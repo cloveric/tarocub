@@ -260,33 +260,27 @@ async function propagateMacOsKeychainCredential(engineHomePath: string): Promise
   const targetService = `Claude Code-credentials-${hash}`;
   const sourceService = "Claude Code-credentials";
 
-  try {
-    await execFileAsync("security", ["find-generic-password", "-s", targetService]);
-    return;
-  } catch {
-    // Target entry doesn't exist — proceed to propagate
-  }
-
-  let password: string;
+  let sourcePassword: string;
   try {
     const result = await execFileAsync("security", [
       "find-generic-password", "-s", sourceService, "-w",
     ]);
-    password = result.stdout.trimEnd();
-    if (!password) {
+    sourcePassword = result.stdout.trimEnd();
+    if (!sourcePassword) {
       return;
     }
   } catch {
     return;
   }
 
+  // Always sync — source token may have been refreshed since last start
   const account = process.env.USER ?? "claude";
   try {
     await execFileAsync("security", [
       "add-generic-password",
       "-s", targetService,
       "-a", account,
-      "-w", password,
+      "-w", sourcePassword,
       "-U",
     ]);
   } catch {
