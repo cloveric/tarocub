@@ -699,9 +699,6 @@ export async function processTelegramUpdates(
       }
 
       if (updateId !== undefined) {
-        if (enqueuedUpdateIds.size > 10000) {
-          enqueuedUpdateIds.clear();
-        }
         enqueuedUpdateIds.add(updateId);
       }
       await chatQueue.enqueue(normalized.chatId, async () => {
@@ -731,6 +728,7 @@ export async function processTelegramUpdates(
       if (updateId !== undefined) {
         await runtimeStateStore.markHandledUpdateId(updateId);
         lastHandledUpdateId = updateId;
+        enqueuedUpdateIds.delete(updateId);
       }
       nextOffset = advanceOffset(nextOffset, completedOffset);
     } catch (error) {
