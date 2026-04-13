@@ -47,11 +47,25 @@ export function tryDecodeWorkspacePath(dirName: string): string | null {
     const segment = parts[i]!;
 
     if (segment === "" && i + 1 < parts.length) {
-      // Double dash → original was a dot-prefixed name (e.g. .cctb)
+      // Double dash → original was a dot-prefixed name (e.g. .cctb, .foo-bar)
+      // Try longest dash-joined match starting with dot prefix
       i++;
-      const dotSegment = "." + parts[i]!;
-      current = current + "/" + dotSegment;
-      i++;
+      let dotFound = false;
+      for (let j = parts.length - 1; j >= i; j--) {
+        const dotJoined = "." + parts.slice(i, j + 1).join("-");
+        const candidate = current + "/" + dotJoined;
+        if (isExistingDir(candidate)) {
+          current = candidate;
+          i = j + 1;
+          dotFound = true;
+          break;
+        }
+      }
+      if (!dotFound) {
+        // Fallback: take just the first segment with dot prefix
+        current = current + "/." + parts[i]!;
+        i++;
+      }
       continue;
     }
 

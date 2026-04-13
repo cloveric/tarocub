@@ -294,9 +294,12 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         sessionId: json.session_id ?? undefined,
         usage,
       };
-    } catch {
-      // If not valid JSON, return raw output
-      return { text: trimmed };
+    } catch (error) {
+      // Re-throw real errors (e.g. is_error from Claude); only swallow JSON parse failures
+      if (error instanceof SyntaxError) {
+        return { text: trimmed };
+      }
+      throw error;
     }
   }
 
