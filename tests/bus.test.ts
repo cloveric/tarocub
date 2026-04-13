@@ -28,17 +28,17 @@ describe("parseBusConfig", () => {
 
   it("parses true as wildcard peers", () => {
     const result = parseBusConfig(true);
-    expect(result).toEqual({ peers: "*", maxDepth: 3, port: 0, secret: "", parallel: [], verifier: null });
+    expect(result).toEqual({ peers: "*", maxDepth: 3, port: 0, secret: expect.any(String), parallel: [], verifier: null });
   });
 
   it("parses peers wildcard", () => {
     const result = parseBusConfig({ peers: "*" });
-    expect(result).toEqual({ peers: "*", maxDepth: 3, port: 0, secret: "", parallel: [], verifier: null });
+    expect(result).toEqual({ peers: "*", maxDepth: 3, port: 0, secret: expect.any(String), parallel: [], verifier: null });
   });
 
   it("parses peers list", () => {
     const result = parseBusConfig({ peers: ["work", "reviewer"] });
-    expect(result).toEqual({ peers: ["work", "reviewer"], maxDepth: 3, port: 0, secret: "", parallel: [], verifier: null });
+    expect(result).toEqual({ peers: ["work", "reviewer"], maxDepth: 3, port: 0, secret: expect.any(String), parallel: [], verifier: null });
   });
 
   it("returns null for empty peers list", () => {
@@ -47,7 +47,7 @@ describe("parseBusConfig", () => {
 
   it("respects custom maxDepth and port", () => {
     const result = parseBusConfig({ peers: "*", maxDepth: 5, port: 9200 });
-    expect(result).toEqual({ peers: "*", maxDepth: 5, port: 9200, secret: "", parallel: [], verifier: null });
+    expect(result).toEqual({ peers: "*", maxDepth: 5, port: 9200, secret: expect.any(String), parallel: [], verifier: null });
   });
 
   it("parses secret", () => {
@@ -58,7 +58,7 @@ describe("parseBusConfig", () => {
   it("parses parallel and verifier", () => {
     const result = parseBusConfig({ peers: "*", parallel: ["sec-bot", "perf-bot"], verifier: "reviewer" });
     expect(result).toEqual({
-      peers: "*", maxDepth: 3, port: 0, secret: "",
+      peers: "*", maxDepth: 3, port: 0, secret: expect.any(String),
       parallel: ["sec-bot", "perf-bot"], verifier: "reviewer",
     });
   });
@@ -127,7 +127,7 @@ describe("bus server", () => {
     try {
       await writeFile(
         path.join(stateDir, "config.json"),
-        JSON.stringify({ bus: { peers: ["work"] } }),
+        JSON.stringify({ bus: { peers: ["work"], secret: "test-secret" } }),
         "utf8",
       );
 
@@ -145,7 +145,7 @@ describe("bus server", () => {
         // Allowed peer
         const res = await fetch(`http://127.0.0.1:${port}/api/talk`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
           body: JSON.stringify({ fromInstance: "work", prompt: "hello", depth: 0 }),
         });
         const body = (await res.json()) as BusTalkResponse;
@@ -155,7 +155,7 @@ describe("bus server", () => {
         // Disallowed peer
         const res2 = await fetch(`http://127.0.0.1:${port}/api/talk`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
           body: JSON.stringify({ fromInstance: "unknown", prompt: "hello", depth: 0 }),
         });
         expect(res2.status).toBe(403);
@@ -179,7 +179,7 @@ describe("bus server", () => {
     try {
       await writeFile(
         path.join(tempDir, "config.json"),
-        JSON.stringify({ bus: { peers: "*", maxDepth: 2 } }),
+        JSON.stringify({ bus: { peers: "*", maxDepth: 2, secret: "test-secret" } }),
         "utf8",
       );
 
@@ -195,7 +195,7 @@ describe("bus server", () => {
       try {
         const res = await fetch(`http://127.0.0.1:${port}/api/talk`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
           body: JSON.stringify({ fromInstance: "work", prompt: "hello", depth: 2 }),
         });
         expect(res.status).toBe(429);

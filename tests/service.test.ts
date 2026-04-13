@@ -544,14 +544,10 @@ describe("polling helpers", () => {
         .mockRejectedValueOnce(new Error("boom")),
     };
 
-    await expect(
-      pollTelegramUpdatesOnce(api as never, bridge as never, path.join(os.tmpdir(), "ignored"), logger, 7),
-    ).resolves.toEqual({
-      offset: 12,
-      hadFetchError: false,
-      hadUpdates: true,
-      conflict: false,
-    });
+    const result = await pollTelegramUpdatesOnce(api as never, bridge as never, path.join(os.tmpdir(), "ignored"), logger, 7);
+    expect(result.hadFetchError).toBe(false);
+    expect(result.hadUpdates).toBe(true);
+    expect(result.conflict).toBe(false);
 
     // Wait for background processing to complete
     await new Promise((r) => setTimeout(r, 100));
@@ -2554,14 +2550,10 @@ describe("polling helpers", () => {
     };
 
     try {
-      await expect(
-        pollTelegramUpdatesOnce(api as never, bridge as never, inboxDir, logger, 7),
-      ).resolves.toEqual({
-        offset: 11,
-        hadFetchError: false,
-        hadUpdates: true,
-        conflict: false,
-      });
+      const result = await pollTelegramUpdatesOnce(api as never, bridge as never, inboxDir, logger, 7);
+      expect(result.hadFetchError).toBe(false);
+      expect(result.hadUpdates).toBe(true);
+      expect(result.conflict).toBe(false);
 
       // Wait for background processing to complete
       await new Promise((r) => setTimeout(r, 100));

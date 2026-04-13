@@ -343,6 +343,7 @@ async function deliverTelegramResponse(
   api: TelegramApi,
   chatId: number,
   text: string,
+  inboxDir: string,
 ): Promise<void> {
   // Handle inline text file blocks
   const fileMatch = text.match(/```file:([^\n]+)\n([\s\S]*?)```/);
@@ -391,10 +392,18 @@ async function deliverTelegramResponse(
   const imageFiles: Array<{ filename: string; contents: Uint8Array }> = [];
   const otherFiles: Array<{ filename: string; contents: Uint8Array | string }> = [];
 
+  const deliveryStateDir = path.dirname(inboxDir);
+  const workspaceDir = path.join(deliveryStateDir, "workspace");
+  const tmpDir = process.platform === "win32" ? (process.env.TEMP ?? "C:\\Temp") : "/tmp";
+
   for (const filePath of filePaths) {
     try {
+      const resolved = path.resolve(filePath);
+      if (!resolved.startsWith(workspaceDir) && !resolved.startsWith(tmpDir)) {
+        continue;
+      }
       const { stat } = await import("node:fs/promises");
-      const stats = await stat(filePath);
+      const stats = await stat(resolved);
       if (!stats.isFile() || stats.size > 50_000_000) {
         continue;
       }
@@ -696,7 +705,7 @@ export async function handleNormalizedTelegramMessage(
         const result = await context.bridge.handleAuthorizedMessage({
           chatId: btwChatId,
           userId: normalized.userId,
-          chatType: normalized.chatType,
+          chatType: "bus",
           locale,
           text: btwCmd.prompt,
           files: [],
@@ -1122,7 +1131,7 @@ export async function handleNormalizedTelegramMessage(
       }
     }
 
-    await deliverTelegramResponse(context.api, normalized.chatId, result.text);
+    await deliverTelegramResponse(context.api, normalized.chatId, result.text, context.inboxDir);
     responded = true;
 
     if (telegramOutDirPath) {

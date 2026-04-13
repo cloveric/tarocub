@@ -668,9 +668,9 @@ export async function processTelegramUpdates(
         continue;
       }
 
-      const taskController = new AbortController();
-      activeTasks.set(normalized.chatId, taskController);
       await chatQueue.enqueue(normalized.chatId, async () => {
+        const taskController = new AbortController();
+        activeTasks.set(normalized.chatId, taskController);
         try {
           await handleNormalizedTelegramMessage(normalized, {
             ...context,
@@ -725,21 +725,16 @@ export async function pollTelegramUpdatesOnce(
   try {
     const updates = await api.getUpdates(offset, signal);
     // Fire-and-forget: process updates in background so polling loop can
-    // immediately fetch new updates (needed for /stop to work mid-task)
+    // immediately fetch new updates (needed for /stop to work mid-task).
+    // Offset is NOT advanced here — processTelegramUpdates marks handled
+    // updates in the runtime state store, and we read back the last handled
+    // ID for the next poll to avoid message loss on crash.
     void processTelegramUpdates(updates, { api, bridge, inboxDir }, logger).catch((error) => {
       logger.error(formatErrorMessage("Background update processing failed", error));
     });
-    // Compute next offset from update IDs without waiting for processing
-    let nextOffset: number | undefined;
-    for (const update of updates) {
-      const uid = getUpdateId(update);
-      if (uid !== undefined) {
-        const candidate = uid + 1;
-        nextOffset = nextOffset === undefined || candidate > nextOffset ? candidate : nextOffset;
-      }
-    }
+    const lastHandled = await getLastHandledUpdateId(inboxDir);
     return {
-      offset: nextOffset,
+      offset: lastHandled !== null ? lastHandled + 1 : offset,
       hadFetchError: false,
       hadUpdates: updates.length > 0,
       conflict: false,

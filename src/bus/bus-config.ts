@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -18,7 +19,7 @@ export function parseBusConfig(raw: unknown): BusConfig | null {
   }
 
   if (raw === true) {
-    return { peers: "*", maxDepth: DEFAULT_MAX_DEPTH, port: 0, secret: "", parallel: [], verifier: null };
+    return { peers: "*", maxDepth: DEFAULT_MAX_DEPTH, port: 0, secret: randomBytes(16).toString("hex"), parallel: [], verifier: null };
   }
 
   if (typeof raw !== "object") {
@@ -49,7 +50,7 @@ export function parseBusConfig(raw: unknown): BusConfig | null {
       ? Math.trunc(obj.port)
       : 0;
 
-  const secret = typeof obj.secret === "string" ? obj.secret : "";
+  const secret = typeof obj.secret === "string" && obj.secret ? obj.secret : randomBytes(16).toString("hex");
 
   const parallel = Array.isArray(obj.parallel)
     ? obj.parallel.filter((v): v is string => typeof v === "string")
