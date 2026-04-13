@@ -201,6 +201,21 @@ describe("ProcessClaudeAdapter", () => {
     expect(calls[0]?.options.windowsHide).toBe(true);
   });
 
+  it("rejects when Claude returns is_error instead of resolving as text", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData('{"type":"result","is_error":true,"result":"auth expired"}');
+    child.close(0);
+
+    await expect(promise).rejects.toThrow("auth expired");
+  });
+
   it("does not trigger multiple promise settlements when error is followed by close", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter("claude", {
