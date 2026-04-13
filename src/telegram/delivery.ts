@@ -341,7 +341,7 @@ async function sendFileOrPhoto(api: TelegramApi, chatId: number, filename: strin
   // Small images (<2MB): use sendDocument to preserve original quality
   if (isImageFile(filename) && payload.length > IMAGE_SIZE_THRESHOLD) {
     try {
-      await api.sendPhoto(chatId, filename, payload);
+      await api.sendPhoto(chatId, filename, payload, filename);
       return;
     } catch {
       // Fall back to sendDocument if sendPhoto fails
