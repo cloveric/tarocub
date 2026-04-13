@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-mode">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#localization">i18n</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#backup--restore">Backup</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-mode">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#localization">i18n</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#backup--restore">Backup</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
@@ -271,6 +271,48 @@ python ~/projects/qwen3-asr/server.py
 **Custom ASR integration:**
 
 To use a different ASR engine, modify the `transcribeVoice()` function in `src/telegram/delivery.ts`. The function receives the local path to an `.ogg` audio file and should return the transcribed text as a string.
+
+---
+
+## Session Resume
+
+Started a task locally with Claude Code? Continue it on Telegram — no copy-paste, no re-explaining context.
+
+```
+/resume          ← Bot scans your local sessions from the past hour
+```
+
+The bot lists recent sessions with project names and timestamps:
+
+```
+Recent local sessions:
+1. [cc-telegram-bridge] 64c2081c… (5m ago)
+2. [my-app] a3f8b21e… (32m ago)
+
+Reply /resume <number> to continue that session.
+```
+
+Pick one:
+
+```
+/resume 1        ← Bot symlinks the session, switches workspace, binds session ID
+```
+
+Now every message you send goes through the original session — same context, same project directory, same conversation history. When you're done:
+
+```
+/detach          ← Cleans up symlink, unbinds session, restores default workspace
+```
+
+**How it works under the hood:**
+
+1. Scans `~/.claude/projects/` for `.jsonl` files modified in the last hour
+2. Creates a symlink from the bot's `engine-home/projects/` to the local session directory
+3. Overrides the workspace to point at your real project path
+4. Binds the session ID so Claude CLI resumes with `-r <sessionId>`
+5. `/detach` reverses everything — the local session is untouched
+
+**No pollution:** `--append-system-prompt` is per-invocation and doesn't persist in session files. The bridge instructions won't leak into your local session.
 
 ---
 
@@ -598,10 +640,13 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
   </tr>
   <tr>
     <td>
+      <h3>Session Resume</h3>
+      <p>Started a task locally? <code>/resume</code> to continue it on Telegram. <code>/detach</code> when done — zero pollution to the original session.</p>
+    </td>
+    <td>
       <h3>Docker Ready</h3>
       <p>Multi-stage Dockerfile included. Build once, deploy anywhere.</p>
     </td>
-    <td></td>
   </tr>
 </table>
 
@@ -648,6 +693,8 @@ Telegram users can also use:
 - `/effort [low|medium|high|max|off]` — set reasoning effort level
 - `/model [name|off]` — switch model
 - `/btw <question>` — ask a side question without affecting the current session
+- `/resume` — scan and resume a local session on Telegram
+- `/detach` — detach from resumed session, restore default workspace
 - `/stop` — immediately stop the current running task
 - `/continue`
 - `/compact` (Claude only — compresses context; Codex falls back to reset)

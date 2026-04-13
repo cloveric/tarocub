@@ -196,10 +196,13 @@ function parseVerifyCommand(text: string): { prompt: string } | null {
   return { prompt: match[1]!.trim() };
 }
 
-function parseResumeCommand(text: string): { pick: number | null } | null {
-  const match = text.trim().match(/^\/resume(?:@\w+)?(?:\s+(\d+))?(?:\s|$)/i);
+function parseResumeCommand(text: string): { pick: number | null; invalid?: boolean } | null {
+  const match = text.trim().match(/^\/resume(?:@\w+)?(?:\s+(\S+))?(?:\s|$)/i);
   if (!match) return null;
-  return { pick: match[1] ? Number(match[1]) : null };
+  if (!match[1]) return { pick: null };
+  const num = Number(match[1]);
+  if (!Number.isInteger(num) || num < 1) return { pick: null, invalid: true };
+  return { pick: num };
 }
 
 function isDetachCommand(text: string): boolean {
@@ -555,6 +558,17 @@ export async function handleNormalizedTelegramMessage(
       }
 
       await sessionStore.removeByChatId(normalized.chatId);
+
+      // Clean up resume state if active
+      if (cfg.resume) {
+        try {
+          const { lstat, unlink } = await import("node:fs/promises");
+          const st = await lstat(cfg.resume.symlinkPath);
+          if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
+        } catch { /* ok */ }
+        await updateInstanceConfig(stateDir, (c) => { delete c.resume; });
+      }
+
       const resetMessage = renderSessionResetMessage(false, locale);
       await context.api.sendMessage(normalized.chatId, resetMessage);
       responded = true;
@@ -749,6 +763,42 @@ export async function handleNormalizedTelegramMessage(
     if (resumeCmd) {
       stopTyping();
 
+      if (cfg.engine !== "claude") {
+        const msg = locale === "zh"
+          ? "/resume 仅支持 Claude 引擎。Codex 的 session 存储在服务端，无法本地恢复。"
+          : "/resume is only supported with the Claude engine. Codex sessions are server-side and cannot be resumed locally.";
+        await context.api.sendMessage(normalized.chatId, msg);
+        responded = true;
+        await appendAuditEventBestEffort(stateDir, {
+          type: "update.handle",
+          instanceName: context.instanceName,
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          outcome: "success",
+          metadata: { durationMs: Date.now() - startedAt, command: "resume", rejected: "wrong-engine" },
+        });
+        return;
+      }
+
+      if (resumeCmd.invalid) {
+        const msg = locale === "zh"
+          ? "用法: /resume [编号]\n先发 /resume 扫描，再发 /resume <编号> 选择。"
+          : "Usage: /resume [number]\nSend /resume to scan, then /resume <number> to pick.";
+        await context.api.sendMessage(normalized.chatId, msg);
+        responded = true;
+        await appendAuditEventBestEffort(stateDir, {
+          type: "update.handle",
+          instanceName: context.instanceName,
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          outcome: "success",
+          metadata: { durationMs: Date.now() - startedAt, command: "resume", rejected: "invalid-arg" },
+        });
+        return;
+      }
+
       if (resumeCmd.pick === null) {
         // Scan for recent sessions
         const sessions = await scanRecentClaudeSessions(1);
@@ -846,11 +896,14 @@ export async function handleNormalizedTelegramMessage(
           : "No resumed session active.";
         await context.api.sendMessage(normalized.chatId, msg);
       } else {
-        // Remove symlink
+        // Remove symlink (only if it's actually a symlink — never delete a real directory)
         try {
-          const { rm } = await import("node:fs/promises");
-          await rm(cfg.resume.symlinkPath, { force: true });
-        } catch { /* ok */ }
+          const { lstat, unlink } = await import("node:fs/promises");
+          const st = await lstat(cfg.resume.symlinkPath);
+          if (st.isSymbolicLink()) {
+            await unlink(cfg.resume.symlinkPath);
+          }
+        } catch { /* ok — already gone */ }
 
         // Unbind session and clear resume state
         await sessionStore.removeByChatId(normalized.chatId);

@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-模式">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#国际化">i18n</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#备份与恢复">备份</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-模式">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#国际化">i18n</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#备份与恢复">备份</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
@@ -257,6 +257,48 @@ huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir models/Qwen3-ASR-0.6B
 | CLI 备用 | `~/projects/qwen3-asr/transcribe.py <文件>` | ~30s | 每次加载模型 |
 
 **自定义 ASR：** 修改 `src/telegram/delivery.ts` 中的 `transcribeVoice()` 函数即可适配其他 ASR 引擎。
+
+---
+
+## 会话续接
+
+在电脑上用 Claude Code 开了个头？发 `/resume` 就能在 Telegram 上接着干 — 不用重复解释上下文。
+
+```
+/resume          ← Bot 扫描本地最近 1 小时的 session
+```
+
+Bot 列出最近的 session：
+
+```
+最近的本地 session：
+1. [cc-telegram-bridge] 64c2081c… (5m ago)
+2. [my-app] a3f8b21e… (32m ago)
+
+回复 /resume <编号> 继续该 session。
+```
+
+选一个：
+
+```
+/resume 1        ← Bot 自动建软链、切工作区、绑 session
+```
+
+之后发的每条消息都走原始 session — 相同的上下文、相同的项目目录、相同的对话历史。完成后：
+
+```
+/detach          ← 清理软链、解绑 session、恢复默认工作区
+```
+
+**底层原理：**
+
+1. 扫描 `~/.claude/projects/` 中最近 1 小时内修改过的 `.jsonl` 文件
+2. 在 bot 的 `engine-home/projects/` 下创建软链指向本地 session 目录
+3. 将工作区切换到你的真实项目路径
+4. 绑定 session ID，Claude CLI 通过 `-r <sessionId>` 恢复会话
+5. `/detach` 反向操作 — 本地 session 不受任何影响
+
+**零污染：** `--append-system-prompt` 是每次调用时传入的，不会写进 session 文件。bridge 指令不会泄漏到你的本地会话中。
 
 ---
 
@@ -576,9 +618,16 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
       <p>每个实例独立的 JSONL 追加日志 — 支持按类型、聊天、结果过滤。10MB 自动轮转。</p>
     </td>
     <td>
+      <h3>会话续接</h3>
+      <p>电脑上开了个头？<code>/resume</code> 在 Telegram 上接着干。<code>/detach</code> 回归默认 — 原始 session 零污染。</p>
+    </td>
+  </tr>
+  <tr>
+    <td>
       <h3>Docker 就绪</h3>
       <p>内含多阶段 Dockerfile，一次构建，随处部署。</p>
     </td>
+    <td></td>
   </tr>
 </table>
 
@@ -625,6 +674,8 @@ Telegram 用户也可以使用：
 - `/effort [low|medium|high|max|off]` — 设置推理强度
 - `/model [名称|off]` — 切换模型
 - `/btw <问题>` — 旁问（不影响当前会话）
+- `/resume` — 扫描并恢复本地 session 到 Telegram 继续
+- `/detach` — 断开恢复的 session，恢复默认工作区
 - `/stop` — 立即停止当前运行中的任务
 - `/continue`
 - `/compact`（仅 Claude — 压缩上下文；Codex 回退为 reset）
