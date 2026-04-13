@@ -393,13 +393,12 @@ async function deliverTelegramResponse(
   const otherFiles: Array<{ filename: string; contents: Uint8Array | string }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
-  const workspaceDir = path.join(deliveryStateDir, "workspace");
-  const tmpDir = process.platform === "win32" ? (process.env.TEMP ?? "C:\\Temp") : "/tmp";
+  const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
 
   for (const filePath of filePaths) {
     try {
       const resolved = path.resolve(filePath);
-      if (!resolved.startsWith(workspaceDir) && !resolved.startsWith(tmpDir)) {
+      if (!resolved.startsWith(workspacePrefix)) {
         continue;
       }
       const { stat } = await import("node:fs/promises");

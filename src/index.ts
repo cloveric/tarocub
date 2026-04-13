@@ -87,7 +87,7 @@ async function main(): Promise<void> {
         }
       };
 
-      busServer = createBusServer(instanceName, config.stateDir, handler);
+      busServer = createBusServer(instanceName, config.stateDir, handler, busConfig.secret);
       const boundPort = await startBusServer(busServer, busConfig.port);
       await registerInstance(channelRoot, instanceName, boundPort, busConfig.secret);
       console.log(`Bus server listening on 127.0.0.1:${boundPort}`);

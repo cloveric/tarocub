@@ -53,6 +53,7 @@ export function createBusServer(
   instanceName: string,
   stateDir: string,
   handler: BusTalkHandler,
+  startupSecret?: string,
 ): http.Server {
   const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/api/talk") {
@@ -86,7 +87,7 @@ export function createBusServer(
         }
 
         const authHeader = req.headers.authorization;
-        const expectedSecret = busConfig.secret;
+        const expectedSecret = startupSecret ?? busConfig.secret;
         if (expectedSecret && authHeader !== `Bearer ${expectedSecret}`) {
           sendJson(res, 401, { success: false, error: "Invalid or missing bus secret" });
           return;

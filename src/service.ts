@@ -469,6 +469,7 @@ export async function lookupTelegramBotIdentity(api: TelegramApi): Promise<Resol
 
 const defaultChatQueue = new ChatQueue();
 const activeTasks = new Map<number, AbortController>();
+const enqueuedUpdateIds = new Set<number>();
 
 export function abortChatTask(chatId: number): boolean {
   const controller = activeTasks.get(chatId);
@@ -610,7 +611,7 @@ export async function processTelegramUpdates(
     const completedOffset = updateId === undefined ? undefined : updateId + 1;
 
     try {
-      if (updateId !== undefined && lastHandledUpdateId !== null && updateId <= lastHandledUpdateId) {
+      if (updateId !== undefined && (enqueuedUpdateIds.has(updateId) || (lastHandledUpdateId !== null && updateId <= lastHandledUpdateId))) {
         await appendAuditEvent(path.dirname(context.inboxDir), {
           type: "update.skip",
           instanceName: context.instanceName,
@@ -668,6 +669,9 @@ export async function processTelegramUpdates(
         continue;
       }
 
+      if (updateId !== undefined) {
+        enqueuedUpdateIds.add(updateId);
+      }
       await chatQueue.enqueue(normalized.chatId, async () => {
         const taskController = new AbortController();
         activeTasks.set(normalized.chatId, taskController);
@@ -690,6 +694,9 @@ export async function processTelegramUpdates(
           });
         } finally {
           activeTasks.delete(normalized.chatId);
+          if (updateId !== undefined) {
+            enqueuedUpdateIds.delete(updateId);
+          }
         }
       });
       if (updateId !== undefined) {
