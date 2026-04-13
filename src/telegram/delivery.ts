@@ -397,16 +397,16 @@ async function deliverTelegramResponse(
 
   for (const filePath of filePaths) {
     try {
-      const resolved = path.resolve(filePath);
-      if (!resolved.startsWith(workspacePrefix)) {
+      const { realpath, lstat } = await import("node:fs/promises");
+      const real = await realpath(filePath);
+      if (!real.startsWith(workspacePrefix)) {
         continue;
       }
-      const { stat } = await import("node:fs/promises");
-      const stats = await stat(resolved);
-      if (!stats.isFile() || stats.size > 50_000_000) {
+      const stats = await lstat(real);
+      if (!stats.isFile() || stats.isSymbolicLink() || stats.size > 50_000_000) {
         continue;
       }
-      const contents = await readFile(filePath);
+      const contents = await readFile(real);
       const fileName = path.basename(filePath);
       if (isImageFile(fileName)) {
         imageFiles.push({ filename: fileName, contents });
