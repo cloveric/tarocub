@@ -724,8 +724,22 @@ export async function pollTelegramUpdatesOnce(
 ): Promise<{ offset: number | undefined; hadFetchError: boolean; hadUpdates: boolean; conflict: boolean }> {
   try {
     const updates = await api.getUpdates(offset, signal);
+    // Fire-and-forget: process updates in background so polling loop can
+    // immediately fetch new updates (needed for /stop to work mid-task)
+    void processTelegramUpdates(updates, { api, bridge, inboxDir }, logger).catch((error) => {
+      logger.error(formatErrorMessage("Background update processing failed", error));
+    });
+    // Compute next offset from update IDs without waiting for processing
+    let nextOffset: number | undefined;
+    for (const update of updates) {
+      const uid = getUpdateId(update);
+      if (uid !== undefined) {
+        const candidate = uid + 1;
+        nextOffset = nextOffset === undefined || candidate > nextOffset ? candidate : nextOffset;
+      }
+    }
     return {
-      offset: await processTelegramUpdates(updates, { api, bridge, inboxDir }, logger),
+      offset: nextOffset,
       hadFetchError: false,
       hadUpdates: updates.length > 0,
       conflict: false,

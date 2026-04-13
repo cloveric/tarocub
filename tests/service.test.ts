@@ -553,6 +553,8 @@ describe("polling helpers", () => {
       conflict: false,
     });
 
+    // Wait for background processing to complete
+    await new Promise((r) => setTimeout(r, 100));
     expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
   });
 
@@ -2561,6 +2563,8 @@ describe("polling helpers", () => {
         conflict: false,
       });
 
+      // Wait for background processing to complete
+      await new Promise((r) => setTimeout(r, 100));
       expect(api.sendMessage).toHaveBeenCalledWith(123, "continuation complete", expect.anything());
       expect(logger.error).not.toHaveBeenCalled();
 
