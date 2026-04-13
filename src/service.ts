@@ -495,6 +495,11 @@ const defaultChatQueue = new ChatQueue();
 const activeTasks = new Map<number, AbortController>();
 const enqueuedUpdateIds = new Set<number>();
 
+/** @internal — test-only reset for module-level dedup state */
+export function _resetEnqueuedUpdateIds(): void {
+  enqueuedUpdateIds.clear();
+}
+
 export function abortChatTask(chatId: number): boolean {
   const controller = activeTasks.get(chatId);
   if (controller) {
@@ -694,6 +699,9 @@ export async function processTelegramUpdates(
       }
 
       if (updateId !== undefined) {
+        if (enqueuedUpdateIds.size > 10000) {
+          enqueuedUpdateIds.clear();
+        }
         enqueuedUpdateIds.add(updateId);
       }
       await chatQueue.enqueue(normalized.chatId, async () => {
@@ -718,9 +726,6 @@ export async function processTelegramUpdates(
           });
         } finally {
           activeTasks.delete(normalized.chatId);
-          if (updateId !== undefined) {
-            enqueuedUpdateIds.delete(updateId);
-          }
         }
       });
       if (updateId !== undefined) {

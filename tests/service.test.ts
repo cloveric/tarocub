@@ -12,6 +12,7 @@ import {
   pollTelegramUpdates,
   processTelegramUpdates,
   readInstanceBotTokenFromEnvFile,
+  _resetEnqueuedUpdateIds,
 } from "../src/service.js";
 import { ChatQueue } from "../src/runtime/chat-queue.js";
 import { Bridge } from "../src/runtime/bridge.js";
@@ -90,6 +91,7 @@ function replaceBufferContents(buffer: Buffer, search: string, replace: string):
 }
 
 afterEach(async () => {
+  _resetEnqueuedUpdateIds();
   await rm(path.join(os.tmpdir(), "ignored"), { recursive: true, force: true });
   await rm(path.join(os.tmpdir(), "runtime-state.json"), { force: true });
 });
