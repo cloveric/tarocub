@@ -239,7 +239,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       args.push("--add-dir", this.workspacePath);
     }
 
-    const result = await this.runClaudeCommand(args, prompt);
+    const result = await this.runClaudeCommand(args, prompt, input.abortSignal);
     const parsed = this.parseResult(result.stdout);
 
     return {
@@ -280,7 +280,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     }
   }
 
-  private async runClaudeCommand(args: string[], stdinContent: string): Promise<{ stdout: string; stderr: string }> {
+  private async runClaudeCommand(args: string[], stdinContent: string, abortSignal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
     const invocation = buildCommandInvocation(this.claudeExecutable, args);
     const child = this.spawnClaude(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -312,6 +312,15 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         settled = true;
         reject(error);
       };
+
+      if (abortSignal) {
+        const onAbort = () => {
+          child.kill?.();
+          rejectOnce(new Error("Task was stopped by user"));
+        };
+        if (abortSignal.aborted) { onAbort(); return; }
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+      }
 
       child.stdout?.on("data", (chunk) => {
         stdout += chunk.toString();

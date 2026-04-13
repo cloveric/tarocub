@@ -21,6 +21,7 @@ export interface CodexUserMessageInput {
   instructions?: string;
   onProgress?: (partialText: string) => void;
   requestOutputDir?: string;
+  abortSignal?: AbortSignal;
 }
 
 export interface CodexAdapter {

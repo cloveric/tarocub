@@ -453,6 +453,7 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "ask", description: "Delegate to another bot instance" },
   { command: "fan", description: "Query multiple bots in parallel" },
   { command: "verify", description: "Execute then auto-verify with reviewer" },
+  { command: "stop", description: "Stop the current running task" },
   { command: "help", description: "Show available commands" },
 ];
 
@@ -473,6 +474,17 @@ export async function lookupTelegramBotIdentity(api: TelegramApi): Promise<Resol
 }
 
 const defaultChatQueue = new ChatQueue();
+const activeTasks = new Map<number, AbortController>();
+
+export function abortChatTask(chatId: number): boolean {
+  const controller = activeTasks.get(chatId);
+  if (controller) {
+    controller.abort();
+    activeTasks.delete(chatId);
+    return true;
+  }
+  return false;
+}
 const runtimeStateStoreCache = new Map<string, RuntimeStateStore>();
 
 function getRuntimeStateStore(inboxDir: string): RuntimeStateStore {
@@ -553,6 +565,16 @@ async function appendPollFetchFailureAuditEventBestEffort(
     await appendPollFetchFailureAuditEvent(inboxDir, error, offset);
   } catch {
     // Poll fetch failures must still back off or terminate cleanly even if audit persistence fails.
+  }
+}
+
+async function loadStopLocale(inboxDir: string): Promise<string> {
+  try {
+    const raw = await readFile(path.join(path.dirname(inboxDir), "config.json"), "utf8");
+    const cfg = JSON.parse(raw) as { locale?: string };
+    return cfg.locale === "zh" ? "zh" : "en";
+  } catch {
+    return "en";
   }
 }
 
@@ -638,12 +660,33 @@ export async function processTelegramUpdates(
         continue;
       }
 
-      await chatQueue.enqueue(normalized.chatId, () =>
-        handleNormalizedTelegramMessage(normalized, {
-          ...context,
-          updateId,
-        }),
-      );
+      if (/^\/stop(?:@\w+)?(?:\s|$)/i.test(normalized.text.trim())) {
+        const aborted = abortChatTask(normalized.chatId);
+        const msg = aborted
+          ? (await loadStopLocale(context.inboxDir)) === "zh" ? "已停止当前任务。" : "Current task stopped."
+          : (await loadStopLocale(context.inboxDir)) === "zh" ? "当前没有运行中的任务。" : "No task is currently running.";
+        try { await context.api.sendMessage(normalized.chatId, msg); } catch { /* best effort */ }
+        nextOffset = advanceOffset(nextOffset, completedOffset);
+        if (updateId !== undefined) {
+          await runtimeStateStore.markHandledUpdateId(updateId);
+          lastHandledUpdateId = updateId;
+        }
+        continue;
+      }
+
+      const taskController = new AbortController();
+      activeTasks.set(normalized.chatId, taskController);
+      await chatQueue.enqueue(normalized.chatId, async () => {
+        try {
+          await handleNormalizedTelegramMessage(normalized, {
+            ...context,
+            updateId,
+            abortSignal: taskController.signal,
+          });
+        } finally {
+          activeTasks.delete(normalized.chatId);
+        }
+      });
       if (updateId !== undefined) {
         await runtimeStateStore.markHandledUpdateId(updateId);
         lastHandledUpdateId = updateId;

@@ -159,6 +159,7 @@ export class Bridge {
     files: string[];
     onProgress?: (partialText: string) => void;
     requestOutputDir?: string;
+    abortSignal?: AbortSignal;
   }) {
     const decision = await this.checkAccess(input);
     if (decision.kind === "deny") {
@@ -190,6 +191,7 @@ export class Bridge {
       instructions,
       onProgress: input.onProgress,
       requestOutputDir: input.requestOutputDir,
+      abortSignal: input.abortSignal,
     });
 
     if (response.sessionId && response.sessionId !== session.sessionId) {

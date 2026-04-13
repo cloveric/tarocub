@@ -341,7 +341,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
     const args = isLogicalTelegramSessionId(sessionId)
       ? ["exec", "--json", "--skip-git-repo-check", ...approvalFlags, ...engineFlags, "-"]
       : ["exec", "resume", "--json", "--skip-git-repo-check", ...approvalFlags, ...engineFlags, sessionId, "-"];
-    const result = await this.runCodexJsonCommand(args, prompt);
+    const result = await this.runCodexJsonCommand(args, prompt, input.abortSignal);
     const events = parseJsonEvents(result.stdout);
     const lastAgentMessage = extractLastAgentMessage(events);
     const threadId = extractThreadId(events);
@@ -367,7 +367,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
     };
   }
 
-  private async runCodexJsonCommand(args: string[], prompt: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  private async runCodexJsonCommand(args: string[], prompt: string, abortSignal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
     const invocation = buildCommandInvocation(this.codexExecutable, args);
     const child = this.spawnCodex(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -389,6 +389,18 @@ export class ProcessCodexAdapter implements CodexAdapter {
       child.stderr?.on("data", (chunk) => {
         stderr += chunk.toString();
       });
+
+      if (abortSignal) {
+        const onAbort = () => {
+          if (!settled) {
+            settled = true;
+            child.kill?.();
+            reject(new Error("Task was stopped by user"));
+          }
+        };
+        if (abortSignal.aborted) { onAbort(); return; }
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+      }
 
       child.stdin?.end(prompt);
       child.once("error", (error) => {

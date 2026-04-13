@@ -113,6 +113,7 @@ export interface TelegramDeliveryContext {
   inboxDir: string;
   instanceName?: string;
   updateId?: number;
+  abortSignal?: AbortSignal;
 }
 
 function wantsTelegramOut(text: string): boolean {
@@ -1110,6 +1111,7 @@ export async function handleNormalizedTelegramMessage(
       replyContext,
       files: requestFiles,
       requestOutputDir: telegramOutDirPath,
+      abortSignal: context.abortSignal,
     });
 
     stopTyping();
