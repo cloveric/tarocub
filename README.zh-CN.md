@@ -22,7 +22,7 @@
 </h3>
 
 <p align="center">
-  <em>基于原生 CLI harness 构建 — 会话持久化、跨设备续接、语音输入、文件投递、Agent 协作，开箱即用。<br>对 99% 的人来说，比任何 *Claw 都更省心、更稳。</em>
+  <em>基于原生 CLI harness 构建 — 会话持久化、跨设备续接、语音输入、文件投递、Agent 协作，开箱即用。<br>对 99% 的人来说，比任何 *Claw 都更省心、更稳定。</em>
 </p>
 
 <p align="center">
