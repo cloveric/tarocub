@@ -22,7 +22,7 @@
 </h3>
 
 <p align="center">
-  <em>Why not use Claude Code and Codex's own harness? Better, stronger, more stable.<br>When you can spin up 10 native bots on Telegram, who still needs <a href="https://github.com/openclaw">OpenClaw</a>?</em>
+  <em>Runs their native CLI harness directly — sessions, memory, tools, all built-in. No reimplemented API wrappers.<br>Start a task on your laptop, <code>/resume</code> it on your phone. That's the workflow.</em>
 </p>
 
 <p align="center">

@@ -22,7 +22,7 @@
 </h3>
 
 <p align="center">
-  <em>为什么不直接用 Claude Code 和 Codex 自己的 harness 呢？更好、更强、更稳定。<br>当你能在 Telegram 上开 10 个原生 bot，OpenClaw 还有什么意义呢？</em>
+  <em>直接跑原生 CLI harness — 会话、记忆、工具，全部内置。不造轮子，不包 API。<br>电脑上开了个头，手机上 <code>/resume</code> 接着干。就是这么用的。</em>
 </p>
 
 <p align="center">
