@@ -1,4 +1,4 @@
-import { readdir, readFile, stat, writeFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, stat, lstat, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 
@@ -38,7 +38,10 @@ async function walkDirectory(root: string, current: string = root): Promise<stri
   }
   for (const entry of entries) {
     const full = path.join(current, entry);
-    const stats = await stat(full);
+    const stats = await lstat(full);
+    if (stats.isSymbolicLink()) {
+      continue; // skip symlinks to prevent traversal outside state dir
+    }
     if (stats.isDirectory()) {
       const nested = await walkDirectory(root, full);
       results.push(...nested);
@@ -58,8 +61,8 @@ export async function createArchive(sourceDir: string, outputPath: string): Prom
   let uncompressed = 0;
 
   for (const filePath of files) {
-    const stats = await stat(filePath);
-    if (stats.size > MAX_FILE_SIZE) {
+    const stats = await lstat(filePath);
+    if (stats.isSymbolicLink() || stats.size > MAX_FILE_SIZE) {
       continue; // skip files that are too large to safely backup
     }
     const content = await readFile(filePath);

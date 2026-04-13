@@ -56,11 +56,11 @@ export function resolveAuditLogPath(stateDir: string): string {
 
 export async function appendAuditEvent(stateDir: string, event: AuditEvent): Promise<void> {
   const filePath = resolveAuditLogPath(stateDir);
-  await mkdir(path.dirname(filePath), { recursive: true });
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   await appendFile(
     filePath,
     `${JSON.stringify({ timestamp: event.timestamp ?? new Date().toISOString(), ...event })}\n`,
-    "utf8",
+    { encoding: "utf8", mode: 0o600 },
   );
 }
 

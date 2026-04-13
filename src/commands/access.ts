@@ -68,8 +68,8 @@ export async function writeInstanceBotToken(
     contents = `${nextLine}\n`;
   }
 
-  await mkdir(path.dirname(envPath), { recursive: true });
-  await writeFile(envPath, contents, "utf8");
+  await mkdir(path.dirname(envPath), { recursive: true, mode: 0o700 });
+  await writeFile(envPath, contents, { encoding: "utf8", mode: 0o600 });
   await appendAuditEvent(stateDir, {
     type: "configure.token",
     instanceName: normalizedInstanceName,

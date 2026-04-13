@@ -39,7 +39,7 @@ export async function registerInstance(
   port: number,
   secret: string,
 ): Promise<void> {
-  await mkdir(channelRoot, { recursive: true });
+  await mkdir(channelRoot, { recursive: true, mode: 0o700 });
   const registry = await readRegistry(channelRoot);
   registry.instances[instanceName] = {
     port,
@@ -47,7 +47,7 @@ export async function registerInstance(
     secret,
     updatedAt: new Date().toISOString(),
   };
-  await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", "utf8");
+  await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
 }
 
 export async function deregisterInstance(
@@ -56,7 +56,7 @@ export async function deregisterInstance(
 ): Promise<void> {
   const registry = await readRegistry(channelRoot);
   delete registry.instances[instanceName];
-  await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", "utf8");
+  await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
 }
 
 export async function lookupInstance(

@@ -36,7 +36,7 @@ export class JsonStore<T> {
   }
 
   async write(value: T): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
 
     // Attach current schema version on write so future loads can detect
     // incompatibility without every caller remembering to add it.
@@ -45,7 +45,7 @@ export class JsonStore<T> {
       : value;
 
     const tmpPath = path.join(path.dirname(this.filePath), `${path.basename(this.filePath)}.${randomUUID()}.tmp`);
-    await writeFile(tmpPath, JSON.stringify(versioned, null, 2), "utf8");
+    await writeFile(tmpPath, JSON.stringify(versioned, null, 2), { encoding: "utf8", mode: 0o600 });
     await rename(tmpPath, this.filePath);
   }
 
