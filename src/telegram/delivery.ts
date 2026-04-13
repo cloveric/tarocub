@@ -333,9 +333,20 @@ function isImageFile(filename: string): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(filename).toLowerCase());
 }
 
+const IMAGE_SIZE_THRESHOLD = 2 * 1024 * 1024; // 2MB
+
 async function sendFileOrPhoto(api: TelegramApi, chatId: number, filename: string, contents: Uint8Array | string): Promise<void> {
-  // Always use sendDocument to preserve original image quality.
-  // Telegram still shows an inline preview for images sent as documents.
+  const payload = typeof contents === "string" ? new TextEncoder().encode(contents) : contents;
+  // Large images (>2MB): use sendPhoto for Telegram-side compression (~500KB)
+  // Small images (<2MB): use sendDocument to preserve original quality
+  if (isImageFile(filename) && payload.length > IMAGE_SIZE_THRESHOLD) {
+    try {
+      await api.sendPhoto(chatId, filename, payload);
+      return;
+    } catch {
+      // Fall back to sendDocument if sendPhoto fails
+    }
+  }
   await api.sendDocument(chatId, filename, contents);
 }
 
