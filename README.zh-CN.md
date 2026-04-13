@@ -625,6 +625,7 @@ Telegram 用户也可以使用：
 - `/effort [low|medium|high|max|off]` — 设置推理强度
 - `/model [名称|off]` — 切换模型
 - `/btw <问题>` — 旁问（不影响当前会话）
+- `/stop` — 立即停止当前运行中的任务
 - `/continue`
 - `/compact`（仅 Claude — 压缩上下文；Codex 回退为 reset）
 - `/reset`

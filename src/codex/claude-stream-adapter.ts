@@ -214,7 +214,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const prompt = this.buildPrompt(input);
     const worker = this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, engineOptions);
 
-    const response = await this.sendTurn(worker, prompt);
+    const response = await this.sendTurn(worker, prompt, input.abortSignal);
     const nextSessionId = response.sessionId;
     if (nextSessionId && nextSessionId !== sessionId) {
       this.workers.delete(sessionId);
@@ -374,7 +374,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
   }
 
-  private async sendTurn(worker: ClaudeWorker, prompt: string): Promise<CodexAdapterResponse> {
+  private async sendTurn(worker: ClaudeWorker, prompt: string, abortSignal?: AbortSignal): Promise<CodexAdapterResponse> {
     if (worker.pendingTurn) {
       throw new Error("Claude session already has an in-flight turn");
     }
@@ -386,6 +386,16 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         reject,
       };
       worker.pendingTurn = pendingTurn;
+
+      if (abortSignal) {
+        const onAbort = () => {
+          worker.child.kill?.();
+          this.failWorker(worker, new Error("Task was stopped by user"));
+          this.removeWorker(worker);
+        };
+        if (abortSignal.aborted) { onAbort(); return; }
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+      }
 
       worker.child.stdin?.write(
         JSON.stringify({

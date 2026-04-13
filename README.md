@@ -648,6 +648,7 @@ Telegram users can also use:
 - `/effort [low|medium|high|max|off]` — set reasoning effort level
 - `/model [name|off]` — switch model
 - `/btw <question>` — ask a side question without affecting the current session
+- `/stop` — immediately stop the current running task
 - `/continue`
 - `/compact` (Claude only — compresses context; Codex falls back to reset)
 - `/reset`
