@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-模式">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#国际化">i18n</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#备份与恢复">备份</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-模式">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#备份与恢复">备份</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
@@ -214,18 +214,6 @@ npm run dev -- telegram budget clear --instance work    # 移除上限
 ```
 
 预算实时执行 — 达到上限时 bot 会用中英双语提示。
-
----
-
-## 国际化
-
-按实例切换 bot 的 UI 语言。所有 Telegram 回复、错误消息和状态输出都会以选定语言呈现。
-
-```bash
-npm run dev -- telegram locale zh --instance work   # 中文
-npm run dev -- telegram locale en --instance work   # 英文（默认）
-npm run dev -- telegram locale --instance work       # 查看当前
-```
 
 ---
 
@@ -598,8 +586,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
       <p>按实例设置费用上限。达到上限时自动拦截请求 — 中英双语提示。</p>
     </td>
     <td>
-      <h3>国际化 (en/zh)</h3>
-      <p>所有 bot 回复、错误消息和状态输出都可按实例切换为中文。</p>
+      <h3>会话续接</h3>
+      <p>电脑上开了个头？<code>/resume</code> 在 Telegram 上接着干。<code>/detach</code> 回归默认 — 原始 session 零污染。</p>
     </td>
   </tr>
   <tr>
@@ -618,16 +606,9 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
       <p>每个实例独立的 JSONL 追加日志 — 支持按类型、聊天、结果过滤。10MB 自动轮转。</p>
     </td>
     <td>
-      <h3>会话续接</h3>
-      <p>电脑上开了个头？<code>/resume</code> 在 Telegram 上接着干。<code>/detach</code> 回归默认 — 原始 session 零污染。</p>
-    </td>
-  </tr>
-  <tr>
-    <td>
       <h3>Docker 就绪</h3>
       <p>内含多阶段 Dockerfile，一次构建，随处部署。</p>
     </td>
-    <td></td>
   </tr>
 </table>
 
@@ -648,7 +629,6 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `telegram usage` | 查看 token 用量和费用估算 |
 | `telegram verbosity [0\|1\|2]` | 设置流式进度显示级别 |
 | `telegram budget [show\|set\|clear]` | 按实例费用上限（达到上限时拦截请求） |
-| `telegram locale [en\|zh]` | 按实例设置 bot UI 语言 |
 | `telegram instance [list\|rename\|delete]` | 通过 CLI 管理实例 |
 | `telegram backup [--instance <name>]` | 将实例状态归档为 `.cctb.gz` |
 | `telegram restore <archive>` | 从备份恢复实例（`--force` 覆盖已有） |

@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-mode">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#localization">i18n</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#backup--restore">Backup</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-mode">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#backup--restore">Backup</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
@@ -213,18 +213,6 @@ npm run dev -- telegram budget clear --instance work    # Remove cap
 ```
 
 Budget is enforced in real-time — the bot replies with a bilingual message when the limit is hit.
-
----
-
-## Localization
-
-Switch the bot's UI language per instance. All Telegram replies, error messages, and status output are rendered in the selected language.
-
-```bash
-npm run dev -- telegram locale zh --instance work   # Chinese
-npm run dev -- telegram locale en --instance work   # English (default)
-npm run dev -- telegram locale --instance work       # Check current
-```
 
 ---
 
@@ -614,8 +602,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
       <p>Set a per-instance cost cap. Requests are blocked when the limit is hit — with bilingual messages.</p>
     </td>
     <td>
-      <h3>Localization (en/zh)</h3>
-      <p>All bot replies, errors, and status messages can be switched to Chinese per instance.</p>
+      <h3>Session Resume</h3>
+      <p>Started a task locally? <code>/resume</code> to continue it on Telegram. <code>/detach</code> when done — zero pollution to the original session.</p>
     </td>
   </tr>
   <tr>
@@ -640,13 +628,10 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
   </tr>
   <tr>
     <td>
-      <h3>Session Resume</h3>
-      <p>Started a task locally? <code>/resume</code> to continue it on Telegram. <code>/detach</code> when done — zero pollution to the original session.</p>
-    </td>
-    <td>
       <h3>Docker Ready</h3>
       <p>Multi-stage Dockerfile included. Build once, deploy anywhere.</p>
     </td>
+    <td></td>
   </tr>
 </table>
 
@@ -667,7 +652,6 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 | `telegram usage` | Show token usage and estimated cost |
 | `telegram verbosity [0\|1\|2]` | Set streaming progress level |
 | `telegram budget [show\|set\|clear]` | Per-instance cost cap (blocks requests when exceeded) |
-| `telegram locale [en\|zh]` | Set bot UI language per instance |
 | `telegram instance [list\|rename\|delete]` | Manage instances from the CLI |
 | `telegram backup [--instance <name>]` | Archive instance state to `.cctb.gz` |
 | `telegram restore <archive>` | Restore instance from backup (with `--force` to overwrite) |
