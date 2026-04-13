@@ -472,6 +472,7 @@ describe("Bridge", () => {
       bindSession: vi.fn(),
     };
     const adapter: CodexAdapter = {
+      bridgeInstructionMode: "telegram-out-only",
       sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
       createSession: vi.fn(),
     };
@@ -495,12 +496,12 @@ describe("Bridge", () => {
         instructions: expect.stringContaining("[Codex Telegram-Out Contract]"),
       }),
     );
-    expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions).toContain(
-      "Files written there will be returned to the user after the task completes.",
-    );
+    const call = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    expect(call?.instructions).toContain("Files written there will be returned to the user after the task completes.");
+    expect(call?.instructions).toContain("[send-file:");
   });
 
-  it("does not inject generic file-block bridge instructions for codex adapters", async () => {
+  it("injects bridge capabilities for codex adapters too", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         policy: "allowlist",
@@ -534,7 +535,7 @@ describe("Bridge", () => {
       "telegram-84",
       expect.objectContaining({
         text: "文件在哪里",
-        instructions: undefined,
+        instructions: expect.stringContaining("[send-file:"),
       }),
     );
   });
@@ -573,8 +574,6 @@ describe("Bridge", () => {
     const call = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
     expect(call?.text).toBe("生成一个文件并发给我");
     expect(call?.instructions).toContain("[Codex Telegram-Out Contract]");
-    expect(call?.instructions).toContain("For small text or code files, prefer returning exactly one fenced block");
-    expect(call?.instructions).toContain("```file:example.txt");
-    expect(call?.instructions).not.toContain("Telegram chat bridge");
+    expect(call?.instructions).toContain("[send-file:");
   });
 });

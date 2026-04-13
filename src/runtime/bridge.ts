@@ -185,15 +185,12 @@ export class Bridge {
       ? `${input.text}\n\n[Quoted message #${input.replyContext.messageId}]\n${input.replyContext.text || "(no text content)"}`
       : input.text;
     const text = baseText;
-    const instructions =
-      this.bridgeInstructionMode === "telegram-out-only"
-        ? combineInstructions(
-            input.requestOutputDir ? renderCodexTelegramOutInstructions(input.requestOutputDir) : undefined,
-          )
-        : combineInstructions(
-            renderTelegramBridgeCapabilities(),
-            input.requestOutputDir ? renderCodexTelegramOutInstructions(input.requestOutputDir) : undefined,
-          );
+    const instructions = combineInstructions(
+      renderTelegramBridgeCapabilities(),
+      this.bridgeInstructionMode === "telegram-out-only" && input.requestOutputDir
+        ? renderCodexTelegramOutInstructions(input.requestOutputDir)
+        : undefined,
+    );
     const response = await this.adapter.sendUserMessage(session.sessionId, {
       text,
       files: input.files,
