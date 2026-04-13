@@ -59,6 +59,8 @@ function renderTelegramBridgeCapabilities(): string {
     "The bridge will read the file from disk and deliver it to the user. You can include multiple [send-file:...] tags. For images, the bridge automatically compresses them for Telegram. This is the ONLY way to send binary files — do NOT put binary content in ```file:``` blocks.",
     "",
     "IMPORTANT: Telegram is a plain-text chat environment. Do NOT use interactive UI elements such as HTML forms, checkboxes, radio buttons, dropdowns, accordions, tabs, or embedded widgets — they will not render. For multiple-choice questions, use numbered plain-text lists and ask the user to reply with a number or letter. For structured data, use simple text tables or bullet lists. Only basic Markdown (bold, italic, code, links) is supported.",
+    "",
+    "CRITICAL FILE DELIVERY RULE: When you generate, save, or create ANY file that the user should receive (images, documents, archives, code files, etc.), you MUST include a [send-file:/absolute/path] tag in your reply for EACH file. Do NOT just list filenames or paths as text — the user cannot access your filesystem. If you saved a file, send it. No exceptions.",
   ].join("\n");
 }
 
