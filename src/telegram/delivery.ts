@@ -602,6 +602,7 @@ export async function handleNormalizedTelegramMessage(
           locale,
           text: "/compact",
           files: [],
+          workspaceOverride: cfg.resume?.workspacePath,
         });
 
         const compactMsg = locale === "zh"
@@ -830,14 +831,17 @@ export async function handleNormalizedTelegramMessage(
             await context.api.sendMessage(normalized.chatId, msg);
           } else {
             // Set up symlink: engine-home/projects/<dirName> → ~/.claude/projects/<dirName>
-            const { symlink: symlinkFn, rm } = await import("node:fs/promises");
+            const { symlink: symlinkFn, lstat: lstatFn, unlink: unlinkFn } = await import("node:fs/promises");
             const engineHome = path.join(stateDir, "engine-home");
             const symlinkTarget = path.join(process.env.HOME ?? "/", ".claude", "projects", picked.dirName);
             const symlinkPath = path.join(engineHome, "projects", picked.dirName);
 
             try {
-              // Remove existing symlink if present
-              try { await rm(symlinkPath, { force: true }); } catch { /* ok */ }
+              // Remove existing symlink if present (only symlinks — never a real directory)
+              try {
+                const st = await lstatFn(symlinkPath);
+                if (st.isSymbolicLink()) await unlinkFn(symlinkPath);
+              } catch { /* ok — doesn't exist */ }
               await mkdir(path.join(engineHome, "projects"), { recursive: true });
               await symlinkFn(symlinkTarget, symlinkPath);
             } catch (err) {
@@ -1060,6 +1064,7 @@ export async function handleNormalizedTelegramMessage(
           locale,
           text: fanCommand.prompt,
           files: [],
+          workspaceOverride: cfg.resume?.workspacePath,
         })
           .then((r) => ({ name: currentInstance, text: r.text, error: null as string | null }))
           .catch((e) => ({ name: currentInstance, text: "", error: e instanceof Error ? e.message : String(e) }));
@@ -1137,6 +1142,7 @@ export async function handleNormalizedTelegramMessage(
           locale,
           text: verifyCommand.prompt,
           files: [],
+          workspaceOverride: cfg.resume?.workspacePath,
         });
 
         await context.api.sendMessage(normalized.chatId,
