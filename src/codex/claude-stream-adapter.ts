@@ -69,7 +69,7 @@ type ClaudeWorker = {
 
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
-const TURN_TIMEOUT_MS = 5 * 60 * 1000;
+// No timeout — complex tasks (image generation, large projects) can run indefinitely
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
@@ -385,16 +385,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         resolve,
         reject,
       };
-      pendingTurn.timeout = setTimeout(() => {
-        if (worker.pendingTurn !== pendingTurn) {
-          return;
-        }
-
-        worker.pendingTurn = null;
-        this.removeWorker(worker);
-        worker.child.kill?.();
-        reject(new Error("Engine execution timed out after 5 minutes"));
-      }, TURN_TIMEOUT_MS);
       worker.pendingTurn = pendingTurn;
 
       worker.child.stdin?.write(

@@ -377,19 +377,10 @@ export class ProcessCodexAdapter implements CodexAdapter {
       windowsHide: true,
     });
 
-    const TIMEOUT_MS = 5 * 60 * 1000;
     return await new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
       let stdout = "";
       let stderr = "";
       let settled = false;
-
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          child.kill?.();
-          reject(new Error("Engine execution timed out after 5 minutes"));
-        }
-      }, TIMEOUT_MS);
 
       child.stdout?.on("data", (chunk) => {
         stdout += chunk.toString();
@@ -403,14 +394,12 @@ export class ProcessCodexAdapter implements CodexAdapter {
       child.once("error", (error) => {
         if (!settled) {
           settled = true;
-          clearTimeout(timer);
           reject(error);
         }
       });
       child.once("close", (code) => {
         if (!settled) {
           settled = true;
-          clearTimeout(timer);
           resolve({ stdout, stderr, exitCode: code });
         }
       });

@@ -277,49 +277,23 @@ describe("ClaudeStreamAdapter", () => {
     await expect(resultPromise).rejects.toThrow("Permission denied");
   });
 
-  it("times out a stalled turn and starts a fresh worker for the retry", async () => {
-    vi.useFakeTimers();
+  it("does not time out — engine runs until completion", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
 
-    try {
-      const { children, spawnFn } = createSpawnHarness();
-      const adapter = new ClaudeStreamAdapter("claude", {
-        spawnFn,
-      });
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Long task",
+      files: [],
+    });
 
-      const firstPromise = adapter.sendUserMessage("telegram-12345", {
-        text: "First",
-        files: [],
-      });
+    expect(children).toHaveLength(1);
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"done after a long time","session_id":"session-long"}\n');
 
-      expect(children).toHaveLength(1);
-      expect(children[0].stdin.lines).toHaveLength(1);
-
-      const firstOutcome: string[] = [];
-      void firstPromise.then(
-        () => firstOutcome.push("resolved"),
-        (error: Error) => firstOutcome.push(error.message),
-      );
-
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-
-      expect(firstOutcome).toEqual(["Engine execution timed out after 5 minutes"]);
-      expect(children[0].killCalls).toBe(1);
-
-      const secondPromise = adapter.sendUserMessage("telegram-12345", {
-        text: "Second",
-        files: [],
-      });
-
-      expect(children).toHaveLength(2);
-      expect(children[1].stdin.lines).toHaveLength(1);
-      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"RECOVERED","session_id":"session-2"}\n');
-
-      await expect(secondPromise).resolves.toEqual({
-        text: "RECOVERED",
-        sessionId: "session-2",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(promise).resolves.toEqual({
+      text: "done after a long time",
+      sessionId: "session-long",
+    });
   });
 });
