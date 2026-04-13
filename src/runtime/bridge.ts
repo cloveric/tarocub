@@ -60,7 +60,14 @@ function renderTelegramBridgeCapabilities(): string {
     "",
     "IMPORTANT: Telegram is a plain-text chat environment. Do NOT use interactive UI elements such as HTML forms, checkboxes, radio buttons, dropdowns, accordions, tabs, or embedded widgets — they will not render. For multiple-choice questions, use numbered plain-text lists and ask the user to reply with a number or letter. For structured data, use simple text tables or bullet lists. Only basic Markdown (bold, italic, code, links) is supported.",
     "",
-    "CRITICAL FILE DELIVERY RULE: When you generate, save, or create ANY file that the user should receive (images, documents, archives, code files, etc.), you MUST include a [send-file:/absolute/path] tag in your reply for EACH file. Do NOT just list filenames or paths as text — the user cannot access your filesystem. If you saved a file, send it. No exceptions.",
+    "CRITICAL FILE DELIVERY RULE:",
+    "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type. The ONLY way to deliver a file to the user is the [send-file:] tag.",
+    "After generating/saving ANY file the user should receive, you MUST include: [send-file:/absolute/path/to/file.ext]",
+    "Examples:",
+    "  Generated a PPT → [send-file:/path/to/presentation.pptx]",
+    "  Generated images → [send-file:/path/to/img1.png] [send-file:/path/to/img2.png]",
+    "  Generated a PDF → [send-file:/path/to/report.pdf]",
+    "If you wrote 'the file is here: filename.pptx' WITHOUT a [send-file:] tag, the user received NOTHING. Always include the tag. No exceptions.",
   ].join("\n");
 }
 
