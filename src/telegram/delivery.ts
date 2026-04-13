@@ -1168,6 +1168,12 @@ export async function handleNormalizedTelegramMessage(
     const message = classifiedError instanceof Error ? classifiedError.message : String(classifiedError);
     const failureCategory = classifyFailure(classifiedError);
 
+    // If user sent /stop, don't send an error message — /stop handler already notified them
+    if (context.abortSignal?.aborted) {
+      stopTyping();
+      return;
+    }
+
     if (failureCategory === "auth" && context.onAuthRetry && !context._authRetried) {
       try {
         await context.onAuthRetry();
