@@ -332,15 +332,8 @@ function isImageFile(filename: string): boolean {
 }
 
 async function sendFileOrPhoto(api: TelegramApi, chatId: number, filename: string, contents: Uint8Array | string): Promise<void> {
-  if (isImageFile(filename)) {
-    const payload = typeof contents === "string" ? new TextEncoder().encode(contents) : contents;
-    try {
-      await api.sendPhoto(chatId, filename, payload);
-      return;
-    } catch {
-      // Fall back to sendDocument if sendPhoto fails (e.g. image too large)
-    }
-  }
+  // Always use sendDocument to preserve original image quality.
+  // Telegram still shows an inline preview for images sent as documents.
   await api.sendDocument(chatId, filename, contents);
 }
 
@@ -415,22 +408,8 @@ async function deliverTelegramResponse(
     }
   }
 
-  // Send multiple images as album, single image as photo
-  if (imageFiles.length > 1) {
-    try {
-      await api.sendMediaGroup(chatId, imageFiles);
-    } catch {
-      // Fallback: send one by one
-      for (const img of imageFiles) {
-        await sendFileOrPhoto(api, chatId, img.filename, img.contents);
-      }
-    }
-  } else if (imageFiles.length === 1) {
-    await sendFileOrPhoto(api, chatId, imageFiles[0]!.filename, imageFiles[0]!.contents);
-  }
-
-  // Send non-image files
-  for (const file of otherFiles) {
+  // Send all files (images + others) as documents to preserve original quality
+  for (const file of [...imageFiles, ...otherFiles]) {
     await sendFileOrPhoto(api, chatId, file.filename, file.contents);
   }
 }
