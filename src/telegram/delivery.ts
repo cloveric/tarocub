@@ -114,6 +114,8 @@ export interface TelegramDeliveryContext {
   instanceName?: string;
   updateId?: number;
   abortSignal?: AbortSignal;
+  onAuthRetry?: () => Promise<void>;
+  _authRetried?: boolean;
 }
 
 function wantsTelegramOut(text: string): boolean {
@@ -1165,6 +1167,17 @@ export async function handleNormalizedTelegramMessage(
     const classifiedError = error instanceof FileWorkflowPreparationError ? error.cause : error;
     const message = classifiedError instanceof Error ? classifiedError.message : String(classifiedError);
     const failureCategory = classifyFailure(classifiedError);
+
+    if (failureCategory === "auth" && context.onAuthRetry && !context._authRetried) {
+      try {
+        await context.onAuthRetry();
+        context._authRetried = true;
+        return await handleNormalizedTelegramMessage(normalized, context);
+      } catch {
+        // Retry failed — fall through to normal error handling
+      }
+    }
+
     const errorMessage = shouldUseNonRepairableResetSessionGuidance(classifiedError, failureCategory, normalized.text)
       ? renderSessionStateErrorMessage(false, locale)
       : classifiedError instanceof SessionStateError

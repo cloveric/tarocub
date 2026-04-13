@@ -676,6 +676,17 @@ export async function processTelegramUpdates(
             ...context,
             updateId,
             abortSignal: taskController.signal,
+            onAuthRetry: async () => {
+              const stateDir = path.dirname(context.inboxDir);
+              const configPath = path.join(stateDir, "config.json");
+              const engine = await readInstanceEngine(configPath);
+              const engineHomePath = path.join(stateDir, "engine-home");
+              if (engine === "claude") {
+                await seedIsolatedClaudeConfig({ HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }, engineHomePath);
+              } else {
+                await seedIsolatedCodexHome({ HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME }, engineHomePath);
+              }
+            },
           });
         } finally {
           activeTasks.delete(normalized.chatId);
