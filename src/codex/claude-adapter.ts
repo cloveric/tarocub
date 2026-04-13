@@ -279,7 +279,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       const json = JSON.parse(trimmed) as ClaudeJsonResult;
 
       if (json.is_error) {
-        return { text: `Error: ${json.result ?? "Unknown error"}` };
+        throw new Error(json.result ?? "Unknown error from Claude CLI");
       }
 
       const usage = json.usage ? {

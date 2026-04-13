@@ -2,6 +2,13 @@ import { readdir, stat } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 
+function resolveHomeDir(): string {
+  if (process.platform === "win32") {
+    return process.env.USERPROFILE ?? process.env.HOME ?? "/";
+  }
+  return process.env.HOME ?? process.env.USERPROFILE ?? "/";
+}
+
 export interface ScannedSession {
   sessionId: string;
   dirName: string;
@@ -22,7 +29,10 @@ function isExistingDir(p: string): boolean {
  * Decode a Claude project directory name back to the original workspace path.
  *
  * Claude encodes workspace paths by replacing `/` and `.` with `-`.
- * Decoding is ambiguous, so we use greedy filesystem probing.
+ * Decoding is ambiguous (e.g. `foo-bar` could be `foo/bar` or literal
+ * `foo-bar`).  We prefer the **longest** dash-joined match at each step
+ * so that project names containing dashes (e.g. `cc-telegram-bridge`) are
+ * resolved correctly even when shorter sub-paths also exist on disk.
  */
 export function tryDecodeWorkspacePath(dirName: string): string | null {
   if (!dirName.startsWith("-")) return null;
@@ -45,20 +55,13 @@ export function tryDecodeWorkspacePath(dirName: string): string | null {
       continue;
     }
 
-    const withSlash = current + "/" + segment;
-
-    if (isExistingDir(withSlash)) {
-      current = withSlash;
-      i++;
-      continue;
-    }
-
-    // Segment doesn't exist as directory — try joining with subsequent
-    // segments using dashes (e.g. cc-telegram-bridge)
-    let joined = segment;
+    // Try longest dash-joined match first (e.g. "cc-telegram-bridge"),
+    // then progressively shorter ones, then bare single segment.
+    // This prevents "foo-bar" being split into "foo/bar" when a real
+    // directory named "foo-bar" exists.
     let found = false;
-    for (let j = i + 1; j < parts.length; j++) {
-      joined += "-" + parts[j]!;
+    for (let j = parts.length - 1; j > i; j--) {
+      const joined = parts.slice(i, j + 1).join("-");
       const candidate = current + "/" + joined;
       if (isExistingDir(candidate)) {
         current = candidate;
@@ -69,8 +72,8 @@ export function tryDecodeWorkspacePath(dirName: string): string | null {
     }
 
     if (!found) {
-      // Accept anyway (might be the final leaf)
-      current = withSlash;
+      // Single segment — accept as slash-separated path component
+      current = current + "/" + segment;
       i++;
     }
   }
@@ -121,7 +124,7 @@ export function formatSessionList(sessions: ScannedSession[], locale: "en" | "zh
  * time window.  Returns results sorted by modification time (newest first).
  */
 export async function scanRecentClaudeSessions(hoursAgo: number = 1): Promise<ScannedSession[]> {
-  const claudeHome = path.join(process.env.HOME ?? "/", ".claude");
+  const claudeHome = path.join(resolveHomeDir(), ".claude");
   const projectsDir = path.join(claudeHome, "projects");
 
   if (!existsSync(projectsDir)) {

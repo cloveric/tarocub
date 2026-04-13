@@ -833,7 +833,10 @@ export async function handleNormalizedTelegramMessage(
             // Set up symlink: engine-home/projects/<dirName> → ~/.claude/projects/<dirName>
             const { symlink: symlinkFn, lstat: lstatFn, unlink: unlinkFn } = await import("node:fs/promises");
             const engineHome = path.join(stateDir, "engine-home");
-            const symlinkTarget = path.join(process.env.HOME ?? "/", ".claude", "projects", picked.dirName);
+            const homeDir = process.platform === "win32"
+              ? (process.env.USERPROFILE ?? process.env.HOME ?? "/")
+              : (process.env.HOME ?? process.env.USERPROFILE ?? "/");
+            const symlinkTarget = path.join(homeDir, ".claude", "projects", picked.dirName);
             const symlinkPath = path.join(engineHome, "projects", picked.dirName);
 
             try {
