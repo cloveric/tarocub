@@ -1,9 +1,9 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { tryDecodeWorkspacePath } from "../src/runtime/session-scanner.js";
+import { tryDecodeWorkspacePath, scanRecentClaudeSessions } from "../src/runtime/session-scanner.js";
 
 describe("tryDecodeWorkspacePath", () => {
   it("returns null for dirnames that don't start with dash", () => {
@@ -78,5 +78,34 @@ describe("tryDecodeWorkspacePath", () => {
 
   it("returns null when the decoded path does not exist", () => {
     expect(tryDecodeWorkspacePath("-nonexistent-path-that-does-not-exist")).toBeNull();
+  });
+});
+
+describe("scanRecentClaudeSessions", () => {
+  it("finds sessions under USERPROFILE when HOME is unset", async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), "cctb-userprofile-"));
+    const projectDir = path.join(fakeHome, ".claude", "projects", "-fake-project");
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(projectDir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"), "{}\n", "utf8");
+
+    const origHome = process.env.HOME;
+    const origUserProfile = process.env.USERPROFILE;
+    try {
+      delete process.env.HOME;
+      process.env.USERPROFILE = fakeHome;
+
+      const sessions = await scanRecentClaudeSessions(1);
+      const match = sessions.find((s) => s.sessionId === "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+      expect(match).toBeDefined();
+      expect(match!.dirName).toBe("-fake-project");
+    } finally {
+      process.env.HOME = origHome;
+      if (origUserProfile !== undefined) {
+        process.env.USERPROFILE = origUserProfile;
+      } else {
+        delete process.env.USERPROFILE;
+      }
+      await rm(fakeHome, { recursive: true, force: true });
+    }
   });
 });
