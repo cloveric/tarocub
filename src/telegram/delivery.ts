@@ -333,6 +333,42 @@ function isImageFile(filename: string): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(filename).toLowerCase());
 }
 
+const SCANNABLE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".pdf", ".pptx", ".docx", ".gif", ".webp"]);
+const MAX_SCAN_FILES = 20;
+
+async function scanNewWorkspaceFiles(workspaceDir: string, sinceTimestamp: number): Promise<Array<{ name: string; contents: Uint8Array }>> {
+  const { readdir, realpath, lstat } = await import("node:fs/promises");
+  const results: Array<{ name: string; contents: Uint8Array }> = [];
+  const workspacePrefix = workspaceDir + path.sep;
+
+  async function walk(dir: string): Promise<void> {
+    if (results.length >= MAX_SCAN_FILES) return;
+    let entries: string[];
+    try { entries = await readdir(dir); } catch { return; }
+    for (const entry of entries) {
+      if (results.length >= MAX_SCAN_FILES) return;
+      const full = path.join(dir, entry);
+      try {
+        const stats = await lstat(full);
+        if (stats.isSymbolicLink()) continue;
+        if (stats.isDirectory()) {
+          await walk(full);
+        } else if (stats.isFile() && stats.mtimeMs >= sinceTimestamp && stats.size <= 50_000_000) {
+          const ext = path.extname(entry).toLowerCase();
+          if (!SCANNABLE_EXTENSIONS.has(ext)) continue;
+          const real = await realpath(full);
+          if (!real.startsWith(workspacePrefix)) continue;
+          const contents = await readFile(real);
+          results.push({ name: entry, contents });
+        }
+      } catch { continue; }
+    }
+  }
+
+  try { await walk(workspaceDir); } catch { /* best effort */ }
+  return results;
+}
+
 const IMAGE_SIZE_THRESHOLD = 2 * 1024 * 1024; // 2MB
 
 async function sendFileOrPhoto(api: TelegramApi, chatId: number, filename: string, contents: Uint8Array | string): Promise<void> {
@@ -1147,28 +1183,13 @@ export async function handleNormalizedTelegramMessage(
     const deliveredFiles = await deliverTelegramResponse(context.api, normalized.chatId, result.text, context.inboxDir);
     responded = true;
 
-    // Auto-scan workspace for new files if deliverTelegramResponse didn't send any
+    // Auto-scan workspace for files created during this request
     if (deliveredFiles === 0) {
-      const workspaceDir = path.join(stateDir, "workspace");
       try {
-        const { stat: fsStat } = await import("node:fs/promises");
-        const { execSync } = await import("node:child_process");
-        // Find files modified in the last 30 minutes within workspace
-        if (process.platform !== "win32") {
-          const found = execSync(`find ${JSON.stringify(workspaceDir)} -type f \\( -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.pdf" -o -name "*.pptx" -o -name "*.docx" \\) -mmin -30 2>/dev/null`, { encoding: "utf8", timeout: 5000 }).trim();
-          if (found) {
-            const newFiles = found.split("\n").filter(Boolean).slice(0, 20);
-            for (const filePath of newFiles) {
-              const { realpath: rp, lstat: ls } = await import("node:fs/promises");
-              const real = await rp(filePath);
-              const workspacePrefix = workspaceDir + path.sep;
-              if (!real.startsWith(workspacePrefix)) continue;
-              const stats = await ls(real);
-              if (!stats.isFile() || stats.isSymbolicLink() || stats.size > 50_000_000) continue;
-              const contents = await readFile(real);
-              await sendFileOrPhoto(context.api, normalized.chatId, path.basename(real), contents);
-            }
-          }
+        const workspaceDir = path.join(stateDir, "workspace");
+        const scannedFiles = await scanNewWorkspaceFiles(workspaceDir, startedAt);
+        for (const file of scannedFiles) {
+          await sendFileOrPhoto(context.api, normalized.chatId, file.name, file.contents);
         }
       } catch {
         // Auto-scan is best-effort
