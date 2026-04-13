@@ -70,6 +70,23 @@ The two engines reference files differently in their output. The delivery layer 
 4. Multiple images are sent as a Telegram album via `sendMediaGroup`.
 5. Never break the `deliverTelegramResponse` function without re-running the regex test cases (see commit `7dad7a4`).
 
+## Security: No Private Data in Commits
+
+Before committing or pushing, verify that **none** of the following appear in code, docs, or examples:
+
+- **Bot tokens** — use placeholder `123456789:ABCdefGHIjklMNOpqrsTUVwxyz0123456789`
+- **API keys** — `ghp_*`, `sk-ant-*`, `ANTHROPIC_API_KEY`, etc.
+- **Pairing codes** — real 6-char codes like `38J63T`
+- **Chat IDs / User IDs** — real Telegram numeric IDs
+- **File paths containing usernames** — use `~/` or `%USERPROFILE%` instead of `/Users/realname/`
+- **`.env` files, `access.json`, `session.json`** — must be in `.gitignore`
+
+Run this check before pushing:
+```bash
+git diff --cached | grep -iE 'ghp_|sk-ant-|bot[0-9]{8,}:[A-Za-z0-9_-]{30,}|TELEGRAM_BOT_TOKEN=' 
+```
+If it matches anything, fix before committing.
+
 ## Repo Notes
 
 - Windows-first project
