@@ -24,8 +24,16 @@ import { SessionStore } from "../state/session-store.js";
 import { SessionStateError } from "../runtime/session-manager.js";
 import { delegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig } from "../bus/bus-config.js";
+import { scanRecentClaudeSessions, formatSessionList, type ScannedSession } from "../runtime/session-scanner.js";
 
 type EffortLevel = "low" | "medium" | "high" | "max";
+
+interface ResumeState {
+  sessionId: string;
+  dirName: string;
+  workspacePath: string;
+  symlinkPath: string;
+}
 
 interface InstanceConfig {
   engine: "codex" | "claude";
@@ -34,9 +42,19 @@ interface InstanceConfig {
   budgetUsd: number | undefined;
   effort: EffortLevel | undefined;
   model: string | undefined;
+  resume: ResumeState | undefined;
 }
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "max"];
+
+function parseResumeState(raw: unknown): ResumeState | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.sessionId !== "string" || typeof r.dirName !== "string" || typeof r.workspacePath !== "string" || typeof r.symlinkPath !== "string") {
+    return undefined;
+  }
+  return { sessionId: r.sessionId, dirName: r.dirName, workspacePath: r.workspacePath, symlinkPath: r.symlinkPath };
+}
 
 async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
   try {
@@ -48,6 +66,7 @@ async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
       budgetUsd?: number;
       effort?: string;
       model?: string;
+      resume?: unknown;
     };
     const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
     return {
@@ -57,9 +76,10 @@ async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
       budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,
       effort,
       model: typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined,
+      resume: parseResumeState(config.resume),
     };
   } catch {
-    return { engine: "codex", locale: "en", verbosity: 1, budgetUsd: undefined, effort: undefined, model: undefined };
+    return { engine: "codex", locale: "en", verbosity: 1, budgetUsd: undefined, effort: undefined, model: undefined, resume: undefined };
   }
 }
 
@@ -175,6 +195,19 @@ function parseVerifyCommand(text: string): { prompt: string } | null {
   if (!match) return null;
   return { prompt: match[1]!.trim() };
 }
+
+function parseResumeCommand(text: string): { pick: number | null } | null {
+  const match = text.trim().match(/^\/resume(?:@\w+)?(?:\s+(\d+))?(?:\s|$)/i);
+  if (!match) return null;
+  return { pick: match[1] ? Number(match[1]) : null };
+}
+
+function isDetachCommand(text: string): boolean {
+  return /^\/detach(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
+// In-memory pending resume selections keyed by chatId
+const pendingResumeScans = new Map<number, ScannedSession[]>();
 
 function isBlockingWorkflowStatus(status: "preparing" | "processing" | "awaiting_continue" | "completed" | "failed"): boolean {
   return status === "preparing" || status === "processing" || status === "failed";
@@ -355,6 +388,7 @@ async function deliverTelegramResponse(
   chatId: number,
   text: string,
   inboxDir: string,
+  workspaceOverride?: string,
 ): Promise<number> {
   let filesSent = 0;
   // Handle inline text file blocks
@@ -406,12 +440,13 @@ async function deliverTelegramResponse(
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
+  const overridePrefix = workspaceOverride ? workspaceOverride + path.sep : null;
 
   for (const filePath of filePaths) {
     try {
       const { realpath, lstat } = await import("node:fs/promises");
       const real = await realpath(filePath);
-      if (!real.startsWith(workspacePrefix)) {
+      if (!real.startsWith(workspacePrefix) && !(overridePrefix && real.startsWith(overridePrefix))) {
         continue;
       }
       const stats = await lstat(real);
@@ -706,6 +741,136 @@ export async function handleNormalizedTelegramMessage(
         updateId: context.updateId,
         outcome: "success",
         metadata: { durationMs: Date.now() - startedAt, command: "model", value: modelCmd.model || "query" },
+      });
+      return;
+    }
+
+    const resumeCmd = parseResumeCommand(normalized.text);
+    if (resumeCmd) {
+      stopTyping();
+
+      if (resumeCmd.pick === null) {
+        // Scan for recent sessions
+        const sessions = await scanRecentClaudeSessions(1);
+        if (sessions.length === 0) {
+          const msg = locale === "zh"
+            ? "最近 1 小时内没有找到本地 session。"
+            : "No local sessions found in the last hour.";
+          await context.api.sendMessage(normalized.chatId, msg);
+        } else {
+          pendingResumeScans.set(normalized.chatId, sessions);
+          await context.api.sendMessage(normalized.chatId, formatSessionList(sessions, locale));
+        }
+      } else {
+        // User picked a session number
+        const cached = pendingResumeScans.get(normalized.chatId);
+        if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
+          const msg = locale === "zh"
+            ? "无效选择，请先发 /resume 扫描。"
+            : "Invalid selection. Send /resume first to scan.";
+          await context.api.sendMessage(normalized.chatId, msg);
+        } else {
+          const picked = cached[resumeCmd.pick - 1]!;
+          pendingResumeScans.delete(normalized.chatId);
+
+          if (!picked.workspacePath) {
+            const msg = locale === "zh"
+              ? `无法解析 session 的工作区路径（${picked.dirName}）。`
+              : `Cannot resolve workspace path for session (${picked.dirName}).`;
+            await context.api.sendMessage(normalized.chatId, msg);
+          } else {
+            // Set up symlink: engine-home/projects/<dirName> → ~/.claude/projects/<dirName>
+            const { symlink: symlinkFn, rm } = await import("node:fs/promises");
+            const engineHome = path.join(stateDir, "engine-home");
+            const symlinkTarget = path.join(process.env.HOME ?? "/", ".claude", "projects", picked.dirName);
+            const symlinkPath = path.join(engineHome, "projects", picked.dirName);
+
+            try {
+              // Remove existing symlink if present
+              try { await rm(symlinkPath, { force: true }); } catch { /* ok */ }
+              await mkdir(path.join(engineHome, "projects"), { recursive: true });
+              await symlinkFn(symlinkTarget, symlinkPath);
+            } catch (err) {
+              const detail = err instanceof Error ? err.message : String(err);
+              const msg = locale === "zh"
+                ? `创建软链失败：${detail}`
+                : `Failed to create symlink: ${detail}`;
+              await context.api.sendMessage(normalized.chatId, msg);
+              responded = true;
+              return;
+            }
+
+            // Bind session and persist resume state
+            await sessionStore.upsert({
+              telegramChatId: normalized.chatId,
+              codexSessionId: picked.sessionId,
+              status: "idle",
+              updatedAt: new Date().toISOString(),
+            });
+            await updateInstanceConfig(stateDir, (c) => {
+              c.resume = {
+                sessionId: picked.sessionId,
+                dirName: picked.dirName,
+                workspacePath: picked.workspacePath,
+                symlinkPath,
+              };
+            });
+
+            const msg = locale === "zh"
+              ? `已恢复 session：${picked.displayName}\n工作区：${picked.workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`
+              : `Resumed session: ${picked.displayName}\nWorkspace: ${picked.workspacePath}\n\nSend a message to continue. Use /detach when done.`;
+            await context.api.sendMessage(normalized.chatId, msg);
+          }
+        }
+      }
+
+      responded = true;
+      await appendAuditEventBestEffort(stateDir, {
+        type: "update.handle",
+        instanceName: context.instanceName,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "success",
+        metadata: { durationMs: Date.now() - startedAt, command: "resume", pick: resumeCmd.pick },
+      });
+      return;
+    }
+
+    if (isDetachCommand(normalized.text)) {
+      stopTyping();
+
+      if (!cfg.resume) {
+        const msg = locale === "zh"
+          ? "当前没有恢复的 session。"
+          : "No resumed session active.";
+        await context.api.sendMessage(normalized.chatId, msg);
+      } else {
+        // Remove symlink
+        try {
+          const { rm } = await import("node:fs/promises");
+          await rm(cfg.resume.symlinkPath, { force: true });
+        } catch { /* ok */ }
+
+        // Unbind session and clear resume state
+        await sessionStore.removeByChatId(normalized.chatId);
+        await updateInstanceConfig(stateDir, (c) => { delete c.resume; });
+
+        const msg = locale === "zh"
+          ? "已断开恢复的 session，软链已清理，回到 bot 默认工作区。"
+          : "Detached from resumed session. Symlink cleaned up, back to default workspace.";
+        await context.api.sendMessage(normalized.chatId, msg);
+      }
+
+      responded = true;
+      await appendAuditEventBestEffort(stateDir, {
+        type: "update.handle",
+        instanceName: context.instanceName,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "success",
+        metadata: { durationMs: Date.now() - startedAt, command: "detach" },
       });
       return;
     }
@@ -1114,6 +1279,7 @@ export async function handleNormalizedTelegramMessage(
       replyContext,
       files: requestFiles,
       requestOutputDir: telegramOutDirPath,
+      workspaceOverride: cfg.resume?.workspacePath,
       abortSignal: context.abortSignal,
     });
 
@@ -1144,7 +1310,7 @@ export async function handleNormalizedTelegramMessage(
       }
     }
 
-    await deliverTelegramResponse(context.api, normalized.chatId, result.text, context.inboxDir);
+    await deliverTelegramResponse(context.api, normalized.chatId, result.text, context.inboxDir, cfg.resume?.workspacePath);
     responded = true;
 
     if (telegramOutDirPath) {

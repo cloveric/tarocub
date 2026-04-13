@@ -168,6 +168,7 @@ export class Bridge {
     files: string[];
     onProgress?: (partialText: string) => void;
     requestOutputDir?: string;
+    workspaceOverride?: string;
     abortSignal?: AbortSignal;
   }) {
     const decision = await this.checkAccess(input);
@@ -197,6 +198,7 @@ export class Bridge {
       instructions,
       onProgress: input.onProgress,
       requestOutputDir: input.requestOutputDir,
+      workspaceOverride: input.workspaceOverride,
       abortSignal: input.abortSignal,
     });
 

@@ -254,11 +254,12 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     }
 
     // Workspace directory (where CLAUDE.md lives)
-    if (this.workspacePath) {
-      args.push("--add-dir", this.workspacePath);
+    const effectiveWorkspace = input.workspaceOverride ?? this.workspacePath;
+    if (effectiveWorkspace) {
+      args.push("--add-dir", effectiveWorkspace);
     }
 
-    const result = await this.runClaudeCommand(args, prompt, input.abortSignal);
+    const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace);
     const parsed = this.parseResult(result.stdout);
 
     return {
@@ -299,13 +300,13 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     }
   }
 
-  private async runClaudeCommand(args: string[], stdinContent: string, abortSignal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+  private async runClaudeCommand(args: string[], stdinContent: string, abortSignal?: AbortSignal, cwdOverride?: string): Promise<{ stdout: string; stderr: string }> {
     const invocation = buildCommandInvocation(this.claudeExecutable, args);
     const child = this.spawnClaude(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
       env: this.childEnv,
-      cwd: this.workspacePath,
+      cwd: cwdOverride ?? this.workspacePath,
       windowsHide: true,
     });
 

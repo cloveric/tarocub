@@ -358,7 +358,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
     const args = isLogicalTelegramSessionId(sessionId)
       ? ["exec", "--json", "--skip-git-repo-check", ...approvalFlags, ...engineFlags, "-"]
       : ["exec", "resume", "--json", "--skip-git-repo-check", ...approvalFlags, ...engineFlags, sessionId, "-"];
-    const result = await this.runCodexJsonCommand(args, prompt, input.abortSignal);
+    const result = await this.runCodexJsonCommand(args, prompt, input.abortSignal, input.workspaceOverride);
     const events = parseJsonEvents(result.stdout);
     const lastAgentMessage = extractLastAgentMessage(events);
     const threadId = extractThreadId(events);
@@ -384,13 +384,13 @@ export class ProcessCodexAdapter implements CodexAdapter {
     };
   }
 
-  private async runCodexJsonCommand(args: string[], prompt: string, abortSignal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  private async runCodexJsonCommand(args: string[], prompt: string, abortSignal?: AbortSignal, cwdOverride?: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
     const invocation = buildCommandInvocation(this.codexExecutable, args);
     const child = this.spawnCodex(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
       env: this.childEnv,
-      cwd: this.workspacePath,
+      cwd: cwdOverride ?? this.workspacePath,
       windowsHide: true,
     });
 
