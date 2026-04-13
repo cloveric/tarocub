@@ -411,7 +411,7 @@ async function createAdapter(
     const engineHomePath = path.join(config.stateDir, "engine-home");
     await mkdir(workspacePath, { recursive: true });
     await seedIsolatedClaudeConfig(env, engineHomePath);
-    return new ClaudeStreamAdapter(resolveClaudeExecutable(env), {
+    return new ProcessClaudeAdapter(resolveClaudeExecutable(env), {
       instructionsPath,
       configPath,
       workspacePath,
