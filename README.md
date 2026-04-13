@@ -425,34 +425,70 @@ All bots can talk to all bots. Simplest config, best for small teams (3-5 bots).
 
 ## Quick Start
 
+> **TL;DR** — You only need to do two things on your phone: get a bot token from BotFather and send the pairing code. Everything else happens on your computer via Claude Code or Codex CLI.
+
 ### Prerequisites
 
 - **Node.js** >= 20
 - **OpenAI Codex CLI** and/or **Claude Code CLI** installed and authenticated
-- A **Telegram Bot Token** from [@BotFather](https://t.me/BotFather)
+- A **Telegram account** (phone)
 
-### Install
+### Step 1: Create a Telegram Bot (on your phone)
+
+1. Open Telegram and search for **[@BotFather](https://t.me/BotFather)**
+2. Send `/newbot`
+3. Follow the prompts — give your bot a name and username
+4. BotFather will reply with a **bot token** like `<revoked-telegram-token-removed>`
+5. Copy this token — you'll paste it in your terminal
+
+### Step 2: Install & Configure (on your computer)
+
+Open your terminal with Claude Code or Codex, and tell it:
+
+> *"Clone https://github.com/cloveric/cc-telegram-bridge and set up a Telegram bot with this token: `<paste your token>`"*
+
+Or do it manually:
 
 ```bash
 git clone https://github.com/cloveric/cc-telegram-bridge.git
 cd cc-telegram-bridge
 npm install
 npm run build
-```
 
-### Single Bot (Simplest)
-
-```bash
+# Configure with your bot token
 npm run dev -- telegram configure <your-bot-token>
+
+# Optional: switch to Claude engine (default is Codex)
+npm run dev -- telegram engine claude
+
+# Enable YOLO mode for hands-free operation
+npm run dev -- telegram yolo on
+
+# Start the service
 npm run dev -- telegram service start
 ```
 
-### Claude Bot
+### Step 3: Pair Your Phone (on your phone)
+
+1. Open Telegram and find your new bot (search its username)
+2. Send any message — the bot will reply with a **6-character pairing code** like `38J63T`
+3. Go back to your terminal and run:
 
 ```bash
-npm run dev -- telegram configure --instance claude-bot <token>
-npm run dev -- telegram engine claude --instance claude-bot
-npm run dev -- telegram service start --instance claude-bot
+npm run dev -- telegram access pair 38J63T
+```
+
+**Done!** You can now chat with Codex or Claude from Telegram. Send text, voice messages, or files — the bot handles everything.
+
+### Multiple Bots
+
+```bash
+# Create a second bot with BotFather, then:
+npm run dev -- telegram configure --instance work <second-token>
+npm run dev -- telegram engine claude --instance work
+npm run dev -- telegram yolo on --instance work
+npm run dev -- telegram service start --instance work
+# Pair the same way: send a message, get the code, run `telegram access pair <code> --instance work`
 ```
 
 ---
