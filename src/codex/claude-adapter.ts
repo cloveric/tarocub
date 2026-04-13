@@ -1,5 +1,23 @@
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+
+function killProcessTree(pid: number | undefined): void {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    // taskkill /T kills the process tree on Windows
+    execFile("taskkill", ["/F", "/T", "/PID", String(pid)], () => {});
+  } else {
+    // pgrep + recursive kill for Unix — kills all descendants
+    execFile("pgrep", ["-P", String(pid)], (_, stdout) => {
+      if (stdout) {
+        for (const childPid of stdout.trim().split(/\s+/)) {
+          killProcessTree(Number(childPid));
+        }
+      }
+      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+    });
+  }
+}
 
 import type {
   CodexAdapter,
@@ -27,6 +45,7 @@ type Writable = {
 };
 
 type ClaudeChildProcess = {
+  pid?: number;
   stdin?: Writable;
   stdout?: ProcessStreamLike;
   stderr?: ProcessStreamLike;
@@ -315,7 +334,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
 
       if (abortSignal) {
         const onAbort = () => {
-          child.kill?.();
+          killProcessTree(child.pid);
           rejectOnce(new Error("Task was stopped by user"));
         };
         if (abortSignal.aborted) { onAbort(); return; }

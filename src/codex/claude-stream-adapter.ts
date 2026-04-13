@@ -1,5 +1,21 @@
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+
+function killProcessTree(pid: number | undefined): void {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    execFile("taskkill", ["/F", "/T", "/PID", String(pid)], () => {});
+  } else {
+    execFile("pgrep", ["-P", String(pid)], (_, stdout) => {
+      if (stdout) {
+        for (const childPid of stdout.trim().split(/\s+/)) {
+          killProcessTree(Number(childPid));
+        }
+      }
+      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+    });
+  }
+}
 
 import type {
   CodexAdapter,
@@ -26,6 +42,7 @@ type Writable = {
 };
 
 type ClaudeChildProcess = {
+  pid?: number;
   stdin?: Writable;
   stdout?: ProcessStreamLike;
   stderr?: ProcessStreamLike;
@@ -248,7 +265,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }
 
       const resumedSessionId = existing.currentSessionId ?? sessionId;
-      existing.child.kill?.();
+      killProcessTree(existing.child.pid);
       this.removeWorker(existing);
       sessionId = resumedSessionId;
     }
@@ -323,7 +340,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     if (worker.lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
       this.failWorker(worker, new Error("Engine output exceeded maximum buffer size"));
-      worker.child.kill?.();
+      killProcessTree(worker.child.pid);
       return;
     }
 
@@ -389,7 +406,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
       if (abortSignal) {
         const onAbort = () => {
-          worker.child.kill?.();
+          killProcessTree(worker.child.pid);
           this.failWorker(worker, new Error("Task was stopped by user"));
           this.removeWorker(worker);
         };
@@ -424,7 +441,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
   destroy(): void {
     for (const worker of this.workers.values()) {
-      worker.child.kill?.();
+      killProcessTree(worker.child.pid);
       if (worker.pendingTurn) {
         this.clearPendingTurnTimeout(worker.pendingTurn);
         worker.pendingTurn.reject(new Error("Adapter destroyed"));
