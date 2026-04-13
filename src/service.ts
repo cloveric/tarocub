@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, symlink, lstat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
 
@@ -188,6 +188,25 @@ function resolveSharedCodexHome(env: Pick<EnvSource, "HOME" | "USERPROFILE" | "C
   return path.join(homeDir, ".codex");
 }
 
+async function symlinkIfMissing(sourcePath: string, targetPath: string): Promise<void> {
+  try {
+    await lstat(targetPath);
+    return; // already exists
+  } catch {
+    // doesn't exist — proceed
+  }
+  try {
+    await lstat(sourcePath);
+  } catch {
+    return; // source doesn't exist
+  }
+  try {
+    await symlink(sourcePath, targetPath);
+  } catch {
+    // symlink failed (e.g. Windows without dev mode)
+  }
+}
+
 async function copyIfExists(sourcePath: string, destinationPath: string): Promise<void> {
   try {
     await copyFile(sourcePath, destinationPath);
@@ -222,6 +241,7 @@ async function seedIsolatedCodexHome(
   await Promise.all([
     copyIfExists(path.join(sharedCodexHome, "auth.json"), path.join(engineHomePath, "auth.json")),
     copyIfExists(path.join(sharedCodexHome, "config.toml"), path.join(engineHomePath, "config.toml")),
+    symlinkIfMissing(path.join(sharedCodexHome, "skills"), path.join(engineHomePath, "skills")),
   ]);
 }
 
@@ -302,6 +322,10 @@ async function seedIsolatedClaudeConfig(
     copyIfExists(path.join(sharedClaudeHome, ".claude.json"), path.join(engineHomePath, ".claude.json")),
     copyIfExists(path.join(sharedClaudeHome, ".claude", ".credentials.json"), path.join(engineHomePath, ".credentials.json")),
     propagateMacOsKeychainCredential(engineHomePath),
+    symlinkIfMissing(path.join(sharedClaudeHome, ".claude", "skills"), path.join(engineHomePath, "skills")),
+    symlinkIfMissing(path.join(sharedClaudeHome, ".claude", "plugins"), path.join(engineHomePath, "plugins")),
+    symlinkIfMissing(path.join(sharedClaudeHome, ".claude", "settings.json"), path.join(engineHomePath, "settings.json")),
+    symlinkIfMissing(path.join(sharedClaudeHome, ".claude", "settings.local.json"), path.join(engineHomePath, "settings.local.json")),
   ]);
 }
 
