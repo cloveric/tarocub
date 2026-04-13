@@ -22,7 +22,7 @@
 </h3>
 
 <p align="center">
-  <em>直接跑原生 CLI harness — 会话、记忆、工具，全部内置。不造轮子，不包 API。<br>电脑上开了个头，手机上 <code>/resume</code> 接着干。就是这么用的。</em>
+  <em>直接跑原生 CLI harness — 会话、记忆、工具，全部内置。不造轮子，不包 API。<br>对 99% 的人来说，比任何 *Claw 都更简单、更稳定。</em>
 </p>
 
 <p align="center">

@@ -22,7 +22,7 @@
 </h3>
 
 <p align="center">
-  <em>Runs their native CLI harness directly — sessions, memory, tools, all built-in. No reimplemented API wrappers.<br>Start a task on your laptop, <code>/resume</code> it on your phone. That's the workflow.</em>
+  <em>Runs their native CLI harness directly — sessions, memory, tools, all built-in. No reimplemented API wrappers.<br>For 99% of people, this is simpler and more stable than any *Claw.</em>
 </p>
 
 <p align="center">
