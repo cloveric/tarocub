@@ -216,6 +216,24 @@ describe("ProcessClaudeAdapter", () => {
     await expect(promise).rejects.toThrow("auth expired");
   });
 
+  it("surfaces the is_error message even when the process exits with non-zero code", async () => {
+    // Claude CLI exits with code 1 on 401 auth errors but still writes the
+    // error JSON to stdout. We must resolve with stdout so parseResult() can
+    // throw the real message, not "claude exited with code 1".
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData('{"type":"result","is_error":true,"result":"Failed to authenticate. API Error: 401"}');
+    child.close(1);
+
+    await expect(promise).rejects.toThrow(/Failed to authenticate/);
+  });
+
   it("does not trigger multiple promise settlements when error is followed by close", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter("claude", {

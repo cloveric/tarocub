@@ -357,7 +357,12 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         rejectOnce(error);
       });
       child.once("close", (code) => {
-        if (code === 0) {
+        // Claude CLI returns exit code 1 for some API errors (e.g. 401 auth)
+        // but still writes a valid {"is_error":true,"result":"..."} JSON to
+        // stdout. Resolve with stdout in that case so parseResult() can
+        // surface the real error message (triggering auth classification
+        // and the onAuthRetry path in delivery.ts).
+        if (code === 0 || (code !== null && stdout.trim().startsWith("{"))) {
           resolveOnce({ stdout, stderr });
           return;
         }

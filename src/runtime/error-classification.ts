@@ -38,7 +38,11 @@ export function classifyFailure(error: unknown): FailureCategory {
     text.includes("unauthorised") ||
     text.includes("missing bearer") ||
     text.includes("please run /login") ||
-    text.includes("login required")
+    text.includes("login required") ||
+    text.includes("failed to authenticate") ||
+    text.includes("authentication_error") ||
+    text.includes("invalid authentication credentials") ||
+    text.includes("401")
   ) {
     return "auth";
   }
