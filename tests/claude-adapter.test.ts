@@ -234,6 +234,21 @@ describe("ProcessClaudeAdapter", () => {
     await expect(promise).rejects.toThrow(/Failed to authenticate/);
   });
 
+  it("strips inherited CLAUDE_CONFIG_DIR when no engineHomePath is given", async () => {
+    const original = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = "/tmp/claude-shared-test";
+    try {
+      const adapter = new ProcessClaudeAdapter("claude") as unknown as { childEnv: NodeJS.ProcessEnv };
+      expect(adapter.childEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
+    } finally {
+      if (original === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = original;
+      }
+    }
+  });
+
   it("does not trigger multiple promise settlements when error is followed by close", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter("claude", {

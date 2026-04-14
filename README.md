@@ -572,7 +572,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>Per-Bot Isolation</h3>
-      <p>Every instance: own personality, workspace, sessions, access rules, inbox, audit trail, <strong>and auto-memory</strong> (keyed by workspace). Credentials are shared with your main Claude / Codex CLI so OAuth refresh tokens never race across instances.</p>
+      <p>Every instance has its own personality, workspace, sessions, access rules, inbox, audit trail, and workspace-keyed auto-memory. The engine config dir (<code>~/.claude/</code> / <code>~/.codex/</code>) is <em>shared</em> with your main CLI so OAuth refresh tokens don't race across instances — the trade-off is that settings, plugins, and MCP state live in your real home, and full-auto / bypass mode can touch it.</p>
     </td>
   </tr>
   <tr>

@@ -233,24 +233,25 @@ export class ProcessCodexAdapter implements CodexAdapter {
     engineHomePath?: string,
     private readonly workspacePath?: string,
   ) {
+    const buildChildEnv = () => {
+      const env = { ...process.env };
+      delete env.TELEGRAM_BOT_TOKEN;
+      if (engineHomePath) {
+        env.CODEX_HOME = engineHomePath;
+      } else {
+        // Explicitly drop any inherited CODEX_HOME so the child reads the
+        // default ~/.codex/ location. Without this, a parent env that sets
+        // CODEX_HOME would silently re-isolate the bot and reintroduce the
+        // refresh-token race this refactor was meant to fix.
+        delete env.CODEX_HOME;
+      }
+      return env;
+    };
+
     this.childEnv =
       typeof childEnvOrSpawn === "function"
-        ? (() => {
-            const env = { ...process.env };
-            delete env.TELEGRAM_BOT_TOKEN;
-            if (engineHomePath) {
-              env.CODEX_HOME = engineHomePath;
-            }
-            return env;
-          })()
-        : childEnvOrSpawn ?? (() => {
-            const env = { ...process.env };
-            delete env.TELEGRAM_BOT_TOKEN;
-            if (engineHomePath) {
-              env.CODEX_HOME = engineHomePath;
-            }
-            return env;
-          })();
+        ? buildChildEnv()
+        : childEnvOrSpawn ?? buildChildEnv();
 
     this.spawnCodex =
       typeof childEnvOrSpawn === "function"

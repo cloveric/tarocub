@@ -91,6 +91,21 @@ describe("CodexAppServerAdapter", () => {
     });
   });
 
+  it("strips inherited CODEX_HOME when no engineHomePath is given", async () => {
+    const original = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = "/tmp/codex-shared-test";
+    try {
+      const adapter = new CodexAppServerAdapter("codex", process.cwd()) as unknown as { childEnv: NodeJS.ProcessEnv };
+      expect(adapter.childEnv.CODEX_HOME).toBeUndefined();
+    } finally {
+      if (original === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = original;
+      }
+    }
+  });
+
   it("starts a persistent thread for a logical session and returns the real thread id", async () => {
     const { child, calls, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

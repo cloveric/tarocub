@@ -562,7 +562,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   <tr>
     <td>
       <h3>按 Bot 隔离</h3>
-      <p>每个实例：独立人格、工作区、会话、访问规则、收件箱、审计日志、<strong>自动记忆</strong>（按工作区路径隔离）。凭证与你主账号共享，不会因为多实例打架导致 OAuth refresh token 被抢用。</p>
+      <p>每个实例有独立的人格、工作区、会话、访问规则、收件箱、审计日志，以及按工作区路径隔离的自动记忆。引擎配置目录（<code>~/.claude/</code> / <code>~/.codex/</code>）与你主 CLI <em>共享</em>，避免 OAuth refresh token 被多实例抢用——代价是 settings、plugins、MCP 状态都落在你真实 home 里，full-auto / bypass 模式下 bot 也能动到这些。</p>
     </td>
     <td>
       <h3>生产级可靠性</h3>
