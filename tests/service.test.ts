@@ -348,6 +348,72 @@ describe("createServiceDependenciesForInstance", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("migrates legacy engine-home/projects into ~/.claude/projects on upgrade", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+    const legacyProjectsDir = path.join(stateDir, "engine-home", "projects");
+    const legacyWorkspaceDir = path.join(legacyProjectsDir, "-tmp-alpha-workspace");
+    const legacyMemoryDir = path.join(legacyWorkspaceDir, "memory");
+    const targetProjectsDir = path.join(root, ".claude", "projects");
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(legacyMemoryDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, JSON.stringify({ engine: "claude" }) + "\n", "utf8");
+      await writeFile(path.join(legacyWorkspaceDir, "abc.jsonl"), '{"old":"session"}\n', "utf8");
+      await writeFile(path.join(legacyMemoryDir, "MEMORY.md"), "- remembered fact\n", "utf8");
+
+      await createServiceDependenciesForInstance(
+        { USERPROFILE: root, CLAUDE_EXECUTABLE: "claude" },
+        "alpha",
+      );
+
+      // Files were copied into ~/.claude/projects/, preserving the workspace-keyed tree
+      await expect(readFile(path.join(targetProjectsDir, "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
+        .resolves.toBe('{"old":"session"}\n');
+      await expect(readFile(path.join(targetProjectsDir, "-tmp-alpha-workspace", "memory", "MEMORY.md"), "utf8"))
+        .resolves.toBe("- remembered fact\n");
+
+      // Legacy engine-home renamed out of the way
+      await expect(readFile(path.join(stateDir, "engine-home", "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
+        .rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite existing files at the target during migration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+    const legacyWorkspaceDir = path.join(stateDir, "engine-home", "projects", "-tmp-alpha-workspace");
+    const targetWorkspaceDir = path.join(root, ".claude", "projects", "-tmp-alpha-workspace");
+
+    try {
+      await mkdir(legacyWorkspaceDir, { recursive: true });
+      await mkdir(targetWorkspaceDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, JSON.stringify({ engine: "claude" }) + "\n", "utf8");
+      await writeFile(path.join(legacyWorkspaceDir, "abc.jsonl"), '{"legacy":"value"}\n', "utf8");
+      await writeFile(path.join(targetWorkspaceDir, "abc.jsonl"), '{"existing":"value"}\n', "utf8");
+
+      await createServiceDependenciesForInstance(
+        { USERPROFILE: root, CLAUDE_EXECUTABLE: "claude" },
+        "alpha",
+      );
+
+      // Existing file was NOT clobbered by the legacy copy
+      await expect(readFile(path.join(targetWorkspaceDir, "abc.jsonl"), "utf8"))
+        .resolves.toBe('{"existing":"value"}\n');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("polling helpers", () => {

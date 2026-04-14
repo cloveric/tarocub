@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, symlink, lstat } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, symlink, lstat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
 
@@ -425,6 +425,87 @@ function resolveClaudeExecutable(env: EnvSource): string {
 }
 
 /**
+ * Recursively copy a directory tree, skipping symlinks and never
+ * overwriting an existing destination file. Used to migrate a legacy
+ * engine-home tree into the user's shared ~/.claude/ location without
+ * clobbering anything that's already there.
+ *
+ * Safe to re-run; returns the number of files actually copied (0 if the
+ * migration has already completed).
+ */
+async function copyTreeSkipExistingSkipSymlinks(src: string, dst: string): Promise<number> {
+  let srcInfo;
+  try {
+    srcInfo = await lstat(src);
+  } catch {
+    return 0;
+  }
+  if (srcInfo.isSymbolicLink()) return 0;
+
+  if (srcInfo.isFile()) {
+    if (existsSync(dst)) return 0;
+    try {
+      await copyFile(src, dst);
+      return 1;
+    } catch {
+      return 0;
+    }
+  }
+
+  if (!srcInfo.isDirectory()) return 0;
+
+  try {
+    await mkdir(dst, { recursive: true });
+  } catch {
+    return 0;
+  }
+
+  let entries: string[];
+  try {
+    entries = await readdir(src);
+  } catch {
+    return 0;
+  }
+
+  let total = 0;
+  for (const entry of entries) {
+    total += await copyTreeSkipExistingSkipSymlinks(path.join(src, entry), path.join(dst, entry));
+  }
+  return total;
+}
+
+async function migrateClaudeEngineHomeIfPresent(
+  stateDir: string,
+  env: Pick<EnvSource, "HOME" | "USERPROFILE">,
+): Promise<void> {
+  const engineProjectsDir = path.join(stateDir, "engine-home", "projects");
+  if (!existsSync(engineProjectsDir)) return;
+
+  const homeDir =
+    process.platform === "win32"
+      ? env.USERPROFILE ?? env.HOME
+      : env.HOME ?? env.USERPROFILE;
+  if (!homeDir) return;
+
+  const targetProjectsDir = path.join(homeDir, ".claude", "projects");
+  await mkdir(targetProjectsDir, { recursive: true });
+
+  const migrated = await copyTreeSkipExistingSkipSymlinks(engineProjectsDir, targetProjectsDir);
+  if (migrated > 0) {
+    // Park the legacy directory so we don't redo the work next boot. Keep
+    // it around as *.migrated-<timestamp> — evidence for the operator and
+    // a cheap rollback path.
+    const parkedPath = path.join(stateDir, `engine-home.migrated-${Date.now()}`);
+    try {
+      await rename(path.join(stateDir, "engine-home"), parkedPath);
+    } catch {
+      // If rename fails (permission, name clash) we just leave it —
+      // copyTree is idempotent so next boot re-scans harmlessly.
+    }
+  }
+}
+
+/**
  * Build the childEnv passed to spawned engine processes.
  *
  * Starts from `process.env` so the child inherits the normal shell
@@ -481,6 +562,12 @@ async function createAdapter(
     // telemetry, MCP state, plugins cache) is shared with the user.
     // full-auto / bypass modes inherit that blast radius too — a bot cannot
     // corrupt only its own engine state anymore.
+    //
+    // One-shot migration for upgraders: if the legacy engine-home/projects/
+    // exists, copy its .jsonl and memory files into ~/.claude/projects/
+    // (never overwriting existing files) so bot conversation history and
+    // auto-memory survive the upgrade.
+    await migrateClaudeEngineHomeIfPresent(config.stateDir, env);
     await mkdir(workspacePath, { recursive: true });
     return new ProcessClaudeAdapter(resolveClaudeExecutable(env), {
       childEnv,
