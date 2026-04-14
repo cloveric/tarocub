@@ -138,6 +138,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
   const normalizedInstanceName = normalizeInstanceName(instanceName);
   const baseEnv: {
     HOME?: string;
+    APPDATA?: string;
     USERPROFILE?: string;
     CODEX_HOME?: string;
     CLAUDE_CONFIG_DIR?: string;
@@ -147,6 +148,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CLAUDE_EXECUTABLE?: string;
   } = {
     HOME: env.HOME,
+    APPDATA: env.APPDATA,
     USERPROFILE: env.USERPROFILE,
     CODEX_HOME: env.CODEX_HOME,
     CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
@@ -476,18 +478,28 @@ async function copyTreeSkipExistingSkipSymlinks(src: string, dst: string): Promi
 
 async function migrateClaudeEngineHomeIfPresent(
   stateDir: string,
-  env: Pick<EnvSource, "HOME" | "USERPROFILE">,
+  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CLAUDE_CONFIG_DIR">,
 ): Promise<void> {
   const engineProjectsDir = path.join(stateDir, "engine-home", "projects");
   if (!existsSync(engineProjectsDir)) return;
 
-  const homeDir =
-    process.platform === "win32"
-      ? env.USERPROFILE ?? env.HOME
-      : env.HOME ?? env.USERPROFILE;
-  if (!homeDir) return;
+  // Mirror the resolution the spawned Claude CLI will actually use: an
+  // explicit CLAUDE_CONFIG_DIR wins, otherwise fall back to ~/.claude.
+  // Writing to the wrong root would leave files unreachable and defeat the
+  // whole migration.
+  let claudeConfigDir: string;
+  if (env.CLAUDE_CONFIG_DIR) {
+    claudeConfigDir = env.CLAUDE_CONFIG_DIR;
+  } else {
+    const homeDir =
+      process.platform === "win32"
+        ? env.USERPROFILE ?? env.HOME
+        : env.HOME ?? env.USERPROFILE;
+    if (!homeDir) return;
+    claudeConfigDir = path.join(homeDir, ".claude");
+  }
 
-  const targetProjectsDir = path.join(homeDir, ".claude", "projects");
+  const targetProjectsDir = path.join(claudeConfigDir, "projects");
   await mkdir(targetProjectsDir, { recursive: true });
 
   const migrated = await copyTreeSkipExistingSkipSymlinks(engineProjectsDir, targetProjectsDir);

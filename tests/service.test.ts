@@ -210,6 +210,29 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
+  it("honours APPDATA injected through the EnvSource", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CODEX_EXECUTABLE: "codex",
+          APPDATA: "/tmp/custom-appdata",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).adapter.childEnv.APPDATA).toBe("/tmp/custom-appdata");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("honours CLAUDE_CONFIG_DIR injected through the EnvSource", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
@@ -380,6 +403,40 @@ describe("createServiceDependenciesForInstance", () => {
 
       // Legacy engine-home renamed out of the way
       await expect(readFile(path.join(stateDir, "engine-home", "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
+        .rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates into CLAUDE_CONFIG_DIR when it's set, not the default home", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+    const legacyWorkspaceDir = path.join(stateDir, "engine-home", "projects", "-tmp-alpha-workspace");
+    const customClaudeConfigDir = path.join(root, "custom-claude-config");
+
+    try {
+      await mkdir(legacyWorkspaceDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, JSON.stringify({ engine: "claude" }) + "\n", "utf8");
+      await writeFile(path.join(legacyWorkspaceDir, "abc.jsonl"), '{"legacy":"value"}\n', "utf8");
+
+      await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CLAUDE_EXECUTABLE: "claude",
+          CLAUDE_CONFIG_DIR: customClaudeConfigDir,
+        },
+        "alpha",
+      );
+
+      // Migrated into the custom config dir, not the default ~/.claude
+      await expect(readFile(path.join(customClaudeConfigDir, "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
+        .resolves.toBe('{"legacy":"value"}\n');
+      // The default ~/.claude/projects should not have received the file
+      await expect(readFile(path.join(root, ".claude", "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
         .rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
