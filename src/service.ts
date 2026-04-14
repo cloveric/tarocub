@@ -140,6 +140,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     HOME?: string;
     USERPROFILE?: string;
     CODEX_HOME?: string;
+    CLAUDE_CONFIG_DIR?: string;
     CODEX_TELEGRAM_INSTANCE: string;
     CODEX_TELEGRAM_STATE_DIR?: string;
     CODEX_EXECUTABLE?: string;
@@ -148,6 +149,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     HOME: env.HOME,
     USERPROFILE: env.USERPROFILE,
     CODEX_HOME: env.CODEX_HOME,
+    CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
     CODEX_TELEGRAM_INSTANCE: normalizedInstanceName,
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
@@ -422,6 +424,37 @@ function resolveClaudeExecutable(env: EnvSource): string {
   return "claude";
 }
 
+/**
+ * Build the childEnv passed to spawned engine processes.
+ *
+ * Starts from `process.env` so the child inherits the normal shell
+ * environment (PATH, etc.), then overlays the explicit EnvSource that
+ * callers of createServiceDependencies* may have provided. This keeps
+ * programmatic callers honest: if they inject `CLAUDE_CONFIG_DIR` or
+ * `CODEX_HOME` into the EnvSource, the spawned engine actually sees it —
+ * not the ambient value on `process.env`.
+ */
+function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  delete childEnv.TELEGRAM_BOT_TOKEN;
+
+  const overlay: Array<[keyof EnvSource, string]> = [
+    ["HOME", "HOME"],
+    ["APPDATA", "APPDATA"],
+    ["USERPROFILE", "USERPROFILE"],
+    ["CODEX_HOME", "CODEX_HOME"],
+    ["CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"],
+  ];
+  for (const [srcKey, dstKey] of overlay) {
+    const injected = env[srcKey];
+    if (injected !== undefined) {
+      childEnv[dstKey] = injected;
+    }
+  }
+
+  return childEnv;
+}
+
 async function createAdapter(
   env: EnvSource,
   config: ReturnType<typeof resolveConfig>,
@@ -431,6 +464,7 @@ async function createAdapter(
   const engine = await readInstanceEngine(configPath);
   const workspacePath = path.join(config.stateDir, "workspace");
   const approvalMode = await readApprovalMode(configPath);
+  const childEnv = buildAdapterChildEnv(env);
 
   if (engine === "claude") {
     // Bots no longer get a per-instance CLAUDE_CONFIG_DIR. Instead they
@@ -449,6 +483,7 @@ async function createAdapter(
     // corrupt only its own engine state anymore.
     await mkdir(workspacePath, { recursive: true });
     return new ProcessClaudeAdapter(resolveClaudeExecutable(env), {
+      childEnv,
       instructionsPath,
       configPath,
       workspacePath,
@@ -464,14 +499,14 @@ async function createAdapter(
     return new CodexAppServerAdapter(
       config.codexExecutable,
       workspacePath,
-      undefined,
+      childEnv,
       undefined,
       instructionsPath,
     );
   }
 
   await mkdir(workspacePath, { recursive: true });
-  return new ProcessCodexAdapter(config.codexExecutable, undefined, undefined, instructionsPath, configPath, undefined, workspacePath);
+  return new ProcessCodexAdapter(config.codexExecutable, childEnv, undefined, instructionsPath, configPath, undefined, workspacePath);
 }
 
 export async function createServiceDependencies(env: EnvSource): Promise<{ config: ReturnType<typeof resolveConfig>; api: TelegramApi; bridge: Bridge }> {

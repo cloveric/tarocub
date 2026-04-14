@@ -9,6 +9,7 @@ export interface EnvSource {
   APPDATA?: string;
   USERPROFILE?: string;
   CODEX_HOME?: string;
+  CLAUDE_CONFIG_DIR?: string;
   TELEGRAM_BOT_TOKEN?: string;
   CODEX_TELEGRAM_INSTANCE?: string;
   CODEX_TELEGRAM_STATE_DIR?: string;

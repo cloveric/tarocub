@@ -187,6 +187,55 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
+  it("honours CODEX_HOME injected through the EnvSource", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CODEX_EXECUTABLE: "codex",
+          CODEX_HOME: "/tmp/custom-main-codex-home",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).adapter.childEnv.CODEX_HOME).toBe("/tmp/custom-main-codex-home");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("honours CLAUDE_CONFIG_DIR injected through the EnvSource", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, JSON.stringify({ engine: "claude" }) + "\n", "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CLAUDE_EXECUTABLE: "claude",
+          CLAUDE_CONFIG_DIR: "/tmp/custom-main-claude-config",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).adapter.childEnv.CLAUDE_CONFIG_DIR).toBe("/tmp/custom-main-claude-config");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not create an engine-home for Codex instances", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
