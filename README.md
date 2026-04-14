@@ -289,16 +289,15 @@ Pick one:
 Now every message you send goes through the original session — same context, same project directory, same conversation history. When you're done:
 
 ```
-/detach          ← Cleans up symlink, unbinds session, restores default workspace
+/detach          ← Unbinds session, restores default workspace
 ```
 
 **How it works under the hood:**
 
 1. Scans `~/.claude/projects/` for `.jsonl` files modified in the last hour
-2. Creates a symlink from the bot's `engine-home/projects/` to the local session directory
-3. Overrides the workspace to point at your real project path
-4. Binds the session ID so Claude CLI resumes with `-r <sessionId>`
-5. `/detach` reverses everything — the local session is untouched
+2. Binds the session ID and overrides the workspace to point at your real project path
+3. Claude CLI resumes with `-r <sessionId>` in the original directory
+4. `/detach` reverses everything — the local session file is untouched
 
 **No pollution:** `--append-system-prompt` is per-invocation and doesn't persist in session files. The bridge instructions won't leak into your local session.
 
@@ -572,8 +571,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
       <p>One command to auto-approve everything — works with both engines. Per-instance, hot-reloadable.</p>
     </td>
     <td>
-      <h3>Full Isolation</h3>
-      <p>Every instance: own engine, token, access, sessions, threads, inbox, audit trail, <strong>and engine memory</strong>. One bot's learned context never leaks to another.</p>
+      <h3>Per-Bot Isolation</h3>
+      <p>Every instance: own personality, workspace, sessions, access rules, inbox, audit trail, <strong>and auto-memory</strong> (keyed by workspace). Credentials are shared with your main Claude / Codex CLI so OAuth refresh tokens never race across instances.</p>
     </td>
   </tr>
   <tr>
@@ -751,12 +750,8 @@ npm run dev -- telegram audit --chat 688567588                      # Filter by 
 ├── agent.md                # Bot personality & instructions
 ├── config.json             # Engine, YOLO mode, verbosity
 ├── usage.json              # Token usage and cost tracking
-├── engine-home/            # Isolated engine config, memory, sessions
-│   ├── memory/             # Claude: auto-memory (CLAUDE_CONFIG_DIR)
-│   ├── sessions/           # Codex: thread history (CODEX_HOME)
-│   └── ...                 # Each bot's engine state is fully isolated
-├── workspace/              # Claude working directory (Claude engine only)
-│   └── CLAUDE.md           # Claude Code project instructions
+├── workspace/              # Per-bot working directory
+│   └── CLAUDE.md           # Claude Code project instructions (Claude only)
 ├── .env                    # Bot token
 ├── access.json             # Pairing + allowlist data
 ├── session.json            # Chat-to-thread bindings
