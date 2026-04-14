@@ -206,6 +206,28 @@ async function symlinkIfMissing(sourcePath: string, targetPath: string): Promise
   }
 }
 
+async function syncOrRemove(sourcePath: string, destinationPath: string): Promise<void> {
+  try {
+    await copyFile(sourcePath, destinationPath);
+  } catch (error) {
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? (error as NodeJS.ErrnoException).code
+      : undefined;
+    if (code === "ENOENT") {
+      // Source doesn't exist — remove any stale destination so the consumer
+      // falls through to alternate auth sources (e.g. keychain).
+      try {
+        const { unlink } = await import("node:fs/promises");
+        await unlink(destinationPath);
+      } catch {
+        // Destination didn't exist or couldn't be removed — that's fine.
+      }
+      return;
+    }
+    throw error;
+  }
+}
+
 async function copyIfExists(sourcePath: string, destinationPath: string): Promise<void> {
   try {
     await copyFile(sourcePath, destinationPath);
@@ -319,7 +341,11 @@ async function seedIsolatedClaudeConfig(
   await mkdir(engineHomePath, { recursive: true });
   await Promise.all([
     copyIfExists(path.join(sharedClaudeHome, ".claude.json"), path.join(engineHomePath, ".claude.json")),
-    copyIfExists(path.join(sharedClaudeHome, ".claude", ".credentials.json"), path.join(engineHomePath, ".credentials.json")),
+    // Credentials: sync from source OR remove stale copy so Claude falls back
+    // to the keychain entry propagated below. Without removal, an old
+    // .credentials.json silently shadows the fresh keychain token and the bot
+    // stays stuck on 401.
+    syncOrRemove(path.join(sharedClaudeHome, ".claude", ".credentials.json"), path.join(engineHomePath, ".credentials.json")),
     propagateMacOsKeychainCredential(engineHomePath),
     symlinkIfMissing(path.join(sharedClaudeHome, ".claude", "skills"), path.join(engineHomePath, "skills")),
     symlinkIfMissing(path.join(sharedClaudeHome, ".claude", "plugins"), path.join(engineHomePath, "plugins")),
