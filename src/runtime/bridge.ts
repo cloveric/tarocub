@@ -60,6 +60,8 @@ function renderTelegramBridgeCapabilities(): string {
     "",
     "IMPORTANT: Telegram is a plain-text chat environment. Do NOT use interactive UI elements such as HTML forms, checkboxes, radio buttons, dropdowns, accordions, tabs, or embedded widgets — they will not render. For multiple-choice questions, use numbered plain-text lists and ask the user to reply with a number or letter. For structured data, use simple text tables or bullet lists. Only basic Markdown (bold, italic, code, links) is supported.",
     "",
+    "DO NOT call interactive MCP tools like AskUserQuestion, prompt_user, ask_user, or any tool whose only purpose is to block waiting for user input — you run in a headless CLI and those tools terminate the turn without ever receiving an answer, which makes the bot appear to freeze. When you need the user to choose between options, put the options directly in your Telegram reply as a numbered list and wait for the next user message.",
+    "",
     "CRITICAL FILE DELIVERY RULE:",
     "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type. The ONLY way to deliver a file to the user is the [send-file:] tag.",
     "After generating/saving ANY file the user should receive, you MUST include: [send-file:/absolute/path/to/file.ext]",

@@ -293,8 +293,16 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         costUsd: json.total_cost_usd ?? undefined,
       } : undefined;
 
+      // Empty result usually means Claude ended the turn with an interactive
+      // tool call (e.g. AskUserQuestion) that can't complete in headless mode.
+      // Surface a hint rather than the misleading "completed the request"
+      // message we used to return.
+      const finalText = json.result?.trim()
+        ? json.result.trim()
+        : "(The engine produced no visible reply. If this keeps happening, the model may be calling an interactive tool like AskUserQuestion — ask it to reply in plain text instead.)";
+
       return {
-        text: json.result?.trim() || "Claude completed the request.",
+        text: finalText,
         sessionId: json.session_id ?? undefined,
         usage,
       };
