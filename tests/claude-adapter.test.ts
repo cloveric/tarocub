@@ -234,12 +234,12 @@ describe("ProcessClaudeAdapter", () => {
     await expect(promise).rejects.toThrow(/Failed to authenticate/);
   });
 
-  it("strips inherited CLAUDE_CONFIG_DIR when no engineHomePath is given", async () => {
+  it("inherits CLAUDE_CONFIG_DIR from the parent env so bots track the main CLI", async () => {
     const original = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = "/tmp/claude-shared-test";
     try {
       const adapter = new ProcessClaudeAdapter("claude") as unknown as { childEnv: NodeJS.ProcessEnv };
-      expect(adapter.childEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
+      expect(adapter.childEnv.CLAUDE_CONFIG_DIR).toBe("/tmp/claude-shared-test");
     } finally {
       if (original === undefined) {
         delete process.env.CLAUDE_CONFIG_DIR;

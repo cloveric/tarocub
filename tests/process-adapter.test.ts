@@ -27,12 +27,12 @@ describe("ProcessCodexAdapter", () => {
     });
   });
 
-  it("strips inherited CODEX_HOME when no engineHomePath is given", async () => {
+  it("inherits CODEX_HOME from the parent env so bots track the main CLI", async () => {
     const original = process.env.CODEX_HOME;
     process.env.CODEX_HOME = "/tmp/codex-shared-test";
     try {
       const adapter = new ProcessCodexAdapter("codex") as unknown as { childEnv: NodeJS.ProcessEnv };
-      expect(adapter.childEnv.CODEX_HOME).toBeUndefined();
+      expect(adapter.childEnv.CODEX_HOME).toBe("/tmp/codex-shared-test");
     } finally {
       if (original === undefined) {
         delete process.env.CODEX_HOME;

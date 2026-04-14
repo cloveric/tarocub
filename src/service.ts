@@ -433,17 +433,20 @@ async function createAdapter(
   const approvalMode = await readApprovalMode(configPath);
 
   if (engine === "claude") {
-    // All bots — and the user's own Claude Code CLI — share the same
-    // ~/.claude/ directory. This avoids the OAuth refresh-token race that
-    // used to kill auth across instances.
+    // Bots no longer get a per-instance CLAUDE_CONFIG_DIR. Instead they
+    // inherit whatever the parent env has — which is either unset (Claude
+    // uses ~/.claude/) or whatever the user's own Claude CLI uses (custom
+    // path via exported CLAUDE_CONFIG_DIR). Either way, all bots plus the
+    // user's CLI end up pointing at the same directory, so OAuth refresh
+    // tokens rotate cleanly across all of them.
     //
-    // Trade-off: the blast radius is now the user's real home. Sessions and
-    // auto-memory are still keyed by workspace path (each bot has its own
-    // workspace/), so those stay per-bot in practice. But anything the engine
-    // writes at the config-dir root (settings, telemetry, MCP state,
-    // plugins cache) is shared with the user. full-auto / bypass modes
-    // inherit that blast radius too — a bot cannot corrupt only its own
-    // engine state anymore.
+    // Trade-off: the blast radius is now the user's real config dir.
+    // Sessions and auto-memory are still keyed by workspace path (each bot
+    // has its own workspace/), so those stay per-bot in practice. But
+    // anything the engine writes at the config-dir root (settings,
+    // telemetry, MCP state, plugins cache) is shared with the user.
+    // full-auto / bypass modes inherit that blast radius too — a bot cannot
+    // corrupt only its own engine state anymore.
     await mkdir(workspacePath, { recursive: true });
     return new ProcessClaudeAdapter(resolveClaudeExecutable(env), {
       instructionsPath,
@@ -452,10 +455,10 @@ async function createAdapter(
     });
   }
 
-  // Same rationale and trade-offs as the Claude branch above: all Codex
-  // bots and the user's own Codex CLI share ~/.codex/. OAuth refresh tokens
-  // rotate cleanly across instances, at the cost of moving the blast radius
-  // from per-instance engine-home to the user's real ~/.codex/.
+  // Same rationale and trade-offs as the Claude branch above: bots inherit
+  // CODEX_HOME (or its absence) from the parent env, so they end up on the
+  // same config dir as the user's main Codex CLI — avoiding the OAuth
+  // refresh-token race at the cost of a wider blast radius.
   if (resolveEngineRuntime(engine, approvalMode) === "app-server") {
     await mkdir(workspacePath, { recursive: true });
     return new CodexAppServerAdapter(

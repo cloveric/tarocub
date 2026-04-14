@@ -238,13 +238,9 @@ export class ProcessCodexAdapter implements CodexAdapter {
       delete env.TELEGRAM_BOT_TOKEN;
       if (engineHomePath) {
         env.CODEX_HOME = engineHomePath;
-      } else {
-        // Explicitly drop any inherited CODEX_HOME so the child reads the
-        // default ~/.codex/ location. Without this, a parent env that sets
-        // CODEX_HOME would silently re-isolate the bot and reintroduce the
-        // refresh-token race this refactor was meant to fix.
-        delete env.CODEX_HOME;
       }
+      // Otherwise inherit CODEX_HOME from the parent env so bots track the
+      // same config dir the user's main Codex CLI uses. Unset → ~/.codex/.
       return env;
     };
 

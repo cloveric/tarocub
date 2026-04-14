@@ -135,13 +135,11 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       delete env.TELEGRAM_BOT_TOKEN;
       if (options?.engineHomePath) {
         env.CLAUDE_CONFIG_DIR = options.engineHomePath;
-      } else {
-        // Explicitly drop any inherited CLAUDE_CONFIG_DIR so the child reads
-        // the default ~/.claude/ location. Without this, a parent env that
-        // sets CLAUDE_CONFIG_DIR would silently re-isolate the bot and
-        // reintroduce the refresh-token race this refactor was meant to fix.
-        delete env.CLAUDE_CONFIG_DIR;
       }
+      // Otherwise inherit CLAUDE_CONFIG_DIR from the parent env. If the user
+      // runs their main Claude CLI with a custom config dir exported in their
+      // shell, bots automatically track the same location. If nothing is
+      // set, Claude uses its built-in default (~/.claude/).
       return env;
     })();
 
