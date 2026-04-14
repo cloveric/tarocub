@@ -108,10 +108,30 @@ export function classifyFailure(error: unknown): FailureCategory {
     text.includes("session-bound") ||
     text.includes("session store") ||
     text.includes("session-state") ||
-    text.includes("session state")
+    text.includes("session state") ||
+    text.includes("no conversation found") ||
+    text.includes("session id not found") ||
+    text.includes("no such session")
   ) {
     return "session-state";
   }
 
   return "unknown";
+}
+
+/**
+ * True when the engine failed because a bound session ID points at a file
+ * the CLI can't find. This is recoverable by clearing the binding and
+ * retrying as a fresh session.
+ */
+export function isStaleSessionError(error: unknown): boolean {
+  const text =
+    error instanceof Error
+      ? `${error.name}\n${error.message}`.toLowerCase()
+      : String(error).toLowerCase();
+  return (
+    text.includes("no conversation found") ||
+    text.includes("session id not found") ||
+    text.includes("no such session")
+  );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyFailure } from "../src/runtime/error-classification.js";
+import { classifyFailure, isStaleSessionError } from "../src/runtime/error-classification.js";
 
 describe("classifyFailure auth detection", () => {
   it("classifies Claude 401 authentication errors as auth", () => {
@@ -21,5 +21,22 @@ describe("classifyFailure auth detection", () => {
   it("does not misclassify unrelated errors as auth", () => {
     expect(classifyFailure(new Error("file not found"))).not.toBe("auth");
     expect(classifyFailure(new Error("network timeout"))).not.toBe("auth");
+  });
+});
+
+describe("isStaleSessionError", () => {
+  it("matches Claude's 'No conversation found' message", () => {
+    expect(
+      isStaleSessionError(new Error("No conversation found with session ID: abc-123")),
+    ).toBe(true);
+  });
+
+  it("classifies the same errors as session-state", () => {
+    expect(classifyFailure(new Error("No conversation found with session ID: abc-123"))).toBe("session-state");
+  });
+
+  it("does not match unrelated errors", () => {
+    expect(isStaleSessionError(new Error("file not found"))).toBe(false);
+    expect(isStaleSessionError(new Error("auth expired"))).toBe(false);
   });
 });

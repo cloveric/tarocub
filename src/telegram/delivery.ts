@@ -16,7 +16,7 @@ import {
   describeTelegramOutFiles,
 } from "../runtime/telegram-out.js";
 import { appendAuditEvent } from "../state/audit-log.js";
-import { classifyFailure } from "../runtime/error-classification.js";
+import { classifyFailure, isStaleSessionError } from "../runtime/error-classification.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { UsageStore } from "../state/usage-store.js";
 import { readFile } from "node:fs/promises";
@@ -145,6 +145,7 @@ export interface TelegramDeliveryContext {
   abortSignal?: AbortSignal;
   onAuthRetry?: () => Promise<void>;
   _authRetried?: boolean;
+  _staleSessionRetried?: boolean;
 }
 
 function wantsTelegramOut(text: string): boolean {
@@ -1411,6 +1412,19 @@ export async function handleNormalizedTelegramMessage(
       try {
         await context.onAuthRetry();
         context._authRetried = true;
+        return await handleNormalizedTelegramMessage(normalized, context);
+      } catch {
+        // Retry failed — fall through to normal error handling
+      }
+    }
+
+    // Stale session: the session ID we have bound points at a file the CLI
+    // no longer has (e.g. after a config-dir migration, or a manual cleanup).
+    // Clear the binding and retry once as a fresh session.
+    if (isStaleSessionError(classifiedError) && !context._staleSessionRetried) {
+      try {
+        await sessionStore.removeByChatId(normalized.chatId);
+        context._staleSessionRetried = true;
         return await handleNormalizedTelegramMessage(normalized, context);
       } catch {
         // Retry failed — fall through to normal error handling
