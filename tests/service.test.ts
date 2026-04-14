@@ -266,15 +266,15 @@ describe("createServiceDependenciesForInstance", () => {
       );
 
       expect((result.bridge as any).adapter).toBeInstanceOf(ProcessClaudeAdapter);
-      expect((result.bridge as any).adapter.childEnv.CLAUDE_CONFIG_DIR).toBe(
-        path.join(root, ".cctb", "alpha", "engine-home"),
-      );
+      // Claude bots no longer isolate CLAUDE_CONFIG_DIR — they share the
+      // user's ~/.claude/ so OAuth refresh tokens don't race across instances.
+      expect((result.bridge as any).adapter.childEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("copies shared Claude auth files into the isolated engine home", async () => {
+  it("does not create an engine-home for Claude instances", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
     const envPath = path.join(stateDir, ".env");
@@ -299,12 +299,8 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      await expect(readFile(path.join(stateDir, "engine-home", ".credentials.json"), "utf8")).resolves.toBe(
-        '{"claudeAiOauth":{"accessToken":"shared-token"}}\n',
-      );
-      await expect(readFile(path.join(stateDir, "engine-home", ".claude.json"), "utf8")).resolves.toBe(
-        '{"projects":{}}\n',
-      );
+      // engine-home should not exist — nothing to seed anymore
+      await expect(readFile(path.join(stateDir, "engine-home", ".credentials.json"), "utf8")).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

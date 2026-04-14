@@ -433,14 +433,15 @@ async function createAdapter(
   const approvalMode = await readApprovalMode(configPath);
 
   if (engine === "claude") {
-    const engineHomePath = path.join(config.stateDir, "engine-home");
+    // All bots share the user's ~/.claude/ directly — no per-instance config dir.
+    // This avoids OAuth refresh-token races that used to kill auth after a few
+    // hours. Memory and sessions are still isolated because each bot has its
+    // own workspacePath (Claude stores those per working directory).
     await mkdir(workspacePath, { recursive: true });
-    await seedIsolatedClaudeConfig(env, engineHomePath);
     return new ProcessClaudeAdapter(resolveClaudeExecutable(env), {
       instructionsPath,
       configPath,
       workspacePath,
-      engineHomePath,
     });
   }
 
@@ -740,12 +741,12 @@ export async function processTelegramUpdates(
               const stateDir = path.dirname(context.inboxDir);
               const configPath = path.join(stateDir, "config.json");
               const engine = await readInstanceEngine(configPath);
-              const engineHomePath = path.join(stateDir, "engine-home");
               if (engine === "claude") {
-                await seedIsolatedClaudeConfig({ HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }, engineHomePath);
-              } else {
-                await seedIsolatedCodexHome({ HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME }, engineHomePath);
+                // Claude now reads ~/.claude/ directly — no propagation needed.
+                return;
               }
+              const engineHomePath = path.join(stateDir, "engine-home");
+              await seedIsolatedCodexHome({ HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME }, engineHomePath);
             },
           });
         } finally {

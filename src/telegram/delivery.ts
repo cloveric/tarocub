@@ -32,7 +32,11 @@ interface ResumeState {
   sessionId: string;
   dirName: string;
   workspacePath: string;
-  symlinkPath: string;
+  /**
+   * @deprecated Kept for backward compatibility. New /resume flows no longer
+   * create a symlink because all bots share ~/.claude/ directly.
+   */
+  symlinkPath?: string;
 }
 
 interface InstanceConfig {
@@ -50,10 +54,15 @@ const VALID_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "max"];
 function parseResumeState(raw: unknown): ResumeState | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as Record<string, unknown>;
-  if (typeof r.sessionId !== "string" || typeof r.dirName !== "string" || typeof r.workspacePath !== "string" || typeof r.symlinkPath !== "string") {
+  if (typeof r.sessionId !== "string" || typeof r.dirName !== "string" || typeof r.workspacePath !== "string") {
     return undefined;
   }
-  return { sessionId: r.sessionId, dirName: r.dirName, workspacePath: r.workspacePath, symlinkPath: r.symlinkPath };
+  return {
+    sessionId: r.sessionId,
+    dirName: r.dirName,
+    workspacePath: r.workspacePath,
+    symlinkPath: typeof r.symlinkPath === "string" ? r.symlinkPath : undefined,
+  };
 }
 
 async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
@@ -561,11 +570,13 @@ export async function handleNormalizedTelegramMessage(
 
       // Clean up resume state if active
       if (cfg.resume) {
-        try {
-          const { lstat, unlink } = await import("node:fs/promises");
-          const st = await lstat(cfg.resume.symlinkPath);
-          if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
-        } catch { /* ok */ }
+        if (cfg.resume.symlinkPath) {
+          try {
+            const { lstat, unlink } = await import("node:fs/promises");
+            const st = await lstat(cfg.resume.symlinkPath);
+            if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
+          } catch { /* ok */ }
+        }
         await updateInstanceConfig(stateDir, (c) => { delete c.resume; });
       }
 
@@ -830,34 +841,8 @@ export async function handleNormalizedTelegramMessage(
               : `Cannot resolve workspace path for session (${picked.dirName}).`;
             await context.api.sendMessage(normalized.chatId, msg);
           } else {
-            // Set up symlink: engine-home/projects/<dirName> → ~/.claude/projects/<dirName>
-            const { symlink: symlinkFn, lstat: lstatFn, unlink: unlinkFn } = await import("node:fs/promises");
-            const engineHome = path.join(stateDir, "engine-home");
-            const homeDir = process.platform === "win32"
-              ? (process.env.USERPROFILE ?? process.env.HOME ?? "/")
-              : (process.env.HOME ?? process.env.USERPROFILE ?? "/");
-            const symlinkTarget = path.join(homeDir, ".claude", "projects", picked.dirName);
-            const symlinkPath = path.join(engineHome, "projects", picked.dirName);
-
-            try {
-              // Remove existing symlink if present (only symlinks — never a real directory)
-              try {
-                const st = await lstatFn(symlinkPath);
-                if (st.isSymbolicLink()) await unlinkFn(symlinkPath);
-              } catch { /* ok — doesn't exist */ }
-              await mkdir(path.join(engineHome, "projects"), { recursive: true });
-              await symlinkFn(symlinkTarget, symlinkPath);
-            } catch (err) {
-              const detail = err instanceof Error ? err.message : String(err);
-              const msg = locale === "zh"
-                ? `创建软链失败：${detail}`
-                : `Failed to create symlink: ${detail}`;
-              await context.api.sendMessage(normalized.chatId, msg);
-              responded = true;
-              return;
-            }
-
-            // Bind session and persist resume state
+            // No symlink needed — bots read ~/.claude/ directly now.
+            // Just bind the session ID and record the workspace override.
             await sessionStore.upsert({
               telegramChatId: normalized.chatId,
               codexSessionId: picked.sessionId,
@@ -869,7 +854,6 @@ export async function handleNormalizedTelegramMessage(
                 sessionId: picked.sessionId,
                 dirName: picked.dirName,
                 workspacePath: picked.workspacePath,
-                symlinkPath,
               };
             });
 
@@ -903,22 +887,21 @@ export async function handleNormalizedTelegramMessage(
           : "No resumed session active.";
         await context.api.sendMessage(normalized.chatId, msg);
       } else {
-        // Remove symlink (only if it's actually a symlink — never delete a real directory)
-        try {
-          const { lstat, unlink } = await import("node:fs/promises");
-          const st = await lstat(cfg.resume.symlinkPath);
-          if (st.isSymbolicLink()) {
-            await unlink(cfg.resume.symlinkPath);
-          }
-        } catch { /* ok — already gone */ }
+        // Clean up legacy symlink if one was left over from an older /resume
+        if (cfg.resume.symlinkPath) {
+          try {
+            const { lstat, unlink } = await import("node:fs/promises");
+            const st = await lstat(cfg.resume.symlinkPath);
+            if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
+          } catch { /* ok — already gone */ }
+        }
 
-        // Unbind session and clear resume state
         await sessionStore.removeByChatId(normalized.chatId);
         await updateInstanceConfig(stateDir, (c) => { delete c.resume; });
 
         const msg = locale === "zh"
-          ? "已断开恢复的 session，软链已清理，回到 bot 默认工作区。"
-          : "Detached from resumed session. Symlink cleaned up, back to default workspace.";
+          ? "已断开恢复的 session，回到 bot 默认工作区。"
+          : "Detached from resumed session. Back to default workspace.";
         await context.api.sendMessage(normalized.chatId, msg);
       }
 
