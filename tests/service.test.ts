@@ -180,15 +180,14 @@ describe("createServiceDependenciesForInstance", () => {
       );
 
       expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
-      expect((result.bridge as any).adapter.childEnv.CODEX_HOME).toBe(
-        path.join(root, ".cctb", "alpha", "engine-home"),
-      );
+      // Codex bots now share ~/.codex/ directly — same reasoning as Claude.
+      expect((result.bridge as any).adapter.childEnv.CODEX_HOME).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("copies shared Codex auth files into the isolated engine home", async () => {
+  it("does not create an engine-home for Codex instances", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
     const envPath = path.join(stateDir, ".env");
@@ -210,12 +209,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      await expect(readFile(path.join(stateDir, "engine-home", "auth.json"), "utf8")).resolves.toBe(
-        '{"access_token":"shared-token"}\n',
-      );
-      await expect(readFile(path.join(stateDir, "engine-home", "config.toml"), "utf8")).resolves.toBe(
-        'model = "gpt-5.3-codex"\n',
-      );
+      await expect(readFile(path.join(stateDir, "engine-home", "auth.json"), "utf8")).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

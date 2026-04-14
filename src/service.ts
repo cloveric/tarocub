@@ -445,24 +445,22 @@ async function createAdapter(
     });
   }
 
+  // Same rationale as Claude: all Codex bots share the user's ~/.codex/ so
+  // a single OAuth refresh token rotates cleanly across instances instead of
+  // N copies fighting over a single-use refresh token.
   if (resolveEngineRuntime(engine, approvalMode) === "app-server") {
-    const engineHomePath = path.join(config.stateDir, "engine-home");
     await mkdir(workspacePath, { recursive: true });
-    await seedIsolatedCodexHome(env, engineHomePath);
     return new CodexAppServerAdapter(
       config.codexExecutable,
       workspacePath,
       undefined,
       undefined,
       instructionsPath,
-      engineHomePath,
     );
   }
 
-  const engineHomePath = path.join(config.stateDir, "engine-home");
   await mkdir(workspacePath, { recursive: true });
-  await seedIsolatedCodexHome(env, engineHomePath);
-  return new ProcessCodexAdapter(config.codexExecutable, undefined, undefined, instructionsPath, configPath, engineHomePath, workspacePath);
+  return new ProcessCodexAdapter(config.codexExecutable, undefined, undefined, instructionsPath, configPath, undefined, workspacePath);
 }
 
 export async function createServiceDependencies(env: EnvSource): Promise<{ config: ReturnType<typeof resolveConfig>; api: TelegramApi; bridge: Bridge }> {
@@ -738,15 +736,10 @@ export async function processTelegramUpdates(
             updateId,
             abortSignal: taskController.signal,
             onAuthRetry: async () => {
-              const stateDir = path.dirname(context.inboxDir);
-              const configPath = path.join(stateDir, "config.json");
-              const engine = await readInstanceEngine(configPath);
-              if (engine === "claude") {
-                // Claude now reads ~/.claude/ directly — no propagation needed.
-                return;
-              }
-              const engineHomePath = path.join(stateDir, "engine-home");
-              await seedIsolatedCodexHome({ HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME }, engineHomePath);
+              // Both Claude and Codex now read the user's ~/.claude/ or
+              // ~/.codex/ directly, so there is no per-bot credential copy
+              // to re-propagate. The retry itself still happens — the
+              // underlying CLI just reads the refreshed credential.
             },
           });
         } finally {
