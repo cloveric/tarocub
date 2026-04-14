@@ -6,12 +6,14 @@ import AdmZip from "adm-zip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createServiceDependencies,
   createServiceDependenciesForInstance,
   parseServiceInstanceName,
   pollTelegramUpdatesOnce,
   pollTelegramUpdates,
   processTelegramUpdates,
   readInstanceBotTokenFromEnvFile,
+  resolveServiceEnvForInstance,
   _resetEnqueuedUpdateIds,
 } from "../src/service.js";
 import { ChatQueue } from "../src/runtime/chat-queue.js";
@@ -439,6 +441,63 @@ describe("createServiceDependenciesForInstance", () => {
       await expect(readFile(path.join(root, ".claude", "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
         .rejects.toThrow();
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("real startup chain: migration honours CLAUDE_CONFIG_DIR read from process.env", async () => {
+    // Regression: reproduces the real index.ts entry point. The service
+    // resolves env by picking specific keys out of process.env, not by
+    // forwarding process.env wholesale — so if index.ts forgets to pick up
+    // CLAUDE_CONFIG_DIR, the migration silently writes to the wrong place.
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+    const legacyWorkspaceDir = path.join(stateDir, "engine-home", "projects", "-tmp-alpha-workspace");
+    const customClaudeConfigDir = path.join(root, "custom-claude-config");
+
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      await mkdir(legacyWorkspaceDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, JSON.stringify({ engine: "claude" }) + "\n", "utf8");
+      await writeFile(path.join(legacyWorkspaceDir, "abc.jsonl"), '{"legacy":"value"}\n', "utf8");
+
+      // Simulate the shell exporting CLAUDE_CONFIG_DIR before launching the service.
+      process.env.USERPROFILE = root;
+      process.env.HOME = root;
+      process.env.CLAUDE_CONFIG_DIR = customClaudeConfigDir;
+
+      // Mirror index.ts: pick specific keys out of process.env.
+      const resolvedEnv = await resolveServiceEnvForInstance(
+        {
+          HOME: process.env.HOME,
+          APPDATA: process.env.APPDATA,
+          USERPROFILE: process.env.USERPROFILE,
+          CODEX_HOME: process.env.CODEX_HOME,
+          CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+          CODEX_TELEGRAM_STATE_DIR: process.env.CODEX_TELEGRAM_STATE_DIR,
+          CLAUDE_EXECUTABLE: "claude",
+        },
+        "alpha",
+      );
+
+      await createServiceDependencies(resolvedEnv);
+
+      // Files landed in the custom CLAUDE_CONFIG_DIR, not the default ~/.claude
+      await expect(readFile(path.join(customClaudeConfigDir, "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
+        .resolves.toBe('{"legacy":"value"}\n');
+      await expect(readFile(path.join(root, ".claude", "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
+        .rejects.toThrow();
+    } finally {
+      process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = originalUserProfile;
+      if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
       await rm(root, { recursive: true, force: true });
     }
   });
