@@ -26,7 +26,7 @@ import { delegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig } from "../bus/bus-config.js";
 import { scanRecentClaudeSessions, formatSessionList, type ScannedSession } from "../runtime/session-scanner.js";
 
-type EffortLevel = "low" | "medium" | "high" | "max";
+type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 interface ResumeState {
   sessionId: string;
@@ -49,7 +49,7 @@ interface InstanceConfig {
   resume: ResumeState | undefined;
 }
 
-const VALID_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "max"];
+const VALID_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
 
 function parseResumeState(raw: unknown): ResumeState | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -726,8 +726,8 @@ export async function handleNormalizedTelegramMessage(
         await context.api.sendMessage(normalized.chatId, msg);
       } else {
         const msg = locale === "zh"
-          ? "用法: /effort [low|medium|high|max|off]"
-          : "Usage: /effort [low|medium|high|max|off]";
+          ? "用法: /effort [low|medium|high|xhigh|max|off]"
+          : "Usage: /effort [low|medium|high|xhigh|max|off]";
         await context.api.sendMessage(normalized.chatId, msg);
       }
       responded = true;

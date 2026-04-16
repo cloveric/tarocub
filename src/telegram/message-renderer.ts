@@ -51,7 +51,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     return [
       "Telegram 命令：",
       "/status - 显示引擎、会话和文件任务状态",
-      "/effort [low|medium|high|max|off] - 设置推理强度",
+      "/effort [low|medium|high|xhigh|max|off] - 设置推理强度（xhigh 仅 Opus 4.7）",
       "/model [名称|off] - 切换模型",
       "/btw <问题> - 旁问（不影响当前会话）",
       "/ask <实例> <提示> - 将任务委托给另一个 bot",
@@ -71,7 +71,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
   return [
     "Telegram commands:",
     "/status - show engine, session, and file task state",
-    "/effort [low|medium|high|max|off] - set reasoning effort level",
+    "/effort [low|medium|high|xhigh|max|off] - set reasoning effort level (xhigh is Opus 4.7 only)",
     "/model [name|off] - switch model",
     "/btw <question> - side question without affecting session",
     "/ask <instance> <prompt> - delegate a task to another bot",

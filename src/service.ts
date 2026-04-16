@@ -633,7 +633,7 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "reset", description: "Reset conversation session" },
   { command: "compact", description: "Compress session context (Claude only)" },
   { command: "status", description: "Show current session status" },
-  { command: "effort", description: "Set effort level (low/medium/high/max/off)" },
+  { command: "effort", description: "Set effort level (low/medium/high/xhigh/max/off)" },
   { command: "model", description: "Set model (opus/sonnet/o3/off)" },
   { command: "btw", description: "Ask a side question without affecting session" },
   { command: "continue", description: "Continue a paused task" },

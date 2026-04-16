@@ -346,6 +346,9 @@ export class ProcessCodexAdapter implements CodexAdapter {
           : [];
     const engineFlags: string[] = [];
     if (engineOptions.effort) {
+      // Codex's highest reasoning level is "xhigh". Claude's new "max" is
+      // strictly above xhigh (Opus 4.7 only), but Codex doesn't have an
+      // equivalent, so we ceiling "max" to "xhigh" on the Codex side.
       const codexEffort = engineOptions.effort === "max" ? "xhigh" : engineOptions.effort;
       engineFlags.push("-c", `model_reasoning_effort="${codexEffort}"`);
     }
