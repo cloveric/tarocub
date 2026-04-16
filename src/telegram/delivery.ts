@@ -652,9 +652,8 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (isUltrareviewCommand(normalized.text)) {
-      stopTyping();
-
       if (cfg.engine !== "claude") {
+        stopTyping();
         const msg = locale === "zh"
           ? "/ultrareview 仅支持 Claude 引擎（Opus 4.7+）。"
           : "/ultrareview is only supported with the Claude engine (Opus 4.7+).";
@@ -674,36 +673,28 @@ export async function handleNormalizedTelegramMessage(
 
       await context.api.sendMessage(normalized.chatId,
         locale === "zh" ? "正在进行代码审查..." : "Running code review...");
-      // Keep typing running — long-running review follows
+      // Keep typing running — long-running review follows. Errors propagate
+      // to the outer catch so auth / stale-session retries still apply.
 
-      try {
-        const result = await context.bridge.handleAuthorizedMessage({
-          chatId: normalized.chatId,
-          userId: normalized.userId,
-          chatType: normalized.chatType,
-          locale,
-          text: "/ultrareview",
-          files: [],
-          workspaceOverride: cfg.resume?.workspacePath,
-          abortSignal: context.abortSignal,
-        });
-
-        const chunks = chunkTelegramMessage(result.text);
-        await context.api.sendMessage(normalized.chatId, chunks[0]!);
-        responded = true;
-        for (const chunk of chunks.slice(1)) {
-          await context.api.sendMessage(normalized.chatId, chunk);
-        }
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        const msg = locale === "zh"
-          ? `代码审查失败：${detail}`
-          : `Code review failed: ${detail}`;
-        await context.api.sendMessage(normalized.chatId, msg);
-        responded = true;
-      }
+      const result = await context.bridge.handleAuthorizedMessage({
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        chatType: normalized.chatType,
+        locale,
+        text: "/ultrareview",
+        files: [],
+        workspaceOverride: cfg.resume?.workspacePath,
+        abortSignal: context.abortSignal,
+      });
 
       stopTyping();
+      const chunks = chunkTelegramMessage(result.text);
+      await context.api.sendMessage(normalized.chatId, chunks[0]!);
+      responded = true;
+      for (const chunk of chunks.slice(1)) {
+        await context.api.sendMessage(normalized.chatId, chunk);
+      }
+
       await appendAuditEventBestEffort(stateDir, {
         type: "update.handle",
         instanceName: context.instanceName,
@@ -1481,6 +1472,10 @@ export async function handleNormalizedTelegramMessage(
       try {
         await context.onAuthRetry();
         context._authRetried = true;
+        // Stop the outer typing interval before recursing: the recursive
+        // call starts its own interval, and our closure would otherwise
+        // keep the outer one alive forever (setInterval pins it).
+        stopTyping();
         return await handleNormalizedTelegramMessage(normalized, context);
       } catch {
         // Retry failed — fall through to normal error handling
@@ -1494,6 +1489,7 @@ export async function handleNormalizedTelegramMessage(
       try {
         await sessionStore.removeByChatId(normalized.chatId);
         context._staleSessionRetried = true;
+        stopTyping();
         return await handleNormalizedTelegramMessage(normalized, context);
       } catch {
         // Retry failed — fall through to normal error handling
