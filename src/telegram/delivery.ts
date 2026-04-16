@@ -160,6 +160,10 @@ function isCompactCommand(text: string): boolean {
   return /^\/compact(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }
 
+function isUltrareviewCommand(text: string): boolean {
+  return /^\/ultrareview(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
 function isHelpCommand(text: string): boolean {
   return /^\/help(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }
@@ -643,6 +647,71 @@ export async function handleNormalizedTelegramMessage(
         updateId: context.updateId,
         outcome: "success",
         metadata: { durationMs: Date.now() - startedAt },
+      });
+      return;
+    }
+
+    if (isUltrareviewCommand(normalized.text)) {
+      stopTyping();
+
+      if (cfg.engine !== "claude") {
+        const msg = locale === "zh"
+          ? "/ultrareview 仅支持 Claude 引擎（Opus 4.7+）。"
+          : "/ultrareview is only supported with the Claude engine (Opus 4.7+).";
+        await context.api.sendMessage(normalized.chatId, msg);
+        responded = true;
+        await appendAuditEventBestEffort(stateDir, {
+          type: "update.handle",
+          instanceName: context.instanceName,
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          outcome: "success",
+          metadata: { durationMs: Date.now() - startedAt, command: "ultrareview", rejected: "wrong-engine" },
+        });
+        return;
+      }
+
+      await context.api.sendMessage(normalized.chatId,
+        locale === "zh" ? "正在进行代码审查..." : "Running code review...");
+      // Keep typing running — long-running review follows
+
+      try {
+        const result = await context.bridge.handleAuthorizedMessage({
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          chatType: normalized.chatType,
+          locale,
+          text: "/ultrareview",
+          files: [],
+          workspaceOverride: cfg.resume?.workspacePath,
+          abortSignal: context.abortSignal,
+        });
+
+        const chunks = chunkTelegramMessage(result.text);
+        await context.api.sendMessage(normalized.chatId, chunks[0]!);
+        responded = true;
+        for (const chunk of chunks.slice(1)) {
+          await context.api.sendMessage(normalized.chatId, chunk);
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const msg = locale === "zh"
+          ? `代码审查失败：${detail}`
+          : `Code review failed: ${detail}`;
+        await context.api.sendMessage(normalized.chatId, msg);
+        responded = true;
+      }
+
+      stopTyping();
+      await appendAuditEventBestEffort(stateDir, {
+        type: "update.handle",
+        instanceName: context.instanceName,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "success",
+        metadata: { durationMs: Date.now() - startedAt, command: "ultrareview" },
       });
       return;
     }

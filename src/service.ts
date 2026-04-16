@@ -632,6 +632,7 @@ export async function createServiceDependenciesForInstance(
 const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "reset", description: "Reset conversation session" },
   { command: "compact", description: "Compress session context (Claude only)" },
+  { command: "ultrareview", description: "Run a dedicated code review (Claude Opus 4.7+ only)" },
   { command: "status", description: "Show current session status" },
   { command: "effort", description: "Set effort level (low/medium/high/xhigh/max/off)" },
   { command: "model", description: "Set model (opus/sonnet/o3/off)" },

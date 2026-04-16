@@ -64,6 +64,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
       "/detach - 断开恢复的 session，回到默认工作区",
       "/stop - 立即停止当前任务",
       "/compact - 压缩当前会话上下文",
+      "/ultrareview - 代码审查（仅 Claude Opus 4.7+，常配合 /resume 到本地项目使用）",
       "/reset - 清除当前聊天的会话",
       "/help - 显示此帮助",
     ].join("\n");
@@ -84,6 +85,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     "/detach - detach from resumed session, back to default workspace",
     "/stop - immediately stop the current task",
     "/compact - compress the current session context",
+    "/ultrareview - dedicated code review (Claude Opus 4.7+ only; usually paired with /resume into a local project)",
     "/reset - clear the current chat session",
     "/help - show this help",
   ].join("\n");
