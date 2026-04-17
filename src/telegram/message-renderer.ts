@@ -64,6 +64,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
       "/detach - 断开恢复的 session，回到默认工作区",
       "/stop - 立即停止当前任务",
       "/context - 显示 Claude 上下文用量（仅 Claude；用来决定何时 /compact）",
+      "/usage - 显示本实例累计 token 和费用",
       "/compact - 压缩当前会话上下文",
       "/ultrareview - 代码审查（仅 Claude Opus 4.7+，常配合 /resume 到本地项目使用）",
       "/reset - 清除当前聊天的会话",
@@ -86,6 +87,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     "/detach - detach from resumed session, back to default workspace",
     "/stop - immediately stop the current task",
     "/context - show Claude context fill level (Claude only; helps decide when to /compact)",
+    "/usage - show cumulative token & cost usage for this instance",
     "/compact - compress the current session context",
     "/ultrareview - dedicated code review (Claude Opus 4.7+ only; usually paired with /resume into a local project)",
     "/reset - clear the current chat session",
@@ -132,6 +134,46 @@ export function renderTelegramStatusMessage(input: {
     input.taskStateWarning
       ? `Waiting file tasks: unknown (${input.taskStateWarning})`
       : `Waiting file tasks: ${waitingTasks}`,
+  ].join("\n");
+}
+
+export function renderUsageMessage(
+  usage: {
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCachedTokens: number;
+    totalCostUsd: number;
+    requestCount: number;
+    lastUpdatedAt: string;
+  },
+  locale: Locale = "en",
+): string {
+  if (usage.requestCount === 0) {
+    return locale === "zh"
+      ? "暂无用量数据——处理完一轮请求后再查。"
+      : "No usage data yet — run a request first.";
+  }
+  const cost = usage.totalCostUsd.toFixed(4);
+  const lastSeen = usage.lastUpdatedAt || "never";
+  if (locale === "zh") {
+    return [
+      `累计用量（本实例）：`,
+      `• 请求数：${usage.requestCount.toLocaleString()}`,
+      `• 输入 tokens：${usage.totalInputTokens.toLocaleString()}`,
+      `• 输出 tokens：${usage.totalOutputTokens.toLocaleString()}`,
+      `• 缓存 tokens：${usage.totalCachedTokens.toLocaleString()}`,
+      `• 花销：$${cost}`,
+      `• 最近更新：${lastSeen}`,
+    ].join("\n");
+  }
+  return [
+    `Cumulative usage (this instance):`,
+    `• Requests: ${usage.requestCount.toLocaleString()}`,
+    `• Input tokens: ${usage.totalInputTokens.toLocaleString()}`,
+    `• Output tokens: ${usage.totalOutputTokens.toLocaleString()}`,
+    `• Cached tokens: ${usage.totalCachedTokens.toLocaleString()}`,
+    `• Cost: $${cost}`,
+    `• Last updated: ${lastSeen}`,
   ].join("\n");
 }
 

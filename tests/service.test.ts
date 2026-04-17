@@ -890,6 +890,7 @@ describe("polling helpers", () => {
     const logger = {
       error: vi.fn(),
     };
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const appendSpy = vi.spyOn(auditLog, "appendAuditEvent").mockRejectedValue(new Error("audit write failed"));
     const api = {
       getUpdates: vi.fn().mockRejectedValue(new Error("temporary Telegram API failure")),
@@ -982,6 +983,7 @@ describe("polling helpers", () => {
     const logger = {
       error: vi.fn(),
     };
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const appendSpy = vi.spyOn(auditLog, "appendAuditEvent").mockRejectedValue(new Error("audit write failed"));
     const api = {
       getUpdates: vi.fn().mockRejectedValue(new Error("409 Conflict: terminated by other getUpdates request")),
@@ -2667,6 +2669,7 @@ describe("polling helpers", () => {
       "README.md": "# hello",
       "src/index.ts": "console.log('hi')",
     });
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const appendSpy = vi.spyOn(auditLog, "appendAuditEvent").mockRejectedValue(new Error("audit write failed"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
@@ -3690,10 +3693,265 @@ describe("polling helpers", () => {
     }
   });
 
+  it("forwards /context to Claude engine and relays the reply", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    await writeFile(path.join(root, "config.json"), JSON.stringify({ engine: "claude" }), "utf8");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "Context: 42k / 200k" }),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/context",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "/context" }),
+      );
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Context: 42k / 200k");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects /context on Codex engine with a clear message", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    // No config.json → default engine is codex
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/context",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("Claude"),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards /ultrareview to Claude engine and relays chunks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    await writeFile(path.join(root, "config.json"), JSON.stringify({ engine: "claude" }), "utf8");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "Review findings..." }),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/ultrareview",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "/ultrareview" }),
+      );
+      // Progress message first, then the result
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Running code review"));
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Review findings...");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects /ultrareview on Codex engine", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/ultrareview",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("Claude"),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports no data on /usage when usage.json is absent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/usage",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringMatching(/No usage data yet|暂无用量数据/),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("renders aggregate usage on /usage when data exists", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    await writeFile(
+      path.join(root, "usage.json"),
+      JSON.stringify({
+        totalInputTokens: 1234,
+        totalOutputTokens: 567,
+        totalCachedTokens: 89,
+        totalCostUsd: 0.123,
+        requestCount: 3,
+        lastUpdatedAt: "2026-04-17T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/usage",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      const [, text] = api.sendMessage.mock.calls[0]!;
+      expect(text).toContain("1,234");
+      expect(text).toContain("567");
+      expect(text).toContain("$0.1230");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the /help success text in place when audit logging fails late", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateBlocker = path.join(root, "state-blocker");
     await writeFile(stateBlocker, "not a directory", "utf8");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
       editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
@@ -3738,6 +3996,7 @@ describe("polling helpers", () => {
     await mkdir(inboxDir, { recursive: true });
     await mkdir(path.join(stateDir, "audit.log.jsonl"));
     await writeFile(path.join(stateDir, "session.json"), JSON.stringify({ chats: [] }), "utf8");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
       editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
@@ -3791,6 +4050,7 @@ describe("polling helpers", () => {
     const inboxDir = path.join(stateDir, "inbox");
     await mkdir(inboxDir, { recursive: true });
     await mkdir(path.join(stateDir, "audit.log.jsonl"));
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     await writeFile(
       path.join(stateDir, "session.json"),
       JSON.stringify({
@@ -4193,6 +4453,7 @@ describe("polling helpers", () => {
   });
 
   it("keeps the original request error when error-path audit persistence fails", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const appendSpy = vi.spyOn(auditLog, "appendAuditEvent").mockRejectedValue(new Error("audit write failed"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),

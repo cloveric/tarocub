@@ -130,6 +130,7 @@ import {
   renderUnauthorizedMessage,
   renderSessionStateErrorMessage,
   renderSessionResetMessage,
+  renderUsageMessage,
 } from "./message-renderer.js";
 import { TelegramApi } from "./api.js";
 import type { NormalizedTelegramAttachment, NormalizedTelegramMessage } from "./update-normalizer.js";
@@ -164,6 +165,10 @@ function isUltrareviewCommand(text: string): boolean {
 
 function isContextCommand(text: string): boolean {
   return /^\/context(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
+function isUsageCommand(text: string): boolean {
+  return /^\/usage(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }
 
 function isHelpCommand(text: string): boolean {
@@ -768,6 +773,24 @@ export async function handleNormalizedTelegramMessage(
           responseChars: helpMessage.length,
           chunkCount: chunkTelegramMessage(helpMessage).length,
         },
+      });
+      return;
+    }
+
+    if (isUsageCommand(normalized.text)) {
+      const usageStore = new UsageStore(stateDir);
+      const usage = await usageStore.load();
+      const usageMessage = renderUsageMessage(usage, locale);
+      await context.api.sendMessage(normalized.chatId, usageMessage);
+      responded = true;
+      await appendAuditEventBestEffort(stateDir, {
+        type: "update.handle",
+        instanceName: context.instanceName,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "success",
+        metadata: { durationMs: Date.now() - startedAt, command: "usage" },
       });
       return;
     }

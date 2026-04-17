@@ -64,7 +64,26 @@ export async function lookupInstance(
   instanceName: string,
 ): Promise<BusRegistryEntry | null> {
   const registry = await readRegistry(channelRoot);
-  return registry.instances[instanceName] ?? null;
+  const entry = registry.instances[instanceName];
+  if (!entry) return null;
+  return isInstanceAlive(entry) ? entry : null;
+}
+
+/**
+ * True when the PID recorded in the registry entry still refers to a live
+ * process. Using `process.kill(pid, 0)` is a no-op signal that probes
+ * existence; ESRCH = no such process, EPERM = exists but owned by another
+ * user (fine — still alive, just not ours to signal).
+ */
+export function isInstanceAlive(entry: BusRegistryEntry): boolean {
+  if (!Number.isInteger(entry.pid) || entry.pid <= 0) return false;
+  try {
+    process.kill(entry.pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "EPERM";
+  }
 }
 
 export async function listRegisteredInstances(
@@ -72,4 +91,36 @@ export async function listRegisteredInstances(
 ): Promise<Array<{ name: string } & BusRegistryEntry>> {
   const registry = await readRegistry(channelRoot);
   return Object.entries(registry.instances).map(([name, entry]) => ({ name, ...entry }));
+}
+
+/**
+ * Like listRegisteredInstances but drops entries whose PID no longer exists.
+ * Use for cross-instance delegation and UI — callers that need a live target
+ * should never see a corpse.
+ */
+export async function listActiveInstances(
+  channelRoot: string,
+): Promise<Array<{ name: string } & BusRegistryEntry>> {
+  const all = await listRegisteredInstances(channelRoot);
+  return all.filter((entry) => isInstanceAlive(entry));
+}
+
+/**
+ * Remove entries whose PID is gone. Safe to call at startup before a fresh
+ * registerInstance, to keep `.bus-registry.json` from accumulating corpses.
+ */
+export async function pruneStaleInstances(channelRoot: string): Promise<number> {
+  const registry = await readRegistry(channelRoot);
+  let removed = 0;
+  for (const [name, entry] of Object.entries(registry.instances)) {
+    if (!isInstanceAlive(entry)) {
+      delete registry.instances[name];
+      removed++;
+    }
+  }
+  if (removed > 0) {
+    await mkdir(channelRoot, { recursive: true, mode: 0o700 });
+    await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  }
+  return removed;
 }

@@ -10,7 +10,7 @@ import {
 } from "./service.js";
 import { loadBusConfig } from "./bus/bus-config.js";
 import { createBusServer, startBusServer, stopBusServer, type BusTalkRequest, type BusTalkResponse } from "./bus/bus-server.js";
-import { registerInstance, deregisterInstance, resolveChannelRoot } from "./bus/bus-registry.js";
+import { pruneStaleInstances, registerInstance, deregisterInstance, resolveChannelRoot } from "./bus/bus-registry.js";
 
 async function main(): Promise<void> {
   try {
@@ -59,6 +59,10 @@ async function main(): Promise<void> {
     const busConfig = await loadBusConfig(config.stateDir);
 
     if (busConfig) {
+      // Clear out entries for instances that have exited (PID no longer
+      // alive). Keeps cross-instance /ask from connecting to dead ports.
+      await pruneStaleInstances(channelRoot);
+
       let busSessionCounter = 0;
       const handler = async (req: BusTalkRequest): Promise<BusTalkResponse> => {
         const startedAt = Date.now();
