@@ -634,6 +634,7 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "compact", description: "Compress session context (Claude only)" },
   { command: "ultrareview", description: "Run a dedicated code review (Claude Opus 4.7+ only)" },
   { command: "status", description: "Show current session status" },
+  { command: "context", description: "Show context fill level (to decide when to /compact)" },
   { command: "effort", description: "Set effort level (low/medium/high/xhigh/max/off)" },
   { command: "model", description: "Set model (opus/sonnet/o3/off; append [1m] for 1M context)" },
   { command: "btw", description: "Ask a side question without affecting session" },

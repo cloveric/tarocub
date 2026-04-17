@@ -63,6 +63,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
       "/resume - 恢复本地 session 到 Telegram 继续",
       "/detach - 断开恢复的 session，回到默认工作区",
       "/stop - 立即停止当前任务",
+      "/context - 显示上下文用量百分比（用来决定何时 /compact）",
       "/compact - 压缩当前会话上下文",
       "/ultrareview - 代码审查（仅 Claude Opus 4.7+，常配合 /resume 到本地项目使用）",
       "/reset - 清除当前聊天的会话",
@@ -84,6 +85,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     "/resume - resume a local session on Telegram",
     "/detach - detach from resumed session, back to default workspace",
     "/stop - immediately stop the current task",
+    "/context - show context fill level (helps decide when to /compact)",
     "/compact - compress the current session context",
     "/ultrareview - dedicated code review (Claude Opus 4.7+ only; usually paired with /resume into a local project)",
     "/reset - clear the current chat session",
@@ -131,6 +133,33 @@ export function renderTelegramStatusMessage(input: {
       ? `Waiting file tasks: unknown (${input.taskStateWarning})`
       : `Waiting file tasks: ${waitingTasks}`,
   ].join("\n");
+}
+
+export function contextLimitForModel(model: string | undefined): number {
+  // [1m] suffix on a model alias enables the 1M context window (Opus 4.7 / Sonnet).
+  // Default Claude / Codex context window is 200k.
+  if (model && /\[1m\]/i.test(model)) return 1_000_000;
+  return 200_000;
+}
+
+export function renderContextMessage(
+  tokens: number | undefined,
+  model: string | undefined,
+  locale: Locale = "en",
+): string {
+  if (tokens === undefined) {
+    return locale === "zh"
+      ? "暂无上下文用量数据——发一条消息后再查。"
+      : "No context data yet — send a message first.";
+  }
+  const limit = contextLimitForModel(model);
+  const percent = (tokens / limit) * 100;
+  const pct = percent >= 10 ? percent.toFixed(1) : percent.toFixed(2);
+  const modelLabel = model ?? (locale === "zh" ? "默认" : "default");
+  if (locale === "zh") {
+    return `上下文：${pct}%（${tokens.toLocaleString()} / ${limit.toLocaleString()} tokens，模型 ${modelLabel}）`;
+  }
+  return `Context: ${pct}% (${tokens.toLocaleString()} / ${limit.toLocaleString()} tokens, model ${modelLabel})`;
 }
 
 export function renderCategorizedErrorMessage(category: FailureCategory, detail: string, locale: Locale = "en"): string {

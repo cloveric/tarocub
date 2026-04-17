@@ -107,6 +107,17 @@ export class SessionStore {
     };
   }
 
+  async updateLastContextTokens(telegramChatId: number, tokens: number): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const state = await this.load();
+      const record = state.chats.find((entry) => entry.telegramChatId === telegramChatId);
+      if (!record) return;
+      record.lastContextTokens = tokens;
+      record.updatedAt = new Date().toISOString();
+      await this.store.write(state);
+    });
+  }
+
   async removeByChatId(telegramChatId: number): Promise<boolean> {
     let removed = false;
 

@@ -126,6 +126,7 @@ async function updateWorkflowBestEffort(
 import {
   chunkTelegramMessage,
   renderCategorizedErrorMessage,
+  renderContextMessage,
   renderErrorMessage,
   renderTelegramHelpMessage,
   renderTelegramStatusMessage,
@@ -162,6 +163,10 @@ function isCompactCommand(text: string): boolean {
 
 function isUltrareviewCommand(text: string): boolean {
   return /^\/ultrareview(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
+function isContextCommand(text: string): boolean {
+  return /^\/context(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }
 
 function isHelpCommand(text: string): boolean {
@@ -765,6 +770,25 @@ export async function handleNormalizedTelegramMessage(
           responseChars: statusMessage.length,
           chunkCount: chunkTelegramMessage(statusMessage).length,
         },
+      });
+      return;
+    }
+
+    if (isContextCommand(normalized.text)) {
+      stopTyping();
+      const sessionResult = await sessionStore.findByChatIdSafe(normalized.chatId);
+      const tokens = sessionResult.record?.lastContextTokens;
+      const message = renderContextMessage(tokens, cfg.model, locale);
+      await context.api.sendMessage(normalized.chatId, message);
+      responded = true;
+      await appendAuditEventBestEffort(stateDir, {
+        type: "update.handle",
+        instanceName: context.instanceName,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "success",
+        metadata: { durationMs: Date.now() - startedAt, command: "context", tokens: tokens ?? null },
       });
       return;
     }
@@ -1399,6 +1423,14 @@ export async function handleNormalizedTelegramMessage(
         cachedTokens: result.usage.cachedTokens,
         costUsd: result.usage.costUsd,
       });
+
+      // Stash the last turn's input-token count on the session record so
+      // /context can report the context-fill level without another round-trip.
+      try {
+        await sessionStore.updateLastContextTokens(normalized.chatId, result.usage.inputTokens);
+      } catch {
+        // Best-effort — /context will just show "no data" if this fails.
+      }
 
       if (cfg.budgetUsd !== undefined) {
         const postUsage = await usageStore.load();

@@ -36,6 +36,7 @@ export interface SessionRecord {
   codexSessionId: string;
   status: "idle" | "running" | "queued" | "blocked";
   updatedAt: string;
+  lastContextTokens?: number;
 }
 
 export interface SessionState {
