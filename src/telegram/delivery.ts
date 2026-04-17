@@ -1312,6 +1312,7 @@ export async function handleNormalizedTelegramMessage(
             normalized.text = normalized.text ? `${normalized.text}\n${transcript}` : transcript;
           }
         } catch {
+          stopTyping();
           const fallbackMsg = locale === "zh" ? "语音转写失败，请发送文字消息。" : "Voice transcription failed. Please send a text message.";
           await context.api.sendMessage(normalized.chatId, fallbackMsg);
           responded = true;
