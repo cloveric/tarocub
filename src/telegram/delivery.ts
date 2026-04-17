@@ -131,6 +131,7 @@ import {
   renderSessionStateErrorMessage,
   renderSessionResetMessage,
   renderUsageMessage,
+  type Locale,
 } from "./message-renderer.js";
 import { TelegramApi } from "./api.js";
 import type { NormalizedTelegramAttachment, NormalizedTelegramMessage } from "./update-normalizer.js";
@@ -426,12 +427,42 @@ async function sendFileOrPhoto(api: TelegramApi, chatId: number, filename: strin
   await api.sendDocument(chatId, filename, contents);
 }
 
+type RejectReason =
+  | "outside-workspace"
+  | "not-a-file"
+  | "too-large"
+  | "not-found"
+  | "permission-denied"
+  | "read-error";
+
+function renderRejectReason(reason: RejectReason, detail: string | undefined, locale: Locale): string {
+  if (locale === "zh") {
+    switch (reason) {
+      case "outside-workspace": return "超出工作目录";
+      case "not-a-file": return "不是普通文件";
+      case "too-large": return `文件过大（${detail} > 50MB）`;
+      case "not-found": return "文件不存在";
+      case "permission-denied": return "无读取权限";
+      case "read-error": return "读取失败";
+    }
+  }
+  switch (reason) {
+    case "outside-workspace": return "outside workspace";
+    case "not-a-file": return "not a regular file";
+    case "too-large": return `too large (${detail} > 50MB)`;
+    case "not-found": return "file not found";
+    case "permission-denied": return "permission denied";
+    case "read-error": return "read error";
+  }
+}
+
 async function deliverTelegramResponse(
   api: TelegramApi,
   chatId: number,
   text: string,
   inboxDir: string,
   workspaceOverride?: string,
+  locale: Locale = "en",
 ): Promise<number> {
   let filesSent = 0;
   // Handle inline text file blocks
@@ -480,7 +511,7 @@ async function deliverTelegramResponse(
   // Collect referenced files from disk
   const imageFiles: Array<{ filename: string; contents: Uint8Array }> = [];
   const otherFiles: Array<{ filename: string; contents: Uint8Array | string }> = [];
-  const rejected: Array<{ path: string; reason: string }> = [];
+  const rejected: Array<{ path: string; reason: RejectReason; detail?: string }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
@@ -490,7 +521,7 @@ async function deliverTelegramResponse(
     try {
       const real = await realpath(filePath);
       if (!real.startsWith(workspacePrefix) && !(overridePrefix && real.startsWith(overridePrefix))) {
-        rejected.push({ path: filePath, reason: "outside workspace" });
+        rejected.push({ path: filePath, reason: "outside-workspace" });
         continue;
       }
       // realpath already resolved any symlinks; lstat here operates on the
@@ -498,11 +529,11 @@ async function deliverTelegramResponse(
       // pointing outside the sandbox was already caught by the prefix test.
       const stats = await lstat(real);
       if (!stats.isFile()) {
-        rejected.push({ path: filePath, reason: "not a regular file" });
+        rejected.push({ path: filePath, reason: "not-a-file" });
         continue;
       }
       if (stats.size > 50_000_000) {
-        rejected.push({ path: filePath, reason: `too large (${Math.round(stats.size / 1_000_000)}MB > 50MB)` });
+        rejected.push({ path: filePath, reason: "too-large", detail: `${Math.round(stats.size / 1_000_000)}MB` });
         continue;
       }
       const contents = await readFile(real);
@@ -514,7 +545,8 @@ async function deliverTelegramResponse(
       }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
-      const reason = code === "ENOENT" ? "file not found" : code === "EACCES" ? "permission denied" : "read error";
+      const reason: RejectReason =
+        code === "ENOENT" ? "not-found" : code === "EACCES" ? "permission-denied" : "read-error";
       rejected.push({ path: filePath, reason });
     }
   }
@@ -533,12 +565,16 @@ async function deliverTelegramResponse(
     const MAX_SHOWN = 5;
     const shown = rejected.slice(0, MAX_SHOWN);
     const extra = rejected.length - shown.length;
-    const lines = [
-      `⚠ ${rejected.length} file${rejected.length === 1 ? "" : "s"} not delivered:`,
-      ...shown.map(({ path: p, reason }) => `• ${p} — ${reason}`),
-    ];
-    if (extra > 0) lines.push(`… and ${extra} more`);
-    lines.push("Files must live under the bot's workspace (or a /resume'd project dir).");
+    const header = locale === "zh"
+      ? `⚠ 有 ${rejected.length} 个文件未能送达：`
+      : `⚠ ${rejected.length} file${rejected.length === 1 ? "" : "s"} not delivered:`;
+    const moreLine = locale === "zh" ? `…还有 ${extra} 个` : `… and ${extra} more`;
+    const footer = locale === "zh"
+      ? "文件必须位于本 bot 的工作目录内（或通过 /resume 指定的项目目录）。"
+      : "Files must live under the bot's workspace (or a /resume'd project dir).";
+    const lines = [header, ...shown.map(({ path: p, reason, detail }) => `• ${p} — ${renderRejectReason(reason, detail, locale)}`)];
+    if (extra > 0) lines.push(moreLine);
+    lines.push(footer);
     await api.sendMessage(chatId, lines.join("\n"));
   }
 
@@ -1519,7 +1555,7 @@ export async function handleNormalizedTelegramMessage(
       }
     }
 
-    await deliverTelegramResponse(context.api, normalized.chatId, result.text, context.inboxDir, cfg.resume?.workspacePath);
+    await deliverTelegramResponse(context.api, normalized.chatId, result.text, context.inboxDir, cfg.resume?.workspacePath, locale);
     responded = true;
 
     if (telegramOutDirPath) {

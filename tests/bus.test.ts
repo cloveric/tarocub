@@ -1,7 +1,19 @@
 import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+
+async function listenOn(port: number): Promise<{ close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.listen(port, "127.0.0.1", () => {
+      resolve({
+        close: () => new Promise<void>((r) => server.close(() => r())),
+      });
+    });
+  });
+}
 
 import { parseBusConfig, isPeerAllowed, type BusConfig } from "../src/bus/bus-config.js";
 import {
@@ -90,6 +102,10 @@ describe("isPeerAllowed", () => {
 describe("bus registry", () => {
   it("registers, looks up, and deregisters instances", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
+    // lookupInstance now probes the registered port via TCP — start real
+    // listeners so registered entries read as alive.
+    const workServer = await listenOn(9100);
+    const reviewerServer = await listenOn(9101);
     try {
       await registerInstance(tempDir, "work", 9100, "secret-a");
       await registerInstance(tempDir, "reviewer", 9101, "secret-b");
@@ -97,12 +113,27 @@ describe("bus registry", () => {
       const work = await lookupInstance(tempDir, "work");
       expect(work).toEqual(expect.objectContaining({ port: 9100, pid: process.pid, secret: "secret-a" }));
 
+      // listRegisteredInstances returns the raw registry (no liveness filter)
       const all = await listRegisteredInstances(tempDir);
       expect(all).toHaveLength(2);
 
       await deregisterInstance(tempDir, "work");
       expect(await lookupInstance(tempDir, "work")).toBeNull();
       expect(await lookupInstance(tempDir, "reviewer")).not.toBeNull();
+    } finally {
+      await workServer.close();
+      await reviewerServer.close();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lookupInstance returns null when the registered port is not listening", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
+    try {
+      // Register against port 9102 without starting a listener — simulates
+      // a crashed bot that didn't deregister, or a PID-recycled corpse.
+      await registerInstance(tempDir, "ghost", 9102, "secret-ghost");
+      expect(await lookupInstance(tempDir, "ghost")).toBeNull();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { createConnection } from "node:net";
 import path from "node:path";
 
 export interface BusRegistryEntry {
@@ -66,24 +67,36 @@ export async function lookupInstance(
   const registry = await readRegistry(channelRoot);
   const entry = registry.instances[instanceName];
   if (!entry) return null;
-  return isInstanceAlive(entry) ? entry : null;
+  return (await isInstanceAlive(entry)) ? entry : null;
 }
 
 /**
- * True when the PID recorded in the registry entry still refers to a live
- * process. Using `process.kill(pid, 0)` is a no-op signal that probes
- * existence; ESRCH = no such process, EPERM = exists but owned by another
- * user (fine — still alive, just not ours to signal).
+ * True when a bus server is actually listening on the registered port.
+ *
+ * Earlier versions probed only the PID via `process.kill(pid, 0)`, but that
+ * gives false positives in two common cases:
+ * 1. The bot crashed but the PID has been recycled by an unrelated process.
+ * 2. The bot's main process exists (as a zombie / during shutdown) but the
+ *    bus server has already stopped accepting connections.
+ *
+ * A TCP connect probe catches both: if nothing is listening on the port,
+ * we get ECONNREFUSED immediately. 500ms timeout is plenty for localhost.
  */
-export function isInstanceAlive(entry: BusRegistryEntry): boolean {
-  if (!Number.isInteger(entry.pid) || entry.pid <= 0) return false;
-  try {
-    process.kill(entry.pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "EPERM";
+export async function isInstanceAlive(entry: BusRegistryEntry): Promise<boolean> {
+  if (!Number.isInteger(entry.port) || entry.port <= 0 || entry.port > 65535) {
+    return false;
   }
+  return new Promise<boolean>((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port: entry.port });
+    const done = (alive: boolean) => {
+      socket.destroy();
+      resolve(alive);
+    };
+    socket.setTimeout(500);
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+    socket.once("timeout", () => done(false));
+  });
 }
 
 export async function listRegisteredInstances(
@@ -94,26 +107,30 @@ export async function listRegisteredInstances(
 }
 
 /**
- * Like listRegisteredInstances but drops entries whose PID no longer exists.
- * Use for cross-instance delegation and UI — callers that need a live target
- * should never see a corpse.
+ * Like listRegisteredInstances but drops entries whose bus server no longer
+ * answers. Use for cross-instance delegation and UI — callers that need a
+ * live target should never see a corpse.
  */
 export async function listActiveInstances(
   channelRoot: string,
 ): Promise<Array<{ name: string } & BusRegistryEntry>> {
   const all = await listRegisteredInstances(channelRoot);
-  return all.filter((entry) => isInstanceAlive(entry));
+  const checks = await Promise.all(all.map(async (entry) => ({ entry, alive: await isInstanceAlive(entry) })));
+  return checks.filter(({ alive }) => alive).map(({ entry }) => entry);
 }
 
 /**
- * Remove entries whose PID is gone. Safe to call at startup before a fresh
- * registerInstance, to keep `.bus-registry.json` from accumulating corpses.
+ * Remove entries whose port no longer answers. Safe to call at startup
+ * before a fresh registerInstance, to keep `.bus-registry.json` from
+ * accumulating corpses.
  */
 export async function pruneStaleInstances(channelRoot: string): Promise<number> {
   const registry = await readRegistry(channelRoot);
+  const entries = Object.entries(registry.instances);
+  const checks = await Promise.all(entries.map(async ([name, entry]) => ({ name, alive: await isInstanceAlive(entry) })));
   let removed = 0;
-  for (const [name, entry] of Object.entries(registry.instances)) {
-    if (!isInstanceAlive(entry)) {
+  for (const { name, alive } of checks) {
+    if (!alive) {
       delete registry.instances[name];
       removed++;
     }

@@ -25,18 +25,14 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
   }
 
   const channelRoot = resolveChannelRoot(input.stateDir);
+  // lookupInstance now probes the bus port, so a returned entry means the
+  // server is actually reachable. A redundant PID check here would only
+  // add false positives (PID alive but bus dead) — ECONNREFUSED from the
+  // fetch() below gives us a more accurate error anyway.
   const target = await lookupInstance(channelRoot, input.targetInstance);
   if (!target) {
     throw new Error(
       `Instance "${input.targetInstance}" is not running or not registered on the bus`,
-    );
-  }
-
-  try {
-    process.kill(target.pid, 0);
-  } catch {
-    throw new Error(
-      `Instance "${input.targetInstance}" has a stale registry entry (PID ${target.pid} is not running)`,
     );
   }
 
