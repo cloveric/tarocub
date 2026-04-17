@@ -12,7 +12,7 @@ Do not treat "feature implemented" as "work complete" unless the current milesto
 
 When you feel the urge to stop, summarize, or hand back partially-finished work:
 
-1. Run `.\scripts\pre-complete-hook.ps1`
+1. Run `./scripts/pre-complete-hook.sh` (or `.\scripts\pre-complete-hook.ps1` on Windows)
 2. If it fails, fix the failures
 3. If it passes but known parity/stability gaps remain, continue with the highest-value next task
 4. Only stop when:
@@ -89,7 +89,7 @@ If it matches anything, fix before committing.
 
 ## Repo Notes
 
-- Windows-first project
+- Cross-platform (macOS / Linux / Windows). Primary development target is macOS; Windows support is maintained.
 - One Telegram bot per instance
 - One instance per process
-- State lives under `%USERPROFILE%\.cctb\<instance>\`
+- State lives under `~/.cctb/<instance>/` (POSIX) or `%USERPROFILE%\.cctb\<instance>\` (Windows)

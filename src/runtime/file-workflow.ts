@@ -141,6 +141,7 @@ function isContinueAnalysisCommand(text: string): {
   extraInstructions: string;
   targetUploadId?: string;
   malformedTarget?: boolean;
+  isSlashCommand?: boolean;
 } {
   const trimmed = text.trim();
   const slashCommandPattern = /^\/continue(?:@\w+)?(?:\s+(.*))?$/i;
@@ -153,6 +154,7 @@ function isContinueAnalysisCommand(text: string): {
         matches: true,
         targetUploadId: targetedMatch[1],
         extraInstructions: targetedMatch[2]?.trim() ?? "",
+        isSlashCommand: true,
       };
     }
 
@@ -161,12 +163,14 @@ function isContinueAnalysisCommand(text: string): {
         matches: true,
         extraInstructions: "",
         malformedTarget: true,
+        isSlashCommand: true,
       };
     }
 
     return {
       matches: true,
       extraInstructions: remainder,
+      isSlashCommand: true,
     };
   }
 
@@ -458,7 +462,7 @@ export async function prepareArchiveContinueWorkflow(input: {
     text: string;
   };
 }): Promise<FileWorkflowResult | null> {
-  const { matches, extraInstructions, targetUploadId, malformedTarget } = isContinueAnalysisCommand(input.text);
+  const { matches, extraInstructions, targetUploadId, malformedTarget, isSlashCommand } = isContinueAnalysisCommand(input.text);
   if (!matches) {
     return null;
   }
@@ -501,18 +505,21 @@ export async function prepareArchiveContinueWorkflow(input: {
       }
     }
 
-    // Implicit continue ("继续" / "继续分析" with no target) but nothing is
-    // awaiting analysis: let the message flow to the engine instead of
-    // intercepting with a "no archive waiting" reply. Bare "继续" is common
-    // in normal Chinese conversation — hijacking it here silently swallows
-    // the message before Claude / Codex ever sees it.
-    if (!explicitTarget) {
+    // A bare Chinese phrase ("继续" / "继续分析") with no pending archive
+    // is almost certainly normal conversation, not a bridge command —
+    // passthrough so Claude / Codex can respond. Slash commands are kept
+    // intercepted: /continue is an explicit request for bridge behavior
+    // and deserves a clear "nothing waiting" reply rather than being
+    // forwarded to the engine as a literal prompt.
+    if (!explicitTarget && !isSlashCommand) {
       return null;
     }
 
     return {
       kind: "reply",
-      text: "That archive is no longer waiting for continued analysis in this chat.",
+      text: explicitTarget
+        ? "That archive is no longer waiting for continued analysis in this chat."
+        : "There is no archive waiting for continued analysis in this chat.",
     };
   }
 

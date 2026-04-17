@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { Bridge } from "../runtime/bridge.js";
@@ -19,7 +19,6 @@ import { appendAuditEvent } from "../state/audit-log.js";
 import { classifyFailure, isStaleSessionError } from "../runtime/error-classification.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { UsageStore } from "../state/usage-store.js";
-import { readFile } from "node:fs/promises";
 import { SessionStore } from "../state/session-store.js";
 import { SessionStateError } from "../runtime/session-manager.js";
 import { delegateToInstance } from "../bus/bus-client.js";
@@ -99,7 +98,6 @@ async function updateInstanceConfig(stateDir: string, updater: (config: Record<s
     config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
   } catch { /* start fresh */ }
   updater(config);
-  const { writeFile } = await import("node:fs/promises");
   await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
 }
 
@@ -317,28 +315,47 @@ async function ensureInboxDirExists(inboxDir: string): Promise<void> {
   await mkdir(inboxDir, { recursive: true });
 }
 
-const ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
-const ASR_CLI_PYTHON = path.join(process.env.HOME ?? "/", "projects/qwen3-asr/venv/bin/python3");
-const ASR_CLI_SCRIPT = path.join(process.env.HOME ?? "/", "projects/qwen3-asr/transcribe.py");
+// Voice transcription configuration. Override via env vars:
+//   ASR_HTTP_URL — warm ASR HTTP server (fast path)
+//   ASR_CLI_PYTHON + ASR_CLI_SCRIPT — CLI fallback (cold start)
+// An empty ASR_HTTP_URL disables the HTTP path; missing CLI paths disable
+// the CLI path. If both are unavailable, voice messages fail cleanly
+// with an "ASR not configured" error instead of spawning against
+// nonexistent files.
+const ASR_HTTP_URL = process.env.ASR_HTTP_URL ?? "http://127.0.0.1:8412/transcribe";
+const ASR_CLI_PYTHON = process.env.ASR_CLI_PYTHON
+  ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/venv/bin/python3") : undefined);
+const ASR_CLI_SCRIPT = process.env.ASR_CLI_SCRIPT
+  ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/transcribe.py") : undefined);
 
 async function transcribeVoice(audioPath: string): Promise<string> {
-  try {
-    const response = await fetch(ASR_HTTP_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: audioPath }),
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (response.ok) {
-      const text = await response.text();
-      if (text.trim()) return text.trim();
+  if (ASR_HTTP_URL) {
+    try {
+      const response = await fetch(ASR_HTTP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: audioPath }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (response.ok) {
+        const text = await response.text();
+        if (text.trim()) return text.trim();
+      }
+    } catch {
+      // HTTP server unreachable — fall back to CLI if configured
     }
-  } catch {
-    // HTTP server not running — fall back to CLI
   }
 
+  if (!ASR_CLI_PYTHON || !ASR_CLI_SCRIPT) {
+    throw new Error(
+      "ASR not configured: set ASR_HTTP_URL or ASR_CLI_PYTHON + ASR_CLI_SCRIPT env vars, or install the qwen3-asr defaults at ~/projects/qwen3-asr/.",
+    );
+  }
+
+  const cliPython = ASR_CLI_PYTHON;
+  const cliScript = ASR_CLI_SCRIPT;
   return new Promise<string>((resolve, reject) => {
-    execFile(ASR_CLI_PYTHON, [ASR_CLI_SCRIPT, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
+    execFile(cliPython, [cliScript, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr?.trim() || error.message));
         return;
@@ -466,7 +483,6 @@ async function deliverTelegramResponse(
 
   for (const filePath of filePaths) {
     try {
-      const { realpath, lstat } = await import("node:fs/promises");
       const real = await realpath(filePath);
       if (!real.startsWith(workspacePrefix) && !(overridePrefix && real.startsWith(overridePrefix))) {
         rejected.push({ path: filePath, reason: "outside workspace" });
@@ -572,7 +588,6 @@ export async function handleNormalizedTelegramMessage(
     });
 
     if (accessDecision.kind === "reply" || accessDecision.kind === "deny") {
-      stopTyping();
       await context.api.sendMessage(
         normalized.chatId,
         accessDecision.text ?? renderErrorMessage(renderUnauthorizedMessage(locale), locale),
@@ -594,7 +609,6 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (isResetCommand(normalized.text)) {
-      stopTyping();
       const inspectedState = await sessionStore.inspect();
       if (inspectedState.warning) {
         throw new SessionStateError(
@@ -611,7 +625,6 @@ export async function handleNormalizedTelegramMessage(
       if (cfg.resume) {
         if (cfg.resume.symlinkPath) {
           try {
-            const { lstat, unlink } = await import("node:fs/promises");
             const st = await lstat(cfg.resume.symlinkPath);
             if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
           } catch { /* ok */ }
@@ -640,7 +653,6 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (isCompactCommand(normalized.text)) {
-      stopTyping();
       await context.api.sendMessage(normalized.chatId,
         locale === "zh" ? "正在压缩会话上下文..." : "Compacting session context...");
 
@@ -687,7 +699,6 @@ export async function handleNormalizedTelegramMessage(
 
     if (isUltrareviewCommand(normalized.text)) {
       if (cfg.engine !== "claude") {
-        stopTyping();
         const msg = locale === "zh"
           ? "/ultrareview 仅支持 Claude 引擎（Opus 4.7+）。"
           : "/ultrareview is only supported with the Claude engine (Opus 4.7+).";
@@ -721,7 +732,6 @@ export async function handleNormalizedTelegramMessage(
         abortSignal: context.abortSignal,
       });
 
-      stopTyping();
       const chunks = chunkTelegramMessage(result.text);
       await context.api.sendMessage(normalized.chatId, chunks[0]!);
       responded = true;
@@ -742,7 +752,6 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (isHelpCommand(normalized.text)) {
-      stopTyping();
       const helpMessage = renderTelegramHelpMessage(locale);
       await context.api.sendMessage(normalized.chatId, helpMessage);
       responded = true;
@@ -764,7 +773,6 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (isStatusCommand(normalized.text)) {
-      stopTyping();
       const sessionResult = await sessionStore.findByChatIdSafe(normalized.chatId);
       const workflowResult = await workflowStore.inspect();
       const chatRecords = workflowResult.warning
@@ -805,7 +813,6 @@ export async function handleNormalizedTelegramMessage(
 
     if (isContextCommand(normalized.text)) {
       if (cfg.engine !== "claude") {
-        stopTyping();
         const msg = locale === "zh"
           ? "/context 仅支持 Claude 引擎。Codex 的上下文由服务端自管，无法本地查询。"
           : "/context is only supported with the Claude engine. Codex manages context server-side and does not expose this.";
@@ -837,7 +844,6 @@ export async function handleNormalizedTelegramMessage(
         abortSignal: context.abortSignal,
       });
 
-      stopTyping();
       const chunks = chunkTelegramMessage(result.text);
       await context.api.sendMessage(normalized.chatId, chunks[0]!);
       responded = true;
@@ -859,7 +865,6 @@ export async function handleNormalizedTelegramMessage(
 
     const effortCmd = parseEffortCommand(normalized.text);
     if (effortCmd) {
-      stopTyping();
       if (!effortCmd.level) {
         const current = cfg.effort ?? "default";
         const msg = locale === "zh" ? `当前 effort: ${current}` : `Current effort: ${current}`;
@@ -893,7 +898,6 @@ export async function handleNormalizedTelegramMessage(
 
     const modelCmd = parseModelCommand(normalized.text);
     if (modelCmd) {
-      stopTyping();
       if (!modelCmd.model) {
         const current = cfg.model ?? "default";
         const msg = locale === "zh" ? `当前模型: ${current}` : `Current model: ${current}`;
@@ -922,8 +926,6 @@ export async function handleNormalizedTelegramMessage(
 
     const resumeCmd = parseResumeCommand(normalized.text);
     if (resumeCmd) {
-      stopTyping();
-
       if (cfg.engine !== "claude") {
         const msg = locale === "zh"
           ? "/resume 仅支持 Claude 引擎。Codex 的 session 存储在服务端，无法本地恢复。"
@@ -1028,7 +1030,6 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (isDetachCommand(normalized.text)) {
-      stopTyping();
 
       if (!cfg.resume) {
         const msg = locale === "zh"
@@ -1039,7 +1040,6 @@ export async function handleNormalizedTelegramMessage(
         // Clean up legacy symlink if one was left over from an older /resume
         if (cfg.resume.symlinkPath) {
           try {
-            const { lstat, unlink } = await import("node:fs/promises");
             const st = await lstat(cfg.resume.symlinkPath);
             if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
           } catch { /* ok — already gone */ }
@@ -1092,7 +1092,6 @@ export async function handleNormalizedTelegramMessage(
         await context.api.sendMessage(normalized.chatId, msg);
         responded = true;
       }
-      stopTyping();
       await appendAuditEventBestEffort(path.dirname(context.inboxDir), {
         type: "update.handle",
         instanceName: context.instanceName,
@@ -1107,7 +1106,6 @@ export async function handleNormalizedTelegramMessage(
 
     const askCommand = parseAskCommand(normalized.text);
     if (askCommand) {
-      stopTyping();
       const currentInstance = context.instanceName ?? "default";
       if (askCommand.targetInstance === currentInstance) {
         await context.api.sendMessage(normalized.chatId,
@@ -1176,7 +1174,6 @@ export async function handleNormalizedTelegramMessage(
 
     const fanCommand = parseFanCommand(normalized.text);
     if (fanCommand) {
-      stopTyping();
       const busConfig = await loadBusConfig(stateDir);
       const targets = busConfig?.parallel ?? [];
       if (targets.length === 0) {
@@ -1247,7 +1244,6 @@ export async function handleNormalizedTelegramMessage(
 
     const verifyCommand = parseVerifyCommand(normalized.text);
     if (verifyCommand) {
-      stopTyping();
       const busConfig = await loadBusConfig(stateDir);
       const verifier = busConfig?.verifier;
       if (!verifier) {
@@ -1342,7 +1338,6 @@ export async function handleNormalizedTelegramMessage(
             normalized.text = normalized.text ? `${normalized.text}\n${transcript}` : transcript;
           }
         } catch {
-          stopTyping();
           const fallbackMsg = locale === "zh" ? "语音转写失败，请发送文字消息。" : "Voice transcription failed. Please send a text message.";
           await context.api.sendMessage(normalized.chatId, fallbackMsg);
           responded = true;
@@ -1374,7 +1369,6 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (workflowResult?.kind === "reply") {
-      stopTyping();
       workflowRecordId = workflowResult.workflowRecordId;
       const deliveryText = workflowRecordId ? boundArchiveSummaryForTelegram(workflowResult.text) : workflowResult.text;
       const summaryMsg = await context.api.sendMessage(
@@ -1425,7 +1419,6 @@ export async function handleNormalizedTelegramMessage(
         const budgetMsg = locale === "zh"
           ? `预算已用尽：$${usage.totalCostUsd.toFixed(4)} / $${cfg.budgetUsd.toFixed(2)}。使用 \`telegram budget set <usd>\` 提高预算或 \`telegram budget clear\` 清除。`
           : `Budget exhausted: $${usage.totalCostUsd.toFixed(4)} used of $${cfg.budgetUsd.toFixed(2)}. Raise the budget with \`telegram budget set <usd>\` or clear it with \`telegram budget clear\`.`;
-        stopTyping();
         await context.api.sendMessage(normalized.chatId, budgetMsg);
         responded = true;
         await appendAuditEventBestEffort(stateDir, {
@@ -1477,8 +1470,6 @@ export async function handleNormalizedTelegramMessage(
       workspaceOverride: cfg.resume?.workspacePath,
       abortSignal: context.abortSignal,
     });
-
-    stopTyping();
 
     if (result.usage) {
       const usageStore = new UsageStore(stateDir);
@@ -1553,7 +1544,6 @@ export async function handleNormalizedTelegramMessage(
 
     // If user sent /stop, don't send an error message — /stop handler already notified them
     if (context.abortSignal?.aborted) {
-      stopTyping();
       return;
     }
 
@@ -1593,7 +1583,6 @@ export async function handleNormalizedTelegramMessage(
       ? `${renderCategorizedErrorMessage(failureCategory, message, locale)}\n${failureHint}`
       : renderCategorizedErrorMessage(failureCategory, message, locale);
     let workflowCleanupError: unknown;
-    stopTyping();
 
     if (workflowRecordId) {
       try {
@@ -1638,5 +1627,11 @@ export async function handleNormalizedTelegramMessage(
       },
     });
 
+  } finally {
+    // Guarantee the typing interval always stops. Without this every new
+    // early-return branch is a potential leak (setInterval pins the closure,
+    // sendChatAction keeps firing forever). See f1bfc31 / aaca5f5 — both
+    // were symptoms of this pattern.
+    stopTyping();
   }
 }
