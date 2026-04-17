@@ -472,11 +472,10 @@ async function deliverTelegramResponse(
         rejected.push({ path: filePath, reason: "outside workspace" });
         continue;
       }
+      // realpath already resolved any symlinks; lstat here operates on the
+      // canonical target, so isFile() is the meaningful check — a symlink
+      // pointing outside the sandbox was already caught by the prefix test.
       const stats = await lstat(real);
-      if (stats.isSymbolicLink()) {
-        rejected.push({ path: filePath, reason: "symlink not allowed" });
-        continue;
-      }
       if (!stats.isFile()) {
         rejected.push({ path: filePath, reason: "not a regular file" });
         continue;
