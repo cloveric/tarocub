@@ -361,7 +361,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         ? json.result.trim()
         : assistantText
           ? assistantText
-        : "(The engine produced no visible reply. If this keeps happening, the model may be calling an interactive tool like AskUserQuestion — ask it to reply in plain text instead.)";
+          : "(The engine produced no visible reply. If this keeps happening, the model may be calling an interactive tool like AskUserQuestion — ask it to reply in plain text instead.)";
 
       return {
         text: finalText,
