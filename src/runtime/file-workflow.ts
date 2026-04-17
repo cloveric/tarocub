@@ -501,11 +501,18 @@ export async function prepareArchiveContinueWorkflow(input: {
       }
     }
 
+    // Implicit continue ("继续" / "继续分析" with no target) but nothing is
+    // awaiting analysis: let the message flow to the engine instead of
+    // intercepting with a "no archive waiting" reply. Bare "继续" is common
+    // in normal Chinese conversation — hijacking it here silently swallows
+    // the message before Claude / Codex ever sees it.
+    if (!explicitTarget) {
+      return null;
+    }
+
     return {
       kind: "reply",
-      text: explicitTarget
-        ? "That archive is no longer waiting for continued analysis in this chat."
-        : "There is no archive waiting for continued analysis in this chat.",
+      text: "That archive is no longer waiting for continued analysis in this chat.",
     };
   }
 
