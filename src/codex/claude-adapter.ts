@@ -57,12 +57,18 @@ type ClaudeChildProcess = {
 type SpawnClaude = (command: string, args: string[], options: SpawnOptions) => ClaudeChildProcess;
 
 interface ClaudeJsonResult {
-  type: string;
+  type?: string;
   subtype?: string;
   is_error?: boolean;
   result?: string;
   session_id?: string;
   total_cost_usd?: number;
+  message?: {
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  };
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -109,6 +115,18 @@ function buildCommandInvocation(command: string, args: string[]): { command: str
 function combineInstructions(primary: string | null, secondary: string | null): string | null {
   const parts = [primary?.trim(), secondary?.trim()].filter((value): value is string => Boolean(value));
   return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function getAssistantText(event: ClaudeJsonResult | undefined): string {
+  if (!event || event.type !== "assistant") {
+    return "";
+  }
+
+  return event.message?.content
+    ?.filter((item) => item.type === "text" && typeof item.text === "string")
+    .map((item) => item.text ?? "")
+    .join("")
+    .trim() ?? "";
 }
 
 export class ProcessClaudeAdapter implements CodexAdapter {
@@ -280,7 +298,49 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     }
 
     try {
-      const json = JSON.parse(trimmed) as ClaudeJsonResult;
+      const parsed = JSON.parse(trimmed) as ClaudeJsonResult | ClaudeJsonResult[];
+      let json: ClaudeJsonResult | undefined;
+      let assistantText = "";
+      let sessionId: string | undefined;
+
+      if (Array.isArray(parsed)) {
+        if (parsed.length === 0) {
+          return { text: "Claude returned an empty response." };
+        }
+
+        for (const item of parsed) {
+          if (!item || typeof item !== "object") {
+            continue;
+          }
+
+          if (item.session_id) {
+            sessionId = item.session_id;
+          }
+
+          const text = getAssistantText(item);
+          if (text) {
+            assistantText = text;
+          }
+
+          if (item.type === "result") {
+            json = item;
+          }
+        }
+
+        if (!json) {
+          json = [...parsed].reverse().find(
+            (item): item is ClaudeJsonResult => Boolean(item && typeof item === "object"),
+          );
+        }
+      } else {
+        json = parsed;
+        sessionId = parsed.session_id ?? undefined;
+        assistantText = getAssistantText(parsed);
+      }
+
+      if (!json) {
+        return { text: "Claude returned an empty response.", sessionId };
+      }
 
       if (json.is_error) {
         throw new Error(json.result ?? "Unknown error from Claude CLI");
@@ -299,11 +359,13 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       // message we used to return.
       const finalText = json.result?.trim()
         ? json.result.trim()
+        : assistantText
+          ? assistantText
         : "(The engine produced no visible reply. If this keeps happening, the model may be calling an interactive tool like AskUserQuestion — ask it to reply in plain text instead.)";
 
       return {
         text: finalText,
-        sessionId: json.session_id ?? undefined,
+        sessionId: json.session_id ?? sessionId,
         usage,
       };
     } catch (error) {

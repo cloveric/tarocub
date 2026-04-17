@@ -216,6 +216,71 @@ describe("ProcessClaudeAdapter", () => {
     await expect(promise).rejects.toThrow("auth expired");
   });
 
+  it("parses Claude JSON array output and returns the result event text", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData(JSON.stringify([
+      { type: "system", subtype: "init", session_id: "session-123" },
+      { type: "assistant", message: { content: [{ type: "text", text: "intermediate" }] } },
+      { type: "result", result: "Looks good", session_id: "session-123" },
+    ]));
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: "Looks good",
+      sessionId: "session-123",
+    });
+  });
+
+  it("falls back to visible assistant text when the result event is empty", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData(JSON.stringify([
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Hello from assistant" }] },
+        session_id: "session-abc",
+      },
+      { type: "result", result: "", session_id: "session-abc" },
+    ]));
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: "Hello from assistant",
+      sessionId: "session-abc",
+    });
+  });
+
+  it("returns an empty-response message for an empty Claude event array", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData("[]");
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: "Claude returned an empty response.",
+      sessionId: undefined,
+    });
+  });
+
   it("surfaces the is_error message even when the process exits with non-zero code", async () => {
     // Claude CLI exits with code 1 on 401 auth errors but still writes the
     // error JSON to stdout. We must resolve with stdout so parseResult() can
