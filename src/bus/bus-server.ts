@@ -123,7 +123,10 @@ export function createBusServer(
     }
 
     if (req.method === "GET" && req.url === "/api/health") {
-      sendJson(res, 200, { instance: instanceName, status: "ok", pid: process.pid });
+      // "kind" fingerprint lets liveness probes confirm this is a
+      // cc-telegram-bridge bus server, not an unrelated local service that
+      // happens to be listening on the same port.
+      sendJson(res, 200, { kind: "cc-telegram-bridge", instance: instanceName, status: "ok", pid: process.pid });
       return;
     }
 

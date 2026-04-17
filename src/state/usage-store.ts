@@ -28,6 +28,9 @@ export interface TurnUsage {
 
 export class UsageStore {
   private readonly store: JsonStore<UsageRecord>;
+  // Serialize read-modify-write so concurrent chats don't clobber each
+  // other's increments. Same pattern as SessionStore.enqueueWrite.
+  private pendingWrite: Promise<void> = Promise.resolve();
 
   constructor(stateDir: string) {
     this.store = new JsonStore<UsageRecord>(path.join(stateDir, "usage.json"));
@@ -38,13 +41,21 @@ export class UsageStore {
   }
 
   async record(turn: TurnUsage): Promise<void> {
-    const current = await this.load();
-    current.totalInputTokens += turn.inputTokens;
-    current.totalOutputTokens += turn.outputTokens;
-    current.totalCachedTokens += turn.cachedTokens ?? 0;
-    current.totalCostUsd += turn.costUsd ?? 0;
-    current.requestCount += 1;
-    current.lastUpdatedAt = new Date().toISOString();
-    await this.store.write(current);
+    const task = async () => {
+      const current = await this.load();
+      current.totalInputTokens += turn.inputTokens;
+      current.totalOutputTokens += turn.outputTokens;
+      current.totalCachedTokens += turn.cachedTokens ?? 0;
+      current.totalCostUsd += turn.costUsd ?? 0;
+      current.requestCount += 1;
+      current.lastUpdatedAt = new Date().toISOString();
+      await this.store.write(current);
+    };
+    const run = this.pendingWrite.then(task, task);
+    this.pendingWrite = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    await run;
   }
 }

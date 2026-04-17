@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, rename, unlink, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { resolveInstanceStateDir, type EnvSource } from "../config.js";
@@ -729,7 +729,17 @@ async function readInstanceConfig(configPath: string): Promise<Record<string, un
 
 async function writeInstanceConfig(configPath: string, config: Record<string, unknown>): Promise<void> {
   await mkdir(path.dirname(configPath), { recursive: true });
-  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  // Atomic write: stage-then-rename so a kill mid-write can't leave a
+  // truncated config.json on disk. A partial JSON file gets parsed as an
+  // error and the instance silently runs on defaults.
+  const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  try {
+    await rename(tempPath, configPath);
+  } catch (error) {
+    await unlink(tempPath).catch(() => {});
+    throw error;
+  }
 }
 
 async function runYoloCommand(

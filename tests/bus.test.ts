@@ -1,15 +1,51 @@
 import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-async function listenOn(port: number): Promise<{ close: () => Promise<void> }> {
+/**
+ * Stand-in for a real cc-telegram-bridge bus server — responds to
+ * GET /api/health with the fingerprint isInstanceAlive looks for.
+ */
+async function listenOn(port: number, instance: string): Promise<{ close: () => Promise<void> }> {
   return new Promise((resolve) => {
-    const server = createServer();
+    const server = createHttpServer((req, res) => {
+      if (req.method === "GET" && req.url === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ kind: "cc-telegram-bridge", instance, status: "ok", pid: process.pid }));
+        return;
+      }
+      res.writeHead(404); res.end();
+    });
+    server.listen(port, "127.0.0.1", () => {
+      resolve({ close: () => new Promise<void>((r) => server.close(() => r())) });
+    });
+  });
+}
+
+/**
+ * A non-bus TCP listener that silently accepts and holds connections
+ * without ever speaking HTTP. Proves random port occupants are rejected.
+ *
+ * We track live sockets explicitly so `.close()` can force them shut —
+ * otherwise `server.close()` hangs waiting for fetch-spawned sockets to
+ * drain after the probe aborts.
+ */
+async function listenOnNonBus(port: number): Promise<{ close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    const sockets = new Set<import("node:net").Socket>();
+    const server = createTcpServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
     server.listen(port, "127.0.0.1", () => {
       resolve({
-        close: () => new Promise<void>((r) => server.close(() => r())),
+        close: () => new Promise<void>((r) => {
+          for (const s of sockets) s.destroy();
+          server.close(() => r());
+        }),
       });
     });
   });
@@ -104,8 +140,8 @@ describe("bus registry", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
     // lookupInstance now probes the registered port via TCP — start real
     // listeners so registered entries read as alive.
-    const workServer = await listenOn(9100);
-    const reviewerServer = await listenOn(9101);
+    const workServer = await listenOn(9100, "work");
+    const reviewerServer = await listenOn(9101, "reviewer");
     try {
       await registerInstance(tempDir, "work", 9100, "secret-a");
       await registerInstance(tempDir, "reviewer", 9101, "secret-b");
@@ -135,6 +171,35 @@ describe("bus registry", () => {
       await registerInstance(tempDir, "ghost", 9102, "secret-ghost");
       expect(await lookupInstance(tempDir, "ghost")).toBeNull();
     } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lookupInstance returns null when a non-bus listener occupies the port", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
+    const impostor = await listenOnNonBus(9103);
+    try {
+      // Register against port 9103 — but the port is held by a plain TCP
+      // service (not our bus). Must not be treated as alive: the caller
+      // would POST the bus secret to a stranger.
+      await registerInstance(tempDir, "hijacked", 9103, "secret-victim");
+      expect(await lookupInstance(tempDir, "hijacked")).toBeNull();
+    } finally {
+      await impostor.close();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lookupInstance returns null when the port serves a different instance name", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
+    // Port 9104 is held by a bus server identifying as "someone-else" —
+    // but the registry claims it belongs to "alpha". Reject.
+    const wrongNameServer = await listenOn(9104, "someone-else");
+    try {
+      await registerInstance(tempDir, "alpha", 9104, "secret-alpha");
+      expect(await lookupInstance(tempDir, "alpha")).toBeNull();
+    } finally {
+      await wrongNameServer.close();
       await rm(tempDir, { recursive: true, force: true });
     }
   });

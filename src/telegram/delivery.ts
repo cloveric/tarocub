@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, mkdir, readFile, realpath, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { Bridge } from "../runtime/bridge.js";
@@ -64,41 +64,100 @@ function parseResumeState(raw: unknown): ResumeState | undefined {
   };
 }
 
+const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
+  engine: "codex",
+  locale: "en",
+  verbosity: 1,
+  budgetUsd: undefined,
+  effort: undefined,
+  model: undefined,
+  resume: undefined,
+};
+
 async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
+  const configPath = path.join(stateDir, "config.json");
+  let raw: string;
   try {
-    const raw = await readFile(path.join(stateDir, "config.json"), "utf8");
-    const config = JSON.parse(raw) as {
-      engine?: string;
-      locale?: string;
-      verbosity?: number;
-      budgetUsd?: number;
-      effort?: string;
-      model?: string;
-      resume?: unknown;
-    };
-    const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
-    return {
-      engine: config.engine === "claude" ? "claude" : "codex",
-      locale: config.locale === "zh" ? "zh" : "en",
-      verbosity: config.verbosity === 0 ? 0 : config.verbosity === 2 ? 2 : 1,
-      budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,
-      effort,
-      model: typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined,
-      resume: parseResumeState(config.resume),
-    };
-  } catch {
-    return { engine: "codex", locale: "en", verbosity: 1, budgetUsd: undefined, effort: undefined, model: undefined, resume: undefined };
+    raw = await readFile(configPath, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // ENOENT is the normal "fresh instance" case — silently use defaults.
+    // Anything else (EACCES, EIO, …) means the file exists but is unreadable;
+    // log so the operator knows the bot is running on defaults, not on the
+    // config they actually wrote. Previously any error silently switched the
+    // instance back to codex/en defaults, which is a serious footgun.
+    if (code !== "ENOENT") {
+      console.error(
+        `Failed to read ${configPath}, falling back to defaults:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+    return { ...DEFAULT_INSTANCE_CONFIG };
   }
+
+  let config: {
+    engine?: string;
+    locale?: string;
+    verbosity?: number;
+    budgetUsd?: number;
+    effort?: string;
+    model?: string;
+    resume?: unknown;
+  };
+  try {
+    config = JSON.parse(raw);
+  } catch (error) {
+    // Corrupt JSON — treat as a real error, not an invisible default. A
+    // half-written config.json would otherwise silently flip Claude
+    // instances to the codex default and strip their model / effort / resume
+    // state until someone noticed the behavioral change.
+    console.error(
+      `Malformed ${configPath} (${error instanceof Error ? error.message : error}); running on defaults until this is repaired.`,
+    );
+    return { ...DEFAULT_INSTANCE_CONFIG };
+  }
+
+  const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
+  return {
+    engine: config.engine === "claude" ? "claude" : "codex",
+    locale: config.locale === "zh" ? "zh" : "en",
+    verbosity: config.verbosity === 0 ? 0 : config.verbosity === 2 ? 2 : 1,
+    budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,
+    effort,
+    model: typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined,
+    resume: parseResumeState(config.resume),
+  };
 }
 
 async function updateInstanceConfig(stateDir: string, updater: (config: Record<string, unknown>) => void): Promise<void> {
   const configPath = path.join(stateDir, "config.json");
   let config: Record<string, unknown> = {};
   try {
-    config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-  } catch { /* start fresh */ }
+    const existing = await readFile(configPath, "utf8");
+    config = JSON.parse(existing) as Record<string, unknown>;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      // Don't silently blow away unreadable config — a partial overwrite
+      // would be much worse than refusing to write.
+      throw error;
+    }
+    // ENOENT is fine — we're about to create it.
+  }
   updater(config);
-  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  // Atomic write: staging file then rename. Without this, a process kill
+  // mid-write produces a truncated config.json that reads as either JSON
+  // parse error (→ loud default fallback via loadInstanceConfig) or partial
+  // object with missing fields (→ silent flip back to defaults for the
+  // fields that got cut off).
+  const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  try {
+    await rename(tempPath, configPath);
+  } catch (error) {
+    await unlink(tempPath).catch(() => {});
+    throw error;
+  }
 }
 
 async function appendAuditEventBestEffort(stateDir: string, event: Parameters<typeof appendAuditEvent>[1]): Promise<void> {

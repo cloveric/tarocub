@@ -1,4 +1,4 @@
-import { readdir, readFile, stat, lstat, writeFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, stat, lstat, writeFile, mkdir, chmod } from "node:fs/promises";
 import path from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
 
@@ -125,7 +125,14 @@ export async function extractArchive(archivePath: string, destinationRoot: strin
 
   const bodyStart = headerEnd;
   const targetRoot = path.join(destinationRoot, header.rootName);
+  // Instance state directories contain bot tokens, access policy, session
+  // transcripts, and audit logs — all per-user-private. Create root dir
+  // owner-only (0o700) on restore; fall through if chmod fails (e.g. on
+  // a filesystem without POSIX perms).
   await mkdir(targetRoot, { recursive: true });
+  try { await chmod(targetRoot, 0o700); } catch { /* non-POSIX fs */ }
+
+  const createdDirs = new Set<string>([path.resolve(targetRoot)]);
 
   for (const file of header.files) {
     // Path traversal safety: reject absolute paths or "..", and resolve only inside targetRoot.
@@ -138,10 +145,20 @@ export async function extractArchive(archivePath: string, destinationRoot: strin
     if (relativeToRoot === "" || relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
       throw new Error(`Archive path escapes target: ${file.path}`);
     }
-    await mkdir(path.dirname(fullPath), { recursive: true });
+    const parentDir = path.dirname(fullPath);
+    await mkdir(parentDir, { recursive: true });
+    const resolvedParent = path.resolve(parentDir);
+    if (!createdDirs.has(resolvedParent)) {
+      try { await chmod(parentDir, 0o700); } catch { /* non-POSIX fs */ }
+      createdDirs.add(resolvedParent);
+    }
     const start = bodyStart + file.contentOffset;
     const end = start + file.size;
     await writeFile(fullPath, buffer.subarray(start, end));
+    // Every file in a bot's state dir is effectively private. Harden all
+    // of them, not just the obvious ones like .env, so sensitive state
+    // never lands world-readable after restore.
+    try { await chmod(fullPath, 0o600); } catch { /* non-POSIX fs */ }
   }
 
   return {
