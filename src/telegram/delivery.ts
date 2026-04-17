@@ -126,7 +126,6 @@ async function updateWorkflowBestEffort(
 import {
   chunkTelegramMessage,
   renderCategorizedErrorMessage,
-  renderContextMessage,
   renderErrorMessage,
   renderTelegramHelpMessage,
   renderTelegramStatusMessage,
@@ -775,12 +774,47 @@ export async function handleNormalizedTelegramMessage(
     }
 
     if (isContextCommand(normalized.text)) {
+      if (cfg.engine !== "claude") {
+        stopTyping();
+        const msg = locale === "zh"
+          ? "/context 仅支持 Claude 引擎。Codex 的上下文由服务端自管，无法本地查询。"
+          : "/context is only supported with the Claude engine. Codex manages context server-side and does not expose this.";
+        await context.api.sendMessage(normalized.chatId, msg);
+        responded = true;
+        await appendAuditEventBestEffort(stateDir, {
+          type: "update.handle",
+          instanceName: context.instanceName,
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          outcome: "success",
+          metadata: { durationMs: Date.now() - startedAt, command: "context", rejected: "wrong-engine" },
+        });
+        return;
+      }
+
+      // Forward to Claude CLI so it reports its own authoritative context
+      // number (same algorithm the CLI uses internally). Errors propagate to
+      // the outer catch so auth / stale-session retries still apply.
+      const result = await context.bridge.handleAuthorizedMessage({
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        chatType: normalized.chatType,
+        locale,
+        text: "/context",
+        files: [],
+        workspaceOverride: cfg.resume?.workspacePath,
+        abortSignal: context.abortSignal,
+      });
+
       stopTyping();
-      const sessionResult = await sessionStore.findByChatIdSafe(normalized.chatId);
-      const tokens = sessionResult.record?.lastContextTokens;
-      const message = renderContextMessage(tokens, cfg.model, locale);
-      await context.api.sendMessage(normalized.chatId, message);
+      const chunks = chunkTelegramMessage(result.text);
+      await context.api.sendMessage(normalized.chatId, chunks[0]!);
       responded = true;
+      for (const chunk of chunks.slice(1)) {
+        await context.api.sendMessage(normalized.chatId, chunk);
+      }
+
       await appendAuditEventBestEffort(stateDir, {
         type: "update.handle",
         instanceName: context.instanceName,
@@ -788,7 +822,7 @@ export async function handleNormalizedTelegramMessage(
         userId: normalized.userId,
         updateId: context.updateId,
         outcome: "success",
-        metadata: { durationMs: Date.now() - startedAt, command: "context", tokens: tokens ?? null },
+        metadata: { durationMs: Date.now() - startedAt, command: "context" },
       });
       return;
     }
@@ -1423,14 +1457,6 @@ export async function handleNormalizedTelegramMessage(
         cachedTokens: result.usage.cachedTokens,
         costUsd: result.usage.costUsd,
       });
-
-      // Stash the last turn's input-token count on the session record so
-      // /context can report the context-fill level without another round-trip.
-      try {
-        await sessionStore.updateLastContextTokens(normalized.chatId, result.usage.inputTokens);
-      } catch {
-        // Best-effort — /context will just show "no data" if this fails.
-      }
 
       if (cfg.budgetUsd !== undefined) {
         const postUsage = await usageStore.load();
