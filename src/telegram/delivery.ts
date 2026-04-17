@@ -458,6 +458,7 @@ async function deliverTelegramResponse(
   // Collect referenced files from disk
   const imageFiles: Array<{ filename: string; contents: Uint8Array }> = [];
   const otherFiles: Array<{ filename: string; contents: Uint8Array | string }> = [];
+  const rejected: Array<{ path: string; reason: string }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
@@ -468,10 +469,20 @@ async function deliverTelegramResponse(
       const { realpath, lstat } = await import("node:fs/promises");
       const real = await realpath(filePath);
       if (!real.startsWith(workspacePrefix) && !(overridePrefix && real.startsWith(overridePrefix))) {
+        rejected.push({ path: filePath, reason: "outside workspace" });
         continue;
       }
       const stats = await lstat(real);
-      if (!stats.isFile() || stats.isSymbolicLink() || stats.size > 50_000_000) {
+      if (stats.isSymbolicLink()) {
+        rejected.push({ path: filePath, reason: "symlink not allowed" });
+        continue;
+      }
+      if (!stats.isFile()) {
+        rejected.push({ path: filePath, reason: "not a regular file" });
+        continue;
+      }
+      if (stats.size > 50_000_000) {
+        rejected.push({ path: filePath, reason: `too large (${Math.round(stats.size / 1_000_000)}MB > 50MB)` });
         continue;
       }
       const contents = await readFile(real);
@@ -481,8 +492,10 @@ async function deliverTelegramResponse(
       } else {
         otherFiles.push({ filename: fileName, contents });
       }
-    } catch {
-      // File not found or unreadable — skip silently
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      const reason = code === "ENOENT" ? "file not found" : code === "EACCES" ? "permission denied" : "read error";
+      rejected.push({ path: filePath, reason });
     }
   }
 
@@ -491,6 +504,24 @@ async function deliverTelegramResponse(
   for (const file of allFiles) {
     await sendFileOrPhoto(api, chatId, file.filename, file.contents);
   }
+
+  // Surface rejected files so the user (and the engine on the next turn) can
+  // see *why* a promised attachment didn't arrive. Without this the bridge
+  // silently dropped anything outside the workspace sandbox, leaving both
+  // sides wondering what happened.
+  if (rejected.length > 0) {
+    const MAX_SHOWN = 5;
+    const shown = rejected.slice(0, MAX_SHOWN);
+    const extra = rejected.length - shown.length;
+    const lines = [
+      `⚠ ${rejected.length} file${rejected.length === 1 ? "" : "s"} not delivered:`,
+      ...shown.map(({ path: p, reason }) => `• ${p} — ${reason}`),
+    ];
+    if (extra > 0) lines.push(`… and ${extra} more`);
+    lines.push("Files must live under the bot's workspace (or a /resume'd project dir).");
+    await api.sendMessage(chatId, lines.join("\n"));
+  }
+
   return allFiles.length;
 }
 
