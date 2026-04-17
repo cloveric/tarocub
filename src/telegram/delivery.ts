@@ -338,7 +338,7 @@ async function transcribeVoice(audioPath: string): Promise<string> {
   }
 
   return new Promise<string>((resolve, reject) => {
-    execFile(ASR_CLI_PYTHON, [ASR_CLI_SCRIPT, audioPath], { timeout: 120_000 }, (error, stdout, stderr) => {
+    execFile(ASR_CLI_PYTHON, [ASR_CLI_SCRIPT, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr?.trim() || error.message));
         return;
