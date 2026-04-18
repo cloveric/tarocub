@@ -10,10 +10,75 @@ export interface BusConfig {
   port: number;
   secret: string;
   parallel: string[];
+  chain: string[];
   verifier: string | null;
+  crew: BusCrewConfig | null;
+}
+
+export interface BusCrewConfig {
+  enabled: boolean;
+  workflow: "research-report";
+  coordinator: string;
+  roles: {
+    researcher: string;
+    analyst: string;
+    writer: string;
+    reviewer: string;
+  };
+  maxResearchQuestions: number;
+  maxRevisionRounds: number;
 }
 
 const DEFAULT_MAX_DEPTH = 3;
+
+function parseCrewConfig(raw: unknown): BusCrewConfig | null {
+  if (typeof raw !== "object" || raw === null) {
+    return null;
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const enabled = obj.enabled === true;
+  const workflow = obj.workflow === "research-report" ? "research-report" : null;
+  const coordinator = typeof obj.coordinator === "string" && obj.coordinator.trim() ? obj.coordinator.trim() : null;
+  const roles = typeof obj.roles === "object" && obj.roles !== null ? obj.roles as Record<string, unknown> : null;
+  const researcher = typeof roles?.researcher === "string" && roles.researcher.trim() ? roles.researcher.trim() : null;
+  const analyst = typeof roles?.analyst === "string" && roles.analyst.trim() ? roles.analyst.trim() : null;
+  const writer = typeof roles?.writer === "string" && roles.writer.trim() ? roles.writer.trim() : null;
+  const reviewer = typeof roles?.reviewer === "string" && roles.reviewer.trim() ? roles.reviewer.trim() : null;
+
+  if (!enabled || !workflow || !coordinator || !researcher || !analyst || !writer || !reviewer) {
+    return null;
+  }
+
+  const participants = [coordinator, researcher, analyst, writer, reviewer];
+  if (new Set(participants).size !== participants.length) {
+    return null;
+  }
+
+  const maxResearchQuestions =
+    typeof obj.maxResearchQuestions === "number" && Number.isFinite(obj.maxResearchQuestions) && obj.maxResearchQuestions > 0
+      ? Math.trunc(obj.maxResearchQuestions)
+      : 5;
+
+  const maxRevisionRounds =
+    typeof obj.maxRevisionRounds === "number" && Number.isFinite(obj.maxRevisionRounds) && obj.maxRevisionRounds >= 0
+      ? Math.trunc(obj.maxRevisionRounds)
+      : 1;
+
+  return {
+    enabled,
+    workflow,
+    coordinator,
+    roles: {
+      researcher,
+      analyst,
+      writer,
+      reviewer,
+    },
+    maxResearchQuestions,
+    maxRevisionRounds,
+  };
+}
 
 export function parseBusConfig(raw: unknown): BusConfig | null {
   if (raw === undefined || raw === null || raw === false) {
@@ -21,7 +86,16 @@ export function parseBusConfig(raw: unknown): BusConfig | null {
   }
 
   if (raw === true) {
-    return { peers: "*", maxDepth: DEFAULT_MAX_DEPTH, port: 0, secret: randomBytes(16).toString("hex"), parallel: [], verifier: null };
+    return {
+      peers: "*",
+      maxDepth: DEFAULT_MAX_DEPTH,
+      port: 0,
+      secret: randomBytes(16).toString("hex"),
+      parallel: [],
+      chain: [],
+      verifier: null,
+      crew: null,
+    };
   }
 
   if (typeof raw !== "object") {
@@ -58,9 +132,14 @@ export function parseBusConfig(raw: unknown): BusConfig | null {
     ? obj.parallel.filter((v): v is string => typeof v === "string")
     : [];
 
-  const verifier = typeof obj.verifier === "string" && obj.verifier.trim() ? obj.verifier.trim() : null;
+  const chain = Array.isArray(obj.chain)
+    ? obj.chain.filter((v): v is string => typeof v === "string")
+    : [];
 
-  return { peers, maxDepth, port, secret, parallel, verifier };
+  const verifier = typeof obj.verifier === "string" && obj.verifier.trim() ? obj.verifier.trim() : null;
+  const crew = parseCrewConfig(obj.crew);
+
+  return { peers, maxDepth, port, secret, parallel, chain, verifier, crew };
 }
 
 export async function loadBusConfig(stateDir: string): Promise<BusConfig | null> {

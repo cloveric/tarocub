@@ -133,6 +133,41 @@ describe("handleDelegationTelegramCommand", () => {
     }
   });
 
+  it("reports missing /chain bots", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+
+    try {
+      const handled = await handleDelegationTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/chain hello"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 79,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn(),
+        } as never,
+        loadBusConfig: vi.fn().mockResolvedValue({}),
+        delegateToInstance: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "No chain bots configured. Add instance names to bus.chain in config.json.",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects /verify when the verifier is the current instance", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
     const api = {
@@ -160,6 +195,99 @@ describe("handleDelegationTelegramCommand", () => {
 
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Verifier cannot be the same instance.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs /chain sequentially across configured bots", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const delegateToInstance = vi.fn()
+      .mockResolvedValueOnce({ text: "draft from reviewer" })
+      .mockResolvedValueOnce({ text: "final from writer" });
+
+    try {
+      const handled = await handleDelegationTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/chain improve this answer"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 81,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn(),
+        } as never,
+        loadBusConfig: vi.fn().mockResolvedValue({ chain: ["reviewer", "writer"] }),
+        delegateToInstance: delegateToInstance as never,
+      });
+
+      expect(handled).toBe(true);
+      expect(delegateToInstance).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        fromInstance: "default",
+        targetInstance: "reviewer",
+        prompt: "improve this answer",
+      }));
+      expect(delegateToInstance).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        fromInstance: "default",
+        targetInstance: "writer",
+        prompt: expect.stringContaining("draft from reviewer"),
+      }));
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Running chain across 2 bots...");
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("[Chain stage 1: reviewer]"));
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("[Chain stage 2: writer]"));
+
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "chain",
+          chainTargets: ["reviewer", "writer"],
+          stageCount: 2,
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects /chain when the configured targets include the current instance", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+
+    try {
+      const handled = await handleDelegationTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/chain improve this answer"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 82,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn(),
+        } as never,
+        loadBusConfig: vi.fn().mockResolvedValue({ chain: ["reviewer", "default"] }),
+        delegateToInstance: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Chain config cannot include the current instance. Remove self-targets from bus.chain.",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

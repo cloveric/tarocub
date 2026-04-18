@@ -18,6 +18,26 @@ describe("collectInstanceSnapshots", () => {
       await mkdir(customStateDir, { recursive: true });
       await writeFile(path.join(customStateDir, "config.json"), JSON.stringify({ engine: "claude" }), "utf8");
       await writeFile(path.join(customStateDir, ".env"), "EXTRA=1\n", "utf8");
+      await mkdir(path.join(customStateDir, "crew-runs"), { recursive: true });
+      await writeFile(
+        path.join(customStateDir, "crew-runs", "run-1.json"),
+        JSON.stringify({
+          runId: "run-1",
+          workflow: "research-report",
+          status: "completed",
+          currentStage: "completed",
+          coordinator: "custom-alpha",
+          chatId: 100,
+          userId: 200,
+          locale: "en",
+          originalPrompt: "Analyze AI adoption",
+          createdAt: "2026-04-08T10:01:10.000Z",
+          updatedAt: "2026-04-08T10:02:10.000Z",
+          finalOutput: "Final report",
+          stages: {},
+        }),
+        "utf8",
+      );
 
       const snapshots = await collectInstanceSnapshots({
         USERPROFILE: tempDir,
@@ -30,6 +50,9 @@ describe("collectInstanceSnapshots", () => {
         stateDir: customStateDir,
         engine: "claude",
         botTokenConfigured: false,
+        crewLatestRunId: "run-1",
+        crewLatestRunStatus: "completed",
+        crewLatestRunStage: "completed",
       });
     } finally {
       await rm(tempDir, { recursive: true, force: true });

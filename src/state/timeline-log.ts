@@ -11,6 +11,11 @@ export interface TimelineEvent {
     | "turn.started"
     | "turn.completed"
     | "turn.retried"
+    | "crew.run.started"
+    | "crew.stage.started"
+    | "crew.stage.completed"
+    | "crew.run.completed"
+    | "crew.run.failed"
     | "workflow.prepared"
     | "workflow.failed"
     | "workflow.completed"
@@ -33,10 +38,14 @@ export interface TimelineSummary {
   lastTurnCompletionAt?: string;
   lastRetryAt?: string;
   lastBudgetBlockedAt?: string;
+  lastCrewRunAt?: string;
   retryCount: number;
   budgetBlockedCount: number;
   fileRejectedCount: number;
   workflowFailedCount: number;
+  crewRunsStartedCount: number;
+  crewRunsCompletedCount: number;
+  crewRunsFailedCount: number;
 }
 
 export interface TimelineEventFilter {
@@ -93,6 +102,9 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
     budgetBlockedCount: 0,
     fileRejectedCount: 0,
     workflowFailedCount: 0,
+    crewRunsStartedCount: 0,
+    crewRunsCompletedCount: 0,
+    crewRunsFailedCount: 0,
   };
 
   for (const event of events) {
@@ -112,6 +124,18 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
       summary.workflowFailedCount += 1;
     }
 
+    if (event.type === "crew.run.started") {
+      summary.crewRunsStartedCount += 1;
+    }
+
+    if (event.type === "crew.run.completed") {
+      summary.crewRunsCompletedCount += 1;
+    }
+
+    if (event.type === "crew.run.failed") {
+      summary.crewRunsFailedCount += 1;
+    }
+
     if (!event.timestamp) {
       continue;
     }
@@ -126,6 +150,10 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
 
     if (event.type === "budget.blocked") {
       summary.lastBudgetBlockedAt = event.timestamp;
+    }
+
+    if (event.type === "crew.run.started" || event.type === "crew.run.completed" || event.type === "crew.run.failed") {
+      summary.lastCrewRunAt = event.timestamp;
     }
   }
 

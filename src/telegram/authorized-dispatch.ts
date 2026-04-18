@@ -1,4 +1,5 @@
 import type { FileWorkflowStore } from "../state/file-workflow-store.js";
+import { handleCrewTelegramWorkflow as defaultHandleCrewTelegramWorkflow } from "./crew-workflow.js";
 import type { SessionStore } from "../state/session-store.js";
 import { handleDelegationTelegramCommand as defaultHandleDelegationTelegramCommand } from "./delegation-commands.js";
 import { handleLocalEngineTelegramCommand as defaultHandleLocalEngineTelegramCommand } from "./engine-commands.js";
@@ -77,6 +78,7 @@ export interface AuthorizedTelegramDispatchHandlers {
   handleLocalEngineTelegramCommand?: typeof defaultHandleLocalEngineTelegramCommand;
   handleSimpleLocalTelegramCommand?: typeof defaultHandleSimpleLocalTelegramCommand;
   handleDelegationTelegramCommand?: typeof defaultHandleDelegationTelegramCommand;
+  handleCrewTelegramWorkflow?: typeof defaultHandleCrewTelegramWorkflow;
   prepareTelegramMessageInput?: typeof defaultPrepareTelegramMessageInput;
   executeWorkflowAwareTelegramTurn?: typeof defaultExecuteWorkflowAwareTelegramTurn;
 }
@@ -120,6 +122,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     handleLocalEngineTelegramCommand = defaultHandleLocalEngineTelegramCommand,
     handleSimpleLocalTelegramCommand = defaultHandleSimpleLocalTelegramCommand,
     handleDelegationTelegramCommand = defaultHandleDelegationTelegramCommand,
+    handleCrewTelegramWorkflow = defaultHandleCrewTelegramWorkflow,
     prepareTelegramMessageInput = defaultPrepareTelegramMessageInput,
     executeWorkflowAwareTelegramTurn = defaultExecuteWorkflowAwareTelegramTurn,
   } = handlers ?? {};
@@ -204,6 +207,20 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     normalized,
     context,
     bridge: context.bridge,
+  })) {
+    return;
+  }
+
+  if (await handleCrewTelegramWorkflow({
+    stateDir,
+    startedAt,
+    locale,
+    cfg: {
+      budgetUsd: cfg.budgetUsd,
+      resume: cfg.resume,
+    },
+    normalized,
+    context,
   })) {
     return;
   }

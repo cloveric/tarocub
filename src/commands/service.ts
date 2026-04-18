@@ -21,6 +21,7 @@ import {
   summarizeTimelineEvents,
   type TimelineSummary,
 } from "../state/timeline-log.js";
+import { CREW_RUN_STATE_UNREADABLE_WARNING, CrewRunStore } from "../state/crew-run-store.js";
 import { FILE_WORKFLOW_STATE_UNREADABLE_WARNING } from "../state/file-workflow-store.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { TelegramApi } from "../telegram/api.js";
@@ -99,6 +100,16 @@ export interface ServiceStatus {
   budgetBlockedCount: number | null;
   fileRejectedCount: number | null;
   workflowFailedCount: number | null;
+  crewRunsStartedCount: number | null;
+  crewRunsCompletedCount: number | null;
+  crewRunsFailedCount: number | null;
+  lastCrewRunAt?: string;
+  latestCrewRunId?: string;
+  latestCrewRunWorkflow?: string;
+  latestCrewRunStatus?: string;
+  latestCrewRunStage?: string;
+  latestCrewRunUpdatedAt?: string;
+  crewRunStateWarning?: string;
   timelineWarning?: string;
   unresolvedTasks: number | null;
   blockingTasks: number | null;
@@ -538,8 +549,17 @@ export async function getServiceStatus(
     budgetBlockedCount: 0,
     fileRejectedCount: 0,
     workflowFailedCount: 0,
+    crewRunsStartedCount: 0,
+    crewRunsCompletedCount: 0,
+    crewRunsFailedCount: 0,
   };
   let timelineWarning: string | undefined;
+  let crewRunStateWarning: string | undefined;
+  let latestCrewRunId: string | undefined;
+  let latestCrewRunWorkflow: string | undefined;
+  let latestCrewRunStatus: string | undefined;
+  let latestCrewRunStage: string | undefined;
+  let latestCrewRunUpdatedAt: string | undefined;
   try {
     const rawAudit = await readFile(resolveAuditLogPath(paths.stateDir), "utf8");
     const auditEvents = parseAuditEvents(rawAudit);
@@ -573,6 +593,13 @@ export async function getServiceStatus(
       timelineWarning = "timeline log unreadable";
     }
   }
+  const latestCrewRun = await new CrewRunStore(paths.stateDir).inspectLatest();
+  crewRunStateWarning = latestCrewRun.warning;
+  latestCrewRunId = latestCrewRun.run?.runId;
+  latestCrewRunWorkflow = latestCrewRun.run?.workflow;
+  latestCrewRunStatus = latestCrewRun.run?.status;
+  latestCrewRunStage = latestCrewRun.run?.currentStage;
+  latestCrewRunUpdatedAt = latestCrewRun.run?.updatedAt;
   const workflowSummary = await summarizeUnresolvedTasks(paths.stateDir);
 
   return {
@@ -608,6 +635,16 @@ export async function getServiceStatus(
     budgetBlockedCount: timelineWarning === undefined ? timelineSummary.budgetBlockedCount : null,
     fileRejectedCount: timelineWarning === undefined ? timelineSummary.fileRejectedCount : null,
     workflowFailedCount: timelineWarning === undefined ? timelineSummary.workflowFailedCount : null,
+    crewRunsStartedCount: timelineWarning === undefined ? timelineSummary.crewRunsStartedCount : null,
+    crewRunsCompletedCount: timelineWarning === undefined ? timelineSummary.crewRunsCompletedCount : null,
+    crewRunsFailedCount: timelineWarning === undefined ? timelineSummary.crewRunsFailedCount : null,
+    lastCrewRunAt: timelineSummary.lastCrewRunAt,
+    latestCrewRunId,
+    latestCrewRunWorkflow,
+    latestCrewRunStatus,
+    latestCrewRunStage,
+    latestCrewRunUpdatedAt,
+    crewRunStateWarning,
     timelineWarning,
     unresolvedTasks: workflowSummary.unresolvedTasks,
     blockingTasks: workflowSummary.blockingTasks,
@@ -675,11 +712,13 @@ export async function runServiceDoctor(
   });
   checks.push({
     name: "timeline",
-    ok: status.timelineWarning === undefined,
+    ok: status.timelineWarning === undefined && status.crewRunStateWarning === undefined,
     detail:
       status.timelineWarning !== undefined
         ? `Timeline events: unknown (${status.timelineWarning}).`
-        : `Timeline events: ${status.timelineEvents}. Last turn completion: ${status.lastTurnCompletionAt ?? "none"}. Last retry: ${status.lastRetryAt ?? "none"}. Last budget block: ${status.lastBudgetBlockedAt ?? "none"}. Incident counts: retries=${status.retryCount}, budget blocks=${status.budgetBlockedCount}, file rejections=${status.fileRejectedCount}, workflow failures=${status.workflowFailedCount}.`,
+        : status.crewRunStateWarning !== undefined
+          ? `Timeline events: ${status.timelineEvents}. Crew runs: unknown (${status.crewRunStateWarning}).`
+          : `Timeline events: ${status.timelineEvents}. Last turn completion: ${status.lastTurnCompletionAt ?? "none"}. Last retry: ${status.lastRetryAt ?? "none"}. Last budget block: ${status.lastBudgetBlockedAt ?? "none"}. Last crew run: ${status.lastCrewRunAt ?? "none"}. Incident counts: retries=${status.retryCount}, budget blocks=${status.budgetBlockedCount}, file rejections=${status.fileRejectedCount}, workflow failures=${status.workflowFailedCount}, crew runs started=${status.crewRunsStartedCount}, crew runs completed=${status.crewRunsCompletedCount}, crew runs failed=${status.crewRunsFailedCount}. Latest crew run: ${status.latestCrewRunId ? `${status.latestCrewRunId} (${status.latestCrewRunWorkflow ?? "unknown"}, ${status.latestCrewRunStatus ?? "unknown"}/${status.latestCrewRunStage ?? "unknown"}, updated ${status.latestCrewRunUpdatedAt ?? "unknown"})` : "none"}.`,
   });
   checks.push({
     name: "tasks",

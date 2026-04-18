@@ -629,10 +629,17 @@ function formatServiceStatus(status: Awaited<ReturnType<typeof getServiceStatus>
     `Last turn completion: ${status.lastTurnCompletionAt ?? "none"}`,
     `Last retry: ${status.lastRetryAt ?? "none"}`,
     `Last budget block: ${status.lastBudgetBlockedAt ?? "none"}`,
+    `Last crew run: ${status.lastCrewRunAt ?? "none"}`,
     `Retry count: ${status.retryCount ?? "unknown"}`,
     `Budget block count: ${status.budgetBlockedCount ?? "unknown"}`,
     `File rejection count: ${status.fileRejectedCount ?? "unknown"}`,
     `Workflow failure count: ${status.workflowFailedCount ?? "unknown"}`,
+    `Crew runs started: ${status.crewRunsStartedCount ?? "unknown"}`,
+    `Crew runs completed: ${status.crewRunsCompletedCount ?? "unknown"}`,
+    `Crew runs failed: ${status.crewRunsFailedCount ?? "unknown"}`,
+    status.crewRunStateWarning !== undefined
+      ? `Latest crew run: unknown (${status.crewRunStateWarning})`
+      : `Latest crew run: ${status.latestCrewRunId ? `${status.latestCrewRunId} (${status.latestCrewRunWorkflow ?? "unknown"}, ${status.latestCrewRunStatus ?? "unknown"}/${status.latestCrewRunStage ?? "unknown"}, updated ${status.latestCrewRunUpdatedAt ?? "unknown"})` : "none"}`,
     status.unresolvedTasksWarning !== undefined
       ? `Unresolved tasks: unknown (${status.unresolvedTasksWarning})`
       : `Unresolved tasks: ${status.unresolvedTasks}`,

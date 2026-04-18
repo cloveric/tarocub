@@ -642,6 +642,7 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "continue", description: "Continue a paused task" },
   { command: "ask", description: "Delegate to another bot instance" },
   { command: "fan", description: "Query multiple bots in parallel" },
+  { command: "chain", description: "Run a configured sequential bot chain" },
   { command: "verify", description: "Execute then auto-verify with reviewer" },
   { command: "resume", description: "Resume a local session on Telegram" },
   { command: "detach", description: "Detach from resumed session" },

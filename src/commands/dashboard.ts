@@ -4,6 +4,7 @@ import { exec } from "node:child_process";
 
 import type { EnvSource } from "../config.js";
 import { readConfiguredBotToken } from "../service.js";
+import { CrewRunStore } from "../state/crew-run-store.js";
 import { parseTimelineEvents } from "../state/timeline-log.js";
 import { inspectInstanceServiceLiveness, type ServiceCommandDeps } from "./service.js";
 
@@ -45,6 +46,11 @@ interface InstanceSnapshot {
   recentAudit: Array<{ type: string; outcome: string; timestamp: string; detail?: string }>;
   timelineTotal: number;
   recentTimeline: Array<{ type: string; outcome: string; timestamp: string; detail?: string }>;
+  crewLatestRunId: string | null;
+  crewLatestRunWorkflow: string | null;
+  crewLatestRunStatus: string | null;
+  crewLatestRunStage: string | null;
+  crewLatestRunUpdatedAt: string | null;
   stateDir: string;
 }
 
@@ -95,6 +101,7 @@ async function ci(
   const timelineEvents = parseTimelineEvents(timelineRaw);
   const ra = aa.slice(-8).map(pa).filter((e): e is NonNullable<typeof e> => e !== null);
   const recentTimeline = timelineEvents.slice(-8).map(pt);
+  const latestCrewRun = await new CrewRunStore(d).inspectLatest();
   let ls = "", lf = "";
   for (let i = aa.length - 1; i >= 0; i--) { const e = pa(aa[i]); if (!e) continue; if (!ls && e.outcome === "success") ls = e.timestamp; if (!lf && e.outcome === "error") lf = e.timestamp; if (ls && lf) break; }
   const liveness = await inspectInstanceServiceLiveness({
@@ -122,6 +129,11 @@ async function ci(
     claudeMdExists: await fe(path.join(d, "workspace", "CLAUDE.md")),
     usage: us, auditTotal: aa.length, lastSuccess: ls, lastFailure: lf,
     timelineTotal: timelineEvents.length,
+    crewLatestRunId: latestCrewRun.run?.runId ?? null,
+    crewLatestRunWorkflow: latestCrewRun.run?.workflow ?? null,
+    crewLatestRunStatus: latestCrewRun.run?.status ?? null,
+    crewLatestRunStage: latestCrewRun.run?.currentStage ?? null,
+    crewLatestRunUpdatedAt: latestCrewRun.run?.updatedAt ?? null,
     lastError: (await ll(path.join(d, "service.stderr.log"))).slice(0, 200),
     recentAudit: ra, recentTimeline, stateDir: d,
   };
@@ -232,6 +244,8 @@ function renderHtml(instances: InstanceSnapshot[]): string {
           <div>Locale <strong>${inst.locale}</strong></div>
           <div>Bus <strong>${inst.bus}</strong></div>
           <div>Budget <strong>${inst.budgetUsd !== null ? `$${inst.budgetUsd}` : "--"}</strong></div>
+          <div>Crew <strong>${inst.crewLatestRunStatus !== null ? `${inst.crewLatestRunStatus}/${inst.crewLatestRunStage}` : "--"}</strong></div>
+          <div>Crew run <strong>${inst.crewLatestRunId ?? "--"}</strong></div>
           <div>Last OK <strong style="color:#2D8B46">${ft(inst.lastSuccess)}</strong></div>
           <div>Last Err <strong style="color:#C1392B">${ft(inst.lastFailure)}</strong></div>
           <div>Verbosity <strong>${inst.verbosity}</strong></div>

@@ -285,7 +285,29 @@ describe("telegram service commands", () => {
           '{"timestamp":"2026-04-08T10:00:45.000Z","type":"turn.retried","channel":"telegram","outcome":"retry","detail":"auth refresh"}',
           '{"timestamp":"2026-04-08T10:00:50.000Z","type":"budget.blocked","channel":"telegram","detail":"budget exhausted"}',
           '{"timestamp":"2026-04-08T10:00:55.000Z","type":"file.rejected","channel":"telegram","detail":"outside workspace"}',
+          '{"timestamp":"2026-04-08T10:01:10.000Z","type":"crew.run.started","channel":"telegram","outcome":"success","metadata":{"workflow":"research-report","runId":"run-1"}}',
+          '{"timestamp":"2026-04-08T10:02:10.000Z","type":"crew.run.completed","channel":"telegram","outcome":"success","metadata":{"workflow":"research-report","runId":"run-1"}}',
         ].join("\n") + "\n",
+        "utf8",
+      );
+      await mkdir(path.join(stateDir, "crew-runs"), { recursive: true });
+      await writeFile(
+        path.join(stateDir, "crew-runs", "run-1.json"),
+        JSON.stringify({
+          runId: "run-1",
+          workflow: "research-report",
+          status: "completed",
+          currentStage: "completed",
+          coordinator: "alpha",
+          chatId: 111,
+          userId: 222,
+          locale: "en",
+          originalPrompt: "Analyze AI adoption.",
+          createdAt: "2026-04-08T10:01:10.000Z",
+          updatedAt: "2026-04-08T10:02:10.000Z",
+          finalOutput: "Final report",
+          stages: {},
+        }),
         "utf8",
       );
 
@@ -311,10 +333,11 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("ok identity:");
       expect(messages[0]).toContain("ok audit:");
       expect(messages[0]).toContain("ok timeline:");
-      expect(messages[0]).toContain("Timeline events: 4");
+      expect(messages[0]).toContain("Timeline events: 6");
       expect(messages[0]).toContain("Last turn completion: 2026-04-08T10:00:30.000Z");
       expect(messages[0]).toContain("Last retry: 2026-04-08T10:00:45.000Z");
-      expect(messages[0]).toContain("Incident counts: retries=1, budget blocks=1, file rejections=1, workflow failures=0");
+      expect(messages[0]).toContain("Incident counts: retries=1, budget blocks=1, file rejections=1, workflow failures=0, crew runs started=1, crew runs completed=1, crew runs failed=0");
+      expect(messages[0]).toContain("Latest crew run: run-1 (research-report, completed/completed, updated 2026-04-08T10:02:10.000Z).");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -448,7 +471,29 @@ describe("telegram service commands", () => {
           '{"timestamp":"2026-04-08T11:00:00.000Z","type":"turn.completed","channel":"telegram","outcome":"success"}',
           '{"timestamp":"2026-04-08T11:02:00.000Z","type":"budget.blocked","channel":"telegram","detail":"budget exhausted"}',
           '{"timestamp":"2026-04-08T11:03:00.000Z","type":"workflow.failed","channel":"telegram","detail":"workflow marked failed"}',
+          '{"timestamp":"2026-04-08T11:04:00.000Z","type":"crew.run.started","channel":"telegram","outcome":"success","metadata":{"workflow":"research-report","runId":"run-2"}}',
+          '{"timestamp":"2026-04-08T11:05:00.000Z","type":"crew.run.failed","channel":"telegram","outcome":"error","metadata":{"workflow":"research-report","runId":"run-2"}}',
         ].join("\n") + "\n",
+        "utf8",
+      );
+      await mkdir(path.join(stateDir, "crew-runs"), { recursive: true });
+      await writeFile(
+        path.join(stateDir, "crew-runs", "run-2.json"),
+        JSON.stringify({
+          runId: "run-2",
+          workflow: "research-report",
+          status: "failed",
+          currentStage: "review",
+          coordinator: "alpha",
+          chatId: 111,
+          userId: 222,
+          locale: "en",
+          originalPrompt: "Analyze AI adoption.",
+          createdAt: "2026-04-08T11:04:00.000Z",
+          updatedAt: "2026-04-08T11:05:00.000Z",
+          lastError: "reviewer failed",
+          stages: {},
+        }),
         "utf8",
       );
 
@@ -463,13 +508,17 @@ describe("telegram service commands", () => {
       });
 
       expect(handled).toBe(true);
-      expect(messages[0]).toContain("Timeline events: 3");
+      expect(messages[0]).toContain("Timeline events: 5");
       expect(messages[0]).toContain("Last turn completion: 2026-04-08T11:00:00.000Z");
       expect(messages[0]).toContain("Last budget block: 2026-04-08T11:02:00.000Z");
       expect(messages[0]).toContain("Retry count: 0");
       expect(messages[0]).toContain("Budget block count: 1");
       expect(messages[0]).toContain("File rejection count: 0");
       expect(messages[0]).toContain("Workflow failure count: 1");
+      expect(messages[0]).toContain("Crew runs started: 1");
+      expect(messages[0]).toContain("Crew runs completed: 0");
+      expect(messages[0]).toContain("Crew runs failed: 1");
+      expect(messages[0]).toContain("Latest crew run: run-2 (research-report, failed/review, updated 2026-04-08T11:05:00.000Z)");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

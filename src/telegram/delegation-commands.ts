@@ -27,10 +27,43 @@ function parseFanCommand(text: string): { prompt: string } | null {
   return { prompt: match[1]!.trim() };
 }
 
+function parseChainCommand(text: string): { prompt: string } | null {
+  const match = text.trim().match(/^\/chain(?:@\w+)?\s+([\s\S]+)$/i);
+  if (!match) return null;
+  return { prompt: match[1]!.trim() };
+}
+
 function parseVerifyCommand(text: string): { prompt: string } | null {
   const match = text.trim().match(/^\/verify(?:@\w+)?\s+([\s\S]+)$/i);
   if (!match) return null;
   return { prompt: match[1]!.trim() };
+}
+
+function buildChainStagePrompt(input: {
+  locale: Locale;
+  originalPrompt: string;
+  previousInstance: string;
+  previousOutput: string;
+}): string {
+  if (input.locale === "zh") {
+    return [
+      `原始问题：${input.originalPrompt}`,
+      "",
+      `上一阶段（${input.previousInstance}）输出：`,
+      input.previousOutput,
+      "",
+      "请在此基础上继续处理，并返回你的结果。",
+    ].join("\n");
+  }
+
+  return [
+    `Original prompt: ${input.originalPrompt}`,
+    "",
+    `Previous stage output (${input.previousInstance}):`,
+    input.previousOutput,
+    "",
+    "Continue from this point and return your updated result.",
+  ].join("\n");
 }
 
 export interface DelegationCommandContext extends TelegramTurnContext {
@@ -276,6 +309,100 @@ export async function handleDelegationTelegramCommand(input: {
         errorCount: fanErrorCount,
         responseChars: fanResponseLength || undefined,
         chunkCount: fanChunkCount || undefined,
+      },
+    });
+    return true;
+  }
+
+  const chainCommand = parseChainCommand(normalized.text);
+  if (chainCommand) {
+    const busConfig = await loadBusConfig(stateDir);
+    const chainTargets = busConfig?.chain ?? [];
+    if (chainTargets.length === 0) {
+      await context.api.sendMessage(
+        normalized.chatId,
+        locale === "zh"
+          ? "未配置 chain bot。在 config.json 的 bus.chain 中添加实例名。"
+          : "No chain bots configured. Add instance names to bus.chain in config.json.",
+      );
+      return true;
+    }
+
+    const currentInstance = context.instanceName ?? "default";
+    if (chainTargets.includes(currentInstance)) {
+      await context.api.sendMessage(
+        normalized.chatId,
+        locale === "zh"
+          ? "chain 配置不能包含当前实例。请从 bus.chain 中移除 self-target。"
+          : "Chain config cannot include the current instance. Remove self-targets from bus.chain.",
+      );
+      return true;
+    }
+    await context.api.sendMessage(
+      normalized.chatId,
+      locale === "zh"
+        ? `正在顺序串联 ${chainTargets.length} 个 bot...`
+        : `Running chain across ${chainTargets.length} bots...`,
+    );
+
+    let chainOutcome: "success" | "error" = "success";
+    let chainResponseLength = 0;
+    let chainChunkCount = 0;
+    const sections: string[] = [];
+    try {
+      let stagePrompt = chainCommand.prompt;
+      let previousInstance = currentInstance;
+
+      for (const [index, target] of chainTargets.entries()) {
+        const result = await delegateToInstance({
+          fromInstance: currentInstance,
+          targetInstance: target,
+          prompt: stagePrompt,
+          depth: 0,
+          stateDir,
+        });
+
+        sections.push(
+          locale === "zh"
+            ? `[链路阶段 ${index + 1}: ${target}]\n${result.text}`
+            : `[Chain stage ${index + 1}: ${target}]\n${result.text}`,
+        );
+
+        previousInstance = target;
+        stagePrompt = buildChainStagePrompt({
+          locale,
+          originalPrompt: chainCommand.prompt,
+          previousInstance,
+          previousOutput: result.text,
+        });
+      }
+
+      const chainResponse = sections.join("\n\n---\n\n");
+      const chunks = chunkTelegramMessage(chainResponse);
+      chainResponseLength = chainResponse.length;
+      chainChunkCount = chunks.length;
+      await context.api.sendMessage(normalized.chatId, chunks[0]!);
+      for (const chunk of chunks.slice(1)) {
+        await context.api.sendMessage(normalized.chatId, chunk);
+      }
+    } catch (error) {
+      chainOutcome = "error";
+      const detail = error instanceof Error ? error.message : String(error);
+      await context.api.sendMessage(
+        normalized.chatId,
+        locale === "zh" ? `串联执行失败：${detail}` : `Chain execution failed: ${detail}`,
+      );
+    }
+
+    await appendUpdateHandleAuditEventBestEffort(stateDir, context, normalized, {
+      outcome: chainOutcome,
+      metadata: {
+        durationMs: Date.now() - startedAt,
+        command: "chain",
+        chainTargets,
+        stageCount: chainTargets.length,
+        responseChars: chainResponseLength || undefined,
+        chunkCount: chainChunkCount || undefined,
       },
     });
     return true;

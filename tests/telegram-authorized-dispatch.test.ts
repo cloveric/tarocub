@@ -211,4 +211,58 @@ describe("dispatchAuthorizedTelegramMessage", () => {
     expect(sendMessage).toHaveBeenCalledWith(123, "语音转写失败，请发送文字消息。");
     expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
   });
+
+  it("runs crew workflow before ordinary message preparation when the handler takes ownership", async () => {
+    const normalized = createNormalizedMessage("research this topic");
+    const prepareTelegramMessageInput = vi.fn();
+    const executeWorkflowAwareTelegramTurn = vi.fn();
+    const handleCrewTelegramWorkflow = vi.fn().mockResolvedValue(true);
+
+    await dispatchAuthorizedTelegramMessage({
+      stateDir: "/tmp/state",
+      startedAt: Date.now(),
+      locale: "en",
+      cfg: { engine: "claude" },
+      normalized,
+      context: {
+        api: {
+          sendMessage: vi.fn(),
+          getFile: vi.fn(),
+          downloadFile: vi.fn(),
+        },
+        bridge: {},
+        inboxDir: "/tmp/inbox",
+      } as never,
+      workflowStore: {
+        inspect: vi.fn(),
+        update: vi.fn(),
+      } as never,
+      deps: {
+        sessionStore: {
+          inspect: vi.fn(),
+          removeByChatId: vi.fn(),
+          upsert: vi.fn(),
+          findByChatIdSafe: vi.fn(),
+        } as never,
+        turnState: createTurnState(),
+        updateInstanceConfig: vi.fn(),
+        deliverTelegramResponse: vi.fn(),
+        sendTelegramOutFile: vi.fn(),
+        updateWorkflowBestEffort: vi.fn(),
+      },
+      handlers: {
+        handleLocalSessionTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleLocalEngineTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleSimpleLocalTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleDelegationTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleCrewTelegramWorkflow,
+        prepareTelegramMessageInput,
+        executeWorkflowAwareTelegramTurn,
+      } as never,
+    });
+
+    expect(handleCrewTelegramWorkflow).toHaveBeenCalledTimes(1);
+    expect(prepareTelegramMessageInput).not.toHaveBeenCalled();
+    expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
+  });
 });
