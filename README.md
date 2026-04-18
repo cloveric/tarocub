@@ -17,19 +17,26 @@
 
 <h3 align="center">
   Put the real Codex and Claude Code CLI on Telegram.<br>
-  Not an API wrapper — the actual CLI, with sessions, memory, and file handling.<br>
-  Run multiple bots, each with its own engine, personality, and state — isolated by default, connected via Agent Bus when you need them to collaborate.
+  Not an API wrapper — the actual CLI, with native sessions, local files, and real tool use.<br>
+  Run one bot or a small bot team: isolated instances by default, Agent Bus when you need delegation, fan-out, pipelines, or a coordinator-led crew.
 </h3>
 
 <p align="center">
-  <em>Runs their native CLI harness directly — sessions, memory, tools, all built-in. No reimplemented API wrappers.<br>For 99% of people, this is simpler and more stable than any *Claw.</em>
+  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local resume, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#yolo-mode">YOLO</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#backup--restore">Backup</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
+
+### What Changed Recently
+
+- The Telegram runtime was split into smaller modules instead of one giant `delivery.ts`.
+- Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
+- The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
+- `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
 
 ---
 
@@ -332,7 +339,7 @@ The archive format is a pure-Node gzipped binary — no `tar` dependency, works 
 
 ## Agent Bus
 
-Enable bot-to-bot communication via local HTTP IPC. Bots delegate tasks to each other with `/ask`, and the bus handles routing, peer validation, and loop prevention.
+Enable bot-to-bot communication via local HTTP IPC. The bus now supports point delegation, fan-out, sequential chains, auto-review, and coordinator-led crew workflows. It handles routing, peer validation, loop prevention, and local auth.
 
 ### Enable
 
@@ -349,7 +356,9 @@ Add `bus` to each instance's `config.json`:
 | `port` | Local HTTP port. `0` = auto-assign (default). |
 | `secret` | Shared secret for Bearer token authentication (optional). |
 | `parallel` | List of instances for `/fan` parallel queries (e.g. `["sec-bot", "perf-bot"]`). |
+| `chain` | Ordered list of instances for `/chain` sequential handoff (e.g. `["reviewer", "writer"]`). |
 | `verifier` | Instance name for `/verify` auto-verification (e.g. `"reviewer"`). |
+| `crew` | Fixed coordinator workflow config for hub-and-spoke specialist orchestration. |
 
 Both sides must allow each other — unilateral bus config is rejected.
 
@@ -360,12 +369,16 @@ In any bot's Telegram chat:
 ```
 /ask reviewer Please review this function for security issues
 /fan Analyze this code for bugs, security issues, and performance
+/chain Improve this answer step by step
 /verify Write a function to sort an array
 ```
 
 - `/ask <instance> <prompt>` — delegate to a specific bot, result inline
 - `/fan <prompt>` — query current bot + all `parallel` bots simultaneously, combined results
+- `/chain <prompt>` — run a configured sequential pipeline, each stage receiving the previous stage output explicitly
 - `/verify <prompt>` — execute on current bot, then auto-send to `verifier` for review
+
+`/chain` is the lightweight pipeline. `crew` is the heavier hub-and-spoke mode.
 
 ### Topology Patterns
 
@@ -440,6 +453,54 @@ Each bot only knows its neighbors. Tasks flow left to right.
 ```json
 { "bus": { "peers": "*", "verifier": "reviewer" } }
 ```
+
+<a id="crew-workflow"></a>
+
+### Crew Workflows (Hub and Spoke)
+
+For heavier multi-agent work, one instance can act as a dedicated coordinator while fixed specialist instances do focused work. This follows the article-style hub-and-spoke pattern:
+
+- the user talks directly to the coordinator bot
+- specialists never talk to each other directly
+- all context is passed explicitly by the coordinator
+- the coordinator keeps the run state, stage progress, and final assembly
+
+Current built-in workflow is `research-report`:
+
+`coordinator -> researcher -> analyst -> writer -> reviewer`
+
+If the reviewer asks for changes, the coordinator can send the draft back to the writer for one or more revision rounds.
+
+Example config on the coordinator instance:
+
+```json
+{
+  "bus": {
+    "peers": ["researcher", "analyst", "writer", "reviewer"],
+    "crew": {
+      "enabled": true,
+      "workflow": "research-report",
+      "coordinator": "coordinator",
+      "roles": {
+        "researcher": "researcher",
+        "analyst": "analyst",
+        "writer": "writer",
+        "reviewer": "reviewer"
+      },
+      "maxResearchQuestions": 4,
+      "maxRevisionRounds": 2
+    }
+  }
+}
+```
+
+Behavior notes:
+
+- only the coordinator instance should have this `crew` block
+- the five roles must all be distinct
+- ordinary text messages sent to the coordinator bot will run the crew workflow automatically
+- crew runs are persisted under `crew-runs/*.json`
+- stage progress is also written to `timeline.log.jsonl`
 
 **Mesh** — full interconnect:
 
@@ -642,20 +703,21 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 |---|---|
 | `telegram service start` | Acquire lock, load state, begin long-polling |
 | `telegram service stop` | Graceful shutdown (SIGTERM/SIGINT) |
-| `telegram service status` | Running state, PID, engine, bot identity, audit health |
+| `telegram service status` | Running state, PID, engine, bot identity, timeline summary, latest crew run |
 | `telegram service restart` | Stop + start with clean consumer reset |
 | `telegram service logs` | Tail stdout/stderr logs |
-| `telegram service doctor` | Health check across all subsystems |
+| `telegram service doctor` | Health check across all subsystems, including timeline and crew state |
 | `telegram engine [codex\|claude]` | Switch AI engine per instance |
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
 | `telegram usage` | Show token usage and estimated cost |
 | `telegram verbosity [0\|1\|2]` | Set streaming progress level |
 | `telegram budget [show\|set\|clear]` | Per-instance cost cap (blocks requests when exceeded) |
+| `telegram timeline` | Inspect structured lifecycle events with filters |
 | `telegram instance [list\|rename\|delete]` | Manage instances from the CLI |
 | `telegram backup [--instance <name>]` | Archive instance state to `.cctb.gz` |
 | `telegram restore <archive>` | Restore instance from backup (with `--force` to overwrite) |
 | `telegram logs rotate` | Manually trigger log rotation |
-| `telegram dashboard` | Generate and open an HTML status dashboard |
+| `telegram dashboard` | Generate and open an HTML status dashboard with timeline and latest crew snapshot |
 | `telegram help` | Show all available commands |
 
 All commands accept `--instance <name>` to target a specific bot.
@@ -676,6 +738,10 @@ Telegram users can also use:
 - `/effort [low|medium|high|max|off]` — set reasoning effort level
 - `/model [name|off]` — switch model
 - `/btw <question>` — ask a side question without affecting the current session
+- `/ask <instance> <prompt>` — delegate to a specific peer bot
+- `/fan <prompt>` — query current bot plus configured parallel bots
+- `/chain <prompt>` — run the configured sequential bot chain
+- `/verify <prompt>` — execute locally, then auto-review with the verifier bot
 - `/resume` — scan and resume a local session on Telegram
 - `/detach` — detach from resumed session, restore default workspace
 - `/stop` — immediately stop the current running task
@@ -688,7 +754,7 @@ For archive summaries, the intended continuation path is to reply to that summar
 
 Recovery behavior on unreadable state:
 
-- `telegram service status` and `telegram service doctor` degrade to `unknown (...)` warnings instead of crashing when `session.json` or `file-workflow.json` is unreadable.
+- `telegram service status` and `telegram service doctor` degrade to `unknown (...)` warnings instead of crashing when `session.json`, `file-workflow.json`, `timeline.log.jsonl`, or `crew-runs/` state is unreadable.
 - `telegram session inspect` and `telegram task inspect` report unreadable state and stop instead of pretending the record is missing.
 - `telegram session reset`, `telegram task clear`, and Telegram `/reset` only self-heal corruption/schema-invalid state. Before writing a default empty file, the unreadable original is quarantined as a backup beside the state file.
 - Telegram `/status` shows `unknown (...)` for session/task state when the backing JSON is unreadable.
