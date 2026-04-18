@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { FileWorkflowStateSchema } from "./file-workflow-schema.js";
 import { JsonStore } from "./json-store.js";
 
 export const FILE_WORKFLOW_STATE_UNREADABLE_WARNING = "file workflow state unreadable";
@@ -31,55 +32,6 @@ export interface FileWorkflowListFilter {
   status?: FileWorkflowStatus;
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
-function isIsoTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
-}
-
-function isFileWorkflowRecord(value: unknown): value is FileWorkflowRecord {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const record = value as Partial<FileWorkflowRecord>;
-  return (
-    typeof record.uploadId === "string" &&
-    typeof record.chatId === "number" &&
-    typeof record.userId === "number" &&
-    (record.kind === "image" || record.kind === "document" || record.kind === "archive") &&
-    (record.status === "preparing" ||
-      record.status === "processing" ||
-      record.status === "awaiting_continue" ||
-      record.status === "completed" ||
-      record.status === "failed") &&
-    isStringArray(record.sourceFiles) &&
-    isStringArray(record.derivedFiles) &&
-    typeof record.summary === "string" &&
-    (record.summaryMessageId === undefined || typeof record.summaryMessageId === "number") &&
-    (record.extractedPath === undefined || typeof record.extractedPath === "string") &&
-    isIsoTimestamp(record.createdAt) &&
-    isIsoTimestamp(record.updatedAt)
-  );
-}
-
-function isFileWorkflowState(value: unknown): value is FileWorkflowState {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "records" in value &&
-    Array.isArray((value as FileWorkflowState).records) &&
-    (value as FileWorkflowState).records.every(isFileWorkflowRecord)
-  );
-}
-
 function createDefaultState(): FileWorkflowState {
   return { records: [] };
 }
@@ -106,8 +58,9 @@ export class FileWorkflowStore {
 
   constructor(stateDir: string) {
     this.store = new JsonStore<FileWorkflowState>(resolveFileWorkflowStatePath(stateDir), (value) => {
-      if (isFileWorkflowState(value)) {
-        return value;
+      const result = FileWorkflowStateSchema.safeParse(value);
+      if (result.success) {
+        return result.data;
       }
 
       throw new Error("invalid file workflow state");

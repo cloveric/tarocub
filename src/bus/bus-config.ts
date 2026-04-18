@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { ConfigFileSchema } from "../state/config-file-schema.js";
+
 export interface BusConfig {
   peers: "*" | string[] | false;
   maxDepth: number;
@@ -64,8 +66,12 @@ export function parseBusConfig(raw: unknown): BusConfig | null {
 export async function loadBusConfig(stateDir: string): Promise<BusConfig | null> {
   try {
     const raw = await readFile(path.join(stateDir, "config.json"), "utf8");
-    const config = JSON.parse(raw) as { bus?: unknown };
-    return parseBusConfig(config.bus);
+    const parsed = JSON.parse(raw) as unknown;
+    const result = ConfigFileSchema.safeParse(parsed);
+    if (!result.success) {
+      return null;
+    }
+    return parseBusConfig(result.data.bus);
   } catch {
     return null;
   }

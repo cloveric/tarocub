@@ -1,42 +1,8 @@
+import { SessionStateSchema } from "./session-state-schema.js";
 import { JsonStore } from "./json-store.js";
 import type { SessionRecord, SessionState } from "../types.js";
 
 export const SESSION_STATE_UNREADABLE_WARNING = "session state unreadable";
-
-function isIsoTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
-}
-
-function isSessionRecord(value: unknown): value is SessionRecord {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<SessionRecord>;
-  return (
-    typeof candidate.telegramChatId === "number" &&
-    typeof candidate.codexSessionId === "string" &&
-    (candidate.status === "idle" ||
-      candidate.status === "running" ||
-      candidate.status === "queued" ||
-      candidate.status === "blocked") &&
-    isIsoTimestamp(candidate.updatedAt)
-  );
-}
-
-function isSessionState(value: unknown): value is SessionState {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<SessionState>;
-  return Array.isArray(candidate.chats) && candidate.chats.every(isSessionRecord);
-}
 
 export function createDefaultSessionState(): SessionState {
   return { chats: [] };
@@ -48,8 +14,9 @@ export class SessionStore {
 
   constructor(filePath: string) {
     this.store = new JsonStore<SessionState>(filePath, (value) => {
-      if (isSessionState(value)) {
-        return value;
+      const result = SessionStateSchema.safeParse(value);
+      if (result.success) {
+        return result.data;
       }
 
       throw new Error("invalid session state");

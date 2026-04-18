@@ -1,0 +1,238 @@
+import { lstat, unlink } from "node:fs/promises";
+
+import { SessionStateError } from "../runtime/session-manager.js";
+import { formatSessionList, scanRecentClaudeSessions, type ScannedSession } from "../runtime/session-scanner.js";
+import type { ResumeState } from "./instance-config.js";
+import { renderSessionResetMessage, type Locale } from "./message-renderer.js";
+import {
+  appendCommandSuccessAuditEventBestEffort,
+  type TelegramTurnContext,
+} from "./turn-bookkeeping.js";
+import type { NormalizedTelegramMessage } from "./update-normalizer.js";
+
+export interface SessionCommandConfig {
+  engine: "codex" | "claude";
+  resume?: ResumeState;
+}
+
+export interface SessionCommandStore {
+  inspect(): Promise<{ warning?: string; repairable?: boolean }>;
+  removeByChatId(chatId: number): Promise<boolean | void>;
+  upsert(record: {
+    telegramChatId: number;
+    codexSessionId: string;
+    status: "idle";
+    updatedAt: string;
+  }): Promise<void>;
+}
+
+const pendingResumeScans = new Map<number, ScannedSession[]>();
+
+function isResetCommand(text: string): boolean {
+  return /^\/reset(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
+function parseResumeCommand(text: string): { pick: number | null; invalid?: boolean } | null {
+  const match = text.trim().match(/^\/resume(?:@\w+)?(?:\s+(\S+))?(?:\s|$)/i);
+  if (!match) return null;
+  if (!match[1]) return { pick: null };
+  const num = Number(match[1]);
+  if (!Number.isInteger(num) || num < 1) return { pick: null, invalid: true };
+  return { pick: num };
+}
+
+function isDetachCommand(text: string): boolean {
+  return /^\/detach(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
+export function resetPendingResumeScans(): void {
+  pendingResumeScans.clear();
+}
+
+export async function handleLocalSessionTelegramCommand(input: {
+  stateDir: string;
+  startedAt: number;
+  locale: Locale;
+  cfg: SessionCommandConfig;
+  normalized: NormalizedTelegramMessage;
+  context: TelegramTurnContext;
+  sessionStore: SessionCommandStore;
+  updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
+  scanRecentSessions?: (hours: number) => Promise<ScannedSession[]>;
+  formatSessionListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
+}): Promise<boolean> {
+  const {
+    stateDir,
+    startedAt,
+    locale,
+    cfg,
+    normalized,
+    context,
+    sessionStore,
+    updateInstanceConfig,
+    scanRecentSessions = scanRecentClaudeSessions,
+    formatSessionListMessage = formatSessionList,
+  } = input;
+
+  if (isResetCommand(normalized.text)) {
+    const inspectedState = await sessionStore.inspect();
+    if (inspectedState.warning) {
+      throw new SessionStateError(
+        inspectedState.repairable
+          ? "Session state is unreadable right now. The operator needs to repair session state and retry."
+          : "Session state is unavailable right now. The operator needs to restore read access and retry.",
+        inspectedState.repairable ?? false,
+      );
+    }
+
+    await sessionStore.removeByChatId(normalized.chatId);
+
+    if (cfg.resume) {
+      if (cfg.resume.symlinkPath) {
+        try {
+          const st = await lstat(cfg.resume.symlinkPath);
+          if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
+        } catch {
+          // ok
+        }
+      }
+      await updateInstanceConfig((c) => { delete c.resume; });
+    }
+
+    const resetMessage = renderSessionResetMessage(false, locale);
+    await context.api.sendMessage(normalized.chatId, resetMessage);
+    await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+      startedAt,
+      command: "reset",
+      responseText: resetMessage,
+    });
+    return true;
+  }
+
+  const resumeCmd = parseResumeCommand(normalized.text);
+  if (resumeCmd) {
+    if (cfg.engine !== "claude") {
+      const msg = locale === "zh"
+        ? "/resume 仅支持 Claude 引擎。Codex 的 session 存储在服务端，无法本地恢复。"
+        : "/resume is only supported with the Claude engine. Codex sessions are server-side and cannot be resumed locally.";
+      await context.api.sendMessage(normalized.chatId, msg);
+      await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+        startedAt,
+        command: "resume",
+        responseText: msg,
+        metadata: { rejected: "wrong-engine" },
+      });
+      return true;
+    }
+
+    if (resumeCmd.invalid) {
+      const msg = locale === "zh"
+        ? "用法: /resume [编号]\n先发 /resume 扫描，再发 /resume <编号> 选择。"
+        : "Usage: /resume [number]\nSend /resume to scan, then /resume <number> to pick.";
+      await context.api.sendMessage(normalized.chatId, msg);
+      await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+        startedAt,
+        command: "resume",
+        responseText: msg,
+        metadata: { rejected: "invalid-arg" },
+      });
+      return true;
+    }
+
+    let resumeAuditText: string | undefined;
+    if (resumeCmd.pick === null) {
+      const sessions = await scanRecentSessions(1);
+      if (sessions.length === 0) {
+        resumeAuditText = locale === "zh"
+          ? "最近 1 小时内没有找到本地 session。"
+          : "No local sessions found in the last hour.";
+        await context.api.sendMessage(normalized.chatId, resumeAuditText);
+      } else {
+        resumeAuditText = formatSessionListMessage(sessions, locale);
+        pendingResumeScans.set(normalized.chatId, sessions);
+        await context.api.sendMessage(normalized.chatId, resumeAuditText);
+      }
+    } else {
+      const cached = pendingResumeScans.get(normalized.chatId);
+      if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
+        resumeAuditText = locale === "zh"
+          ? "无效选择，请先发 /resume 扫描。"
+          : "Invalid selection. Send /resume first to scan.";
+        await context.api.sendMessage(normalized.chatId, resumeAuditText);
+      } else {
+        const picked = cached[resumeCmd.pick - 1]!;
+        pendingResumeScans.delete(normalized.chatId);
+
+        if (!picked.workspacePath) {
+          resumeAuditText = locale === "zh"
+            ? `无法解析 session 的工作区路径（${picked.dirName}）。`
+            : `Cannot resolve workspace path for session (${picked.dirName}).`;
+          await context.api.sendMessage(normalized.chatId, resumeAuditText);
+        } else {
+          await sessionStore.upsert({
+            telegramChatId: normalized.chatId,
+            codexSessionId: picked.sessionId,
+            status: "idle",
+            updatedAt: new Date().toISOString(),
+          });
+          await updateInstanceConfig((c) => {
+            c.resume = {
+              sessionId: picked.sessionId,
+              dirName: picked.dirName,
+              workspacePath: picked.workspacePath,
+            };
+          });
+
+          resumeAuditText = locale === "zh"
+            ? `已恢复 session：${picked.displayName}\n工作区：${picked.workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`
+            : `Resumed session: ${picked.displayName}\nWorkspace: ${picked.workspacePath}\n\nSend a message to continue. Use /detach when done.`;
+          await context.api.sendMessage(normalized.chatId, resumeAuditText);
+        }
+      }
+    }
+
+    await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+      startedAt,
+      command: "resume",
+      responseText: resumeAuditText,
+      metadata: { pick: resumeCmd.pick },
+    });
+    return true;
+  }
+
+  if (isDetachCommand(normalized.text)) {
+    let detachMessage: string;
+    if (!cfg.resume) {
+      detachMessage = locale === "zh"
+        ? "当前没有恢复的 session。"
+        : "No resumed session active.";
+      await context.api.sendMessage(normalized.chatId, detachMessage);
+    } else {
+      if (cfg.resume.symlinkPath) {
+        try {
+          const st = await lstat(cfg.resume.symlinkPath);
+          if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
+        } catch {
+          // ok
+        }
+      }
+
+      await sessionStore.removeByChatId(normalized.chatId);
+      await updateInstanceConfig((c) => { delete c.resume; });
+
+      detachMessage = locale === "zh"
+        ? "已断开恢复的 session，回到 bot 默认工作区。"
+        : "Detached from resumed session. Back to default workspace.";
+      await context.api.sendMessage(normalized.chatId, detachMessage);
+    }
+
+    await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+      startedAt,
+      command: "detach",
+      responseText: detachMessage,
+    });
+    return true;
+  }
+
+  return false;
+}

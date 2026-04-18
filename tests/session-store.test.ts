@@ -49,6 +49,49 @@ describe("JsonStore", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("rewrites legacy schemaVersion to the current version on write", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const store = new JsonStore<SessionState>(filePath, (value) => {
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        "chats" in value &&
+        Array.isArray((value as SessionState).chats)
+      ) {
+        return value as SessionState;
+      }
+
+      throw new Error("invalid session state");
+    });
+
+    try {
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          schemaVersion: 0,
+          chats: [
+            {
+              telegramChatId: 123,
+              codexSessionId: "session-1",
+              status: "running",
+              updatedAt: "2026-04-08T03:00:00.000Z",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const readBack = await store.read({ chats: [] });
+      await store.write(readBack);
+
+      const onDisk = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion?: number };
+      expect(onDisk.schemaVersion).toBe(1);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("SessionStore", () => {
@@ -208,6 +251,33 @@ describe("SessionStore", () => {
               telegramChatId: 123,
               codexSessionId: "session-1",
               status: "not-a-real-status",
+              updatedAt: "2026-04-08T03:00:00.000Z",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      await expect(store.load()).rejects.toThrow("invalid session state");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-integer chat identifiers in persisted session state", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const store = new SessionStore(filePath);
+
+    try {
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          chats: [
+            {
+              telegramChatId: 123.5,
+              codexSessionId: "session-1",
+              status: "running",
               updatedAt: "2026-04-08T03:00:00.000Z",
             },
           ],

@@ -9,6 +9,11 @@ export type FailureCategory =
   | "session-state"
   | "unknown";
 
+export interface BusErrorSemantics {
+  code: string;
+  retryable: boolean;
+}
+
 function normalizeErrorText(error: unknown): string {
   if (error instanceof Error) {
     return [error.name, error.message].filter(Boolean).join("\n");
@@ -117,6 +122,29 @@ export function classifyFailure(error: unknown): FailureCategory {
   }
 
   return "unknown";
+}
+
+export function getBusErrorSemantics(failureCategory: FailureCategory): BusErrorSemantics {
+  switch (failureCategory) {
+    case "auth":
+      return { code: "auth", retryable: false };
+    case "write-permission":
+      return { code: "write_permission", retryable: false };
+    case "telegram-conflict":
+      return { code: "telegram_conflict", retryable: true };
+    case "telegram-delivery":
+      return { code: "telegram_delivery", retryable: true };
+    case "engine-cli":
+      return { code: "engine_cli", retryable: true };
+    case "file-workflow":
+      return { code: "file_workflow", retryable: false };
+    case "workflow-state":
+      return { code: "workflow_state", retryable: false };
+    case "session-state":
+      return { code: "session_state", retryable: false };
+    case "unknown":
+      return { code: "unknown", retryable: true };
+  }
 }
 
 /**

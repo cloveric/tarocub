@@ -1,16 +1,8 @@
 import { JsonStore } from "./json-store.js";
+import { RuntimeStateSchema } from "./runtime-state-schema.js";
 
 export interface RuntimeState {
   lastHandledUpdateId: number | null;
-}
-
-function isRuntimeState(value: unknown): value is RuntimeState {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<RuntimeState>;
-  return candidate.lastHandledUpdateId === null || typeof candidate.lastHandledUpdateId === "number";
 }
 
 export function createDefaultRuntimeState(): RuntimeState {
@@ -25,8 +17,9 @@ export class RuntimeStateStore {
 
   constructor(filePath: string) {
     this.store = new JsonStore<RuntimeState>(filePath, (value) => {
-      if (isRuntimeState(value)) {
-        return value;
+      const result = RuntimeStateSchema.safeParse(value);
+      if (result.success) {
+        return result.data;
       }
 
       throw new Error("invalid runtime state");

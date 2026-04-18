@@ -282,4 +282,36 @@ describe("AccessStore", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("rejects non-integer telegram identifiers in persisted access state", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    try {
+      const filePath = path.join(dir, "access.json");
+      await writeFile(
+        filePath,
+        JSON.stringify(
+          {
+            policy: "pairing",
+            pairedUsers: [
+              {
+                telegramUserId: 42.5,
+                telegramChatId: 84,
+                pairedAt: "2026-04-08T00:00:00.000Z",
+              },
+            ],
+            allowlist: [84.25],
+            pendingPairs: [],
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const store = new AccessStore(filePath);
+      await expect(store.load()).rejects.toThrow("invalid access state");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -13,6 +13,12 @@ import {
   type AuditEventFilter,
 } from "../state/audit-log.js";
 import {
+  filterTimelineEvents,
+  parseTimelineEvents,
+  resolveTimelineLogPath,
+  type TimelineEventFilter,
+} from "../state/timeline-log.js";
+import {
   getSessionForChat,
   inspectSessionForChat,
   inspectSessions,
@@ -28,6 +34,7 @@ import {
 import {
   getServiceLogs,
   getServiceStatus,
+  inspectInstanceServiceLiveness,
   runServiceDoctor,
   startServiceInstance,
   stopServiceInstance,
@@ -395,6 +402,84 @@ async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: Cl
   return true;
 }
 
+async function runTimelineCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
+  const { instanceName, args } = extractInstanceOption(argv.slice(1));
+  const filter: TimelineEventFilter = { tail: 20 };
+
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index];
+
+    if (/^\d+$/.test(argument)) {
+      filter.tail = parsePositiveInteger(argument, "tail count");
+      continue;
+    }
+
+    if (argument === "--type") {
+      if (index + 1 >= args.length) {
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+      }
+      filter.type = args[index + 1] as TimelineEventFilter["type"];
+      index++;
+      continue;
+    }
+
+    if (argument === "--chat") {
+      if (index + 1 >= args.length) {
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+      }
+      filter.chatId = parseChatId(args[index + 1]);
+      index++;
+      continue;
+    }
+
+    if (argument === "--outcome") {
+      if (index + 1 >= args.length) {
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+      }
+      filter.outcome = args[index + 1];
+      index++;
+      continue;
+    }
+
+    if (argument === "--channel") {
+      if (index + 1 >= args.length) {
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+      }
+      const value = args[index + 1];
+      if (value !== "telegram" && value !== "bus") {
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+      }
+      filter.channel = value;
+      index++;
+      continue;
+    }
+
+    throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+  }
+
+  const timelinePath = resolveTimelineLogPath(resolveAuditStateDir(env, instanceName));
+
+  try {
+    const raw = await import("node:fs/promises").then((fs) => fs.readFile(timelinePath, "utf8"));
+    const lines = filterTimelineEvents(parseTimelineEvents(raw), filter).map((event) => JSON.stringify(event));
+    logger.log(lines.length > 0 ? lines.join("\n") : "(empty)");
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      logger.log("(empty)");
+      return true;
+    }
+
+    throw error;
+  }
+
+  return true;
+}
+
 async function runSessionCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
   if (argv.length < 2) {
     throw new Error("Usage: telegram session <list|inspect|reset> ...");
@@ -536,8 +621,18 @@ function formatServiceStatus(status: Awaited<ReturnType<typeof getServiceStatus>
       : `Session bindings: ${status.sessionBindings}`,
     `Last handled update: ${status.lastHandledUpdateId ?? "none"}`,
     `Audit events: ${status.auditEvents}`,
+    status.timelineWarning !== undefined
+      ? `Timeline events: unknown (${status.timelineWarning})`
+      : `Timeline events: ${status.timelineEvents}`,
     `Last success: ${status.lastSuccessAt ?? "none"}`,
     `Last failure: ${status.lastFailureAt ?? "none"}`,
+    `Last turn completion: ${status.lastTurnCompletionAt ?? "none"}`,
+    `Last retry: ${status.lastRetryAt ?? "none"}`,
+    `Last budget block: ${status.lastBudgetBlockedAt ?? "none"}`,
+    `Retry count: ${status.retryCount ?? "unknown"}`,
+    `Budget block count: ${status.budgetBlockedCount ?? "unknown"}`,
+    `File rejection count: ${status.fileRejectedCount ?? "unknown"}`,
+    `Workflow failure count: ${status.workflowFailedCount ?? "unknown"}`,
     status.unresolvedTasksWarning !== undefined
       ? `Unresolved tasks: unknown (${status.unresolvedTasksWarning})`
       : `Unresolved tasks: ${status.unresolvedTasks}`,
@@ -924,6 +1019,8 @@ Commands:
   task clear [--instance <name>] <upload-id>  Clear a file workflow record
   audit [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>]
                                               View audit trail
+  timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]
+                                              View timeline trail
   instructions <show|set|path> [--instance <name>]
                                               Manage per-instance agent.md
   yolo [on|off|unsafe] [--instance <name>]    Toggle YOLO auto-approval mode
@@ -1002,18 +1099,15 @@ async function runInstanceCommand(
     for (const name of entries) {
       const stateDir = path.join(channelsDir, name);
       let engine = "codex";
-      let running = false;
       try {
         const cfg = JSON.parse(await fs.readFile(path.join(stateDir, "config.json"), "utf8")) as { engine?: string };
         engine = cfg.engine ?? "codex";
       } catch {}
-      try {
-        const lk = JSON.parse(await fs.readFile(path.join(stateDir, "instance.lock.json"), "utf8")) as { pid?: number };
-        if (lk.pid) {
-          try { process.kill(lk.pid, 0); running = true; } catch { running = false; }
-        }
-      } catch {}
-      logger.log(`  - ${name} [${engine}] ${running ? "running" : "stopped"}`);
+      const liveness = await inspectInstanceServiceLiveness({
+        stateDir,
+        instanceName: name,
+      }, serviceDeps);
+      logger.log(`  - ${name} [${engine}] ${liveness.running ? "running" : "stopped"}`);
     }
     return true;
   }
@@ -1270,6 +1364,10 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
 
   if (normalized[0] === "audit") {
     return runAuditCommand(normalized, env, logger);
+  }
+
+  if (normalized[0] === "timeline") {
+    return runTimelineCommand(normalized, env, logger);
   }
 
   if (normalized[0] === "instructions") {

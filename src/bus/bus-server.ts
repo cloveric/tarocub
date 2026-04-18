@@ -1,42 +1,34 @@
 import http from "node:http";
 
 import { isPeerAllowed, loadBusConfig } from "./bus-config.js";
+import {
+  createBusErrorResponse,
+  createBusTalkResponseEnvelope,
+  parseBusTalkRequest,
+  parseBusTalkResponse,
+} from "./bus-protocol.js";
 
 export interface BusTalkRequest {
   fromInstance: string;
   prompt: string;
   depth: number;
+  protocolVersion?: number;
+  capabilities?: string[];
 }
 
 export interface BusTalkResponse {
   success: boolean;
   text: string;
-  fromInstance: string;
+  fromInstance?: string;
   error?: string;
+  errorCode?: string;
+  retryable?: boolean;
   durationMs?: number;
+  protocolVersion?: number;
+  capabilities?: string[];
 }
 
 export type BusTalkHandler = (req: BusTalkRequest) => Promise<BusTalkResponse>;
-
-function parseTalkBody(body: string): BusTalkRequest | null {
-  try {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
-    if (
-      typeof parsed.fromInstance !== "string" ||
-      typeof parsed.prompt !== "string" ||
-      typeof parsed.depth !== "number"
-    ) {
-      return null;
-    }
-    return {
-      fromInstance: parsed.fromInstance,
-      prompt: parsed.prompt,
-      depth: parsed.depth,
-    };
-  } catch {
-    return null;
-  }
-}
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
@@ -64,7 +56,12 @@ export function createBusServer(
         totalBytes += chunk.length;
         if (totalBytes > MAX_BODY_BYTES) {
           aborted = true;
-          sendJson(res, 413, { success: false, error: "Request body too large" });
+          sendJson(res, 413, createBusErrorResponse({
+            fromInstance: instanceName,
+            error: "Request body too large",
+            errorCode: "request_too_large",
+            retryable: false,
+          }));
           req.destroy();
           return;
         }
@@ -73,50 +70,80 @@ export function createBusServer(
       req.on("end", async () => {
         if (aborted) return;
         const body = Buffer.concat(chunks).toString("utf8");
-        const talkReq = parseTalkBody(body);
+        const talkReq = parseBusTalkRequest(body);
 
         if (!talkReq) {
-          sendJson(res, 400, { success: false, error: "Invalid request body" });
+          sendJson(res, 400, createBusErrorResponse({
+            fromInstance: instanceName,
+            error: "Invalid request body",
+            errorCode: "invalid_request",
+            retryable: false,
+          }));
           return;
         }
 
         const busConfig = await loadBusConfig(stateDir);
         if (!busConfig) {
-          sendJson(res, 403, { success: false, error: "Bus is not enabled on this instance" });
+          sendJson(res, 403, createBusErrorResponse({
+            fromInstance: instanceName,
+            error: "Bus is not enabled on this instance",
+            errorCode: "bus_disabled",
+            retryable: false,
+          }));
           return;
         }
 
         const authHeader = req.headers.authorization;
         const expectedSecret = startupSecret ?? busConfig.secret;
         if (expectedSecret && authHeader !== `Bearer ${expectedSecret}`) {
-          sendJson(res, 401, { success: false, error: "Invalid or missing bus secret" });
+          sendJson(res, 401, createBusErrorResponse({
+            fromInstance: instanceName,
+            error: "Invalid or missing bus secret",
+            errorCode: "auth_failed",
+            retryable: false,
+          }));
           return;
         }
 
         if (!isPeerAllowed(busConfig, talkReq.fromInstance)) {
-          sendJson(res, 403, {
-            success: false,
+          sendJson(res, 403, createBusErrorResponse({
+            fromInstance: instanceName,
             error: `Instance "${talkReq.fromInstance}" is not in the peer list`,
-          });
+            errorCode: "peer_not_allowed",
+            retryable: false,
+          }));
           return;
         }
 
         if (talkReq.depth >= busConfig.maxDepth) {
-          sendJson(res, 429, {
-            success: false,
+          sendJson(res, 429, createBusErrorResponse({
+            fromInstance: instanceName,
             error: `Max delegation depth (${busConfig.maxDepth}) exceeded`,
-          });
+            errorCode: "max_depth_exceeded",
+            retryable: false,
+          }));
           return;
         }
 
         try {
-          const result = await handler(talkReq);
-          sendJson(res, 200, result);
+          const result = parseBusTalkResponse(await handler(talkReq));
+          if (!result) {
+            sendJson(res, 500, createBusErrorResponse({
+              fromInstance: instanceName,
+              error: "Handler returned invalid bus response",
+              errorCode: "invalid_handler_response",
+              retryable: true,
+            }));
+            return;
+          }
+          sendJson(res, 200, createBusTalkResponseEnvelope(result));
         } catch (error) {
-          sendJson(res, 500, {
-            success: false,
+          sendJson(res, 500, createBusErrorResponse({
+            fromInstance: instanceName,
             error: error instanceof Error ? error.message : String(error),
-          });
+            errorCode: "internal_error",
+            retryable: true,
+          }));
         }
       });
       return;

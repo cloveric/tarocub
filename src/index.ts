@@ -9,7 +9,8 @@ import {
   resolveServiceEnvForInstance,
 } from "./service.js";
 import { loadBusConfig } from "./bus/bus-config.js";
-import { createBusServer, startBusServer, stopBusServer, type BusTalkRequest, type BusTalkResponse } from "./bus/bus-server.js";
+import { createBusServer, startBusServer, stopBusServer } from "./bus/bus-server.js";
+import { createBusTalkHandler } from "./bus/bus-handler.js";
 import { pruneStaleInstances, registerInstance, deregisterInstance, resolveChannelRoot } from "./bus/bus-registry.js";
 
 async function main(): Promise<void> {
@@ -63,34 +64,11 @@ async function main(): Promise<void> {
       // alive). Keeps cross-instance /ask from connecting to dead ports.
       await pruneStaleInstances(channelRoot);
 
-      let busSessionCounter = 0;
-      const handler = async (req: BusTalkRequest): Promise<BusTalkResponse> => {
-        const startedAt = Date.now();
-        const busChatId = -(++busSessionCounter);
-        try {
-          const result = await bridge.handleAuthorizedMessage({
-            chatId: busChatId,
-            userId: 0,
-            chatType: "bus",
-            text: req.prompt,
-            files: [],
-          });
-          return {
-            success: true,
-            text: result.text,
-            fromInstance: instanceName,
-            durationMs: Date.now() - startedAt,
-          };
-        } catch (error) {
-          return {
-            success: false,
-            text: "",
-            fromInstance: instanceName,
-            error: error instanceof Error ? error.message : String(error),
-            durationMs: Date.now() - startedAt,
-          };
-        }
-      };
+      const handler = createBusTalkHandler({
+        bridge,
+        stateDir: config.stateDir,
+        instanceName,
+      });
 
       busServer = createBusServer(instanceName, config.stateDir, handler, busConfig.secret);
       const boundPort = await startBusServer(busServer, busConfig.port);

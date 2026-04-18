@@ -3,6 +3,13 @@ import path from "node:path";
 import { exec } from "node:child_process";
 
 import type { EnvSource } from "../config.js";
+import { readConfiguredBotToken } from "../service.js";
+import { parseTimelineEvents } from "../state/timeline-log.js";
+import { inspectInstanceServiceLiveness, type ServiceCommandDeps } from "./service.js";
+
+export interface DashboardEnv extends Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR"> {}
+
+export type DashboardDeps = Pick<ServiceCommandDeps, "cwd" | "isProcessAlive" | "isExpectedServiceProcess">;
 
 function resolveChannelsDir(env: Pick<EnvSource, "HOME" | "USERPROFILE">): string {
   const homeDir = env.HOME ?? env.USERPROFILE;
@@ -36,6 +43,8 @@ interface InstanceSnapshot {
   lastFailure: string;
   lastError: string;
   recentAudit: Array<{ type: string; outcome: string; timestamp: string; detail?: string }>;
+  timelineTotal: number;
+  recentTimeline: Array<{ type: string; outcome: string; timestamp: string; detail?: string }>;
   stateDir: string;
 }
 
@@ -49,36 +58,72 @@ function pa(line: string): InstanceSnapshot["recentAudit"][0] | null {
   try { const e = JSON.parse(line) as Record<string, unknown>; return { type: (e.type as string) ?? "?", outcome: (e.outcome as string) ?? "?", timestamp: (e.timestamp as string) ?? "", detail: typeof e.detail === "string" ? e.detail : undefined }; } catch { return null; }
 }
 
-async function ci(cd: string, name: string): Promise<InstanceSnapshot> {
-  const d = path.join(cd, name);
+function pt(event: ReturnType<typeof parseTimelineEvents>[number]): InstanceSnapshot["recentTimeline"][0] {
+  return {
+    type: event.type,
+    outcome: event.outcome ?? "?",
+    timestamp: event.timestamp ?? "",
+    detail: event.detail,
+  };
+}
+
+function resolveDashboardTargets(env: DashboardEnv): Array<{ name: string; stateDir: string }> {
+  if (env.CODEX_TELEGRAM_STATE_DIR) {
+    return [{
+      name: path.basename(env.CODEX_TELEGRAM_STATE_DIR),
+      stateDir: env.CODEX_TELEGRAM_STATE_DIR,
+    }];
+  }
+
+  return [];
+}
+
+async function ci(
+  env: DashboardEnv,
+  target: { name: string; stateDir: string },
+  deps: DashboardDeps = {},
+): Promise<InstanceSnapshot> {
+  const d = target.stateDir;
+  const name = target.name;
   const cfg = await rj<{ engine?: string; approvalMode?: string; verbosity?: number; effort?: string; model?: string; locale?: string; budgetUsd?: number; bus?: { peers?: unknown } }>(path.join(d, "config.json"), {});
-  const lk = await rj<{ pid?: number } | null>(path.join(d, "instance.lock.json"), null);
   const ac = await rj<{ policy?: string; pairedUsers?: unknown[]; allowlist?: unknown[] }>(path.join(d, "access.json"), {});
   const ss = await rj<{ chats?: unknown[] }>(path.join(d, "session.json"), {});
-  const rt = await rj<{ lastHandledUpdateId?: number | null }>(path.join(d, "runtime-state.json"), {});
+  const runtimeState = await rj<{ lastHandledUpdateId?: number | null }>(path.join(d, "runtime-state.json"), {});
   const us = await rj<InstanceSnapshot["usage"]>(path.join(d, "usage.json"), { requestCount: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCachedTokens: 0, totalCostUsd: 0, lastUpdatedAt: "" });
   const aa = await aal(path.join(d, "audit.log.jsonl"));
+  const timelineRaw = await readFile(path.join(d, "timeline.log.jsonl"), "utf8").catch(() => "");
+  const timelineEvents = parseTimelineEvents(timelineRaw);
   const ra = aa.slice(-8).map(pa).filter((e): e is NonNullable<typeof e> => e !== null);
+  const recentTimeline = timelineEvents.slice(-8).map(pt);
   let ls = "", lf = "";
   for (let i = aa.length - 1; i >= 0; i--) { const e = pa(aa[i]); if (!e) continue; if (!ls && e.outcome === "success") ls = e.timestamp; if (!lf && e.outcome === "error") lf = e.timestamp; if (ls && lf) break; }
-  let running = false;
-  if (lk?.pid) { try { process.kill(lk.pid, 0); running = true; } catch { running = false; } }
+  const liveness = await inspectInstanceServiceLiveness({
+    stateDir: d,
+    instanceName: name,
+  }, deps);
+  const botToken = await readConfiguredBotToken({
+    HOME: env.HOME,
+    USERPROFILE: env.USERPROFILE,
+    CODEX_TELEGRAM_STATE_DIR: d,
+  }, name);
+
   return {
     name, engine: cfg.engine ?? "codex", approvalMode: cfg.approvalMode ?? "normal", verbosity: cfg.verbosity ?? 1,
     effort: cfg.effort ?? "default", model: cfg.model ?? "default", locale: cfg.locale ?? "en",
     budgetUsd: typeof cfg.budgetUsd === "number" ? cfg.budgetUsd : null,
     bus: cfg.bus?.peers ? (cfg.bus.peers === "*" ? "mesh" : Array.isArray(cfg.bus.peers) ? `${(cfg.bus.peers as unknown[]).length} peers` : "off") : "off",
-    running, pid: running ? (lk?.pid ?? null) : null, policy: ac.policy ?? "pairing",
+    running: liveness.running, pid: liveness.pid, policy: ac.policy ?? "pairing",
     pairedUsers: Array.isArray(ac.pairedUsers) ? ac.pairedUsers.length : 0,
     allowlistCount: Array.isArray(ac.allowlist) ? ac.allowlist.length : 0,
     sessionBindings: Array.isArray(ss.chats) ? ss.chats.length : 0,
-    lastHandledUpdateId: rt.lastHandledUpdateId ?? null,
-    botTokenConfigured: await fe(path.join(d, ".env")),
+    lastHandledUpdateId: runtimeState.lastHandledUpdateId ?? null,
+    botTokenConfigured: botToken !== null,
     agentMdPreview: await tp(path.join(d, "agent.md"), 160),
     claudeMdExists: await fe(path.join(d, "workspace", "CLAUDE.md")),
     usage: us, auditTotal: aa.length, lastSuccess: ls, lastFailure: lf,
+    timelineTotal: timelineEvents.length,
     lastError: (await ll(path.join(d, "service.stderr.log"))).slice(0, 200),
-    recentAudit: ra, stateDir: d,
+    recentAudit: ra, recentTimeline, stateDir: d,
   };
 }
 
@@ -154,6 +199,10 @@ function renderHtml(instances: InstanceSnapshot[]): string {
       const c = ev.outcome === "error" ? "#C1392B" : ev.outcome === "success" ? "#2D8B46" : "#6B7280";
       return `<tr><td class="au-t">${ft(ev.timestamp)}</td><td style="color:${c}">${esc(ev.type)}</td><td style="color:${c}">${ev.outcome}</td></tr>`;
     }).join("");
+    const timelineRows = inst.recentTimeline.map(ev => {
+      const c = ev.outcome === "error" ? "#C1392B" : ev.outcome === "success" ? "#2D8B46" : ev.outcome === "retry" ? "#8B6914" : "#6B7280";
+      return `<tr><td class="au-t">${ft(ev.timestamp)}</td><td style="color:${c}">${esc(ev.type)}</td><td style="color:${c}">${esc(ev.outcome)}</td></tr>`;
+    }).join("");
 
     return `
     <div class="card">
@@ -194,6 +243,12 @@ function renderHtml(instances: InstanceSnapshot[]): string {
         <details class="audit">
           <summary>Activity <span class="au-count">${inst.auditTotal.toLocaleString()}</span></summary>
           <table>${auditRows}</table>
+        </details>` : ""}
+
+        ${inst.recentTimeline.length > 0 ? `
+        <details class="audit">
+          <summary>Timeline <span class="au-count">${inst.timelineTotal.toLocaleString()}</span></summary>
+          <table>${timelineRows}</table>
         </details>` : ""}
 
         <div class="card-foot">${esc(inst.stateDir)}</div>
@@ -298,13 +353,23 @@ function openBrowser(fp: string): void {
   exec(cmd, () => {});
 }
 
-export async function generateDashboard(env: Pick<EnvSource, "HOME" | "USERPROFILE">, outputPath?: string): Promise<string> {
+export async function collectInstanceSnapshots(env: DashboardEnv, deps: DashboardDeps = {}): Promise<InstanceSnapshot[]> {
+  const explicitTargets = resolveDashboardTargets(env);
+  if (explicitTargets.length > 0) {
+    return Promise.all(explicitTargets.map((target) => ci(env, target, deps)));
+  }
+
   const cd = resolveChannelsDir(env);
   let names: string[];
   try { names = (await readdir(cd, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name).sort(); } catch { names = []; }
-  const instances = await Promise.all(names.map(n => ci(cd, n)));
+  return Promise.all(names.map((name) => ci(env, { name, stateDir: path.join(cd, name) }, deps)));
+}
+
+export async function generateDashboard(env: DashboardEnv, outputPath?: string): Promise<string> {
+  const instances = await collectInstanceSnapshots(env);
   const html = renderHtml(instances);
-  const out = outputPath ?? path.join(cd, "dashboard.html");
+  const outDir = env.CODEX_TELEGRAM_STATE_DIR ?? resolveChannelsDir(env);
+  const out = outputPath ?? path.join(outDir, "dashboard.html");
   await writeFile(out, html, "utf8");
   openBrowser(out);
   return out;

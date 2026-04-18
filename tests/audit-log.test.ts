@@ -48,6 +48,48 @@ describe("audit log", () => {
     }
   });
 
+  it("rejects invalid audit event shapes on append", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+
+    try {
+      await expect(
+        appendAuditEvent(tempDir, {
+          type: "update.handle",
+          chatId: Number.NaN,
+          outcome: "success",
+        }),
+      ).rejects.toThrow(/invalid audit event/i);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores parsed audit lines with invalid typed fields", () => {
+    const events = parseAuditEvents([
+      JSON.stringify({
+        timestamp: "2026-04-10T00:00:00.000Z",
+        type: "update.handle",
+        chatId: "123",
+        outcome: "success",
+      }),
+      JSON.stringify({
+        timestamp: "2026-04-10T00:01:00.000Z",
+        type: "update.handle",
+        chatId: 123,
+        outcome: "success",
+      }),
+    ].join("\n"));
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        timestamp: "2026-04-10T00:01:00.000Z",
+        type: "update.handle",
+        chatId: 123,
+        outcome: "success",
+      }),
+    ]);
+  });
+
   it("returns the latest categorized failure from audit history", () => {
     const events = parseAuditEvents([
       JSON.stringify({

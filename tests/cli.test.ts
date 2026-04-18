@@ -290,6 +290,40 @@ describe("runCli", () => {
     }
   });
 
+  it("does not mark an instance as running in instance list when the pid belongs to a different process", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      const stateDir = path.join(tempDir, ".cctb", "alpha");
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }), "utf8");
+      await writeFile(
+        path.join(stateDir, "instance.lock.json"),
+        JSON.stringify({ pid: process.pid, token: "token", acquiredAt: new Date().toISOString() }),
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "instance", "list"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === process.pid,
+          isExpectedServiceProcess: () => false,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual([
+        "Instances (1):",
+        "  - alpha [claude] stopped",
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects deleting a running instance", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 
@@ -828,6 +862,68 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages).toEqual([
         '{"timestamp":"2026-04-08T00:01:00.000Z","type":"update.handle","chatId":2,"outcome":"error"}',
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the timeline tail for an instance", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      const timelinePath = path.join(tempDir, ".cctb", "default", "timeline.log.jsonl");
+      await mkdir(path.dirname(timelinePath), { recursive: true });
+      await writeFile(
+        timelinePath,
+        [
+          '{"timestamp":"2026-04-08T00:00:00.000Z","type":"turn.started","channel":"telegram"}',
+          '{"timestamp":"2026-04-08T00:00:01.000Z","type":"turn.completed","channel":"telegram","outcome":"success"}',
+          '{"timestamp":"2026-04-08T00:00:02.000Z","type":"budget.blocked","channel":"telegram"}',
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "timeline", "2"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual([
+        '{"timestamp":"2026-04-08T00:00:01.000Z","type":"turn.completed","channel":"telegram","outcome":"success"}\n{"timestamp":"2026-04-08T00:00:02.000Z","type":"budget.blocked","channel":"telegram"}',
+      ]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("filters timeline output by channel and type", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      const timelinePath = path.join(tempDir, ".cctb", "default", "timeline.log.jsonl");
+      await mkdir(path.dirname(timelinePath), { recursive: true });
+      await writeFile(
+        timelinePath,
+        [
+          '{"timestamp":"2026-04-08T00:00:00.000Z","type":"turn.completed","channel":"telegram","outcome":"success","chatId":1}',
+          '{"timestamp":"2026-04-08T00:00:01.000Z","type":"turn.completed","channel":"bus","outcome":"success","chatId":2}',
+          '{"timestamp":"2026-04-08T00:00:02.000Z","type":"turn.retried","channel":"telegram","outcome":"retry","chatId":1}',
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "timeline", "--channel", "telegram", "--type", "turn.completed"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual([
+        '{"timestamp":"2026-04-08T00:00:00.000Z","type":"turn.completed","channel":"telegram","outcome":"success","chatId":1}',
       ]);
     } finally {
       await rm(tempDir, { recursive: true, force: true });

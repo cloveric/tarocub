@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { CURRENT_SCHEMA_VERSION } from "./schema-version.js";
+import { CURRENT_SCHEMA_VERSION, withSchemaVersion } from "./schema-version.js";
 
 export class JsonStore<T> {
   constructor(
@@ -41,7 +41,7 @@ export class JsonStore<T> {
     // Attach current schema version on write so future loads can detect
     // incompatibility without every caller remembering to add it.
     const versioned = typeof value === "object" && value !== null
-      ? { schemaVersion: CURRENT_SCHEMA_VERSION, ...(value as object) }
+      ? withSchemaVersion(value as object)
       : value;
 
     const tmpPath = path.join(path.dirname(this.filePath), `${path.basename(this.filePath)}.${randomUUID()}.tmp`);

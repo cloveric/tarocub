@@ -1,6 +1,8 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import { BusRegistryEntrySchema } from "./bus-registry-schema.js";
+
 export interface BusRegistryEntry {
   port: number;
   pid: number;
@@ -23,9 +25,19 @@ export function resolveChannelRoot(stateDir: string): string {
 export async function readRegistry(channelRoot: string): Promise<BusRegistryData> {
   try {
     const raw = await readFile(resolveRegistryPath(channelRoot), "utf8");
-    const data = JSON.parse(raw) as BusRegistryData;
-    if (typeof data === "object" && data !== null && typeof data.instances === "object") {
-      return data;
+    const data = JSON.parse(raw) as unknown;
+    if (typeof data === "object" && data !== null && "instances" in data) {
+      const instances = (data as { instances?: unknown }).instances;
+      if (typeof instances === "object" && instances !== null) {
+        const filtered: Record<string, BusRegistryEntry> = {};
+        for (const [name, entry] of Object.entries(instances as Record<string, unknown>)) {
+          const result = BusRegistryEntrySchema.safeParse(entry);
+          if (result.success) {
+            filtered[name] = result.data;
+          }
+        }
+        return { instances: filtered };
+      }
     }
     return { instances: {} };
   } catch {

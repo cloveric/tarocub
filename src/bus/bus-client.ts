@@ -1,5 +1,10 @@
 import { isPeerAllowed, loadBusConfig } from "./bus-config.js";
 import { lookupInstance, resolveChannelRoot } from "./bus-registry.js";
+import {
+  BusProtocolError,
+  createBusTalkRequestEnvelope,
+  parseBusTalkResponse,
+} from "./bus-protocol.js";
 import type { BusTalkResponse } from "./bus-server.js";
 
 export interface BusDelegateInput {
@@ -13,15 +18,27 @@ export interface BusDelegateInput {
 export async function delegateToInstance(input: BusDelegateInput): Promise<BusTalkResponse> {
   const busConfig = await loadBusConfig(input.stateDir);
   if (!busConfig) {
-    throw new Error("Bus is not enabled on this instance");
+    throw new BusProtocolError({
+      message: "Bus is not enabled on this instance",
+      code: "bus_disabled",
+      retryable: false,
+    });
   }
 
   if (!isPeerAllowed(busConfig, input.targetInstance)) {
-    throw new Error(`Instance "${input.targetInstance}" is not in the peer list`);
+    throw new BusProtocolError({
+      message: `Instance "${input.targetInstance}" is not in the peer list`,
+      code: "peer_not_allowed",
+      retryable: false,
+    });
   }
 
   if (input.depth >= busConfig.maxDepth) {
-    throw new Error(`Max delegation depth (${busConfig.maxDepth}) exceeded`);
+    throw new BusProtocolError({
+      message: `Max delegation depth (${busConfig.maxDepth}) exceeded`,
+      code: "max_depth_exceeded",
+      retryable: false,
+    });
   }
 
   const channelRoot = resolveChannelRoot(input.stateDir);
@@ -31,16 +48,18 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
   // fetch() below gives us a more accurate error anyway.
   const target = await lookupInstance(channelRoot, input.targetInstance);
   if (!target) {
-    throw new Error(
-      `Instance "${input.targetInstance}" is not running or not registered on the bus`,
-    );
+    throw new BusProtocolError({
+      message: `Instance "${input.targetInstance}" is not running or not registered on the bus`,
+      code: "instance_unavailable",
+      retryable: true,
+    });
   }
 
-  const body = JSON.stringify({
+  const body = JSON.stringify(createBusTalkRequestEnvelope({
     fromInstance: input.fromInstance,
     prompt: input.prompt,
     depth: input.depth + 1,
-  });
+  }));
 
   const url = `http://127.0.0.1:${target.port}/api/talk`;
   const controller = new AbortController();
@@ -59,16 +78,47 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
       signal: controller.signal,
     });
 
-    const result = (await res.json()) as BusTalkResponse;
-
-    if (!result.success) {
-      throw new Error(result.error ?? `Delegation to "${input.targetInstance}" failed`);
+    let payload: unknown;
+    try {
+      payload = await res.json();
+    } catch {
+      throw new BusProtocolError({
+        message: `Invalid bus response from "${input.targetInstance}"`,
+        code: "invalid_response",
+        retryable: true,
+        fromInstance: input.targetInstance,
+      });
     }
 
-    return result;
+    const parsed = parseBusTalkResponse(payload);
+    if (!parsed) {
+      throw new BusProtocolError({
+        message: `Invalid bus response from "${input.targetInstance}"`,
+        code: "invalid_response",
+        retryable: true,
+        fromInstance: input.targetInstance,
+      });
+    }
+
+    if (!parsed.success) {
+      throw new BusProtocolError({
+        message: parsed.error ?? `Delegation to "${input.targetInstance}" failed`,
+        code: parsed.errorCode ?? "unknown",
+        retryable: parsed.retryable ?? false,
+        fromInstance: parsed.fromInstance ?? input.targetInstance,
+        protocolVersion: parsed.protocolVersion,
+      });
+    }
+
+    return parsed;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Delegation to "${input.targetInstance}" timed out after 60 seconds`);
+      throw new BusProtocolError({
+        message: `Delegation to "${input.targetInstance}" timed out after 60 seconds`,
+        code: "timeout",
+        retryable: true,
+        fromInstance: input.targetInstance,
+      });
     }
     throw error;
   } finally {

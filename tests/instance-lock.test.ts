@@ -76,4 +76,29 @@ describe("instance lock", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("rejects an invalid lock record shape", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const lockPath = resolveInstanceLockPath(root);
+
+    try {
+      await writeFile(
+        lockPath,
+        JSON.stringify(
+          {
+            pid: process.pid,
+            token: "live-token",
+            acquiredAt: "not-a-timestamp",
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      await expect(acquireInstanceLock(root)).rejects.toThrow("invalid instance lock");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

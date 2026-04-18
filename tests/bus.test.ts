@@ -51,7 +51,7 @@ async function listenOnNonBus(port: number): Promise<{ close: () => Promise<void
   });
 }
 
-import { parseBusConfig, isPeerAllowed, type BusConfig } from "../src/bus/bus-config.js";
+import { loadBusConfig, parseBusConfig, isPeerAllowed, type BusConfig } from "../src/bus/bus-config.js";
 import {
   registerInstance,
   deregisterInstance,
@@ -66,6 +66,8 @@ import {
   type BusTalkRequest,
   type BusTalkResponse,
 } from "../src/bus/bus-server.js";
+import { delegateToInstance } from "../src/bus/bus-client.js";
+import { BUS_PROTOCOL_CAPABILITIES, BUS_PROTOCOL_VERSION, BusProtocolError } from "../src/bus/bus-protocol.js";
 
 describe("parseBusConfig", () => {
   it("returns null for undefined/null/false", () => {
@@ -113,6 +115,17 @@ describe("parseBusConfig", () => {
 
   it("returns null for peers: false", () => {
     expect(parseBusConfig({ peers: false })).toBeNull();
+  });
+
+  it("loadBusConfig returns null for non-object config roots", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-config-"));
+
+    try {
+      await writeFile(path.join(tempDir, "config.json"), "null\n", "utf8");
+      await expect(loadBusConfig(tempDir)).resolves.toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -213,6 +226,44 @@ describe("bus registry", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("filters invalid registry entries but keeps valid ones", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
+    try {
+      await writeFile(
+        path.join(tempDir, ".bus-registry.json"),
+        JSON.stringify({
+          instances: {
+            valid: {
+              port: 9100,
+              pid: process.pid,
+              secret: "secret-valid",
+              updatedAt: "2026-04-17T00:00:00.000Z",
+            },
+            invalid: {
+              port: 9100.5,
+              pid: "oops",
+              secret: "secret-invalid",
+              updatedAt: "2026-04-17T00:00:00.000Z",
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const registry = await readRegistry(tempDir);
+      expect(registry.instances).toEqual({
+        valid: {
+          port: 9100,
+          pid: process.pid,
+          secret: "secret-valid",
+          updatedAt: "2026-04-17T00:00:00.000Z",
+        },
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("bus server", () => {
@@ -247,6 +298,8 @@ describe("bus server", () => {
         const body = (await res.json()) as BusTalkResponse;
         expect(body.success).toBe(true);
         expect(body.text).toBe("Processed: hello");
+        expect(body.protocolVersion).toBe(BUS_PROTOCOL_VERSION);
+        expect(body.capabilities).toEqual(BUS_PROTOCOL_CAPABILITIES);
 
         // Disallowed peer
         const res2 = await fetch(`http://127.0.0.1:${port}/api/talk`, {
@@ -300,6 +353,244 @@ describe("bus server", () => {
       }
     } finally {
       await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects requests with negative delegation depth", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-server-"));
+
+    try {
+      await writeFile(
+        path.join(tempDir, "config.json"),
+        JSON.stringify({ bus: { peers: "*", secret: "test-secret" } }),
+        "utf8",
+      );
+
+      const handler = async (): Promise<BusTalkResponse> => ({
+        success: true,
+        text: "ok",
+        fromInstance: "test",
+      });
+
+      const server = createBusServer("test", tempDir, handler);
+      const port = await startBusServer(server, 0);
+
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/talk`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
+          body: JSON.stringify({ fromInstance: "work", prompt: "hello", depth: -1 }),
+        });
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({
+          success: false,
+          error: "Invalid request body",
+          protocolVersion: BUS_PROTOCOL_VERSION,
+          errorCode: "invalid_request",
+          retryable: false,
+        });
+      } finally {
+        await stopBusServer(server);
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns 500 when the handler returns an invalid bus response", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-server-"));
+
+    try {
+      await writeFile(
+        path.join(tempDir, "config.json"),
+        JSON.stringify({ bus: { peers: "*", secret: "test-secret" } }),
+        "utf8",
+      );
+
+      const handler = async () => ({
+        text: "missing success flag",
+        fromInstance: "test",
+      });
+
+      const server = createBusServer("test", tempDir, handler as never);
+      const port = await startBusServer(server, 0);
+
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/talk`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
+          body: JSON.stringify({ fromInstance: "work", prompt: "hello", depth: 0 }),
+        });
+        expect(res.status).toBe(500);
+        await expect(res.json()).resolves.toMatchObject({
+          success: false,
+          error: "Handler returned invalid bus response",
+          protocolVersion: BUS_PROTOCOL_VERSION,
+          errorCode: "invalid_handler_response",
+          retryable: true,
+        });
+      } finally {
+        await stopBusServer(server);
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delegateToInstance", () => {
+  it("rejects malformed bus responses", async () => {
+    const channelRoot = await mkdtemp(path.join(os.tmpdir(), "bus-client-"));
+    const stateDir = path.join(channelRoot, "work");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ bus: { peers: ["reviewer"], secret: "test-secret" } }),
+      "utf8",
+    );
+
+    const server = createHttpServer((req, res) => {
+      if (req.method === "GET" && req.url === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ kind: "cc-telegram-bridge", instance: "reviewer", status: "ok", pid: process.pid }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/api/talk") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ text: "oops", fromInstance: "reviewer" }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    try {
+      await registerInstance(channelRoot, "reviewer", port, "test-secret");
+
+      await expect(delegateToInstance({
+        fromInstance: "work",
+        targetInstance: "reviewer",
+        prompt: "hello",
+        depth: 0,
+        stateDir,
+      })).rejects.toThrow(/Invalid bus response/i);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(channelRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("maps non-JSON bus responses to invalid_response", async () => {
+    const channelRoot = await mkdtemp(path.join(os.tmpdir(), "bus-client-"));
+    const stateDir = path.join(channelRoot, "work");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ bus: { peers: ["reviewer"], secret: "test-secret" } }),
+      "utf8",
+    );
+
+    const server = createHttpServer((req, res) => {
+      if (req.method === "GET" && req.url === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ kind: "cc-telegram-bridge", instance: "reviewer", status: "ok", pid: process.pid }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/api/talk") {
+        res.writeHead(502, { "Content-Type": "text/html" });
+        res.end("<html><body>bad gateway</body></html>");
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    try {
+      await registerInstance(channelRoot, "reviewer", port, "test-secret");
+
+      await expect(delegateToInstance({
+        fromInstance: "work",
+        targetInstance: "reviewer",
+        prompt: "hello",
+        depth: 0,
+        stateDir,
+      })).rejects.toMatchObject({
+        name: "BusProtocolError",
+        code: "invalid_response",
+        retryable: true,
+        fromInstance: "reviewer",
+      } satisfies Partial<BusProtocolError>);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(channelRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces structured remote bus errors with code and retryability", async () => {
+    const channelRoot = await mkdtemp(path.join(os.tmpdir(), "bus-client-"));
+    const stateDir = path.join(channelRoot, "work");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ bus: { peers: ["reviewer"], secret: "test-secret" } }),
+      "utf8",
+    );
+
+    const server = createHttpServer((req, res) => {
+      if (req.method === "GET" && req.url === "/api/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ kind: "cc-telegram-bridge", instance: "reviewer", status: "ok", pid: process.pid }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/api/talk") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          success: false,
+          text: "",
+          fromInstance: "reviewer",
+          error: "Budget exhausted",
+          errorCode: "budget_exhausted",
+          retryable: false,
+          protocolVersion: BUS_PROTOCOL_VERSION,
+          capabilities: BUS_PROTOCOL_CAPABILITIES,
+        }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    try {
+      await registerInstance(channelRoot, "reviewer", port, "test-secret");
+
+      await expect(delegateToInstance({
+        fromInstance: "work",
+        targetInstance: "reviewer",
+        prompt: "hello",
+        depth: 0,
+        stateDir,
+      })).rejects.toMatchObject({
+        name: "BusProtocolError",
+        message: "Budget exhausted",
+        code: "budget_exhausted",
+        retryable: false,
+        fromInstance: "reviewer",
+      } satisfies Partial<BusProtocolError>);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(channelRoot, { recursive: true, force: true });
     }
   });
 });

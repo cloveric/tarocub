@@ -3,6 +3,8 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { unlinkSync, readFileSync } from "node:fs";
 
+import { InstanceLockRecordSchema } from "./instance-lock-schema.js";
+
 const INSTANCE_LOCK_FILENAME = "instance.lock.json";
 
 export interface InstanceLockRecord {
@@ -19,20 +21,7 @@ export interface InstanceLockHandle {
 }
 
 function isLockRecord(value: unknown): value is InstanceLockRecord {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<InstanceLockRecord>;
-  return (
-    typeof candidate.pid === "number" &&
-    Number.isInteger(candidate.pid) &&
-    candidate.pid > 0 &&
-    typeof candidate.token === "string" &&
-    candidate.token.length > 0 &&
-    typeof candidate.acquiredAt === "string" &&
-    candidate.acquiredAt.length > 0
-  );
+  return InstanceLockRecordSchema.safeParse(value).success;
 }
 
 function isMissingFileError(error: unknown): boolean {

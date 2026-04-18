@@ -1,5 +1,6 @@
 import { randomInt } from "node:crypto";
 
+import { AccessStateSchema } from "./access-state-schema.js";
 import { JsonStore } from "./json-store.js";
 import type { AccessPolicy, AccessState, PairedUser, PendingPair } from "../types.js";
 
@@ -26,69 +27,14 @@ function generateCode(): string {
   return code;
 }
 
-function isIsoTimestamp(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
-}
-
-function isPairedUser(value: unknown): value is PairedUser {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<PairedUser>;
-  return (
-    typeof candidate.telegramUserId === "number" &&
-    typeof candidate.telegramChatId === "number" &&
-    isIsoTimestamp(candidate.pairedAt)
-  );
-}
-
-function isPendingPair(value: unknown): value is PendingPair {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<PendingPair>;
-  return (
-    typeof candidate.code === "string" &&
-    typeof candidate.telegramUserId === "number" &&
-    typeof candidate.telegramChatId === "number" &&
-    isIsoTimestamp(candidate.expiresAt)
-  );
-}
-
-function isNumberArray(value: unknown): value is number[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "number");
-}
-
-function isAccessState(value: unknown): value is AccessState {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<AccessState>;
-  return (
-    (candidate.policy === "pairing" || candidate.policy === "allowlist") &&
-    Array.isArray(candidate.pairedUsers) &&
-    candidate.pairedUsers.every(isPairedUser) &&
-    isNumberArray(candidate.allowlist) &&
-    Array.isArray(candidate.pendingPairs) &&
-    candidate.pendingPairs.every(isPendingPair)
-  );
-}
-
 export class AccessStore {
   private readonly store: JsonStore<AccessState>;
 
   constructor(filePath: string) {
     this.store = new JsonStore<AccessState>(filePath, (value) => {
-      if (isAccessState(value)) {
-        return value;
+      const result = AccessStateSchema.safeParse(value);
+      if (result.success) {
+        return result.data;
       }
 
       throw new Error("invalid access state");

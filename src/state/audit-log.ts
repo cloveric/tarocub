@@ -1,6 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import { AuditEventSchema, formatAuditSchemaError } from "./audit-log-schema.js";
 import { classifyFailure, type FailureCategory } from "../runtime/error-classification.js";
 
 export interface AuditEvent {
@@ -56,21 +57,21 @@ export function resolveAuditLogPath(stateDir: string): string {
 
 export async function appendAuditEvent(stateDir: string, event: AuditEvent): Promise<void> {
   const filePath = resolveAuditLogPath(stateDir);
+  const materialized = { timestamp: event.timestamp ?? new Date().toISOString(), ...event };
+  const result = AuditEventSchema.safeParse(materialized);
+  if (!result.success) {
+    throw new Error(`invalid audit event: ${formatAuditSchemaError(result.error)}`);
+  }
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
   await appendFile(
     filePath,
-    `${JSON.stringify({ timestamp: event.timestamp ?? new Date().toISOString(), ...event })}\n`,
+    `${JSON.stringify(result.data)}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
 }
 
 function isAuditEvent(value: unknown): value is AuditEvent {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const candidate = value as Partial<AuditEvent>;
-  return (candidate.timestamp === undefined || typeof candidate.timestamp === "string") && typeof candidate.type === "string";
+  return AuditEventSchema.safeParse(value).success;
 }
 
 export function parseAuditEvents(raw: string): AuditEvent[] {

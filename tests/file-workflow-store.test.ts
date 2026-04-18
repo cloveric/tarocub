@@ -303,6 +303,40 @@ describe("FileWorkflowStore", () => {
     }
   });
 
+  it("rejects non-integer workflow identifiers", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new FileWorkflowStore(stateDir);
+
+    try {
+      const filePath = path.join(stateDir, "file-workflow.json");
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          records: [
+            {
+              uploadId: "one",
+              chatId: 100.5,
+              userId: 100,
+              kind: "archive",
+              status: "awaiting_continue",
+              sourceFiles: ["a.zip"],
+              derivedFiles: [],
+              summary: "first",
+              summaryMessageId: 41.2,
+              createdAt: "2026-04-10T00:00:00.000Z",
+              updatedAt: "2026-04-10T00:00:00.000Z",
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      await expect(store.load()).rejects.toThrow("invalid file workflow state");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps concurrent workflow mutations from losing updates", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new FileWorkflowStore(stateDir);

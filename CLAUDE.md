@@ -1,5 +1,13 @@
 # CC Telegram Bridge Instructions
 
+## Read First
+
+Before modifying Telegram flow, bus flow, state/config handling, usage/budget/audit logic, or file delivery, read:
+
+- `docs/entrypoint-map.md`
+
+That file is the source of truth for codebase navigation and test selection.
+
 ## Mission
 
 This repository is not in maintenance mode. The active objective is:

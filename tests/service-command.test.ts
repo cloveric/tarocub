@@ -278,6 +278,16 @@ describe("telegram service commands", () => {
         ].join("\n") + "\n",
         "utf8",
       );
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        [
+          '{"timestamp":"2026-04-08T10:00:30.000Z","type":"turn.completed","channel":"telegram","outcome":"success"}',
+          '{"timestamp":"2026-04-08T10:00:45.000Z","type":"turn.retried","channel":"telegram","outcome":"retry","detail":"auth refresh"}',
+          '{"timestamp":"2026-04-08T10:00:50.000Z","type":"budget.blocked","channel":"telegram","detail":"budget exhausted"}',
+          '{"timestamp":"2026-04-08T10:00:55.000Z","type":"file.rejected","channel":"telegram","detail":"outside workspace"}',
+        ].join("\n") + "\n",
+        "utf8",
+      );
 
       const handled = await runCli(["telegram", "service", "doctor", "--instance", "alpha"], {
         env: { USERPROFILE: tempDir },
@@ -300,6 +310,11 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("ok service:");
       expect(messages[0]).toContain("ok identity:");
       expect(messages[0]).toContain("ok audit:");
+      expect(messages[0]).toContain("ok timeline:");
+      expect(messages[0]).toContain("Timeline events: 4");
+      expect(messages[0]).toContain("Last turn completion: 2026-04-08T10:00:30.000Z");
+      expect(messages[0]).toContain("Last retry: 2026-04-08T10:00:45.000Z");
+      expect(messages[0]).toContain("Incident counts: retries=1, budget blocks=1, file rejections=1, workflow failures=0");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -405,6 +420,129 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("blocking tasks: 2");
       expect(messages[0]).toContain("awaiting continue: 1");
       expect(messages[0]).toContain("- fail tasks:");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports timeline summary in service status when timeline events exist", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        [
+          '{"timestamp":"2026-04-08T11:00:00.000Z","type":"turn.completed","channel":"telegram","outcome":"success"}',
+          '{"timestamp":"2026-04-08T11:02:00.000Z","type":"budget.blocked","channel":"telegram","detail":"budget exhausted"}',
+          '{"timestamp":"2026-04-08T11:03:00.000Z","type":"workflow.failed","channel":"telegram","detail":"workflow marked failed"}',
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "service", "status", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("Timeline events: 3");
+      expect(messages[0]).toContain("Last turn completion: 2026-04-08T11:00:00.000Z");
+      expect(messages[0]).toContain("Last budget block: 2026-04-08T11:02:00.000Z");
+      expect(messages[0]).toContain("Retry count: 0");
+      expect(messages[0]).toContain("Budget block count: 1");
+      expect(messages[0]).toContain("File rejection count: 0");
+      expect(messages[0]).toContain("Workflow failure count: 1");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps service status working when timeline state is unreadable", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+      await mkdir(path.join(stateDir, "timeline.log.jsonl"));
+
+      const handled = await runCli(["telegram", "service", "status", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("Timeline events: unknown (timeline log unreadable)");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports timeline warnings in service doctor when timeline state is unreadable", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+      await mkdir(path.join(stateDir, "timeline.log.jsonl"));
+
+      const handled = await runCli(["telegram", "service", "doctor", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("- fail timeline: Timeline events: unknown (timeline log unreadable).");
+      expect(messages[0]).toContain("Healthy: no");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

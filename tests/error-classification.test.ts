@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyFailure, isStaleSessionError } from "../src/runtime/error-classification.js";
+import {
+  classifyFailure,
+  getBusErrorSemantics,
+  isStaleSessionError,
+} from "../src/runtime/error-classification.js";
 
 describe("classifyFailure auth detection", () => {
   it("classifies Claude 401 authentication errors as auth", () => {
@@ -38,5 +42,14 @@ describe("isStaleSessionError", () => {
   it("does not match unrelated errors", () => {
     expect(isStaleSessionError(new Error("file not found"))).toBe(false);
     expect(isStaleSessionError(new Error("auth expired"))).toBe(false);
+  });
+});
+
+describe("getBusErrorSemantics", () => {
+  it("maps failure categories to shared bus error semantics", () => {
+    expect(getBusErrorSemantics("auth")).toEqual({ code: "auth", retryable: false });
+    expect(getBusErrorSemantics("telegram-conflict")).toEqual({ code: "telegram_conflict", retryable: true });
+    expect(getBusErrorSemantics("workflow-state")).toEqual({ code: "workflow_state", retryable: false });
+    expect(getBusErrorSemantics("unknown")).toEqual({ code: "unknown", retryable: true });
   });
 });

@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { normalizeInstanceName } from "../instance.js";
 import { resolveInstanceLockPath, type InstanceLockRecord } from "../state/instance-lock.js";
+import { InstanceLockRecordSchema } from "../state/instance-lock-schema.js";
 import { AccessStore } from "../state/access-store.js";
 import {
   getLatestFailure,
@@ -14,6 +15,12 @@ import {
   summarizeAuditEvents,
   type AuditSummary,
 } from "../state/audit-log.js";
+import {
+  parseTimelineEvents,
+  resolveTimelineLogPath,
+  summarizeTimelineEvents,
+  type TimelineSummary,
+} from "../state/timeline-log.js";
 import { FILE_WORKFLOW_STATE_UNREADABLE_WARNING } from "../state/file-workflow-store.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { TelegramApi } from "../telegram/api.js";
@@ -51,6 +58,11 @@ export interface ServicePaths {
   entryPath: string;
 }
 
+export interface ServiceLiveness {
+  running: boolean;
+  pid: number | null;
+}
+
 export interface ServiceStatus {
   instanceName: string;
   running: boolean;
@@ -79,6 +91,15 @@ export interface ServiceStatus {
   lastFailureAt?: string;
   auditEvents: number;
   latestFailureCategory?: string;
+  timelineEvents: number | null;
+  lastTurnCompletionAt?: string;
+  lastRetryAt?: string;
+  lastBudgetBlockedAt?: string;
+  retryCount: number | null;
+  budgetBlockedCount: number | null;
+  fileRejectedCount: number | null;
+  workflowFailedCount: number | null;
+  timelineWarning?: string;
   unresolvedTasks: number | null;
   blockingTasks: number | null;
   awaitingContinueTasks: number | null;
@@ -219,16 +240,9 @@ async function readLockRecord(lockPath: string): Promise<InstanceLockRecord | nu
   try {
     const raw = await readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
-
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "pid" in parsed &&
-      typeof (parsed as InstanceLockRecord).pid === "number" &&
-      "token" in parsed &&
-      typeof (parsed as InstanceLockRecord).token === "string"
-    ) {
-      return parsed as InstanceLockRecord;
+    const result = InstanceLockRecordSchema.safeParse(parsed);
+    if (result.success) {
+      return result.data;
     }
   } catch (error) {
     if (
@@ -242,6 +256,27 @@ async function readLockRecord(lockPath: string): Promise<InstanceLockRecord | nu
   }
 
   return null;
+}
+
+export async function inspectInstanceServiceLiveness(
+  input: { stateDir: string; instanceName: string },
+  deps: Pick<ServiceCommandDeps, "cwd" | "isProcessAlive" | "isExpectedServiceProcess"> = {},
+): Promise<ServiceLiveness> {
+  const cwd = deps.cwd ?? process.cwd();
+  const lock = await readLockRecord(resolveInstanceLockPath(input.stateDir));
+  const pid = lock?.pid ?? null;
+  if (pid === null) {
+    return { running: false, pid: null };
+  }
+
+  const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
+  const isExpectedServiceProcess = deps.isExpectedServiceProcess ?? defaultIsExpectedServiceProcess;
+  const entryPath = path.join(cwd, "dist", "src", "index.js");
+  const running = isProcessAlive(pid) && isExpectedServiceProcess(pid, entryPath, input.instanceName);
+  return {
+    running,
+    pid: running ? pid : null,
+  };
 }
 
 function isFreshLockRecord(
@@ -275,14 +310,8 @@ function removeLockIfMatches(lockPath: string, expectedPid: number | null): void
   try {
     const raw = readFileSync(lockPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
-
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "pid" in parsed &&
-      typeof (parsed as InstanceLockRecord).pid === "number" &&
-      (parsed as InstanceLockRecord).pid === expectedPid
-    ) {
+    const result = InstanceLockRecordSchema.safeParse(parsed);
+    if (result.success && result.data.pid === expectedPid) {
       rmSync(lockPath, { force: true });
     }
   } catch {
@@ -503,6 +532,14 @@ export async function getServiceStatus(
   const lastErrorLine = await readLastNonEmptyLine(paths.stderrPath);
   let auditSummary: AuditSummary = { totalEvents: 0 };
   let latestFailureCategory: string | undefined;
+  let timelineSummary: TimelineSummary = {
+    totalEvents: 0,
+    retryCount: 0,
+    budgetBlockedCount: 0,
+    fileRejectedCount: 0,
+    workflowFailedCount: 0,
+  };
+  let timelineWarning: string | undefined;
   try {
     const rawAudit = await readFile(resolveAuditLogPath(paths.stateDir), "utf8");
     const auditEvents = parseAuditEvents(rawAudit);
@@ -516,6 +553,24 @@ export async function getServiceStatus(
       (error as NodeJS.ErrnoException).code !== "ENOENT"
     ) {
       throw error;
+    }
+  }
+  try {
+    const rawTimeline = await readFile(resolveTimelineLogPath(paths.stateDir), "utf8");
+    const timelineEvents = parseTimelineEvents(rawTimeline);
+    timelineSummary = summarizeTimelineEvents(timelineEvents);
+  } catch (error) {
+    if (
+      typeof error !== "object" ||
+      error === null ||
+      !("code" in error)
+    ) {
+      throw error;
+    }
+
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      timelineWarning = "timeline log unreadable";
     }
   }
   const workflowSummary = await summarizeUnresolvedTasks(paths.stateDir);
@@ -545,6 +600,15 @@ export async function getServiceStatus(
     lastFailureAt: auditSummary.lastErrorAt,
     auditEvents: auditSummary.totalEvents,
     latestFailureCategory,
+    timelineEvents: timelineWarning === undefined ? timelineSummary.totalEvents : null,
+    lastTurnCompletionAt: timelineSummary.lastTurnCompletionAt,
+    lastRetryAt: timelineSummary.lastRetryAt,
+    lastBudgetBlockedAt: timelineSummary.lastBudgetBlockedAt,
+    retryCount: timelineWarning === undefined ? timelineSummary.retryCount : null,
+    budgetBlockedCount: timelineWarning === undefined ? timelineSummary.budgetBlockedCount : null,
+    fileRejectedCount: timelineWarning === undefined ? timelineSummary.fileRejectedCount : null,
+    workflowFailedCount: timelineWarning === undefined ? timelineSummary.workflowFailedCount : null,
+    timelineWarning,
     unresolvedTasks: workflowSummary.unresolvedTasks,
     blockingTasks: workflowSummary.blockingTasks,
     awaitingContinueTasks: workflowSummary.awaitingContinueTasks,
@@ -608,6 +672,14 @@ export async function runServiceDoctor(
     name: "audit",
     ok: true,
     detail: `Audit events: ${status.auditEvents}. Last success: ${status.lastSuccessAt ?? "none"}. Last failure: ${status.lastFailureAt ?? "none"}. latest failure category: ${status.latestFailureCategory ?? "none"}.`,
+  });
+  checks.push({
+    name: "timeline",
+    ok: status.timelineWarning === undefined,
+    detail:
+      status.timelineWarning !== undefined
+        ? `Timeline events: unknown (${status.timelineWarning}).`
+        : `Timeline events: ${status.timelineEvents}. Last turn completion: ${status.lastTurnCompletionAt ?? "none"}. Last retry: ${status.lastRetryAt ?? "none"}. Last budget block: ${status.lastBudgetBlockedAt ?? "none"}. Incident counts: retries=${status.retryCount}, budget blocks=${status.budgetBlockedCount}, file rejections=${status.fileRejectedCount}, workflow failures=${status.workflowFailedCount}.`,
   });
   checks.push({
     name: "tasks",
