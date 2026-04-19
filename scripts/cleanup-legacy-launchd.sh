@@ -24,7 +24,8 @@ if [[ "${1:-}" == "--all" ]]; then
   found=0
   for plist in "${LAUNCH_AGENTS_DIR}"/${LABEL_PREFIX}*.plist; do
     found=1
-    instance="${plist##${LABEL_PREFIX}}"
+    filename="$(basename "${plist}" .plist)"
+    instance="${filename#${LABEL_PREFIX}}"
     instance="${instance%.plist}"
     cleanup_one "${instance}"
   done
