@@ -27,7 +27,6 @@ import {
   renderWorkingMessage,
 } from "../src/telegram/message-renderer.js";
 import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
-import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
 import { ProcessClaudeAdapter } from "../src/codex/claude-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import * as auditLog from "../src/state/audit-log.js";
@@ -290,7 +289,7 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
-  it("falls back to the process adapter when codex yolo mode is enabled", async () => {
+  it("keeps using the app-server adapter when codex yolo mode is enabled", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
     const envPath = path.join(stateDir, ".env");
@@ -309,7 +308,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

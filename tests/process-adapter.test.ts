@@ -366,6 +366,30 @@ describe("ProcessCodexAdapter", () => {
 
     await expect(promise).rejects.toThrow(/maximum buffer size/i);
   });
+
+  it("does not fail when stderr is noisy but stdout still produces a valid result", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stderr.emitData("warn\n".repeat(300_000));
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n');
+    child.stdout.emitData('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2,"cached_input_tokens":3}}\n');
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: "ok",
+      usage: {
+        inputTokens: 1,
+        outputTokens: 2,
+        cachedTokens: 3,
+      },
+    });
+  });
 });
 
 class FakeStream extends EventEmitter {

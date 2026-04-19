@@ -35,7 +35,8 @@ type ProcessChildLike = {
 
 type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => ProcessChildLike;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
-const MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024;
+const MAX_OUTPUT_LINE_BUFFER_BYTES = 1024 * 1024;
+const MAX_STDERR_TAIL_BYTES = 128 * 1024;
 
 type CodexJsonEvent =
   | {
@@ -68,86 +69,81 @@ type CodexJsonEvent =
       };
     };
 
-function parseJsonEvents(stdout: string): CodexJsonEvent[] {
-  const events: CodexJsonEvent[] = [];
+type CodexTurnState = {
+  threadId: string | null;
+  lastAgentMessage: string | null;
+  lastTurnFailureMessage: string | null;
+  lastErrorMessage: string | null;
+  usage: { inputTokens: number; outputTokens: number; cachedTokens: number } | null;
+};
 
-  for (const line of stdout.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-
-    try {
-      events.push(JSON.parse(trimmed) as CodexJsonEvent);
-    } catch {
-      // Ignore non-JSON lines such as CLI notes.
-    }
-  }
-
-  return events;
+function createTurnState(): CodexTurnState {
+  return {
+    threadId: null,
+    lastAgentMessage: null,
+    lastTurnFailureMessage: null,
+    lastErrorMessage: null,
+    usage: null,
+  };
 }
 
-function extractThreadId(events: CodexJsonEvent[]): string | null {
-  for (const event of events) {
-    if (event.type === "thread.started" && typeof event.thread_id === "string") {
-      return event.thread_id;
-    }
+function updateTurnStateFromLine(state: CodexTurnState, line: string): void {
+  let event: CodexJsonEvent;
+  try {
+    event = JSON.parse(line) as CodexJsonEvent;
+  } catch {
+    return;
   }
 
-  return null;
+  if (event.type === "thread.started" && typeof event.thread_id === "string") {
+    state.threadId = event.thread_id;
+    return;
+  }
+
+  if (
+    event.type === "item.completed" &&
+    event.item?.type === "agent_message" &&
+    typeof event.item.text === "string"
+  ) {
+    state.lastAgentMessage = event.item.text;
+    return;
+  }
+
+  if (event.type === "turn.failed" && typeof event.error?.message === "string" && event.error.message.trim()) {
+    state.lastTurnFailureMessage = event.error.message;
+    return;
+  }
+
+  if (event.type === "turn.completed" && event.usage) {
+    state.usage = {
+      inputTokens: event.usage.input_tokens ?? 0,
+      outputTokens: event.usage.output_tokens ?? 0,
+      cachedTokens: event.usage.cached_input_tokens ?? 0,
+    };
+    return;
+  }
+
+  if (event.type === "error" && typeof event.message === "string" && event.message.trim()) {
+    state.lastErrorMessage = event.message;
+  }
 }
 
-function extractLastAgentMessage(events: CodexJsonEvent[]): string | null {
-  let lastMessage: string | null = null;
-
-  for (const event of events) {
-    if (
-      event.type === "item.completed" &&
-      event.item?.type === "agent_message" &&
-      typeof event.item.text === "string"
-    ) {
-      lastMessage = event.item.text;
-    }
+function appendTail(existing: string, chunk: string, maxBytes: number): string {
+  const combined = existing + chunk;
+  if (Buffer.byteLength(combined, "utf8") <= maxBytes) {
+    return combined;
   }
 
-  return lastMessage;
-}
-
-function extractLastTurnFailureMessage(events: CodexJsonEvent[]): string | null {
-  let lastMessage: string | null = null;
-
-  for (const event of events) {
-    if (event.type === "turn.failed" && typeof event.error?.message === "string" && event.error.message.trim()) {
-      lastMessage = event.error.message;
-    }
+  let start = combined.length - maxBytes;
+  if (start < 0) {
+    start = 0;
   }
 
-  return lastMessage;
-}
-
-function extractUsage(events: CodexJsonEvent[]): { inputTokens: number; outputTokens: number; cachedTokens: number } | null {
-  for (const event of events) {
-    if (event.type === "turn.completed" && event.usage) {
-      return {
-        inputTokens: event.usage.input_tokens ?? 0,
-        outputTokens: event.usage.output_tokens ?? 0,
-        cachedTokens: event.usage.cached_input_tokens ?? 0,
-      };
-    }
-  }
-  return null;
-}
-
-function extractLastErrorMessage(events: CodexJsonEvent[]): string | null {
-  let lastMessage: string | null = null;
-
-  for (const event of events) {
-    if (event.type === "error" && typeof event.message === "string" && event.message.trim()) {
-      lastMessage = event.message;
-    }
+  while (start < combined.length && Buffer.byteLength(combined.slice(start), "utf8") > maxBytes) {
+    start += 1;
   }
 
-  return lastMessage;
+  return combined.slice(start);
 }
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
@@ -349,32 +345,27 @@ export class ProcessCodexAdapter implements CodexAdapter {
       ? ["exec", "--json", "--skip-git-repo-check", ...approvalFlags, ...engineFlags, "-"]
       : ["exec", "resume", "--json", "--skip-git-repo-check", ...approvalFlags, ...engineFlags, sessionId, "-"];
     const result = await this.runCodexJsonCommand(args, prompt, input.abortSignal, input.workspaceOverride);
-    const events = parseJsonEvents(result.stdout);
-    const lastAgentMessage = extractLastAgentMessage(events);
-    const threadId = extractThreadId(events);
-    const turnFailureMessage = extractLastTurnFailureMessage(events);
-    const turnUsage = extractUsage(events);
 
-    if (turnFailureMessage) {
-      throw new Error(turnFailureMessage);
+    if (result.state.lastTurnFailureMessage) {
+      throw new Error(result.state.lastTurnFailureMessage);
     }
 
     if (result.exitCode !== 0) {
-      const stderrMessage = result.stderr.trim();
+      const stderrMessage = result.stderrTail.trim();
       throw new Error(
-        extractLastErrorMessage(events) ??
+        result.state.lastErrorMessage ??
           (stderrMessage || `codex exited with code ${result.exitCode}`),
       );
     }
 
     return {
-      text: lastAgentMessage?.trim() || `Session ${sessionId} completed.`,
-      sessionId: threadId ?? undefined,
-      usage: turnUsage ?? undefined,
+      text: result.state.lastAgentMessage?.trim() || `Session ${sessionId} completed.`,
+      sessionId: result.state.threadId ?? undefined,
+      usage: result.state.usage ?? undefined,
     };
   }
 
-  private async runCodexJsonCommand(args: string[], prompt: string, abortSignal?: AbortSignal, cwdOverride?: string): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+  private async runCodexJsonCommand(args: string[], prompt: string, abortSignal?: AbortSignal, cwdOverride?: string): Promise<{ state: CodexTurnState; stderrTail: string; exitCode: number | null }> {
     const invocation = buildCommandInvocation(this.codexExecutable, args);
     const child = this.spawnCodex(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -384,27 +375,30 @@ export class ProcessCodexAdapter implements CodexAdapter {
       windowsHide: true,
     });
 
-    return await new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
-      let stdout = "";
-      let stderr = "";
+    return await new Promise<{ state: CodexTurnState; stderrTail: string; exitCode: number | null }>((resolve, reject) => {
+      let stdoutLineBuffer = "";
+      let stderrTail = "";
       let settled = false;
+      const state = createTurnState();
 
       child.stdout?.on("data", (chunk) => {
-        stdout += chunk.toString();
-        if (!settled && stdout.length > MAX_OUTPUT_BUFFER_BYTES) {
+        stdoutLineBuffer += chunk.toString();
+        if (!settled && stdoutLineBuffer.length > MAX_OUTPUT_LINE_BUFFER_BYTES) {
           settled = true;
           killProcessTree(child.pid);
           reject(new Error("Engine output exceeded maximum buffer size"));
+          return;
+        }
+
+        const lines = stdoutLineBuffer.split(/\r?\n/);
+        stdoutLineBuffer = lines.pop() ?? "";
+        for (const line of lines.map((value) => value.trim()).filter(Boolean)) {
+          updateTurnStateFromLine(state, line);
         }
       });
 
       child.stderr?.on("data", (chunk) => {
-        stderr += chunk.toString();
-        if (!settled && stderr.length > MAX_OUTPUT_BUFFER_BYTES) {
-          settled = true;
-          killProcessTree(child.pid);
-          reject(new Error("Engine output exceeded maximum buffer size"));
-        }
+        stderrTail = appendTail(stderrTail, chunk.toString(), MAX_STDERR_TAIL_BYTES);
       });
 
       if (abortSignal) {
@@ -429,7 +423,11 @@ export class ProcessCodexAdapter implements CodexAdapter {
       child.once("close", (code) => {
         if (!settled) {
           settled = true;
-          resolve({ stdout, stderr, exitCode: code });
+          const trailingLine = stdoutLineBuffer.trim();
+          if (trailingLine) {
+            updateTurnStateFromLine(state, trailingLine);
+          }
+          resolve({ state, stderrTail, exitCode: code });
         }
       });
     });

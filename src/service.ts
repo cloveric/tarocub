@@ -388,12 +388,8 @@ export async function readApprovalMode(configPath: string): Promise<ApprovalMode
   }
 }
 
-export function resolveEngineRuntime(engine: EngineType, approvalMode: ApprovalMode): "app-server" | "process" {
+export function resolveEngineRuntime(engine: EngineType, _approvalMode: ApprovalMode): "app-server" | "process" {
   if (engine === "claude") {
-    return "process";
-  }
-
-  if (approvalMode !== "normal") {
     return "process";
   }
 
@@ -601,6 +597,8 @@ async function createAdapter(
       childEnv,
       undefined,
       instructionsPath,
+      undefined,
+      configPath,
     );
   }
 

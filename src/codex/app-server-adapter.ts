@@ -37,6 +37,7 @@ type AppServerChildProcess = {
 type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => AppServerChildProcess;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
+type ApprovalMode = "normal" | "full-auto" | "bypass";
 
 type JsonRpcResponse = {
   id?: number;
@@ -107,8 +108,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnCodex: SpawnCodex;
   private readonly instructionsPath: string | undefined;
+  private readonly configPath: string | undefined;
   private child: AppServerChildProcess | null = null;
   private initializePromise: Promise<void> | null = null;
+  private initializeKey: string | null = null;
   private lineBuffer = "";
   private nextRequestId = 1;
   private readonly pendingRequests = new Map<number, PendingRequest>();
@@ -122,6 +125,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     spawnCodexArg?: SpawnCodex,
     instructionsPath?: string,
     engineHomePath?: string,
+    configPath?: string,
   ) {
     const buildChildEnv = () => {
       const env = { ...process.env };
@@ -144,6 +148,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         ? childEnvOrSpawn
         : spawnCodexArg ?? (spawn as unknown as SpawnCodex);
     this.instructionsPath = instructionsPath;
+    this.configPath = configPath;
   }
 
   async createSession(chatId: number): Promise<CodexSessionHandle> {
@@ -151,7 +156,8 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
-    await this.ensureInitialized();
+    const runtimeOptions = await this.loadRuntimeOptions();
+    await this.ensureInitialized(runtimeOptions);
 
     const instructions = combineInstructions(
       this.instructionsPath ? await this.loadInstructions() : null,
@@ -170,13 +176,71 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   async validateExternalSession(sessionId: string): Promise<void> {
-    await this.ensureInitialized();
+    const runtimeOptions = await this.loadRuntimeOptions();
+    await this.ensureInitialized(runtimeOptions);
 
     if (isLogicalTelegramSessionId(sessionId)) {
       return;
     }
 
     await this.ensureThreadLoaded(sessionId);
+  }
+
+  private async loadRuntimeOptions(): Promise<{
+    approvalMode: ApprovalMode;
+    effort?: string;
+    model?: string;
+    initializeArgs: string[];
+    initializeKey: string;
+  }> {
+    if (!this.configPath) {
+      return {
+        approvalMode: "normal",
+        initializeArgs: ["app-server"],
+        initializeKey: JSON.stringify({ approvalMode: "normal" }),
+      };
+    }
+
+    try {
+      const raw = await readFile(this.configPath, "utf8");
+      const parsed = JSON.parse(raw) as { approvalMode?: string; effort?: string; model?: string };
+      const approvalMode: ApprovalMode =
+        parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass"
+          ? parsed.approvalMode
+          : "normal";
+      const effort = typeof parsed.effort === "string" ? parsed.effort : undefined;
+      const model = typeof parsed.model === "string" ? parsed.model : undefined;
+      const initializeArgs = ["app-server"];
+
+      if (approvalMode === "bypass") {
+        initializeArgs.push("-c", 'sandbox_mode="danger-full-access"');
+      } else if (approvalMode === "full-auto") {
+        initializeArgs.push("-c", 'sandbox_mode="workspace-write"');
+      }
+
+      if (effort) {
+        const codexEffort = effort === "max" ? "xhigh" : effort;
+        initializeArgs.push("-c", `model_reasoning_effort="${codexEffort}"`);
+      }
+
+      if (model) {
+        initializeArgs.push("-c", `model="${model}"`);
+      }
+
+      return {
+        approvalMode,
+        effort,
+        model,
+        initializeArgs,
+        initializeKey: JSON.stringify({ approvalMode, effort, model }),
+      };
+    } catch {
+      return {
+        approvalMode: "normal",
+        initializeArgs: ["app-server"],
+        initializeKey: JSON.stringify({ approvalMode: "normal" }),
+      };
+    }
   }
 
   private async loadInstructions(): Promise<string | null> {
@@ -213,16 +277,24 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return parts.join("\n");
   }
 
-  private async ensureInitialized(): Promise<void> {
+  private async ensureInitialized(runtimeOptions: {
+    initializeArgs: string[];
+    initializeKey: string;
+  }): Promise<void> {
+    if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
+      this.destroy();
+    }
+
     if (!this.initializePromise) {
-      this.initializePromise = this.startChildAndInitialize();
+      this.initializeKey = runtimeOptions.initializeKey;
+      this.initializePromise = this.startChildAndInitialize(runtimeOptions.initializeArgs);
     }
 
     return this.initializePromise;
   }
 
-  private async startChildAndInitialize(): Promise<void> {
-    const invocation = buildCommandInvocation(this.codexExecutable, ["app-server"]);
+  private async startChildAndInitialize(appServerArgs: string[]): Promise<void> {
+    const invocation = buildCommandInvocation(this.codexExecutable, appServerArgs);
     const child = this.spawnCodex(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
@@ -615,6 +687,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     this.failAllPending(new Error("Adapter destroyed"));
     this.child = null;
     this.initializePromise = null;
+    this.initializeKey = null;
   }
 
   private failAllPending(error: Error): void {

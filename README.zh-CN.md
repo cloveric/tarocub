@@ -317,7 +317,7 @@ Codex 没有和 Claude 一样的本地 session 扫描入口。如果你已经知
 
 这是一种“绑定已有 thread”的流程，不是导入本地 session：thread 仍然在服务端，bridge 只是在当前 chat 上绑定一个已知 thread id。
 
-注意：外部 thread 的验证当前依赖默认的 Codex app-server runtime。如果实例跑在回退的 process runtime（例如某些 yolo/full-auto 进程模式），`/resume thread <thread-id>` 会直接 fail closed，而不是猜测绑定成功。
+注意：外部 thread 的验证当前依赖 Codex app-server runtime。如果某个实例被强制切到 legacy process runtime，`/resume thread <thread-id>` 会直接 fail closed，而不是猜测绑定成功。
 
 ---
 
