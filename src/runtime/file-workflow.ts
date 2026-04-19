@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import AdmZip from "adm-zip";
@@ -347,17 +347,6 @@ export async function prepareAttachmentWorkflow(input: {
   const uploadId = randomUUID();
   const store = new FileWorkflowStore(input.stateDir);
 
-  const existingState = await store.load();
-  const activeForChat = existingState.records.filter(
-    (r) => r.chatId === input.chatId && isActiveWorkflowStatus(r.status),
-  );
-  if (activeForChat.length >= MAX_ACTIVE_WORKFLOWS_PER_CHAT) {
-    return {
-      kind: "reply",
-      text: "Too many active file tasks for this chat. Wait for current tasks to finish or use /reset.",
-    };
-  }
-
   const stagedFiles = await stageAttachmentFiles(input.stateDir, uploadId, input.downloadedAttachments);
   const now = new Date().toISOString();
 
@@ -376,7 +365,14 @@ export async function prepareAttachmentWorkflow(input: {
       createdAt: now,
       updatedAt: now,
     };
-    await store.append(record);
+    const appended = await store.appendIfChatBelowActiveLimit(record, MAX_ACTIVE_WORKFLOWS_PER_CHAT);
+    if (!appended) {
+      await rm(path.join(resolveWorkspaceUploadsDir(input.stateDir), uploadId), { recursive: true, force: true });
+      return {
+        kind: "reply",
+        text: "Too many active file tasks for this chat. Wait for current tasks to finish or use /reset.",
+      };
+    }
 
     try {
       const { summary } = await summarizeArchive(stagedFiles[0]!, extractedRoot);
@@ -443,7 +439,14 @@ export async function prepareAttachmentWorkflow(input: {
     createdAt: now,
     updatedAt: now,
   };
-  await store.append(record);
+  const appended = await store.appendIfChatBelowActiveLimit(record, MAX_ACTIVE_WORKFLOWS_PER_CHAT);
+  if (!appended) {
+    await rm(path.join(resolveWorkspaceUploadsDir(input.stateDir), uploadId), { recursive: true, force: true });
+    return {
+      kind: "reply",
+      text: "Too many active file tasks for this chat. Wait for current tasks to finish or use /reset.",
+    };
+  }
 
   return {
     kind: "direct",

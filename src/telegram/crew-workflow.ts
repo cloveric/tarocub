@@ -15,6 +15,11 @@ import type { TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 type CrewStageName = "decomposition" | "research" | "analysis" | "writing" | "review";
+type ResearchStageEntry =
+  | { question: string; finding: string }
+  | { question: string; error: string };
+
+const activeCrewRunKeys = new Set<string>();
 
 export interface CrewWorkflowContext extends TelegramTurnContext {
   api: Pick<TelegramApi, "sendMessage">;
@@ -117,11 +122,11 @@ function buildResearchPrompt(input: { locale: Locale; originalPrompt: string; su
   ].join("\n");
 }
 
-function buildResearchPacket(subQuestions: string[], findings: string[]): string {
-  return subQuestions
-    .map((question, index) => [
-      `SUB-QUESTION ${index + 1}: ${question}`,
-      findings[index] ?? "",
+function buildResearchPacket(entries: ResearchStageEntry[]): string {
+  return entries
+    .map((entry, index) => [
+      `SUB-QUESTION ${index + 1}: ${entry.question}`,
+      "finding" in entry ? entry.finding : `RESEARCH FAILED: ${entry.error}`,
     ].join("\n"))
     .join("\n\n---\n\n");
 }
@@ -386,7 +391,19 @@ export async function handleCrewTelegramWorkflow(input: {
     return false;
   }
 
+  const activeRunKey = `${stateDir}:${normalized.chatId}`;
+  if (activeCrewRunKeys.has(activeRunKey)) {
+    await context.api.sendMessage(
+      normalized.chatId,
+      locale === "zh" ? "当前聊天已有 crew 正在运行。" : "A crew run is already active for this chat.",
+    );
+    return true;
+  }
+
+  activeCrewRunKeys.add(activeRunKey);
+
   if (await maybeReplyWithBudgetExhausted(stateDir, cfg.budgetUsd, locale, context, normalized)) {
+    activeCrewRunKeys.delete(activeRunKey);
     return true;
   }
 
@@ -513,31 +530,59 @@ export async function handleCrewTelegramWorkflow(input: {
       normalized.chatId,
       locale === "zh" ? `研究阶段：${subQuestions.length} 个子问题` : `Research stage: ${subQuestions.length} sub-questions`,
     );
-    const researchFindings: string[] = [];
-    for (const question of subQuestions) {
-      const result = await delegateToInstance({
-        fromInstance: currentInstance,
-        targetInstance: crew.roles.researcher,
-        prompt: buildResearchPrompt({
-          locale,
-          originalPrompt: normalized.text,
-          subQuestion: question,
-        }),
-        depth: 0,
-        stateDir,
-      });
-      researchFindings.push(result.text);
+    const researchResults = await Promise.all(subQuestions.map(async (question): Promise<ResearchStageEntry> => {
+      try {
+        const result = await delegateToInstance({
+          fromInstance: currentInstance,
+          targetInstance: crew.roles.researcher,
+          prompt: buildResearchPrompt({
+            locale,
+            originalPrompt: normalized.text,
+            subQuestion: question,
+          }),
+          depth: 0,
+          stateDir,
+        });
+        return { question, finding: result.text };
+      } catch (error) {
+        return {
+          question,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }));
+    const successfulResearchFindings = researchResults
+      .filter((entry): entry is Extract<ResearchStageEntry, { finding: string }> => "finding" in entry)
+      .map((entry) => entry.finding);
+    const failedResearch = researchResults
+      .filter((entry): entry is Extract<ResearchStageEntry, { error: string }> => "error" in entry)
+      .map((entry) => ({ question: entry.question, error: entry.error }));
+    if (successfulResearchFindings.length === 0) {
+      throw new Error(
+        locale === "zh"
+          ? "所有 research specialist 子任务都失败了。"
+          : "All research specialist sub-questions failed.",
+      );
     }
-    const researchPacket = buildResearchPacket(subQuestions, researchFindings);
+    const researchPacket = buildResearchPacket(researchResults);
     await crewRunStore.update(runId, (record) => {
       record.stages.research = {
         status: "completed",
         updatedAt: new Date().toISOString(),
         subQuestions,
-        findings: researchFindings,
+        findings: successfulResearchFindings,
         researchPacket,
+        failedQuestions: failedResearch,
       };
     });
+    if (failedResearch.length > 0) {
+      await context.api.sendMessage(
+        normalized.chatId,
+        locale === "zh"
+          ? `研究阶段完成，但有 ${failedResearch.length} 个子问题失败。`
+          : `Research stage completed with ${failedResearch.length} failed sub-question${failedResearch.length === 1 ? "" : "s"}.`,
+      );
+    }
     await appendCrewTimelineEvent(stateDir, {
       type: "crew.stage.completed",
       context,
@@ -545,8 +590,8 @@ export async function handleCrewTelegramWorkflow(input: {
       runId,
       workflow: crew.workflow,
       stage: "research",
-      outcome: "success",
-      metadata: { questionCount: subQuestions.length },
+      outcome: failedResearch.length > 0 ? "partial" : "success",
+      metadata: { questionCount: subQuestions.length, failedQuestionCount: failedResearch.length },
     });
 
     activeStage = "analysis";
@@ -904,6 +949,9 @@ export async function handleCrewTelegramWorkflow(input: {
         coordinator: currentInstance,
       },
     });
+  }
+  finally {
+    activeCrewRunKeys.delete(activeRunKey);
   }
 
   return true;

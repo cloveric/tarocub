@@ -30,12 +30,12 @@ export interface TurnUsage {
 
 export class UsageStore {
   private readonly store: JsonStore<UsageRecord>;
-  // Serialize read-modify-write so concurrent chats don't clobber each
-  // other's increments. Same pattern as SessionStore.enqueueWrite.
-  private pendingWrite: Promise<void> = Promise.resolve();
+  private static pendingWrites = new Map<string, Promise<void>>();
+  private readonly filePath: string;
 
   constructor(stateDir: string) {
-    this.store = new JsonStore<UsageRecord>(path.join(stateDir, "usage.json"), (value) => {
+    this.filePath = path.join(stateDir, "usage.json");
+    this.store = new JsonStore<UsageRecord>(this.filePath, (value) => {
       const result = UsageRecordSchema.safeParse(value);
       if (result.success) {
         return result.data;
@@ -55,16 +55,17 @@ export class UsageStore {
       current.totalInputTokens += turn.inputTokens;
       current.totalOutputTokens += turn.outputTokens;
       current.totalCachedTokens += turn.cachedTokens ?? 0;
-      current.totalCostUsd += turn.costUsd ?? 0;
+      current.totalCostUsd = Number((current.totalCostUsd + (turn.costUsd ?? 0)).toFixed(12));
       current.requestCount += 1;
       current.lastUpdatedAt = new Date().toISOString();
       await this.store.write(current);
     };
-    const run = this.pendingWrite.then(task, task);
-    this.pendingWrite = run.then(
+    const previous = UsageStore.pendingWrites.get(this.filePath) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    UsageStore.pendingWrites.set(this.filePath, run.then(
       () => undefined,
       () => undefined,
-    );
+    ));
     await run;
   }
 }

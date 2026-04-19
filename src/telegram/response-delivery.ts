@@ -5,10 +5,26 @@ import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { TelegramApi } from "./api.js";
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 
+function isMarkdownParseError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const text = error.message.toLowerCase();
+  return (
+    text.includes("can't parse entities") ||
+    text.includes("cannot parse entities") ||
+    text.includes("parse entities") ||
+    text.includes("parse_mode")
+  );
+}
+
 async function sendMessageWithMarkdown(api: TelegramApi, chatId: number, text: string): Promise<void> {
   try {
     await api.sendMessage(chatId, text, { parseMode: "Markdown" });
-  } catch {
+  } catch (error) {
+    if (!isMarkdownParseError(error)) {
+      throw error;
+    }
     await api.sendMessage(chatId, text);
   }
 }
@@ -68,6 +84,56 @@ function renderRejectReason(reason: RejectReason, detail: string | undefined, lo
   }
 }
 
+function isAbsoluteFilePath(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function extractMarkdownAbsoluteLinks(text: string): Array<{ start: number; end: number; path: string }> {
+  const links: Array<{ start: number; end: number; path: string }> = [];
+  const opener = /!?\[[^\]]*\]\(/g;
+
+  for (const match of text.matchAll(opener)) {
+    const start = match.index ?? -1;
+    if (start < 0) continue;
+    const pathStart = start + match[0].length;
+    if (pathStart >= text.length) continue;
+
+    let pathEnd = pathStart;
+    let pathValue = "";
+    if (text[pathStart] === "<") {
+      const closing = text.indexOf(">", pathStart + 1);
+      if (closing === -1 || text[closing + 1] !== ")") {
+        continue;
+      }
+      pathEnd = closing + 1;
+      pathValue = text.slice(pathStart + 1, closing);
+    } else {
+      let depth = 1;
+      for (let index = pathStart; index < text.length; index++) {
+        const char = text[index]!;
+        if (char === "(") depth += 1;
+        if (char === ")") depth -= 1;
+        if (depth === 0) {
+          pathEnd = index;
+          pathValue = text.slice(pathStart, index);
+          break;
+        }
+      }
+      if (depth !== 0) {
+        continue;
+      }
+    }
+
+    const trimmed = pathValue.trim();
+    if (!isAbsoluteFilePath(trimmed)) {
+      continue;
+    }
+    links.push({ start, end: pathEnd + 1, path: trimmed });
+  }
+
+  return links;
+}
+
 export async function deliverTelegramResponse(
   api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">,
   chatId: number,
@@ -84,25 +150,27 @@ export async function deliverTelegramResponse(
     return 1;
   }
 
-  const filePatterns = [
-    /\[send-file:([^\]]+)\]/g,
-    /!\[[^\]]*\]\(((?:\/|[A-Za-z]:[\\/])[^)]+)\)/g,
-    /(?<!!)\[[^\]]*\]\(((?:\/|[A-Za-z]:[\\/])[^)]+\.(?:png|jpg|jpeg|gif|webp|bmp|pdf|zip|tar|gz|svg))\)/gi,
-  ];
   const filePaths: string[] = [];
   let cleanedText = text;
-  for (const pattern of filePatterns) {
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(text)) !== null) {
-      const p = match[1]!.trim();
-      if ((p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p)) && !filePaths.includes(p)) {
-        filePaths.push(p);
-      }
+  const sendFilePattern = /\[send-file:([^\]]+)\]/g;
+  let sendFileMatch: RegExpExecArray | null;
+  while ((sendFileMatch = sendFilePattern.exec(text)) !== null) {
+    const p = sendFileMatch[1]!.trim();
+    if (isAbsoluteFilePath(p) && !filePaths.includes(p)) {
+      filePaths.push(p);
     }
   }
+  const markdownLinks = extractMarkdownAbsoluteLinks(text);
+  for (const link of markdownLinks) {
+    if (!filePaths.includes(link.path)) {
+      filePaths.push(link.path);
+    }
+  }
+
   if (filePaths.length > 0) {
-    for (const pattern of filePatterns) {
-      cleanedText = cleanedText.replace(pattern, "");
+    cleanedText = cleanedText.replace(sendFilePattern, "");
+    for (const link of [...markdownLinks].sort((left, right) => right.start - left.start)) {
+      cleanedText = `${cleanedText.slice(0, link.start)}${cleanedText.slice(link.end)}`;
     }
     cleanedText = cleanedText.replace(/\n{3,}/g, "\n\n").trim();
   }

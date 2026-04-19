@@ -112,6 +112,9 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
 
     return parsed;
   } catch (error) {
+    if (error instanceof BusProtocolError) {
+      throw error;
+    }
     if (error instanceof Error && error.name === "AbortError") {
       throw new BusProtocolError({
         message: `Delegation to "${input.targetInstance}" timed out after 60 seconds`,
@@ -120,7 +123,12 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
         fromInstance: input.targetInstance,
       });
     }
-    throw error;
+    throw new BusProtocolError({
+      message: `Delegation to "${input.targetInstance}" could not reach the bus server`,
+      code: "instance_unavailable",
+      retryable: true,
+      fromInstance: input.targetInstance,
+    });
   } finally {
     clearTimeout(timeout);
   }

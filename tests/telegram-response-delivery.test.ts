@@ -107,4 +107,50 @@ describe("deliverTelegramResponse", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("extracts Markdown-linked files whose absolute path contains parentheses", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const nestedDir = path.join(workspaceDir, "cache (2)");
+    const filePath = path.join(nestedDir, "sheet.xlsx");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await mkdir(nestedDir, { recursive: true });
+      await writeFile(filePath, "xlsx-bytes", "utf8");
+
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `[download me](${filePath})`,
+        inboxDir,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(1);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "sheet.xlsx", expect.any(Uint8Array));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rethrows non-Markdown Telegram delivery errors instead of silently falling back", async () => {
+    const api = {
+      sendMessage: vi.fn().mockRejectedValue(new Error("Telegram API request failed for sendMessage: 403 Forbidden")),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    await expect(
+      deliverTelegramResponse(api as never, 123, "hello", "/tmp/inbox", undefined, "en"),
+    ).rejects.toThrow("403 Forbidden");
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
 });

@@ -43,6 +43,23 @@ describe("chunkTelegramMessage", () => {
     expect(() => chunkTelegramMessage("hello", Number.POSITIVE_INFINITY)).toThrow(RangeError);
     expect(() => chunkTelegramMessage("hello", 3.5)).toThrow(RangeError);
   });
+
+  it("does not split surrogate pairs across chunk boundaries", () => {
+    const chunks = chunkTelegramMessage(`aaaa${"😀".repeat(2)}bbbb`, 6);
+
+    expect(chunks).toEqual(["aaaa😀", "😀bbbb"]);
+  });
+
+  it("closes and reopens fenced code blocks across chunk boundaries", () => {
+    const message = ["before", "```js", "const answer = 42;", "```", "after"].join("\n");
+
+    const chunks = chunkTelegramMessage(message, 20);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0]).toContain("```js");
+    expect(chunks[0]).toMatch(/```$/);
+    expect(chunks[1]).toMatch(/^```js/);
+  });
 });
 
 describe("message rendering", () => {

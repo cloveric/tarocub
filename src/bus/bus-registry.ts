@@ -14,6 +14,8 @@ export interface BusRegistryData {
   instances: Record<string, BusRegistryEntry>;
 }
 
+const pendingRegistryWrites = new Map<string, Promise<void>>();
+
 function resolveRegistryPath(channelRoot: string): string {
   return path.join(channelRoot, ".bus-registry.json");
 }
@@ -51,24 +53,23 @@ export async function registerInstance(
   port: number,
   secret: string,
 ): Promise<void> {
-  await mkdir(channelRoot, { recursive: true, mode: 0o700 });
-  const registry = await readRegistry(channelRoot);
-  registry.instances[instanceName] = {
-    port,
-    pid: process.pid,
-    secret,
-    updatedAt: new Date().toISOString(),
-  };
-  await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  await mutateRegistry(channelRoot, (registry) => {
+    registry.instances[instanceName] = {
+      port,
+      pid: process.pid,
+      secret,
+      updatedAt: new Date().toISOString(),
+    };
+  });
 }
 
 export async function deregisterInstance(
   channelRoot: string,
   instanceName: string,
 ): Promise<void> {
-  const registry = await readRegistry(channelRoot);
-  delete registry.instances[instanceName];
-  await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  await mutateRegistry(channelRoot, (registry) => {
+    delete registry.instances[instanceName];
+  });
 }
 
 export async function lookupInstance(
@@ -147,16 +148,36 @@ export async function pruneStaleInstances(channelRoot: string): Promise<number> 
   const registry = await readRegistry(channelRoot);
   const entries = Object.entries(registry.instances);
   const checks = await Promise.all(entries.map(async ([name, entry]) => ({ name, alive: await isInstanceAlive(entry, name) })));
-  let removed = 0;
-  for (const { name, alive } of checks) {
-    if (!alive) {
-      delete registry.instances[name];
-      removed++;
+  const staleNames = checks.filter(({ alive }) => !alive).map(({ name }) => name);
+  if (staleNames.length === 0) {
+    return 0;
+  }
+
+  await mutateRegistry(channelRoot, (current) => {
+    for (const name of staleNames) {
+      delete current.instances[name];
     }
-  }
-  if (removed > 0) {
+  });
+  return staleNames.length;
+}
+
+async function mutateRegistry(
+  channelRoot: string,
+  mutate: (registry: BusRegistryData) => void,
+): Promise<void> {
+  const registryPath = resolveRegistryPath(channelRoot);
+  const task = async () => {
     await mkdir(channelRoot, { recursive: true, mode: 0o700 });
-    await writeFile(resolveRegistryPath(channelRoot), JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  }
-  return removed;
+    const registry = await readRegistry(channelRoot);
+    mutate(registry);
+    await writeFile(registryPath, JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  };
+
+  const previous = pendingRegistryWrites.get(registryPath) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  pendingRegistryWrites.set(registryPath, run.then(
+    () => undefined,
+    () => undefined,
+  ));
+  await run;
 }

@@ -80,6 +80,7 @@ export async function rotateIfNeeded(filePath: string, options: RotateOptions = 
 export async function rotateInstanceLogs(stateDir: string, options: RotateOptions = DEFAULT_ROTATE_OPTIONS): Promise<string[]> {
   const files = [
     path.join(stateDir, "audit.log.jsonl"),
+    path.join(stateDir, "timeline.log.jsonl"),
     path.join(stateDir, "service.stdout.log"),
     path.join(stateDir, "service.stderr.log"),
   ];

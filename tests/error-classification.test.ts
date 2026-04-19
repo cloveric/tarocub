@@ -28,6 +28,16 @@ describe("classifyFailure auth detection", () => {
   });
 });
 
+describe("classifyFailure specificity", () => {
+  it("does not treat generic app-server mentions as engine-cli failures", () => {
+    expect(classifyFailure(new Error("status page mentions app-server maintenance"))).toBe("unknown");
+  });
+
+  it("does not treat generic archive mentions as file-workflow failures", () => {
+    expect(classifyFailure(new Error("archive the previous messages for me"))).toBe("unknown");
+  });
+});
+
 describe("isStaleSessionError", () => {
   it("matches Claude's 'No conversation found' message", () => {
     expect(

@@ -3,7 +3,7 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Stand-in for a real cc-telegram-bridge bus server — responds to
@@ -68,6 +68,11 @@ import {
 } from "../src/bus/bus-server.js";
 import { delegateToInstance } from "../src/bus/bus-client.js";
 import { BUS_PROTOCOL_CAPABILITIES, BUS_PROTOCOL_VERSION, BusProtocolError } from "../src/bus/bus-protocol.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("parseBusConfig", () => {
   it("returns null for undefined/null/false", () => {
@@ -373,6 +378,24 @@ describe("bus registry", () => {
           updatedAt: "2026-04-17T00:00:00.000Z",
         },
       });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not lose registrations when multiple instances register concurrently", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
+    try {
+      await Promise.all([
+        registerInstance(tempDir, "alpha", 9201, "secret-a"),
+        registerInstance(tempDir, "beta", 9202, "secret-b"),
+      ]);
+
+      const registry = await readRegistry(tempDir);
+      expect(registry.instances).toEqual(expect.objectContaining({
+        alpha: expect.objectContaining({ port: 9201, secret: "secret-a" }),
+        beta: expect.objectContaining({ port: 9202, secret: "secret-b" }),
+      }));
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -703,6 +726,56 @@ describe("delegateToInstance", () => {
       } satisfies Partial<BusProtocolError>);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(channelRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("wraps transport-level fetch failures as retryable BusProtocolError instances", async () => {
+    const channelRoot = await mkdtemp(path.join(os.tmpdir(), "bus-client-"));
+    const stateDir = path.join(channelRoot, "work");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ bus: { peers: ["reviewer"], secret: "test-secret" } }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(channelRoot, ".bus-registry.json"),
+      JSON.stringify({
+        instances: {
+          reviewer: {
+            port: 9109,
+            pid: process.pid,
+            secret: "test-secret",
+            updatedAt: "2026-04-19T00:00:00.000Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ kind: "cc-telegram-bridge", instance: "reviewer", status: "ok", pid: process.pid }),
+      })
+      .mockRejectedValueOnce(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(delegateToInstance({
+        fromInstance: "work",
+        targetInstance: "reviewer",
+        prompt: "hello",
+        depth: 0,
+        stateDir,
+      })).rejects.toMatchObject({
+        name: "BusProtocolError",
+        code: "instance_unavailable",
+        retryable: true,
+        fromInstance: "reviewer",
+      } satisfies Partial<BusProtocolError>);
+    } finally {
       await rm(channelRoot, { recursive: true, force: true });
     }
   });

@@ -50,6 +50,7 @@ type ProcessChildLike = {
 
 type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => ProcessChildLike;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
+const MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024;
 
 type CodexJsonEvent =
   | {
@@ -405,10 +406,20 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
       child.stdout?.on("data", (chunk) => {
         stdout += chunk.toString();
+        if (!settled && stdout.length > MAX_OUTPUT_BUFFER_BYTES) {
+          settled = true;
+          killProcessTree(child.pid);
+          reject(new Error("Engine output exceeded maximum buffer size"));
+        }
       });
 
       child.stderr?.on("data", (chunk) => {
         stderr += chunk.toString();
+        if (!settled && stderr.length > MAX_OUTPUT_BUFFER_BYTES) {
+          settled = true;
+          killProcessTree(child.pid);
+          reject(new Error("Engine output exceeded maximum buffer size"));
+        }
       });
 
       if (abortSignal) {

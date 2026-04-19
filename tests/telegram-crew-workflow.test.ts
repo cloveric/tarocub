@@ -8,6 +8,17 @@ import { parseAuditEvents } from "../src/state/audit-log.js";
 import { handleCrewTelegramWorkflow } from "../src/telegram/crew-workflow.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+
+  return { promise, resolve, reject };
+}
+
 function createNormalizedMessage(text: string): NormalizedTelegramMessage {
   return {
     chatId: 123,
@@ -317,6 +328,135 @@ describe("handleCrewTelegramWorkflow", () => {
         }),
       }));
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a second crew run for the same chat while one is already active", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-crew-workflow-"));
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 11 });
+    const bridgeGate = createDeferred<{ text: string }>();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockReturnValueOnce(bridgeGate.promise),
+    };
+
+    try {
+      const firstRun = handleCrewTelegramWorkflow({
+        stateDir: root,
+        startedAt: Date.now(),
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("Analyze adoption trends."),
+        context: {
+          api: { sendMessage } as never,
+          bridge: bridge as never,
+          instanceName: "coordinator",
+          updateId: 93,
+        },
+        loadBusConfig: vi.fn().mockResolvedValue(createCrewConfig()),
+        delegateToInstance: vi.fn() as never,
+      });
+
+      await Promise.resolve();
+
+      const handledSecond = await handleCrewTelegramWorkflow({
+        stateDir: root,
+        startedAt: Date.now(),
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("Analyze adoption trends."),
+        context: {
+          api: { sendMessage } as never,
+          bridge: bridge as never,
+          instanceName: "coordinator",
+          updateId: 94,
+        },
+        loadBusConfig: vi.fn().mockResolvedValue(createCrewConfig()),
+        delegateToInstance: vi.fn() as never,
+      });
+
+      expect(handledSecond).toBe(true);
+      expect(sendMessage).toHaveBeenCalledWith(123, "A crew run is already active for this chat.");
+
+      bridgeGate.resolve({
+        text: "1. Which industries are changing fastest?\n2. What measurable impact is already visible?",
+      });
+      await firstRun;
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs research sub-questions in parallel and continues when one specialist fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-crew-workflow-"));
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 11 });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValueOnce({
+        text: "1. What changed first?\n2. What is measurable now?",
+      }),
+    };
+    const firstResearch = createDeferred<{ text: string }>();
+    const secondResearch = createDeferred<{ text: string }>();
+    const researchCalls: string[] = [];
+    const delegateToInstance = vi.fn().mockImplementation(async (input: { targetInstance: string; prompt: string }) => {
+      if (input.targetInstance === "researcher") {
+        researchCalls.push(input.prompt);
+        if (researchCalls.length === 1) {
+          return await firstResearch.promise;
+        }
+        return await secondResearch.promise;
+      }
+      if (input.targetInstance === "analyst") {
+        return { text: "Analysis summary" };
+      }
+      if (input.targetInstance === "writer") {
+        return { text: "Draft report" };
+      }
+      if (input.targetInstance === "reviewer") {
+        return { text: "VERDICT: PASS\nISSUES:\n- none" };
+      }
+      throw new Error(`unexpected target ${input.targetInstance}`);
+    });
+
+    try {
+      const runPromise = handleCrewTelegramWorkflow({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("Explain the impact of AI."),
+        context: {
+          api: { sendMessage } as never,
+          bridge: bridge as never,
+          instanceName: "coordinator",
+          updateId: 95,
+        },
+        loadBusConfig: vi.fn().mockResolvedValue(createCrewConfig()),
+        delegateToInstance: delegateToInstance as never,
+      });
+
+      for (let attempt = 0; attempt < 20 && researchCalls.length < 2; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
+      expect(researchCalls).toHaveLength(2);
+
+      firstResearch.resolve({ text: "Research findings A" });
+      secondResearch.reject(new Error("research timeout"));
+
+      const handled = await runPromise;
+      expect(handled).toBe(true);
+      expect(sendMessage).toHaveBeenCalledWith(123, "Research stage completed with 1 failed sub-question.");
+      expect(delegateToInstance).toHaveBeenCalledWith(expect.objectContaining({
+        targetInstance: "analyst",
+        prompt: expect.stringContaining("Research findings A"),
+      }));
+      expect(delegateToInstance).toHaveBeenCalledWith(expect.objectContaining({
+        targetInstance: "analyst",
+        prompt: expect.stringContaining("RESEARCH FAILED: research timeout"),
+      }));
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 0));
       await rm(root, { recursive: true, force: true });
     }
   });

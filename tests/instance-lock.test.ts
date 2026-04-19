@@ -77,7 +77,7 @@ describe("instance lock", () => {
     }
   });
 
-  it("rejects an invalid lock record shape", async () => {
+  it("replaces an invalid lock record shape", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const lockPath = resolveInstanceLockPath(root);
 
@@ -96,7 +96,26 @@ describe("instance lock", () => {
         "utf8",
       );
 
-      await expect(acquireInstanceLock(root)).rejects.toThrow("invalid instance lock");
+      const lock = await acquireInstanceLock(root);
+      const onDisk = JSON.parse(await readFile(lockPath, "utf8")) as { pid: number };
+      expect(onDisk.pid).toBe(process.pid);
+      await lock.release();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces a malformed lock file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const lockPath = resolveInstanceLockPath(root);
+
+    try {
+      await writeFile(lockPath, "{bad json\n", "utf8");
+
+      const lock = await acquireInstanceLock(root);
+      const onDisk = JSON.parse(await readFile(lockPath, "utf8")) as { pid: number };
+      expect(onDisk.pid).toBe(process.pid);
+      await lock.release();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

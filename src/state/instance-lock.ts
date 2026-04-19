@@ -32,6 +32,10 @@ function isFileExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "EEXIST";
 }
 
+function isRepairableLockError(error: unknown): boolean {
+  return error instanceof SyntaxError || (error instanceof Error && error.message === "invalid instance lock");
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -119,7 +123,15 @@ export async function acquireInstanceLock(stateDir: string, pid: number = proces
     }
 
     let existing: InstanceLockRecord | null;
-    existing = await readLockRecord(filePath);
+    try {
+      existing = await readLockRecord(filePath);
+    } catch (error) {
+      if (isRepairableLockError(error)) {
+        await removeStaleLock(filePath);
+        continue;
+      }
+      throw error;
+    }
 
     if (existing === null) {
       continue;

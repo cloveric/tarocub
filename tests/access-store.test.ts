@@ -192,6 +192,25 @@ describe("AccessStore", () => {
     }
   });
 
+  it("serializes concurrent access mutations without losing updates", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    try {
+      const store = new AccessStore(path.join(dir, "access.json"));
+
+      await Promise.all([
+        store.allowChat(101),
+        store.allowChat(202),
+        store.allowChat(303),
+      ]);
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        allowlist: [101, 202, 303],
+      }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects corrupt access state", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {

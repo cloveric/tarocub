@@ -418,6 +418,45 @@ describe("FileWorkflowStore", () => {
     }
   });
 
+  it("enforces the active-workflow cap inside the store write queue", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new FileWorkflowStore(stateDir);
+
+    try {
+      const results = await Promise.all([
+        store.appendIfChatBelowActiveLimit({
+          uploadId: "one",
+          chatId: 100,
+          userId: 100,
+          kind: "document",
+          status: "processing",
+          sourceFiles: ["a.txt"],
+          derivedFiles: [],
+          summary: "first",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:00:00.000Z",
+        }, 1),
+        store.appendIfChatBelowActiveLimit({
+          uploadId: "two",
+          chatId: 100,
+          userId: 100,
+          kind: "document",
+          status: "processing",
+          sourceFiles: ["b.txt"],
+          derivedFiles: [],
+          summary: "second",
+          createdAt: "2026-04-10T00:01:00.000Z",
+          updatedAt: "2026-04-10T00:01:00.000Z",
+        }, 1),
+      ]);
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(await store.list({ chatId: 100 })).toHaveLength(1);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("treats permission-denied reads as unreadable workflow state", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new FileWorkflowStore(stateDir);

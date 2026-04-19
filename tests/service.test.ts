@@ -1138,6 +1138,117 @@ describe("polling helpers", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it("does not let an unauthorized user stop another chat's running task", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    let aborted = false;
+    const bridge = {
+      checkAccess: vi.fn().mockImplementation(async ({ userId }: { userId: number }) => {
+        return userId === 456
+          ? { kind: "allow" }
+          : { kind: "deny", text: "This chat is not authorized for this instance." };
+      }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        started.resolve();
+        await new Promise<void>((resolve) => {
+          abortSignal?.addEventListener("abort", () => {
+            aborted = true;
+            resolve();
+          }, { once: true });
+          void release.promise.then(() => resolve());
+        });
+        return { text: "done" };
+      }),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    const firstRun = processTelegramUpdates(
+      [{ update_id: 1, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "long" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await started.promise;
+
+    await processTelegramUpdates(
+      [{ update_id: 2, message: { chat: { id: 123, type: "private" }, from: { id: 999 }, text: "/stop" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    release.resolve();
+    await firstRun;
+
+    expect(aborted).toBe(false);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "This chat is not authorized for this instance.");
+  });
+
+  it("stops the in-flight task and skips queued same-chat jobs", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const started = createDeferred<void>();
+    const firstAborted = createDeferred<void>();
+    let callCount = 0;
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ text, abortSignal }: { text: string; abortSignal?: AbortSignal }) => {
+        callCount += 1;
+        if (text === "first") {
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            abortSignal?.addEventListener("abort", () => {
+              firstAborted.resolve();
+              resolve();
+            }, { once: true });
+          });
+        }
+        return { text: `${text} done` };
+      }),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    const firstRun = processTelegramUpdates(
+      [{ update_id: 3, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "first" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+    await started.promise;
+
+    const secondRun = processTelegramUpdates(
+      [{ update_id: 4, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "second" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const stopRun = processTelegramUpdates(
+      [{ update_id: 5, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "/stop" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await firstAborted.promise;
+    await Promise.all([firstRun, secondRun, stopRun]);
+
+    expect(callCount).toBe(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Current task stopped.");
+  });
+
   it("downloads attachments and passes local file paths to the bridge", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const inboxDir = path.join(root, "inbox");

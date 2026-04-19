@@ -68,10 +68,9 @@ export function classifyFailure(error: unknown): FailureCategory {
 
   if (
     text.includes("turn.failed") ||
-    text.includes("app-server") ||
     text.includes("engine cli") ||
-    (/(codex|claude)/.test(text) && /(runtime|process|spawn|adapter|binary|cli|failed|error|startup|start)/.test(text)) ||
-    (/(runtime|process|spawn|adapter|binary|cli)/.test(text) && /(codex|claude|engine)/.test(text))
+    (/(codex|claude|engine)/.test(text) && /(runtime|process|spawn|adapter|binary|cli|app-server|failed|error|startup|start)/.test(text)) ||
+    (/(runtime|process|spawn|adapter|binary|cli|app-server)/.test(text) && /(codex|claude|engine)/.test(text))
   ) {
     return "engine-cli";
   }
@@ -97,8 +96,11 @@ export function classifyFailure(error: unknown): FailureCategory {
   }
 
   if (
-    text.includes("archive") ||
-    text.includes("attachment") ||
+    text.includes("archive summary") ||
+    text.includes("archive extraction") ||
+    text.includes("failed to extract archive") ||
+    text.includes("attachment download") ||
+    text.includes("failed to download attachment") ||
     text.includes("extract") ||
     text.includes("extraction") ||
     text.includes("pdf text") ||

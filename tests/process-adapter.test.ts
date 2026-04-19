@@ -351,6 +351,21 @@ describe("ProcessCodexAdapter", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("rejects when engine stdout exceeds the safety buffer", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData("x".repeat(1024 * 1024 + 1));
+    child.close(1);
+
+    await expect(promise).rejects.toThrow(/maximum buffer size/i);
+  });
 });
 
 class FakeStream extends EventEmitter {

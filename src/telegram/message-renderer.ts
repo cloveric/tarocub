@@ -2,15 +2,134 @@ import type { FailureCategory } from "../runtime/error-classification.js";
 
 export type Locale = "en" | "zh";
 
+function utf16Length(text: string): number {
+  return text.length;
+}
+
+function takeSafePrefixByUnits(text: string, maxUnits: number): string {
+  if (text.length <= maxUnits) {
+    return text;
+  }
+
+  let end = maxUnits;
+  if (
+    end > 0 &&
+    end < text.length &&
+    /[\uDC00-\uDFFF]/u.test(text[end] ?? "") &&
+    /[\uD800-\uDBFF]/u.test(text[end - 1] ?? "")
+  ) {
+    end -= 1;
+  }
+
+  if (end <= 0) {
+    return Array.from(text)[0] ?? "";
+  }
+
+  return text.slice(0, end);
+}
+
+function splitLineSegments(text: string): string[] {
+  if (text.length === 0) {
+    return [""];
+  }
+
+  const segments = text.match(/[^\n]*\n?|$/g)?.filter((value) => value.length > 0) ?? [];
+  return segments.length > 0 ? segments : [text];
+}
+
 export function chunkTelegramMessage(text: string, limit = 4000): string[] {
   if (!Number.isInteger(limit) || !Number.isFinite(limit) || limit <= 0) {
     throw new RangeError("limit must be a positive integer");
   }
 
-  const chunks: string[] = [];
+  if (utf16Length(text) <= limit) {
+    return [text];
+  }
 
-  for (let index = 0; index < text.length; index += limit) {
-    chunks.push(text.slice(index, index + limit));
+  const chunks: string[] = [];
+  let current = "";
+  let inFence = false;
+  let fenceOpener = "```";
+
+  const pushCurrent = () => {
+    if (!current) {
+      return;
+    }
+    chunks.push(current);
+    current = "";
+  };
+
+  const appendWithinFence = (segment: string) => {
+    let remaining = segment;
+    while (remaining) {
+      const closeFenceSuffix = current ? `${current.endsWith("\n") ? "" : "\n"}\`\`\`` : "```";
+      const reopenPrefix = `${fenceOpener}\n`;
+      const available = Math.max(1, limit - utf16Length(current) - utf16Length(closeFenceSuffix));
+      if (utf16Length(remaining) <= available) {
+        current += remaining;
+        return;
+      }
+      const prefix = takeSafePrefixByUnits(remaining, available);
+      current += prefix;
+      current += closeFenceSuffix;
+      pushCurrent();
+      current = reopenPrefix;
+      remaining = remaining.slice(prefix.length);
+    }
+  };
+
+  const appendPlain = (segment: string) => {
+    let remaining = segment;
+    while (remaining) {
+      const available = Math.max(1, limit - utf16Length(current));
+      if (utf16Length(remaining) <= available) {
+        current += remaining;
+        return;
+      }
+      const prefix = takeSafePrefixByUnits(remaining, available);
+      current += prefix;
+      pushCurrent();
+      remaining = remaining.slice(prefix.length);
+    }
+  };
+
+  for (const segment of splitLineSegments(text)) {
+    const lineWithoutNewline = segment.replace(/\r?\n$/, "");
+    const isFenceLine = lineWithoutNewline.trimStart().startsWith("```");
+    const nextLength = utf16Length(current) + utf16Length(segment);
+
+    if (current && nextLength > limit) {
+      if (inFence) {
+        current += `${current.endsWith("\n") ? "" : "\n"}\`\`\``;
+        pushCurrent();
+        current = `${fenceOpener}\n`;
+      } else {
+        pushCurrent();
+      }
+    }
+
+    if (inFence) {
+      appendWithinFence(segment);
+    } else {
+      appendPlain(segment);
+    }
+
+    if (isFenceLine) {
+      if (!inFence) {
+        inFence = true;
+        fenceOpener = lineWithoutNewline.trim();
+      } else {
+        inFence = false;
+        fenceOpener = "```";
+      }
+    }
+  }
+
+  if (current) {
+    if (inFence) {
+      current += `${current.endsWith("\n") ? "" : "\n"}\`\`\``;
+    }
+    pushCurrent();
   }
 
   return chunks;

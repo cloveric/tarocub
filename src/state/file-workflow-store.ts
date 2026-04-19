@@ -36,6 +36,10 @@ function createDefaultState(): FileWorkflowState {
   return { records: [] };
 }
 
+function isActiveWorkflowStatus(status: FileWorkflowRecord["status"]): boolean {
+  return status === "preparing" || status === "processing" || status === "awaiting_continue";
+}
+
 function selectLatestRecord(records: FileWorkflowRecord[]): FileWorkflowRecord | null {
   let latest: FileWorkflowRecord | null = null;
 
@@ -100,6 +104,23 @@ export class FileWorkflowStore {
       state.records.push(record);
       await this.store.write(state);
     });
+  }
+
+  async appendIfChatBelowActiveLimit(record: FileWorkflowRecord, maxActivePerChat: number): Promise<boolean> {
+    let appended = false;
+    await this.enqueueWrite(async () => {
+      const state = await this.load();
+      const activeForChat = state.records.filter(
+        (entry) => entry.chatId === record.chatId && isActiveWorkflowStatus(entry.status),
+      );
+      if (activeForChat.length >= maxActivePerChat) {
+        return;
+      }
+      state.records.push(record);
+      await this.store.write(state);
+      appended = true;
+    });
+    return appended;
   }
 
   async list(filter: FileWorkflowListFilter = {}): Promise<FileWorkflowRecord[]> {

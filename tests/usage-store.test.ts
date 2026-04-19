@@ -60,4 +60,27 @@ describe("UsageStore", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("serializes concurrent writes across separate UsageStore instances", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const storeA = new UsageStore(stateDir);
+    const storeB = new UsageStore(stateDir);
+
+    try {
+      await Promise.all([
+        storeA.record({ inputTokens: 10, outputTokens: 1, costUsd: 0.1 }),
+        storeB.record({ inputTokens: 20, outputTokens: 2, costUsd: 0.2 }),
+        storeA.record({ inputTokens: 30, outputTokens: 3, costUsd: 0.3 }),
+      ]);
+
+      await expect(storeA.load()).resolves.toEqual(expect.objectContaining({
+        totalInputTokens: 60,
+        totalOutputTokens: 6,
+        requestCount: 3,
+        totalCostUsd: 0.6,
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
