@@ -40,11 +40,13 @@ export class SessionManager {
   }
 
   async bindSession(chatId: number, sessionId: string): Promise<void> {
+    const existing = await this.sessionStore.findByChatId(chatId);
     await this.sessionStore.upsert({
       telegramChatId: chatId,
       codexSessionId: sessionId,
       status: "idle",
       updatedAt: new Date().toISOString(),
+      suspendedPrevious: existing?.suspendedPrevious,
     });
   }
 }

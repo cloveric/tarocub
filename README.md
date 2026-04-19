@@ -301,7 +301,7 @@ Pick one:
 Now every message you send goes through the original session — same context, same project directory, same conversation history. When you're done:
 
 ```
-/detach          ← Unbinds session, restores default workspace
+/detach          ← Unbinds session, restores the pre-/resume conversation when one exists
 ```
 
 **How it works under the hood:**
@@ -309,7 +309,7 @@ Now every message you send goes through the original session — same context, s
 1. Scans `CLAUDE_CONFIG_DIR/projects/` when set, otherwise `~/.claude/projects/`, for `.jsonl` files modified in the last hour
 2. Binds the session ID and overrides the workspace to point at your real project path
 3. Claude CLI resumes with `-r <sessionId>` in the original directory
-4. `/detach` reverses everything — the local session file is untouched
+4. `/detach` returns to the pre-/resume conversation when one exists; otherwise it falls back to the default workspace without touching the original local session file
 
 **No pollution:** `--append-system-prompt` is per-invocation and doesn't persist in session files. The bridge instructions won't leak into your local session.
 
@@ -325,7 +325,7 @@ That binds the current Telegram chat to the existing Codex thread. From then on:
 
 - new Telegram messages continue that thread
 - `/status` shows the current thread ID
-- `/detach` unbinds the thread and the next message starts a fresh one
+- `/detach` unbinds the thread and restores the pre-attach conversation when one exists
 
 This is an attach flow, not a local session import: the thread stays server-side and the bridge only binds the known thread ID to the current chat.
 
@@ -698,7 +698,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>Session Resume</h3>
-      <p><code>/resume</code> scans Claude local sessions; <code>/resume thread &lt;thread-id&gt;</code> attaches an existing Codex thread. <code>/detach</code> cleanly unbinds either flow.</p>
+      <p><code>/resume</code> scans Claude local sessions; <code>/resume thread &lt;thread-id&gt;</code> attaches an existing Codex thread. <code>/detach</code> restores the pre-resume conversation when one exists.</p>
     </td>
   </tr>
   <tr>
@@ -781,7 +781,7 @@ Telegram users can also use:
 - `/chain <prompt>` — run the configured sequential bot chain
 - `/verify <prompt>` — execute locally, then auto-review with the verifier bot
 - `/resume` — Claude: scan local sessions; Codex: use `/resume thread <thread-id>` to attach an existing thread
-- `/detach` — detach from resumed Claude session or current Codex thread
+- `/detach` — detach from resumed Claude session or current Codex thread; restore the pre-resume conversation when one exists
 - `/stop` — immediately stop the current running task
 - `/continue` — resume the latest waiting archive summary
 - `/compact` (Claude only — compresses context; Codex falls back to reset)

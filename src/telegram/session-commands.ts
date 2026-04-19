@@ -17,12 +17,27 @@ export interface SessionCommandConfig {
 
 export interface SessionCommandStore {
   inspect(): Promise<{ warning?: string; repairable?: boolean }>;
+  findByChatIdSafe(chatId: number): Promise<{
+    record: {
+      codexSessionId: string;
+      suspendedPrevious?: {
+        sessionId: string | null;
+        resume: ResumeState | null;
+      };
+    } | null;
+    warning?: string;
+    repairable?: boolean;
+  }>;
   removeByChatId(chatId: number): Promise<boolean | void>;
   upsert(record: {
     telegramChatId: number;
     codexSessionId: string;
     status: "idle";
     updatedAt: string;
+    suspendedPrevious?: {
+      sessionId: string | null;
+      resume: ResumeState | null;
+    };
   }): Promise<void>;
 }
 
@@ -60,6 +75,26 @@ function isDetachCommand(text: string): boolean {
 
 export function resetPendingResumeScans(): void {
   pendingResumeScans.clear();
+}
+
+function buildSuspendedPreviousSnapshot(input: {
+  existingRecord: {
+    codexSessionId: string;
+    suspendedPrevious?: {
+      sessionId: string | null;
+      resume: ResumeState | null;
+    };
+  } | null;
+  currentResume: ResumeState | undefined;
+}): { sessionId: string | null; resume: ResumeState | null } {
+  if (input.existingRecord?.suspendedPrevious) {
+    return input.existingRecord.suspendedPrevious;
+  }
+
+  return {
+    sessionId: input.existingRecord?.codexSessionId ?? null,
+    resume: input.currentResume ?? null,
+  };
 }
 
 export async function handleLocalSessionTelegramCommand(input: {
@@ -171,11 +206,16 @@ export async function handleLocalSessionTelegramCommand(input: {
         return true;
       }
 
+      const existing = await sessionStore.findByChatIdSafe(normalized.chatId);
       await sessionStore.upsert({
         telegramChatId: normalized.chatId,
         codexSessionId: resumeCmd.threadId,
         status: "idle",
         updatedAt: new Date().toISOString(),
+        suspendedPrevious: buildSuspendedPreviousSnapshot({
+          existingRecord: existing.record,
+          currentResume: cfg.resume,
+        }),
       });
       await updateInstanceConfig((c) => { delete c.resume; });
 
@@ -236,11 +276,16 @@ export async function handleLocalSessionTelegramCommand(input: {
             : `Cannot resolve workspace path for session (${picked.dirName}).`;
           await context.api.sendMessage(normalized.chatId, resumeAuditText);
         } else {
+          const existing = await sessionStore.findByChatIdSafe(normalized.chatId);
           await sessionStore.upsert({
             telegramChatId: normalized.chatId,
             codexSessionId: picked.sessionId,
             status: "idle",
             updatedAt: new Date().toISOString(),
+            suspendedPrevious: buildSuspendedPreviousSnapshot({
+              existingRecord: existing.record,
+              currentResume: cfg.resume,
+            }),
           });
           await updateInstanceConfig((c) => {
             c.resume = {
@@ -268,8 +313,38 @@ export async function handleLocalSessionTelegramCommand(input: {
   }
 
   if (isDetachCommand(normalized.text)) {
+    const current = await sessionStore.findByChatIdSafe(normalized.chatId);
     let detachMessage: string;
-    if (cfg.resume) {
+    if (current.record?.suspendedPrevious) {
+      const previous = current.record.suspendedPrevious;
+      if (previous.sessionId) {
+        await sessionStore.upsert({
+          telegramChatId: normalized.chatId,
+          codexSessionId: previous.sessionId,
+          status: "idle",
+          updatedAt: new Date().toISOString(),
+        });
+      } else {
+        await sessionStore.removeByChatId(normalized.chatId);
+      }
+
+      await updateInstanceConfig((c) => {
+        if (previous.resume) {
+          c.resume = previous.resume;
+        } else {
+          delete c.resume;
+        }
+      });
+
+      detachMessage = cfg.engine === "codex"
+        ? (locale === "zh"
+          ? "已断开当前 Codex thread，并恢复到 /resume 之前的对话。"
+          : "Detached from the current Codex thread and restored the previous conversation.")
+        : (locale === "zh"
+          ? "已断开恢复的 session，并恢复到 /resume 之前的对话。"
+          : "Detached from resumed session and restored the previous conversation.");
+      await context.api.sendMessage(normalized.chatId, detachMessage);
+    } else if (cfg.resume) {
       if (cfg.resume.symlinkPath) {
         try {
           const st = await lstat(cfg.resume.symlinkPath);
