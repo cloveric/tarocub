@@ -128,6 +128,12 @@ Any change touching one of these areas needs explicit regression thought:
 - shared `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - archive restore / backup
 
+For shared engine env:
+
+- do not inject default `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
+- only propagate them when the caller explicitly set them
+- when debugging auth or engine startup issues, inspect the real runtime first and only then build a reduced reproduction
+
 The default assumption should be:
 
 - input is untrusted

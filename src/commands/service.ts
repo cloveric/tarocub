@@ -36,7 +36,10 @@ import {
 import { inspectSessions as inspectSessionBindings } from "./session.js";
 
 export interface ServiceCommandEnv
-  extends Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN"> {}
+  extends Pick<
+    EnvSource,
+    "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
+  > {}
 
 export interface ServiceCommandDeps {
   cwd?: string;
@@ -48,6 +51,7 @@ export interface ServiceCommandDeps {
   readTextFile?: (filePath: string) => Promise<string>;
   readConfiguredBotToken?: (env: ServiceCommandEnv, instanceName: string) => Promise<string | null>;
   fetchTelegramBotIdentity?: (botToken: string) => Promise<{ firstName: string; username?: string }>;
+  readProcessEnvironment?: (pid: number) => Promise<Record<string, string> | null>;
 }
 
 export interface ServicePaths {
@@ -130,6 +134,32 @@ export interface ServiceDoctorResult {
 }
 
 const BLOCKING_WORKFLOW_STATUSES = new Set(["preparing", "processing", "failed"]);
+const LEGACY_AUTOSTART_LABEL_PREFIX = "com.cloveric.cc-telegram-bridge.";
+
+function resolveHomeDir(env: Pick<ServiceCommandEnv, "HOME" | "USERPROFILE">): string {
+  const homeDir = env.HOME ?? env.USERPROFILE;
+  if (!homeDir) {
+    throw new Error("HOME or USERPROFILE is required");
+  }
+
+  return homeDir;
+}
+
+function resolveLegacyLaunchAgentPlistPath(
+  env: Pick<ServiceCommandEnv, "HOME" | "USERPROFILE">,
+  instanceName: string,
+): string {
+  return path.join(
+    resolveHomeDir(env),
+    "Library",
+    "LaunchAgents",
+    `${LEGACY_AUTOSTART_LABEL_PREFIX}${normalizeInstanceName(instanceName)}.plist`,
+  );
+}
+
+function formatLegacyLaunchdWarning(instanceName: string): string {
+  return `Warning: legacy launchd plist still exists. Run "bash scripts/cleanup-legacy-launchd.sh ${instanceName}" to remove it.`;
+}
 
 function defaultIsProcessAlive(pid: number): boolean {
   try {
@@ -245,6 +275,33 @@ function defaultKillProcessTree(pid: number): void {
       throw new Error(`Failed to stop pid ${pid}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+async function defaultReadProcessEnvironment(pid: number): Promise<Record<string, string> | null> {
+  if (process.platform === "win32") {
+    return null;
+  }
+
+  const result = spawnSync("ps", ["eww", "-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+  });
+
+  if (result.status !== 0 || !result.stdout) {
+    return null;
+  }
+
+  const commandLine = result.stdout.trim();
+  const environment: Record<string, string> = {};
+
+  for (const key of ["CODEX_HOME", "CLAUDE_CONFIG_DIR"]) {
+    const pattern = new RegExp(`(?:^|\\s)${key}=([^\\s]+)`);
+    const match = commandLine.match(pattern);
+    if (match?.[1]) {
+      environment[key] = match[1];
+    }
+  }
+
+  return environment;
 }
 
 async function readLockRecord(lockPath: string): Promise<InstanceLockRecord | null> {
@@ -471,6 +528,10 @@ export async function stopServiceInstance(
   const isExpectedServiceProcess = deps.isExpectedServiceProcess ?? defaultIsExpectedServiceProcess;
   const killProcessTree = deps.killProcessTree ?? defaultKillProcessTree;
   const sleep = deps.sleep ?? defaultSleep;
+  const legacyLaunchAgentPath = resolveLegacyLaunchAgentPlistPath(env, instanceName);
+  const legacyLaunchdWarning = existsSync(legacyLaunchAgentPath)
+    ? ` ${formatLegacyLaunchdWarning(paths.instanceName)}`
+    : "";
 
   const existingLock = await readLockRecord(paths.lockPath);
   if (
@@ -479,14 +540,14 @@ export async function stopServiceInstance(
     !isExpectedServiceProcess(existingLock.pid, paths.entryPath, paths.instanceName)
   ) {
     removeLockIfMatches(paths.lockPath, existingLock?.pid ?? null);
-    return `Instance "${paths.instanceName}" is not running.`;
+    return `Instance "${paths.instanceName}" is not running.${legacyLaunchdWarning}`;
   }
 
   killProcessTree(existingLock.pid);
 
   for (let attempt = 0; attempt < 20; attempt++) {
     if (!isProcessAlive(existingLock.pid)) {
-      return `Stopped instance "${paths.instanceName}".`;
+      return `Stopped instance "${paths.instanceName}".${legacyLaunchdWarning}`;
     }
 
     await sleep(250);
@@ -662,6 +723,7 @@ export async function runServiceDoctor(
   const paths = resolveServicePaths(env, instanceName, cwd);
   const status = await getServiceStatus(env, instanceName, deps);
   const checks: ServiceDoctorResult["checks"] = [];
+  const readProcessEnvironment = deps.readProcessEnvironment ?? defaultReadProcessEnvironment;
 
   checks.push({
     name: "engine",
@@ -696,6 +758,70 @@ export async function runServiceDoctor(
       (status.botIdentity
         ? `Bot identity resolved as ${status.botIdentity.firstName}${status.botIdentity.username ? ` (@${status.botIdentity.username})` : ""}.`
         : "Bot identity not available."),
+  });
+  const sharedEnvKey = status.engine === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+  const shellSharedEnvValue =
+    sharedEnvKey === "CLAUDE_CONFIG_DIR" ? env.CLAUDE_CONFIG_DIR?.trim() || null : env.CODEX_HOME?.trim() || null;
+  let environmentCheck = {
+    ok: true,
+    detail: "Shared engine env matches the current shell.",
+  };
+  if (status.running && status.pid !== null) {
+    const processEnvironment = await readProcessEnvironment(status.pid);
+    if (processEnvironment !== null) {
+      const processSharedEnvValue = processEnvironment[sharedEnvKey]?.trim() || null;
+      if (shellSharedEnvValue !== processSharedEnvValue) {
+        if (shellSharedEnvValue === null && processSharedEnvValue !== null) {
+          environmentCheck = {
+            ok: false,
+            detail: `The running service exports ${sharedEnvKey}=${processSharedEnvValue} while the current shell does not. Restart the service from the shell you want to use, or clear the stale shared-engine env first.`,
+          };
+        } else if (shellSharedEnvValue !== null && processSharedEnvValue === null) {
+          environmentCheck = {
+            ok: false,
+            detail: `The current shell exports ${sharedEnvKey}=${shellSharedEnvValue}, but the running service does not. Restart the service from this shell if you changed shared engine env.`,
+          };
+        } else {
+          environmentCheck = {
+            ok: false,
+            detail: `The current shell exports ${sharedEnvKey}=${shellSharedEnvValue}, but the running service uses ${sharedEnvKey}=${processSharedEnvValue}. Restart the service so its shared engine env matches the shell you are using.`,
+          };
+        }
+      } else if (shellSharedEnvValue === null) {
+        environmentCheck = {
+          ok: true,
+          detail: `Shared engine env matches the current shell (${sharedEnvKey} not explicitly set).`,
+        };
+      } else {
+        environmentCheck = {
+          ok: true,
+          detail: `Shared engine env matches the current shell (${sharedEnvKey}=${shellSharedEnvValue}).`,
+        };
+      }
+    } else {
+      environmentCheck = {
+        ok: true,
+        detail: "Process environment inspection is unavailable on this platform.",
+      };
+    }
+  } else {
+    environmentCheck = {
+      ok: true,
+      detail: "Service is not running, so live environment comparison is unavailable.",
+    };
+  }
+  checks.push({
+    name: "environment",
+    ok: environmentCheck.ok,
+    detail: environmentCheck.detail,
+  });
+  const legacyLaunchAgentPath = resolveLegacyLaunchAgentPlistPath(env, instanceName);
+  checks.push({
+    name: "legacy-launchd",
+    ok: !existsSync(legacyLaunchAgentPath),
+    detail: existsSync(legacyLaunchAgentPath)
+      ? `Legacy launchd plist still exists at ${legacyLaunchAgentPath}. Remove it with "bash scripts/cleanup-legacy-launchd.sh ${status.instanceName}" so service stop/start cannot fight a stale launchd entry.`
+      : "No legacy launchd plist detected.",
   });
   checks.push({
     name: "sessions",

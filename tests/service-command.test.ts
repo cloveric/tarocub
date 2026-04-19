@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,16 +27,15 @@ describe("telegram service commands", () => {
         serviceDeps: {
           cwd: REPO_ROOT,
           spawnDetached: (command, args, options) => {
-            mkdir(stateDir, { recursive: true }).then(() =>
-              writeFile(
-                lockPath,
-                JSON.stringify({
-                  pid: 12345,
-                  token: "token",
-                  acquiredAt: new Date().toISOString(),
-                }),
-                "utf8",
-              ),
+            mkdirSync(stateDir, { recursive: true });
+            writeFileSync(
+              lockPath,
+              JSON.stringify({
+                pid: 12345,
+                token: "token",
+                acquiredAt: new Date().toISOString(),
+              }),
+              "utf8",
             );
             spawnDetached(command, args, options);
           },
@@ -333,6 +333,8 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("ok token:");
       expect(messages[0]).toContain("ok service:");
       expect(messages[0]).toContain("ok identity:");
+      expect(messages[0]).toContain("ok environment:");
+      expect(messages[0]).toContain("ok legacy-launchd:");
       expect(messages[0]).toContain("ok audit:");
       expect(messages[0]).toContain("ok timeline:");
       expect(messages[0]).toContain("Timeline events: 6");
@@ -445,6 +447,94 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("blocking tasks: 2");
       expect(messages[0]).toContain("awaiting continue: 1");
       expect(messages[0]).toContain("- fail tasks:");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports environment mismatches in service doctor for shared engine env", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }), "utf8");
+
+      const handled = await runCli(["telegram", "service", "doctor", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+          readProcessEnvironment: async () => ({
+            CLAUDE_CONFIG_DIR: "/tmp/legacy-claude-config",
+          }),
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("Healthy: no");
+      expect(messages[0]).toContain("- fail environment:");
+      expect(messages[0]).toContain(
+        "running service exports CLAUDE_CONFIG_DIR=/tmp/legacy-claude-config while the current shell does not",
+      );
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports legacy launchd plists in service doctor", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+    const legacyPlist = path.join(
+      tempDir,
+      "Library",
+      "LaunchAgents",
+      "com.cloveric.cc-telegram-bridge.alpha.plist",
+    );
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(path.dirname(legacyPlist), { recursive: true });
+      await writeFile(legacyPlist, "<plist/>", "utf8");
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "service", "doctor", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir, HOME: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("Healthy: no");
+      expect(messages[0]).toContain("- fail legacy-launchd:");
+      expect(messages[0]).toContain("bash scripts/cleanup-legacy-launchd.sh alpha");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1028,6 +1118,63 @@ describe("telegram service commands", () => {
       expect(handled).toBe(true);
       expect(messages).toEqual(['Stopped instance "default".']);
       expect(killProcessTree).toHaveBeenCalledWith(54321);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when stopping an instance that still has a legacy launchd plist", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+    const legacyPlist = path.join(
+      tempDir,
+      "Library",
+      "LaunchAgents",
+      "com.cloveric.cc-telegram-bridge.alpha.plist",
+    );
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await mkdir(path.dirname(legacyPlist), { recursive: true });
+      await writeFile(legacyPlist, "<plist/>", "utf8");
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "service", "stop", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir, HOME: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          killProcessTree: () => {},
+          sleep: async () => {},
+          isProcessAlive: (() => {
+            let running = true;
+            return (pid: number) => {
+              if (pid !== 12345) {
+                return false;
+              }
+              const current = running;
+              running = false;
+              return current;
+            };
+          })(),
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Stopped instance "alpha".');
+      expect(messages[0]).toContain("legacy launchd plist still exists");
+      expect(messages[0]).toContain("bash scripts/cleanup-legacy-launchd.sh alpha");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

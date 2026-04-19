@@ -745,7 +745,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 | `telegram service status` | Running state, PID, engine, bot identity, timeline summary, latest crew run |
 | `telegram service restart` | Stop + start with clean consumer reset |
 | `telegram service logs` | Tail stdout/stderr logs |
-| `telegram service doctor` | Health check across all subsystems, including timeline and crew state |
+| `telegram service doctor` | Health check across all subsystems, including timeline, crew state, shared engine env, and stale launchd leftovers |
 | `telegram engine [codex\|claude]` | Switch AI engine per instance |
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
 | `telegram usage` | Show token usage and estimated cost |
@@ -817,6 +817,24 @@ Recovery behavior on unreadable state:
 ./scripts/status-instance.sh [work]
 ./scripts/stop-instance.sh [work]
 ```
+
+Legacy cleanup after older autostart builds:
+
+```bash
+bash scripts/cleanup-legacy-launchd.sh --all
+```
+
+Claude auth smoke test:
+
+```bash
+npm run smoke:claude-auth
+```
+
+Shared engine env rule:
+
+- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are only forwarded when you explicitly export them.
+- If you change either one, restart the affected instance from that same shell.
+- `telegram service doctor` now flags both shared-env mismatches and stale launchd plists.
 
 ---
 
@@ -925,6 +943,21 @@ Mount `~/.cctb` to persist state across container restarts.
 1. Run `telegram service doctor --instance <name>` to diagnose
 2. Check `telegram service logs` for errors
 3. Verify the engine is installed: `codex --version` or `claude --version`
+4. If the instance uses Claude, run `npm run smoke:claude-auth`
+5. If `service doctor` reports `legacy-launchd`, clean it with `bash scripts/cleanup-legacy-launchd.sh --all`
+
+</details>
+
+<details>
+<summary><strong>Claude works in Terminal but not in the bot</strong></summary>
+
+1. Check shell auth first: `claude auth status`
+2. Run `npm run smoke:claude-auth`
+3. Run `telegram service doctor --instance <name>`
+4. If you recently changed `CLAUDE_CONFIG_DIR`, restart the instance from that same shell
+5. If `doctor` reports `legacy-launchd`, run `bash scripts/cleanup-legacy-launchd.sh --all`
+
+More detail: [`docs/runtime-env-troubleshooting.md`](./docs/runtime-env-troubleshooting.md)
 
 </details>
 
