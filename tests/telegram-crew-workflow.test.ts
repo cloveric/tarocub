@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { parseAuditEvents } from "../src/state/audit-log.js";
+import { CrewRunStore } from "../src/state/crew-run-store.js";
 import { handleCrewTelegramWorkflow } from "../src/telegram/crew-workflow.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
@@ -116,7 +117,7 @@ describe("handleCrewTelegramWorkflow", () => {
       expect(handled).toBe(true);
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
       const coordinatorInput = bridge.handleAuthorizedMessage.mock.calls[0]?.[0];
-      expect(coordinatorInput?.chatId).toBeLessThan(-9_000_000_000_000);
+      expect(coordinatorInput?.chatId).toBeLessThan(-9_000_000_000_000_000);
       expect(delegateToInstance).toHaveBeenNthCalledWith(1, expect.objectContaining({
         fromInstance: "coordinator",
         targetInstance: "researcher",
@@ -437,7 +438,7 @@ describe("handleCrewTelegramWorkflow", () => {
         delegateToInstance: delegateToInstance as never,
       });
 
-      for (let attempt = 0; attempt < 20 && researchCalls.length < 2; attempt++) {
+      for (let attempt = 0; attempt < 100 && researchCalls.length < 2; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
 
@@ -459,6 +460,72 @@ describe("handleCrewTelegramWorkflow", () => {
       }));
     } finally {
       await new Promise((resolve) => setTimeout(resolve, 0));
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the last successfully-entered stage when the next stage state update fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-crew-workflow-"));
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 11 });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValueOnce({
+        text: "1. What changed first?\n2. What is measurable now?",
+      }),
+    };
+    const delegateToInstance = vi.fn()
+      .mockResolvedValueOnce({ text: "Research findings A" })
+      .mockResolvedValueOnce({ text: "Research findings B" });
+
+    const originalUpdate = CrewRunStore.prototype.update;
+    const updateSpy = vi.spyOn(CrewRunStore.prototype, "update").mockImplementation(async function(this: CrewRunStore, runId, mutate) {
+      return originalUpdate.call(this, runId, (record) => {
+        mutate(record);
+        if (
+          record.currentStage === "analysis" &&
+          record.stages.analysis?.status === "running"
+        ) {
+          throw new Error("simulated state write failure");
+        }
+      });
+    });
+
+    try {
+      const handled = await handleCrewTelegramWorkflow({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("Explain the impact of AI."),
+        context: {
+          api: { sendMessage } as never,
+          bridge: bridge as never,
+          instanceName: "coordinator",
+          updateId: 96,
+        },
+        loadBusConfig: vi.fn().mockResolvedValue(createCrewConfig()),
+        delegateToInstance: delegateToInstance as never,
+      });
+
+      expect(handled).toBe(true);
+      expect(sendMessage).toHaveBeenCalledWith(123, "Crew execution failed: simulated state write failure");
+
+      const runFiles = await readdir(path.join(root, "crew-runs"));
+      const crewRun = JSON.parse(
+        await readFile(path.join(root, "crew-runs", runFiles[0]!), "utf8"),
+      ) as Record<string, unknown>;
+
+      expect(crewRun).toEqual(expect.objectContaining({
+        status: "failed",
+        currentStage: "research",
+        lastError: "simulated state write failure",
+        stages: expect.objectContaining({
+          research: expect.objectContaining({
+            status: "failed",
+          }),
+        }),
+      }));
+    } finally {
+      updateSpy.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });

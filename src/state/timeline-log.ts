@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { mkdir, open } from "node:fs/promises";
 import path from "node:path";
 
 import { TimelineEventSchema, formatTimelineSchemaError } from "./timeline-log-schema.js";
@@ -69,11 +69,13 @@ export async function appendTimelineEvent(stateDir: string, event: TimelineEvent
   }
 
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await appendFile(
-    filePath,
-    `${JSON.stringify(result.data)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  const line = `${JSON.stringify(result.data)}\n`;
+  const handle = await open(filePath, "a", 0o600);
+  try {
+    await handle.write(line, undefined, "utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 function isTimelineEvent(value: unknown): value is TimelineEvent {
@@ -81,18 +83,30 @@ function isTimelineEvent(value: unknown): value is TimelineEvent {
 }
 
 export function parseTimelineEvents(raw: string): TimelineEvent[] {
-  return raw
+  let droppedLines = 0;
+  const events = raw
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .flatMap((line) => {
       try {
         const parsed = JSON.parse(line) as unknown;
-        return isTimelineEvent(parsed) ? [parsed] : [];
+        if (isTimelineEvent(parsed)) {
+          return [parsed];
+        }
       } catch {
-        return [];
+        // fall through
       }
+
+      droppedLines += 1;
+      return [];
     });
+
+  if (droppedLines > 0) {
+    console.warn(`Dropped ${droppedLines} invalid timeline log line${droppedLines === 1 ? "" : "s"} while parsing timeline history.`);
+  }
+
+  return events;
 }
 
 export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummary {

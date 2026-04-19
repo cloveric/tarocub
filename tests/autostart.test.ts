@@ -365,4 +365,27 @@ describe("runAutostartCommand", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("requires --instance for autostart add when CODEX_TELEGRAM_STATE_DIR is set", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-autostart-"));
+
+    try {
+      const { runAutostartCommand } = await loadAutostartModule();
+
+      await expect(
+        runAutostartCommand(
+          ["autostart", "add"],
+          {
+            HOME: tempDir,
+            USERPROFILE: tempDir,
+            CODEX_TELEGRAM_STATE_DIR: path.join(tempDir, "custom-state"),
+          },
+          { log: () => {} },
+          { platform: "darwin" },
+        ),
+      ).rejects.toThrow('When CODEX_TELEGRAM_STATE_DIR is set, pass "--instance <name>" to telegram autostart.');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

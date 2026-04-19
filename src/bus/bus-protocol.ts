@@ -35,7 +35,8 @@ const BusTalkRequestSchema = z.object({
   depth: z.number().int().nonnegative(),
   protocolVersion: z.literal(BUS_PROTOCOL_VERSION).optional().default(BUS_PROTOCOL_VERSION),
   capabilities: BusCapabilitiesSchema,
-}).passthrough();
+  ext: z.record(z.string(), z.unknown()).optional(),
+}).strict();
 
 const BusTalkResponseSchema = z.object({
   success: z.boolean(),

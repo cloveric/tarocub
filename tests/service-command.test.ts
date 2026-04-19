@@ -39,7 +39,9 @@ describe("telegram service commands", () => {
             );
             spawnDetached(command, args, options);
           },
-          sleep: async () => {},
+          sleep: async () => {
+            await Promise.resolve();
+          },
           isProcessAlive: (pid) => pid === 12345,
           isExpectedServiceProcess: (pid) => pid === 12345,
         },

@@ -337,7 +337,10 @@ export class TelegramApi {
   }
 
   async getUpdates(offset?: number, signal?: AbortSignal, timeoutSeconds = 30): Promise<unknown[]> {
-    const body: Record<string, unknown> = { timeout: timeoutSeconds };
+    const body: Record<string, unknown> = {
+      timeout: timeoutSeconds,
+      allowed_updates: ["message", "callback_query", "my_chat_member"],
+    };
     if (offset !== undefined) {
       body.offset = offset;
     }

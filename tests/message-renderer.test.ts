@@ -391,7 +391,7 @@ describe("TelegramApi", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.telegram.org/bottoken/getUpdates", expect.objectContaining({
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ timeout: 30 }),
+      body: JSON.stringify({ timeout: 30, allowed_updates: ["message", "callback_query", "my_chat_member"] }),
     }));
 
     fetchMock.mockRestore();
@@ -411,7 +411,7 @@ describe("TelegramApi", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.telegram.org/bottoken/getUpdates", expect.objectContaining({
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ timeout: 30, offset: 42 }),
+      body: JSON.stringify({ timeout: 30, allowed_updates: ["message", "callback_query", "my_chat_member"], offset: 42 }),
     }));
 
     fetchMock.mockRestore();

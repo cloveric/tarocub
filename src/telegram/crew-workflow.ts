@@ -20,7 +20,7 @@ type ResearchStageEntry =
   | { question: string; error: string };
 
 const activeCrewRunKeys = new Set<string>();
-const SYNTHETIC_COORDINATOR_CHAT_ID_BASE = 9_000_000_000_000;
+const SYNTHETIC_COORDINATOR_CHAT_ID_BASE = Number.MAX_SAFE_INTEGER - 1_000_000_000;
 const CREW_RESEARCH_TIMEOUT_MS = 60_000;
 const CREW_ANALYSIS_TIMEOUT_MS = 120_000;
 const CREW_WRITING_TIMEOUT_MS = 120_000;
@@ -511,7 +511,6 @@ export async function handleCrewTelegramWorkflow(input: {
       metadata: { questionCount: subQuestions.length },
     });
 
-    activeStage = "research";
     await crewRunStore.update(runId, (record) => {
       record.currentStage = "research";
       record.stages.research = {
@@ -521,6 +520,7 @@ export async function handleCrewTelegramWorkflow(input: {
         subQuestions,
       };
     });
+    activeStage = "research";
     await appendCrewTimelineEvent(stateDir, {
       type: "crew.stage.started",
       context,
@@ -600,7 +600,6 @@ export async function handleCrewTelegramWorkflow(input: {
       metadata: { questionCount: subQuestions.length, failedQuestionCount: failedResearch.length },
     });
 
-    activeStage = "analysis";
     await crewRunStore.update(runId, (record) => {
       record.currentStage = "analysis";
       record.stages.analysis = {
@@ -609,6 +608,7 @@ export async function handleCrewTelegramWorkflow(input: {
         updatedAt: new Date().toISOString(),
       };
     });
+    activeStage = "analysis";
     await appendCrewTimelineEvent(stateDir, {
       type: "crew.stage.started",
       context,
@@ -651,7 +651,6 @@ export async function handleCrewTelegramWorkflow(input: {
       outcome: "success",
     });
 
-    activeStage = "writing";
     await crewRunStore.update(runId, (record) => {
       record.currentStage = "writing";
       record.stages.writing = {
@@ -661,6 +660,7 @@ export async function handleCrewTelegramWorkflow(input: {
         revisionCount: 0,
       };
     });
+    activeStage = "writing";
     await appendCrewTimelineEvent(stateDir, {
       type: "crew.stage.started",
       context,
@@ -707,7 +707,6 @@ export async function handleCrewTelegramWorkflow(input: {
       metadata: { revisionCount: 0 },
     });
 
-    activeStage = "review";
     await crewRunStore.update(runId, (record) => {
       record.currentStage = "review";
       record.stages.review = {
@@ -716,6 +715,7 @@ export async function handleCrewTelegramWorkflow(input: {
         updatedAt: new Date().toISOString(),
       };
     });
+    activeStage = "review";
     await appendCrewTimelineEvent(stateDir, {
       type: "crew.stage.started",
       context,
@@ -766,7 +766,6 @@ export async function handleCrewTelegramWorkflow(input: {
     let revisionCount = 0;
     while (reviewerResult.verdict === "revise" && revisionCount < crew.maxRevisionRounds) {
       revisionCount += 1;
-      activeStage = "writing";
       await crewRunStore.update(runId, (record) => {
         record.currentStage = "writing";
         record.stages.writing = {
@@ -777,6 +776,7 @@ export async function handleCrewTelegramWorkflow(input: {
           revisionCount,
         };
       });
+      activeStage = "writing";
       await appendCrewTimelineEvent(stateDir, {
         type: "crew.stage.started",
         context,
@@ -825,7 +825,6 @@ export async function handleCrewTelegramWorkflow(input: {
         metadata: { revisionCount },
       });
 
-      activeStage = "review";
       await crewRunStore.update(runId, (record) => {
         record.currentStage = "review";
         record.stages.review = {
@@ -834,6 +833,7 @@ export async function handleCrewTelegramWorkflow(input: {
           updatedAt: new Date().toISOString(),
         };
       });
+      activeStage = "review";
       await appendCrewTimelineEvent(stateDir, {
         type: "crew.stage.started",
         context,

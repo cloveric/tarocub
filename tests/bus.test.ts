@@ -650,7 +650,7 @@ describe("bus server", () => {
     }
   });
 
-  it("ignores unexpected extra request fields for forward compatibility", async () => {
+  it("accepts ext request fields but rejects unexpected top-level request fields", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-server-"));
 
     try {
@@ -669,13 +669,20 @@ describe("bus server", () => {
       const port = await startBusServer(server, 0);
 
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/api/talk`, {
+        const extRes = await fetch(`http://127.0.0.1:${port}/api/talk`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
-          body: JSON.stringify({ fromInstance: "work", prompt: "hello", depth: 0, rogue: true }),
+          body: JSON.stringify({
+            fromInstance: "work",
+            prompt: "hello",
+            depth: 0,
+            ext: {
+              traceId: "abc123",
+            },
+          }),
         });
-        expect(res.status).toBe(200);
-        await expect(res.json()).resolves.toMatchObject({
+        expect(extRes.status).toBe(200);
+        await expect(extRes.json()).resolves.toMatchObject({
           success: true,
           protocolVersion: BUS_PROTOCOL_VERSION,
         });
@@ -684,7 +691,21 @@ describe("bus server", () => {
           prompt: "hello",
           depth: 0,
           protocolVersion: BUS_PROTOCOL_VERSION,
+          ext: {
+            traceId: "abc123",
+          },
         }));
+
+        const rogueRes = await fetch(`http://127.0.0.1:${port}/api/talk`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
+          body: JSON.stringify({ fromInstance: "work", prompt: "hello", depth: 0, rogue: true }),
+        });
+        expect(rogueRes.status).toBe(400);
+        await expect(rogueRes.json()).resolves.toMatchObject({
+          success: false,
+          errorCode: "invalid_request",
+        });
       } finally {
         await stopBusServer(server);
       }

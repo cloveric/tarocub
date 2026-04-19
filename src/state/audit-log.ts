@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { mkdir, open } from "node:fs/promises";
 import path from "node:path";
 
 import { AuditEventSchema, formatAuditSchemaError } from "./audit-log-schema.js";
@@ -63,11 +63,13 @@ export async function appendAuditEvent(stateDir: string, event: AuditEvent): Pro
     throw new Error(`invalid audit event: ${formatAuditSchemaError(result.error)}`);
   }
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await appendFile(
-    filePath,
-    `${JSON.stringify(result.data)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
+  const line = `${JSON.stringify(result.data)}\n`;
+  const handle = await open(filePath, "a", 0o600);
+  try {
+    await handle.write(line, undefined, "utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 function isAuditEvent(value: unknown): value is AuditEvent {
@@ -75,18 +77,30 @@ function isAuditEvent(value: unknown): value is AuditEvent {
 }
 
 export function parseAuditEvents(raw: string): AuditEvent[] {
-  return raw
+  let droppedLines = 0;
+  const events = raw
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .flatMap((line) => {
       try {
         const parsed = JSON.parse(line) as unknown;
-        return isAuditEvent(parsed) ? [parsed] : [];
+        if (isAuditEvent(parsed)) {
+          return [parsed];
+        }
       } catch {
-        return [];
+        // fall through
       }
+
+      droppedLines += 1;
+      return [];
     });
+
+  if (droppedLines > 0) {
+    console.warn(`Dropped ${droppedLines} invalid audit log line${droppedLines === 1 ? "" : "s"} while parsing audit history.`);
+  }
+
+  return events;
 }
 
 export function filterAuditEvents(events: AuditEvent[], filter: AuditEventFilter = {}): AuditEvent[] {

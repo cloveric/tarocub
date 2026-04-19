@@ -12,12 +12,12 @@ const ResumeStateSchema = z.object({
   dirName: z.string(),
   workspacePath: z.string(),
   symlinkPath: z.string().optional(),
-}).passthrough();
+}).strict();
 
 const SuspendedConversationStateSchema = z.object({
   sessionId: z.string().nullable(),
   resume: ResumeStateSchema.nullable(),
-}).passthrough();
+}).strict();
 
 export const SessionRecordSchema = z.object({
   telegramChatId: z.number().int(),
@@ -25,8 +25,9 @@ export const SessionRecordSchema = z.object({
   status: z.enum(["idle", "running", "queued", "blocked"]),
   updatedAt: IsoTimestampSchema,
   suspendedPrevious: SuspendedConversationStateSchema.optional(),
-}).passthrough();
+}).strict();
 
 export const SessionStateSchema = z.object({
+  schemaVersion: z.number().int().optional(),
   chats: z.array(SessionRecordSchema),
-}).passthrough();
+}).strict();

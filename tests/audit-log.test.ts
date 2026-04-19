@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { classifyFailure } from "../src/runtime/error-classification.js";
 import { appendAuditEvent, getLatestFailure, parseAuditEvents, resolveAuditLogPath } from "../src/state/audit-log.js";
@@ -88,6 +88,26 @@ describe("audit log", () => {
         outcome: "success",
       }),
     ]);
+  });
+
+  it("warns when invalid audit log lines are dropped during parsing", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const events = parseAuditEvents([
+        "{bad json",
+        JSON.stringify({
+          timestamp: "2026-04-10T00:01:00.000Z",
+          type: "update.handle",
+          outcome: "success",
+        }),
+      ].join("\n"));
+
+      expect(events).toHaveLength(1);
+      expect(warnSpy).toHaveBeenCalledWith("Dropped 1 invalid audit log line while parsing audit history.");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("returns the latest categorized failure from audit history", () => {

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { acquireInstanceLock, resolveInstanceLockPath } from "../src/state/instance-lock.js";
 
@@ -142,6 +142,23 @@ describe("instance lock", () => {
       expect(onDisk.pid).toBe(process.pid);
       await lock.release();
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("logs sync-release failures before swallowing them", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const lockPath = resolveInstanceLockPath(root);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const lock = await acquireInstanceLock(root);
+      await writeFile(lockPath, "{bad json\n", "utf8");
+
+      expect(() => lock.releaseSync()).not.toThrow();
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });

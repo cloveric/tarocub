@@ -157,7 +157,11 @@ export async function acquireInstanceLock(stateDir: string, pid: number = proces
       if (isLockRecord(current) && current.pid === pid && current.token === token) {
         unlinkSync(filePath);
       }
-    } catch {
+    } catch (error) {
+      console.error(
+        `Failed to release instance lock synchronously at ${filePath}:`,
+        error instanceof Error ? error.message : error,
+      );
       return;
     }
   };

@@ -14,6 +14,7 @@ export interface BusTalkRequest {
   depth: number;
   protocolVersion?: number;
   capabilities?: string[];
+  ext?: Record<string, unknown>;
 }
 
 export interface BusTalkResponse {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { CURRENT_SCHEMA_VERSION, withSchemaVersion } from "./schema-version.js";
@@ -36,7 +36,8 @@ export class JsonStore<T> {
   }
 
   async write(value: T): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+    const directoryPath = path.dirname(this.filePath);
+    await mkdir(directoryPath, { recursive: true, mode: 0o700 });
 
     // Attach current schema version on write so future loads can detect
     // incompatibility without every caller remembering to add it.
@@ -44,9 +45,21 @@ export class JsonStore<T> {
       ? withSchemaVersion(value as object)
       : value;
 
-    const tmpPath = path.join(path.dirname(this.filePath), `${path.basename(this.filePath)}.${randomUUID()}.tmp`);
+    const tmpPath = path.join(directoryPath, `${path.basename(this.filePath)}.${randomUUID()}.tmp`);
     await writeFile(tmpPath, JSON.stringify(versioned, null, 2), { encoding: "utf8", mode: 0o600 });
+    const tmpHandle = await open(tmpPath, "r");
+    try {
+      await tmpHandle.sync();
+    } finally {
+      await tmpHandle.close();
+    }
     await rename(tmpPath, this.filePath);
+    const dirHandle = await open(directoryPath, "r");
+    try {
+      await dirHandle.sync();
+    } finally {
+      await dirHandle.close();
+    }
   }
 
   async quarantineCurrentFile(reason = "unreadable"): Promise<string | null> {

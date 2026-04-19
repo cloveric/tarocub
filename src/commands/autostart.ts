@@ -324,7 +324,7 @@ export async function runAutostartCommand(
     throw new Error("telegram autostart is currently supported only on macOS (launchd).");
   }
 
-  if (env.CODEX_TELEGRAM_STATE_DIR && !parsed.instanceName && (subcommand === "sync" || subcommand === "status")) {
+  if (env.CODEX_TELEGRAM_STATE_DIR && !parsed.instanceName && (subcommand === "sync" || subcommand === "add" || subcommand === "status")) {
     throw new Error('When CODEX_TELEGRAM_STATE_DIR is set, pass "--instance <name>" to telegram autostart.');
   }
 

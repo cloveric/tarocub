@@ -20,8 +20,9 @@ export const FileWorkflowRecordSchema = z.object({
   extractedPath: z.string().optional(),
   createdAt: IsoTimestampSchema,
   updatedAt: IsoTimestampSchema,
-}).passthrough();
+}).strict();
 
 export const FileWorkflowStateSchema = z.object({
+  schemaVersion: z.number().int().optional(),
   records: z.array(FileWorkflowRecordSchema),
-}).passthrough();
+}).strict();
