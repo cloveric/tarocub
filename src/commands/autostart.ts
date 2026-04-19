@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import type { EnvSource } from "../config.js";
+import { resolveInstanceStateDir } from "../config.js";
 import { normalizeInstanceName } from "../instance.js";
 
 const execFile = promisify(nodeExecFile);
@@ -28,6 +29,7 @@ export interface AutostartCommandDeps {
   uid?: number;
   nodePath?: string;
   pathEnv?: string;
+  platform?: NodeJS.Platform;
   bootstrap?: (label: string, plistPath: string) => Promise<void>;
   enable?: (label: string) => Promise<void>;
   kickstart?: (label: string) => Promise<void>;
@@ -49,6 +51,24 @@ function resolveLaunchAgentsDir(env: Pick<AutostartCommandEnv, "HOME" | "USERPRO
 
 function resolveChannelsDir(env: Pick<AutostartCommandEnv, "HOME" | "USERPROFILE">): string {
   return path.join(resolveHomeDir(env), ".cctb");
+}
+
+function resolveInstanceAutostartStateDir(env: AutostartCommandEnv, instanceName: string): string {
+  return resolveInstanceStateDir({
+    HOME: env.HOME,
+    USERPROFILE: env.USERPROFILE,
+    CODEX_TELEGRAM_INSTANCE: instanceName,
+    CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
+  });
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&apos;");
 }
 
 function buildLabel(instanceName: string): string {
@@ -98,14 +118,15 @@ function renderLaunchAgentPlist(
   const environmentVariables = [
     ["HOME", homeDir],
     ["USERPROFILE", env.USERPROFILE ?? homeDir],
+    ...(env.CODEX_TELEGRAM_STATE_DIR ? ([["CODEX_TELEGRAM_STATE_DIR", env.CODEX_TELEGRAM_STATE_DIR]] as const) : []),
     ["CODEX_HOME", env.CODEX_HOME ?? path.join(homeDir, ".codex")],
     ["CLAUDE_CONFIG_DIR", env.CLAUDE_CONFIG_DIR ?? path.join(homeDir, ".claude")],
     ["PATH", pathEnv],
   ]
-    .map(([key, value]) => `    <key>${key}</key>\n    <string>${value}</string>`)
+    .map(([key, value]) => `    <key>${xmlEscape(key)}</key>\n    <string>${xmlEscape(value)}</string>`)
     .join("\n");
 
-  const stateDir = path.join(resolveChannelsDir(env), instanceName);
+  const stateDir = resolveInstanceAutostartStateDir(env, instanceName);
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -113,18 +134,18 @@ function renderLaunchAgentPlist(
     '<plist version="1.0">',
     "<dict>",
     "  <key>Label</key>",
-    `  <string>${buildLabel(instanceName)}</string>`,
+    `  <string>${xmlEscape(buildLabel(instanceName))}</string>`,
     "",
     "  <key>ProgramArguments</key>",
     "  <array>",
-    `    <string>${nodePath}</string>`,
-    `    <string>${path.join(cwd, "dist", "src", "index.js")}</string>`,
+    `    <string>${xmlEscape(nodePath)}</string>`,
+    `    <string>${xmlEscape(path.join(cwd, "dist", "src", "index.js"))}</string>`,
     "    <string>--instance</string>",
-    `    <string>${instanceName}</string>`,
+    `    <string>${xmlEscape(instanceName)}</string>`,
     "  </array>",
     "",
     "  <key>WorkingDirectory</key>",
-    `  <string>${cwd}</string>`,
+    `  <string>${xmlEscape(cwd)}</string>`,
     "",
     "  <key>RunAtLoad</key>",
     "  <true/>",
@@ -141,9 +162,9 @@ function renderLaunchAgentPlist(
     "  </dict>",
     "",
     "  <key>StandardOutPath</key>",
-    `  <string>${path.join(stateDir, "service.stdout.log")}</string>`,
+    `  <string>${xmlEscape(path.join(stateDir, "service.stdout.log"))}</string>`,
     "  <key>StandardErrorPath</key>",
-    `  <string>${path.join(stateDir, "service.stderr.log")}</string>`,
+    `  <string>${xmlEscape(path.join(stateDir, "service.stderr.log"))}</string>`,
     "</dict>",
     "</plist>",
     "",
@@ -197,6 +218,7 @@ function createDefaultDeps(uid: number): Required<AutostartCommandDeps> {
     uid,
     nodePath: process.execPath,
     pathEnv: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+    platform: process.platform,
     bootstrap: async (_label, plistPath) => {
       await execFile("launchctl", ["bootstrap", launchctlDomain, plistPath]);
     },
@@ -237,6 +259,7 @@ function withDeps(deps: AutostartCommandDeps = {}): Required<AutostartCommandDep
   const uid = deps.uid ?? process.getuid?.() ?? 0;
   return {
     ...createDefaultDeps(uid),
+    platform: process.platform,
     ...deps,
   };
 }
@@ -246,8 +269,7 @@ async function syncInstanceAutostart(
   instanceName: string,
   deps: Required<AutostartCommandDeps>,
 ): Promise<void> {
-  const channelsDir = resolveChannelsDir(env);
-  const stateDir = path.join(channelsDir, instanceName);
+  const stateDir = resolveInstanceAutostartStateDir(env, instanceName);
   if (!(await fileExists(stateDir))) {
     throw new Error(`Instance "${instanceName}" not found.`);
   }
@@ -298,6 +320,13 @@ export async function runAutostartCommand(
   const subcommand = argv[1];
   const parsed = parseAutostartInstanceOption(argv.slice(2));
   const actualDeps = withDeps(deps);
+  if (actualDeps.platform !== "darwin") {
+    throw new Error("telegram autostart is currently supported only on macOS (launchd).");
+  }
+
+  if (env.CODEX_TELEGRAM_STATE_DIR && !parsed.instanceName && (subcommand === "sync" || subcommand === "status")) {
+    throw new Error('When CODEX_TELEGRAM_STATE_DIR is set, pass "--instance <name>" to telegram autostart.');
+  }
 
   if (subcommand === "sync" || subcommand === "add") {
     const prune = parsed.args.includes("--prune");

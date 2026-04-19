@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -69,6 +69,53 @@ describe("runAutostartCommand", () => {
       expect(plist).toContain(path.join(tempDir, ".codex"));
       expect(plist).toContain(path.join(tempDir, ".claude"));
       expect(plist).toContain("/usr/local/bin/node");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors CODEX_TELEGRAM_STATE_DIR and persists it into the launch agent environment", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-autostart-"));
+    const messages: string[] = [];
+
+    try {
+      const customStateDir = path.join(tempDir, "custom-state");
+      await mkdir(customStateDir, { recursive: true });
+      const { runAutostartCommand } = await loadAutostartModule();
+
+      const handled = await runAutostartCommand(
+        ["autostart", "sync", "--instance", "alpha"],
+        {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CODEX_TELEGRAM_STATE_DIR: customStateDir,
+        },
+        { log: (message) => messages.push(message) },
+        {
+          cwd: "/repo",
+          nodePath: "/usr/bin/node",
+          uid: 501,
+          pathEnv: "/usr/bin:/bin",
+          bootout: async () => {},
+          bootstrap: async () => {},
+          enable: async () => {},
+          kickstart: async () => {},
+          inspect: async () => ({
+            loaded: true,
+            running: true,
+            pid: 123,
+          }),
+        },
+      );
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual(['Synced autostart for instance "alpha".']);
+
+      const plistPath = path.join(tempDir, "Library", "LaunchAgents", "com.cloveric.cc-telegram-bridge.alpha.plist");
+      const plist = await readFile(plistPath, "utf8");
+      expect(plist).toContain(`<string>${customStateDir}</string>`);
+      expect(plist).toContain(path.join(customStateDir, "service.stdout.log"));
+      expect(plist).toContain(path.join(customStateDir, "service.stderr.log"));
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -235,6 +282,48 @@ describe("runAutostartCommand", () => {
     }
   });
 
+  it("XML-escapes launch agent values before writing the plist", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram & bridge-"));
+
+    try {
+      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
+      const { runAutostartCommand } = await loadAutostartModule();
+
+      const handled = await runAutostartCommand(
+        ["autostart", "sync", "--instance", "alpha"],
+        {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+        },
+        { log: () => {} },
+        {
+          cwd: path.join(tempDir, "repo & docs"),
+          nodePath: "/usr/local/bin/node",
+          uid: 501,
+          pathEnv: "/usr/bin:/bin:/tmp/a & b",
+          bootout: async () => {},
+          bootstrap: async () => {},
+          enable: async () => {},
+          kickstart: async () => {},
+          inspect: async () => ({
+            loaded: true,
+            running: true,
+            pid: 123,
+          }),
+        },
+      );
+
+      expect(handled).toBe(true);
+      const plistPath = path.join(tempDir, "Library", "LaunchAgents", "com.cloveric.cc-telegram-bridge.alpha.plist");
+      const plist = await readFile(plistPath, "utf8");
+      expect(plist).toContain("&amp;");
+      expect(plist).not.toContain("repo & docs");
+      expect(plist).not.toContain("/tmp/a & b");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses pid and running state from launchctl print output", async () => {
     const { parseLaunchctlPrintStatus } = await loadAutostartModule();
 
@@ -248,5 +337,32 @@ describe("runAutostartCommand", () => {
       running: true,
       pid: 52427,
     });
+  });
+
+  it("fails fast on non-macOS without creating launch agent directories", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-autostart-"));
+
+    try {
+      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
+      const { runAutostartCommand } = await loadAutostartModule();
+
+      await expect(
+        runAutostartCommand(
+          ["autostart", "sync", "--instance", "alpha"],
+          {
+            HOME: tempDir,
+            USERPROFILE: tempDir,
+          },
+          { log: () => {} },
+          {
+            platform: "linux",
+          },
+        ),
+      ).rejects.toThrow("telegram autostart is currently supported only on macOS (launchd).");
+
+      await expect(stat(path.join(tempDir, "Library", "LaunchAgents"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
