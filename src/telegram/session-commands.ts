@@ -86,9 +86,13 @@ function buildSuspendedPreviousSnapshot(input: {
     };
   } | null;
   currentResume: ResumeState | undefined;
-}): { sessionId: string | null; resume: ResumeState | null } {
+}): { sessionId: string | null; resume: ResumeState | null } | undefined {
   if (input.existingRecord?.suspendedPrevious) {
     return input.existingRecord.suspendedPrevious;
+  }
+
+  if (!input.existingRecord?.codexSessionId && !input.currentResume) {
+    return undefined;
   }
 
   return {

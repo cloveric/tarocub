@@ -368,6 +368,74 @@ describe("handleLocalSessionTelegramCommand", () => {
     }
   });
 
+  it("does not claim to restore a previous Codex conversation when none existed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    let record: {
+      codexSessionId: string;
+      suspendedPrevious?: {
+        sessionId: string | null;
+        resume: null;
+      };
+    } | null = null;
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn(async () => ({ record, warning: undefined })),
+      removeByChatId: vi.fn().mockResolvedValue(true),
+      upsert: vi.fn(async (next) => {
+        record = {
+          codexSessionId: next.codexSessionId,
+          suspendedPrevious: next.suspendedPrevious,
+        };
+      }),
+    };
+
+    try {
+      const resumeHandled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/resume thread thread-new"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 86,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        validateCodexThread: vi.fn().mockResolvedValue(undefined),
+      });
+
+      expect(resumeHandled).toBe(true);
+
+      const detachHandled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/detach"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 87,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(detachHandled).toBe(true);
+      expect(api.sendMessage).toHaveBeenLastCalledWith(
+        123,
+        "Detached from the current Codex thread. Next message will start a fresh thread.",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("restores the previous Claude conversation and workspace on /detach", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
     const api = {
@@ -435,6 +503,91 @@ describe("handleLocalSessionTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         "Detached from resumed session and restored the previous conversation.",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim to restore a previous Claude conversation when none existed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    let record: {
+      codexSessionId: string;
+      suspendedPrevious?: {
+        sessionId: string | null;
+        resume: null;
+      };
+    } | null = null;
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn(async () => ({ record, warning: undefined })),
+      removeByChatId: vi.fn().mockResolvedValue(true),
+      upsert: vi.fn(async (next) => {
+        record = {
+          codexSessionId: next.codexSessionId,
+          suspendedPrevious: next.suspendedPrevious,
+        };
+      }),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const resumeHandled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/resume 1"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 88,
+        },
+        sessionStore,
+        updateInstanceConfig,
+        scanRecentSessions: vi.fn().mockResolvedValue([
+          {
+            sessionId: "claude-resumed",
+            dirName: "new-proj",
+            workspacePath: "/tmp/new-proj",
+            displayName: "new-proj",
+            modifiedAt: new Date().toISOString(),
+          },
+        ]),
+        formatSessionListMessage: vi.fn().mockReturnValue("1. new-proj"),
+      });
+
+      expect(resumeHandled).toBe(true);
+
+      const detachHandled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {
+          engine: "claude",
+          resume: {
+            sessionId: "claude-resumed",
+            dirName: "new-proj",
+            workspacePath: "/tmp/new-proj",
+          },
+        },
+        normalized: createNormalizedMessage("/detach"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 89,
+        },
+        sessionStore,
+        updateInstanceConfig,
+      });
+
+      expect(detachHandled).toBe(true);
+      expect(api.sendMessage).toHaveBeenLastCalledWith(
+        123,
+        "Detached from resumed session. Back to default workspace.",
       );
     } finally {
       await rm(root, { recursive: true, force: true });
