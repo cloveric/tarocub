@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { AccessStore } from "../state/access-store.js";
 import { normalizeInstanceName } from "../instance.js";
+import { runAutostartCommand, type AutostartCommandDeps } from "./autostart.js";
 import { resolveInstanceAccessStatePath, type InstanceTokenEnv, writeInstanceBotToken } from "./access.js";
 import {
   appendAuditEvent,
@@ -46,9 +47,13 @@ export interface CliLogger {
 }
 
 export interface CliOptions {
-  env?: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN">;
+  env?: Pick<
+    EnvSource,
+    "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
+  >;
   logger?: CliLogger;
   serviceDeps?: ServiceCommandDeps;
+  autostartDeps?: AutostartCommandDeps;
 }
 
 function normalizeCommandArgs(argv: string[]): string[] {
@@ -1037,6 +1042,8 @@ Commands:
   budget [set <usd>|show] [--instance <name>] Manage cost budget and block-on-exceed
   locale [en|zh] [--instance <name>]          Set user-facing message language
   instance <list|rename|delete> [...]         Manage instances (list, rename, delete)
+  autostart <status|up|down|restart|sync|remove|add> [...]
+                                              Manage macOS launchd autostart for instances
   logs rotate [--instance <name>]             Rotate log files now (auto on service start)
   backup [--instance <name>] [--out <path>]   Back up instance state to a .cctb.gz archive (pure Node)
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
@@ -1410,6 +1417,10 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
 
   if (normalized[0] === "instance") {
     return runInstanceCommand(normalized, env, logger, options.serviceDeps ?? {});
+  }
+
+  if (normalized[0] === "autostart") {
+    return runAutostartCommand(normalized, env, logger, options.autostartDeps ?? {});
   }
 
   if (normalized[0] === "budget") {
