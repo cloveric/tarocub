@@ -70,6 +70,9 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
         return;
       }
       const prefix = takeSafePrefixByUnits(remaining, available);
+      if (utf16Length(prefix) > available) {
+        throw new RangeError("limit is too small to safely encode this message chunk");
+      }
       current += prefix;
       current += closeFenceSuffix;
       pushCurrent();
@@ -87,6 +90,9 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
         return;
       }
       const prefix = takeSafePrefixByUnits(remaining, available);
+      if (utf16Length(prefix) > available) {
+        throw new RangeError("limit is too small to safely encode this message chunk");
+      }
       current += prefix;
       pushCurrent();
       remaining = remaining.slice(prefix.length);

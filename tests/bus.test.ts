@@ -1,5 +1,7 @@
 import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { createServer as createTcpServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +70,21 @@ import {
 } from "../src/bus/bus-server.js";
 import { delegateToInstance } from "../src/bus/bus-client.js";
 import { BUS_PROTOCOL_CAPABILITIES, BUS_PROTOCOL_VERSION, BusProtocolError } from "../src/bus/bus-protocol.js";
+
+const require = createRequire(import.meta.url);
+const tsxCliPath = require.resolve("tsx/cli");
+
+function execFileAsync(command: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { cwd }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -389,6 +406,33 @@ describe("bus registry", () => {
       await Promise.all([
         registerInstance(tempDir, "alpha", 9201, "secret-a"),
         registerInstance(tempDir, "beta", 9202, "secret-b"),
+      ]);
+
+      const registry = await readRegistry(tempDir);
+      expect(registry.instances).toEqual(expect.objectContaining({
+        alpha: expect.objectContaining({ port: 9201, secret: "secret-a" }),
+        beta: expect.objectContaining({ port: 9202, secret: "secret-b" }),
+      }));
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not lose registrations when multiple processes register concurrently", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-registry-"));
+    const scriptPath = path.join(tempDir, "register.ts");
+    try {
+      await writeFile(scriptPath, [
+        "import { registerInstance } from '/Users/cloveric/projects/cc-telegram-bridge/src/bus/bus-registry.ts';",
+        "(async () => {",
+        "  const [root, name, port, secret] = process.argv.slice(2);",
+        "  await registerInstance(root, name, Number(port), secret);",
+        "})().catch((error) => { console.error(error); process.exit(1); });",
+      ].join("\n"), "utf8");
+
+      await Promise.all([
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, tempDir, "alpha", "9201", "secret-a"], "/Users/cloveric/projects/cc-telegram-bridge"),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, tempDir, "beta", "9202", "secret-b"], "/Users/cloveric/projects/cc-telegram-bridge"),
       ]);
 
       const registry = await readRegistry(tempDir);

@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { withFileMutex } from "./file-mutex.js";
 import { JsonStore } from "./json-store.js";
 import { UsageRecordSchema } from "./usage-state-schema.js";
 
@@ -51,14 +52,16 @@ export class UsageStore {
 
   async record(turn: TurnUsage): Promise<void> {
     const task = async () => {
-      const current = await this.load();
-      current.totalInputTokens += turn.inputTokens;
-      current.totalOutputTokens += turn.outputTokens;
-      current.totalCachedTokens += turn.cachedTokens ?? 0;
-      current.totalCostUsd = Number((current.totalCostUsd + (turn.costUsd ?? 0)).toFixed(12));
-      current.requestCount += 1;
-      current.lastUpdatedAt = new Date().toISOString();
-      await this.store.write(current);
+      await withFileMutex(this.filePath, async () => {
+        const current = await this.load();
+        current.totalInputTokens += turn.inputTokens;
+        current.totalOutputTokens += turn.outputTokens;
+        current.totalCachedTokens += turn.cachedTokens ?? 0;
+        current.totalCostUsd = Number((current.totalCostUsd + (turn.costUsd ?? 0)).toFixed(12));
+        current.requestCount += 1;
+        current.lastUpdatedAt = new Date().toISOString();
+        await this.store.write(current);
+      });
     };
     const previous = UsageStore.pendingWrites.get(this.filePath) ?? Promise.resolve();
     const run = previous.then(task, task);

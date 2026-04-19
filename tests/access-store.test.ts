@@ -1,4 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { randomInt } from "node:crypto";
@@ -13,6 +15,21 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 import { AccessStore } from "../src/state/access-store.js";
+
+const require = createRequire(import.meta.url);
+const tsxCliPath = require.resolve("tsx/cli");
+
+function execFileAsync(command: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { cwd }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
 
 const mockRandomInt = randomInt as unknown as {
   mockImplementation: (implementation: (...args: unknown[]) => number) => void;
@@ -205,6 +222,33 @@ describe("AccessStore", () => {
 
       await expect(store.load()).resolves.toEqual(expect.objectContaining({
         allowlist: [101, 202, 303],
+      }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes concurrent access mutations across separate processes", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const scriptPath = path.join(dir, "allow-chat.ts");
+    const filePath = path.join(dir, "access.json");
+    try {
+      await writeFile(scriptPath, [
+        "import { AccessStore } from '/Users/cloveric/projects/cc-telegram-bridge/src/state/access-store.ts';",
+        "(async () => {",
+        "  const [file, chatId] = process.argv.slice(2);",
+        "  const store = new AccessStore(file);",
+        "  await store.allowChat(Number(chatId));",
+        "})().catch((error) => { console.error(error); process.exit(1); });",
+      ].join("\n"), "utf8");
+
+      await Promise.all([
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "111"], "/Users/cloveric/projects/cc-telegram-bridge"),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "222"], "/Users/cloveric/projects/cc-telegram-bridge"),
+      ]);
+
+      await expect(new AccessStore(filePath).load()).resolves.toEqual(expect.objectContaining({
+        allowlist: expect.arrayContaining([111, 222]),
       }));
     } finally {
       await rm(dir, { recursive: true, force: true });

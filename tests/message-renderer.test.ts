@@ -50,6 +50,10 @@ describe("chunkTelegramMessage", () => {
     expect(chunks).toEqual(["aaaa😀", "😀bbbb"]);
   });
 
+  it("rejects limits that cannot safely encode a surrogate pair", () => {
+    expect(() => chunkTelegramMessage("😀a", 1)).toThrow(RangeError);
+  });
+
   it("closes and reopens fenced code blocks across chunk boundaries", () => {
     const message = ["before", "```js", "const answer = 42;", "```", "after"].join("\n");
 

@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto";
 
 import { AccessStateSchema } from "./access-state-schema.js";
+import { withFileMutex } from "./file-mutex.js";
 import { JsonStore } from "./json-store.js";
 import type { AccessPolicy, AccessState, PairedUser, PendingPair } from "../types.js";
 
@@ -30,8 +31,10 @@ function generateCode(): string {
 export class AccessStore {
   private readonly store: JsonStore<AccessState>;
   private pendingWrite: Promise<void> = Promise.resolve();
+  private readonly filePath: string;
 
   constructor(filePath: string) {
+    this.filePath = filePath;
     this.store = new JsonStore<AccessState>(filePath, (value) => {
       const result = AccessStateSchema.safeParse(value);
       if (result.success) {
@@ -179,7 +182,10 @@ export class AccessStore {
   }
 
   private enqueueWrite(task: () => Promise<void>): Promise<void> {
-    const run = this.pendingWrite.then(task, task);
+    const run = this.pendingWrite.then(
+      () => withFileMutex(this.filePath, task),
+      () => withFileMutex(this.filePath, task),
+    );
     this.pendingWrite = run.then(
       () => undefined,
       () => undefined,

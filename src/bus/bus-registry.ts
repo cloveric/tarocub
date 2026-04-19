@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { BusRegistryEntrySchema } from "./bus-registry-schema.js";
+import { withFileMutex } from "../state/file-mutex.js";
 
 export interface BusRegistryEntry {
   port: number;
@@ -13,8 +14,6 @@ export interface BusRegistryEntry {
 export interface BusRegistryData {
   instances: Record<string, BusRegistryEntry>;
 }
-
-const pendingRegistryWrites = new Map<string, Promise<void>>();
 
 function resolveRegistryPath(channelRoot: string): string {
   return path.join(channelRoot, ".bus-registry.json");
@@ -166,18 +165,10 @@ async function mutateRegistry(
   mutate: (registry: BusRegistryData) => void,
 ): Promise<void> {
   const registryPath = resolveRegistryPath(channelRoot);
-  const task = async () => {
+  await withFileMutex(registryPath, async () => {
     await mkdir(channelRoot, { recursive: true, mode: 0o700 });
     const registry = await readRegistry(channelRoot);
     mutate(registry);
     await writeFile(registryPath, JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-  };
-
-  const previous = pendingRegistryWrites.get(registryPath) ?? Promise.resolve();
-  const run = previous.then(task, task);
-  pendingRegistryWrites.set(registryPath, run.then(
-    () => undefined,
-    () => undefined,
-  ));
-  await run;
+  });
 }
