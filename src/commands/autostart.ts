@@ -136,8 +136,14 @@ function renderLaunchAgentPlist(
     ["USER", resolveUserName(env)],
     ["USERPROFILE", env.USERPROFILE ?? homeDir],
     ...(env.CODEX_TELEGRAM_STATE_DIR ? ([["CODEX_TELEGRAM_STATE_DIR", env.CODEX_TELEGRAM_STATE_DIR]] as const) : []),
-    ["CODEX_HOME", env.CODEX_HOME ?? path.join(homeDir, ".codex")],
-    ["CLAUDE_CONFIG_DIR", env.CLAUDE_CONFIG_DIR ?? path.join(homeDir, ".claude")],
+    // Only forward CODEX_HOME / CLAUDE_CONFIG_DIR when the caller set them
+    // explicitly. Setting CLAUDE_CONFIG_DIR to its *default* value is NOT a
+    // no-op: Claude Code's CLI keys its keychain credential lookup on whether
+    // the env var is present, so injecting it here (even with the same path)
+    // makes every launchd-managed bot fail auth with "Not logged in". Let the
+    // engines use their own defaults when the user did not override.
+    ...(env.CODEX_HOME ? ([["CODEX_HOME", env.CODEX_HOME]] as const) : []),
+    ...(env.CLAUDE_CONFIG_DIR ? ([["CLAUDE_CONFIG_DIR", env.CLAUDE_CONFIG_DIR]] as const) : []),
     ["PATH", pathEnv],
   ]
     .map(([key, value]) => `    <key>${xmlEscape(key)}</key>\n    <string>${xmlEscape(value)}</string>`)

@@ -121,6 +121,44 @@ describe("runAutostartCommand", () => {
     }
   });
 
+  it("omits CODEX_HOME and CLAUDE_CONFIG_DIR when the caller did not set them", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-autostart-"));
+
+    try {
+      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
+      const { runAutostartCommand } = await loadAutostartModule();
+
+      const handled = await runAutostartCommand(
+        ["autostart", "sync", "--instance", "alpha"],
+        {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+        },
+        { log: () => {} },
+        {
+          cwd: "/repo",
+          nodePath: "/usr/bin/node",
+          uid: 501,
+          pathEnv: "/usr/bin:/bin",
+          bootout: async () => {},
+          bootstrap: async () => {},
+          enable: async () => {},
+          kickstart: async () => {},
+          inspect: async () => ({ loaded: true, running: true, pid: 123 }),
+        },
+      );
+
+      expect(handled).toBe(true);
+
+      const plistPath = path.join(tempDir, "Library", "LaunchAgents", "com.cloveric.cc-telegram-bridge.alpha.plist");
+      const plist = await readFile(plistPath, "utf8");
+      expect(plist).not.toContain("<key>CODEX_HOME</key>");
+      expect(plist).not.toContain("<key>CLAUDE_CONFIG_DIR</key>");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("persists USER into the launch agent environment for background Claude auth", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-autostart-"));
 
