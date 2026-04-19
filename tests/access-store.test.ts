@@ -268,6 +268,65 @@ describe("AccessStore", () => {
     }
   });
 
+  it("keeps a pending pairing code intact when redemption is blocked by single-chat mode", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    try {
+      setRandomIntSequence([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]);
+      const store = new AccessStore(path.join(dir, "access.json"));
+
+      const firstCode = await store.issuePairingCode({
+        telegramUserId: 10,
+        telegramChatId: 111,
+        now: new Date("2026-04-08T00:00:00Z"),
+      });
+      const secondCode = await store.issuePairingCode({
+        telegramUserId: 20,
+        telegramChatId: 222,
+        now: new Date("2026-04-08T00:02:00Z"),
+      });
+
+      await store.redeemPairingCode(firstCode.code, new Date("2026-04-08T00:01:00Z"));
+
+      await expect(
+        store.redeemPairingCode(secondCode.code, new Date("2026-04-08T00:03:00Z")),
+      ).rejects.toThrow("instance is locked to another chat until multi-chat is enabled");
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        pendingPairs: [
+          expect.objectContaining({
+            code: secondCode.code,
+            telegramChatId: 222,
+            telegramUserId: 20,
+          }),
+        ],
+      }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to disable multi-chat while another chat is still pending pairing", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    try {
+      mockRandomInt.mockReturnValue(0);
+      const store = new AccessStore(path.join(dir, "access.json"));
+
+      await store.setMultiChat(true);
+      await store.allowChat(111);
+      await store.issuePairingCode({
+        telegramUserId: 20,
+        telegramChatId: 222,
+        now: new Date("2026-04-08T00:02:00Z"),
+      });
+
+      await expect(store.setMultiChat(false)).rejects.toThrow(
+        "cannot disable multi-chat while multiple chats are authorized or pending pairing",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("serializes concurrent access mutations across separate processes", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const scriptPath = path.join(dir, "allow-chat.ts");

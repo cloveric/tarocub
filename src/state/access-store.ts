@@ -38,6 +38,7 @@ function countAuthorizedChats(state: AccessState): number {
   return new Set<number>([
     ...state.allowlist,
     ...state.pairedUsers.map((entry) => entry.telegramChatId),
+    ...state.pendingPairs.map((entry) => entry.telegramChatId),
   ]).size;
 }
 
@@ -84,7 +85,7 @@ export class AccessStore {
     await this.enqueueWrite(async () => {
       const state = await this.load();
       if (!enabled && countAuthorizedChats(state) > 1) {
-        throw new Error("cannot disable multi-chat while multiple chats are authorized");
+        throw new Error("cannot disable multi-chat while multiple chats are authorized or pending pairing");
       }
       state.multiChat = enabled;
       await this.store.write(state);
@@ -198,17 +199,17 @@ export class AccessStore {
         return;
       }
 
-      state.pendingPairs = state.pendingPairs.filter((pair) => pair.code !== code);
-
       if (new Date(pendingPair.expiresAt).getTime() <= now.getTime()) {
+        state.pendingPairs = state.pendingPairs.filter((pair) => pair.code !== code);
         await this.store.write(state);
         return;
       }
 
       if (findConflictingAuthorizedChatId(state, pendingPair.telegramChatId) !== null) {
-        await this.store.write(state);
         throw new Error("instance is locked to another chat until multi-chat is enabled");
       }
+
+      state.pendingPairs = state.pendingPairs.filter((pair) => pair.code !== code);
 
       pairedUser = {
         telegramUserId: pendingPair.telegramUserId,

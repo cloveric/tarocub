@@ -28,9 +28,8 @@ import { TelegramApi } from "../telegram/api.js";
 import {
   getLastHandledUpdateId,
   lookupTelegramBotIdentity,
-  readApprovalMode,
   readConfiguredBotToken,
-  readInstanceEngine,
+  readInstanceRuntimeConfig,
   resolveEngineRuntime,
 } from "../service.js";
 import { inspectSessions as inspectSessionBindings } from "./session.js";
@@ -577,8 +576,9 @@ export async function getServiceStatus(
   const accessStore = new AccessStore(path.join(paths.stateDir, "access.json"));
   const accessStatus = await accessStore.getStatus();
   const configPath = path.join(paths.stateDir, "config.json");
-  const engine = await readInstanceEngine(configPath);
-  const approvalMode = await readApprovalMode(configPath);
+  const runtimeConfig = await readInstanceRuntimeConfig(configPath);
+  const engine = runtimeConfig.engine;
+  const approvalMode = runtimeConfig.approvalMode;
   const sessionSummary = await inspectSessionBindings(env, paths.instanceName);
   const lastHandledUpdateId = await getLastHandledUpdateId(path.join(paths.stateDir, "inbox"));
   const readToken = deps.readConfiguredBotToken ?? readConfiguredBotToken;

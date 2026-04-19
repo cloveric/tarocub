@@ -21,6 +21,7 @@ import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
 import { ChatQueue } from "./runtime/chat-queue.js";
 import { classifyFailure } from "./runtime/error-classification.js";
+import { readValidatedConfigFile } from "./telegram/instance-config.js";
 
 export interface ServiceDependencies {
   api: TelegramApi;
@@ -361,31 +362,26 @@ async function seedIsolatedClaudeConfig(
 export type EngineType = "codex" | "claude";
 type ApprovalMode = "normal" | "full-auto" | "bypass";
 
+export async function readInstanceRuntimeConfig(configPath: string): Promise<{
+  engine: EngineType;
+  approvalMode: ApprovalMode;
+}> {
+  const parsed = await readValidatedConfigFile(configPath);
+  return {
+    engine: parsed.engine === "claude" ? "claude" : "codex",
+    approvalMode:
+      parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass"
+        ? parsed.approvalMode
+        : "normal",
+  };
+}
+
 export async function readInstanceEngine(configPath: string): Promise<EngineType> {
-  try {
-    const raw = await readFile(configPath, "utf8");
-    const parsed = JSON.parse(raw) as { engine?: string };
-    if (parsed.engine === "claude") {
-      return "claude";
-    }
-    return "codex";
-  } catch {
-    return "codex";
-  }
+  return (await readInstanceRuntimeConfig(configPath)).engine;
 }
 
 export async function readApprovalMode(configPath: string): Promise<ApprovalMode> {
-  try {
-    const raw = await readFile(configPath, "utf8");
-    const parsed = JSON.parse(raw) as { approvalMode?: string };
-    if (parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass") {
-      return parsed.approvalMode;
-    }
-
-    return "normal";
-  } catch {
-    return "normal";
-  }
+  return (await readInstanceRuntimeConfig(configPath)).approvalMode;
 }
 
 export function resolveEngineRuntime(engine: EngineType, _approvalMode: ApprovalMode): "app-server" | "process" {
@@ -550,9 +546,10 @@ async function createAdapter(
   instructionsPath: string,
   configPath: string,
 ): Promise<CodexAdapter> {
-  const engine = await readInstanceEngine(configPath);
+  const runtimeConfig = await readInstanceRuntimeConfig(configPath);
+  const engine = runtimeConfig.engine;
   const workspacePath = path.join(config.stateDir, "workspace");
-  const approvalMode = await readApprovalMode(configPath);
+  const approvalMode = runtimeConfig.approvalMode;
   const childEnv = buildAdapterChildEnv(env);
 
   if (engine === "claude") {

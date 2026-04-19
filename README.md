@@ -37,6 +37,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.3.1** — preserves pending pairing codes when single-chat mode blocks redemption, refuses to turn multi-chat off while another chat is still pending pairing, and makes service startup/runtime config parsing use the same validated config reader.
 - **v4.3.0** — makes single-chat-per-instance the default, adds explicit `telegram access multi on|off` control, keeps Codex on `app-server` across YOLO modes, and exposes `/engine` switching directly in Telegram.
 - **v4.2.0** — adds Claude auth smoke checks, stronger service environment diagnostics, and cleanup guidance for stale legacy launchd plists after removing the old autostart path.
 - **v4.1.0** — adds coordinator-led `crew` runs with persisted run state, plus a round of state/runtime hardening around schemas, file delivery, and shared state writes.

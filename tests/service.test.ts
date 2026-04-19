@@ -314,6 +314,36 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
+  it("uses shared config validation when the service resolves codex runtime options", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, "{bad json\n", "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CODEX_EXECUTABLE: "codex",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`Malformed ${configPath}`),
+      );
+    } finally {
+      consoleErrorSpy.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses the Claude adapter when the instance engine is claude", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
