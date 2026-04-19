@@ -54,11 +54,17 @@ export class JsonStore<T> {
       await tmpHandle.close();
     }
     await rename(tmpPath, this.filePath);
-    const dirHandle = await open(directoryPath, "r");
     try {
-      await dirHandle.sync();
-    } finally {
-      await dirHandle.close();
+      const dirHandle = await open(directoryPath, "r");
+      try {
+        await dirHandle.sync();
+      } finally {
+        await dirHandle.close();
+      }
+    } catch (error) {
+      if (!isSkippableDirectorySyncError(error)) {
+        throw error;
+      }
     }
   }
 
@@ -81,4 +87,13 @@ export class JsonStore<T> {
       throw error;
     }
   }
+}
+
+function isSkippableDirectorySyncError(error: unknown): boolean {
+  if (!(typeof error === "object" && error !== null && "code" in error)) {
+    return false;
+  }
+
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EPERM" || code === "EINVAL" || code === "ENOTSUP" || code === "EISDIR";
 }

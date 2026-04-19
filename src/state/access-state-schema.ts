@@ -11,14 +11,14 @@ export const PairedUserSchema = z.object({
   telegramUserId: z.number().int(),
   telegramChatId: z.number().int(),
   pairedAt: IsoTimestampSchema,
-}).strict();
+});
 
 export const PendingPairSchema = z.object({
   code: z.string(),
   telegramUserId: z.number().int(),
   telegramChatId: z.number().int(),
   expiresAt: IsoTimestampSchema,
-}).strict();
+});
 
 export const AccessStateSchema = z.object({
   schemaVersion: z.number().int().optional(),
@@ -26,4 +26,4 @@ export const AccessStateSchema = z.object({
   pairedUsers: z.array(PairedUserSchema),
   allowlist: z.array(z.number().int()),
   pendingPairs: z.array(PendingPairSchema),
-}).strict();
+});

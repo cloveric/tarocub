@@ -378,7 +378,7 @@ describe("AccessStore", () => {
     }
   });
 
-  it("rejects unexpected extra fields in persisted access state", async () => {
+  it("strips unexpected extra fields from persisted access state", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
       const filePath = path.join(dir, "access.json");
@@ -400,7 +400,18 @@ describe("AccessStore", () => {
         "utf8",
       );
 
-      await expect(new AccessStore(filePath).load()).rejects.toThrow("invalid access state");
+      await expect(new AccessStore(filePath).load()).resolves.toEqual({
+        policy: "pairing",
+        pairedUsers: [
+          {
+            telegramUserId: 42,
+            telegramChatId: 84,
+            pairedAt: "2026-04-08T00:00:00.000Z",
+          },
+        ],
+        allowlist: [],
+        pendingPairs: [],
+      });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

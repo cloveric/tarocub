@@ -337,7 +337,7 @@ describe("FileWorkflowStore", () => {
     }
   });
 
-  it("rejects unexpected extra fields in persisted workflow records", async () => {
+  it("strips unexpected extra fields from persisted workflow records", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new FileWorkflowStore(stateDir);
 
@@ -365,7 +365,22 @@ describe("FileWorkflowStore", () => {
         "utf8",
       );
 
-      await expect(store.load()).rejects.toThrow("invalid file workflow state");
+      await expect(store.load()).resolves.toEqual({
+        records: [
+          {
+            uploadId: "one",
+            chatId: 100,
+            userId: 100,
+            kind: "archive",
+            status: "awaiting_continue",
+            sourceFiles: ["a.zip"],
+            derivedFiles: [],
+            summary: "first",
+            createdAt: "2026-04-10T00:00:00.000Z",
+            updatedAt: "2026-04-10T00:00:00.000Z",
+          },
+        ],
+      });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

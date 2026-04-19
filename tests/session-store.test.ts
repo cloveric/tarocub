@@ -265,7 +265,7 @@ describe("SessionStore", () => {
     }
   });
 
-  it("rejects unexpected extra fields in persisted session records", async () => {
+  it("strips unexpected extra fields from persisted session records", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const filePath = path.join(tempDir, "session.json");
     const store = new SessionStore(filePath);
@@ -287,7 +287,16 @@ describe("SessionStore", () => {
         "utf8",
       );
 
-      await expect(store.load()).rejects.toThrow("invalid session state");
+      await expect(store.load()).resolves.toEqual({
+        chats: [
+          {
+            telegramChatId: 123,
+            codexSessionId: "session-1",
+            status: "running",
+            updatedAt: "2026-04-08T03:00:00.000Z",
+          },
+        ],
+      });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
