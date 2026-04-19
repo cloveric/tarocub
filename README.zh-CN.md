@@ -37,6 +37,7 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.2.0** — 新增 Claude 认证 smoke 检查、更强的 service 环境诊断，以及移除旧 autostart 之后对残留 legacy launchd plist 的清理指引。
 - **v4.1.0** — 新增 coordinator 主导的 `crew` 持久化 run 状态，并补了一轮 state/runtime 边界加固，包括 schema 兼容、文件投递和共享状态写入。
 - **v4.0.0** — 内部 bus 正式走 `v1` 协议（兼容老报文）：带 `protocolVersion`、`capabilities`、结构化 `errorCode` 和 `retryable` 标志。详见 [`docs/bus-protocol.md`](./docs/bus-protocol.md)。
 - Peer 活性改为 `GET /api/health` 探活 + `cc-telegram-bridge` 指纹校验，端口被别的进程占用时不会再被误判成活着。
