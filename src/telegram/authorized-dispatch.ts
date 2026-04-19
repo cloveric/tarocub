@@ -55,7 +55,7 @@ export interface AuthorizedTelegramDispatchContext {
 }
 
 export interface AuthorizedTelegramDispatchDeps {
-  sessionStore: Pick<SessionStore, "findByChatIdSafe" | "inspect" | "removeByChatId" | "upsert">;
+  sessionStore: Pick<SessionStore, "findByChatIdSafe" | "inspect" | "removeByChatId" | "clearAll" | "upsert">;
   turnState: WorkflowAwareTurnState;
   updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
   deliverTelegramResponse: (

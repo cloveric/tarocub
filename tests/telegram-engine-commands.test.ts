@@ -42,6 +42,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         },
         sessionStore: {
           removeByChatId: vi.fn(),
+          clearAll: vi.fn(),
         },
         updateInstanceConfig: vi.fn(),
       });
@@ -78,6 +79,7 @@ describe("handleLocalEngineTelegramCommand", () => {
     };
     const sessionStore = {
       removeByChatId: vi.fn().mockResolvedValue(true),
+      clearAll: vi.fn().mockResolvedValue(2),
     };
     const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
       const cfg: Record<string, unknown> = { engine: "claude", model: "opus" };
@@ -107,10 +109,10 @@ describe("handleLocalEngineTelegramCommand", () => {
 
       expect(handled).toBe(true);
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
-      expect(sessionStore.removeByChatId).toHaveBeenCalledWith(123);
+      expect(sessionStore.clearAll).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Engine set to codex. Cleared the previous model override and reset this chat's session binding. Restart this instance to apply.",
+        "Engine set to codex. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.",
       );
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({
@@ -149,6 +151,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         },
         sessionStore: {
           removeByChatId: vi.fn(),
+          clearAll: vi.fn(),
         },
         updateInstanceConfig: vi.fn(),
       });
@@ -179,6 +182,7 @@ describe("handleLocalEngineTelegramCommand", () => {
     };
     const sessionStore = {
       removeByChatId: vi.fn().mockResolvedValue(true),
+      clearAll: vi.fn(),
     };
 
     try {
@@ -224,6 +228,7 @@ describe("handleLocalEngineTelegramCommand", () => {
     };
     const sessionStore = {
       removeByChatId: vi.fn().mockResolvedValue(true),
+      clearAll: vi.fn(),
     };
     const authError = new Error("unauthorized");
 
@@ -279,6 +284,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         bridge,
         sessionStore: {
           removeByChatId: vi.fn(),
+          clearAll: vi.fn(),
         },
         updateInstanceConfig: vi.fn(),
       });
@@ -316,6 +322,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         },
         sessionStore: {
           removeByChatId: vi.fn(),
+          clearAll: vi.fn(),
         },
         updateInstanceConfig: vi.fn(),
       });

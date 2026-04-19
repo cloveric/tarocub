@@ -37,6 +37,7 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.3.0** — 默认改为一实例一聊天，新增显式 `telegram access multi on|off` 开关；Codex 在 YOLO 模式下继续走 `app-server`；并支持直接在 Telegram 里用 `/engine` 切换引擎。
 - **v4.2.0** — 新增 Claude 认证 smoke 检查、更强的 service 环境诊断，以及移除旧 autostart 之后对残留 legacy launchd plist 的清理指引。
 - **v4.1.0** — 新增 coordinator 主导的 `crew` 持久化 run 状态，并补了一轮 state/runtime 边界加固，包括 schema 兼容、文件投递和共享状态写入。
 - **v4.0.0** — 内部 bus 正式走 `v1` 协议（兼容老报文）：带 `protocolVersion`、`capabilities`、结构化 `errorCode` 和 `retryable` 标志。详见 [`docs/bus-protocol.md`](./docs/bus-protocol.md)。
@@ -90,7 +91,7 @@ npm run dev -- telegram engine --instance review-bot
 
 ## 多 Bot 部署
 
-想开多少个 bot 就开多少个。每个实例完全隔离 — 独立的引擎、token、人格、线程、访问规则、收件箱和审计日志。
+想开多少个 bot 就开多少个。每个实例完全隔离 — 独立的引擎、token、人格、线程、访问规则、收件箱和审计日志。默认语义仍然是“一实例一个聊天”；多聊天是显式开启的例外模式。
 
 ```
           ┌─────────────────────────────────────────────┐
@@ -759,6 +760,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 Telegram 用户也可以使用：
 
 - `/status`
+- `/engine [claude|codex]` — 切换当前实例引擎（桥会自动清掉陈旧绑定）
 - `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`xhigh` 仅 Opus 4.7+ 可用）
 - `/model [名称|off]` — 切换模型
 - `/btw <问题>` — 旁问（不影响当前会话）
@@ -827,13 +829,23 @@ npm run smoke:claude-auth
 
 按实例分两层：**配对**（初始握手）+ **白名单**（持续授权）。
 
+默认行为现在更保守：
+
+- 一个实例默认只服务 **一个 Telegram chat**
+- 第二个 chat 不会自动配对，也不会被加入 allowlist，除非你显式打开 multi-chat
+- 这样可以减少 `/resume`、workspace override、本地文件和会话状态在不同 chat 之间串掉
+
 ```bash
 npm run dev -- telegram access pair <code>
 npm run dev -- telegram access policy allowlist
 npm run dev -- telegram access allow <chat-id>
 npm run dev -- telegram access revoke <chat-id>
+npm run dev -- telegram access multi on
+npm run dev -- telegram access multi off
 npm run dev -- telegram status [--instance work]
 ```
+
+只有在你真的想让一个实例服务多个聊天时，才使用 `telegram access multi on --instance <name>`。新实例和旧实例在没有显式修改前，默认都保持 `off`。
 
 ---
 

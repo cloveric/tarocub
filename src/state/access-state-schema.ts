@@ -22,6 +22,7 @@ export const PendingPairSchema = z.object({
 
 export const AccessStateSchema = z.object({
   schemaVersion: z.number().int().optional(),
+  multiChat: z.boolean().optional().default(false),
   policy: z.enum(["pairing", "allowlist"]),
   pairedUsers: z.array(PairedUserSchema),
   allowlist: z.array(z.number().int()),

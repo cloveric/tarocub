@@ -116,8 +116,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private lineBuffer = "";
   private nextRequestId = 1;
   private readonly pendingRequests = new Map<number, PendingRequest>();
+  private readonly nonBlockingRequestIds = new Set<number>();
   private readonly pendingTurns = new Map<string, PendingTurn>();
   private readonly loadedThreads = new Set<string>();
+  private completingTurns = 0;
+  private readonly idleWaiters = new Set<() => void>();
 
   constructor(
     private readonly codexExecutable: string,
@@ -274,7 +277,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
     initializeKey: string;
   }): Promise<void> {
     if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
-      this.destroy();
+      await this.waitForIdle();
+      if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
+        this.destroy();
+      }
     }
 
     if (!this.initializePromise) {
@@ -363,6 +369,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       } else {
         pending.resolve(parsed.result);
       }
+      this.notifyIdleWaitersIfIdle();
       return;
     }
 
@@ -417,13 +424,19 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
       this.pendingTurns.delete(threadId);
       const turnErrorMessage = this.readTurnErrorMessage(parsed.params?.turn);
+      this.completingTurns += 1;
       if (turnErrorMessage) {
         pending.reject(new Error(turnErrorMessage));
+        this.completingTurns -= 1;
+        this.notifyIdleWaitersIfIdle();
         return;
       }
 
       void this.completeTurn(threadId, turnId, pending).catch((error) => {
         pending.reject(error instanceof Error ? error : new Error(String(error)));
+      }).finally(() => {
+        this.completingTurns -= 1;
+        this.notifyIdleWaitersIfIdle();
       });
       return;
     }
@@ -479,7 +492,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return null;
   }
 
-  private request(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private request(
+    method: string,
+    params: Record<string, unknown>,
+    options?: { idleBlocking?: boolean },
+  ): Promise<unknown> {
     const child = this.child;
     const stdin = child?.stdin;
 
@@ -490,12 +507,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
     const id = this.nextRequestId++;
     return new Promise<unknown>((resolve, reject) => {
       let settled = false;
+      const idleBlocking = options?.idleBlocking !== false;
       const resolveOnce = (value: unknown) => {
         if (settled) {
           return;
         }
 
         settled = true;
+        this.nonBlockingRequestIds.delete(id);
         resolve(value);
       };
       const rejectOnce = (error: Error) => {
@@ -505,9 +524,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
         settled = true;
         this.pendingRequests.delete(id);
+        this.nonBlockingRequestIds.delete(id);
+        this.notifyIdleWaitersIfIdle();
         reject(error);
       };
 
+      if (!idleBlocking) {
+        this.nonBlockingRequestIds.add(id);
+      }
       this.pendingRequests.set(id, {
         resolve: resolveOnce,
         reject: rejectOnce,
@@ -597,8 +621,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
             text_elements: [],
           },
         ],
+      }, {
+        idleBlocking: false,
       }).catch((error) => {
         this.pendingTurns.delete(threadId);
+        this.notifyIdleWaitersIfIdle();
         reject(error);
       });
     });
@@ -687,11 +714,45 @@ export class CodexAppServerAdapter implements CodexAdapter {
       pending.reject(error);
     }
     this.pendingRequests.clear();
+    this.nonBlockingRequestIds.clear();
 
     for (const pending of this.pendingTurns.values()) {
       pending.reject(error);
     }
     this.pendingTurns.clear();
+    this.completingTurns = 0;
     this.loadedThreads.clear();
+    this.notifyIdleWaitersIfIdle();
+  }
+
+  private isIdle(): boolean {
+    for (const requestId of this.pendingRequests.keys()) {
+      if (!this.nonBlockingRequestIds.has(requestId)) {
+        return false;
+      }
+    }
+    return this.pendingTurns.size === 0 && this.completingTurns === 0;
+  }
+
+  private async waitForIdle(): Promise<void> {
+    if (this.isIdle()) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      this.idleWaiters.add(resolve);
+    });
+  }
+
+  private notifyIdleWaitersIfIdle(): void {
+    if (!this.isIdle() || this.idleWaiters.size === 0) {
+      return;
+    }
+
+    const waiters = [...this.idleWaiters];
+    this.idleWaiters.clear();
+    for (const waiter of waiters) {
+      waiter();
+    }
   }
 }

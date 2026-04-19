@@ -66,6 +66,7 @@ describe("AccessStore", () => {
       const stateB = await storeB.load();
 
       expect(stateB).toEqual({
+        multiChat: false,
         policy: "pairing",
         pairedUsers: [],
         allowlist: [],
@@ -82,6 +83,7 @@ describe("AccessStore", () => {
       const store = new AccessStore(path.join(dir, "access.json"));
 
       await store.setPolicy("allowlist");
+      await store.setMultiChat(true);
       await store.allowChat(123);
       await store.allowChat(456);
       await store.allowChat(123);
@@ -90,6 +92,7 @@ describe("AccessStore", () => {
       const status = await store.getStatus();
 
       expect(status).toEqual({
+        multiChat: true,
         policy: "allowlist",
         pairedUsers: 0,
         allowlist: [123],
@@ -213,6 +216,7 @@ describe("AccessStore", () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
       const store = new AccessStore(path.join(dir, "access.json"));
+      await store.setMultiChat(true);
 
       await Promise.all([
         store.allowChat(101),
@@ -228,6 +232,42 @@ describe("AccessStore", () => {
     }
   });
 
+  it("blocks authorizing a second chat until multi-chat is explicitly enabled", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    try {
+      mockRandomInt.mockReturnValue(0);
+      const store = new AccessStore(path.join(dir, "access.json"));
+      await store.allowChat(111);
+
+      await expect(store.allowChat(222)).rejects.toThrow(
+        "instance is locked to another chat until multi-chat is enabled",
+      );
+
+      const issued = await store.issuePairingCode({
+        telegramUserId: 42,
+        telegramChatId: 111,
+        now: new Date("2026-04-08T00:00:00Z"),
+      });
+      await expect(
+        store.redeemPairingCode(issued.code, new Date("2026-04-08T00:01:00Z")),
+      ).resolves.toEqual({
+        telegramUserId: 42,
+        telegramChatId: 111,
+        pairedAt: "2026-04-08T00:01:00.000Z",
+      });
+
+      await store.setMultiChat(true);
+      await store.allowChat(222);
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        multiChat: true,
+        allowlist: [111, 222],
+      }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("serializes concurrent access mutations across separate processes", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const scriptPath = path.join(dir, "allow-chat.ts");
@@ -236,15 +276,17 @@ describe("AccessStore", () => {
       await writeFile(scriptPath, [
         "import { AccessStore } from '/Users/cloveric/projects/cc-telegram-bridge/src/state/access-store.ts';",
         "(async () => {",
-        "  const [file, chatId] = process.argv.slice(2);",
+        "  const [file, chatId, multi] = process.argv.slice(2);",
         "  const store = new AccessStore(file);",
+        "  if (multi === 'on') await store.setMultiChat(true);",
         "  await store.allowChat(Number(chatId));",
         "})().catch((error) => { console.error(error); process.exit(1); });",
       ].join("\n"), "utf8");
 
+      await new AccessStore(filePath).setMultiChat(true);
       await Promise.all([
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "111"], "/Users/cloveric/projects/cc-telegram-bridge"),
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "222"], "/Users/cloveric/projects/cc-telegram-bridge"),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "111", "on"], "/Users/cloveric/projects/cc-telegram-bridge"),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "222", "on"], "/Users/cloveric/projects/cc-telegram-bridge"),
       ]);
 
       await expect(new AccessStore(filePath).load()).resolves.toEqual(expect.objectContaining({
@@ -401,6 +443,7 @@ describe("AccessStore", () => {
       );
 
       await expect(new AccessStore(filePath).load()).resolves.toEqual({
+        multiChat: false,
         policy: "pairing",
         pairedUsers: [
           {

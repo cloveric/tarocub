@@ -99,6 +99,23 @@ export class SessionStore {
     return removed;
   }
 
+  async clearAll(): Promise<number> {
+    let removedCount = 0;
+
+    await this.enqueueWrite(async () => {
+      const state = await this.load();
+      removedCount = state.chats.length;
+      if (removedCount === 0) {
+        return;
+      }
+
+      state.chats = [];
+      await this.store.write(state);
+    });
+
+    return removedCount;
+  }
+
   async removeByChatIdRecovering(telegramChatId: number): Promise<{ removed: boolean; repaired: boolean }> {
     try {
       return {

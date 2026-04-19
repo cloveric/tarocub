@@ -61,12 +61,15 @@ export function applyEngineSelection(
   config: Record<string, unknown>,
   engine: "codex" | "claude",
 ): { clearedModel: boolean } {
-  const previousEngine = config.engine === "claude" ? "claude" : "codex";
+  const previousEngine =
+    config.engine === "claude" || config.engine === "codex"
+      ? config.engine
+      : undefined;
   const hadModelOverride = typeof config.model === "string" && config.model.trim().length > 0;
 
   config.engine = engine;
 
-  const clearedModel = previousEngine !== engine && hadModelOverride;
+  const clearedModel = previousEngine !== undefined && previousEngine !== engine && hadModelOverride;
   if (clearedModel) {
     delete config.model;
   }

@@ -14,6 +14,7 @@ export interface PendingPair {
 }
 
 export interface AccessState {
+  multiChat: boolean;
   policy: AccessPolicy;
   pairedUsers: PairedUser[];
   allowlist: number[];

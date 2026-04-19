@@ -37,6 +37,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.3.0** — makes single-chat-per-instance the default, adds explicit `telegram access multi on|off` control, keeps Codex on `app-server` across YOLO modes, and exposes `/engine` switching directly in Telegram.
 - **v4.2.0** — adds Claude auth smoke checks, stronger service environment diagnostics, and cleanup guidance for stale legacy launchd plists after removing the old autostart path.
 - **v4.1.0** — adds coordinator-led `crew` runs with persisted run state, plus a round of state/runtime hardening around schemas, file delivery, and shared state writes.
 - **v4.0.0** — the bus now speaks a compatibility-first `v1` protocol: protocol versioning, explicit capabilities, structured error codes, and `retryable` flags. See [`docs/bus-protocol.md`](./docs/bus-protocol.md).
@@ -90,7 +91,7 @@ Two layers of instructions, no conflict:
 
 ## Multi-Bot Setup
 
-Run as many bots as you need. Each instance is fully isolated — its own engine, token, personality, threads, access rules, inbox, and audit trail.
+Run as many bots as you need. Each instance is fully isolated — its own engine, token, personality, threads, access rules, inbox, and audit trail. By default, each instance is meant for one Telegram chat; multi-chat access is opt-in.
 
 ```
           ┌─────────────────────────────────────────────┐
@@ -775,6 +776,7 @@ All commands accept `--instance <name>` to target a specific bot.
 Telegram users can also use:
 
 - `/status`
+- `/engine [claude|codex]` — switch engine for the current instance (the bridge resets stale bindings automatically)
 - `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`xhigh` is Opus 4.7+ only)
 - `/model [name|off]` — switch model
 - `/btw <question>` — ask a side question without affecting the current session
@@ -843,13 +845,23 @@ Shared engine env rule:
 
 Per-instance, two layers: **pairing** + **allowlist**.
 
+Default behavior is intentionally conservative:
+
+- One instance is locked to **one Telegram chat by default**
+- A second chat will not be paired or allowlisted unless you explicitly enable multi-chat
+- This keeps `/resume`, workspace overrides, local files, and session state from bleeding across chats by accident
+
 ```bash
 npm run dev -- telegram access pair <code>
 npm run dev -- telegram access policy allowlist
 npm run dev -- telegram access allow <chat-id>
 npm run dev -- telegram access revoke <chat-id>
+npm run dev -- telegram access multi on
+npm run dev -- telegram access multi off
 npm run dev -- telegram status [--instance work]
 ```
+
+Use `telegram access multi on --instance <name>` only when you really want one bot instance to serve multiple chats. New and legacy instances both default to `off` unless you explicitly change it.
 
 ---
 

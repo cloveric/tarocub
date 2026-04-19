@@ -4563,6 +4563,12 @@ describe("polling helpers", () => {
       status: "idle",
       updatedAt: "2026-04-20T00:00:00.000Z",
     });
+    await sessionStore.upsert({
+      telegramChatId: 456,
+      codexSessionId: "thread-other",
+      status: "idle",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+    });
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
       editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
@@ -4614,12 +4620,13 @@ describe("polling helpers", () => {
 
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Engine set to codex. Cleared the previous model override and reset this chat's session binding. Restart this instance to apply.",
+        "Engine set to codex. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.",
       );
       const configText = await readFile(path.join(root, "config.json"), "utf8");
       expect(configText).toContain('"engine": "codex"');
       expect(configText).not.toContain('"model"');
       await expect(sessionStore.findByChatId(123)).resolves.toBeNull();
+      await expect(sessionStore.findByChatId(456)).resolves.toBeNull();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -221,6 +221,22 @@ describe("SessionStore", () => {
     }
   });
 
+  it("clearAll removes every stored chat binding", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const store = new SessionStore(filePath);
+
+    try {
+      await store.upsert(createRecord({ telegramChatId: 100, codexSessionId: "thread-a" }));
+      await store.upsert(createRecord({ telegramChatId: 200, codexSessionId: "thread-b" }));
+
+      await expect(store.clearAll()).resolves.toBe(2);
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({ chats: [] }));
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns fresh default state when the file is missing", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const filePath = path.join(tempDir, "session.json");

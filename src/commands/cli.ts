@@ -225,6 +225,7 @@ function formatAccessStatus(instanceName: string, status: Awaited<ReturnType<Acc
   return [
     `Instance: ${instanceName}`,
     `Policy: ${status.policy}`,
+    `Multi-chat: ${status.multiChat ? "on" : "off"}`,
     `Paired users: ${status.pairedUsers}`,
     `Allowlist: ${allowlist}`,
     `Pending pairs: ${pendingPairs}`,
@@ -237,7 +238,7 @@ async function runAccessCommand(
   logger: CliLogger,
 ): Promise<boolean> {
   if (argv.length < 2) {
-    throw new Error("Usage: telegram access <pair|policy|allow|revoke> ...");
+    throw new Error("Usage: telegram access <pair|policy|allow|revoke|multi> ...");
   }
 
   const subcommand = argv[1];
@@ -325,7 +326,24 @@ async function runAccessCommand(
     return true;
   }
 
-  throw new Error("Usage: telegram access <pair|policy|allow|revoke> ...");
+  if (subcommand === "multi") {
+    if (args.length !== 1 || (args[0] !== "on" && args[0] !== "off")) {
+      throw new Error("Usage: telegram access multi [--instance <name>] <on|off>");
+    }
+
+    const enabled = args[0] === "on";
+    await store.setMultiChat(enabled);
+    await appendAuditEvent(auditStateDir, {
+      type: "access.multi-chat",
+      instanceName,
+      outcome: "success",
+      metadata: { enabled },
+    });
+    logger.log(`Set multi-chat for instance "${instanceName}" to ${enabled ? "on" : "off"}.`);
+    return true;
+  }
+
+  throw new Error("Usage: telegram access <pair|policy|allow|revoke|multi> ...");
 }
 
 async function runStatusCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -1023,7 +1041,7 @@ Commands:
   configure <token> [--instance <name>]       Configure bot token for an instance
   service <start|stop|restart|status|logs|doctor> [--instance <name>]
                                               Manage the service lifecycle
-  access <pair|policy|allow|revoke> [--instance <name>]
+  access <pair|policy|allow|revoke|multi> [--instance <name>]
                                               Manage access control
   status [--instance <name>]                  Show access policy and paired users
   session list [--instance <name>]            Inspect chat-to-thread bindings

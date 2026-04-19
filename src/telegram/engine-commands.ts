@@ -29,42 +29,42 @@ function renderEngineSwitchMessage(input: {
   locale: Locale;
   engine: "claude" | "codex";
   clearedModel: boolean;
-  resetSessionBinding: boolean;
+  resetSessionBindings: boolean;
   resetSessionBindingFailed: boolean;
 }): string {
-  const { locale, engine, clearedModel, resetSessionBinding, resetSessionBindingFailed } = input;
+  const { locale, engine, clearedModel, resetSessionBindings, resetSessionBindingFailed } = input;
 
   if (locale === "zh") {
     if (resetSessionBindingFailed) {
       return clearedModel
-        ? `引擎已设为 ${engine}。已清除先前的模型覆盖。未能自动清除当前聊天的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`
-        : `引擎已设为 ${engine}。未能自动清除当前聊天的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`;
+        ? `引擎已设为 ${engine}。已清除先前的模型覆盖。未能自动清除该实例的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`
+        : `引擎已设为 ${engine}。未能自动清除该实例的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`;
     }
-    if (clearedModel && resetSessionBinding) {
-      return `引擎已设为 ${engine}。已清除先前的模型覆盖，并重置当前聊天的会话绑定。重启此实例后生效。`;
+    if (clearedModel && resetSessionBindings) {
+      return `引擎已设为 ${engine}。已清除先前的模型覆盖，并重置该实例的会话绑定。重启此实例后生效。`;
     }
     if (clearedModel) {
       return `引擎已设为 ${engine}。已清除先前的模型覆盖。重启此实例后生效。`;
     }
-    if (resetSessionBinding) {
-      return `引擎已设为 ${engine}。已重置当前聊天的会话绑定。重启此实例后生效。`;
+    if (resetSessionBindings) {
+      return `引擎已设为 ${engine}。已重置该实例的会话绑定。重启此实例后生效。`;
     }
     return `引擎已设为 ${engine}。重启此实例后生效。`;
   }
 
   if (resetSessionBindingFailed) {
     return clearedModel
-      ? `Engine set to ${engine}. Cleared the previous model override. Could not reset this chat's session binding automatically; use /reset after restarting if needed. Restart this instance to apply.`
-      : `Engine set to ${engine}. Could not reset this chat's session binding automatically; use /reset after restarting if needed. Restart this instance to apply.`;
+      ? `Engine set to ${engine}. Cleared the previous model override. Could not reset this instance's session bindings automatically; use /reset after restarting if needed. Restart this instance to apply.`
+      : `Engine set to ${engine}. Could not reset this instance's session bindings automatically; use /reset after restarting if needed. Restart this instance to apply.`;
   }
-  if (clearedModel && resetSessionBinding) {
-    return `Engine set to ${engine}. Cleared the previous model override and reset this chat's session binding. Restart this instance to apply.`;
+  if (clearedModel && resetSessionBindings) {
+    return `Engine set to ${engine}. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.`;
   }
   if (clearedModel) {
     return `Engine set to ${engine}. Cleared the previous model override. Restart this instance to apply.`;
   }
-  if (resetSessionBinding) {
-    return `Engine set to ${engine}. Reset this chat's session binding. Restart this instance to apply.`;
+  if (resetSessionBindings) {
+    return `Engine set to ${engine}. Reset this instance's session bindings. Restart this instance to apply.`;
   }
   return `Engine set to ${engine}. Restart this instance to apply.`;
 }
@@ -96,6 +96,7 @@ export interface EngineCommandContext extends TelegramTurnContext {
 
 export interface EngineCommandSessionStore {
   removeByChatId(chatId: number): Promise<boolean | void>;
+  clearAll(): Promise<number | void>;
 }
 
 export async function handleLocalEngineTelegramCommand(input: {
@@ -139,7 +140,7 @@ export async function handleLocalEngineTelegramCommand(input: {
     } else {
       const engineChanged = cfg.engine !== engineCmd.engine;
       let clearedModel = false;
-      let resetSessionBinding = false;
+      let resetSessionBindings = false;
       let resetSessionBindingFailed = false;
       await updateInstanceConfig((config) => {
         const result = applyEngineSelection(config, engineCmd.engine as "claude" | "codex");
@@ -147,12 +148,12 @@ export async function handleLocalEngineTelegramCommand(input: {
       });
       if (engineChanged) {
         try {
-          await sessionStore.removeByChatId(normalized.chatId);
-          resetSessionBinding = true;
+          await sessionStore.clearAll();
+          resetSessionBindings = true;
         } catch (error) {
           resetSessionBindingFailed = true;
           console.error(
-            `Failed to clear chat ${normalized.chatId} session binding after switching engine to ${engineCmd.engine}:`,
+            `Failed to clear instance session bindings after switching engine to ${engineCmd.engine}:`,
             error instanceof Error ? error.message : error,
           );
         }
@@ -161,7 +162,7 @@ export async function handleLocalEngineTelegramCommand(input: {
         locale,
         engine: engineCmd.engine,
         clearedModel,
-        resetSessionBinding,
+        resetSessionBindings,
         resetSessionBindingFailed,
       });
       await context.api.sendMessage(normalized.chatId, engineMessage);

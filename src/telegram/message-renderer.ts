@@ -408,6 +408,12 @@ export function renderPrivateChatRequiredMessage(locale: Locale = "en"): string 
   return locale === "zh" ? "此 bot 只接受私聊。" : "This bot only accepts private chats.";
 }
 
+export function renderSingleChatLockedMessage(locale: Locale = "en"): string {
+  return locale === "zh"
+    ? "此实例已锁定到另一个聊天。若要允许多个聊天，请先显式开启 multi-chat。"
+    : "This instance is locked to another chat. Enable multi-chat before pairing or allowing a different chat.";
+}
+
 export function renderPairingMessage(code: string, locale: Locale = "en"): string {
   return locale === "zh" ? `使用配对码 ${code} 配对此私聊` : `Pair this private chat with code ${code}`;
 }
