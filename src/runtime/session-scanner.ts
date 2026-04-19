@@ -9,6 +9,15 @@ function resolveHomeDir(): string {
   return process.env.HOME ?? process.env.USERPROFILE ?? "/";
 }
 
+function resolveClaudeProjectsDir(): string {
+  const explicitClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  if (explicitClaudeConfigDir) {
+    return path.join(explicitClaudeConfigDir, "projects");
+  }
+
+  return path.join(resolveHomeDir(), ".claude", "projects");
+}
+
 export interface ScannedSession {
   sessionId: string;
   dirName: string;
@@ -138,8 +147,7 @@ export function formatSessionList(sessions: ScannedSession[], locale: "en" | "zh
  * time window.  Returns results sorted by modification time (newest first).
  */
 export async function scanRecentClaudeSessions(hoursAgo: number = 1): Promise<ScannedSession[]> {
-  const claudeHome = path.join(resolveHomeDir(), ".claude");
-  const projectsDir = path.join(claudeHome, "projects");
+  const projectsDir = resolveClaudeProjectsDir();
 
   if (!existsSync(projectsDir)) {
     return [];

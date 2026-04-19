@@ -108,4 +108,45 @@ describe("scanRecentClaudeSessions", () => {
       await rm(fakeHome, { recursive: true, force: true });
     }
   });
+
+  it("finds sessions under CLAUDE_CONFIG_DIR when it's set", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-claude-config-dir-"));
+    const customClaudeDir = path.join(root, "custom-claude");
+    const fakeHome = path.join(root, "fake-home");
+    const projectDir = path.join(customClaudeDir, "projects", "-fake-project");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(fakeHome, { recursive: true });
+    await writeFile(path.join(projectDir, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"), "{}\n", "utf8");
+
+    const origHome = process.env.HOME;
+    const origUserProfile = process.env.USERPROFILE;
+    const origClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    try {
+      process.env.HOME = fakeHome;
+      delete process.env.USERPROFILE;
+      process.env.CLAUDE_CONFIG_DIR = customClaudeDir;
+
+      const sessions = await scanRecentClaudeSessions(1);
+      const match = sessions.find((s) => s.sessionId === "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+      expect(match).toBeDefined();
+      expect(match!.dirName).toBe("-fake-project");
+    } finally {
+      if (origHome !== undefined) {
+        process.env.HOME = origHome;
+      } else {
+        delete process.env.HOME;
+      }
+      if (origUserProfile !== undefined) {
+        process.env.USERPROFILE = origUserProfile;
+      } else {
+        delete process.env.USERPROFILE;
+      }
+      if (origClaudeConfigDir !== undefined) {
+        process.env.CLAUDE_CONFIG_DIR = origClaudeConfigDir;
+      } else {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
