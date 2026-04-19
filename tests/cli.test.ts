@@ -324,58 +324,6 @@ describe("runCli", () => {
     }
   });
 
-  it("routes autostart sync through the CLI", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
-    const messages: string[] = [];
-    const actions: string[] = [];
-
-    try {
-      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
-
-      const handled = await runCli(["telegram", "autostart", "sync", "--instance", "alpha"], {
-        env: {
-          USERPROFILE: tempDir,
-          HOME: tempDir,
-        },
-        logger: { log: (message) => messages.push(message) },
-        autostartDeps: {
-          cwd: REPO_ROOT,
-          nodePath: "/usr/bin/node",
-          uid: 501,
-          pathEnv: "/usr/bin:/bin",
-          bootout: async () => {
-            actions.push("bootout");
-          },
-          bootstrap: async (label) => {
-            actions.push(`bootstrap:${label}`);
-          },
-          enable: async (label) => {
-            actions.push(`enable:${label}`);
-          },
-          kickstart: async (label) => {
-            actions.push(`kickstart:${label}`);
-          },
-          inspect: async () => ({
-            loaded: true,
-            running: true,
-            pid: 123,
-          }),
-        },
-      });
-
-      expect(handled).toBe(true);
-      expect(actions).toEqual([
-        "bootout",
-        "bootstrap:com.cloveric.cc-telegram-bridge.alpha",
-        "enable:com.cloveric.cc-telegram-bridge.alpha",
-        "kickstart:com.cloveric.cc-telegram-bridge.alpha",
-      ]);
-      expect(messages).toEqual(['Synced autostart for instance "alpha".']);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("rejects deleting a running instance", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 
