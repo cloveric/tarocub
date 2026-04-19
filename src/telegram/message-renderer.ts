@@ -176,6 +176,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     return [
       "Telegram 命令：",
       "/status - 显示引擎、会话和文件任务状态",
+      "/engine [claude|codex] - 切换引擎（切换后需重启实例）",
       "/effort [low|medium|high|xhigh|max|off] - 设置推理强度（xhigh 仅 Opus 4.7）",
       "/model [名称|off] - 切换模型（加 [1m] 后缀启用 1M 上下文，如 opus[1m]）",
       "/btw <问题> - 旁问（不影响当前会话）",
@@ -200,6 +201,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
   return [
     "Telegram commands:",
     "/status - show engine, session, and file task state",
+    "/engine [claude|codex] - switch engine (restart required after changing)",
     "/effort [low|medium|high|xhigh|max|off] - set reasoning effort level (xhigh is Opus 4.7 only)",
     "/model [name|off] - switch model (append [1m] for 1M context, e.g. opus[1m])",
     "/btw <question> - side question without affecting session",

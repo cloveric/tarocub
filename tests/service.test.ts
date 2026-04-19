@@ -4484,6 +4484,140 @@ describe("polling helpers", () => {
     }
   });
 
+  it("shows model choices on successful /model queries", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    await writeFile(
+      path.join(root, "config.json"),
+      JSON.stringify({ engine: "claude" }, null, 2) + "\n",
+      "utf8",
+    );
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/model",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Current model: default",
+          "Choose a model with /model <name>:",
+          "/model opus",
+          "/model sonnet",
+          "/model haiku",
+          "/model off",
+          "1M context example: /model opus[1m]",
+        ].join("\n"),
+      );
+
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "model",
+          value: "query",
+          responseChars: expect.any(Number),
+          chunkCount: 1,
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shows engine choices and applies /engine switches", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    await writeFile(
+      path.join(root, "config.json"),
+      JSON.stringify({ engine: "claude", model: "opus" }, null, 2) + "\n",
+      "utf8",
+    );
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/engine",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Current engine: claude",
+          "Choose an engine with /engine <name>:",
+          "/engine claude",
+          "/engine codex",
+          "Restart this instance after switching to apply the change.",
+        ].join("\n"),
+      );
+
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/engine codex",
+          replyContext: undefined,
+          attachments: [],
+        },
+        { api: api as never, bridge: bridge as never, inboxDir },
+      );
+
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Engine set to codex. Cleared the previous model override. Restart this instance to apply.",
+      );
+      const configText = await readFile(path.join(root, "config.json"), "utf8");
+      expect(configText).toContain('"engine": "codex"');
+      expect(configText).not.toContain('"model"');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("records rejection metadata on /resume wrong-engine audits", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const inboxDir = path.join(root, "inbox");

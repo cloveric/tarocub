@@ -52,6 +52,23 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   resume: undefined,
 };
 
+export function applyEngineSelection(
+  config: Record<string, unknown>,
+  engine: "codex" | "claude",
+): { clearedModel: boolean } {
+  const previousEngine = config.engine === "claude" ? "claude" : "codex";
+  const hadModelOverride = typeof config.model === "string" && config.model.trim().length > 0;
+
+  config.engine = engine;
+
+  const clearedModel = previousEngine !== engine && hadModelOverride;
+  if (clearedModel) {
+    delete config.model;
+  }
+
+  return { clearedModel };
+}
+
 export async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
   const configPath = path.join(stateDir, "config.json");
   let raw: string;

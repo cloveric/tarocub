@@ -19,6 +19,111 @@ function createNormalizedMessage(text: string): NormalizedTelegramMessage {
 }
 
 describe("handleLocalEngineTelegramCommand", () => {
+  it("shows engine choices on bare /engine", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/engine"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 76,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn(),
+        },
+        sessionStore: {
+          removeByChatId: vi.fn(),
+        },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Current engine: claude",
+          "Choose an engine with /engine <name>:",
+          "/engine claude",
+          "/engine codex",
+          "Restart this instance after switching to apply the change.",
+        ].join("\n"),
+      );
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "engine",
+          value: "query",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("switches engine locally and clears incompatible model overrides", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
+      const cfg: Record<string, unknown> = { engine: "claude", model: "opus" };
+      mutate(cfg);
+      expect(cfg.engine).toBe("codex");
+      expect(cfg.model).toBeUndefined();
+    });
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude", model: "opus" },
+        normalized: createNormalizedMessage("/engine codex"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 76,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn(),
+        },
+        sessionStore: {
+          removeByChatId: vi.fn(),
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Engine set to codex. Cleared the previous model override. Restart this instance to apply.",
+      );
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "engine",
+          value: "codex",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects /context on the wrong engine", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
     const api = {
@@ -43,6 +148,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         sessionStore: {
           removeByChatId: vi.fn(),
         },
+        updateInstanceConfig: vi.fn(),
       });
 
       expect(handled).toBe(true);
@@ -89,6 +195,7 @@ describe("handleLocalEngineTelegramCommand", () => {
           handleAuthorizedMessage: vi.fn().mockRejectedValue(new Error("unsupported")),
         },
         sessionStore,
+        updateInstanceConfig: vi.fn(),
       });
 
       expect(handled).toBe(true);
@@ -134,6 +241,7 @@ describe("handleLocalEngineTelegramCommand", () => {
           handleAuthorizedMessage: vi.fn().mockRejectedValue(authError),
         },
         sessionStore,
+        updateInstanceConfig: vi.fn(),
       })).rejects.toBe(authError);
 
       expect(sessionStore.removeByChatId).not.toHaveBeenCalled();
@@ -170,6 +278,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         sessionStore: {
           removeByChatId: vi.fn(),
         },
+        updateInstanceConfig: vi.fn(),
       });
 
       expect(handled).toBe(true);
@@ -206,6 +315,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         sessionStore: {
           removeByChatId: vi.fn(),
         },
+        updateInstanceConfig: vi.fn(),
       });
 
       expect(handled).toBe(false);

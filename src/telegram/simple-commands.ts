@@ -44,6 +44,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
   startedAt: number;
   locale: Locale;
   cfg: {
+    engine?: "codex" | "claude";
     effort?: string;
     model?: string;
   };
@@ -61,6 +62,64 @@ export async function handleSimpleLocalTelegramCommand(input: {
   }>;
 }): Promise<boolean> {
   const { stateDir, startedAt, locale, cfg, normalized, context, updateInstanceConfig, resolveStatus } = input;
+
+  const renderModelSelectionMessage = (): string => {
+    const current = cfg.model ?? "default";
+
+    if (cfg.engine === "claude") {
+      return locale === "zh"
+        ? [
+            `当前模型: ${current}`,
+            "用 /model <名称> 选择模型：",
+            "/model opus",
+            "/model sonnet",
+            "/model haiku",
+            "/model off",
+            "1M 上下文示例：/model opus[1m]",
+          ].join("\n")
+        : [
+            `Current model: ${current}`,
+            "Choose a model with /model <name>:",
+            "/model opus",
+            "/model sonnet",
+            "/model haiku",
+            "/model off",
+            "1M context example: /model opus[1m]",
+          ].join("\n");
+    }
+
+    if (cfg.engine === "codex") {
+      return locale === "zh"
+        ? [
+            `当前模型: ${current}`,
+            "用 /model <名称> 选择模型：",
+            "/model gpt-5.4",
+            "/model gpt-5.3-codex",
+            "/model o3",
+            "/model off",
+          ].join("\n")
+        : [
+            `Current model: ${current}`,
+            "Choose a model with /model <name>:",
+            "/model gpt-5.4",
+            "/model gpt-5.3-codex",
+            "/model o3",
+            "/model off",
+          ].join("\n");
+    }
+
+    return locale === "zh"
+      ? [
+          `当前模型: ${current}`,
+          "用 /model <名称> 选择模型。",
+          "示例：/model opus、/model gpt-5.4、/model off",
+        ].join("\n")
+      : [
+          `Current model: ${current}`,
+          "Choose a model with /model <name>.",
+          "Examples: /model opus, /model gpt-5.4, /model off",
+        ].join("\n");
+  };
 
   if (isHelpCommand(normalized.text)) {
     const helpMessage = renderTelegramHelpMessage(locale);
@@ -147,8 +206,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
   if (modelCmd) {
     let modelMessage: string;
     if (!modelCmd.model) {
-      const current = cfg.model ?? "default";
-      modelMessage = locale === "zh" ? `当前模型: ${current}` : `Current model: ${current}`;
+      modelMessage = renderModelSelectionMessage();
       await context.api.sendMessage(normalized.chatId, modelMessage);
     } else if (modelCmd.model === "off" || modelCmd.model === "default") {
       await updateInstanceConfig((c) => { delete c.model; });

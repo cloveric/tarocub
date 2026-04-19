@@ -151,12 +151,14 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     locale,
     cfg: {
       engine: cfg.engine,
+      model: cfg.model,
       resume: cfg.resume,
     },
     normalized,
     context,
     bridge: context.bridge,
     sessionStore,
+    updateInstanceConfig,
   })) {
     return;
   }
@@ -166,6 +168,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     startedAt,
     locale,
     cfg: {
+      engine: cfg.engine,
       effort: cfg.effort,
       model: cfg.model,
     },

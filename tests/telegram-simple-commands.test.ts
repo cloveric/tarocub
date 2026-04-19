@@ -90,6 +90,83 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("shows Claude model choices on bare /model", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/model"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 78,
+        },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Current model: default",
+          "Choose a model with /model <name>:",
+          "/model opus",
+          "/model sonnet",
+          "/model haiku",
+          "/model off",
+          "1M context example: /model opus[1m]",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("shows Codex model choices on bare /model", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/model"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 79,
+        },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Current model: default",
+          "Choose a model with /model <name>:",
+          "/model gpt-5.4",
+          "/model gpt-5.3-codex",
+          "/model o3",
+          "/model off",
+        ].join("\n"),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns false for non-simple commands", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
 

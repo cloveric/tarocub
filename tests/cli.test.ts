@@ -1005,4 +1005,32 @@ describe("runCli", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("clears incompatible model overrides when switching engines", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const configPath = path.join(tempDir, ".cctb", "alpha", "config.json");
+
+    try {
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await writeFile(
+        configPath,
+        JSON.stringify({ engine: "claude", model: "opus" }, null, 2) + "\n",
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "engine", "codex", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toBe(
+        'Instance "alpha": engine set to "codex". Cleared the previous model override. Restart the service to apply.',
+      );
+      await expect(readFile(configPath, "utf8")).resolves.not.toContain('"model"');
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

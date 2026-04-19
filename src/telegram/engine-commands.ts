@@ -4,6 +4,7 @@ import {
   appendCommandSuccessAuditEventBestEffort,
   type TelegramTurnContext,
 } from "./turn-bookkeeping.js";
+import { applyEngineSelection } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 function isCompactCommand(text: string): boolean {
@@ -18,8 +19,15 @@ function isContextCommand(text: string): boolean {
   return /^\/context(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }
 
+function parseEngineCommand(text: string): { engine: string } | null {
+  const match = text.trim().match(/^\/engine(?:@\w+)?(?:\s+(\S+))?$/i);
+  if (!match) return null;
+  return { engine: match[1] ?? "" };
+}
+
 export interface EngineCommandConfig {
   engine: "codex" | "claude";
+  model?: string;
   resume?: {
     workspacePath: string;
   };
@@ -55,8 +63,59 @@ export async function handleLocalEngineTelegramCommand(input: {
   context: EngineCommandContext;
   bridge: EngineCommandBridge;
   sessionStore: EngineCommandSessionStore;
+  updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
 }): Promise<boolean> {
-  const { stateDir, startedAt, locale, cfg, normalized, context, bridge, sessionStore } = input;
+  const { stateDir, startedAt, locale, cfg, normalized, context, bridge, sessionStore, updateInstanceConfig } = input;
+
+  const engineCmd = parseEngineCommand(normalized.text);
+  if (engineCmd) {
+    let engineMessage: string;
+    if (!engineCmd.engine) {
+      engineMessage = locale === "zh"
+        ? [
+            `当前引擎：${cfg.engine}`,
+            "用 /engine <名称> 选择引擎：",
+            "/engine claude",
+            "/engine codex",
+            "切换后重启此实例以生效。",
+          ].join("\n")
+        : [
+            `Current engine: ${cfg.engine}`,
+            "Choose an engine with /engine <name>:",
+            "/engine claude",
+            "/engine codex",
+            "Restart this instance after switching to apply the change.",
+          ].join("\n");
+      await context.api.sendMessage(normalized.chatId, engineMessage);
+    } else if (engineCmd.engine !== "claude" && engineCmd.engine !== "codex") {
+      engineMessage = locale === "zh"
+        ? "用法: /engine [claude|codex]"
+        : "Usage: /engine [claude|codex]";
+      await context.api.sendMessage(normalized.chatId, engineMessage);
+    } else {
+      let clearedModel = false;
+      await updateInstanceConfig((config) => {
+        const result = applyEngineSelection(config, engineCmd.engine as "claude" | "codex");
+        clearedModel = result.clearedModel;
+      });
+      engineMessage = locale === "zh"
+        ? clearedModel
+          ? `引擎已设为 ${engineCmd.engine}。已清除先前的模型覆盖。重启此实例后生效。`
+          : `引擎已设为 ${engineCmd.engine}。重启此实例后生效。`
+        : clearedModel
+          ? `Engine set to ${engineCmd.engine}. Cleared the previous model override. Restart this instance to apply.`
+          : `Engine set to ${engineCmd.engine}. Restart this instance to apply.`;
+      await context.api.sendMessage(normalized.chatId, engineMessage);
+    }
+
+    await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+      startedAt,
+      command: "engine",
+      responseText: engineMessage,
+      metadata: { value: engineCmd.engine || "query" },
+    });
+    return true;
+  }
 
   if (isCompactCommand(normalized.text)) {
     await context.api.sendMessage(

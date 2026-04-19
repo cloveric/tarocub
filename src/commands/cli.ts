@@ -40,6 +40,7 @@ import {
   stopServiceInstance,
   type ServiceCommandDeps,
 } from "./service.js";
+import { applyEngineSelection } from "../telegram/instance-config.js";
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -933,7 +934,7 @@ async function runEngineCommand(
   }
 
   const config = await readInstanceConfig(configPath);
-  config.engine = engine;
+  const { clearedModel } = applyEngineSelection(config, engine);
   await writeInstanceConfig(configPath, config);
 
   const auditStateDir = resolveAuditStateDir(env, instanceName);
@@ -944,7 +945,11 @@ async function runEngineCommand(
     metadata: { engine },
   });
 
-  logger.log(`Instance "${instanceName}": engine set to "${engine}". Restart the service to apply.`);
+  logger.log(
+    clearedModel
+      ? `Instance "${instanceName}": engine set to "${engine}". Cleared the previous model override. Restart the service to apply.`
+      : `Instance "${instanceName}": engine set to "${engine}". Restart the service to apply.`,
+  );
   return true;
 }
 
