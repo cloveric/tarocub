@@ -61,8 +61,8 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
       "直接发送文件进行分析。支持语音消息（本地 ASR 转写）。",
       "压缩包在摘要后会暂停；回复\"继续分析\"或点击 Continue Analysis 按钮继续。裸 /continue 恢复最近一个等待中的压缩包。",
       "/continue - 恢复最近等待的压缩包",
-      "/resume - 恢复本地 session 到 Telegram 继续",
-      "/detach - 断开恢复的 session，回到默认工作区",
+      "/resume - Claude 扫描本地 session；Codex 用 /resume thread <thread-id>",
+      "/detach - 断开恢复的 session 或当前 Codex thread",
       "/stop - 立即停止当前任务",
       "/context - 显示 Claude 上下文用量（仅 Claude；用来决定何时 /compact）",
       "/usage - 显示本实例累计 token 和费用",
@@ -85,8 +85,8 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     "Send files directly to analyze them. Voice messages supported (local ASR).",
     "Archives pause after summary; reply \"继续分析\" or press Continue Analysis to continue this archive. Bare /continue resumes the latest waiting archive.",
     "/continue - resume the latest waiting archive",
-    "/resume - resume a local session on Telegram",
-    "/detach - detach from resumed session, back to default workspace",
+    "/resume - Claude scan; use /resume thread <thread-id> for Codex",
+    "/detach - detach from resumed session or current Codex thread",
     "/stop - immediately stop the current task",
     "/context - show Claude context fill level (Claude only; helps decide when to /compact)",
     "/usage - show cumulative token & cost usage for this instance",
@@ -100,6 +100,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
 export function renderTelegramStatusMessage(input: {
   engine: "codex" | "claude";
   sessionBound: boolean | null;
+  threadId?: string | null;
   blockingTasks: number | null;
   waitingTasks: number | null;
   sessionWarning?: string;
@@ -116,6 +117,7 @@ export function renderTelegramStatusMessage(input: {
       input.sessionWarning
         ? `会话绑定：未知（${input.sessionWarning}）`
         : `会话绑定：${input.sessionBound ? "是" : "否"}`,
+      ...(input.engine === "codex" && input.threadId ? [`当前 thread：${input.threadId}`] : []),
       input.taskStateWarning
         ? `阻塞文件任务：未知（${input.taskStateWarning}）`
         : `阻塞文件任务：${blockingTasks}`,
@@ -130,6 +132,7 @@ export function renderTelegramStatusMessage(input: {
     input.sessionWarning
       ? `Session bound: unknown (${input.sessionWarning})`
       : `Session bound: ${input.sessionBound ? "yes" : "no"}`,
+    ...(input.engine === "codex" && input.threadId ? [`Current thread: ${input.threadId}`] : []),
     input.taskStateWarning
       ? `Blocking file tasks: unknown (${input.taskStateWarning})`
       : `Blocking file tasks: ${blockingTasks}`,

@@ -272,9 +272,11 @@ To use a different ASR engine, modify the `transcribeVoice()` function in `src/t
 
 ---
 
-## Session Resume
+## Session Resume & Codex Thread Attach
 
-Started a task locally with Claude Code? Continue it on Telegram — no copy-paste, no re-explaining context.
+Started a task locally with Claude Code? Continue it on Telegram — no copy-paste, no re-explaining context. Using Codex instead? Attach an existing thread by ID and keep going from Telegram.
+
+### Claude local session resume
 
 ```
 /resume          ← Bot scans your local sessions from the past hour
@@ -304,12 +306,28 @@ Now every message you send goes through the original session — same context, s
 
 **How it works under the hood:**
 
-1. Scans `~/.claude/projects/` for `.jsonl` files modified in the last hour
+1. Scans `CLAUDE_CONFIG_DIR/projects/` when set, otherwise `~/.claude/projects/`, for `.jsonl` files modified in the last hour
 2. Binds the session ID and overrides the workspace to point at your real project path
 3. Claude CLI resumes with `-r <sessionId>` in the original directory
 4. `/detach` reverses everything — the local session file is untouched
 
 **No pollution:** `--append-system-prompt` is per-invocation and doesn't persist in session files. The bridge instructions won't leak into your local session.
+
+### Codex thread attach
+
+Codex does not expose the same local session scan flow as Claude. If you already know the thread ID, attach it explicitly:
+
+```text
+/resume thread thread_abc123
+```
+
+That binds the current Telegram chat to the existing Codex thread. From then on:
+
+- new Telegram messages continue that thread
+- `/status` shows the current thread ID
+- `/detach` unbinds the thread and the next message starts a fresh one
+
+This is an attach flow, not a local session import: the thread stays server-side and the bridge only binds the known thread ID to the current chat.
 
 ---
 
@@ -678,7 +696,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>Session Resume</h3>
-      <p>Started a task locally? <code>/resume</code> to continue it on Telegram. <code>/detach</code> when done — zero pollution to the original session.</p>
+      <p><code>/resume</code> scans Claude local sessions; <code>/resume thread &lt;thread-id&gt;</code> attaches an existing Codex thread. <code>/detach</code> cleanly unbinds either flow.</p>
     </td>
   </tr>
   <tr>
@@ -760,8 +778,8 @@ Telegram users can also use:
 - `/fan <prompt>` — query current bot plus configured parallel bots
 - `/chain <prompt>` — run the configured sequential bot chain
 - `/verify <prompt>` — execute locally, then auto-review with the verifier bot
-- `/resume` — scan and resume a local session on Telegram
-- `/detach` — detach from resumed session, restore default workspace
+- `/resume` — Claude: scan local sessions; Codex: use `/resume thread <thread-id>` to attach an existing thread
+- `/detach` — detach from resumed Claude session or current Codex thread
 - `/stop` — immediately stop the current running task
 - `/continue` — resume the latest waiting archive summary
 - `/compact` (Claude only — compresses context; Codex falls back to reset)

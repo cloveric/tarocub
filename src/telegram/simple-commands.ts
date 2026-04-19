@@ -53,6 +53,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
   resolveStatus?: (chatId: number) => Promise<{
     engine: "codex" | "claude";
     sessionBound: boolean | null;
+    threadId?: string | null;
     blockingTasks: number | null;
     waitingTasks: number | null;
     sessionWarning?: string;

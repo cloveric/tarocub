@@ -117,6 +117,7 @@ describe("message rendering", () => {
       renderTelegramStatusMessage({
         engine: "codex",
         sessionBound: true,
+        threadId: "thread-123",
         blockingTasks: 2,
         waitingTasks: 1,
       }),
@@ -125,6 +126,7 @@ describe("message rendering", () => {
       renderTelegramStatusMessage({
         engine: "codex",
         sessionBound: true,
+        threadId: "thread-123",
         blockingTasks: 2,
         waitingTasks: 1,
       }),
@@ -133,6 +135,16 @@ describe("message rendering", () => {
       renderTelegramStatusMessage({
         engine: "codex",
         sessionBound: true,
+        threadId: "thread-123",
+        blockingTasks: 2,
+        waitingTasks: 1,
+      }),
+    ).toContain("Current thread: thread-123");
+    expect(
+      renderTelegramStatusMessage({
+        engine: "codex",
+        sessionBound: true,
+        threadId: "thread-123",
         blockingTasks: 2,
         waitingTasks: 1,
       }),
@@ -141,6 +153,7 @@ describe("message rendering", () => {
       renderTelegramStatusMessage({
         engine: "codex",
         sessionBound: true,
+        threadId: "thread-123",
         blockingTasks: 2,
         waitingTasks: 1,
       }),

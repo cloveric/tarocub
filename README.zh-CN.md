@@ -258,9 +258,11 @@ huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir models/Qwen3-ASR-0.6B
 
 ---
 
-## 会话续接
+## 会话续接与 Codex Thread 绑定
 
-在电脑上用 Claude Code 开了个头？发 `/resume` 就能在 Telegram 上接着干 — 不用重复解释上下文。
+在电脑上用 Claude Code 开了个头？发 `/resume` 就能在 Telegram 上接着干 — 不用重复解释上下文。用的是 Codex？那就直接用 thread id 绑定现有 thread，再从 Telegram 继续。
+
+### Claude 本地 session 续接
 
 ```
 /resume          ← Bot 扫描本地最近 1 小时的 session
@@ -290,12 +292,28 @@ Bot 列出最近的 session：
 
 **底层原理：**
 
-1. 扫描 `~/.claude/projects/` 中最近 1 小时内修改过的 `.jsonl` 文件
+1. 优先扫描 `CLAUDE_CONFIG_DIR/projects/`，未设置时回退到 `~/.claude/projects/`，查找最近 1 小时内修改过的 `.jsonl` 文件
 2. 绑定 session ID，将工作区切换到你的真实项目路径
 3. Claude CLI 在原目录用 `-r <sessionId>` 继续
 4. `/detach` 反向操作 — 本地 session 文件不受任何影响
 
 **零污染：** `--append-system-prompt` 是每次调用时传入的，不会写进 session 文件。bridge 指令不会泄漏到你的本地会话中。
+
+### Codex thread 绑定
+
+Codex 没有和 Claude 一样的本地 session 扫描入口。如果你已经知道 thread id，可以直接绑定：
+
+```text
+/resume thread thread_abc123
+```
+
+绑定后：
+
+- Telegram 里的后续消息会继续这个 Codex thread
+- `/status` 会显示当前 thread id
+- `/detach` 会解绑该 thread，下一条消息重新开新 thread
+
+这是一种“绑定已有 thread”的流程，不是导入本地 session：thread 仍然在服务端，bridge 只是在当前 chat 上绑定一个已知 thread id。
 
 ---
 
@@ -662,7 +680,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     </td>
     <td>
       <h3>会话续接</h3>
-      <p>电脑上开了个头？<code>/resume</code> 在 Telegram 上接着干。<code>/detach</code> 回归默认 — 原始 session 零污染。</p>
+      <p><code>/resume</code> 用来扫描 Claude 本地 session；<code>/resume thread &lt;thread-id&gt;</code> 用来绑定已有 Codex thread。<code>/detach</code> 可以干净地断开这两种绑定。</p>
     </td>
   </tr>
   <tr>
@@ -744,8 +762,8 @@ Telegram 用户也可以使用：
 - `/fan <提示>` — 查询当前 bot 和并行 specialist bot
 - `/chain <提示>` — 跑配置好的顺序 bot 链
 - `/verify <提示>` — 本地执行后交给 verifier bot 自动复核
-- `/resume` — 扫描并恢复本地 session 到 Telegram 继续
-- `/detach` — 断开恢复的 session，恢复默认工作区
+- `/resume` — Claude：扫描并恢复本地 session；Codex：使用 `/resume thread <thread-id>` 绑定已有 thread
+- `/detach` — 断开恢复的 Claude session 或当前 Codex thread
 - `/stop` — 立即停止当前运行中的任务
 - `/continue` — 恢复最近一个等待中的压缩包摘要
 - `/compact`（仅 Claude — 压缩上下文；Codex 回退为 reset）

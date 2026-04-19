@@ -122,6 +122,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
     const resolveStatus = vi.fn().mockResolvedValue({
       engine: "claude",
       sessionBound: true,
+      threadId: null,
       blockingTasks: 2,
       waitingTasks: 1,
     });
@@ -163,6 +164,51 @@ describe("handleSimpleLocalTelegramCommand", () => {
           chunkCount: 1,
         }),
       }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes the current Codex thread id in /status when available", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const resolveStatus = vi.fn().mockResolvedValue({
+      engine: "codex",
+      sessionBound: true,
+      threadId: "thread-123",
+      blockingTasks: 0,
+      waitingTasks: 0,
+    });
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/status"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 82,
+        },
+        updateInstanceConfig: vi.fn(),
+        resolveStatus,
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Engine: codex",
+          "Session bound: yes",
+          "Current thread: thread-123",
+          "Blocking file tasks: 0",
+          "Waiting file tasks: 0",
+        ].join("\n"),
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

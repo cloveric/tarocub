@@ -32,13 +32,26 @@ function isResetCommand(text: string): boolean {
   return /^\/reset(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }
 
-function parseResumeCommand(text: string): { pick: number | null; invalid?: boolean } | null {
-  const match = text.trim().match(/^\/resume(?:@\w+)?(?:\s+(\S+))?(?:\s|$)/i);
+type ResumeCommand =
+  | { kind: "scan" }
+  | { kind: "pick"; pick: number }
+  | { kind: "thread"; threadId: string }
+  | { kind: "invalid" };
+
+function parseResumeCommand(text: string): ResumeCommand | null {
+  const match = text.trim().match(/^\/resume(?:@\w+)?(?:\s+(.+))?$/i);
   if (!match) return null;
-  if (!match[1]) return { pick: null };
-  const num = Number(match[1]);
-  if (!Number.isInteger(num) || num < 1) return { pick: null, invalid: true };
-  return { pick: num };
+  const arg = match[1]?.trim();
+  if (!arg) return { kind: "scan" };
+
+  const threadMatch = arg.match(/^thread\s+(.+)$/i);
+  if (threadMatch?.[1]?.trim()) {
+    return { kind: "thread", threadId: threadMatch[1].trim() };
+  }
+
+  const num = Number(arg);
+  if (!Number.isInteger(num) || num < 1) return { kind: "invalid" };
+  return { kind: "pick", pick: num };
 }
 
 function isDetachCommand(text: string): boolean {
@@ -111,21 +124,43 @@ export async function handleLocalSessionTelegramCommand(input: {
 
   const resumeCmd = parseResumeCommand(normalized.text);
   if (resumeCmd) {
-    if (cfg.engine !== "claude") {
+    if (cfg.engine === "codex") {
+      if (resumeCmd.kind !== "thread") {
+        const msg = locale === "zh"
+          ? "Codex 请使用 /resume thread <thread-id>。普通 /resume 扫描仅适用于 Claude。"
+          : "For Codex, use /resume thread <thread-id>. Plain /resume scan is Claude-only.";
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: { rejected: "codex-requires-thread-id" },
+        });
+        return true;
+      }
+
+      await sessionStore.upsert({
+        telegramChatId: normalized.chatId,
+        codexSessionId: resumeCmd.threadId,
+        status: "idle",
+        updatedAt: new Date().toISOString(),
+      });
+      await updateInstanceConfig((c) => { delete c.resume; });
+
       const msg = locale === "zh"
-        ? "/resume 仅支持 Claude 引擎。Codex 的 session 存储在服务端，无法本地恢复。"
-        : "/resume is only supported with the Claude engine. Codex sessions are server-side and cannot be resumed locally.";
+        ? `已绑定 Codex thread：${resumeCmd.threadId}\n\n发送消息继续对话，完成后发 /detach 断开。`
+        : `Attached Codex thread: ${resumeCmd.threadId}\n\nSend a message to continue. Use /detach when done.`;
       await context.api.sendMessage(normalized.chatId, msg);
       await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
         startedAt,
         command: "resume",
         responseText: msg,
-        metadata: { rejected: "wrong-engine" },
+        metadata: { threadId: resumeCmd.threadId },
       });
       return true;
     }
 
-    if (resumeCmd.invalid) {
+    if (resumeCmd.kind === "invalid" || resumeCmd.kind === "thread") {
       const msg = locale === "zh"
         ? "用法: /resume [编号]\n先发 /resume 扫描，再发 /resume <编号> 选择。"
         : "Usage: /resume [number]\nSend /resume to scan, then /resume <number> to pick.";
@@ -140,7 +175,7 @@ export async function handleLocalSessionTelegramCommand(input: {
     }
 
     let resumeAuditText: string | undefined;
-    if (resumeCmd.pick === null) {
+    if (resumeCmd.kind === "scan") {
       const sessions = await scanRecentSessions(1);
       if (sessions.length === 0) {
         resumeAuditText = locale === "zh"
@@ -195,19 +230,14 @@ export async function handleLocalSessionTelegramCommand(input: {
       startedAt,
       command: "resume",
       responseText: resumeAuditText,
-      metadata: { pick: resumeCmd.pick },
+      metadata: { pick: resumeCmd.kind === "pick" ? resumeCmd.pick : null },
     });
     return true;
   }
 
   if (isDetachCommand(normalized.text)) {
     let detachMessage: string;
-    if (!cfg.resume) {
-      detachMessage = locale === "zh"
-        ? "当前没有恢复的 session。"
-        : "No resumed session active.";
-      await context.api.sendMessage(normalized.chatId, detachMessage);
-    } else {
+    if (cfg.resume) {
       if (cfg.resume.symlinkPath) {
         try {
           const st = await lstat(cfg.resume.symlinkPath);
@@ -223,6 +253,21 @@ export async function handleLocalSessionTelegramCommand(input: {
       detachMessage = locale === "zh"
         ? "已断开恢复的 session，回到 bot 默认工作区。"
         : "Detached from resumed session. Back to default workspace.";
+      await context.api.sendMessage(normalized.chatId, detachMessage);
+    } else if (cfg.engine === "codex") {
+      const removed = await sessionStore.removeByChatId(normalized.chatId);
+      detachMessage = removed
+        ? (locale === "zh"
+          ? "已断开当前 Codex thread。下一条消息会新建 thread。"
+          : "Detached from the current Codex thread. Next message will start a fresh thread.")
+        : (locale === "zh"
+          ? "当前没有绑定的 Codex thread。"
+          : "No active Codex thread.");
+      await context.api.sendMessage(normalized.chatId, detachMessage);
+    } else {
+      detachMessage = locale === "zh"
+        ? "当前没有恢复的 session。"
+        : "No resumed session active.";
       await context.api.sendMessage(normalized.chatId, detachMessage);
     }
 

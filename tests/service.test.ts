@@ -3590,6 +3590,7 @@ describe("polling helpers", () => {
         [
           "Engine: codex",
           "Session bound: yes",
+          "Current thread: thread-bound",
           "Blocking file tasks: 3",
           "Waiting file tasks: 1",
         ].join("\n"),
@@ -4326,7 +4327,7 @@ describe("polling helpers", () => {
         outcome: "success",
         metadata: expect.objectContaining({
           command: "resume",
-          rejected: "wrong-engine",
+          rejected: "codex-requires-thread-id",
           responseChars: expect.any(Number),
           chunkCount: 1,
         }),
