@@ -980,6 +980,32 @@ describe("polling helpers", () => {
     }
   });
 
+  it("does not treat unrelated 409 conflict strings as Telegram polling conflicts", async () => {
+    const logger = {
+      error: vi.fn(),
+    };
+    const api = {
+      getUpdates: vi.fn().mockRejectedValue(new Error("Engine error: 409 Conflict while processing artifact.zip")),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    await expect(
+      pollTelegramUpdatesOnce(api as never, bridge as never, path.join(os.tmpdir(), "ignored"), logger, 7),
+    ).resolves.toEqual({
+      offset: 7,
+      hadFetchError: true,
+      hadUpdates: false,
+      conflict: false,
+    });
+
+    expect(logger.error).toHaveBeenCalledWith(
+      "Failed to fetch Telegram updates: Engine error: 409 Conflict while processing artifact.zip",
+    );
+  });
+
   it("keeps poll conflicts best-effort when audit writing fails", async () => {
     const logger = {
       error: vi.fn(),
@@ -1060,6 +1086,62 @@ describe("polling helpers", () => {
     }
 
     expect(sleepCalls[0]).toBe(100);
+  });
+
+  it("audits my_chat_member updates instead of dropping them silently", async () => {
+    const logger = {
+      error: vi.fn(),
+    };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 15,
+            my_chat_member: {
+              chat: { id: -100123, type: "supergroup" },
+              from: { id: 456 },
+              old_chat_member: { status: "member" },
+              new_chat_member: { status: "kicked" },
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      const events = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "update.membership",
+        updateId: 15,
+        chatId: -100123,
+        userId: 456,
+        outcome: "observed",
+        metadata: expect.objectContaining({
+          oldStatus: "member",
+          newStatus: "kicked",
+        }),
+      }));
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("serializes same-chat updates through the service chat queue", async () => {

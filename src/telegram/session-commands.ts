@@ -41,7 +41,12 @@ export interface SessionCommandStore {
   }): Promise<void>;
 }
 
-const pendingResumeScans = new Map<number, ScannedSession[]>();
+const RESUME_SCAN_TTL_MS = 10 * 60 * 1000;
+
+const pendingResumeScans = new Map<number, {
+  scannedAt: number;
+  sessions: ScannedSession[];
+}>();
 
 function isResetCommand(text: string): boolean {
   return /^\/reset(?:@\w+)?(?:\s|$)/i.test(text.trim());
@@ -75,6 +80,20 @@ function isDetachCommand(text: string): boolean {
 
 export function resetPendingResumeScans(): void {
   pendingResumeScans.clear();
+}
+
+function getPendingResumeScan(chatId: number): ScannedSession[] | null {
+  const entry = pendingResumeScans.get(chatId);
+  if (!entry) {
+    return null;
+  }
+
+  if (Date.now() - entry.scannedAt > RESUME_SCAN_TTL_MS) {
+    pendingResumeScans.delete(chatId);
+    return null;
+  }
+
+  return entry.sessions;
 }
 
 function buildSuspendedPreviousSnapshot(input: {
@@ -260,11 +279,14 @@ export async function handleLocalSessionTelegramCommand(input: {
         await context.api.sendMessage(normalized.chatId, resumeAuditText);
       } else {
         resumeAuditText = formatSessionListMessage(sessions, locale);
-        pendingResumeScans.set(normalized.chatId, sessions);
+        pendingResumeScans.set(normalized.chatId, {
+          scannedAt: Date.now(),
+          sessions,
+        });
         await context.api.sendMessage(normalized.chatId, resumeAuditText);
       }
     } else {
-      const cached = pendingResumeScans.get(normalized.chatId);
+      const cached = getPendingResumeScan(normalized.chatId);
       if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
         resumeAuditText = locale === "zh"
           ? "无效选择，请先发 /resume 扫描。"

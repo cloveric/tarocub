@@ -263,6 +263,36 @@ describe("ProcessClaudeAdapter", () => {
     });
   });
 
+  it("accumulates multiple assistant text events when the result event is empty", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData(JSON.stringify([
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "First chunk" }] },
+        session_id: "session-xyz",
+      },
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Second chunk" }] },
+        session_id: "session-xyz",
+      },
+      { type: "result", result: "", session_id: "session-xyz" },
+    ]));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({
+      text: "First chunk\nSecond chunk",
+      sessionId: "session-xyz",
+    });
+  });
+
   it("returns an empty-response message for an empty Claude event array", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter("claude", { spawnFn });

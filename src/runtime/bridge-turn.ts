@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { AdapterUsage } from "../codex/adapter.js";
-import { ConfigFileSchema, formatSchemaError } from "../state/config-file-schema.js";
 import type { Locale } from "../telegram/message-renderer.js";
+import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { UsageStore, type UsageRecord } from "../state/usage-store.js";
 
 export interface ExhaustedBudgetState {
@@ -18,34 +17,13 @@ export interface RecordedTurnUsage {
 }
 
 export async function loadBudgetUsd(stateDir: string): Promise<number | undefined> {
-  const configPath = path.join(stateDir, "config.json");
-  let raw: string;
   try {
-    raw = await readFile(configPath, "utf8");
+    return (await loadInstanceConfig(stateDir)).budgetUsd;
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      console.error(
-        `Failed to read ${configPath}, falling back to no budget enforcement:`,
-        error instanceof Error ? error.message : error,
-      );
-    }
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    const result = ConfigFileSchema.safeParse(parsed);
-    if (!result.success) {
-      console.error(
-        `Malformed ${configPath} (${formatSchemaError(result.error)}); bus budget enforcement is disabled until this is repaired.`,
-      );
-      return undefined;
-    }
-    return result.data.budgetUsd;
-  } catch (error) {
+    const configPath = path.join(stateDir, "config.json");
     console.error(
-      `Malformed ${configPath} (${error instanceof Error ? error.message : error}); bus budget enforcement is disabled until this is repaired.`,
+      `Failed to load ${configPath}, falling back to no budget enforcement:`,
+      error instanceof Error ? error.message : error,
     );
     return undefined;
   }

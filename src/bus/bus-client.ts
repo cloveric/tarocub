@@ -13,6 +13,7 @@ export interface BusDelegateInput {
   prompt: string;
   depth: number;
   stateDir: string;
+  timeoutMs?: number;
 }
 
 export async function delegateToInstance(input: BusDelegateInput): Promise<BusTalkResponse> {
@@ -63,7 +64,8 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
 
   const url = `http://127.0.0.1:${target.port}/api/talk`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60 * 1000);
+  const timeoutMs = input.timeoutMs ?? 60_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (target.secret) {
@@ -117,7 +119,7 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
     }
     if (error instanceof Error && error.name === "AbortError") {
       throw new BusProtocolError({
-        message: `Delegation to "${input.targetInstance}" timed out after 60 seconds`,
+        message: `Delegation to "${input.targetInstance}" timed out after ${Math.ceil(timeoutMs / 1000)} seconds`,
         code: "timeout",
         retryable: true,
         fromInstance: input.targetInstance,

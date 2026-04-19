@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { FileWorkflowPreparationError } from "../src/runtime/file-workflow.js";
 import {
   classifyFailure,
   getBusErrorSemantics,
@@ -35,6 +36,16 @@ describe("classifyFailure specificity", () => {
 
   it("does not treat generic archive mentions as file-workflow failures", () => {
     expect(classifyFailure(new Error("archive the previous messages for me"))).toBe("unknown");
+  });
+
+  it("classifies file workflow preparation errors by type", () => {
+    expect(
+      classifyFailure(new FileWorkflowPreparationError("upload-1", new Error("temporary failure"))),
+    ).toBe("file-workflow");
+  });
+
+  it("does not treat generic zip mentions as file-workflow failures", () => {
+    expect(classifyFailure(new Error("Remote peer mentioned export.zip in an unrelated error"))).toBe("unknown");
   });
 });
 

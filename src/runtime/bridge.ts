@@ -126,7 +126,11 @@ export class Bridge {
     let accessState: Awaited<ReturnType<AccessStoreLike["load"]>>;
     try {
       accessState = await this.accessStore.load();
-    } catch {
+    } catch (error) {
+      console.error(
+        "Failed to load access state; denying access:",
+        error instanceof Error ? error.message : error,
+      );
       return { kind: "deny", text: renderUnauthorizedMessage(input.locale) };
     }
 

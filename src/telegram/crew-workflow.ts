@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig as defaultLoadBusConfig, type BusConfig, type BusCrewConfig } from "../bus/bus-config.js";
@@ -20,6 +20,11 @@ type ResearchStageEntry =
   | { question: string; error: string };
 
 const activeCrewRunKeys = new Set<string>();
+const SYNTHETIC_COORDINATOR_CHAT_ID_BASE = 9_000_000_000_000;
+const CREW_RESEARCH_TIMEOUT_MS = 60_000;
+const CREW_ANALYSIS_TIMEOUT_MS = 120_000;
+const CREW_WRITING_TIMEOUT_MS = 120_000;
+const CREW_REVIEW_TIMEOUT_MS = 120_000;
 
 export interface CrewWorkflowContext extends TelegramTurnContext {
   api: Pick<TelegramApi, "sendMessage">;
@@ -49,7 +54,7 @@ export interface CrewWorkflowContext extends TelegramTurnContext {
 }
 
 function createSyntheticCoordinatorChatId(): number {
-  return -(4_000_000_000 + Math.floor(Math.random() * 1_000_000_000));
+  return -(SYNTHETIC_COORDINATOR_CHAT_ID_BASE + randomInt(1_000_000_000));
 }
 
 function parseCoordinatorSubquestions(text: string, maxQuestions: number): string[] {
@@ -542,6 +547,7 @@ export async function handleCrewTelegramWorkflow(input: {
           }),
           depth: 0,
           stateDir,
+          timeoutMs: CREW_RESEARCH_TIMEOUT_MS,
         });
         return { question, finding: result.text };
       } catch (error) {
@@ -625,8 +631,9 @@ export async function handleCrewTelegramWorkflow(input: {
         researchPacket,
       }),
       depth: 0,
-        stateDir,
-      })).text;
+      stateDir,
+      timeoutMs: CREW_ANALYSIS_TIMEOUT_MS,
+    })).text;
     await crewRunStore.update(runId, (record) => {
       record.stages.analysis = {
         status: "completed",
@@ -678,8 +685,9 @@ export async function handleCrewTelegramWorkflow(input: {
         analysis,
       }),
       depth: 0,
-        stateDir,
-      })).text;
+      stateDir,
+      timeoutMs: CREW_WRITING_TIMEOUT_MS,
+    })).text;
     await crewRunStore.update(runId, (record) => {
       record.stages.writing = {
         status: "completed",
@@ -732,6 +740,7 @@ export async function handleCrewTelegramWorkflow(input: {
       }),
       depth: 0,
       stateDir,
+      timeoutMs: CREW_REVIEW_TIMEOUT_MS,
     })).text;
     const reviewerResult = parseReviewerVerdict(reviewerText);
     await crewRunStore.update(runId, (record) => {
@@ -794,8 +803,9 @@ export async function handleCrewTelegramWorkflow(input: {
           reviewIssues: reviewerResult.issues,
         }),
         depth: 0,
-          stateDir,
-        })).text;
+        stateDir,
+        timeoutMs: CREW_WRITING_TIMEOUT_MS,
+      })).text;
       await crewRunStore.update(runId, (record) => {
         record.stages.writing = {
           status: "completed",
@@ -845,6 +855,7 @@ export async function handleCrewTelegramWorkflow(input: {
         }),
         depth: 0,
         stateDir,
+        timeoutMs: CREW_REVIEW_TIMEOUT_MS,
       })).text;
       const revisedReviewerResult = parseReviewerVerdict(revisedReviewerText);
       reviewerResult.verdict = revisedReviewerResult.verdict;

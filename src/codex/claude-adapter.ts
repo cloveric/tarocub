@@ -1,23 +1,5 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-
-function killProcessTree(pid: number | undefined): void {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    // taskkill /T kills the process tree on Windows
-    execFile("taskkill", ["/F", "/T", "/PID", String(pid)], () => {});
-  } else {
-    // pgrep + recursive kill for Unix — kills all descendants
-    execFile("pgrep", ["-P", String(pid)], (_, stdout) => {
-      if (stdout) {
-        for (const childPid of stdout.trim().split(/\s+/)) {
-          killProcessTree(Number(childPid));
-        }
-      }
-      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
-    });
-  }
-}
 
 import type {
   CodexAdapter,
@@ -25,6 +7,7 @@ import type {
   CodexSessionHandle,
   CodexUserMessageInput,
 } from "./adapter.js";
+import { killProcessTree } from "./process-tree.js";
 import type { ApprovalMode } from "./process-adapter.js";
 
 type SpawnOptions = {
@@ -127,6 +110,14 @@ function getAssistantText(event: ClaudeJsonResult | undefined): string {
     .map((item) => item.text ?? "")
     .join("")
     .trim() ?? "";
+}
+
+function appendAssistantText(existing: string, next: string): string {
+  if (!next) {
+    return existing;
+  }
+
+  return existing ? `${existing}\n${next}` : next;
 }
 
 export class ProcessClaudeAdapter implements CodexAdapter {
@@ -319,7 +310,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
 
           const text = getAssistantText(item);
           if (text) {
-            assistantText = text;
+            assistantText = appendAssistantText(assistantText, text);
           }
 
           if (item.type === "result") {

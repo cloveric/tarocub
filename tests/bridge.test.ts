@@ -91,6 +91,44 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("logs access-store read failures before denying access", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockRejectedValue(new Error("access unavailable")),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn(),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn(),
+      createSession: vi.fn(),
+    };
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const bridge = new Bridge(accessStore, sessionManager, adapter);
+
+      await expect(
+        bridge.handleAuthorizedMessage({
+          chatId: 84,
+          userId: 42,
+          chatType: "private",
+          text: "hello",
+          replyContext: undefined,
+          files: [],
+        }),
+      ).rejects.toThrow("This chat is not authorized for this instance.");
+
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        "Failed to load access state; denying access:",
+        "access unavailable",
+      );
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it("blocks an unknown chat in pairing mode and returns a pairing code", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

@@ -105,6 +105,31 @@ describe("instance lock", () => {
     }
   });
 
+  it("treats parseable non-canonical timestamps as valid lock records", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const lockPath = resolveInstanceLockPath(root);
+
+    try {
+      await writeFile(
+        lockPath,
+        JSON.stringify(
+          {
+            pid: process.pid,
+            token: "live-token",
+            acquiredAt: "2026-04-08T00:00:00Z",
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      await expect(acquireInstanceLock(root)).rejects.toThrow(`Instance lock already held by pid ${process.pid}`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("replaces a malformed lock file", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const lockPath = resolveInstanceLockPath(root);

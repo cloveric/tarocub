@@ -160,7 +160,7 @@ export async function handleNormalizedTelegramMessage(
     }
 
     const classifiedError = error instanceof FileWorkflowPreparationError ? error.cause : error;
-    const failureCategory = classifyFailure(classifiedError);
+    const failureCategory = classifyFailure(error);
     if (await maybeRetryTelegramTurnError({
       stateDir,
       normalized,

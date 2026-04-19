@@ -1,21 +1,5 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-
-function killProcessTree(pid: number | undefined): void {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    execFile("taskkill", ["/F", "/T", "/PID", String(pid)], () => {});
-  } else {
-    execFile("pgrep", ["-P", String(pid)], (_, stdout) => {
-      if (stdout) {
-        for (const childPid of stdout.trim().split(/\s+/)) {
-          killProcessTree(Number(childPid));
-        }
-      }
-      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
-    });
-  }
-}
 
 import type {
   CodexAdapter,
@@ -23,6 +7,7 @@ import type {
   CodexSessionHandle,
   CodexUserMessageInput,
 } from "./adapter.js";
+import { killProcessTree } from "./process-tree.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];

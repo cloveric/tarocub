@@ -741,7 +741,38 @@ function isAbortError(error: unknown): boolean {
 }
 
 function isConflictError(error: unknown): boolean {
-  return error instanceof Error && /409\s*Conflict/i.test(error.message);
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    /Telegram API request failed for getUpdates:.*409\s*Conflict/i.test(error.message) ||
+    /409\s*Conflict:\s*terminated by other getUpdates request/i.test(error.message)
+  );
+}
+
+function extractMembershipUpdate(update: unknown): {
+  chatId?: number;
+  userId?: number;
+  oldStatus?: string;
+  newStatus?: string;
+} | null {
+  const membership = (update as { my_chat_member?: unknown })?.my_chat_member;
+  if (!membership || typeof membership !== "object") {
+    return null;
+  }
+
+  const chatId = (membership as { chat?: { id?: unknown } }).chat?.id;
+  const userId = (membership as { from?: { id?: unknown } }).from?.id;
+  const oldStatus = (membership as { old_chat_member?: { status?: unknown } }).old_chat_member?.status;
+  const newStatus = (membership as { new_chat_member?: { status?: unknown } }).new_chat_member?.status;
+
+  return {
+    chatId: typeof chatId === "number" ? chatId : undefined,
+    userId: typeof userId === "number" ? userId : undefined,
+    oldStatus: typeof oldStatus === "string" ? oldStatus : undefined,
+    newStatus: typeof newStatus === "string" ? newStatus : undefined,
+  };
 }
 
 async function appendPollFetchFailureAuditEvent(inboxDir: string, error: unknown, offset?: number): Promise<void> {
@@ -829,16 +860,33 @@ export async function processTelegramUpdates(
 
       const normalized = normalizeUpdate(update);
       if (!normalized) {
+        const membershipUpdate = extractMembershipUpdate(update);
         if (updateId !== undefined) {
           await runtimeStateStore.markHandledUpdateId(updateId);
           lastHandledUpdateId = updateId;
         }
-        await appendAuditEvent(path.dirname(context.inboxDir), {
-          type: "update.skip",
-          instanceName: context.instanceName,
-          updateId,
-          outcome: "invalid",
-        });
+        if (membershipUpdate) {
+          await appendAuditEvent(path.dirname(context.inboxDir), {
+            type: "update.membership",
+            instanceName: context.instanceName,
+            chatId: membershipUpdate.chatId,
+            userId: membershipUpdate.userId,
+            updateId,
+            outcome: "observed",
+            detail: [membershipUpdate.oldStatus, membershipUpdate.newStatus].filter(Boolean).join(" -> ") || undefined,
+            metadata: {
+              oldStatus: membershipUpdate.oldStatus,
+              newStatus: membershipUpdate.newStatus,
+            },
+          });
+        } else {
+          await appendAuditEvent(path.dirname(context.inboxDir), {
+            type: "update.skip",
+            instanceName: context.instanceName,
+            updateId,
+            outcome: "invalid",
+          });
+        }
         nextOffset = advanceOffset(nextOffset, completedOffset);
         continue;
       }

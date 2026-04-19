@@ -33,7 +33,7 @@ const BusTalkRequestSchema = z.object({
   fromInstance: z.string().min(1),
   prompt: z.string(),
   depth: z.number().int().nonnegative(),
-  protocolVersion: z.literal(BUS_PROTOCOL_VERSION).optional(),
+  protocolVersion: z.literal(BUS_PROTOCOL_VERSION).optional().default(BUS_PROTOCOL_VERSION),
   capabilities: BusCapabilitiesSchema,
 }).passthrough();
 
@@ -45,7 +45,7 @@ const BusTalkResponseSchema = z.object({
   errorCode: z.string().min(1).optional(),
   retryable: z.boolean().optional(),
   durationMs: z.number().nonnegative().optional(),
-  protocolVersion: z.literal(BUS_PROTOCOL_VERSION).optional(),
+  protocolVersion: z.literal(BUS_PROTOCOL_VERSION).optional().default(BUS_PROTOCOL_VERSION),
   capabilities: BusCapabilitiesSchema,
 }).passthrough();
 

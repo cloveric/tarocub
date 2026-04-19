@@ -1,3 +1,5 @@
+import { FileWorkflowPreparationError } from "./file-workflow.js";
+
 export type FailureCategory =
   | "auth"
   | "write-permission"
@@ -35,6 +37,10 @@ function normalizeErrorText(error: unknown): string {
 }
 
 export function classifyFailure(error: unknown): FailureCategory {
+  if (error instanceof FileWorkflowPreparationError) {
+    return "file-workflow";
+  }
+
   const text = normalizeErrorText(error).toLowerCase();
 
   if (
@@ -101,10 +107,7 @@ export function classifyFailure(error: unknown): FailureCategory {
     text.includes("failed to extract archive") ||
     text.includes("attachment download") ||
     text.includes("failed to download attachment") ||
-    text.includes("extract") ||
-    text.includes("extraction") ||
     text.includes("pdf text") ||
-    text.includes("zip") ||
     text.includes("file workflow")
   ) {
     return "file-workflow";

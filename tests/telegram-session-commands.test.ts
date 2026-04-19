@@ -23,6 +23,7 @@ function createNormalizedMessage(text: string): NormalizedTelegramMessage {
 
 afterEach(() => {
   resetPendingResumeScans();
+  vi.useRealTimers();
 });
 
 describe("handleLocalSessionTelegramCommand", () => {
@@ -101,6 +102,74 @@ describe("handleLocalSessionTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         "For Codex, use /resume thread <thread-id>. Plain /resume scan is Claude-only.",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("expires cached /resume scans after 10 minutes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-19T10:00:00.000Z"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+    const scannedSessions = [
+      {
+        sessionId: "session-1",
+        dirName: "project-a",
+        workspacePath: "/tmp/project-a",
+        modifiedAt: "2026-04-19T09:55:00.000Z",
+        displayName: "project-a",
+      },
+    ];
+
+    try {
+      await expect(handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/resume"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 84,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        scanRecentSessions: vi.fn().mockResolvedValue(scannedSessions),
+        formatSessionListMessage: vi.fn().mockReturnValue("1. project-a"),
+      })).resolves.toBe(true);
+
+      vi.setSystemTime(new Date("2026-04-19T10:11:00.000Z"));
+
+      await expect(handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/resume 1"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 85,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+      })).resolves.toBe(true);
+
+      expect(sessionStore.upsert).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenLastCalledWith(
+        123,
+        "Invalid selection. Send /resume first to scan.",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

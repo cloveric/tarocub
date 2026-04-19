@@ -115,6 +115,8 @@ describe("handleCrewTelegramWorkflow", () => {
 
       expect(handled).toBe(true);
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const coordinatorInput = bridge.handleAuthorizedMessage.mock.calls[0]?.[0];
+      expect(coordinatorInput?.chatId).toBeLessThan(-9_000_000_000_000);
       expect(delegateToInstance).toHaveBeenNthCalledWith(1, expect.objectContaining({
         fromInstance: "coordinator",
         targetInstance: "researcher",
