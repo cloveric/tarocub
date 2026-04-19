@@ -11,6 +11,7 @@ export const ResumeStateFileSchema = z.object({
 
 export const ConfigFileSchema = z.object({
   engine: z.enum(["codex", "claude"]).optional(),
+  approvalMode: z.enum(["normal", "full-auto", "bypass"]).optional(),
   locale: z.enum(["en", "zh"]).optional(),
   verbosity: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
   budgetUsd: z.number().positive().optional(),

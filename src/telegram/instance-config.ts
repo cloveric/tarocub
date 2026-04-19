@@ -1,7 +1,12 @@
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { ConfigFileSchema, EFFORT_LEVELS, formatSchemaError } from "../state/config-file-schema.js";
+import {
+  ConfigFileSchema,
+  EFFORT_LEVELS,
+  formatSchemaError,
+  type ConfigFile,
+} from "../state/config-file-schema.js";
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -69,8 +74,7 @@ export function applyEngineSelection(
   return { clearedModel };
 }
 
-export async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
-  const configPath = path.join(stateDir, "config.json");
+export async function readValidatedConfigFile(configPath: string): Promise<ConfigFile> {
   let raw: string;
   try {
     raw = await readFile(configPath, "utf8");
@@ -82,7 +86,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
         error instanceof Error ? error.message : error,
       );
     }
-    return { ...DEFAULT_INSTANCE_CONFIG };
+    return {};
   }
 
   let parsed: unknown;
@@ -92,7 +96,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     console.error(
       `Malformed ${configPath} (${error instanceof Error ? error.message : error}); running on defaults until this is repaired.`,
     );
-    return { ...DEFAULT_INSTANCE_CONFIG };
+    return {};
   }
 
   const result = ConfigFileSchema.safeParse(parsed);
@@ -100,10 +104,15 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     console.error(
       `Malformed ${configPath} (${formatSchemaError(result.error)}); running on defaults until this is repaired.`,
     );
-    return { ...DEFAULT_INSTANCE_CONFIG };
+    return {};
   }
 
-  const config = result.data;
+  return result.data;
+}
+
+export async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {
+  const configPath = path.join(stateDir, "config.json");
+  const config = await readValidatedConfigFile(configPath);
 
   const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
   return {

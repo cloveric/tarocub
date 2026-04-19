@@ -7,6 +7,7 @@ import type {
   CodexSessionHandle,
   CodexUserMessageInput,
 } from "./adapter.js";
+import { readValidatedConfigFile } from "../telegram/instance-config.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -201,46 +202,37 @@ export class CodexAppServerAdapter implements CodexAdapter {
       };
     }
 
-    try {
-      const raw = await readFile(this.configPath, "utf8");
-      const parsed = JSON.parse(raw) as { approvalMode?: string; effort?: string; model?: string };
-      const approvalMode: ApprovalMode =
-        parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass"
-          ? parsed.approvalMode
-          : "normal";
-      const effort = typeof parsed.effort === "string" ? parsed.effort : undefined;
-      const model = typeof parsed.model === "string" ? parsed.model : undefined;
-      const initializeArgs = ["app-server"];
+    const parsed = await readValidatedConfigFile(this.configPath);
+    const approvalMode: ApprovalMode =
+      parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass"
+        ? parsed.approvalMode
+        : "normal";
+    const effort = typeof parsed.effort === "string" ? parsed.effort : undefined;
+    const model = typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : undefined;
+    const initializeArgs = ["app-server"];
 
-      if (approvalMode === "bypass") {
-        initializeArgs.push("-c", 'sandbox_mode="danger-full-access"');
-      } else if (approvalMode === "full-auto") {
-        initializeArgs.push("-c", 'sandbox_mode="workspace-write"');
-      }
-
-      if (effort) {
-        const codexEffort = effort === "max" ? "xhigh" : effort;
-        initializeArgs.push("-c", `model_reasoning_effort="${codexEffort}"`);
-      }
-
-      if (model) {
-        initializeArgs.push("-c", `model="${model}"`);
-      }
-
-      return {
-        approvalMode,
-        effort,
-        model,
-        initializeArgs,
-        initializeKey: JSON.stringify({ approvalMode, effort, model }),
-      };
-    } catch {
-      return {
-        approvalMode: "normal",
-        initializeArgs: ["app-server"],
-        initializeKey: JSON.stringify({ approvalMode: "normal" }),
-      };
+    if (approvalMode === "bypass") {
+      initializeArgs.push("-c", 'sandbox_mode="danger-full-access"');
+    } else if (approvalMode === "full-auto") {
+      initializeArgs.push("-c", 'sandbox_mode="workspace-write"');
     }
+
+    if (effort) {
+      const codexEffort = effort === "max" ? "xhigh" : effort;
+      initializeArgs.push("-c", `model_reasoning_effort="${codexEffort}"`);
+    }
+
+    if (model) {
+      initializeArgs.push("-c", `model="${model}"`);
+    }
+
+    return {
+      approvalMode,
+      effort,
+      model,
+      initializeArgs,
+      initializeKey: JSON.stringify({ approvalMode, effort, model }),
+    };
   }
 
   private async loadInstructions(): Promise<string | null> {

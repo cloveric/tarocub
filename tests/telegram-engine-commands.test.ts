@@ -76,6 +76,9 @@ describe("handleLocalEngineTelegramCommand", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
+    const sessionStore = {
+      removeByChatId: vi.fn().mockResolvedValue(true),
+    };
     const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
       const cfg: Record<string, unknown> = { engine: "claude", model: "opus" };
       mutate(cfg);
@@ -98,17 +101,16 @@ describe("handleLocalEngineTelegramCommand", () => {
         bridge: {
           handleAuthorizedMessage: vi.fn(),
         },
-        sessionStore: {
-          removeByChatId: vi.fn(),
-        },
+        sessionStore,
         updateInstanceConfig,
       });
 
       expect(handled).toBe(true);
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(sessionStore.removeByChatId).toHaveBeenCalledWith(123);
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Engine set to codex. Cleared the previous model override. Restart this instance to apply.",
+        "Engine set to codex. Cleared the previous model override and reset this chat's session binding. Restart this instance to apply.",
       );
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({

@@ -4556,6 +4556,13 @@ describe("polling helpers", () => {
       JSON.stringify({ engine: "claude", model: "opus" }, null, 2) + "\n",
       "utf8",
     );
+    const sessionStore = new SessionStore(path.join(root, "session.json"));
+    await sessionStore.upsert({
+      telegramChatId: 123,
+      codexSessionId: "thread-old",
+      status: "idle",
+      updatedAt: "2026-04-20T00:00:00.000Z",
+    });
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
       editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
@@ -4607,12 +4614,68 @@ describe("polling helpers", () => {
 
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Engine set to codex. Cleared the previous model override. Restart this instance to apply.",
+        "Engine set to codex. Cleared the previous model override and reset this chat's session binding. Restart this instance to apply.",
       );
       const configText = await readFile(path.join(root, "config.json"), "utf8");
       expect(configText).toContain('"engine": "codex"');
       expect(configText).not.toContain('"model"');
+      await expect(sessionStore.findByChatId(123)).resolves.toBeNull();
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to plain text when a voice-triggered reply trips Telegram markdown parsing", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    const api = {
+      sendMessage: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Telegram API request failed for sendMessage: Bad Request: can't parse entities: Can't find end of Italic entity"))
+        .mockResolvedValueOnce({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn().mockResolvedValue({ file_path: "voice/message.ogg" }),
+      downloadFile: vi.fn().mockImplementation(async (_filePath: string, destinationPath: string) => {
+        await writeFile(destinationPath, "voice-bytes", "utf8");
+      }),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "preferred_layout" }),
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "spoken transcript",
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "What did I say?",
+          replyContext: undefined,
+          attachments: [{ fileId: "voice-1", kind: "voice" }],
+        },
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+      );
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        text: "What did I say?\nspoken transcript",
+      }));
+      expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "preferred_layout", { parseMode: "Markdown" });
+      expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "preferred_layout");
+    } finally {
+      vi.unstubAllGlobals();
       await rm(root, { recursive: true, force: true });
     }
   });

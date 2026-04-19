@@ -25,6 +25,50 @@ function parseEngineCommand(text: string): { engine: string } | null {
   return { engine: match[1] ?? "" };
 }
 
+function renderEngineSwitchMessage(input: {
+  locale: Locale;
+  engine: "claude" | "codex";
+  clearedModel: boolean;
+  resetSessionBinding: boolean;
+  resetSessionBindingFailed: boolean;
+}): string {
+  const { locale, engine, clearedModel, resetSessionBinding, resetSessionBindingFailed } = input;
+
+  if (locale === "zh") {
+    if (resetSessionBindingFailed) {
+      return clearedModel
+        ? `引擎已设为 ${engine}。已清除先前的模型覆盖。未能自动清除当前聊天的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`
+        : `引擎已设为 ${engine}。未能自动清除当前聊天的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`;
+    }
+    if (clearedModel && resetSessionBinding) {
+      return `引擎已设为 ${engine}。已清除先前的模型覆盖，并重置当前聊天的会话绑定。重启此实例后生效。`;
+    }
+    if (clearedModel) {
+      return `引擎已设为 ${engine}。已清除先前的模型覆盖。重启此实例后生效。`;
+    }
+    if (resetSessionBinding) {
+      return `引擎已设为 ${engine}。已重置当前聊天的会话绑定。重启此实例后生效。`;
+    }
+    return `引擎已设为 ${engine}。重启此实例后生效。`;
+  }
+
+  if (resetSessionBindingFailed) {
+    return clearedModel
+      ? `Engine set to ${engine}. Cleared the previous model override. Could not reset this chat's session binding automatically; use /reset after restarting if needed. Restart this instance to apply.`
+      : `Engine set to ${engine}. Could not reset this chat's session binding automatically; use /reset after restarting if needed. Restart this instance to apply.`;
+  }
+  if (clearedModel && resetSessionBinding) {
+    return `Engine set to ${engine}. Cleared the previous model override and reset this chat's session binding. Restart this instance to apply.`;
+  }
+  if (clearedModel) {
+    return `Engine set to ${engine}. Cleared the previous model override. Restart this instance to apply.`;
+  }
+  if (resetSessionBinding) {
+    return `Engine set to ${engine}. Reset this chat's session binding. Restart this instance to apply.`;
+  }
+  return `Engine set to ${engine}. Restart this instance to apply.`;
+}
+
 export interface EngineCommandConfig {
   engine: "codex" | "claude";
   model?: string;
@@ -93,18 +137,33 @@ export async function handleLocalEngineTelegramCommand(input: {
         : "Usage: /engine [claude|codex]";
       await context.api.sendMessage(normalized.chatId, engineMessage);
     } else {
+      const engineChanged = cfg.engine !== engineCmd.engine;
       let clearedModel = false;
+      let resetSessionBinding = false;
+      let resetSessionBindingFailed = false;
       await updateInstanceConfig((config) => {
         const result = applyEngineSelection(config, engineCmd.engine as "claude" | "codex");
         clearedModel = result.clearedModel;
       });
-      engineMessage = locale === "zh"
-        ? clearedModel
-          ? `引擎已设为 ${engineCmd.engine}。已清除先前的模型覆盖。重启此实例后生效。`
-          : `引擎已设为 ${engineCmd.engine}。重启此实例后生效。`
-        : clearedModel
-          ? `Engine set to ${engineCmd.engine}. Cleared the previous model override. Restart this instance to apply.`
-          : `Engine set to ${engineCmd.engine}. Restart this instance to apply.`;
+      if (engineChanged) {
+        try {
+          await sessionStore.removeByChatId(normalized.chatId);
+          resetSessionBinding = true;
+        } catch (error) {
+          resetSessionBindingFailed = true;
+          console.error(
+            `Failed to clear chat ${normalized.chatId} session binding after switching engine to ${engineCmd.engine}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+      engineMessage = renderEngineSwitchMessage({
+        locale,
+        engine: engineCmd.engine,
+        clearedModel,
+        resetSessionBinding,
+        resetSessionBindingFailed,
+      });
       await context.api.sendMessage(normalized.chatId, engineMessage);
     }
 

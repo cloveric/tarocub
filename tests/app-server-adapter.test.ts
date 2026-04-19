@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
 
@@ -305,6 +305,45 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
       await promise;
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("logs malformed config files instead of silently swallowing them", async () => {
+    const { child, calls, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await writeFile(configPath, "{not-json\n", "utf8");
+      const adapter = new CodexAppServerAdapter(
+        "codex",
+        process.cwd(),
+        undefined,
+        spawnFn,
+        undefined,
+        undefined,
+        configPath,
+      );
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await waitFor(() => child.stdin.lines.length >= 1);
+      expect(calls[0]?.args).toEqual(["app-server"]);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+      await waitFor(() => child.stdin.lines.length >= 2);
+      child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+      await waitFor(() => child.stdin.lines.length >= 3);
+      child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+      await promise;
+    } finally {
+      consoleErrorSpy.mockRestore();
       await rm(root, { recursive: true, force: true });
     }
   });
