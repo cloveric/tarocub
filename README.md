@@ -37,6 +37,9 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.0.0** — the bus now speaks a compatibility-first `v1` protocol: protocol versioning, explicit capabilities, structured error codes, and `retryable` flags. See [`docs/bus-protocol.md`](./docs/bus-protocol.md).
+- Peer liveness is probed via `GET /api/health` with a `cc-telegram-bridge` fingerprint, so a reused local port can no longer fake a live peer.
+- All state files are zod-validated and written atomically (stage-then-rename); `UsageStore` writes are serialized to eliminate concurrent-turn races.
 
 ---
 
@@ -341,6 +344,8 @@ The archive format is a pure-Node gzipped binary — no `tar` dependency, works 
 
 Enable bot-to-bot communication via local HTTP IPC. The bus now supports point delegation, fan-out, sequential chains, auto-review, and coordinator-led crew workflows. It handles routing, peer validation, loop prevention, and local auth.
 
+**Protocol v1** — every request and response is stamped with `protocolVersion`, declared `capabilities`, structured `errorCode`, and a `retryable` flag, so callers can tell transient failures (timeouts, unreachable peers) from terminal ones (disabled bus, peer not allowed). Legacy unversioned payloads are still accepted for rolling upgrades. Peer liveness is verified by probing `GET /api/health` and matching a `cc-telegram-bridge` fingerprint, so a reused local port cannot fake a live peer. Full spec: [`docs/bus-protocol.md`](./docs/bus-protocol.md).
+
 ### Enable
 
 Add `bus` to each instance's `config.json`:
@@ -598,8 +603,18 @@ npm run dev -- telegram service start --instance work
 │ normalizer  │ manager.ts   │ claude-adapter   │ instance-lock.ts    │
 │   .ts       │              │   .ts (Claude)   │ json-store.ts       │
 │ message-    │              │                  │ audit-log.ts        │
-│ renderer.ts │              │ agent.md + config│                     │
+│ renderer.ts │              │ agent.md + config│ timeline-log.ts     │
+│             │              │                  │ usage-store.ts      │
+│             │              │                  │ crew-run-store.ts   │
 └─────────────┴──────────────┴──────────────────┴─────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  Bus Layer  (local HTTP, loopback, protocol v1)                     │
+├─────────────────────────────────────────────────────────────────────┤
+│  bus-server.ts  · bus-client.ts  · bus-handler.ts                   │
+│  bus-protocol.ts (envelope, errors, zod)  · bus-registry.ts         │
+│  bus-config.ts  · delegation-commands.ts  · crew-workflow.ts        │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 **Data flow:**
@@ -691,7 +706,10 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
       <h3>Docker Ready</h3>
       <p>Multi-stage Dockerfile included. Build once, deploy anywhere.</p>
     </td>
-    <td></td>
+    <td>
+      <h3>Structured Bus Protocol</h3>
+      <p>Local bot-to-bot calls speak a versioned <code>v1</code> protocol — <code>protocolVersion</code>, <code>capabilities</code>, structured <code>errorCode</code>, and a <code>retryable</code> flag so callers can tell transient failures from terminal ones. Peer liveness is a real <code>/api/health</code> probe, not just a PID check. See <a href="./docs/bus-protocol.md">docs/bus-protocol.md</a>.</p>
+    </td>
   </tr>
 </table>
 
@@ -735,7 +753,7 @@ All commands accept `--instance <name>` to target a specific bot.
 Telegram users can also use:
 
 - `/status`
-- `/effort [low|medium|high|max|off]` — set reasoning effort level
+- `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`xhigh` is Opus 4.7+ only)
 - `/model [name|off]` — switch model
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
@@ -745,8 +763,10 @@ Telegram users can also use:
 - `/resume` — scan and resume a local session on Telegram
 - `/detach` — detach from resumed session, restore default workspace
 - `/stop` — immediately stop the current running task
-- `/continue`
+- `/continue` — resume the latest waiting archive summary
 - `/compact` (Claude only — compresses context; Codex falls back to reset)
+- `/context` (Claude only) — show current context fill level; use it to decide when to `/compact`
+- `/ultrareview` (Claude Opus 4.7+ only) — dedicated code-review pass, typically paired with `/resume` into a local project
 - `/reset`
 - `/help`
 
@@ -804,6 +824,20 @@ npm run dev -- telegram audit --type update.handle --outcome error  # Filter by 
 npm run dev -- telegram audit --chat 688567588                      # Filter by chat
 ```
 
+`audit.log.jsonl` records **what the bridge did** — `update.handle`, `bus.reply`, `budget.blocked` — one line per external action, rotated at 10MB.
+
+### Timeline
+
+Parallel to audit, the bridge emits a **lifecycle** stream (`timeline.log.jsonl`) describing the shape of each turn — `turn.started`, `turn.completed`, `budget.threshold_reached`, `crew.stage.*`, bus delegations, etc. Same JSONL shape, different axis:
+
+```bash
+npm run dev -- telegram timeline [--instance work]
+npm run dev -- telegram timeline --type turn.completed --outcome error
+npm run dev -- telegram timeline --chat 688567588 --limit 100
+```
+
+Think of it this way: audit answers *"what action did we take"*, timeline answers *"how did this turn go"*. `telegram service status` and `telegram dashboard` pull summaries from timeline.
+
 ---
 
 ## State Layout
@@ -814,16 +848,20 @@ npm run dev -- telegram audit --chat 688567588                      # Filter by 
 
 <instance>/
 ├── agent.md                # Bot personality & instructions
-├── config.json             # Engine, YOLO mode, verbosity
+├── config.json             # Engine, YOLO mode, verbosity, bus
 ├── usage.json              # Token usage and cost tracking
 ├── workspace/              # Per-bot working directory
 │   └── CLAUDE.md           # Claude Code project instructions (Claude only)
 ├── .env                    # Bot token
 ├── access.json             # Pairing + allowlist data
 ├── session.json            # Chat-to-thread bindings
+├── file-workflow.json      # Pending file-upload follow-ups
 ├── runtime-state.json      # Watermarks, offsets
 ├── instance.lock.json      # Process lock
-├── audit.log.jsonl         # Structured audit stream
+├── audit.log.jsonl         # Structured audit stream (rotates to .1, .2, ...)
+├── timeline.log.jsonl      # Lifecycle events (turn.started, budget.*, crew.stage.*)
+├── crew-runs/              # Coordinator-led crew run state (coordinator only)
+│   └── <run-id>.json
 ├── service.stdout.log      # Service stdout
 ├── service.stderr.log      # Service stderr
 └── inbox/                  # Downloaded attachments
@@ -850,8 +888,8 @@ npm start                    # Start production build
 docker build -t cc-telegram-bridge .
 
 # Run (configure first, then start)
-docker run -v ~/.cctb:/root/.codex cc-telegram-bridge telegram configure <token>
-docker run -v ~/.cctb:/root/.codex cc-telegram-bridge telegram service start
+docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram configure <token>
+docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram service start
 ```
 
 Mount `~/.cctb` to persist state across container restarts.
