@@ -121,6 +121,49 @@ describe("runAutostartCommand", () => {
     }
   });
 
+  it("persists USER into the launch agent environment for background Claude auth", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-autostart-"));
+
+    try {
+      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
+      const { runAutostartCommand } = await loadAutostartModule();
+
+      const handled = await runAutostartCommand(
+        ["autostart", "sync", "--instance", "alpha"],
+        {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          USER: "alice",
+        } as any,
+        { log: () => {} },
+        {
+          cwd: "/repo",
+          nodePath: "/usr/bin/node",
+          uid: 501,
+          pathEnv: "/usr/bin:/bin",
+          bootout: async () => {},
+          bootstrap: async () => {},
+          enable: async () => {},
+          kickstart: async () => {},
+          inspect: async () => ({
+            loaded: true,
+            running: true,
+            pid: 123,
+          }),
+        },
+      );
+
+      expect(handled).toBe(true);
+
+      const plistPath = path.join(tempDir, "Library", "LaunchAgents", "com.cloveric.cc-telegram-bridge.alpha.plist");
+      const plist = await readFile(plistPath, "utf8");
+      expect(plist).toContain("<key>USER</key>");
+      expect(plist).toContain("<string>alice</string>");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("syncs all instances and prunes stale launch agents", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-autostart-"));
     const messages: string[] = [];

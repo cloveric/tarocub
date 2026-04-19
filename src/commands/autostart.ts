@@ -12,7 +12,9 @@ const execFile = promisify(nodeExecFile);
 const AUTOSTART_LABEL_PREFIX = "com.cloveric.cc-telegram-bridge.";
 
 export interface AutostartCommandEnv
-  extends Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"> {}
+  extends Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"> {
+  USER?: string;
+}
 
 export interface AutostartLogger {
   log: (message: string) => void;
@@ -47,6 +49,20 @@ function resolveHomeDir(env: Pick<AutostartCommandEnv, "HOME" | "USERPROFILE">):
 
 function resolveLaunchAgentsDir(env: Pick<AutostartCommandEnv, "HOME" | "USERPROFILE">): string {
   return path.join(resolveHomeDir(env), "Library", "LaunchAgents");
+}
+
+function resolveUserName(env: Pick<AutostartCommandEnv, "HOME" | "USERPROFILE" | "USER">): string {
+  const explicitUser = env.USER?.trim();
+  if (explicitUser) {
+    return explicitUser;
+  }
+
+  const inheritedUser = process.env.USER?.trim();
+  if (inheritedUser) {
+    return inheritedUser;
+  }
+
+  return path.basename(resolveHomeDir(env));
 }
 
 function resolveChannelsDir(env: Pick<AutostartCommandEnv, "HOME" | "USERPROFILE">): string {
@@ -117,6 +133,7 @@ function renderLaunchAgentPlist(
   const homeDir = resolveHomeDir(env);
   const environmentVariables = [
     ["HOME", homeDir],
+    ["USER", resolveUserName(env)],
     ["USERPROFILE", env.USERPROFILE ?? homeDir],
     ...(env.CODEX_TELEGRAM_STATE_DIR ? ([["CODEX_TELEGRAM_STATE_DIR", env.CODEX_TELEGRAM_STATE_DIR]] as const) : []),
     ["CODEX_HOME", env.CODEX_HOME ?? path.join(homeDir, ".codex")],
