@@ -310,6 +310,15 @@ export function renderUsageMessage(
 }
 
 export function renderCategorizedErrorMessage(category: FailureCategory, detail: string, locale: Locale = "en"): string {
+  const normalizedDetail = detail.toLowerCase();
+  const isTelegramFormattingError =
+    category === "telegram-delivery" &&
+    (
+      normalizedDetail.includes("can't parse entities") ||
+      normalizedDetail.includes("cannot parse entities") ||
+      normalizedDetail.includes("parse entities")
+    );
+
   if (locale === "zh") {
     if (category === "write-permission") {
       return "错误：当前写入策略禁止创建文件，请在允许写入的模式下重试。";
@@ -321,7 +330,9 @@ export function renderCategorizedErrorMessage(category: FailureCategory, detail:
       return "错误：另一个 Telegram 轮询进程正在使用此 bot token，请停止重复的服务后重试。";
     }
     if (category === "telegram-delivery") {
-      return "错误：Telegram 投递暂时不可用，请稍后重试。";
+      return isTelegramFormattingError
+        ? "错误：回复内容的格式被 Telegram 拒绝了。我已记录具体原因，请稍后重试或让运维检查日志。"
+        : "错误：Telegram 投递暂时不可用，请稍后重试。";
     }
     if (category === "engine-cli") {
       return "错误：引擎运行时失败，请重启实例后重试。";
@@ -351,7 +362,9 @@ export function renderCategorizedErrorMessage(category: FailureCategory, detail:
     return "Error: Another Telegram poller is using this bot token. Stop the duplicate service and retry.";
   }
   if (category === "telegram-delivery") {
-    return "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.";
+    return isTelegramFormattingError
+      ? "Error: Telegram rejected the reply formatting. The detailed parse error has been logged; retry the request or inspect the logs."
+      : "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.";
   }
   if (category === "engine-cli") {
     return "Error: The engine runtime failed. Restart the instance and retry.";

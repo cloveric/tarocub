@@ -108,6 +108,14 @@ describe("message rendering", () => {
     expect(renderCategorizedErrorMessage("telegram-delivery", "sendMessage failed")).toBe(
       "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.",
     );
+    expect(
+      renderCategorizedErrorMessage(
+        "telegram-delivery",
+        "Telegram API request failed for sendMessage: Bad Request: can't parse entities: Can't find end of Italic entity",
+      ),
+    ).toBe(
+      "Error: Telegram rejected the reply formatting. The detailed parse error has been logged; retry the request or inspect the logs.",
+    );
     expect(renderCategorizedErrorMessage("engine-cli", "engine failed to start")).toBe(
       "Error: The engine runtime failed. Restart the instance and retry.",
     );
@@ -290,6 +298,23 @@ describe("normalizeUpdate", () => {
 });
 
 describe("TelegramApi", () => {
+  it("preserves Telegram error descriptions for non-OK HTTP responses", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      json: async () => ({ ok: false, description: "Bad Request: can't parse entities: Can't find end of Italic entity" }),
+    } as unknown as Response);
+
+    const api = new TelegramApi("token");
+
+    await expect(api.sendMessage(1, "hello")).rejects.toThrow(
+      "Telegram API request failed for sendMessage: Bad Request: can't parse entities: Can't find end of Italic entity",
+    );
+
+    fetchMock.mockRestore();
+  });
+
   it("throws a stable error for non-OK responses", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: false,
@@ -565,6 +590,23 @@ describe("TelegramApi", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, options] = fetchMock.mock.calls[0]!;
     expect(String((options as RequestInit).headers && (options as any).headers["Content-Type"])).toContain("multipart/form-data");
+
+    fetchMock.mockRestore();
+  });
+
+  it("preserves Telegram error descriptions for multipart uploads", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: "Bad Request",
+      json: async () => ({ ok: false, description: "Bad Request: wrong file identifier/HTTP URL specified" }),
+    } as unknown as Response);
+
+    const api = new TelegramApi("token");
+
+    await expect(api.sendDocument(123, "report.txt", "hello file")).rejects.toThrow(
+      "Telegram API request failed for sendDocument: Bad Request: wrong file identifier/HTTP URL specified",
+    );
 
     fetchMock.mockRestore();
   });

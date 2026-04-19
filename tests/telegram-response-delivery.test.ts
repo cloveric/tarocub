@@ -153,4 +153,20 @@ describe("deliverTelegramResponse", () => {
     ).rejects.toThrow("403 Forbidden");
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("falls back to plain text when Telegram rejects Markdown entity parsing", async () => {
+    const api = {
+      sendMessage: vi.fn()
+        .mockRejectedValueOnce(new Error("Telegram API request failed for sendMessage: Bad Request: can't parse entities: Can't find end of Italic entity"))
+        .mockResolvedValueOnce({ message_id: 2 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
+    };
+
+    await expect(
+      deliverTelegramResponse(api as never, 123, "preferred_layout", "/tmp/inbox", undefined, "en"),
+    ).resolves.toBe(0);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "preferred_layout", { parseMode: "Markdown" });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "preferred_layout");
+  });
 });

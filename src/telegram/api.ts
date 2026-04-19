@@ -53,6 +53,19 @@ function isTelegramApiResponse<T>(value: unknown): value is TelegramApiResponse<
   return true;
 }
 
+async function extractTelegramErrorDetail<T>(response: Response, fallback: string): Promise<string> {
+  try {
+    const json = await response.json();
+    if (isTelegramApiResponse<T>(json) && !json.ok && json.description) {
+      return json.description;
+    }
+  } catch {
+    // Fall back to the HTTP status line when the body is unreadable.
+  }
+
+  return fallback;
+}
+
 export interface TelegramMessage {
   message_id: number;
   text?: string;
@@ -151,7 +164,8 @@ export class TelegramApi {
     }
 
     if (!response.ok) {
-      throw new Error(`Telegram API request failed for ${method}: ${response.status} ${response.statusText}`);
+      const detail = await extractTelegramErrorDetail<T>(response, `${response.status} ${response.statusText}`);
+      throw new Error(`Telegram API request failed for ${method}: ${detail}`);
     }
 
     let json: unknown;
@@ -227,7 +241,8 @@ export class TelegramApi {
     });
 
     if (!response.ok) {
-      throw new Error(`Telegram API request failed for sendDocument: ${response.status} ${response.statusText}`);
+      const detail = await extractTelegramErrorDetail<TelegramMessage>(response, `${response.status} ${response.statusText}`);
+      throw new Error(`Telegram API request failed for sendDocument: ${detail}`);
     }
 
     const json = await response.json();
@@ -274,7 +289,8 @@ export class TelegramApi {
     });
 
     if (!response.ok) {
-      throw new Error(`Telegram API request failed for sendPhoto: ${response.status} ${response.statusText}`);
+      const detail = await extractTelegramErrorDetail<TelegramMessage>(response, `${response.status} ${response.statusText}`);
+      throw new Error(`Telegram API request failed for sendPhoto: ${detail}`);
     }
 
     const json = await response.json();
@@ -386,7 +402,8 @@ export class TelegramApi {
     });
 
     if (!response.ok) {
-      throw new Error(`Telegram API request failed for sendMediaGroup: ${response.status} ${response.statusText}`);
+      const detail = await extractTelegramErrorDetail<unknown>(response, `${response.status} ${response.statusText}`);
+      throw new Error(`Telegram API request failed for sendMediaGroup: ${detail}`);
     }
   }
 
