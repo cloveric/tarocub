@@ -37,6 +37,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.1.0** — adds coordinator-led `crew` runs with persisted run state, macOS `launchd` autostart management (`telegram autostart ...`), and a round of state/runtime hardening around schemas, file delivery, and shared state writes.
 - **v4.0.0** — the bus now speaks a compatibility-first `v1` protocol: protocol versioning, explicit capabilities, structured error codes, and `retryable` flags. See [`docs/bus-protocol.md`](./docs/bus-protocol.md).
 - Peer liveness is probed via `GET /api/health` with a `cc-telegram-bridge` fingerprint, so a reused local port can no longer fake a live peer.
 - All state files are zod-validated and written atomically (stage-then-rename); `UsageStore` writes are serialized to eliminate concurrent-turn races.
