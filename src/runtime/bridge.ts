@@ -110,6 +110,14 @@ export class Bridge {
     this.bridgeInstructionMode = adapter.bridgeInstructionMode ?? "generic-file-blocks";
   }
 
+  async validateCodexThread(threadId: string): Promise<void> {
+    if (!this.adapter.validateExternalSession) {
+      throw new Error("codex thread validation unsupported");
+    }
+
+    await this.adapter.validateExternalSession(threadId);
+  }
+
   async checkAccess(input: BridgeAccessInput): Promise<BridgeAccessDecision> {
     if (input.chatType === "bus") {
       return { kind: "allow" };

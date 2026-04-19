@@ -29,5 +29,6 @@ export interface CodexAdapter {
   bridgeInstructionMode?: "generic-file-blocks" | "telegram-out-only";
   createSession(chatId: number): Promise<CodexSessionHandle>;
   sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse>;
+  validateExternalSession?(sessionId: string): Promise<void>;
   destroy?(): void;
 }

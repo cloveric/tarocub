@@ -44,7 +44,7 @@ function parseResumeCommand(text: string): ResumeCommand | null {
   const arg = match[1]?.trim();
   if (!arg) return { kind: "scan" };
 
-  const threadMatch = arg.match(/^thread\s+(.+)$/i);
+  const threadMatch = arg.match(/^thread\s+(\S+)$/i);
   if (threadMatch?.[1]?.trim()) {
     return { kind: "thread", threadId: threadMatch[1].trim() };
   }
@@ -71,6 +71,7 @@ export async function handleLocalSessionTelegramCommand(input: {
   context: TelegramTurnContext;
   sessionStore: SessionCommandStore;
   updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
+  validateCodexThread?: (threadId: string) => Promise<void>;
   scanRecentSessions?: (hours: number) => Promise<ScannedSession[]>;
   formatSessionListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
 }): Promise<boolean> {
@@ -83,6 +84,7 @@ export async function handleLocalSessionTelegramCommand(input: {
     context,
     sessionStore,
     updateInstanceConfig,
+    validateCodexThread,
     scanRecentSessions = scanRecentClaudeSessions,
     formatSessionListMessage = formatSessionList,
   } = input;
@@ -135,6 +137,36 @@ export async function handleLocalSessionTelegramCommand(input: {
           command: "resume",
           responseText: msg,
           metadata: { rejected: "codex-requires-thread-id" },
+        });
+        return true;
+      }
+
+      try {
+        if (!validateCodexThread) {
+          throw new Error("codex thread validation unsupported");
+        }
+        await validateCodexThread(resumeCmd.threadId);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const isNotFound = /could not resume thread|thread not found|no rollout found/i.test(detail);
+        const isUnsupported = /validation unsupported/i.test(detail);
+        const msg = isNotFound
+          ? (locale === "zh"
+            ? `未找到 Codex thread：${resumeCmd.threadId}\n\n请检查 thread id 后重试。`
+            : `Codex thread not found: ${resumeCmd.threadId}\n\nCheck the thread ID and try again.`)
+          : isUnsupported
+            ? (locale === "zh"
+              ? "当前 Codex runtime 无法为 /resume thread 验证外部 thread id。"
+              : "This Codex runtime cannot validate external thread IDs for /resume thread.")
+            : (locale === "zh"
+              ? `验证 Codex thread 失败：${resumeCmd.threadId}`
+              : `Could not validate Codex thread: ${resumeCmd.threadId}`);
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: { rejected: isNotFound ? "thread-not-found" : "thread-validation-unavailable" },
         });
         return true;
       }

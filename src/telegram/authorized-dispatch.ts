@@ -26,6 +26,7 @@ export interface AuthorizedTelegramDispatchConfig {
 export interface AuthorizedTelegramDispatchContext {
   api: Pick<TelegramApi, "sendMessage" | "getFile" | "downloadFile">;
   bridge: {
+    validateCodexThread?(threadId: string): Promise<void>;
     handleAuthorizedMessage(input: {
       chatId: number;
       userId: number;
@@ -139,6 +140,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     context,
     sessionStore,
     updateInstanceConfig,
+    validateCodexThread: context.bridge.validateCodexThread?.bind(context.bridge),
   })) {
     return;
   }

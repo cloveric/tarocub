@@ -220,6 +220,48 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("validates an external Codex thread through the adapter when supported", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn(),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn(),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn(),
+      createSession: vi.fn(),
+      validateExternalSession: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.validateCodexThread("thread-123");
+
+    expect(adapter.validateExternalSession).toHaveBeenCalledWith("thread-123");
+  });
+
+  it("fails closed when the adapter cannot validate an external Codex thread", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn(),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn(),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn(),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+
+    await expect(bridge.validateCodexThread("thread-123")).rejects.toThrow(
+      "codex thread validation unsupported",
+    );
+  });
+
   it("requires a revoked chat to pair again under pairing policy", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 

@@ -116,6 +116,7 @@ describe("handleLocalSessionTelegramCommand", () => {
       upsert: vi.fn().mockResolvedValue(undefined),
     };
     const updateInstanceConfig = vi.fn();
+    const validateCodexThread = vi.fn().mockResolvedValue(undefined);
 
     try {
       const handled = await handleLocalSessionTelegramCommand({
@@ -131,9 +132,11 @@ describe("handleLocalSessionTelegramCommand", () => {
         },
         sessionStore,
         updateInstanceConfig,
+        validateCodexThread,
       });
 
       expect(handled).toBe(true);
+      expect(validateCodexThread).toHaveBeenCalledWith("thread-abc");
       expect(sessionStore.upsert).toHaveBeenCalledWith({
         telegramChatId: 123,
         codexSessionId: "thread-abc",
@@ -143,6 +146,84 @@ describe("handleLocalSessionTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         "Attached Codex thread: thread-abc\n\nSend a message to continue. Use /detach when done.",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects /resume thread when the Codex thread cannot be validated", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      inspect: vi.fn(),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/resume thread thread-missing"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 82,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        validateCodexThread: vi.fn().mockRejectedValue(new Error("codex app-server could not resume thread thread-missing")),
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.upsert).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Codex thread not found: thread-missing\n\nCheck the thread ID and try again.",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when the current Codex runtime cannot validate external threads", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      inspect: vi.fn(),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/resume thread thread-abc"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 83,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        validateCodexThread: vi.fn().mockRejectedValue(new Error("codex thread validation unsupported")),
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.upsert).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "This Codex runtime cannot validate external thread IDs for /resume thread.",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

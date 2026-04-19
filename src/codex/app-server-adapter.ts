@@ -169,6 +169,16 @@ export class CodexAppServerAdapter implements CodexAdapter {
     };
   }
 
+  async validateExternalSession(sessionId: string): Promise<void> {
+    await this.ensureInitialized();
+
+    if (isLogicalTelegramSessionId(sessionId)) {
+      return;
+    }
+
+    await this.ensureThreadLoaded(sessionId);
+  }
+
   private async loadInstructions(): Promise<string | null> {
     if (!this.instructionsPath) {
       return null;

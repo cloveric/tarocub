@@ -262,6 +262,10 @@ export class ProcessCodexAdapter implements CodexAdapter {
     return { sessionId: `telegram-${chatId}` };
   }
 
+  async validateExternalSession(): Promise<void> {
+    throw new Error("codex thread validation unsupported");
+  }
+
   private async loadApprovalMode(): Promise<ApprovalMode> {
     if (!this.configPath) {
       return "normal";
