@@ -677,16 +677,20 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   </tr>
   <tr>
     <td>
+      <h3>语音输入</h3>
+      <p>直接发语音消息 — 本地通过可插拔 ASR（如 Qwen3-ASR）转写。常驻 HTTP 服务做快速推理，离线时回退到 CLI。</p>
+    </td>
+    <td>
       <h3>完整审计日志</h3>
       <p>每个实例独立的 JSONL 追加日志 — 支持按类型、聊天、结果过滤。10MB 自动轮转。</p>
     </td>
+  </tr>
+  <tr>
     <td>
       <h3>Docker 就绪</h3>
       <p>内含多阶段 Dockerfile，一次构建，随处部署。</p>
     </td>
-  </tr>
-  <tr>
-    <td colspan="2">
+    <td>
       <h3>结构化 Bus 协议</h3>
       <p>本地 bot 之间用带版本的 <code>v1</code> 协议通信 — <code>protocolVersion</code>、<code>capabilities</code>、结构化 <code>errorCode</code> 和 <code>retryable</code> 标志，调用方能区分临时失败和终态失败。Peer 活性是真的 <code>/api/health</code> 探活，不是只看 PID。详见 <a href="./docs/bus-protocol.md">docs/bus-protocol.md</a>。</p>
     </td>
@@ -789,15 +793,6 @@ npm run dev -- telegram access policy allowlist
 npm run dev -- telegram access allow <chat-id>
 npm run dev -- telegram access revoke <chat-id>
 npm run dev -- telegram status [--instance work]
-```
-
----
-
-## 会话检视
-
-```bash
-npm run dev -- telegram session inspect [--instance work] <chat-id>
-npm run dev -- telegram session reset [--instance work] <chat-id>
 ```
 
 ---
