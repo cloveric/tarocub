@@ -128,14 +128,10 @@ function combineInstructions(...values: Array<string | undefined>): string | und
 function shouldDisableRuntimeTimeout(text: string): boolean {
   const normalized = text.toLowerCase();
   return [
-    "执行任务",
-    "长任务",
     "不设超时",
     "无超时",
     "不要超时",
   ].some((keyword) => text.includes(keyword)) || [
-    "execute task",
-    "long task",
     "no timeout",
     "disable timeout",
     "without timeout",

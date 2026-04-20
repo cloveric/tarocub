@@ -91,6 +91,39 @@ describe("Bridge", () => {
     }));
   });
 
+  it("keeps runtime timeout enabled for ordinary execution requests", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "请执行任务：卸载 browser harness。",
+      replyContext: undefined,
+      files: [],
+    });
+
+    expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.disableRuntimeTimeout).toBeUndefined();
+  });
+
   it("rejects a message when the chat is not on the allowlist", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
