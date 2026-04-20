@@ -15,6 +15,7 @@ import {
   readInstanceBotTokenFromEnvFile,
   resolveServiceEnvForInstance,
   _resetEnqueuedUpdateIds,
+  _resetStoppedTaskChats,
 } from "../src/service.js";
 import { ChatQueue } from "../src/runtime/chat-queue.js";
 import { Bridge } from "../src/runtime/bridge.js";
@@ -94,6 +95,7 @@ function replaceBufferContents(buffer: Buffer, search: string, replace: string):
 
 afterEach(async () => {
   _resetEnqueuedUpdateIds();
+  _resetStoppedTaskChats();
   await rm(path.join(os.tmpdir(), "ignored"), { recursive: true, force: true });
   await rm(path.join(os.tmpdir(), "runtime-state.json"), { force: true });
 });
@@ -1358,6 +1360,67 @@ describe("polling helpers", () => {
 
     expect(callCount).toBe(1);
     expect(api.sendMessage).toHaveBeenCalledWith(123, "Current task stopped.");
+  });
+
+  it("treats the first plain message after /stop as a fresh request instead of continuing the stopped task", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const started = createDeferred<void>();
+    const firstAborted = createDeferred<void>();
+    const seenTexts: string[] = [];
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ text, abortSignal }: { text: string; abortSignal?: AbortSignal }) => {
+        seenTexts.push(text);
+        if (text === "first") {
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            abortSignal?.addEventListener("abort", () => {
+              firstAborted.resolve();
+              resolve();
+            }, { once: true });
+          });
+          return { text: "first aborted" };
+        }
+
+        return { text: "fresh reply" };
+      }),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    const firstRun = processTelegramUpdates(
+      [{ update_id: 6, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "first" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await started.promise;
+
+    await processTelegramUpdates(
+      [{ update_id: 7, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "/stop" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await firstAborted.promise;
+    await firstRun;
+
+    await processTelegramUpdates(
+      [{ update_id: 8, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "继续" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    expect(seenTexts).toHaveLength(2);
+    expect(seenTexts[1]).toContain("[Previous task was explicitly stopped by the user.]");
+    expect(seenTexts[1]).toContain("Do not continue or resume that stopped task");
+    expect(seenTexts[1]).toContain("User's new message:\n继续");
   });
 
   it("downloads attachments and passes local file paths to the bridge", async () => {

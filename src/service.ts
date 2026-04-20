@@ -664,10 +664,21 @@ export async function lookupTelegramBotIdentity(api: TelegramApi): Promise<Resol
 const defaultChatQueue = new ChatQueue();
 const activeTasks = new Map<number, AbortController>();
 const enqueuedUpdateIds = new Set<number>();
+const stoppedTaskChats = new Set<number>();
+const STOPPED_TASK_BOUNDARY = [
+  "[Previous task was explicitly stopped by the user.]",
+  "Do not continue or resume that stopped task unless the user's new message explicitly asks you to resume it.",
+  "Treat the user's new message as a fresh request by default.",
+].join("\n");
 
 /** @internal — test-only reset for module-level dedup state */
 export function _resetEnqueuedUpdateIds(): void {
   enqueuedUpdateIds.clear();
+}
+
+/** @internal — test-only reset for module-level stopped-task state */
+export function _resetStoppedTaskChats(): void {
+  stoppedTaskChats.clear();
 }
 
 export function abortChatTask(chatId: number, chatQueue: ChatQueue = defaultChatQueue): boolean {
@@ -912,8 +923,15 @@ export async function processTelegramUpdates(
           locale,
         });
 
-        const msg = accessDecision.kind === "allow"
+        const stopped = accessDecision.kind === "allow"
           ? abortChatTask(normalized.chatId, chatQueue)
+          : false;
+        if (stopped) {
+          stoppedTaskChats.add(normalized.chatId);
+        }
+
+        const msg = accessDecision.kind === "allow"
+          ? stopped
             ? locale === "zh" ? "已停止当前任务。" : "Current task stopped."
             : locale === "zh" ? "当前没有运行中的任务。" : "No task is currently running."
           : accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
@@ -926,6 +944,22 @@ export async function processTelegramUpdates(
         continue;
       }
 
+      const shouldFenceStoppedTask =
+        stoppedTaskChats.has(normalized.chatId) &&
+        !/^\/\S/.test(normalized.text.trim()) &&
+        (normalized.text.trim().length > 0 || normalized.attachments.length > 0);
+      const effectiveNormalized = shouldFenceStoppedTask
+        ? {
+            ...normalized,
+            text: normalized.text.trim().length > 0
+              ? `${STOPPED_TASK_BOUNDARY}\n\nUser's new message:\n${normalized.text}`
+              : `${STOPPED_TASK_BOUNDARY}\n\nThe user sent attachments without additional text.`,
+          }
+        : normalized;
+      if (shouldFenceStoppedTask) {
+        stoppedTaskChats.delete(normalized.chatId);
+      }
+
       if (updateId !== undefined) {
         enqueuedUpdateIds.add(updateId);
       }
@@ -933,7 +967,7 @@ export async function processTelegramUpdates(
         const taskController = new AbortController();
         activeTasks.set(normalized.chatId, taskController);
         try {
-          await handleNormalizedTelegramMessage(normalized, {
+          await handleNormalizedTelegramMessage(effectiveNormalized, {
             ...context,
             updateId,
             abortSignal: taskController.signal,
