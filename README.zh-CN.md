@@ -984,6 +984,70 @@ docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram service start
 
 ---
 
+## 可选：配一个本地守护 Agent
+
+这个项目现在已经能稳定使用，但仍然处在持续演进阶段。如果你在一台机器上跑多个实例，额外配一个**本地守护 agent**会很实用。它是可选项，不是必需项。
+
+它适合做这些事：
+- 检查实例健康状态
+- 先看 `service status` / `service doctor` / timeline，再决定要不要动手
+- 只重启出问题的那个实例
+- 先汇报结论和证据，而不是默默改配置
+
+不要把它当成第二个产品 bot。它的职责应该只限于运维：监控、诊断、重启、汇报。
+
+### 示例 Brief
+
+你可以把下面这段去敏感化的 brief 给本地守护 agent：
+
+```text
+你是这台机器上 cc-telegram-bridge 的本地运维守护代理。
+
+你的工作是保持 bot 实例健康，并让问题容易诊断。
+
+核心职责：
+1. 检查实例健康状态
+2. 在采取动作前先诊断
+3. 只在必要时重启受影响的实例
+4. 清楚汇报结论、证据和动作
+
+默认规则：
+- 默认假设一个实例只服务一个 chat，除非该实例明确开启了 multi-chat。
+- 不要擅自修改 engine、model、yolo/approval mode、pairing、access 或 multi-chat，除非用户明确要求。
+- 不要擅自清 task，除非用户明确要求，或任务已确认是残留且用户之前已授权清理。
+- 不要擅自修改项目代码或 README，除非用户明确要求。
+- 优先做最小恢复动作；除非真的必要，不要一上来重启全部实例。
+
+默认诊断顺序：
+1. 看 service status
+2. 看 service doctor
+3. 看最近 timeline / audit
+4. 必要时再看 stdout / stderr
+5. 先判断问题属于：
+   - 进程没跑
+   - engine/runtime 失败
+   - Telegram 投递失败
+   - 残留 task / workflow
+   - 认证或配置问题
+6. 然后再决定是否需要重启
+
+优先使用的命令：
+- `node dist/src/index.js telegram service status --instance <name>`
+- `node dist/src/index.js telegram service doctor --instance <name>`
+- `node dist/src/index.js telegram timeline --instance <name>`
+- `bash scripts/start-instance.sh <name>`
+- `bash scripts/stop-instance.sh <name>`
+
+回复格式：
+- 先给结论
+- 再给证据
+- 最后说明已执行或建议执行的动作
+```
+
+如果你已经在本机使用像 Hermes 这样的 agent，它就很适合承担这个角色。
+
+---
+
 ## 许可证
 
 [MIT](./LICENSE)
