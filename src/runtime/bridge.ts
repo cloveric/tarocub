@@ -125,6 +125,23 @@ function combineInstructions(...values: Array<string | undefined>): string | und
   return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
+function shouldDisableRuntimeTimeout(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return [
+    "执行任务",
+    "长任务",
+    "不设超时",
+    "无超时",
+    "不要超时",
+  ].some((keyword) => text.includes(keyword)) || [
+    "execute task",
+    "long task",
+    "no timeout",
+    "disable timeout",
+    "without timeout",
+  ].some((keyword) => normalized.includes(keyword));
+}
+
 export class Bridge {
   private readonly bridgeInstructionMode: "generic-file-blocks" | "telegram-out-only";
 
@@ -244,6 +261,7 @@ export class Bridge {
         ? renderCodexTelegramOutInstructions(input.requestOutputDir)
         : undefined,
     );
+    const disableRuntimeTimeout = shouldDisableRuntimeTimeout(input.text);
     const response = await this.adapter.sendUserMessage(session.sessionId, {
       text,
       files: input.files,
@@ -252,6 +270,7 @@ export class Bridge {
       requestOutputDir: input.requestOutputDir,
       workspaceOverride: input.workspaceOverride,
       abortSignal: input.abortSignal,
+      disableRuntimeTimeout: disableRuntimeTimeout || undefined,
     });
 
     if (response.sessionId && response.sessionId !== session.sessionId) {

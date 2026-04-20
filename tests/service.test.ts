@@ -691,6 +691,85 @@ describe("polling helpers", () => {
     }
   });
 
+  it("does not audit in-flight duplicate updates while the original turn is still running", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const appendSpy = vi.spyOn(auditLog, "appendAuditEvent");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async () => {
+        started.resolve();
+        await release.promise;
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      const firstRun = processTelegramUpdates(
+        [
+          {
+            update_id: 10,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              text: "first",
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      await started.promise;
+
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 10,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              text: "duplicate",
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      release.resolve();
+      await firstRun;
+
+      expect(
+        appendSpy.mock.calls.some((call) => {
+          const event = call[1] as { type?: string; outcome?: string } | undefined;
+          return event?.type === "update.skip" && event.outcome === "duplicate";
+        }),
+      ).toBe(false);
+    } finally {
+      appendSpy.mockRestore();
+      release.resolve();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps processing increasing update ids", async () => {
     const logger = {
       error: vi.fn(),
@@ -1116,7 +1195,67 @@ describe("polling helpers", () => {
       globalThis.setTimeout = originalSetTimeout;
     }
 
-    expect(sleepCalls[0]).toBe(100);
+    expect(sleepCalls[0]).toBe(1000);
+  });
+
+  it("backs off while an update is still in flight instead of busy-looping duplicates", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const api = {
+      getUpdates: vi.fn().mockResolvedValue([
+        {
+          update_id: 10,
+          message: {
+            chat: { id: 123, type: "private" },
+            from: { id: 456 },
+            text: "first",
+          },
+        },
+      ]),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async () => {
+        started.resolve();
+        await release.promise;
+        return { text: "done" };
+      }),
+    };
+    const sleepCalls: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+
+    try {
+      const controller = new AbortController();
+      let timerCount = 0;
+      globalThis.setTimeout = (((handler: TimerHandler, timeout?: number) => {
+        sleepCalls.push(Number(timeout ?? 0));
+        timerCount += 1;
+        if (timerCount >= 2) {
+          controller.abort();
+        }
+        if (typeof handler === "function") {
+          queueMicrotask(() => handler());
+        }
+        return {} as ReturnType<typeof setTimeout>;
+      }) as unknown) as typeof setTimeout;
+
+      await pollTelegramUpdates(api as never, bridge as never, inboxDir, logger, controller.signal);
+      await started.promise;
+
+      expect(sleepCalls.some((value) => value === 1000)).toBe(true);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      release.resolve();
+      await waitForCondition(() => api.sendMessage.mock.calls.length > 0);
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("audits my_chat_member updates instead of dropping them silently", async () => {

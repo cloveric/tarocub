@@ -853,7 +853,12 @@ export async function processTelegramUpdates(
     const completedOffset = updateId === undefined ? undefined : updateId + 1;
 
     try {
-      if (updateId !== undefined && (enqueuedUpdateIds.has(updateId) || (lastHandledUpdateId !== null && updateId <= lastHandledUpdateId))) {
+      if (updateId !== undefined && enqueuedUpdateIds.has(updateId)) {
+        nextOffset = advanceOffset(nextOffset, completedOffset);
+        continue;
+      }
+
+      if (updateId !== undefined && lastHandledUpdateId !== null && updateId <= lastHandledUpdateId) {
         await appendAuditEvent(path.dirname(context.inboxDir), {
           type: "update.skip",
           instanceName: context.instanceName,
@@ -1090,6 +1095,10 @@ export async function pollTelegramUpdates(
     } else if (result.hadUpdates && result.offset !== previousOffset) {
       // Got messages — poll again immediately for low latency
       backoffMs = 0;
+    } else if (result.hadUpdates && enqueuedUpdateIds.size > 0) {
+      // We are still working on at least one update; avoid a tight 100ms loop
+      // repeatedly re-fetching and skipping the same in-flight update IDs.
+      backoffMs = 1000;
     } else {
       // No updates — long polling already waited ~30s on Telegram's side,
       // just a tiny gap before the next long-poll request
