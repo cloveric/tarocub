@@ -73,6 +73,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "final response",
         expect.any(String),
         undefined,
+        expect.stringContaining(path.join("workspace", ".telegram-out")),
         "en",
       );
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));

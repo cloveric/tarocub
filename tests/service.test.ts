@@ -1254,7 +1254,7 @@ describe("polling helpers", () => {
       globalThis.setTimeout = originalSetTimeout;
       release.resolve();
       await waitForCondition(() => api.sendMessage.mock.calls.length > 0);
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     }
   });
 
@@ -6271,7 +6271,7 @@ describe("polling helpers", () => {
     }
   });
 
-  it("does not create codex telegram-out directories for ordinary messages", async () => {
+  it("creates fresh codex telegram-out directories even for ordinary messages", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const inboxDir = path.join(root, "inbox");
     await writeFile(path.join(root, "config.json"), JSON.stringify({ engine: "codex" }) + "\n", "utf8");
@@ -6308,7 +6308,7 @@ describe("polling helpers", () => {
 
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          requestOutputDir: undefined,
+          requestOutputDir: expect.stringContaining(path.join("workspace", ".telegram-out")),
         }),
       );
       expect(api.sendDocument).not.toHaveBeenCalled();

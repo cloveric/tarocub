@@ -57,6 +57,7 @@ export async function sendFileOrPhoto(
 
 type RejectReason =
   | "outside-workspace"
+  | "outside-request-output"
   | "not-a-file"
   | "too-large"
   | "not-found"
@@ -67,6 +68,7 @@ function renderRejectReason(reason: RejectReason, detail: string | undefined, lo
   if (locale === "zh") {
     switch (reason) {
       case "outside-workspace": return "超出工作目录";
+      case "outside-request-output": return "不在当前请求输出目录中";
       case "not-a-file": return "不是普通文件";
       case "too-large": return `文件过大（${detail} > 50MB）`;
       case "not-found": return "文件不存在";
@@ -76,6 +78,7 @@ function renderRejectReason(reason: RejectReason, detail: string | undefined, lo
   }
   switch (reason) {
     case "outside-workspace": return "outside workspace";
+    case "outside-request-output": return "outside current request output";
     case "not-a-file": return "not a regular file";
     case "too-large": return `too large (${detail} > 50MB)`;
     case "not-found": return "file not found";
@@ -86,6 +89,10 @@ function renderRejectReason(reason: RejectReason, detail: string | undefined, lo
 
 function isAbsoluteFilePath(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function hasAbsoluteFileLineSuffix(value: string): boolean {
+  return /:\d+(?::\d+)?$/.test(value);
 }
 
 function extractMarkdownAbsoluteLinks(text: string): Array<{ start: number; end: number; path: string }> {
@@ -128,6 +135,9 @@ function extractMarkdownAbsoluteLinks(text: string): Array<{ start: number; end:
     if (!isAbsoluteFilePath(trimmed)) {
       continue;
     }
+    if (hasAbsoluteFileLineSuffix(trimmed)) {
+      continue;
+    }
     links.push({ start, end: pathEnd + 1, path: trimmed });
   }
 
@@ -140,6 +150,7 @@ export async function deliverTelegramResponse(
   text: string,
   inboxDir: string,
   workspaceOverride?: string,
+  requestOutputDir?: string,
   locale: Locale = "en",
 ): Promise<number> {
   let filesSent = 0;
@@ -189,10 +200,17 @@ export async function deliverTelegramResponse(
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
   const overridePrefix = workspaceOverride ? workspaceOverride + path.sep : null;
+  const requestOutputPrefix = requestOutputDir
+    ? `${await realpath(requestOutputDir).catch(() => requestOutputDir)}${path.sep}`
+    : null;
 
   for (const filePath of filePaths) {
     try {
       const real = await realpath(filePath);
+      if (requestOutputPrefix && !real.startsWith(requestOutputPrefix)) {
+        rejected.push({ path: filePath, reason: "outside-request-output" });
+        continue;
+      }
       if (!real.startsWith(workspacePrefix) && !(overridePrefix && real.startsWith(overridePrefix))) {
         rejected.push({ path: filePath, reason: "outside-workspace" });
         continue;

@@ -65,10 +65,6 @@ export interface WorkflowAwareTurnContext {
   updateId?: number;
 }
 
-function wantsTelegramOut(text: string): boolean {
-  return /(发.*文件|传.*文件|发送.*文件|导出.*文件|文件.*传|文件.*发|生成.*文件|generate.*file|send.*file|export.*file)/i.test(text);
-}
-
 function defaultBuildContinueAnalysisKeyboard(uploadId: string): { inlineKeyboard: InlineKeyboardButton[][] } {
   return {
     inlineKeyboard: [[{ text: "Continue Analysis", callbackData: `continue-archive:${uploadId}` }]],
@@ -101,6 +97,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     text: string,
     inboxDir: string,
     workspaceOverride: string | undefined,
+    requestOutputDir: string | undefined,
     locale: Locale,
   ) => Promise<number>;
   sendTelegramOutFile: (chatId: number, filename: string, contents: Uint8Array) => Promise<void>;
@@ -169,7 +166,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     });
   }
 
-  if (cfg.engine === "codex" && wantsTelegramOut(normalized.text)) {
+  if (cfg.engine === "codex") {
     state.telegramOutDirPath = (await createTelegramOutDir(stateDir, `${Date.now()}-${normalized.chatId}`)).dirPath;
   }
 
@@ -271,6 +268,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     result.text,
     context.inboxDir,
     cfg.resume?.workspacePath,
+    state.telegramOutDirPath,
     locale,
   );
 
