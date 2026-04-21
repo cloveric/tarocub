@@ -389,7 +389,7 @@ export function resolveEngineRuntime(engine: EngineType, _approvalMode: Approval
     return "process";
   }
 
-  return "app-server";
+  return "process";
 }
 
 function resolveClaudeExecutable(env: EnvSource): string {

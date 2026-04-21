@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
   CODEX_APP_SERVER_TURN_TIMEOUT_MS,
   CodexAppServerAdapter,
 } from "../src/codex/app-server-adapter.js";
@@ -94,6 +95,10 @@ function createSpawnHarness() {
 describe("CodexAppServerAdapter", () => {
   it("defaults the hard turn timeout to one hour", () => {
     expect(CODEX_APP_SERVER_TURN_TIMEOUT_MS).toBe(60 * 60_000);
+  });
+
+  it("defaults the inactivity watchdog to fifteen minutes", () => {
+    expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(15 * 60_000);
   });
 
   it("creates a logical telegram session placeholder", async () => {

@@ -27,8 +27,8 @@ import {
   renderErrorMessage,
   renderWorkingMessage,
 } from "../src/telegram/message-renderer.js";
-import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
 import { ProcessClaudeAdapter } from "../src/codex/claude-adapter.js";
+import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import * as auditLog from "../src/state/audit-log.js";
 import * as busClient from "../src/bus/bus-client.js";
@@ -167,7 +167,7 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
-  it("uses the persistent Codex app-server adapter by default", async () => {
+  it("uses the process Codex adapter by default", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const envPath = path.join(root, ".cctb", "alpha", ".env");
 
@@ -183,7 +183,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
       // Codex bots now share ~/.codex/ directly — same reasoning as Claude.
       expect((result.bridge as any).adapter.childEnv.CODEX_HOME).toBeUndefined();
     } finally {
@@ -291,7 +291,7 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
-  it("keeps using the app-server adapter when codex yolo mode is enabled", async () => {
+  it("keeps using the process adapter when codex yolo mode is enabled", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
     const envPath = path.join(stateDir, ".env");
@@ -310,7 +310,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -336,7 +336,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining(`Malformed ${configPath}`),
       );

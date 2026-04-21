@@ -38,7 +38,8 @@
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
 - **v4.3.1** — 单聊模式下如果配对兑换被拦，不再吞掉 pending pairing code；有其他挂起配对时也不能直接关回 multi-chat；并且 service 启动与运行时的配置解析统一走同一个校验读取路径。
-- **v4.3.0** — 默认改为一实例一聊天，新增显式 `telegram access multi on|off` 开关；Codex 在 YOLO 模式下继续走 `app-server`；并支持直接在 Telegram 里用 `/engine` 切换引擎。
+- **当前默认值** — Telegram 里的 Codex 实例现在默认走 process runtime，以换取更稳定的长会话表现；Claude 继续保持原有的 process runtime。
+- **v4.3.0** — 默认改为一实例一聊天，新增显式 `telegram access multi on|off` 开关；并支持直接在 Telegram 里用 `/engine` 切换引擎。
 - **v4.2.0** — 新增 Claude 认证 smoke 检查、更强的 service 环境诊断，以及移除旧 autostart 之后对残留 legacy launchd plist 的清理指引。
 - **v4.1.0** — 新增 coordinator 主导的 `crew` 持久化 run 状态，并补了一轮 state/runtime 边界加固，包括 schema 兼容、文件投递和共享状态写入。
 - **v4.0.0** — 内部 bus 正式走 `v1` 协议（兼容老报文）：带 `protocolVersion`、`capabilities`、结构化 `errorCode` 和 `retryable` 标志。详见 [`docs/bus-protocol.md`](./docs/bus-protocol.md)。
@@ -319,7 +320,7 @@ Codex 没有和 Claude 一样的本地 session 扫描入口。如果你已经知
 
 这是一种“绑定已有 thread”的流程，不是导入本地 session：thread 仍然在服务端，bridge 只是在当前 chat 上绑定一个已知 thread id。
 
-注意：外部 thread 的验证当前依赖 Codex app-server runtime。如果某个实例被强制切到 legacy process runtime，`/resume thread <thread-id>` 会直接 fail closed，而不是猜测绑定成功。
+注意：外部 thread 的验证当前依赖 Codex app-server runtime。由于 Telegram 里的 Codex 现在默认走 process runtime，`/resume thread <thread-id>` 目前会直接 fail closed，而不是猜测绑定成功。
 
 ---
 
