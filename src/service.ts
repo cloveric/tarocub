@@ -842,6 +842,11 @@ export async function processTelegramUpdates(
   context: TelegramServiceContext,
   logger: Pick<Console, "error"> = console,
 ): Promise<number | undefined> {
+  const queuedCompletions: Array<{
+    updateId: number | undefined;
+    completedOffset: number | undefined;
+    run: Promise<unknown>;
+  }> = [];
   let nextOffset: number | undefined;
   const chatQueue = context.chatQueue ?? defaultChatQueue;
   const runtimeStateStore = getRuntimeStateStore(context.inboxDir);
@@ -968,7 +973,7 @@ export async function processTelegramUpdates(
       if (updateId !== undefined) {
         enqueuedUpdateIds.add(updateId);
       }
-      await chatQueue.enqueue(normalized.chatId, async () => {
+      const queuedRun = chatQueue.enqueue(normalized.chatId, async () => {
         const taskController = new AbortController();
         activeTasks.set(normalized.chatId, taskController);
         try {
@@ -987,12 +992,11 @@ export async function processTelegramUpdates(
           activeTasks.delete(normalized.chatId);
         }
       });
-      if (updateId !== undefined) {
-        await runtimeStateStore.markHandledUpdateId(updateId);
-        lastHandledUpdateId = updateId;
-        enqueuedUpdateIds.delete(updateId);
-      }
-      nextOffset = advanceOffset(nextOffset, completedOffset);
+      queuedCompletions.push({
+        updateId,
+        completedOffset,
+        run: queuedRun,
+      });
     } catch (error) {
       if (updateId !== undefined) {
         enqueuedUpdateIds.delete(updateId);
@@ -1001,6 +1005,30 @@ export async function processTelegramUpdates(
       logger.error(formatErrorMessage("Failed to handle Telegram update", error));
       nextOffset = advanceOffset(nextOffset, completedOffset);
       continue;
+    }
+  }
+
+  for (const queued of queuedCompletions) {
+    try {
+      await queued.run;
+      if (queued.updateId !== undefined) {
+        await runtimeStateStore.markHandledUpdateId(queued.updateId);
+        lastHandledUpdateId = queued.updateId;
+        enqueuedUpdateIds.delete(queued.updateId);
+      }
+      nextOffset = advanceOffset(nextOffset, queued.completedOffset);
+    } catch (error) {
+      if (queued.updateId !== undefined) {
+        enqueuedUpdateIds.delete(queued.updateId);
+      }
+      await appendUpdateHandleFailureAuditEventBestEffort(
+        context.inboxDir,
+        context.instanceName,
+        error,
+        queued.updateId,
+      );
+      logger.error(formatErrorMessage("Failed to handle Telegram update", error));
+      nextOffset = advanceOffset(nextOffset, queued.completedOffset);
     }
   }
 

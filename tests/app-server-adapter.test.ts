@@ -759,6 +759,74 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(1);
   });
 
+  it("uses a dedicated thread/read timeout after turn/completed instead of the inactivity watchdog", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter(
+      "codex",
+      process.cwd(),
+      undefined,
+      spawnFn,
+      undefined,
+      undefined,
+      undefined,
+      60 * 60_000,
+      1,
+      5,
+    );
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const threadRead = JSON.parse(child.stdin.lines[3] ?? "{}");
+    expect(threadRead.method).toBe("thread/read");
+
+    await expect(promise).rejects.toThrow("Codex app-server thread/read timed out");
+    expect(child.killCalls).toBe(1);
+  });
+
+  it("includes stderr and non-JSON stdout diagnostics in inactivity failures", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter(
+      "codex",
+      process.cwd(),
+      undefined,
+      spawnFn,
+      undefined,
+      undefined,
+      undefined,
+      60 * 60_000,
+      1,
+    );
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stderr.emitData("trustd: ocsp responder failed\n");
+    child.stdout.emitData("non-json diagnostic line\n");
+
+    await expect(promise).rejects.toThrow(/trustd: ocsp responder failed/);
+    await expect(promise).rejects.toThrow(/non-json diagnostic line/);
+    expect(child.killCalls).toBe(1);
+  });
+
   it("rejects when app-server stdin write fails", async () => {
     const { child, spawnFn } = createSpawnHarness();
     child.stdin.nextError = new Error("pipe broken");

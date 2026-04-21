@@ -1390,6 +1390,58 @@ describe("polling helpers", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it("enqueues later updates from the same poll batch without waiting for the first chat to finish", async () => {
+    const logger = {
+      error: vi.fn(),
+    };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const firstStarted = createDeferred<void>();
+    const secondStarted = createDeferred<void>();
+    const releaseFirst = createDeferred<void>();
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ text, chatId }: { text: string; chatId: number }) => {
+        if (chatId === 123) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+
+        if (chatId === 456) {
+          secondStarted.resolve();
+        }
+
+        return { text: `${text} done` };
+      }),
+    };
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    const run = processTelegramUpdates(
+      [
+        { update_id: 10, message: { chat: { id: 123, type: "private" }, from: { id: 1 }, text: "first" } },
+        { update_id: 11, message: { chat: { id: 456, type: "private" }, from: { id: 2 }, text: "second" } },
+      ],
+      {
+        api: api as never,
+        bridge: bridge as never,
+        inboxDir,
+      },
+      logger,
+    );
+
+    await firstStarted.promise;
+    await secondStarted.promise;
+    releaseFirst.resolve();
+    await run;
+
+    expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it("does not let an unauthorized user stop another chat's running task", async () => {
     const logger = { error: vi.fn() };
     const api = {
