@@ -37,6 +37,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.3.2** — tightens Telegram runtime state handling across both runtimes: Codex now defaults to the simpler process runtime, stale telegram-out outputs and engine/session mismatches are fenced off, and the remaining app-server shared-turn edge cases are hardened for optional use.
 - **v4.3.1** — preserves pending pairing codes when single-chat mode blocks redemption, refuses to turn multi-chat off while another chat is still pending pairing, and makes service startup/runtime config parsing use the same validated config reader.
 - **Current default** — Codex instances now use the process runtime in Telegram for better stability under long-running bot sessions; Claude keeps its existing process runtime.
 - **v4.3.0** — makes single-chat-per-instance the default, adds explicit `telegram access multi on|off` control, and exposes `/engine` switching directly in Telegram.

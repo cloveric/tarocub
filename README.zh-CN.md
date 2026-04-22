@@ -37,6 +37,7 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.3.2** — 继续收紧 Telegram 运行时状态边界：Codex 默认改走更稳定的 process runtime，旧 telegram-out 产物和引擎/会话错配会被挡住，可选 app-server 路径剩余的共享 turn 边角问题也补齐了防护。
 - **v4.3.1** — 单聊模式下如果配对兑换被拦，不再吞掉 pending pairing code；有其他挂起配对时也不能直接关回 multi-chat；并且 service 启动与运行时的配置解析统一走同一个校验读取路径。
 - **当前默认值** — Telegram 里的 Codex 实例现在默认走 process runtime，以换取更稳定的长会话表现；Claude 继续保持原有的 process runtime。
 - **v4.3.0** — 默认改为一实例一聊天，新增显式 `telegram access multi on|off` 开关；并支持直接在 Telegram 里用 `/engine` 切换引擎。
