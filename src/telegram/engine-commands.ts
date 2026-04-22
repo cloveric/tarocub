@@ -19,10 +19,18 @@ function isContextCommand(text: string): boolean {
   return /^\/context(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }
 
-function parseEngineCommand(text: string): { engine: string } | null {
-  const match = text.trim().match(/^\/engine(?:@\w+)?(?:\s+(\S+))?$/i);
+function parseEngineCommand(text: string): { engine: string; invalid: boolean } | null {
+  const match = text.trim().match(/^\/engine(?:@\w+)?(?:\s+(.+))?$/i);
   if (!match) return null;
-  return { engine: match[1] ?? "" };
+  const rawArgs = match[1]?.trim() ?? "";
+  if (!rawArgs) {
+    return { engine: "", invalid: false };
+  }
+  const parts = rawArgs.split(/\s+/).filter(Boolean);
+  if (parts.length !== 1) {
+    return { engine: "", invalid: true };
+  }
+  return { engine: parts[0] ?? "", invalid: false };
 }
 
 function renderEngineSwitchMessage(input: {
@@ -93,7 +101,7 @@ export interface EngineCommandContext extends TelegramTurnContext {
 
 export interface EngineCommandSessionStore {
   removeByChatId(chatId: number): Promise<boolean | void>;
-  clearAll(): Promise<number | void>;
+  clearAll(): Promise<number>;
 }
 
 export async function handleLocalEngineTelegramCommand(input: {
@@ -112,7 +120,7 @@ export async function handleLocalEngineTelegramCommand(input: {
   const engineCmd = parseEngineCommand(normalized.text);
   if (engineCmd) {
     let engineMessage: string;
-    if (!engineCmd.engine) {
+    if (!engineCmd.engine && !engineCmd.invalid) {
       engineMessage = locale === "zh"
         ? [
             `当前引擎：${cfg.engine}`,
@@ -129,7 +137,7 @@ export async function handleLocalEngineTelegramCommand(input: {
             "Restart this instance after switching to apply the change.",
           ].join("\n");
       await context.api.sendMessage(normalized.chatId, engineMessage);
-    } else if (engineCmd.engine !== "claude" && engineCmd.engine !== "codex") {
+    } else if (engineCmd.invalid || (engineCmd.engine !== "claude" && engineCmd.engine !== "codex")) {
       engineMessage = locale === "zh"
         ? "用法: /engine [claude|codex]"
         : "Usage: /engine [claude|codex]";

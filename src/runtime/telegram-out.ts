@@ -1,4 +1,4 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 export interface TelegramOutRequest {
@@ -23,12 +23,50 @@ export interface TelegramOutLimitResult {
   skipped: TelegramOutFileInfo[];
 }
 
+const TELEGRAM_OUT_RETENTION_MS = 7 * 24 * 60 * 60_000;
+
 export function resolveTelegramOutDir(stateDir: string, requestId: string): string {
   return path.join(stateDir, "workspace", ".telegram-out", requestId);
 }
 
+async function pruneStaleTelegramOutDirs(rootDir: string, preserveRequestId: string): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(rootDir, { withFileTypes: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  const staleBefore = Date.now() - TELEGRAM_OUT_RETENTION_MS;
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isDirectory() || entry.name === preserveRequestId) {
+      return;
+    }
+
+    const entryPath = path.join(rootDir, entry.name);
+    let metadata;
+    try {
+      metadata = await stat(entryPath);
+    } catch {
+      return;
+    }
+
+    if (metadata.mtimeMs >= staleBefore) {
+      return;
+    }
+
+    await rm(entryPath, { recursive: true, force: true }).catch(() => {});
+  }));
+}
+
 export async function createTelegramOutDir(stateDir: string, requestId: string): Promise<TelegramOutRequest> {
   const dirPath = resolveTelegramOutDir(stateDir, requestId);
+  await mkdir(path.dirname(dirPath), { recursive: true });
+  await pruneStaleTelegramOutDirs(path.dirname(dirPath), requestId);
   await mkdir(dirPath, { recursive: true });
   return { requestId, dirPath };
 }

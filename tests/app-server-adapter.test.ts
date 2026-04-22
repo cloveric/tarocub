@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
   CODEX_APP_SERVER_TURN_TIMEOUT_MS,
+  CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS,
   CodexAppServerAdapter,
 } from "../src/codex/app-server-adapter.js";
 
@@ -99,6 +100,26 @@ describe("CodexAppServerAdapter", () => {
 
   it("defaults the inactivity watchdog to fifteen minutes", () => {
     expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(15 * 60_000);
+  });
+
+  it("times out waiting for idle app-server state", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new CodexAppServerAdapter("codex", process.cwd()) as unknown as {
+        pendingTurns: Map<string, unknown>;
+        waitForIdle: () => Promise<void>;
+      };
+      adapter.pendingTurns.set("turn-1", {});
+
+      const waitPromise = adapter.waitForIdle();
+      const assertion = expect(waitPromise).rejects.toThrow(
+        `Codex app-server did not become idle within ${CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS}ms`,
+      );
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("creates a logical telegram session placeholder", async () => {

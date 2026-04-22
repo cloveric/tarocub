@@ -19,7 +19,7 @@ function createDefaultAccessState(): AccessState {
   };
 }
 
-function findConflictingAuthorizedChatId(state: AccessState, chatId: number): number | null {
+export function findConflictingAuthorizedChatId(state: AccessState, chatId: number): number | null {
   if (state.multiChat) {
     return null;
   }
@@ -34,7 +34,7 @@ function findConflictingAuthorizedChatId(state: AccessState, chatId: number): nu
   return conflict.done ? null : conflict.value;
 }
 
-function findConflictingLockedChatId(state: AccessState, chatId: number): number | null {
+export function findConflictingLockedChatId(state: AccessState, chatId: number): number | null {
   if (state.multiChat) {
     return null;
   }

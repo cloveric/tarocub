@@ -42,6 +42,7 @@ const MAX_DIAGNOSTIC_CHARS = 4_000;
 export const CODEX_APP_SERVER_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS = 15 * 60_000;
 export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 60_000;
+export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 type ApprovalMode = "normal" | "full-auto" | "bypass";
 
 type JsonRpcResponse = {
@@ -918,8 +919,17 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return;
     }
 
-    await new Promise<void>((resolve) => {
-      this.idleWaiters.add(resolve);
+    await new Promise<void>((resolve, reject) => {
+      const waiter = () => {
+        clearTimeout(timer);
+        this.idleWaiters.delete(waiter);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        this.idleWaiters.delete(waiter);
+        reject(new Error(`Codex app-server did not become idle within ${CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS}ms`));
+      }, CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS);
+      this.idleWaiters.add(waiter);
     });
   }
 

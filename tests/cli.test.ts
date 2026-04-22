@@ -1061,4 +1061,60 @@ describe("runCli", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("clears session bindings when switching engines via CLI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+
+    try {
+      const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+      await sessionStore.upsert({
+        telegramChatId: 123,
+        codexSessionId: "thread-old",
+        status: "idle",
+        updatedAt: "2026-04-22T00:00:00.000Z",
+      });
+
+      const handled = await runCli(["telegram", "engine", "claude", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toBe(
+        'Instance "alpha": engine set to "claude". Reset this instance\'s session bindings. Restart the service to apply.',
+      );
+      await expect(sessionStore.findByChatId(123)).resolves.toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the old engine when CLI session bindings cannot be reset first", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const configPath = path.join(tempDir, ".cctb", "alpha", "config.json");
+    const clearAllSpy = vi.spyOn(SessionStore.prototype, "clearAll").mockRejectedValue(new Error("session store unavailable"));
+
+    try {
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await writeFile(
+        configPath,
+        JSON.stringify({ engine: "claude", model: "opus" }, null, 2) + "\n",
+        "utf8",
+      );
+
+      await expect(runCli(["telegram", "engine", "codex", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      })).rejects.toThrow("Could not switch to codex because this instance's session bindings could not be reset first. Engine remains claude.");
+
+      await expect(readFile(configPath, "utf8")).resolves.toContain('"engine": "claude"');
+      expect(messages).toEqual([]);
+    } finally {
+      clearAllSpy.mockRestore();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

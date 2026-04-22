@@ -318,6 +318,54 @@ describe("AccessStore", () => {
     }
   });
 
+  it("preserves unknown access-state fields for forward compatibility", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(dir, "access.json");
+
+    try {
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          multiChat: false,
+          policy: "pairing",
+          pairedUsers: [
+            {
+              telegramUserId: 42,
+              telegramChatId: 84,
+              pairedAt: "2026-04-08T00:00:00.000Z",
+              profile: "legacy",
+            },
+          ],
+          allowlist: [],
+          pendingPairs: [
+            {
+              code: "AAAAAA",
+              telegramUserId: 42,
+              telegramChatId: 84,
+              expiresAt: "2026-04-08T00:05:00.000Z",
+              source: "legacy",
+            },
+          ],
+          futureFlag: true,
+        }, null, 2) + "\n",
+        "utf8",
+      );
+
+      const store = new AccessStore(filePath);
+      const state = await store.load() as unknown as {
+        futureFlag?: boolean;
+        pairedUsers: Array<{ profile?: string }>;
+        pendingPairs: Array<{ source?: string }>;
+      };
+
+      expect(state.futureFlag).toBe(true);
+      expect(state.pairedUsers[0]?.profile).toBe("legacy");
+      expect(state.pendingPairs[0]?.source).toBe("legacy");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks issuing a second pairing code while another chat already holds the single-chat lock", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
@@ -526,7 +574,7 @@ describe("AccessStore", () => {
     }
   });
 
-  it("strips unexpected extra fields from persisted access state", async () => {
+  it("preserves unexpected extra fields from persisted access state", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
       const filePath = path.join(dir, "access.json");
@@ -548,7 +596,7 @@ describe("AccessStore", () => {
         "utf8",
       );
 
-      await expect(new AccessStore(filePath).load()).resolves.toEqual({
+      await expect(new AccessStore(filePath).load()).resolves.toEqual(expect.objectContaining({
         multiChat: false,
         policy: "pairing",
         pairedUsers: [
@@ -556,11 +604,12 @@ describe("AccessStore", () => {
             telegramUserId: 42,
             telegramChatId: 84,
             pairedAt: "2026-04-08T00:00:00.000Z",
+            rogue: true,
           },
         ],
         allowlist: [],
         pendingPairs: [],
-      });
+      }));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -1,4 +1,5 @@
 import type { CodexAdapter } from "../codex/adapter.js";
+import { findConflictingLockedChatId } from "../state/access-store.js";
 import {
   type Locale,
   renderPairingMessage,
@@ -42,29 +43,6 @@ export interface BridgeAccessInput {
 export interface BridgeAccessDecision {
   kind: "allow" | "reply" | "deny";
   text?: string;
-}
-
-function findConflictingAuthorizedChatId(
-  accessState: Awaited<ReturnType<AccessStoreLike["load"]>>,
-  chatId: number,
-): number | null {
-  if (accessState.multiChat) {
-    return null;
-  }
-
-  const authorizedChatIds = new Set<number>([
-    ...accessState.allowlist,
-    ...accessState.pairedUsers.map((user) => user.telegramChatId),
-    ...accessState.pendingPairs.map((pair) =>
-      typeof pair === "object" && pair !== null && "telegramChatId" in pair && typeof (pair as { telegramChatId?: unknown }).telegramChatId === "number"
-        ? (pair as { telegramChatId: number }).telegramChatId
-        : null,
-    ).filter((chatId): chatId is number => chatId !== null),
-  ]);
-  authorizedChatIds.delete(chatId);
-
-  const conflict = authorizedChatIds.values().next();
-  return conflict.done ? null : conflict.value;
 }
 
 function renderTelegramBridgeCapabilities(): string {
@@ -185,7 +163,7 @@ export class Bridge {
       };
     }
 
-    const conflictingChatId = findConflictingAuthorizedChatId(accessState, input.chatId);
+    const conflictingChatId = findConflictingLockedChatId(accessState as Parameters<typeof findConflictingLockedChatId>[0], input.chatId);
 
     if (accessState.policy === "allowlist" && !accessState.allowlist.includes(input.chatId)) {
       return {

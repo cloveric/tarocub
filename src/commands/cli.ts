@@ -25,6 +25,7 @@ import {
   resetSessionForChat,
   SESSION_STATE_UNREADABLE_WARNING,
 } from "./session.js";
+import { SessionStore } from "../state/session-store.js";
 import {
   clearTaskWithRecovery,
   FILE_WORKFLOW_STATE_UNREADABLE_WARNING,
@@ -938,6 +939,7 @@ async function runEngineCommand(
 ): Promise<boolean> {
   const { instanceName, args } = extractInstanceOption(argv.slice(1));
   const configPath = resolveConfigJsonPath(env, instanceName);
+  const stateDir = resolveStateDirForInstance(env, instanceName);
 
   if (args.length === 0) {
     const config = await readInstanceConfig(configPath);
@@ -952,6 +954,24 @@ async function runEngineCommand(
   }
 
   const config = await readInstanceConfig(configPath);
+  const previousEngine =
+    config.engine === "claude" || config.engine === "codex"
+      ? config.engine
+      : "codex";
+  let resetSessionBindings = false;
+
+  if (previousEngine !== engine) {
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    try {
+      const removedBindings = await sessionStore.clearAll();
+      resetSessionBindings = removedBindings > 0;
+    } catch {
+      throw new Error(
+        `Could not switch to ${engine} because this instance's session bindings could not be reset first. Engine remains ${previousEngine}.`,
+      );
+    }
+  }
+
   const { clearedModel } = applyEngineSelection(config, engine);
   await writeInstanceConfig(configPath, config);
 
@@ -964,9 +984,13 @@ async function runEngineCommand(
   });
 
   logger.log(
-    clearedModel
-      ? `Instance "${instanceName}": engine set to "${engine}". Cleared the previous model override. Restart the service to apply.`
-      : `Instance "${instanceName}": engine set to "${engine}". Restart the service to apply.`,
+    clearedModel && resetSessionBindings
+      ? `Instance "${instanceName}": engine set to "${engine}". Cleared the previous model override and reset this instance's session bindings. Restart the service to apply.`
+      : clearedModel
+        ? `Instance "${instanceName}": engine set to "${engine}". Cleared the previous model override. Restart the service to apply.`
+        : resetSessionBindings
+          ? `Instance "${instanceName}": engine set to "${engine}". Reset this instance's session bindings. Restart the service to apply.`
+          : `Instance "${instanceName}": engine set to "${engine}". Restart the service to apply.`,
   );
   return true;
 }

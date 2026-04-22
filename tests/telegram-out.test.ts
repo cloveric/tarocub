@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -82,5 +82,29 @@ describe("telegram-out", () => {
     expect(result.skipped).toEqual([
       { path: "c.txt", name: "c.txt", size: 50 },
     ]);
+  });
+
+  it("prunes stale request directories when creating a new telegram-out dir", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const telegramOutRoot = path.join(root, "workspace", ".telegram-out");
+    const staleDir = path.join(telegramOutRoot, "req-stale");
+    const freshDir = path.join(telegramOutRoot, "req-fresh");
+
+    try {
+      await mkdir(staleDir, { recursive: true });
+      await mkdir(freshDir, { recursive: true });
+      const now = new Date();
+      const staleAt = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
+      const freshAt = new Date(now.getTime() - 60 * 60 * 1000);
+      await utimes(staleDir, staleAt, staleAt);
+      await utimes(freshDir, freshAt, freshAt);
+
+      const created = await createTelegramOutDir(root, "req-new");
+
+      expect(created.dirPath).toBe(path.join(telegramOutRoot, "req-new"));
+      await expect(readdir(telegramOutRoot)).resolves.toEqual(["req-fresh", "req-new"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
