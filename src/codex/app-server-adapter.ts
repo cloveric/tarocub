@@ -334,12 +334,12 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     child.once("error", (error) => {
       this.failAllPending(this.withDiagnostics(error instanceof Error ? error.message : String(error)));
+      this.resetChildState();
     });
 
     child.once("close", (code) => {
       this.failAllPending(this.withDiagnostics(`codex app-server exited with code ${code}`));
-      this.child = null;
-      this.initializePromise = null;
+      this.resetChildState();
     });
 
     await this.request("initialize", {
@@ -458,16 +458,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
       this.completingTurns += 1;
       if (turnErrorMessage) {
         pending.reject(this.withDiagnostics(turnErrorMessage));
-        this.completingTurns -= 1;
-        this.notifyIdleWaitersIfIdle();
+        this.finishCompletingTurn();
         return;
       }
 
       void this.completeTurn(threadId, turnId, pending).catch((error) => {
         pending.reject(this.withDiagnostics(error instanceof Error ? error.message : String(error)));
       }).finally(() => {
-        this.completingTurns -= 1;
-        this.notifyIdleWaitersIfIdle();
+        this.finishCompletingTurn();
       });
       return;
     }
@@ -696,7 +694,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         resolve: resolveAndCleanup,
         reject: rejectAndCleanup,
       };
-      const abortTurn = (error: Error) => {
+      const abortTurn = (error: Error, options?: { destroyChild?: boolean }) => {
         const pendingTurnState = this.pendingTurns.get(threadId);
         if (pendingTurnState && pendingTurnState !== pendingTurn) {
           return;
@@ -705,10 +703,12 @@ export class CodexAppServerAdapter implements CodexAdapter {
         if (pendingTurnState === pendingTurn) {
           this.pendingTurns.delete(threadId);
         }
+        this.loadedThreads.delete(threadId);
         pendingTurn.reject(error);
-        // Codex app-server exposes no per-turn cancel RPC today, so a best-effort
-        // turn abort means recycling the whole child process.
-        this.destroy();
+        this.notifyIdleWaitersIfIdle();
+        if (options?.destroyChild) {
+          this.destroy();
+        }
       };
 
       if (timeoutMs !== null) {
@@ -717,6 +717,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
             this.withDiagnostics(
               `${turnErrorPrefix} timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`,
             ),
+            { destroyChild: true },
           );
         }, timeoutMs);
       }
@@ -884,9 +885,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
   destroy(): void {
     this.child?.kill?.();
     this.failAllPending(this.withDiagnostics("Adapter destroyed"));
-    this.child = null;
-    this.initializePromise = null;
-    this.initializeKey = null;
+    this.resetChildState();
   }
 
   private failAllPending(error: Error): void {
@@ -943,6 +942,20 @@ export class CodexAppServerAdapter implements CodexAdapter {
     for (const waiter of waiters) {
       waiter();
     }
+  }
+
+  private finishCompletingTurn(): void {
+    this.completingTurns = Math.max(0, this.completingTurns - 1);
+    this.notifyIdleWaitersIfIdle();
+  }
+
+  private resetChildState(): void {
+    this.child = null;
+    this.initializePromise = null;
+    this.initializeKey = null;
+    this.lineBuffer = "";
+    this.stderrTail = "";
+    this.stdoutDiagnosticTail = "";
   }
 
   private appendDiagnostic(channel: "stderr" | "stdout", chunk: string): void {

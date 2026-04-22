@@ -701,7 +701,7 @@ describe("CodexAppServerAdapter", () => {
     controller.abort();
 
     await expect(promise).rejects.toThrow("Codex app-server turn aborted");
-    expect(child.killCalls).toBe(1);
+    expect(child.killCalls).toBe(0);
   });
 
   it("rejects when thread/read shows the completed turn actually failed", async () => {
@@ -818,6 +818,96 @@ describe("CodexAppServerAdapter", () => {
 
     await expect(promise).rejects.toThrow("Codex app-server thread/read timed out");
     expect(child.killCalls).toBe(1);
+  });
+
+  it("does not drive completingTurns negative when a completing turn is destroyed mid-read", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), undefined, spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 4);
+
+    (adapter as unknown as { destroy(): void }).destroy();
+    await expect(promise).rejects.toThrow("Adapter destroyed");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const internal = adapter as unknown as {
+      completingTurns: number;
+      waitForIdle(): Promise<void>;
+    };
+    expect(internal.completingTurns).toBe(0);
+    await expect(internal.waitForIdle()).resolves.toBeUndefined();
+  });
+
+  it("does not destroy the shared child when aborting one chat turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), undefined, spawnFn);
+    const firstAbort = new AbortController();
+
+    const firstPromise = adapter.sendUserMessage("telegram-100", {
+      text: "First",
+      files: [],
+      abortSignal: firstAbort.signal,
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-a"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    const secondPromise = adapter.sendUserMessage("telegram-200", {
+      text: "Second",
+      files: [],
+    });
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const secondThreadStart = JSON.parse(child.stdin.lines[3] ?? "{}");
+    expect(secondThreadStart.method).toBe("thread/start");
+    child.stdout.emitData(`{"id":${secondThreadStart.id},"result":{"thread":{"id":"thread-b"}}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 5);
+
+    firstAbort.abort();
+    await expect(firstPromise).rejects.toThrow("Codex app-server turn aborted");
+    expect(child.killCalls).toBe(0);
+
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-a","turn":{"id":"turn-a","items":[],"status":"completed","error":null}}}\n');
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-b","item":{"type":"agentMessage","text":"second ok"}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-b","turn":{"id":"turn-b","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(secondPromise).resolves.toEqual({
+      text: "second ok",
+      sessionId: "thread-b",
+    });
+    expect(child.killCalls).toBe(0);
+  });
+
+  it("clears transport buffers and diagnostic tails on destroy", () => {
+    const adapter = new CodexAppServerAdapter("codex", process.cwd()) as unknown as {
+      lineBuffer: string;
+      stderrTail: string;
+      stdoutDiagnosticTail: string;
+      destroy(): void;
+    };
+    adapter.lineBuffer = '{"partial":true';
+    adapter.stderrTail = "trustd noise";
+    adapter.stdoutDiagnosticTail = "non-json";
+
+    adapter.destroy();
+
+    expect(adapter.lineBuffer).toBe("");
+    expect(adapter.stderrTail).toBe("");
+    expect(adapter.stdoutDiagnosticTail).toBe("");
   });
 
   it("includes stderr and non-JSON stdout diagnostics in inactivity failures", async () => {
