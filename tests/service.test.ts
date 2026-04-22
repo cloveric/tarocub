@@ -1614,6 +1614,71 @@ describe("polling helpers", () => {
     expect(seenTexts[1]).toContain("User's new message:\n继续");
   });
 
+  it("clears the /stop fence when the next chat message is a slash command", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const started = createDeferred<void>();
+    const firstAborted = createDeferred<void>();
+    const seenTexts: string[] = [];
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ text, abortSignal }: { text: string; abortSignal?: AbortSignal }) => {
+        seenTexts.push(text);
+        if (text === "first") {
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            abortSignal?.addEventListener("abort", () => {
+              firstAborted.resolve();
+              resolve();
+            }, { once: true });
+          });
+          return { text: "first aborted" };
+        }
+
+        return { text: "fresh reply" };
+      }),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    const firstRun = processTelegramUpdates(
+      [{ update_id: 9, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "first" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await started.promise;
+
+    await processTelegramUpdates(
+      [{ update_id: 10, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "/stop" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await firstAborted.promise;
+    await firstRun;
+
+    await processTelegramUpdates(
+      [{ update_id: 11, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "/status" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    await processTelegramUpdates(
+      [{ update_id: 12, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "继续" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    expect(seenTexts).toHaveLength(2);
+    expect(seenTexts[1]).toBe("继续");
+  });
+
   it("downloads attachments and passes local file paths to the bridge", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const inboxDir = path.join(root, "inbox");

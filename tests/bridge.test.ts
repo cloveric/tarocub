@@ -332,6 +332,52 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("blocks a different private chat when another chat already has a pending pairing code", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "pairing",
+        pairedUsers: [],
+        allowlist: [],
+        pendingPairs: [
+          {
+            code: "ABC123",
+            telegramUserId: 42,
+            telegramChatId: 84,
+            expiresAt: "2026-04-08T00:05:00.000Z",
+          },
+        ],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn(),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn(),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await expect(
+      bridge.handleAuthorizedMessage({
+        chatId: 99,
+        userId: 99,
+        chatType: "private",
+        text: "hello",
+        replyContext: undefined,
+        files: [],
+      }),
+    ).resolves.toEqual({
+      text: "This instance is locked to another chat. Enable multi-chat before pairing or allowing a different chat.",
+    });
+
+    expect(accessStore.issuePairingCode).not.toHaveBeenCalled();
+    expect(sessionManager.getOrCreateSession).not.toHaveBeenCalled();
+    expect(adapter.sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it("allows a second private chat to pair when multi-chat is explicitly enabled", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

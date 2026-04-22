@@ -27,18 +27,17 @@ function parseEngineCommand(text: string): { engine: string } | null {
 
 function renderEngineSwitchMessage(input: {
   locale: Locale;
+  previousEngine?: "claude" | "codex";
   engine: "claude" | "codex";
   clearedModel: boolean;
   resetSessionBindings: boolean;
   resetSessionBindingFailed: boolean;
 }): string {
-  const { locale, engine, clearedModel, resetSessionBindings, resetSessionBindingFailed } = input;
+  const { locale, previousEngine, engine, clearedModel, resetSessionBindings, resetSessionBindingFailed } = input;
 
   if (locale === "zh") {
     if (resetSessionBindingFailed) {
-      return clearedModel
-        ? `引擎已设为 ${engine}。已清除先前的模型覆盖。未能自动清除该实例的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`
-        : `引擎已设为 ${engine}。未能自动清除该实例的会话绑定；如有需要，请在重启后执行 /reset。重启此实例后生效。`;
+      return `未能切换到 ${engine}：该实例的会话绑定未能先清除。当前引擎仍是 ${previousEngine ?? engine}。`;
     }
     if (clearedModel && resetSessionBindings) {
       return `引擎已设为 ${engine}。已清除先前的模型覆盖，并重置该实例的会话绑定。重启此实例后生效。`;
@@ -53,9 +52,7 @@ function renderEngineSwitchMessage(input: {
   }
 
   if (resetSessionBindingFailed) {
-    return clearedModel
-      ? `Engine set to ${engine}. Cleared the previous model override. Could not reset this instance's session bindings automatically; use /reset after restarting if needed. Restart this instance to apply.`
-      : `Engine set to ${engine}. Could not reset this instance's session bindings automatically; use /reset after restarting if needed. Restart this instance to apply.`;
+    return `Could not switch to ${engine} because this instance's session bindings could not be reset first. Engine remains ${previousEngine ?? engine}.`;
   }
   if (clearedModel && resetSessionBindings) {
     return `Engine set to ${engine}. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.`;
@@ -142,10 +139,6 @@ export async function handleLocalEngineTelegramCommand(input: {
       let clearedModel = false;
       let resetSessionBindings = false;
       let resetSessionBindingFailed = false;
-      await updateInstanceConfig((config) => {
-        const result = applyEngineSelection(config, engineCmd.engine as "claude" | "codex");
-        clearedModel = result.clearedModel;
-      });
       if (engineChanged) {
         try {
           await sessionStore.clearAll();
@@ -158,8 +151,15 @@ export async function handleLocalEngineTelegramCommand(input: {
           );
         }
       }
+      if (!resetSessionBindingFailed) {
+        await updateInstanceConfig((config) => {
+          const result = applyEngineSelection(config, engineCmd.engine as "claude" | "codex");
+          clearedModel = result.clearedModel;
+        });
+      }
       engineMessage = renderEngineSwitchMessage({
         locale,
+        previousEngine: cfg.engine,
         engine: engineCmd.engine,
         clearedModel,
         resetSessionBindings,

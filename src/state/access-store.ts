@@ -34,6 +34,22 @@ function findConflictingAuthorizedChatId(state: AccessState, chatId: number): nu
   return conflict.done ? null : conflict.value;
 }
 
+function findConflictingLockedChatId(state: AccessState, chatId: number): number | null {
+  if (state.multiChat) {
+    return null;
+  }
+
+  const lockedChatIds = new Set<number>([
+    ...state.allowlist,
+    ...state.pairedUsers.map((entry) => entry.telegramChatId),
+    ...state.pendingPairs.map((entry) => entry.telegramChatId),
+  ]);
+  lockedChatIds.delete(chatId);
+
+  const conflict = lockedChatIds.values().next();
+  return conflict.done ? null : conflict.value;
+}
+
 function countAuthorizedChats(state: AccessState): number {
   return new Set<number>([
     ...state.allowlist,
@@ -147,10 +163,11 @@ export class AccessStore {
     let issued!: PendingPair;
     await this.enqueueWrite(async () => {
       const state = await this.load();
-      if (findConflictingAuthorizedChatId(state, telegramChatId) !== null) {
-        throw new Error("instance is locked to another chat until multi-chat is enabled");
-      }
       const nowTime = now.getTime();
+      state.pendingPairs = state.pendingPairs.filter(
+        (pair) => new Date(pair.expiresAt).getTime() > nowTime,
+      );
+
       const reusablePendingPair = state.pendingPairs.find(
         (pair) =>
           pair.telegramUserId === telegramUserId &&
@@ -158,16 +175,17 @@ export class AccessStore {
           new Date(pair.expiresAt).getTime() > nowTime,
       );
 
-      state.pendingPairs = state.pendingPairs.filter(
-        (pair) => new Date(pair.expiresAt).getTime() > nowTime && pair.telegramUserId !== telegramUserId,
-      );
-
       if (reusablePendingPair) {
-        state.pendingPairs.push(reusablePendingPair);
         await this.store.write(state);
         issued = reusablePendingPair;
         return;
       }
+
+      if (findConflictingLockedChatId(state, telegramChatId) !== null) {
+        throw new Error("instance is locked to another chat until multi-chat is enabled");
+      }
+
+      state.pendingPairs = state.pendingPairs.filter((pair) => pair.telegramUserId !== telegramUserId);
 
       const pendingCodes = new Set(state.pendingPairs.map((pair) => pair.code));
 

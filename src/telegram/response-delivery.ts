@@ -199,6 +199,7 @@ export async function deliverTelegramResponse(
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
+  const telegramOutPrefix = path.join(deliveryStateDir, "workspace", ".telegram-out") + path.sep;
   const overridePrefix = workspaceOverride ? workspaceOverride + path.sep : null;
   const requestOutputPrefix = requestOutputDir
     ? `${await realpath(requestOutputDir).catch(() => requestOutputDir)}${path.sep}`
@@ -207,7 +208,7 @@ export async function deliverTelegramResponse(
   for (const filePath of filePaths) {
     try {
       const real = await realpath(filePath);
-      if (requestOutputPrefix && !real.startsWith(requestOutputPrefix)) {
+      if (requestOutputPrefix && real.startsWith(telegramOutPrefix) && !real.startsWith(requestOutputPrefix)) {
         rejected.push({ path: filePath, reason: "outside-request-output" });
         continue;
       }

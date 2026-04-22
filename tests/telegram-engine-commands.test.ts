@@ -77,11 +77,16 @@ describe("handleLocalEngineTelegramCommand", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
+    const order: string[] = [];
     const sessionStore = {
       removeByChatId: vi.fn().mockResolvedValue(true),
-      clearAll: vi.fn().mockResolvedValue(2),
+      clearAll: vi.fn().mockImplementation(async () => {
+        order.push("clear");
+        return 2;
+      }),
     };
     const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
+      order.push("config");
       const cfg: Record<string, unknown> = { engine: "claude", model: "opus" };
       mutate(cfg);
       expect(cfg.engine).toBe("codex");
@@ -110,6 +115,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
       expect(sessionStore.clearAll).toHaveBeenCalledOnce();
+      expect(order).toEqual(["clear", "config"]);
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         "Engine set to codex. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.",
@@ -123,6 +129,48 @@ describe("handleLocalEngineTelegramCommand", () => {
           value: "codex",
         }),
       }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the old engine when session bindings cannot be reset first", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      removeByChatId: vi.fn().mockResolvedValue(true),
+      clearAll: vi.fn().mockRejectedValue(new Error("session store unavailable")),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude", model: "opus" },
+        normalized: createNormalizedMessage("/engine codex"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 77,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn(),
+        },
+        sessionStore,
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.clearAll).toHaveBeenCalledOnce();
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Could not switch to codex because this instance's session bindings could not be reset first. Engine remains claude.",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

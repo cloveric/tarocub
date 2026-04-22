@@ -466,6 +466,35 @@ describe("ProcessCodexAdapter", () => {
     await vi.advanceTimersByTimeAsync(CODEX_PROCESS_INACTIVITY_TIMEOUT_MS);
     await rejection;
   });
+
+  it("kills the child promptly when the abort signal is already aborted", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+      abortSignal: controller.signal,
+    })).rejects.toThrow("Task was stopped by user");
+    expect(child.stdin.ended).toBe(false);
+  });
+
+  it("rejects immediately when stdin.end throws synchronously", async () => {
+    const child = new FakeChildProcess();
+    child.stdin.end = () => {
+      throw new Error("EPIPE");
+    };
+    const spawnCodex = () => child;
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    await expect(adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    })).rejects.toThrow("EPIPE");
+    expect(child.stdin.ended).toBe(false);
+  });
 });
 
 class FakeStream extends EventEmitter {
@@ -475,6 +504,7 @@ class FakeStream extends EventEmitter {
 }
 
 class FakeChildProcess extends EventEmitter {
+  killedSignals: string[] = [];
   stdin = {
     writes: [] as string[],
     ended: false,
@@ -491,6 +521,11 @@ class FakeChildProcess extends EventEmitter {
   };
   stdout = new FakeStream();
   stderr = new FakeStream();
+
+  kill(signal?: string) {
+    this.killedSignals.push(signal ?? "SIGTERM");
+    return true;
+  }
 
   close(code: number | null) {
     this.emit("close", code);

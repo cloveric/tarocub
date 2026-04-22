@@ -270,8 +270,58 @@ describe("AccessStore", () => {
 
   it("keeps a pending pairing code intact when redemption is blocked by single-chat mode", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(dir, "access.json");
     try {
-      setRandomIntSequence([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]);
+      const store = new AccessStore(filePath);
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          multiChat: false,
+          policy: "pairing",
+          pairedUsers: [],
+          allowlist: [],
+          pendingPairs: [
+            {
+              code: "AAAAAA",
+              telegramUserId: 10,
+              telegramChatId: 111,
+              expiresAt: "2026-04-08T00:05:00.000Z",
+            },
+            {
+              code: "BBBBBB",
+              telegramUserId: 20,
+              telegramChatId: 222,
+              expiresAt: "2026-04-08T00:07:00.000Z",
+            },
+          ],
+        }, null, 2) + "\n",
+        "utf8",
+      );
+
+      await store.redeemPairingCode("AAAAAA", new Date("2026-04-08T00:01:00Z"));
+
+      await expect(
+        store.redeemPairingCode("BBBBBB", new Date("2026-04-08T00:03:00Z")),
+      ).rejects.toThrow("instance is locked to another chat until multi-chat is enabled");
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        pendingPairs: [
+          expect.objectContaining({
+            code: "BBBBBB",
+            telegramChatId: 222,
+            telegramUserId: 20,
+          }),
+        ],
+      }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks issuing a second pairing code while another chat already holds the single-chat lock", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    try {
+      setRandomIntSequence([0, 0, 0, 0, 0, 0]);
       const store = new AccessStore(path.join(dir, "access.json"));
 
       const firstCode = await store.issuePairingCode({
@@ -279,24 +329,21 @@ describe("AccessStore", () => {
         telegramChatId: 111,
         now: new Date("2026-04-08T00:00:00Z"),
       });
-      const secondCode = await store.issuePairingCode({
-        telegramUserId: 20,
-        telegramChatId: 222,
-        now: new Date("2026-04-08T00:02:00Z"),
-      });
-
-      await store.redeemPairingCode(firstCode.code, new Date("2026-04-08T00:01:00Z"));
 
       await expect(
-        store.redeemPairingCode(secondCode.code, new Date("2026-04-08T00:03:00Z")),
+        store.issuePairingCode({
+          telegramUserId: 20,
+          telegramChatId: 222,
+          now: new Date("2026-04-08T00:02:00Z"),
+        }),
       ).rejects.toThrow("instance is locked to another chat until multi-chat is enabled");
 
       await expect(store.load()).resolves.toEqual(expect.objectContaining({
         pendingPairs: [
           expect.objectContaining({
-            code: secondCode.code,
-            telegramChatId: 222,
-            telegramUserId: 20,
+            code: firstCode.code,
+            telegramChatId: 111,
+            telegramUserId: 10,
           }),
         ],
       }));

@@ -958,6 +958,9 @@ export async function processTelegramUpdates(
         stoppedTaskChats.has(normalized.chatId) &&
         !/^\/\S/.test(normalized.text.trim()) &&
         (normalized.text.trim().length > 0 || normalized.attachments.length > 0);
+      if (!shouldFenceStoppedTask && stoppedTaskChats.has(normalized.chatId) && /^\/\S/.test(normalized.text.trim())) {
+        stoppedTaskChats.delete(normalized.chatId);
+      }
       const effectiveNormalized = shouldFenceStoppedTask
         ? {
             ...normalized,

@@ -55,6 +55,11 @@ function findConflictingAuthorizedChatId(
   const authorizedChatIds = new Set<number>([
     ...accessState.allowlist,
     ...accessState.pairedUsers.map((user) => user.telegramChatId),
+    ...accessState.pendingPairs.map((pair) =>
+      typeof pair === "object" && pair !== null && "telegramChatId" in pair && typeof (pair as { telegramChatId?: unknown }).telegramChatId === "number"
+        ? (pair as { telegramChatId: number }).telegramChatId
+        : null,
+    ).filter((chatId): chatId is number => chatId !== null),
   ]);
   authorizedChatIds.delete(chatId);
 

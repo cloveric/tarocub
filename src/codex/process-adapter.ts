@@ -438,12 +438,18 @@ export class ProcessCodexAdapter implements CodexAdapter {
       const state = createTurnState();
       let totalTimeout: ReturnType<typeof setTimeout> | undefined;
       let inactivityTimeout: ReturnType<typeof setTimeout> | undefined;
+      let abortCleanup: (() => void) | undefined;
 
       const clearTimers = () => {
         totalTimeout && clearTimeout(totalTimeout);
         inactivityTimeout && clearTimeout(inactivityTimeout);
         totalTimeout = undefined;
         inactivityTimeout = undefined;
+      };
+
+      const clearAbortListener = () => {
+        abortCleanup?.();
+        abortCleanup = undefined;
       };
 
       const rejectAndKill = (error: Error) => {
@@ -453,6 +459,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
         settled = true;
         clearTimers();
+        clearAbortListener();
         killProcessTree(child.pid);
         reject(error);
       };
@@ -483,6 +490,27 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
       resetInactivityTimeout();
 
+      child.once("error", (error) => {
+        if (!settled) {
+          settled = true;
+          clearTimers();
+          clearAbortListener();
+          reject(error);
+        }
+      });
+      child.once("close", (code) => {
+        if (!settled) {
+          settled = true;
+          clearTimers();
+          clearAbortListener();
+          const trailingLine = stdoutLineBuffer.trim();
+          if (trailingLine) {
+            updateTurnStateFromLine(state, trailingLine);
+          }
+          resolve({ state, stderrTail, exitCode: code });
+        }
+      });
+
       child.stdout?.on("data", (chunk) => {
         resetInactivityTimeout();
         stdoutLineBuffer += chunk.toString();
@@ -507,29 +535,16 @@ export class ProcessCodexAdapter implements CodexAdapter {
         const onAbort = () => {
           rejectAndKill(new Error("Task was stopped by user"));
         };
-        if (abortSignal.aborted) { onAbort(); return; }
+        abortCleanup = () => abortSignal.removeEventListener("abort", onAbort);
         abortSignal.addEventListener("abort", onAbort, { once: true });
+        if (abortSignal.aborted) { onAbort(); return; }
       }
 
-      child.stdin?.end(prompt);
-      child.once("error", (error) => {
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          reject(error);
-        }
-      });
-      child.once("close", (code) => {
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          const trailingLine = stdoutLineBuffer.trim();
-          if (trailingLine) {
-            updateTurnStateFromLine(state, trailingLine);
-          }
-          resolve({ state, stderrTail, exitCode: code });
-        }
-      });
+      try {
+        child.stdin?.end(prompt);
+      } catch (error) {
+        rejectAndKill(error instanceof Error ? error : new Error(String(error)));
+      }
     });
   }
 }

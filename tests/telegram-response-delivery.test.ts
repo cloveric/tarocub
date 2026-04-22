@@ -160,6 +160,40 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
+  it("still allows existing workspace files outside the current request output directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const currentOutputDir = path.join(workspaceDir, ".telegram-out", "req-current");
+    const existingFile = path.join(workspaceDir, "final-report.docx");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await mkdir(currentOutputDir, { recursive: true });
+      await writeFile(existingFile, "report bytes", "utf8");
+
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `[send-file:${existingFile}]`,
+        inboxDir,
+        undefined,
+        currentOutputDir,
+        "en",
+      );
+
+      expect(filesSent).toBe(1);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "final-report.docx", expect.any(Uint8Array));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("extracts Markdown-linked files whose absolute path contains parentheses", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
