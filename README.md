@@ -334,7 +334,7 @@ That binds the current Telegram chat to the existing Codex thread. From then on:
 
 This is an attach flow, not a local session import: the thread stays server-side and the bridge only binds the known thread ID to the current chat.
 
-Note: external thread validation currently requires the Codex app-server runtime. Because Codex now defaults to the process runtime in Telegram, `/resume thread <thread-id>` currently fails closed instead of guessing.
+Note: the default Codex process runtime validates `/resume thread <thread-id>` against the local Codex session index. Thread IDs unknown to the local machine still fail closed instead of being guessed.
 
 ---
 

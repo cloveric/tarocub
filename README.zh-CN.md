@@ -320,7 +320,7 @@ Codex 没有和 Claude 一样的本地 session 扫描入口。如果你已经知
 
 这是一种“绑定已有 thread”的流程，不是导入本地 session：thread 仍然在服务端，bridge 只是在当前 chat 上绑定一个已知 thread id。
 
-注意：外部 thread 的验证当前依赖 Codex app-server runtime。由于 Telegram 里的 Codex 现在默认走 process runtime，`/resume thread <thread-id>` 目前会直接 fail closed，而不是猜测绑定成功。
+注意：默认的 Codex process runtime 会先用本机的 Codex session index 验证 `/resume thread <thread-id>`。如果这个 thread id 不在本机索引里，仍然会 fail closed，而不是猜测绑定成功。
 
 ---
 

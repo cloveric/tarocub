@@ -1,11 +1,15 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
+import {
+  CODEX_PROCESS_INACTIVITY_TIMEOUT_MS,
+  CODEX_PROCESS_TURN_TIMEOUT_MS,
+  ProcessCodexAdapter,
+} from "../src/codex/process-adapter.js";
 
 async function waitForSpawn(calls: Array<unknown>): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -25,6 +29,10 @@ describe("ProcessCodexAdapter", () => {
     await expect(adapter.createSession(12345)).resolves.toEqual({
       sessionId: "telegram-12345",
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("inherits CODEX_HOME from the parent env so bots track the main CLI", async () => {
@@ -199,6 +207,33 @@ describe("ProcessCodexAdapter", () => {
     await expect(promise).resolves.toEqual({
       text: "Session thread-123 completed.",
     });
+  });
+
+  it("validates external sessions against the local Codex session index", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-session-index-"));
+    const codexHome = path.join(root, ".codex");
+    try {
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(
+        path.join(codexHome, "session_index.jsonl"),
+        [
+          JSON.stringify({ id: "thread-123", thread_name: "Example thread" }),
+          JSON.stringify({ id: "thread-456", thread_name: "Human-readable title" }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+      const adapter = new ProcessCodexAdapter("codex", { CODEX_HOME: codexHome });
+
+      await expect(adapter.validateExternalSession("thread-123")).resolves.toBeUndefined();
+      await expect(adapter.validateExternalSession("Human-readable title")).rejects.toThrow(
+        "codex process could not resume thread Human-readable title",
+      );
+      await expect(adapter.validateExternalSession("thread-missing")).rejects.toThrow(
+        "codex process could not resume thread thread-missing",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("returns a newly created thread id on the first real user message", async () => {
@@ -389,6 +424,47 @@ describe("ProcessCodexAdapter", () => {
         cachedTokens: 3,
       },
     });
+  });
+
+  it("rejects when the overall Codex process turn exceeds the runtime timeout", async () => {
+    vi.useFakeTimers();
+    const { spawnCodex } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter(
+      "codex",
+      spawnCodex,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      CODEX_PROCESS_TURN_TIMEOUT_MS,
+      null,
+    );
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    });
+    const rejection = expect(promise).rejects.toThrow("Codex process turn timed out after 60 minutes");
+
+    await vi.advanceTimersByTimeAsync(CODEX_PROCESS_TURN_TIMEOUT_MS);
+    await rejection;
+  });
+
+  it("rejects when the Codex process turn goes inactive", async () => {
+    vi.useFakeTimers();
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    });
+    const rejection = expect(promise).rejects.toThrow("Codex process turn became inactive after 30 minutes");
+
+    child.stdout.emitData('{"type":"thread.started","thread_id":"thread-123"}\n');
+    await vi.advanceTimersByTimeAsync(CODEX_PROCESS_INACTIVITY_TIMEOUT_MS);
+    await rejection;
   });
 });
 
