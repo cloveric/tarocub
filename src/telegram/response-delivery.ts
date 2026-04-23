@@ -60,6 +60,7 @@ type RejectReason =
   | "outside-request-output"
   | "not-a-file"
   | "too-large"
+  | "placeholder-path"
   | "not-found"
   | "permission-denied"
   | "read-error";
@@ -71,6 +72,7 @@ function renderRejectReason(reason: RejectReason, detail: string | undefined, lo
       case "outside-request-output": return "不在当前请求输出目录中";
       case "not-a-file": return "不是普通文件";
       case "too-large": return `文件过大（${detail} > 50MB）`;
+      case "placeholder-path": return "示例占位路径，不是真实文件";
       case "not-found": return "文件不存在";
       case "permission-denied": return "无读取权限";
       case "read-error": return "读取失败";
@@ -81,6 +83,7 @@ function renderRejectReason(reason: RejectReason, detail: string | undefined, lo
     case "outside-request-output": return "outside current request output";
     case "not-a-file": return "not a regular file";
     case "too-large": return `too large (${detail} > 50MB)`;
+    case "placeholder-path": return "placeholder path, not a real file";
     case "not-found": return "file not found";
     case "permission-denied": return "permission denied";
     case "read-error": return "read error";
@@ -89,6 +92,17 @@ function renderRejectReason(reason: RejectReason, detail: string | undefined, lo
 
 function isAbsoluteFilePath(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function isPlaceholderFilePath(value: string): boolean {
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return (
+    normalized === "/absolute/path" ||
+    normalized.startsWith("/absolute/path/") ||
+    normalized === "/path/to" ||
+    normalized.startsWith("/path/to/") ||
+    normalized.startsWith("/users/cloveric/.cctb/example/")
+  );
 }
 
 function hasAbsoluteFileLineSuffix(value: string): boolean {
@@ -162,12 +176,19 @@ export async function deliverTelegramResponse(
   }
 
   const filePaths: string[] = [];
+  const rejected: Array<{ path: string; reason: RejectReason; detail?: string }> = [];
   let cleanedText = text;
   const sendFilePattern = /\[send-file:([^\]]+)\]/g;
   let sendFileMatch: RegExpExecArray | null;
+  let sawSendFileTag = false;
   while ((sendFileMatch = sendFilePattern.exec(text)) !== null) {
+    sawSendFileTag = true;
     const p = sendFileMatch[1]!.trim();
-    if (isAbsoluteFilePath(p) && !filePaths.includes(p)) {
+    if (isPlaceholderFilePath(p)) {
+      if (!rejected.some((item) => item.path === p && item.reason === "placeholder-path")) {
+        rejected.push({ path: p, reason: "placeholder-path" });
+      }
+    } else if (isAbsoluteFilePath(p) && !filePaths.includes(p)) {
       filePaths.push(p);
     }
   }
@@ -178,7 +199,7 @@ export async function deliverTelegramResponse(
     }
   }
 
-  if (filePaths.length > 0) {
+  if (filePaths.length > 0 || sawSendFileTag || markdownLinks.length > 0) {
     cleanedText = cleanedText.replace(sendFilePattern, "");
     for (const link of [...markdownLinks].sort((left, right) => right.start - left.start)) {
       cleanedText = `${cleanedText.slice(0, link.start)}${cleanedText.slice(link.end)}`;
@@ -195,7 +216,6 @@ export async function deliverTelegramResponse(
 
   const imageFiles: Array<{ filename: string; contents: Uint8Array }> = [];
   const otherFiles: Array<{ filename: string; contents: Uint8Array | string }> = [];
-  const rejected: Array<{ path: string; reason: RejectReason; detail?: string }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;

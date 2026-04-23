@@ -110,6 +110,48 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
+  it("reports copied send-file placeholder paths as placeholders instead of missing files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        "我会发给你。\n[send-file:/absolute/path]",
+        inboxDir,
+        undefined,
+        undefined,
+        "zh",
+      );
+
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "我会发给你。", { parseMode: "Markdown" });
+      expect(api.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        123,
+        expect.stringContaining("/absolute/path — 示例占位路径，不是真实文件"),
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(path.dirname(inboxDir), "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.rejected",
+        metadata: expect.objectContaining({
+          path: "/absolute/path",
+          reason: "placeholder-path",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects workspace files outside the current codex request output directory", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);

@@ -16,7 +16,7 @@ import { SessionStore } from "./state/session-store.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
 import { TelegramApi } from "./telegram/api.js";
 import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
-import { normalizeUpdate } from "./telegram/update-normalizer.js";
+import { normalizeUpdate, type NormalizedTelegramMessage } from "./telegram/update-normalizer.js";
 import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
 import { ChatQueue } from "./runtime/chat-queue.js";
@@ -30,6 +30,7 @@ export interface ServiceDependencies {
 
 export interface TelegramServiceContext extends TelegramDeliveryContext {
   chatQueue?: ChatQueue;
+  attachmentIntentGraceMs?: number;
 }
 
 export interface ResolvedInstanceEnv extends EnvSource {
@@ -665,15 +666,35 @@ const defaultChatQueue = new ChatQueue();
 const activeTasks = new Map<number, AbortController>();
 const enqueuedUpdateIds = new Set<number>();
 const stoppedTaskChats = new Set<number>();
+const pendingAttachmentIntents = new Map<number, PendingAttachmentIntent>();
+const DEFAULT_ATTACHMENT_INTENT_GRACE_MS = 90_000;
 const STOPPED_TASK_BOUNDARY = [
   "[Previous task was explicitly stopped by the user.]",
   "Do not continue or resume that stopped task unless the user's new message explicitly asks you to resume it.",
   "Treat the user's new message as a fresh request by default.",
 ].join("\n");
 
+interface PendingAttachmentIntent {
+  normalized: NormalizedTelegramMessage;
+  updateId?: number;
+  expiresAt: number;
+  timer: ReturnType<typeof setTimeout>;
+  context: TelegramServiceContext;
+  chatQueue: ChatQueue;
+  logger: Pick<Console, "error">;
+}
+
 /** @internal — test-only reset for module-level dedup state */
 export function _resetEnqueuedUpdateIds(): void {
   enqueuedUpdateIds.clear();
+}
+
+/** @internal — test-only reset for module-level pending attachment state */
+export function _resetPendingAttachmentIntents(): void {
+  for (const pending of pendingAttachmentIntents.values()) {
+    clearTimeout(pending.timer);
+  }
+  pendingAttachmentIntents.clear();
 }
 
 /** @internal — test-only reset for module-level stopped-task state */
@@ -837,6 +858,145 @@ async function appendUpdateHandleFailureAuditEventBestEffort(
   }
 }
 
+function getAttachmentIntentGraceMs(context: TelegramServiceContext): number {
+  return context.attachmentIntentGraceMs ?? DEFAULT_ATTACHMENT_INTENT_GRACE_MS;
+}
+
+function isPotentialAttachmentIntentText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed || /^\/\S/.test(trimmed)) {
+    return false;
+  }
+
+  const lower = trimmed.toLowerCase();
+  const attachmentWords = /(这个|这份|刚才|上面|附件|文件|文档|资料|报告|图片|照片|截图|pdf|docx?|pptx?|slides?|file|document|attachment|image)/i;
+  const actionWords = /(用|基于|根据|拿|把|生成|做|分析|总结|读取|读|改|处理|提取|转换|上传|转发|create|generate|analy[sz]e|summari[sz]e|read|convert)/i;
+
+  return (
+    (attachmentWords.test(trimmed) && actionWords.test(trimmed)) ||
+    /(?:notebooklm|kimi|ppt|slides?)/i.test(lower) && /(?:生成|做|create|generate)/i.test(trimmed) && attachmentWords.test(trimmed)
+  );
+}
+
+function mergePendingAttachmentIntent(
+  pending: PendingAttachmentIntent,
+  normalized: NormalizedTelegramMessage,
+): NormalizedTelegramMessage {
+  const pendingText = pending.normalized.text.trim();
+  const currentText = normalized.text.trim();
+  return {
+    ...normalized,
+    text: [pendingText, currentText].filter(Boolean).join("\n\n"),
+    replyContext: normalized.replyContext ?? pending.normalized.replyContext,
+  };
+}
+
+function enqueueTelegramMessageTurn(input: {
+  normalized: NormalizedTelegramMessage;
+  effectiveNormalized: NormalizedTelegramMessage;
+  context: TelegramServiceContext;
+  chatQueue: ChatQueue;
+  updateId?: number;
+}): Promise<unknown> {
+  const { normalized, effectiveNormalized, context, chatQueue, updateId } = input;
+  return chatQueue.enqueue(normalized.chatId, async () => {
+    const taskController = new AbortController();
+    activeTasks.set(normalized.chatId, taskController);
+    try {
+      await handleNormalizedTelegramMessage(effectiveNormalized, {
+        ...context,
+        updateId,
+        abortSignal: taskController.signal,
+        onAuthRetry: async () => {
+          // Both Claude and Codex now read the user's ~/.claude/ or
+          // ~/.codex/ directly, so there is no per-bot credential copy
+          // to re-propagate. The retry itself still happens — the
+          // underlying CLI just reads the refreshed credential.
+        },
+      });
+    } finally {
+      activeTasks.delete(normalized.chatId);
+    }
+  });
+}
+
+function flushPendingAttachmentIntent(pending: PendingAttachmentIntent): void {
+  const queuedRun = enqueueTelegramMessageTurn({
+    normalized: pending.normalized,
+    effectiveNormalized: pending.normalized,
+    context: pending.context,
+    chatQueue: pending.chatQueue,
+    updateId: pending.updateId,
+  });
+  void queuedRun.catch(async (error) => {
+    await appendUpdateHandleFailureAuditEventBestEffort(
+      pending.context.inboxDir,
+      pending.context.instanceName,
+      error,
+      pending.updateId,
+    );
+    pending.logger.error(formatErrorMessage("Failed to handle deferred Telegram update", error));
+  });
+}
+
+function cancelPendingAttachmentIntent(chatId: number): PendingAttachmentIntent | undefined {
+  const pending = pendingAttachmentIntents.get(chatId);
+  if (!pending) {
+    return undefined;
+  }
+  clearTimeout(pending.timer);
+  pendingAttachmentIntents.delete(chatId);
+  return pending;
+}
+
+function takePendingAttachmentIntentForAttachment(normalized: NormalizedTelegramMessage): PendingAttachmentIntent | undefined {
+  const pending = pendingAttachmentIntents.get(normalized.chatId);
+  if (!pending || pending.normalized.userId !== normalized.userId) {
+    return undefined;
+  }
+
+  cancelPendingAttachmentIntent(normalized.chatId);
+  if (Date.now() > pending.expiresAt) {
+    flushPendingAttachmentIntent(pending);
+    return undefined;
+  }
+
+  return pending;
+}
+
+function deferAttachmentIntent(input: {
+  normalized: NormalizedTelegramMessage;
+  context: TelegramServiceContext;
+  chatQueue: ChatQueue;
+  logger: Pick<Console, "error">;
+  updateId?: number;
+  graceMs: number;
+}): void {
+  const existing = cancelPendingAttachmentIntent(input.normalized.chatId);
+  if (existing) {
+    flushPendingAttachmentIntent(existing);
+  }
+
+  const expiresAt = Date.now() + input.graceMs;
+  const pending: PendingAttachmentIntent = {
+    normalized: input.normalized,
+    context: input.context,
+    chatQueue: input.chatQueue,
+    logger: input.logger,
+    updateId: input.updateId,
+    expiresAt,
+    timer: setTimeout(() => {
+      if (pendingAttachmentIntents.get(input.normalized.chatId) !== pending) {
+        return;
+      }
+      pendingAttachmentIntents.delete(input.normalized.chatId);
+      flushPendingAttachmentIntent(pending);
+    }, input.graceMs),
+  };
+  pending.timer.unref?.();
+  pendingAttachmentIntents.set(input.normalized.chatId, pending);
+}
+
 export async function processTelegramUpdates(
   updates: unknown[],
   context: TelegramServiceContext,
@@ -874,7 +1034,7 @@ export async function processTelegramUpdates(
         continue;
       }
 
-      const normalized = normalizeUpdate(update);
+      let normalized = normalizeUpdate(update);
       if (!normalized) {
         const membershipUpdate = extractMembershipUpdate(update);
         if (updateId !== undefined) {
@@ -924,7 +1084,15 @@ export async function processTelegramUpdates(
         continue;
       }
 
+      if (normalized.attachments.length > 0) {
+        const pending = takePendingAttachmentIntentForAttachment(normalized);
+        if (pending) {
+          normalized = mergePendingAttachmentIntent(pending, normalized);
+        }
+      }
+
       if (/^\/stop(?:@\w+)?(?:\s|$)/i.test(normalized.text.trim())) {
+        cancelPendingAttachmentIntent(normalized.chatId);
         const locale = (await loadStopLocale(context.inboxDir)) === "zh" ? "zh" : "en";
         const accessDecision = await context.bridge.checkAccess({
           chatId: normalized.chatId,
@@ -954,6 +1122,45 @@ export async function processTelegramUpdates(
         continue;
       }
 
+      if (/^\/\S/.test(normalized.text.trim())) {
+        cancelPendingAttachmentIntent(normalized.chatId);
+      }
+
+      const attachmentIntentGraceMs = getAttachmentIntentGraceMs(context);
+      if (
+        normalized.attachments.length === 0 &&
+        normalized.replyContext === undefined &&
+        normalized.callbackQueryId === undefined &&
+        attachmentIntentGraceMs > 0 &&
+        isPotentialAttachmentIntentText(normalized.text)
+      ) {
+        deferAttachmentIntent({
+          normalized,
+          context,
+          chatQueue,
+          logger,
+          updateId,
+          graceMs: attachmentIntentGraceMs,
+        });
+        if (updateId !== undefined) {
+          await runtimeStateStore.markHandledUpdateId(updateId);
+          lastHandledUpdateId = updateId;
+        }
+        await appendAuditEvent(path.dirname(context.inboxDir), {
+          type: "update.defer",
+          instanceName: context.instanceName,
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          updateId,
+          outcome: "awaiting-attachment",
+          metadata: {
+            graceMs: attachmentIntentGraceMs,
+          },
+        });
+        nextOffset = advanceOffset(nextOffset, completedOffset);
+        continue;
+      }
+
       const shouldFenceStoppedTask =
         stoppedTaskChats.has(normalized.chatId) &&
         !/^\/\S/.test(normalized.text.trim()) &&
@@ -976,24 +1183,12 @@ export async function processTelegramUpdates(
       if (updateId !== undefined) {
         enqueuedUpdateIds.add(updateId);
       }
-      const queuedRun = chatQueue.enqueue(normalized.chatId, async () => {
-        const taskController = new AbortController();
-        activeTasks.set(normalized.chatId, taskController);
-        try {
-          await handleNormalizedTelegramMessage(effectiveNormalized, {
-            ...context,
-            updateId,
-            abortSignal: taskController.signal,
-            onAuthRetry: async () => {
-              // Both Claude and Codex now read the user's ~/.claude/ or
-              // ~/.codex/ directly, so there is no per-bot credential copy
-              // to re-propagate. The retry itself still happens — the
-              // underlying CLI just reads the refreshed credential.
-            },
-          });
-        } finally {
-          activeTasks.delete(normalized.chatId);
-        }
+      const queuedRun = enqueueTelegramMessageTurn({
+        normalized,
+        effectiveNormalized,
+        context,
+        chatQueue,
+        updateId,
       });
       queuedCompletions.push({
         updateId,
@@ -1126,9 +1321,11 @@ export async function pollTelegramUpdates(
     } else if (result.hadUpdates && result.offset !== previousOffset) {
       // Got messages — poll again immediately for low latency
       backoffMs = 0;
-    } else if (result.hadUpdates && enqueuedUpdateIds.size > 0) {
-      // We are still working on at least one update; avoid a tight 100ms loop
-      // repeatedly re-fetching and skipping the same in-flight update IDs.
+    } else if (result.hadUpdates && result.offset === previousOffset) {
+      // We saw updates but did not advance the handled offset yet. That means
+      // at least one update is still in flight, was deferred, or failed before
+      // bookkeeping completed. Back off to avoid a tight loop that keeps
+      // re-fetching the same update IDs immediately.
       backoffMs = 1000;
     } else {
       // No updates — long polling already waited ~30s on Telegram's side,

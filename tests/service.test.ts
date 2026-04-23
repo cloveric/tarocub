@@ -15,6 +15,7 @@ import {
   readInstanceBotTokenFromEnvFile,
   resolveServiceEnvForInstance,
   _resetEnqueuedUpdateIds,
+  _resetPendingAttachmentIntents,
   _resetStoppedTaskChats,
 } from "../src/service.js";
 import { ChatQueue } from "../src/runtime/chat-queue.js";
@@ -95,6 +96,7 @@ function replaceBufferContents(buffer: Buffer, search: string, replace: string):
 
 afterEach(async () => {
   _resetEnqueuedUpdateIds();
+  _resetPendingAttachmentIntents();
   _resetStoppedTaskChats();
   await rm(path.join(os.tmpdir(), "ignored"), { recursive: true, force: true });
   await rm(path.join(os.tmpdir(), "runtime-state.json"), { force: true });
@@ -130,7 +132,7 @@ describe("readInstanceBotTokenFromEnvFile", () => {
         }),
       ).resolves.toBe("secret-token");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     }
   });
 });
@@ -836,6 +838,151 @@ describe("polling helpers", () => {
 
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(3);
       expect(api.sendMessage).toHaveBeenCalledTimes(3);
+      expect(logger.error).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("merges a file-dependent text update with a following attachment update from the same chat", async () => {
+    const logger = {
+      error: vi.fn(),
+    };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn().mockResolvedValue({ file_path: "documents/report.txt" }),
+      downloadFile: vi.fn().mockImplementation(async (_remotePath: string, localPath: string) => {
+        await mkdir(path.dirname(localPath), { recursive: true });
+        await writeFile(localPath, "report body", "utf8");
+      }),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 100,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              text: "用这个文件让 notebooklm py 生成",
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+          attachmentIntentGraceMs: 60_000,
+        },
+        logger,
+      );
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 101,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              document: {
+                file_id: "doc-1",
+                file_name: "AI_报告_2025-2026.docx",
+              },
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+          attachmentIntentGraceMs: 60_000,
+        },
+        logger,
+      );
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const request = (bridge.handleAuthorizedMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+        text: string;
+        files: string[];
+      };
+      expect(request.text).toContain("用这个文件让 notebooklm py 生成");
+      expect(request.text).toContain("[Document Extract]");
+      expect(request.files).toHaveLength(1);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "done", { parseMode: "Markdown" });
+      expect(logger.error).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("flushes a deferred file-dependent text update when no attachment arrives", async () => {
+    const logger = {
+      error: vi.fn(),
+    };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const handled = createDeferred<void>();
+    const delivered = createDeferred<void>();
+    const api = {
+      sendMessage: vi.fn().mockImplementation(async () => {
+        delivered.resolve();
+        return { message_id: 11 };
+      }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async () => {
+        handled.resolve();
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 110,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              text: "基于这个文件总结一下",
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+          attachmentIntentGraceMs: 1,
+        },
+        logger,
+      );
+
+      await handled.promise;
+      await delivered.promise;
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        text: "基于这个文件总结一下",
+        files: [],
+      }));
       expect(logger.error).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
