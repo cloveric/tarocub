@@ -95,7 +95,7 @@ function isAbsoluteFilePath(value: string): boolean {
 }
 
 function isPlaceholderFilePath(value: string): boolean {
-  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
   return (
     normalized === "/absolute/path" ||
     normalized.startsWith("/absolute/path/") ||

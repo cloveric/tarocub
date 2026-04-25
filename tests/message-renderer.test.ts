@@ -133,6 +133,19 @@ describe("message rendering", () => {
     expect(
       renderCategorizedErrorMessage(
         "engine-cli",
+        "stream disconnected before completion",
+        "en",
+        "claude",
+      ),
+    ).toBe(
+      [
+        "Error: The engine runtime failed. Restart the instance and retry.",
+        "Details: Claude transport stream disconnected. The previous turn failed before producing a final answer; this does not identify a browser or image-generation task by itself.",
+      ].join("\n"),
+    );
+    expect(
+      renderCategorizedErrorMessage(
+        "engine-cli",
         "fetch failed for https://chatgpt.com/backend-api/codex/responses?access_token=secret",
       ),
     ).toContain("chatgpt.com/backend-api/codex/responses.");

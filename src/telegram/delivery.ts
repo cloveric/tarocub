@@ -209,6 +209,7 @@ export async function handleNormalizedTelegramMessage(
       classifiedError,
       failureCategory,
       turnState,
+      engine: cfg.engine,
     });
 
   } finally {

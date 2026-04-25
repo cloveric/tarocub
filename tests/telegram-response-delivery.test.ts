@@ -152,6 +152,47 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
+  it("reports copied example workspace placeholders case-insensitively", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const placeholderPath = "/Users/cloveric/.cctb/example/workspace/output.png";
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `[send-file:${placeholderPath}]`,
+        inboxDir,
+        undefined,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining(`${placeholderPath} — placeholder path, not a real file`),
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(path.dirname(inboxDir), "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.rejected",
+        metadata: expect.objectContaining({
+          path: placeholderPath,
+          reason: "placeholder-path",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects workspace files outside the current codex request output directory", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);

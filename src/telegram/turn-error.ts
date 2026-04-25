@@ -6,6 +6,7 @@ import type { SessionStore } from "../state/session-store.js";
 import {
   renderCategorizedErrorMessage,
   renderSessionStateErrorMessage,
+  type EngineName,
   type Locale,
 } from "./message-renderer.js";
 import type { TelegramApi } from "./api.js";
@@ -141,6 +142,7 @@ export async function finalizeTelegramTurnError(input: {
   classifiedError: unknown;
   failureCategory: ReturnType<typeof classifyFailure>;
   turnState: WorkflowAwareTurnState;
+  engine?: EngineName;
 }): Promise<void> {
   const {
     stateDir,
@@ -152,6 +154,7 @@ export async function finalizeTelegramTurnError(input: {
     classifiedError,
     failureCategory,
     turnState,
+    engine,
   } = input;
 
   const message = classifiedError instanceof Error ? classifiedError.message : String(classifiedError);
@@ -160,8 +163,8 @@ export async function finalizeTelegramTurnError(input: {
     : classifiedError instanceof SessionStateError
     ? renderSessionStateErrorMessage(classifiedError.repairable, locale)
     : turnState.failureHint
-    ? `${renderCategorizedErrorMessage(failureCategory, message, locale)}\n${turnState.failureHint}`
-    : renderCategorizedErrorMessage(failureCategory, message, locale);
+    ? `${renderCategorizedErrorMessage(failureCategory, message, locale, engine)}\n${turnState.failureHint}`
+    : renderCategorizedErrorMessage(failureCategory, message, locale, engine);
   let workflowCleanupError: unknown;
 
   if (turnState.workflowRecordId) {

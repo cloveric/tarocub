@@ -1,6 +1,7 @@
 import type { FailureCategory } from "../runtime/error-classification.js";
 
 export type Locale = "en" | "zh";
+export type EngineName = "codex" | "claude";
 
 function utf16Length(text: string): number {
   return text.length;
@@ -330,7 +331,22 @@ function extractDiagnosticHttpTarget(detail: string): string | undefined {
   }
 }
 
-function inferEngineName(detail: string, target: string | undefined): "Codex" | "Claude" | "Engine" {
+function renderEngineName(engine: EngineName | undefined): "Codex" | "Claude" | undefined {
+  if (engine === "codex") {
+    return "Codex";
+  }
+  if (engine === "claude") {
+    return "Claude";
+  }
+  return undefined;
+}
+
+function inferEngineName(detail: string, target: string | undefined, engine?: EngineName): "Codex" | "Claude" | "Engine" {
+  const explicitEngineName = renderEngineName(engine);
+  if (explicitEngineName) {
+    return explicitEngineName;
+  }
+
   const normalized = `${detail}\n${target ?? ""}`.toLowerCase();
   if (normalized.includes("codex")) {
     return "Codex";
@@ -341,10 +357,10 @@ function inferEngineName(detail: string, target: string | undefined): "Codex" | 
   return "Engine";
 }
 
-function renderEngineDiagnosticDetail(detail: string, locale: Locale): string | undefined {
+function renderEngineDiagnosticDetail(detail: string, locale: Locale, engine?: EngineName): string | undefined {
   const normalized = detail.toLowerCase();
   const target = extractDiagnosticHttpTarget(detail);
-  const engineName = inferEngineName(detail, target);
+  const engineName = inferEngineName(detail, target, engine);
   const isTransportFailure =
     normalized.includes("stream disconnected") ||
     normalized.includes("error sending request") ||
@@ -366,7 +382,12 @@ function renderEngineDiagnosticDetail(detail: string, locale: Locale): string | 
     : `Details: ${engineName} transport stream disconnected${targetPhrase}. The previous turn failed before producing a final answer; this does not identify a browser or image-generation task by itself.`;
 }
 
-export function renderCategorizedErrorMessage(category: FailureCategory, detail: string, locale: Locale = "en"): string {
+export function renderCategorizedErrorMessage(
+  category: FailureCategory,
+  detail: string,
+  locale: Locale = "en",
+  engine?: EngineName,
+): string {
   const normalizedDetail = detail.toLowerCase();
   const isTelegramFormattingError =
     category === "telegram-delivery" &&
@@ -394,7 +415,7 @@ export function renderCategorizedErrorMessage(category: FailureCategory, detail:
     if (category === "engine-cli") {
       return [
         "错误：引擎运行时失败，请重启实例后重试。",
-        renderEngineDiagnosticDetail(detail, locale),
+        renderEngineDiagnosticDetail(detail, locale, engine),
       ].filter(Boolean).join("\n");
     }
     if (category === "file-workflow") {
@@ -429,7 +450,7 @@ export function renderCategorizedErrorMessage(category: FailureCategory, detail:
   if (category === "engine-cli") {
     return [
       "Error: The engine runtime failed. Restart the instance and retry.",
-      renderEngineDiagnosticDetail(detail, locale),
+      renderEngineDiagnosticDetail(detail, locale, engine),
     ].filter(Boolean).join("\n");
   }
   if (category === "file-workflow") {
