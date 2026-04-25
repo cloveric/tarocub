@@ -6250,6 +6250,72 @@ describe("polling helpers", () => {
     expect(api.sendMessage).toHaveBeenCalledTimes(3);
   });
 
+  it("does not leak typing intervals when overlapping approval prompts resolve", async () => {
+    vi.useFakeTimers();
+    const firstApproval = new AbortController();
+    const secondApproval = new AbortController();
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ onApprovalRequest }: { onApprovalRequest?: (request: any) => Promise<unknown> }) => {
+        if (!onApprovalRequest) {
+          throw new Error("missing approval callback");
+        }
+
+        const first = onApprovalRequest({
+          engine: "claude",
+          toolName: "Write",
+          toolInput: { file_path: "/tmp/a.txt" },
+          abortSignal: firstApproval.signal,
+        });
+        const second = onApprovalRequest({
+          engine: "claude",
+          toolName: "Bash",
+          toolInput: { command: "echo ok" },
+          abortSignal: secondApproval.signal,
+        });
+
+        await waitForCondition(() => api.sendMessage.mock.calls.length === 2);
+        firstApproval.abort();
+        await first;
+        secondApproval.abort();
+        await second;
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "needs approval",
+          replyContext: undefined,
+          attachments: [],
+        },
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir: path.join(os.tmpdir(), "ignored"),
+        },
+      );
+
+      const callsAfterTurn = api.sendChatAction.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(api.sendChatAction).toHaveBeenCalledTimes(callsAfterTurn);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("passes quoted reply context to the bridge", async () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),

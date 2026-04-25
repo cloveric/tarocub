@@ -193,6 +193,54 @@ describe("ProcessCodexAdapter", () => {
     expect(progressUpdates).toEqual([]);
   });
 
+  it("pre-approves normal Codex turns before running them with full-auto", async () => {
+    const { spawnCodex, child, calls } = createSpawnHarness();
+    const approvals: unknown[] = [];
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Delete the temporary file",
+      files: ["notes.txt"],
+      workspaceOverride: "/tmp/workspace",
+      onApprovalRequest: async (request) => {
+        approvals.push(request);
+        return { behavior: "allow", scope: "once" };
+      },
+    });
+    await waitForSpawn(calls);
+
+    child.stdout.emitData('{"type":"thread.started","thread_id":"thread-123"}\n');
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n');
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: "done",
+      sessionId: "thread-123",
+    });
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      engine: "codex",
+      toolName: "Codex full-auto turn",
+      cwd: "/tmp/workspace",
+      toolInput: {
+        prompt: "Delete the temporary file\nAttachment: notes.txt",
+      },
+    });
+    expect(calls[0]?.args).toEqual(["exec", "--json", "--skip-git-repo-check", "--full-auto", "-"]);
+  });
+
+  it("does not start Codex when Telegram denies the pre-turn approval", async () => {
+    const spawnCodex = vi.fn();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    await expect(adapter.sendUserMessage("telegram-12345", {
+      text: "Delete the temporary file",
+      files: [],
+      onApprovalRequest: async () => ({ behavior: "deny" }),
+    })).rejects.toThrow("Codex turn was denied from Telegram");
+    expect(spawnCodex).not.toHaveBeenCalled();
+  });
+
   it("falls back when codex returns empty stdout", async () => {
     const { spawnCodex, child } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);

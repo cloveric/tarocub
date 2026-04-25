@@ -175,6 +175,46 @@ describe("ProcessClaudeAdapter", () => {
     }
   });
 
+  it("injects a Claude permission prompt MCP tool when Telegram approval is available", async () => {
+    const { child, calls, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", {
+      spawnFn,
+    });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Edit package.json",
+      files: [],
+      onApprovalRequest: async () => ({ behavior: "deny" }),
+    });
+    await waitForSpawn(calls);
+
+    child.stdout.emitData('{"type":"result","result":"ok","session_id":"session-abc"}');
+    child.close(0);
+    await promise;
+
+    const configIndex = calls[0]?.args.indexOf("--mcp-config") ?? -1;
+    expect(configIndex).toBeGreaterThanOrEqual(0);
+    const config = JSON.parse(calls[0]!.args[configIndex + 1]!) as {
+      mcpServers?: {
+        cctb_approval?: {
+          type?: string;
+          command?: string;
+          args?: string[];
+          env?: Record<string, string>;
+        };
+      };
+    };
+    const server = config.mcpServers?.cctb_approval;
+    expect(server?.type).toBe("stdio");
+    expect(server?.command).toBeTruthy();
+    expect(server?.args?.[0]).toMatch(/claude-permission-mcp-server\.(?:js|ts)$/);
+    expect(server?.env?.CCTB_CLAUDE_APPROVAL_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/claude-permission$/);
+
+    const promptToolIndex = calls[0]?.args.indexOf("--permission-prompt-tool") ?? -1;
+    expect(promptToolIndex).toBeGreaterThanOrEqual(0);
+    expect(calls[0]?.args[promptToolIndex + 1]).toBe("mcp__cctb_approval__approve");
+  });
+
   it("normalizes quoted Windows claude.cmd paths", async () => {
     const { child, calls, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter('"C:\\Users\\hangw\\AppData\\Roaming\\npm\\claude.cmd"', {

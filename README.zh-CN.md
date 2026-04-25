@@ -31,7 +31,7 @@
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
 
-> **推荐运行方式：** 对你自己控制的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。Telegram 是无头聊天界面；如果不开自动审批，CLI 权限确认可能会一直等到你回电脑处理。`unsafe` 只建议在可信机器和可信工作区使用。
+> **推荐运行方式：** 对你自己控制、希望完全免打断运行的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。如果关闭 YOLO，bridge 也会尽量在 Telegram 里弹审批按钮：Claude 是按工具请求审批；Codex 因为 `codex exec` 不支持 turn 中途审批回调，所以是按整轮 turn 预审批。`unsafe` 只建议在可信机器和可信工作区使用。
 
 ### 最近这波变化
 
@@ -71,6 +71,7 @@ npm run dev -- telegram engine --instance review-bot
 | CLI 命令 | `codex exec --json` | `claude -p --output-format json` |
 | 会话恢复 | `codex exec resume --json <id>` | `claude -p -r <session-id>` |
 | 项目指令 | `agent.md`（注入到 prompt） | `agent.md`（`--system-prompt`）+ `CLAUDE.md`（工作目录自动加载） |
+| YOLO 关闭时的 Telegram 审批 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--full-auto` | Claude 权限请求会变成 Telegram 内联按钮 |
 | YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` |
 | `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 |
 | 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） |
@@ -165,7 +166,7 @@ open -e ~/.cctb/work/agent.md
 
 ## YOLO 模式
 
-正常通过 Telegram 使用时，推荐开启 `telegram yolo on`。这样 Codex/Claude 不会卡在你无法从 Telegram 处理的 CLI 交互审批上。`unsafe` 只适合完全可信的本地环境。
+如果你希望 Telegram bot 免打断运行，推荐开启 `telegram yolo on`。如果保持 YOLO 关闭，bridge 会用 Telegram 审批按钮接住无头审批：Claude 可以按单个权限请求审批；Codex process 模式会先问你是否允许本轮自动执行，通过后这一轮用 `--full-auto` 跑。`unsafe` 只适合完全可信的本地环境。
 
 ```bash
 npm run dev -- telegram yolo on --instance work      # 安全自动审批
@@ -176,7 +177,7 @@ npm run dev -- telegram yolo --instance work          # 查看状态
 
 | 模式 | Codex | Claude | 适用场景 |
 |---|---|---|---|
-| `off` | 正常审批 | 正常审批 | 默认，最安全 |
+| `off` | Telegram 预审批整轮 turn | Telegram 工具审批 | 默认，最安全 |
 | `on` | `--full-auto` | `--permission-mode bypassPermissions` | 手机操作 |
 | `unsafe` | `--dangerously-bypass-*` | `--dangerously-skip-permissions` | 仅限可信环境 |
 

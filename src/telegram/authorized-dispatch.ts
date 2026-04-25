@@ -14,6 +14,7 @@ import { handleLocalSessionTelegramCommand as defaultHandleLocalSessionTelegramC
 import { handleSimpleLocalTelegramCommand as defaultHandleSimpleLocalTelegramCommand } from "./simple-commands.js";
 import type { TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
+import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
 
 export interface AuthorizedTelegramDispatchConfig {
   engine: "codex" | "claude";
@@ -35,6 +36,7 @@ export interface AuthorizedTelegramDispatchContext {
       text: string;
       replyContext?: NormalizedTelegramMessage["replyContext"];
       files: string[];
+      onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
       requestOutputDir?: string;
       workspaceOverride?: string;
       abortSignal?: AbortSignal;
@@ -50,6 +52,7 @@ export interface AuthorizedTelegramDispatchContext {
   };
   inboxDir: string;
   abortSignal?: AbortSignal;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   instanceName?: string;
   updateId?: number;
 }

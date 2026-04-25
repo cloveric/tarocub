@@ -15,6 +15,7 @@ import {
 } from "./turn-bookkeeping.js";
 import { finalizeTelegramTurnError, maybeRetryTelegramTurnError } from "./turn-error.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { requestTelegramApproval } from "./approval-requests.js";
 
 async function updateWorkflowBestEffort(
   workflowStore: FileWorkflowStore,
@@ -67,6 +68,9 @@ export async function handleNormalizedTelegramMessage(
   const locale = cfg.locale;
 
   const startTyping = () => {
+    if (typingInterval) {
+      return;
+    }
     context.api.sendChatAction(normalized.chatId).catch(() => {});
     typingInterval = setInterval(() => {
       context.api.sendChatAction(normalized.chatId).catch(() => {});
@@ -136,7 +140,26 @@ export async function handleNormalizedTelegramMessage(
         resume: cfg.resume,
       },
       normalized,
-      context,
+      context: {
+        ...context,
+        onApprovalRequest: async (request) => {
+          stopTyping();
+          try {
+            return await requestTelegramApproval({
+              api: context.api,
+              chatId: normalized.chatId,
+              userId: normalized.userId,
+              locale,
+              request,
+              abortSignal: request.abortSignal ?? context.abortSignal,
+            });
+          } finally {
+            if (!context.abortSignal?.aborted) {
+              startTyping();
+            }
+          }
+        },
+      },
       workflowStore,
       deps: {
         sessionStore,

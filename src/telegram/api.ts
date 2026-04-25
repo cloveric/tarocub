@@ -105,7 +105,7 @@ function isTelegramBotIdentity(value: unknown): value is TelegramBotIdentity {
 }
 
 interface TelegramMessageOptions {
-  inlineKeyboard?: InlineKeyboardButton[][];
+  inlineKeyboard?: InlineKeyboardButton[][] | null;
   parseMode?: "MarkdownV2" | "HTML" | "Markdown";
 }
 
@@ -307,23 +307,27 @@ export class TelegramApi {
     text: string,
     options?: TelegramMessageOptions,
   ): Promise<TelegramMessage> {
-    return this.postJson("editMessageText", {
+    const body: Record<string, unknown> = {
       chat_id: chatId,
       message_id: messageId,
       text,
-      ...(options?.inlineKeyboard
-        ? {
-            reply_markup: {
-              inline_keyboard: options.inlineKeyboard.map((row) =>
-                row.map((button) => ({
-                  text: button.text,
-                  callback_data: button.callbackData,
-                })),
-              ),
-            },
-          }
-        : {}),
-    }, isTelegramMessage);
+    };
+
+    const inlineKeyboard = options?.inlineKeyboard;
+    if (inlineKeyboard === null) {
+      body.reply_markup = null;
+    } else if (inlineKeyboard !== undefined) {
+      body.reply_markup = {
+        inline_keyboard: inlineKeyboard.map((row) =>
+          row.map((button) => ({
+            text: button.text,
+            callback_data: button.callbackData,
+          })),
+        ),
+      };
+    }
+
+    return this.postJson("editMessageText", body, isTelegramMessage);
   }
 
   async answerCallbackQuery(callbackQueryId: string): Promise<void> {

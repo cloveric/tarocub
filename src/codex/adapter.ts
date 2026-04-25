@@ -15,11 +15,31 @@ export interface CodexAdapterResponse {
   usage?: AdapterUsage;
 }
 
+export interface EngineApprovalRequest {
+  engine: "claude" | "codex";
+  toolName: string;
+  toolInput: unknown;
+  cwd?: string;
+  sessionId?: string;
+  abortSignal?: AbortSignal;
+  permissionSuggestions?: unknown[];
+}
+
+export type EngineApprovalDecision =
+  | {
+      behavior: "allow";
+      scope?: "once" | "session";
+    }
+  | {
+      behavior: "deny";
+    };
+
 export interface CodexUserMessageInput {
   text: string;
   files: string[];
   instructions?: string;
   onProgress?: (partialText: string) => void;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   requestOutputDir?: string;
   workspaceOverride?: string;
   abortSignal?: AbortSignal;

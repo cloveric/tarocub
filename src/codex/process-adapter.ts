@@ -359,6 +359,20 @@ export class ProcessCodexAdapter implements CodexAdapter {
         : approvalMode === "full-auto"
           ? ["--full-auto"]
           : [];
+    let effectiveApprovalFlags = approvalFlags;
+    if (approvalMode === "normal" && input.onApprovalRequest) {
+      const decision = await input.onApprovalRequest({
+        engine: "codex",
+        toolName: "Codex full-auto turn",
+        toolInput: { prompt },
+        cwd: input.workspaceOverride ?? this.workspacePath,
+        abortSignal: input.abortSignal,
+      });
+      if (decision.behavior === "deny") {
+        throw new Error("Codex turn was denied from Telegram");
+      }
+      effectiveApprovalFlags = ["--full-auto"];
+    }
     const engineFlags: string[] = [];
     if (engineOptions.effort) {
       // Codex's highest reasoning level is "xhigh". Claude's new "max" is
@@ -371,8 +385,8 @@ export class ProcessCodexAdapter implements CodexAdapter {
       engineFlags.push("-m", engineOptions.model);
     }
     const args = isLogicalTelegramSessionId(sessionId)
-      ? ["exec", "--json", "--skip-git-repo-check", ...approvalFlags, ...engineFlags, "-"]
-      : ["exec", "resume", "--json", "--skip-git-repo-check", "--all", ...approvalFlags, ...engineFlags, sessionId, "-"];
+      ? ["exec", "--json", "--skip-git-repo-check", ...effectiveApprovalFlags, ...engineFlags, "-"]
+      : ["exec", "resume", "--json", "--skip-git-repo-check", "--all", ...effectiveApprovalFlags, ...engineFlags, sessionId, "-"];
     const result = await this.runCodexJsonCommand(
       args,
       prompt,

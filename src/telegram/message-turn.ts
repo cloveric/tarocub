@@ -19,6 +19,7 @@ import { appendUpdateHandleAuditEventBestEffort, maybeReplyWithBudgetExhausted, 
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { InlineKeyboardButton, TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
+import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
 
 export interface WorkflowAwareTurnState {
   workflowRecordId?: string;
@@ -46,6 +47,7 @@ export interface WorkflowAwareTurnContext {
       text: string;
       replyContext?: NormalizedTelegramMessage["replyContext"];
       files: string[];
+      onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
       requestOutputDir?: string;
       workspaceOverride?: string;
       abortSignal?: AbortSignal;
@@ -61,6 +63,7 @@ export interface WorkflowAwareTurnContext {
   };
   inboxDir: string;
   abortSignal?: AbortSignal;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   instanceName?: string;
   updateId?: number;
 }
@@ -255,6 +258,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     text: requestText,
     replyContext,
     files: requestFiles,
+    onApprovalRequest: context.onApprovalRequest,
     requestOutputDir: state.telegramOutDirPath,
     workspaceOverride: cfg.resume?.workspacePath,
     abortSignal: context.abortSignal,

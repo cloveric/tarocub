@@ -20,6 +20,45 @@ export interface NormalizedTelegramMessage {
   attachments: NormalizedTelegramAttachment[];
 }
 
+function normalizeCallbackCommand(data: string): string | null {
+  const approval = data.match(/^approval:([A-Za-z0-9_-]+):(once|session|deny)$/i);
+  if (approval) {
+    return `/approval ${approval[1]} ${approval[2]!.toLowerCase()}`;
+  }
+
+  const rawContinueData = data.startsWith("continue-archive:")
+    ? data.slice("continue-archive:".length).trim()
+    : null;
+  if (
+    rawContinueData &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawContinueData)
+  ) {
+    return `/continue --upload ${rawContinueData}`;
+  }
+
+  return null;
+}
+
+function normalizeCallbackQuery(callbackQuery: any, text: string): NormalizedTelegramMessage | null {
+  const message = callbackQuery.message;
+  const chatId = message?.chat?.id;
+  const userId = callbackQuery?.from?.id;
+  const chatType = message?.chat?.type;
+
+  if (typeof chatId !== "number" || typeof userId !== "number" || typeof chatType !== "string") {
+    return null;
+  }
+
+  return {
+    chatId,
+    userId,
+    chatType,
+    text,
+    callbackQueryId: typeof callbackQuery.id === "string" ? callbackQuery.id : undefined,
+    attachments: [],
+  };
+}
+
 function normalizeReplyContext(message: any): NormalizedTelegramMessage["replyContext"] {
   const reply = message?.reply_to_message;
   const messageId = reply?.message_id;
@@ -107,32 +146,11 @@ function normalizeVoiceAttachment(message: any): NormalizedTelegramAttachment[] 
 
 export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
   const callbackQuery = update?.callback_query;
-  const rawCallbackData =
-    typeof callbackQuery?.data === "string" && callbackQuery.data.startsWith("continue-archive:")
-      ? callbackQuery.data.slice("continue-archive:".length).trim()
-      : null;
-  const callbackData =
-    rawCallbackData && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawCallbackData)
-      ? rawCallbackData
-      : null;
-  if (callbackData) {
-    const message = callbackQuery.message;
-    const chatId = message?.chat?.id;
-    const userId = callbackQuery?.from?.id;
-    const chatType = message?.chat?.type;
-
-    if (typeof chatId !== "number" || typeof userId !== "number" || typeof chatType !== "string") {
-      return null;
+  if (typeof callbackQuery?.data === "string") {
+    const callbackCommand = normalizeCallbackCommand(callbackQuery.data);
+    if (callbackCommand) {
+      return normalizeCallbackQuery(callbackQuery, callbackCommand);
     }
-
-    return {
-      chatId,
-      userId,
-      chatType,
-      text: `/continue --upload ${callbackData}`,
-      callbackQueryId: typeof callbackQuery.id === "string" ? callbackQuery.id : undefined,
-      attachments: [],
-    };
   }
 
   const message = update?.message;

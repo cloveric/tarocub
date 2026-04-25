@@ -1,4 +1,4 @@
-import type { CodexAdapter } from "../codex/adapter.js";
+import type { CodexAdapter, EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
 import { findConflictingLockedChatId } from "../state/access-store.js";
 import {
   type Locale,
@@ -216,6 +216,7 @@ export class Bridge {
     };
     files: string[];
     onProgress?: (partialText: string) => void;
+    onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
     requestOutputDir?: string;
     workspaceOverride?: string;
     abortSignal?: AbortSignal;
@@ -247,6 +248,7 @@ export class Bridge {
       files: input.files,
       instructions,
       onProgress: input.onProgress,
+      onApprovalRequest: input.onApprovalRequest,
       requestOutputDir: input.requestOutputDir,
       workspaceOverride: input.workspaceOverride,
       abortSignal: input.abortSignal,

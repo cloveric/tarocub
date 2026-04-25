@@ -7,6 +7,13 @@ import type {
   CodexSessionHandle,
   CodexUserMessageInput,
 } from "./adapter.js";
+import {
+  CLAUDE_PERMISSION_MCP_TOOL_NAME,
+  createClaudePermissionMcpConfig,
+  resolveClaudePermissionMcpServerInvocation,
+  startClaudePermissionHookServer,
+  type ClaudePermissionHookServer,
+} from "./claude-permission-hook.js";
 import { killProcessTree } from "./process-tree.js";
 import type { ApprovalMode } from "./process-adapter.js";
 
@@ -272,7 +279,24 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       args.push("--add-dir", effectiveWorkspace);
     }
 
-    const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace);
+    let permissionHookServer: ClaudePermissionHookServer | undefined;
+    if (approvalMode === "normal" && input.onApprovalRequest) {
+      permissionHookServer = await startClaudePermissionHookServer(input.onApprovalRequest);
+      const mcpInvocation = resolveClaudePermissionMcpServerInvocation();
+      args.push(
+        "--mcp-config",
+        JSON.stringify(createClaudePermissionMcpConfig({
+          ...mcpInvocation,
+          approvalUrl: permissionHookServer.url,
+        })),
+        "--permission-prompt-tool",
+        CLAUDE_PERMISSION_MCP_TOOL_NAME,
+      );
+    }
+
+    const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace).finally(async () => {
+      await permissionHookServer?.close();
+    });
     const parsed = this.parseResult(result.stdout);
 
     return {

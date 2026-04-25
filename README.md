@@ -31,7 +31,7 @@
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
 
-> **Recommended runtime:** enable YOLO mode for Telegram instances you control: `telegram yolo on --instance <name>`. Telegram is a headless chat surface; without auto-approval, CLI permission prompts can stall until you return to the computer. Use `unsafe` only on a trusted machine and workspace.
+> **Recommended runtime:** enable YOLO mode for hands-free Telegram instances you control: `telegram yolo on --instance <name>`. With YOLO off, the bridge can ask for approval in Telegram instead: Claude approvals are per tool request; Codex approvals are per turn because `codex exec` does not support mid-turn approval callbacks. Use `unsafe` only on a trusted machine and workspace.
 
 ### What Changed Recently
 
@@ -71,6 +71,7 @@ npm run dev -- telegram engine --instance review-bot
 | CLI command | `codex exec --json` | `claude -p --output-format json` |
 | Session resume | `codex exec resume --json <id>` | `claude -p -r <session-id>` |
 | Project instructions | `agent.md` (prepended to prompt) | `agent.md` (via `--system-prompt`) + `CLAUDE.md` (auto-loaded from workspace) |
+| Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts |
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` |
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage |
 | Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) |
@@ -166,7 +167,7 @@ open -e ~/.cctb/work/agent.md
 
 ## YOLO Mode
 
-For normal Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without waiting for interactive CLI approval prompts that you cannot answer from Telegram. Keep `unsafe` for fully trusted local environments only.
+For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the CLI supports a headless path: Claude can approve individual permission prompts; Codex process mode asks once before the turn, then runs the approved turn with `--full-auto`. Keep `unsafe` for fully trusted local environments only.
 
 ```powershell
 npm run dev -- telegram yolo on --instance work      # Safe auto-approve
@@ -177,7 +178,7 @@ npm run dev -- telegram yolo --instance work          # Check status
 
 | Mode | Codex | Claude | Use case |
 |---|---|---|---|
-| `off` | Normal approvals | Normal approvals | Default, safest |
+| `off` | Telegram pre-turn approval | Telegram tool approval | Default, safest |
 | `on` | `--full-auto` | `--permission-mode bypassPermissions` | Mobile use |
 | `unsafe` | `--dangerously-bypass-*` | `--dangerously-skip-permissions` | Trusted env only |
 

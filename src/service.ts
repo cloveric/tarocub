@@ -16,6 +16,7 @@ import { SessionStore } from "./state/session-store.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
 import { TelegramApi } from "./telegram/api.js";
 import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
+import { handleTelegramApprovalCommand } from "./telegram/approval-requests.js";
 import { normalizeUpdate } from "./telegram/update-normalizer.js";
 import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
@@ -921,6 +922,15 @@ export async function processTelegramUpdates(
           outcome: "empty",
         });
         nextOffset = advanceOffset(nextOffset, completedOffset);
+        continue;
+      }
+
+      if (await handleTelegramApprovalCommand({ normalized, api: context.api })) {
+        nextOffset = advanceOffset(nextOffset, completedOffset);
+        if (updateId !== undefined) {
+          await runtimeStateStore.markHandledUpdateId(updateId);
+          lastHandledUpdateId = updateId;
+        }
         continue;
       }
 
