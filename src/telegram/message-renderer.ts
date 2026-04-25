@@ -309,6 +309,63 @@ export function renderUsageMessage(
   ].join("\n");
 }
 
+function stripTrailingUrlPunctuation(value: string): string {
+  return value.replace(/[),.;:!?]+$/g, "");
+}
+
+function extractDiagnosticHttpTarget(detail: string): string | undefined {
+  const match = detail.match(/https?:\/\/[^\s"'<>]+/i);
+  if (!match) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(stripTrailingUrlPunctuation(match[0]));
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return `${parsed.hostname}${parsed.pathname}`.slice(0, 160);
+  } catch {
+    return undefined;
+  }
+}
+
+function inferEngineName(detail: string, target: string | undefined): "Codex" | "Claude" | "Engine" {
+  const normalized = `${detail}\n${target ?? ""}`.toLowerCase();
+  if (normalized.includes("codex")) {
+    return "Codex";
+  }
+  if (normalized.includes("claude")) {
+    return "Claude";
+  }
+  return "Engine";
+}
+
+function renderEngineDiagnosticDetail(detail: string, locale: Locale): string | undefined {
+  const normalized = detail.toLowerCase();
+  const target = extractDiagnosticHttpTarget(detail);
+  const engineName = inferEngineName(detail, target);
+  const isTransportFailure =
+    normalized.includes("stream disconnected") ||
+    normalized.includes("error sending request") ||
+    normalized.includes("fetch failed");
+
+  if (!isTransportFailure) {
+    return undefined;
+  }
+
+  const targetPhrase =
+    target === undefined
+      ? ""
+      : locale === "zh"
+        ? `在调用 ${target} 时`
+        : ` while calling ${target}`;
+
+  return locale === "zh"
+    ? `详情：${engineName} 传输流${targetPhrase}断开。上一轮还没有生成最终回答就失败了；这本身不能说明是浏览器或生图任务失败。`
+    : `Details: ${engineName} transport stream disconnected${targetPhrase}. The previous turn failed before producing a final answer; this does not identify a browser or image-generation task by itself.`;
+}
+
 export function renderCategorizedErrorMessage(category: FailureCategory, detail: string, locale: Locale = "en"): string {
   const normalizedDetail = detail.toLowerCase();
   const isTelegramFormattingError =
@@ -335,7 +392,10 @@ export function renderCategorizedErrorMessage(category: FailureCategory, detail:
         : "错误：Telegram 投递暂时不可用，请稍后重试。";
     }
     if (category === "engine-cli") {
-      return "错误：引擎运行时失败，请重启实例后重试。";
+      return [
+        "错误：引擎运行时失败，请重启实例后重试。",
+        renderEngineDiagnosticDetail(detail, locale),
+      ].filter(Boolean).join("\n");
     }
     if (category === "file-workflow") {
       return "错误：准备请求时文件处理失败，请尝试更小或不同的文件。";
@@ -367,7 +427,10 @@ export function renderCategorizedErrorMessage(category: FailureCategory, detail:
       : "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.";
   }
   if (category === "engine-cli") {
-    return "Error: The engine runtime failed. Restart the instance and retry.";
+    return [
+      "Error: The engine runtime failed. Restart the instance and retry.",
+      renderEngineDiagnosticDetail(detail, locale),
+    ].filter(Boolean).join("\n");
   }
   if (category === "file-workflow") {
     return "Error: File handling failed while preparing your request. Retry with a smaller or different file.";

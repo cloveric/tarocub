@@ -119,6 +119,41 @@ describe("message rendering", () => {
     expect(renderCategorizedErrorMessage("engine-cli", "engine failed to start")).toBe(
       "Error: The engine runtime failed. Restart the instance and retry.",
     );
+    expect(
+      renderCategorizedErrorMessage(
+        "engine-cli",
+        "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+      ),
+    ).toBe(
+      [
+        "Error: The engine runtime failed. Restart the instance and retry.",
+        "Details: Codex transport stream disconnected while calling chatgpt.com/backend-api/codex/responses. The previous turn failed before producing a final answer; this does not identify a browser or image-generation task by itself.",
+      ].join("\n"),
+    );
+    expect(
+      renderCategorizedErrorMessage(
+        "engine-cli",
+        "fetch failed for https://chatgpt.com/backend-api/codex/responses?access_token=secret",
+      ),
+    ).toContain("chatgpt.com/backend-api/codex/responses.");
+    expect(
+      renderCategorizedErrorMessage(
+        "engine-cli",
+        "fetch failed for https://chatgpt.com/backend-api/codex/responses?access_token=secret",
+      ),
+    ).not.toContain("secret");
+    expect(
+      renderCategorizedErrorMessage(
+        "engine-cli",
+        "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+        "zh",
+      ),
+    ).toBe(
+      [
+        "错误：引擎运行时失败，请重启实例后重试。",
+        "详情：Codex 传输流在调用 chatgpt.com/backend-api/codex/responses 时断开。上一轮还没有生成最终回答就失败了；这本身不能说明是浏览器或生图任务失败。",
+      ].join("\n"),
+    );
     expect(renderCategorizedErrorMessage("file-workflow", "archive extraction failed")).toBe(
       "Error: File handling failed while preparing your request. Retry with a smaller or different file.",
     );

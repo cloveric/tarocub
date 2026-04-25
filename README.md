@@ -31,6 +31,8 @@
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
 
+> **Recommended runtime:** enable YOLO mode for Telegram instances you control: `telegram yolo on --instance <name>`. Telegram is a headless chat surface; without auto-approval, CLI permission prompts can stall until you return to the computer. Use `unsafe` only on a trusted machine and workspace.
+
 ### What Changed Recently
 
 - The Telegram runtime was split into smaller modules instead of one giant `delivery.ts`.
@@ -129,7 +131,7 @@ npm run dev -- telegram engine claude --instance reviewer
 # Set personalities
 npm run dev -- telegram instructions set --instance reviewer ./reviewer-instructions.md
 
-# Enable YOLO for mobile use
+# Recommended: enable YOLO for Telegram/mobile use
 npm run dev -- telegram yolo on --instance work
 
 # Start them all
@@ -163,6 +165,8 @@ open -e ~/.cctb/work/agent.md
 ---
 
 ## YOLO Mode
+
+For normal Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without waiting for interactive CLI approval prompts that you cannot answer from Telegram. Keep `unsafe` for fully trusted local environments only.
 
 ```powershell
 npm run dev -- telegram yolo on --instance work      # Safe auto-approve
@@ -582,7 +586,7 @@ npm run dev -- telegram configure <your-bot-token>
 # Optional: switch to Claude engine (default is Codex)
 npm run dev -- telegram engine claude
 
-# Enable YOLO mode for hands-free operation
+# Recommended: enable YOLO mode for hands-free Telegram operation
 npm run dev -- telegram yolo on
 
 # Start the service

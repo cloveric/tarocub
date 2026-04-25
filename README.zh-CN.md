@@ -31,6 +31,8 @@
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
 
+> **推荐运行方式：** 对你自己控制的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。Telegram 是无头聊天界面；如果不开自动审批，CLI 权限确认可能会一直等到你回电脑处理。`unsafe` 只建议在可信机器和可信工作区使用。
+
 ### 最近这波变化
 
 - Telegram 主链路已经拆成更小的模块，不再是一个巨大的 `delivery.ts`。
@@ -128,7 +130,7 @@ npm run dev -- telegram engine claude --instance reviewer
 # 设置人格
 npm run dev -- telegram instructions set --instance reviewer ./reviewer-instructions.md
 
-# 给手机用开启 YOLO
+# 推荐：给 Telegram/手机使用开启 YOLO
 npm run dev -- telegram yolo on --instance work
 
 # 全部启动
@@ -162,6 +164,8 @@ open -e ~/.cctb/work/agent.md
 ---
 
 ## YOLO 模式
+
+正常通过 Telegram 使用时，推荐开启 `telegram yolo on`。这样 Codex/Claude 不会卡在你无法从 Telegram 处理的 CLI 交互审批上。`unsafe` 只适合完全可信的本地环境。
 
 ```bash
 npm run dev -- telegram yolo on --instance work      # 安全自动审批
@@ -566,7 +570,7 @@ npm run dev -- telegram configure <your-bot-token>
 # 可选：切换到 Claude 引擎（默认是 Codex）
 npm run dev -- telegram engine claude
 
-# 开启 YOLO 模式（免确认）
+# 推荐：开启 YOLO 模式（Telegram 无需回电脑确认）
 npm run dev -- telegram yolo on
 
 # 启动服务
