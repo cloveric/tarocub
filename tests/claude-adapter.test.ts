@@ -473,6 +473,40 @@ describe("ProcessClaudeAdapter", () => {
     await expect(promise).rejects.toThrow(/Failed to authenticate/);
   });
 
+  it("surfaces stderr when Claude exits non-zero after stream events without a result", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData([
+      '{"type":"system","subtype":"hook_started","session_id":"session-abc"}',
+      '{"type":"system","subtype":"hook_response","session_id":"session-abc"}',
+    ].join("\n"));
+    child.stderr.emitData("No deferred tool marker found in the resumed session.");
+    child.close(1);
+
+    await expect(promise).rejects.toThrow(/No deferred tool marker found/);
+  });
+
+  it("does not throw an empty error when Claude returns is_error with an empty result", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData('{"type":"result","is_error":true,"result":"","subtype":"error","session_id":"session-abc"}');
+    child.close(0);
+
+    await expect(promise).rejects.toThrow(/Unknown error from Claude CLI/);
+  });
+
   it("inherits CLAUDE_CONFIG_DIR from the parent env so bots track the main CLI", async () => {
     const original = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = "/tmp/claude-shared-test";

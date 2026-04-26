@@ -50,6 +50,8 @@ interface ClaudeJsonResult {
   type?: string;
   subtype?: string;
   is_error?: boolean;
+  api_error_status?: string | number | null;
+  terminal_reason?: string;
   result?: string;
   session_id?: string;
   total_cost_usd?: number;
@@ -162,6 +164,27 @@ function mergeIntermediateDeliveryText(finalResult: string, intermediateDelivery
   }
 
   return appendAssistantText(intermediateDeliveryText, finalResult);
+}
+
+function renderClaudeCliError(json: ClaudeJsonResult, stderr: string): string {
+  const result = json.result?.trim();
+  if (result) {
+    return result;
+  }
+
+  if (stderr) {
+    return stderr;
+  }
+
+  const details = [
+    json.api_error_status ? `api_error_status=${json.api_error_status}` : undefined,
+    json.subtype ? `subtype=${json.subtype}` : undefined,
+    json.terminal_reason ? `terminal_reason=${json.terminal_reason}` : undefined,
+  ].filter(Boolean);
+
+  return details.length > 0
+    ? `Unknown error from Claude CLI (${details.join(", ")})`
+    : "Unknown error from Claude CLI";
 }
 
 function parseClaudeJsonOutput(trimmed: string): ClaudeJsonResult | ClaudeJsonResult[] {
@@ -352,7 +375,10 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace, input.extraEnv).finally(async () => {
       await permissionHookServer?.close();
     });
-    const parsed = this.parseResult(result.stdout);
+    const parsed = this.parseResult(result.stdout, {
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    });
 
     return {
       text: parsed.text,
@@ -361,9 +387,14 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     };
   }
 
-  private parseResult(stdout: string): { text: string; sessionId?: string; usage?: { inputTokens: number; outputTokens: number; cachedTokens?: number; costUsd?: number } } {
+  private parseResult(stdout: string, context: { stderr?: string; exitCode?: number | null } = {}): { text: string; sessionId?: string; usage?: { inputTokens: number; outputTokens: number; cachedTokens?: number; costUsd?: number } } {
     const trimmed = stdout.trim();
+    const stderr = context.stderr?.trim() ?? "";
+    const failedExitCode = context.exitCode !== undefined && context.exitCode !== null && context.exitCode !== 0;
     if (!trimmed) {
+      if (failedExitCode) {
+        throw new Error(stderr || `claude exited with code ${context.exitCode}`);
+      }
       return { text: "Claude returned an empty response." };
     }
 
@@ -376,12 +407,20 @@ export class ProcessClaudeAdapter implements CodexAdapter {
 
       if (Array.isArray(parsed)) {
         if (parsed.length === 0) {
+          if (failedExitCode) {
+            throw new Error(stderr || `claude exited with code ${context.exitCode}`);
+          }
           return { text: "Claude returned an empty response." };
         }
 
+        let sawResultEvent = false;
         for (const item of parsed) {
           if (!item || typeof item !== "object") {
             continue;
+          }
+
+          if (item.type === "result") {
+            sawResultEvent = true;
           }
 
           if (item.session_id) {
@@ -406,6 +445,10 @@ export class ProcessClaudeAdapter implements CodexAdapter {
             (item): item is ClaudeJsonResult => Boolean(item && typeof item === "object"),
           );
         }
+
+        if (!sawResultEvent && failedExitCode) {
+          throw new Error(stderr || `claude exited with code ${context.exitCode}`);
+        }
       } else {
         json = parsed;
         sessionId = parsed.session_id ?? undefined;
@@ -413,11 +456,14 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       }
 
       if (!json) {
+        if (failedExitCode) {
+          throw new Error(stderr || `claude exited with code ${context.exitCode}`);
+        }
         return { text: "Claude returned an empty response.", sessionId };
       }
 
       if (json.is_error) {
-        throw new Error(json.result ?? "Unknown error from Claude CLI");
+        throw new Error(renderClaudeCliError(json, stderr));
       }
 
       const usage = json.usage ? {
@@ -454,7 +500,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     }
   }
 
-  private async runClaudeCommand(args: string[], stdinContent: string, abortSignal?: AbortSignal, cwdOverride?: string, extraEnv?: Record<string, string>): Promise<{ stdout: string; stderr: string }> {
+  private async runClaudeCommand(args: string[], stdinContent: string, abortSignal?: AbortSignal, cwdOverride?: string, extraEnv?: Record<string, string>): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
     const invocation = buildCommandInvocation(this.claudeExecutable, args);
     const child = this.spawnClaude(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -464,12 +510,12 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       windowsHide: true,
     });
 
-    return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+    return await new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
       let stdout = "";
       let stderr = "";
       let settled = false;
 
-      const resolveOnce = (value: { stdout: string; stderr: string }) => {
+      const resolveOnce = (value: { stdout: string; stderr: string; exitCode: number | null }) => {
         if (settled) {
           return;
         }
@@ -514,7 +560,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         // surface the real error message (triggering auth classification
         // and the onAuthRetry path in delivery.ts).
         if (code === 0 || (code !== null && stdout.trim().startsWith("{"))) {
-          resolveOnce({ stdout, stderr });
+          resolveOnce({ stdout, stderr, exitCode: code });
           return;
         }
 
