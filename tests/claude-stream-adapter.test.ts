@@ -176,6 +176,41 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("runs resumed Claude sessions in the selected workspace override", async () => {
+    const { children, calls, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const botWorkspace = path.join(root, "bot-workspace");
+    const resumedWorkspace = path.join(root, "resumed-project");
+
+    try {
+      const adapter = new ClaudeStreamAdapter("claude", {
+        spawnFn,
+        workspacePath: botWorkspace,
+      });
+
+      const resultPromise = adapter.sendUserMessage("session-abc", {
+        text: "Resume",
+        files: [],
+        workspaceOverride: resumedWorkspace,
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      expect(calls[0]?.options.cwd).toBe(resumedWorkspace);
+      expect(calls[0]?.args).toContain("--add-dir");
+      expect(calls[0]?.args).toContain(resumedWorkspace);
+      expect(calls[0]?.args).not.toContain(botWorkspace);
+
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-abc"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"READY","session_id":"session-abc"}\n');
+
+      await expect(resultPromise).resolves.toEqual({
+        text: "READY",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("restarts the worker when instructions or approval mode change", async () => {
     const { children, calls, spawnFn } = createSpawnHarness();
     const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
@@ -279,6 +314,43 @@ describe("ClaudeStreamAdapter", () => {
     children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":true,"result":"Permission denied","session_id":"session-123"}\n');
 
     await expect(resultPromise).rejects.toThrow("Permission denied");
+  });
+
+  it("does not reject with an empty error for empty structured error results", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const resultPromise = adapter.sendUserMessage("telegram-12345", {
+      text: "Fail",
+      files: [],
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"error","is_error":true,"result":"","session_id":"session-123"}\n');
+
+    await expect(resultPromise).rejects.toThrow("Claude reported an error");
+  });
+
+  it("surfaces stderr when Claude stream exits before completing a turn", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const resultPromise = adapter.sendUserMessage("telegram-12345", {
+      text: "Fail",
+      files: [],
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stderr.emitData("No deferred tool marker found in the resumed session.");
+    children[0].close(1);
+
+    await expect(resultPromise).rejects.toThrow(/No deferred tool marker/);
   });
 
   it("routes Claude stdio permission requests through the Telegram approval callback", async () => {

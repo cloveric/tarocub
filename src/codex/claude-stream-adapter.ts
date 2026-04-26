@@ -62,6 +62,8 @@ type ClaudeStreamEvent = {
   session_id?: string;
   result?: string;
   is_error?: boolean;
+  api_error_status?: string | number | null;
+  terminal_reason?: string;
   request_id?: string;
   request?: {
     subtype?: string;
@@ -108,7 +110,9 @@ type PendingTurn = {
 type ClaudeWorker = {
   child: ClaudeChildProcess;
   lineBuffer: string;
+  stderrTail: string;
   currentSessionId: string | null;
+  workspacePath: string | undefined;
   pendingTurn: PendingTurn | null;
   instructions: string | null;
   approvalMode: ApprovalMode;
@@ -118,6 +122,7 @@ type ClaudeWorker = {
 
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
+const MAX_STDERR_TAIL_CHARS = 20_000;
 // No timeout — complex tasks (image generation, large projects) can run indefinitely
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
@@ -251,6 +256,37 @@ function renderPermissionResponse(decision: EngineApprovalDecision, originalInpu
   };
 }
 
+function renderClaudeStreamError(parsed: ClaudeStreamEvent, stderrTail: string): string {
+  const result = parsed.result?.trim();
+  if (result) {
+    return result;
+  }
+
+  const stderr = stderrTail.trim();
+  if (stderr) {
+    return stderr;
+  }
+
+  const details = [
+    parsed.api_error_status ? `api_error_status=${parsed.api_error_status}` : undefined,
+    parsed.subtype ? `subtype=${parsed.subtype}` : undefined,
+    parsed.terminal_reason ? `terminal_reason=${parsed.terminal_reason}` : undefined,
+  ].filter(Boolean);
+
+  return details.length > 0
+    ? `Claude reported an error (${details.join(", ")})`
+    : "Claude reported an error";
+}
+
+function renderClaudeStreamExitError(code: number | null, stderrTail: string): string {
+  const stderr = stderrTail.trim();
+  if (stderr) {
+    return stderr;
+  }
+
+  return `claude stream session exited with code ${code}`;
+}
+
 export class ClaudeStreamAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "generic-file-blocks" as const;
   readonly supportsTurnScopedEnv = false;
@@ -354,7 +390,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const approvalMode = this.configPath ? await this.loadApprovalMode() : "normal";
     const engineOptions = this.configPath ? await this.loadEngineOptions() : {};
     const prompt = this.buildPrompt(input);
-    const worker = this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, engineOptions);
+    const effectiveWorkspace = input.workspaceOverride ?? this.workspacePath;
+    const worker = this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, effectiveWorkspace, engineOptions);
 
     const response = await this.sendTurn(worker, prompt, input);
     const nextSessionId = response.sessionId;
@@ -376,12 +413,17 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     return parts.join("\n");
   }
 
-  private getOrCreateWorker(sessionId: string, agentInstructions: string | null, bridgeInstructions: string | null, approvalMode: ApprovalMode, engineOptions?: { effort?: string; model?: string }): ClaudeWorker {
+  private getOrCreateWorker(sessionId: string, agentInstructions: string | null, bridgeInstructions: string | null, approvalMode: ApprovalMode, workspacePath: string | undefined, engineOptions?: { effort?: string; model?: string }): ClaudeWorker {
     const combinedKey = combineInstructions(agentInstructions, bridgeInstructions);
     const optionsKey = `${engineOptions?.effort ?? ""}:${engineOptions?.model ?? ""}`;
     const existing = this.workers.get(sessionId);
     if (existing) {
-      if (existing.instructions === combinedKey && existing.approvalMode === approvalMode && existing.engineOptionsKey === optionsKey) {
+      if (
+        existing.instructions === combinedKey &&
+        existing.approvalMode === approvalMode &&
+        existing.engineOptionsKey === optionsKey &&
+        existing.workspacePath === workspacePath
+      ) {
         return existing;
       }
 
@@ -416,8 +458,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     if (engineOptions?.model) {
       args.push("--model", engineOptions.model);
     }
-    if (this.workspacePath) {
-      args.push("--add-dir", this.workspacePath);
+    if (workspacePath) {
+      args.push("--add-dir", workspacePath);
     }
 
     const invocation = buildCommandInvocation(this.claudeExecutable, args);
@@ -425,14 +467,16 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
       env: this.childEnv,
-      cwd: this.workspacePath,
+      cwd: workspacePath,
       windowsHide: true,
     });
 
     const worker: ClaudeWorker = {
       child,
       lineBuffer: "",
+      stderrTail: "",
       currentSessionId: isLogicalTelegramSessionId(sessionId) ? null : sessionId,
+      workspacePath,
       pendingTurn: null,
       instructions: combinedKey,
       approvalMode,
@@ -444,8 +488,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       this.handleStdout(worker, chunk.toString());
     });
 
-    child.stderr?.on("data", () => {
+    child.stderr?.on("data", (chunk) => {
       // Claude stream-json emits structured events on stdout; stderr is only used on hard failure.
+      worker.stderrTail = `${worker.stderrTail}${chunk.toString()}`.slice(-MAX_STDERR_TAIL_CHARS);
     });
 
     child.once("error", (error) => {
@@ -453,7 +498,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     });
 
     child.once("close", (code) => {
-      this.failWorker(worker, new Error(`claude stream session exited with code ${code}`));
+      this.failWorker(worker, new Error(renderClaudeStreamExitError(code, worker.stderrTail)));
       this.removeWorker(worker);
     });
 
@@ -554,7 +599,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       if (parsed.is_error) {
         worker.pendingTurn = null;
         this.clearPendingTurnTimeout(pending);
-        pending.reject(new Error((parsed.result ?? pending.assistantText ?? "Claude reported an error").trim()));
+        const detail = parsed.result?.trim() || pending.assistantText.trim() || renderClaudeStreamError(parsed, worker.stderrTail);
+        pending.reject(new Error(detail));
         return;
       }
       const text = parsed.result
@@ -649,6 +695,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         reject,
       };
       worker.pendingTurn = pendingTurn;
+      worker.stderrTail = "";
 
       if (input.abortSignal) {
         const onAbort = () => {
