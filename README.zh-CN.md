@@ -18,15 +18,15 @@
 <h3 align="center">
   把真正的 Codex 和 Claude Code CLI 搬到 Telegram。<br>
   不是 API 封装 — 是原生 CLI，带原生会话、本地文件和真实工具调用。<br>
-  内置可靠文件投递：agent 生成的图片、PDF、PPT 和报告可以在当前 turn 里直接发回 Telegram。
+  从 Telegram 续接电脑上的 Claude session 或 Codex thread，做完再安全 detach 回来。
 </h3>
 
 <p align="center">
-  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、side-channel 文件投递、本地续接、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
+  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
 </p>
 
 <p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件投递</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
@@ -685,8 +685,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   </tr>
   <tr>
     <td>
-      <h3>可靠文件投递</h3>
-      <p>agent 可在当前 Telegram turn 里通过 <code>CCTB_SEND_COMMAND</code> 直接发送生成的图片、PDF、PPT 和报告。bridge 会校验路径、保留 <code>[send-file:]</code> fallback，并在最终扫描前对 stream/side-channel 已投递文件去重。</p>
+      <h3>会话续接</h3>
+      <p><code>/resume</code> 可以接上电脑里的 Claude Code 本地 session；<code>/resume thread &lt;thread-id&gt;</code> 可以绑定已有 Codex thread。手机上继续之前的工作，不丢上下文。</p>
     </td>
     <td>
       <h3>流式进度</h3>
@@ -699,8 +699,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
       <p>一条命令让 AI 自动审批一切 — 双引擎通用，按实例配置，热加载生效。</p>
     </td>
     <td>
-      <h3>手机端友好交付</h3>
-      <p>Telegram 只是控制面，真正的 CLI 仍在你的电脑上工作。最终产物会作为 Telegram 附件发回，而不是只告诉你一个本地路径。</p>
+      <h3>安全脱离</h3>
+      <p><code>/detach</code> 会在可能时回到 /resume 前的旧对话。bridge 指令是每 turn 注入的，不会写回你的本地 Claude 或 Codex session 文件。</p>
     </td>
   </tr>
   <tr>
@@ -729,8 +729,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
       <p>按实例设置费用上限。达到上限时自动拦截请求 — 中英双语提示。</p>
     </td>
     <td>
-      <h3>会话续接</h3>
-      <p><code>/resume</code> 用来扫描 Claude 本地 session；<code>/resume thread &lt;thread-id&gt;</code> 用来绑定已有 Codex thread。<code>/detach</code> 在有旧对话可恢复时会回到 /resume 之前的会话。</p>
+      <h3>文件投递</h3>
+      <p>生成的图片、PDF、PPT 和报告仍可通过每 turn helper 或 <code>[send-file:]</code> fallback 作为 Telegram 附件发回。</p>
     </td>
   </tr>
   <tr>

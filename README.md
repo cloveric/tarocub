@@ -18,15 +18,15 @@
 <h3 align="center">
   Put the real Codex and Claude Code CLI on Telegram.<br>
   Not an API wrapper — the actual CLI, with native sessions, local files, and real tool use.<br>
-  Reliable file delivery included: generated images, PDFs, decks, and reports can be sent directly from the agent turn.
+  Resume your desktop Claude sessions or Codex threads from Telegram, then detach back when you are done.
 </h3>
 
 <p align="center">
-  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, side-channel file delivery, local resume, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
+  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">File Delivery</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
@@ -711,8 +711,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
   </tr>
   <tr>
     <td>
-      <h3>Reliable File Delivery</h3>
-      <p>Agents can send generated images, PDFs, decks, and reports during the active Telegram turn via <code>CCTB_SEND_COMMAND</code>. The bridge validates paths, supports <code>[send-file:]</code> fallback, and de-dupes stream/side-channel files before the final sweep.</p>
+      <h3>Session Resume</h3>
+      <p><code>/resume</code> picks up existing Claude Code local sessions, and <code>/resume thread &lt;thread-id&gt;</code> attaches Codex threads, so you can continue desktop work from Telegram without losing context.</p>
     </td>
     <td>
       <h3>Streaming Progress</h3>
@@ -725,8 +725,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
       <p>Long polling (~0ms latency), exponential backoff, 429 auto-retry, 409 conflict auto-shutdown, graceful SIGTERM/SIGINT, fault-tolerant batch processing.</p>
     </td>
     <td>
-      <h3>Mobile-Friendly Outputs</h3>
-      <p>Use Telegram as the control surface while the real CLI works on your machine. Final artifacts are delivered back as Telegram attachments, not just local paths.</p>
+      <h3>Safe Detach</h3>
+      <p><code>/detach</code> returns to the pre-resume conversation when possible. Bridge instructions are injected per turn and are not written back into your local Claude or Codex session files.</p>
     </td>
   </tr>
   <tr>
@@ -745,8 +745,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
       <p>Set a per-instance cost cap. Requests are blocked when the limit is hit — with bilingual messages.</p>
     </td>
     <td>
-      <h3>Session Resume</h3>
-      <p><code>/resume</code> scans Claude local sessions; <code>/resume thread &lt;thread-id&gt;</code> attaches an existing Codex thread. <code>/detach</code> restores the pre-resume conversation when one exists.</p>
+      <h3>File Delivery</h3>
+      <p>Generated images, PDFs, decks, and reports can still be delivered as Telegram attachments through the per-turn helper or <code>[send-file:]</code> fallback.</p>
     </td>
   </tr>
   <tr>
