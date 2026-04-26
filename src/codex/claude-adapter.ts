@@ -127,6 +127,47 @@ function appendAssistantText(existing: string, next: string): string {
   return existing ? `${existing}\n${next}` : next;
 }
 
+function hasSendFileTag(text: string): boolean {
+  return /\[send-file:[^\]]+\]/.test(text);
+}
+
+function mergeIntermediateDeliveryText(finalResult: string, intermediateDeliveryText: string): string {
+  if (!intermediateDeliveryText || hasSendFileTag(finalResult)) {
+    return finalResult;
+  }
+
+  if (!finalResult) {
+    return intermediateDeliveryText;
+  }
+
+  if (finalResult.includes(intermediateDeliveryText)) {
+    return finalResult;
+  }
+
+  if (intermediateDeliveryText.includes(finalResult)) {
+    return intermediateDeliveryText;
+  }
+
+  return appendAssistantText(intermediateDeliveryText, finalResult);
+}
+
+function parseClaudeJsonOutput(trimmed: string): ClaudeJsonResult | ClaudeJsonResult[] {
+  try {
+    return JSON.parse(trimmed) as ClaudeJsonResult | ClaudeJsonResult[];
+  } catch (jsonError) {
+    const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length <= 1) {
+      throw jsonError;
+    }
+
+    try {
+      return lines.map((line) => JSON.parse(line) as ClaudeJsonResult);
+    } catch {
+      throw jsonError;
+    }
+  }
+}
+
 export class ProcessClaudeAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "generic-file-blocks" as const;
   private readonly childEnv: NodeJS.ProcessEnv;
@@ -239,7 +280,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     const prompt = parts.join("\n");
 
     // Build args
-    const args: string[] = ["-p", "--output-format", "json"];
+    const args: string[] = ["-p", "--output-format", "stream-json"];
 
     // Agent personality from agent.md → --system-prompt
     if (agentInstructions) {
@@ -313,9 +354,10 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     }
 
     try {
-      const parsed = JSON.parse(trimmed) as ClaudeJsonResult | ClaudeJsonResult[];
+      const parsed = parseClaudeJsonOutput(trimmed);
       let json: ClaudeJsonResult | undefined;
       let assistantText = "";
+      let intermediateDeliveryText = "";
       let sessionId: string | undefined;
 
       if (Array.isArray(parsed)) {
@@ -335,6 +377,9 @@ export class ProcessClaudeAdapter implements CodexAdapter {
           const text = getAssistantText(item);
           if (text) {
             assistantText = appendAssistantText(assistantText, text);
+            if (hasSendFileTag(text)) {
+              intermediateDeliveryText = appendAssistantText(intermediateDeliveryText, text);
+            }
           }
 
           if (item.type === "result") {
@@ -372,8 +417,9 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       // tool call (e.g. AskUserQuestion) that can't complete in headless mode.
       // Surface a hint rather than the misleading "completed the request"
       // message we used to return.
-      const finalText = json.result?.trim()
-        ? json.result.trim()
+      const resultText = json.result?.trim() ?? "";
+      const finalText = resultText
+        ? mergeIntermediateDeliveryText(resultText, intermediateDeliveryText)
         : assistantText
           ? assistantText
           : "(The engine produced no visible reply. If this keeps happening, the model may be calling an interactive tool like AskUserQuestion — ask it to reply in plain text instead.)";

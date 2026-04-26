@@ -123,7 +123,7 @@ describe("ProcessClaudeAdapter", () => {
       expect(calls[0]?.args).toEqual([
         "-p",
         "--output-format",
-        "json",
+        "stream-json",
         "--system-prompt",
         "You are a reviewer.",
         "-r",
@@ -275,6 +275,41 @@ describe("ProcessClaudeAdapter", () => {
     await expect(promise).resolves.toEqual({
       text: "Looks good",
       sessionId: "session-123",
+    });
+  });
+
+  it("preserves intermediate Claude send-file tags when the final result only summarizes delivery", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Generate images",
+      files: [],
+    });
+
+    child.stdout.emitData([
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Working on it." }] },
+        session_id: "session-files",
+      },
+      {
+        type: "assistant",
+        message: {
+          content: [{
+            type: "text",
+            text: "Files ready:\n[send-file:/tmp/workspace/01-cover.png]",
+          }],
+        },
+        session_id: "session-files",
+      },
+      { type: "result", result: "Files delivered.", session_id: "session-files" },
+    ].map((event) => JSON.stringify(event)).join("\n"));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({
+      text: "Files ready:\n[send-file:/tmp/workspace/01-cover.png]\nFiles delivered.",
+      sessionId: "session-files",
     });
   });
 
