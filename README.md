@@ -18,11 +18,11 @@
 <h3 align="center">
   Put the real Codex and Claude Code CLI on Telegram.<br>
   Not an API wrapper — the actual CLI, with native sessions, local files, and real tool use.<br>
-  Resume your desktop Claude sessions or Codex threads from Telegram, then detach back when you are done.
+  Resume desktop sessions from Telegram, or run isolated multi-bot teams through Agent Bus.
 </h3>
 
 <p align="center">
-  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
+  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, multi-bot Agent Bus, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
 </p>
 
 <p align="center">
@@ -697,6 +697,16 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     <td width="50%">
       <h3>Per-Bot Personality</h3>
       <p>Each instance loads its own <code>agent.md</code> on every message. Claude instances also get <code>CLAUDE.md</code> project rules.</p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <h3>Multi-Bot Support</h3>
+      <p>Run multiple Telegram bots from one repo. Each instance has its own token, engine, workspace, access rules, session binding, audit trail, and service lifecycle.</p>
+    </td>
+    <td>
+      <h3>Agent Bus</h3>
+      <p>Local bot-to-bot calls enable delegation, fan-out, chains, verification, and coordinator-led crew workflows without mixing each bot's Telegram chat context.</p>
     </td>
   </tr>
   <tr>

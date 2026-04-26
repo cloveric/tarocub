@@ -18,11 +18,11 @@
 <h3 align="center">
   把真正的 Codex 和 Claude Code CLI 搬到 Telegram。<br>
   不是 API 封装 — 是原生 CLI，带原生会话、本地文件和真实工具调用。<br>
-  从 Telegram 续接电脑上的 Claude session 或 Codex thread，做完再安全 detach 回来。
+  既能从 Telegram 续接电脑会话，也能用 Agent Bus 跑隔离的多 bot 团队。
 </h3>
 
 <p align="center">
-  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
+  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、多 bot Agent Bus、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
 </p>
 
 <p align="center">
@@ -681,6 +681,16 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     <td width="50%">
       <h3>独立人格</h3>
       <p>每个实例加载自己的 <code>agent.md</code>。Claude 实例还支持 <code>CLAUDE.md</code> 项目规则。</p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <h3>多 Bot 支持</h3>
+      <p>一个仓库可以跑多个 Telegram bot。每个实例都有自己的 token、引擎、工作区、访问规则、会话绑定、审计日志和服务生命周期。</p>
+    </td>
+    <td>
+      <h3>Agent Bus</h3>
+      <p>本地 bot-to-bot 调用支持委托、并行 fan-out、链式执行、验证和 coordinator 主导的 crew workflow，同时不会把各 bot 的 Telegram 聊天上下文混在一起。</p>
     </td>
   </tr>
   <tr>
