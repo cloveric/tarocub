@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -255,11 +255,15 @@ export class ProcessCodexAdapter implements CodexAdapter {
   }
 
   async validateExternalSession(sessionId: string): Promise<void> {
-    const sessionIndexPath = path.join(this.resolveCodexHome(), "session_index.jsonl");
+    const codexHome = this.resolveCodexHome();
+    const sessionIndexPath = path.join(codexHome, "session_index.jsonl");
     let raw: string;
     try {
       raw = await readFile(sessionIndexPath, "utf8");
     } catch {
+      if (await this.hasLocalRolloutFile(codexHome, sessionId)) {
+        return;
+      }
       throw new Error(`codex process could not resume thread ${sessionId}`);
     }
 
@@ -274,7 +278,39 @@ export class ProcessCodexAdapter implements CodexAdapter {
       }
     }
 
+    if (await this.hasLocalRolloutFile(codexHome, sessionId)) {
+      return;
+    }
+
     throw new Error(`codex process could not resume thread ${sessionId}`);
+  }
+
+  private async hasLocalRolloutFile(codexHome: string, sessionId: string): Promise<boolean> {
+    const pending = [
+      path.join(codexHome, "sessions"),
+      path.join(codexHome, "archived_sessions"),
+    ];
+
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      try {
+        const entries = await readdir(current, { withFileTypes: true, encoding: "utf8" });
+        for (const entry of entries) {
+          const entryPath = path.join(current, entry.name);
+          if (entry.isDirectory()) {
+            pending.push(entryPath);
+            continue;
+          }
+          if (entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(`-${sessionId}.jsonl`)) {
+            return true;
+          }
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return false;
   }
 
   private async loadApprovalMode(): Promise<ApprovalMode> {

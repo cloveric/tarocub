@@ -284,6 +284,50 @@ describe("ProcessCodexAdapter", () => {
     }
   });
 
+  it("validates external sessions against local Codex rollout files when the index is stale", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-session-files-"));
+    const codexHome = path.join(root, ".codex");
+    try {
+      await mkdir(path.join(codexHome, "sessions", "2026", "04", "13"), { recursive: true });
+      await writeFile(
+        path.join(codexHome, "sessions", "2026", "04", "13", "rollout-2026-04-13T19-36-23-thread-abc.jsonl"),
+        "{}\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(codexHome, "session_index.jsonl"),
+        JSON.stringify({ id: "thread-other", thread_name: "Other thread" }) + "\n",
+        "utf8",
+      );
+      const adapter = new ProcessCodexAdapter("codex", { CODEX_HOME: codexHome });
+
+      await expect(adapter.validateExternalSession("thread-abc")).resolves.toBeUndefined();
+      await expect(adapter.validateExternalSession("thread-missing")).rejects.toThrow(
+        "codex process could not resume thread thread-missing",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("validates external sessions against archived Codex rollout files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-archived-session-files-"));
+    const codexHome = path.join(root, ".codex");
+    try {
+      await mkdir(path.join(codexHome, "archived_sessions"), { recursive: true });
+      await writeFile(
+        path.join(codexHome, "archived_sessions", "rollout-2026-04-19T16-09-28-thread-archived.jsonl"),
+        "{}\n",
+        "utf8",
+      );
+      const adapter = new ProcessCodexAdapter("codex", { CODEX_HOME: codexHome });
+
+      await expect(adapter.validateExternalSession("thread-archived")).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns a newly created thread id on the first real user message", async () => {
     const { spawnCodex, child } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);
