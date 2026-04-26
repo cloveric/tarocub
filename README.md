@@ -39,6 +39,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.3.8** — documents the current file-delivery contract: prefer the per-turn `CCTB_SEND_COMMAND` side-channel, keep `[send-file:]` only as fallback, and de-dupe stream/side-channel deliveries against the final `.telegram-out` sweep.
 - **v4.3.3** — refines Telegram diagnostics: copied example send-file paths are classified as placeholders case-insensitively, and engine transport errors now use the current instance engine instead of guessing from the error text.
 - **v4.3.2** — tightens Telegram runtime state handling across both runtimes: Codex now defaults to the simpler process runtime, stale telegram-out outputs and engine/session mismatches are fenced off, and the remaining app-server shared-turn edge cases are hardened for optional use.
 - **v4.3.1** — preserves pending pairing codes when single-chat mode blocks redemption, refuses to turn multi-chat off while another chat is still pending pairing, and makes service startup/runtime config parsing use the same validated config reader.
@@ -176,7 +177,16 @@ During each active Telegram turn, the bridge injects a short-lived local send he
 "$CCTB_SEND_COMMAND" --message "Done" --file /absolute/path/to/report.pdf
 ```
 
-This works for the default Codex and Claude process runtimes. The helper posts only file paths to a one-turn localhost endpoint; the bridge still validates that files live under the instance workspace or the `/resume` project before sending them to Telegram. The older `[send-file:/absolute/path]` tag remains as a fallback when the helper is unavailable.
+Current delivery contract:
+
+- Prefer `CCTB_SEND_COMMAND` for existing files, images, PDFs, decks, and other binary outputs. Wait for the command to exit; do not run it in the background.
+- Use `[send-file:/absolute/path]` only as fallback when the helper is unavailable or fails.
+- Small text/code files can still use the `file:name.ext` fenced-block form.
+- The helper is scoped to one Telegram turn. It will not work after the turn finishes.
+- The bridge validates that every file lives under the instance workspace or the active `/resume` project before sending it.
+- If a file was already sent by stream delivery or the side-channel helper, the final `.telegram-out` sweep skips that same real path to avoid duplicate Telegram attachments.
+
+This works for the default Codex and Claude process runtimes. For long file-producing tasks, the agent should keep the turn open until the requested deliverable set is complete, send the files, then finish the turn instead of sleeping, polling, or promising a later notification.
 
 ---
 

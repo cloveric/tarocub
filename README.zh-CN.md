@@ -39,6 +39,7 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.3.8** — 补充当前文件投递约定：优先使用每 turn 注入的 `CCTB_SEND_COMMAND` side-channel，`[send-file:]` 只作为 fallback，并且 stream/side-channel 已投递文件会和最终 `.telegram-out` 扫描去重。
 - **v4.3.3** — 细化 Telegram 诊断：复制出来的示例 send-file 路径会按大小写不敏感方式识别为占位路径；engine transport 错误也改为使用当前实例引擎，而不是只靠错误文本猜。
 - **v4.3.2** — 继续收紧 Telegram 运行时状态边界：Codex 默认改走更稳定的 process runtime，旧 telegram-out 产物和引擎/会话错配会被挡住，可选 app-server 路径剩余的共享 turn 边角问题也补齐了防护。
 - **v4.3.1** — 单聊模式下如果配对兑换被拦，不再吞掉 pending pairing code；有其他挂起配对时也不能直接关回 multi-chat；并且 service 启动与运行时的配置解析统一走同一个校验读取路径。
@@ -175,7 +176,16 @@ open -e ~/.cctb/work/agent.md
 "$CCTB_SEND_COMMAND" --message "Done" --file /absolute/path/to/report.pdf
 ```
 
-当前默认的 Codex 和 Claude process runtime 都支持。helper 只把文件路径 POST 到本 turn 的 localhost 端点；bridge 仍会校验文件必须位于实例工作区或 `/resume` 指定项目目录下，才会真正发到 Telegram。旧的 `[send-file:/absolute/path]` 标签仍然保留，作为 helper 不可用时的 fallback。
+当前投递约定：
+
+- 已存在的文件、图片、PDF、PPT、二进制产物，优先用 `CCTB_SEND_COMMAND`。必须等待命令退出，不要后台运行。
+- 只有 helper 不可用或失败时，才用 `[send-file:/absolute/path]` 作为 fallback。
+- 小型文本/代码文件仍可用 `file:name.ext` fenced-block 形式返回。
+- helper 只在当前 Telegram turn 有效，turn 结束后不能再用。
+- bridge 会校验每个文件必须位于实例工作区或当前 `/resume` 项目目录下，才会真正发送。
+- 如果某个文件已经通过 stream delivery 或 side-channel helper 发过，最终 `.telegram-out` 扫描会按真实路径跳过它，避免 Telegram 重复附件。
+
+当前默认的 Codex 和 Claude process runtime 都支持。长时间生成文件的任务里，agent 应该等当前这批交付物完成后立刻发送文件并结束 turn，不要继续睡眠、轮询、做可选 QA，或承诺稍后通知。
 
 ---
 
