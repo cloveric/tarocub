@@ -313,6 +313,74 @@ describe("ProcessClaudeAdapter", () => {
     });
   });
 
+  it("preserves intermediate send-file tags that are not repeated in the final result", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Generate two images",
+      files: [],
+    });
+
+    child.stdout.emitData([
+      {
+        type: "assistant",
+        message: {
+          content: [{
+            type: "text",
+            text: "First file ready:\n[send-file:/tmp/workspace/01-cover.png]",
+          }],
+        },
+        session_id: "session-files",
+      },
+      {
+        type: "result",
+        result: "Second file ready:\n[send-file:/tmp/workspace/02-core.png]",
+        session_id: "session-files",
+      },
+    ].map((event) => JSON.stringify(event)).join("\n"));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({
+      text: "First file ready:\n[send-file:/tmp/workspace/01-cover.png]\nSecond file ready:\n[send-file:/tmp/workspace/02-core.png]",
+      sessionId: "session-files",
+    });
+  });
+
+  it("does not duplicate intermediate send-file tags already present in the final result", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Generate one image",
+      files: [],
+    });
+
+    child.stdout.emitData([
+      {
+        type: "assistant",
+        message: {
+          content: [{
+            type: "text",
+            text: "File ready:\n[send-file:/tmp/workspace/01-cover.png]",
+          }],
+        },
+        session_id: "session-files",
+      },
+      {
+        type: "result",
+        result: "File ready:\n[send-file:/tmp/workspace/01-cover.png]",
+        session_id: "session-files",
+      },
+    ].map((event) => JSON.stringify(event)).join("\n"));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({
+      text: "File ready:\n[send-file:/tmp/workspace/01-cover.png]",
+      sessionId: "session-files",
+    });
+  });
+
   it("falls back to visible assistant text when the result event is empty", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter("claude", { spawnFn });

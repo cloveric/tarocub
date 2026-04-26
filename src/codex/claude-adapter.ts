@@ -131,8 +131,12 @@ function hasSendFileTag(text: string): boolean {
   return /\[send-file:[^\]]+\]/.test(text);
 }
 
+function extractSendFileTags(text: string): string[] {
+  return Array.from(text.matchAll(/\[send-file:[^\]]+\]/g), (match) => match[0]);
+}
+
 function mergeIntermediateDeliveryText(finalResult: string, intermediateDeliveryText: string): string {
-  if (!intermediateDeliveryText || hasSendFileTag(finalResult)) {
+  if (!intermediateDeliveryText) {
     return finalResult;
   }
 
@@ -146,6 +150,15 @@ function mergeIntermediateDeliveryText(finalResult: string, intermediateDelivery
 
   if (intermediateDeliveryText.includes(finalResult)) {
     return intermediateDeliveryText;
+  }
+
+  const finalSendFileTags = new Set(extractSendFileTags(finalResult));
+  const intermediateSendFileTags = extractSendFileTags(intermediateDeliveryText);
+  if (
+    intermediateSendFileTags.length > 0 &&
+    intermediateSendFileTags.every((tag) => finalSendFileTags.has(tag))
+  ) {
+    return finalResult;
   }
 
   return appendAssistantText(intermediateDeliveryText, finalResult);
@@ -418,6 +431,8 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       // Surface a hint rather than the misleading "completed the request"
       // message we used to return.
       const resultText = json.result?.trim() ?? "";
+      // Claude stream-json can emit [send-file:] tags in intermediate assistant
+      // messages while the final result only summarizes delivery.
       const finalText = resultText
         ? mergeIntermediateDeliveryText(resultText, intermediateDeliveryText)
         : assistantText
