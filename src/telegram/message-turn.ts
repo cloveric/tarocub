@@ -108,6 +108,34 @@ function hasSendFileTag(text: string): boolean {
   return /\[send-file:[^\]]+\]/.test(text);
 }
 
+const DEFERRED_DELIVERY_REPLY_PATTERNS = [
+  /等(?:待)?[\s\S]{0,16}通知/i,
+  /(?:batch|批量|后台)[\s\S]{0,32}(?:通知|notify|notification)/i,
+  /(?:wait|waiting)[\s\S]{0,24}(?:notify|notification|batch)/i,
+  /(?:notify you|will notify|i'll notify)[\s\S]{0,24}(?:later|when|once)?/i,
+];
+
+function isDeferredDeliveryReply(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized || hasSendFileTag(normalized)) {
+    return false;
+  }
+  return DEFERRED_DELIVERY_REPLY_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function buildDeferredDeliveryRepairPrompt(previousText: string): string {
+  return [
+    "[Bridge delivery repair]",
+    "Your previous reply ended the Telegram turn by promising a later notification for requested deliverables:",
+    previousText.trim(),
+    "",
+    "That is not valid in this Telegram bridge. Do not send that reply to the user.",
+    "Continue the current task now. If a background command is still creating requested deliverables, wait for it or check it until it completes or fails.",
+    "When the requested deliverable set is ready, deliver the files with the active side-channel send command or [send-file:] fallback.",
+    "If the deliverables cannot be completed, report the failure or what is incomplete. Do not promise a later notification.",
+  ].join("\n");
+}
+
 function extractSendFilePaths(text: string): string[] {
   return Array.from(text.matchAll(/\[send-file:([^\]]+)\]/g), (match) => match[1]?.trim())
     .filter((value): value is string => Boolean(value));
@@ -437,14 +465,18 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   let streamDeliveriesSettled = false;
   let turnError: unknown;
   try {
-    result = await context.bridge.handleAuthorizedMessage({
+    const runEngineTurn = async (input: {
+      text: string;
+      files: string[];
+      replyContext?: NormalizedTelegramMessage["replyContext"];
+    }) => await context.bridge.handleAuthorizedMessage({
       chatId: normalized.chatId,
       userId: normalized.userId,
       chatType: normalized.chatType,
       locale,
-      text: requestText,
-      replyContext,
-      files: requestFiles,
+      text: input.text,
+      replyContext: input.replyContext,
+      files: input.files,
       onApprovalRequest: context.onApprovalRequest,
       onEngineEvent: handleEngineEvent,
       requestOutputDir: state.telegramOutDirPath,
@@ -454,7 +486,42 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       abortSignal: context.abortSignal,
     });
 
+    result = await runEngineTurn({
+      text: requestText,
+      replyContext,
+      files: requestFiles,
+    });
     await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+
+    for (let repairAttempt = 1; repairAttempt <= 2 && isDeferredDeliveryReply(result.text); repairAttempt += 1) {
+      await appendTimelineEventBestEffort(stateDir, {
+        type: "turn.retried",
+        instanceName: context.instanceName,
+        channel: "telegram",
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "retry",
+        detail: "deferred delivery repair",
+        metadata: {
+          repairAttempt,
+          responseChars: result.text.length,
+        },
+      });
+      result = await runEngineTurn({
+        text: buildDeferredDeliveryRepairPrompt(result.text),
+        files: [],
+        replyContext: undefined,
+      });
+      await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+    }
+
+    if (isDeferredDeliveryReply(result.text)) {
+      state.failureHint = locale === "zh"
+        ? "引擎提前结束了仍在生成交付物的任务。bridge 已阻止发送“等通知”式回复，请重试或继续追问当前任务。"
+        : "The engine ended a deliverable-generating task with a later-notification reply. The bridge blocked that reply; retry or continue the current task.";
+      throw new Error("Engine returned a deferred delivery notification instead of completing deliverables");
+    }
 
     await Promise.allSettled(streamDeliveryPromises);
     streamDeliveriesSettled = true;

@@ -375,6 +375,81 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("repairs deferred delivery replies before sending them to Telegram", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const generatedPath = path.join(root, "workspace", "final.png");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockResolvedValueOnce({
+          text: "跑到 7/9，P8 在生成中。还差 P8 + P9，应该 2 分钟左右。等 batch 通知。",
+        })
+        .mockResolvedValueOnce({
+          text: `Done\n[send-file:${generatedPath}]`,
+        }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(1);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "zh",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("好了吗"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "bot2",
+          updateId: 103,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        text: expect.stringContaining("Bridge delivery repair"),
+        files: [],
+        replyContext: undefined,
+      }));
+      expect(deliverTelegramResponse).toHaveBeenCalledTimes(1);
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        `Done\n[send-file:${generatedPath}]`,
+        expect.any(String),
+        undefined,
+        undefined,
+        "zh",
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.retried",
+        outcome: "retry",
+        detail: "deferred delivery repair",
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("waits for stream deliveries to settle when the engine turn fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {
