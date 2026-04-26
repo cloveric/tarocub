@@ -131,4 +131,29 @@ describe("telegram-out", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("prunes stale cctb-send helper directories in a resume workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const resumeWorkspace = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-resume-"));
+    const helperRoot = path.join(resumeWorkspace, ".cctb-send");
+    const staleDir = path.join(helperRoot, "req-stale");
+    const freshDir = path.join(helperRoot, "req-fresh");
+
+    try {
+      await mkdir(staleDir, { recursive: true });
+      await mkdir(freshDir, { recursive: true });
+      const now = new Date();
+      const staleAt = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
+      const freshAt = new Date(now.getTime() - 60 * 60 * 1000);
+      await utimes(staleDir, staleAt, staleAt);
+      await utimes(freshDir, freshAt, freshAt);
+
+      await pruneStaleCctbSendDirs(root, "req-new", resumeWorkspace);
+
+      await expect(readdir(helperRoot)).resolves.toEqual(["req-fresh"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(resumeWorkspace, { recursive: true, force: true });
+    }
+  });
 });

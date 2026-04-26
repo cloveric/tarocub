@@ -407,10 +407,10 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       requestOutputDir: state.telegramOutDirPath,
       locale,
     });
-    await pruneStaleCctbSendDirs(stateDir, requestId);
     const helperRoot = cfg.resume?.workspacePath
       ? path.join(cfg.resume.workspacePath, ".cctb-send", requestId)
       : resolveCctbSendDir(stateDir, requestId);
+    await pruneStaleCctbSendDirs(stateDir, requestId, cfg.resume?.workspacePath);
     sideChannelCommand = await createSideChannelSendHelper(helperRoot, undefined, {
       CCTB_SEND_URL: sideChannel.url,
       CCTB_SEND_TOKEN: sideChannel.token,
@@ -429,6 +429,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     sideChannelEnv = undefined;
   }
 
+  let streamDeliveriesSettled = false;
   try {
     result = await context.bridge.handleAuthorizedMessage({
       chatId: normalized.chatId,
@@ -450,6 +451,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
 
     await Promise.allSettled(streamDeliveryPromises);
+    streamDeliveriesSettled = true;
     deliveredText = stripDeliveredStreamTextFragments(
       stripAlreadySentSideChannelTags(result.text, getAlreadyDeliveredFilePaths()),
       streamDeliveredTextFragments,
@@ -464,6 +466,9 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       locale,
     );
   } finally {
+    if (!streamDeliveriesSettled) {
+      await Promise.allSettled(streamDeliveryPromises);
+    }
     await sideChannel?.close().catch(() => {});
   }
 

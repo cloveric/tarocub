@@ -192,6 +192,67 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("prunes side-channel helper directories under the resume workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const resumeWorkspace = path.join(root, "resumed-project");
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const pruneStaleCctbSendDirs = vi.fn().mockResolvedValue(undefined);
+    const createSideChannelSendHelper = vi.fn().mockResolvedValue(path.join(resumeWorkspace, ".cctb-send", "helper"));
+    const close = vi.fn().mockResolvedValue(undefined);
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: "final response",
+      }),
+    };
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex", resume: { workspacePath: resumeWorkspace } },
+        normalized: createNormalizedMessage("hello"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        pruneStaleCctbSendDirs,
+        startSideChannelSendServer: vi.fn().mockResolvedValue({
+          url: "http://127.0.0.1:12345/send/token",
+          token: "token",
+          getSentFilePaths: () => [],
+          close,
+        }),
+        createSideChannelSendHelper,
+        deliverTelegramResponse: vi.fn().mockResolvedValue(0),
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(pruneStaleCctbSendDirs).toHaveBeenCalledWith(root, expect.any(String), resumeWorkspace);
+      const helperRoot = createSideChannelSendHelper.mock.calls[0]?.[0] as string;
+      expect(helperRoot).toContain(path.join(resumeWorkspace, ".cctb-send"));
+      expect(createSideChannelSendHelper).toHaveBeenCalledWith(helperRoot, undefined, expect.any(Object));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("delivers stream send-file events before final turn delivery and strips duplicate final tags", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {
@@ -310,6 +371,88 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       ]));
     } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for stream deliveries to settle when the engine turn fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const generatedPath = path.join(root, "workspace", "chart.png");
+    let resolveDelivery: () => void = () => {};
+    const deliverySettled = new Promise<void>((resolve) => {
+      resolveDelivery = resolve;
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
+        input.onEngineEvent?.({
+          type: "assistant_text",
+          text: `Generated chart.\n[send-file:${generatedPath}]`,
+        });
+        throw new Error("engine failed");
+      }),
+    };
+    type DeliverTelegramResponse = Parameters<typeof executeWorkflowAwareTelegramTurn>[0]["deliverTelegramResponse"];
+    const deliverTelegramResponse = vi.fn(async (
+      ...args: Parameters<DeliverTelegramResponse>
+    ) => {
+      const text = args[2];
+      const options = args[7];
+      if (text.includes("[send-file:")) {
+        options?.onFileAccepted?.(generatedPath);
+      }
+      await deliverySettled;
+      return 1;
+    }) as DeliverTelegramResponse;
+
+    try {
+      const turn = executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("make chart"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 100,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+      let settled = false;
+      turn.catch(() => {
+        settled = true;
+      });
+
+      await vi.waitFor(() => {
+        expect(deliverTelegramResponse).toHaveBeenCalled();
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(settled).toBe(false);
+
+      resolveDelivery();
+      await expect(turn).rejects.toThrow("engine failed");
+    } finally {
+      resolveDelivery();
       await rm(root, { recursive: true, force: true });
     }
   });

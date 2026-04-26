@@ -5,3 +5,4 @@ dist/
 coverage/
 .codex-state/
 .worktrees/
+.cctb-send/

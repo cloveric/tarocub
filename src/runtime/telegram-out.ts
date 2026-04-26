@@ -71,8 +71,11 @@ async function pruneStaleTelegramOutDirs(rootDir: string, preserveRequestId: str
   await pruneStaleRequestDirs(rootDir, preserveRequestId);
 }
 
-export async function pruneStaleCctbSendDirs(stateDir: string, preserveRequestId: string): Promise<void> {
+export async function pruneStaleCctbSendDirs(stateDir: string, preserveRequestId: string, workspacePath?: string): Promise<void> {
   await pruneStaleRequestDirs(path.dirname(resolveCctbSendDir(stateDir, preserveRequestId)), preserveRequestId);
+  if (workspacePath) {
+    await pruneStaleRequestDirs(path.join(workspacePath, ".cctb-send"), preserveRequestId);
+  }
 }
 
 export async function createTelegramOutDir(stateDir: string, requestId: string): Promise<TelegramOutRequest> {
