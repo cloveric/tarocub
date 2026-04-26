@@ -1,5 +1,8 @@
+import path from "node:path";
+
 import { runCli } from "./commands/cli.js";
 import { acquireInstanceLock } from "./state/instance-lock.js";
+import { RuntimeStateStore } from "./state/runtime-state.js";
 import { resolveConfig } from "./config.js";
 import {
   createServiceDependencies,
@@ -100,6 +103,8 @@ async function main(): Promise<void> {
     const shutdownSigint = () => shutdown("SIGINT");
     process.once("SIGTERM", shutdownSigterm);
     process.once("SIGINT", shutdownSigint);
+
+    await new RuntimeStateStore(path.join(serviceConfig.stateDir, "runtime-state.json")).resetActiveTurns();
 
     const { api, bridge, config } = await createServiceDependencies(resolvedEnv);
     await registerBotCommands(api);

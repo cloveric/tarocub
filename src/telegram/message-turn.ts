@@ -115,7 +115,7 @@ const DEFERRED_DELIVERY_REPLY_PATTERNS = [
   /(?:notify you|will notify|i'll notify)[\s\S]{0,24}(?:later|when|once)?/i,
 ];
 const EXPLANATORY_DEFERRED_DELIVERY_CONTEXT_PATTERN =
-  /(?:出现类似|类似|例如|比如|不要|不能|不会|不是|不应该|拦截|机制|解释|prompt|bridge|repair|example|quote|quoted|do not|don't|not valid)/i;
+  /(?:出现类似|类似|例如|比如|不要|不能|不会|不是|不应该|拦截|机制|解释|截图|错误行为|根因|prompt|bridge|repair|example|quote|quoted|do not|don't|not valid)/i;
 
 function isDeferredDeliveryReply(text: string): boolean {
   const normalized = text.trim();

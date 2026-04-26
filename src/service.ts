@@ -1006,6 +1006,7 @@ export async function processTelegramUpdates(
       const queuedRun = chatQueue.enqueue(normalized.chatId, async () => {
         const taskController = new AbortController();
         activeTasks.set(normalized.chatId, taskController);
+        await runtimeStateStore.markTurnStarted();
         try {
           await handleNormalizedTelegramMessage(effectiveNormalized, {
             ...context,
@@ -1020,6 +1021,7 @@ export async function processTelegramUpdates(
           });
         } finally {
           activeTasks.delete(normalized.chatId);
+          await runtimeStateStore.markTurnCompleted();
         }
       });
       queuedCompletions.push({

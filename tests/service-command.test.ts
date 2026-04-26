@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -111,6 +111,65 @@ describe("telegram service commands", () => {
       expect(handled).toBe(true);
       expect(messages).toEqual(['Started instance "alpha" with pid 22222.']);
       expect(sleepCalls).toBeGreaterThan(0);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears stale active-turn state when starting a fresh instance", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+    const runtimeStatePath = path.join(stateDir, "runtime-state.json");
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        runtimeStatePath,
+        JSON.stringify({
+          lastHandledUpdateId: 42,
+          activeTurnCount: 1,
+          activeTurnStartedAt: "2026-04-27T00:00:00.000Z",
+          activeTurnUpdatedAt: "2026-04-27T00:01:00.000Z",
+        }),
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "service", "start", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          spawnDetached: () => {
+            writeFileSync(
+              lockPath,
+              JSON.stringify({
+                pid: 12345,
+                token: "token",
+                acquiredAt: new Date().toISOString(),
+              }),
+              "utf8",
+            );
+          },
+          sleep: async () => {},
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual(['Started instance "alpha" with pid 12345.']);
+      await expect(readFile(runtimeStatePath, "utf8").then((raw) => JSON.parse(raw))).resolves.toMatchObject({
+        lastHandledUpdateId: 42,
+        activeTurnCount: 0,
+      });
+      const state = JSON.parse(await readFile(runtimeStatePath, "utf8")) as {
+        activeTurnStartedAt?: string;
+        activeTurnUpdatedAt?: string;
+      };
+      expect(state.activeTurnStartedAt).toBeUndefined();
+      expect(state.activeTurnUpdatedAt).toBeUndefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1237,6 +1296,50 @@ describe("telegram service commands", () => {
       expect(killProcessTree).toHaveBeenCalledWith(54321);
       expect(spawnDetached).toHaveBeenCalledTimes(1);
       expect(messages).toEqual(['Started instance "default" with pid 12345.']);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to restart an instance while a Telegram turn is active unless forced", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, ".cctb", "default");
+    const lockPath = resolveInstanceLockPath(stateDir);
+    const killProcessTree = vi.fn();
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 54321,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+      await writeFile(
+        path.join(stateDir, "runtime-state.json"),
+        JSON.stringify({
+          lastHandledUpdateId: null,
+          activeTurnCount: 1,
+          activeTurnStartedAt: "2026-04-27T00:00:00.000Z",
+          activeTurnUpdatedAt: new Date().toISOString(),
+        }),
+      );
+
+      await expect(runCli(["telegram", "service", "restart"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: vi.fn() },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 54321,
+          isExpectedServiceProcess: (pid) => pid === 54321,
+          killProcessTree,
+          sleep: async () => {},
+        },
+      })).rejects.toThrow('Instance "default" has 1 active Telegram turn');
+
+      expect(killProcessTree).not.toHaveBeenCalled();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

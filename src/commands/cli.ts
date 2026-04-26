@@ -93,6 +93,19 @@ function extractInstanceOption(argv: string[]): { instanceName: string; args: st
   return { instanceName, args };
 }
 
+function extractBooleanFlag(argv: string[], flag: string): { enabled: boolean; args: string[] } {
+  let enabled = false;
+  const args: string[] = [];
+  for (const argument of argv) {
+    if (argument === flag) {
+      enabled = true;
+      continue;
+    }
+    args.push(argument);
+  }
+  return { enabled, args };
+}
+
 function parseConfigureCommand(argv: string[]): { instanceName: string; botToken: string } {
   if (argv.length === 2) {
     return { instanceName: "default", botToken: argv[1] };
@@ -719,10 +732,11 @@ async function runServiceCommand(
   }
 
   const subcommand = argv[1];
-  const { instanceName, args } = extractInstanceOption(argv.slice(2));
+  const { instanceName, args: rawArgs } = extractInstanceOption(argv.slice(2));
+  const { enabled: force, args } = extractBooleanFlag(rawArgs, "--force");
 
   if (subcommand !== "logs" && args.length !== 0) {
-    throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> [--instance <name>]");
+    throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> [--instance <name>] [--force]");
   }
 
   if (subcommand === "start") {
@@ -731,12 +745,12 @@ async function runServiceCommand(
   }
 
   if (subcommand === "stop") {
-    logger.log(await stopServiceInstance(env, instanceName, serviceDeps));
+    logger.log(await stopServiceInstance(env, instanceName, serviceDeps, { force }));
     return true;
   }
 
   if (subcommand === "restart") {
-    await stopServiceInstance(env, instanceName, serviceDeps);
+    await stopServiceInstance(env, instanceName, serviceDeps, { force });
     logger.log(await startServiceInstance(env, instanceName, serviceDeps));
     return true;
   }

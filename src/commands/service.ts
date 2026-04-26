@@ -7,6 +7,7 @@ import { resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { normalizeInstanceName } from "../instance.js";
 import { resolveInstanceLockPath, type InstanceLockRecord } from "../state/instance-lock.js";
 import { InstanceLockRecordSchema } from "../state/instance-lock-schema.js";
+import { RuntimeStateSchema } from "../state/runtime-state-schema.js";
 import { AccessStore } from "../state/access-store.js";
 import {
   getLatestFailure,
@@ -134,6 +135,7 @@ export interface ServiceDoctorResult {
 
 const BLOCKING_WORKFLOW_STATUSES = new Set(["preparing", "processing", "failed"]);
 const LEGACY_AUTOSTART_LABEL_PREFIX = "com.cloveric.cc-telegram-bridge.";
+const ACTIVE_TURN_STALE_MS = 6 * 60 * 60_000;
 
 function resolveHomeDir(env: Pick<ServiceCommandEnv, "HOME" | "USERPROFILE">): string {
   const homeDir = env.HOME ?? env.USERPROFILE;
@@ -409,6 +411,73 @@ async function readLastNonEmptyLine(filePath: string): Promise<string | undefine
   }
 }
 
+async function readRuntimeActivity(
+  stateDir: string,
+  deps: Pick<ServiceCommandDeps, "readTextFile"> = {},
+): Promise<{
+  activeTurnCount: number;
+  activeTurnStartedAt?: string;
+  activeTurnUpdatedAt?: string;
+  stale: boolean;
+}> {
+  const runtimeStatePath = path.join(stateDir, "runtime-state.json");
+  let raw: string;
+  try {
+    raw = deps.readTextFile
+      ? await deps.readTextFile(runtimeStatePath)
+      : await readFile(runtimeStatePath, "utf8");
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return { activeTurnCount: 0, stale: false };
+    }
+    throw error;
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { activeTurnCount: 0, stale: false };
+  }
+
+  const parsed = RuntimeStateSchema.safeParse(value);
+  if (!parsed.success) {
+    return { activeTurnCount: 0, stale: false };
+  }
+
+  const updatedAt = parsed.data.activeTurnUpdatedAt ?? parsed.data.activeTurnStartedAt;
+  const updatedMs = updatedAt ? new Date(updatedAt).getTime() : Number.NaN;
+  const stale = parsed.data.activeTurnCount > 0 &&
+    (!Number.isFinite(updatedMs) || Date.now() - updatedMs > ACTIVE_TURN_STALE_MS);
+  return {
+    activeTurnCount: parsed.data.activeTurnCount,
+    activeTurnStartedAt: parsed.data.activeTurnStartedAt,
+    activeTurnUpdatedAt: parsed.data.activeTurnUpdatedAt,
+    stale,
+  };
+}
+
+async function assertNoActiveTurnsBeforeStop(
+  stateDir: string,
+  instanceName: string,
+  deps: Pick<ServiceCommandDeps, "readTextFile">,
+): Promise<void> {
+  const activity = await readRuntimeActivity(stateDir, deps);
+  if (activity.activeTurnCount <= 0 || activity.stale) {
+    return;
+  }
+
+  throw new Error(
+    `Instance "${instanceName}" has ${activity.activeTurnCount} active Telegram turn(s). ` +
+    "Refusing to stop/restart without --force.",
+  );
+}
+
 async function summarizeUnresolvedTasks(stateDir: string): Promise<{
   unresolvedTasks: number | null;
   blockingTasks: number | null;
@@ -520,6 +589,7 @@ export async function stopServiceInstance(
   env: ServiceCommandEnv,
   instanceName: string,
   deps: ServiceCommandDeps = {},
+  options: { force?: boolean } = {},
 ): Promise<string> {
   const cwd = deps.cwd ?? process.cwd();
   const paths = resolveServicePaths(env, instanceName, cwd);
@@ -540,6 +610,10 @@ export async function stopServiceInstance(
   ) {
     removeLockIfMatches(paths.lockPath, existingLock?.pid ?? null);
     return `Instance "${paths.instanceName}" is not running.${legacyLaunchdWarning}`;
+  }
+
+  if (!options.force) {
+    await assertNoActiveTurnsBeforeStop(paths.stateDir, paths.instanceName, deps);
   }
 
   killProcessTree(existingLock.pid);

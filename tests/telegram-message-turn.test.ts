@@ -514,6 +514,74 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("does not repair screenshot analysis that describes deferred-delivery failures", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const explanatoryText = [
+      "截图里有两个问题叠在一起：",
+      "",
+      "1. **05:52 / 06:05 的“等通知 / 等 batch 通知”是错误行为。**",
+      "这是模型把后台 batch 放出去后提前结束 turn。",
+      "",
+      "正确修复方向应该是机制层：",
+      "- 拦截“等通知 / 等 batch 通知”这种未交付回复，强制继续等待并交付。",
+      "- 不能只靠 prompt，因为 prompt 只能降低概率，不能保证运行时安全。",
+    ].join("\n");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: explanatoryText,
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(0);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "zh",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("分析截图"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "bot6",
+          updateId: 105,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        explanatoryText,
+        expect.any(String),
+        undefined,
+        expect.stringContaining(path.join("workspace", ".telegram-out")),
+        "zh",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("waits for stream deliveries to settle when the engine turn fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {
