@@ -25,8 +25,9 @@ export interface AuthorizedTelegramDispatchConfig {
 }
 
 export interface AuthorizedTelegramDispatchContext {
-  api: Pick<TelegramApi, "sendMessage" | "getFile" | "downloadFile">;
+  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "getFile" | "downloadFile">;
   bridge: {
+    supportsTurnScopedEnv?: boolean;
     validateCodexThread?(threadId: string): Promise<void>;
     handleAuthorizedMessage(input: {
       chatId: number;
@@ -39,6 +40,8 @@ export interface AuthorizedTelegramDispatchContext {
       onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
       requestOutputDir?: string;
       workspaceOverride?: string;
+      sideChannelCommand?: string;
+      extraEnv?: Record<string, string>;
       abortSignal?: AbortSignal;
     }): Promise<{
       text: string;

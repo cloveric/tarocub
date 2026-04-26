@@ -193,6 +193,7 @@ function combineInstructions(primary: string | null, secondary: string | null): 
 
 export class ProcessCodexAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "telegram-out-only" as const;
+  readonly supportsTurnScopedEnv = true;
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnCodex: SpawnCodex;
   private readonly instructionsPath: string | undefined;
@@ -430,6 +431,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
       input.workspaceOverride,
       input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
       input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
+      input.extraEnv,
     );
 
     if (result.state.lastTurnFailureMessage) {
@@ -471,12 +473,13 @@ export class ProcessCodexAdapter implements CodexAdapter {
     cwdOverride?: string,
     timeoutMs: number | null = this.turnTimeoutMs,
     inactivityTimeoutMs: number | null = this.inactivityTimeoutMs,
+    extraEnv?: Record<string, string>,
   ): Promise<{ state: CodexTurnState; stderrTail: string; exitCode: number | null }> {
     const invocation = buildCommandInvocation(this.codexExecutable, args);
     const child = this.spawnCodex(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
-      env: this.childEnv,
+      env: extraEnv ? { ...this.childEnv, ...extraEnv } : this.childEnv,
       cwd: cwdOverride ?? this.workspacePath,
       windowsHide: true,
     });

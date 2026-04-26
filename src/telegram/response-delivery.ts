@@ -166,6 +166,10 @@ export async function deliverTelegramResponse(
   workspaceOverride?: string,
   requestOutputDir?: string,
   locale: Locale = "en",
+  options: {
+    onFileAccepted?: (sourcePath: string) => void;
+    source?: "post-turn" | "side-channel";
+  } = {},
 ): Promise<number> {
   let filesSent = 0;
   const fileMatch = text.match(/```file:([^\n]+)\n([\s\S]*?)```/);
@@ -220,8 +224,8 @@ export async function deliverTelegramResponse(
     }
   }
 
-  const imageFiles: Array<{ filename: string; contents: Uint8Array }> = [];
-  const otherFiles: Array<{ filename: string; contents: Uint8Array | string }> = [];
+  const imageFiles: Array<{ sourcePath: string; filename: string; contents: Uint8Array }> = [];
+  const otherFiles: Array<{ sourcePath: string; filename: string; contents: Uint8Array | string }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
@@ -254,9 +258,9 @@ export async function deliverTelegramResponse(
       const contents = await readFile(real);
       const fileName = path.basename(filePath);
       if (isImageFile(fileName)) {
-        imageFiles.push({ filename: fileName, contents });
+        imageFiles.push({ sourcePath: filePath, filename: fileName, contents });
       } else {
-        otherFiles.push({ filename: fileName, contents });
+        otherFiles.push({ sourcePath: filePath, filename: fileName, contents });
       }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
@@ -269,6 +273,7 @@ export async function deliverTelegramResponse(
   const allFiles = [...imageFiles, ...otherFiles];
   for (const file of allFiles) {
     await sendFileOrPhoto(api, chatId, file.filename, file.contents);
+    options.onFileAccepted?.(file.sourcePath);
     await appendTimelineEventBestEffort(deliveryStateDir, {
       type: "file.accepted",
       channel: "telegram",
@@ -277,6 +282,7 @@ export async function deliverTelegramResponse(
       metadata: {
         fileName: file.filename,
         bytes: typeof file.contents === "string" ? Buffer.byteLength(file.contents) : file.contents.length,
+        via: options.source ?? "post-turn",
       },
     }, "file delivery timeline event");
   }

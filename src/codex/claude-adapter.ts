@@ -183,6 +183,7 @@ function parseClaudeJsonOutput(trimmed: string): ClaudeJsonResult | ClaudeJsonRe
 
 export class ProcessClaudeAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "generic-file-blocks" as const;
+  readonly supportsTurnScopedEnv = true;
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnClaude: SpawnClaude;
   private readonly instructionsPath: string | undefined;
@@ -348,7 +349,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       );
     }
 
-    const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace).finally(async () => {
+    const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace, input.extraEnv).finally(async () => {
       await permissionHookServer?.close();
     });
     const parsed = this.parseResult(result.stdout);
@@ -453,12 +454,12 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     }
   }
 
-  private async runClaudeCommand(args: string[], stdinContent: string, abortSignal?: AbortSignal, cwdOverride?: string): Promise<{ stdout: string; stderr: string }> {
+  private async runClaudeCommand(args: string[], stdinContent: string, abortSignal?: AbortSignal, cwdOverride?: string, extraEnv?: Record<string, string>): Promise<{ stdout: string; stderr: string }> {
     const invocation = buildCommandInvocation(this.claudeExecutable, args);
     const child = this.spawnClaude(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
-      env: this.childEnv,
+      env: extraEnv ? { ...this.childEnv, ...extraEnv } : this.childEnv,
       cwd: cwdOverride ?? this.workspacePath,
       windowsHide: true,
     });

@@ -115,6 +115,7 @@ function combineInstructions(primary: string | null, secondary: string | null): 
 
 export class CodexAppServerAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "telegram-out-only" as const;
+  readonly supportsTurnScopedEnv = false;
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnCodex: SpawnCodex;
   private readonly instructionsPath: string | undefined;

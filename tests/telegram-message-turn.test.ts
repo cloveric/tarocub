@@ -66,6 +66,12 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         chatId: 123,
         text: "hello",
         files: [],
+        sideChannelCommand: expect.any(String),
+        extraEnv: expect.objectContaining({
+          CCTB_SEND_URL: expect.stringContaining("http://127.0.0.1:"),
+          CCTB_SEND_TOKEN: expect.any(String),
+          CCTB_SEND_COMMAND: expect.any(String),
+        }),
       }));
       expect(deliverTelegramResponse).toHaveBeenCalledWith(
         expect.anything(),
@@ -101,6 +107,156 @@ describe("executeWorkflowAwareTelegramTurn", () => {
           }),
         }),
       ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes the active side-channel helper to the engine without placing it in telegram-out", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const close = vi.fn().mockResolvedValue(undefined);
+    const startSideChannelSendServer = vi.fn().mockResolvedValue({
+      url: "http://127.0.0.1:12345/send/token",
+      token: "token",
+      getSentFilePaths: () => ["/tmp/generated.png"],
+      close,
+    });
+    const createSideChannelSendHelper = vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-send", "helper"));
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: "Done\n[send-file:/tmp/generated.png]\n[send-file:/tmp/fallback.png]",
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(0);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("make an image"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        startSideChannelSendServer,
+        createSideChannelSendHelper,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(startSideChannelSendServer).toHaveBeenCalledWith(expect.objectContaining({
+        requestOutputDir: expect.stringContaining(path.join("workspace", ".telegram-out")),
+      }));
+      const helperRoot = createSideChannelSendHelper.mock.calls[0]?.[0] as string;
+      expect(helperRoot).toContain(path.join("workspace", ".cctb-send"));
+      expect(helperRoot).not.toContain(".telegram-out");
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        sideChannelCommand: path.join(root, "workspace", ".cctb-send", "helper"),
+        extraEnv: {
+          CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+          CCTB_SEND_TOKEN: "token",
+          CCTB_SEND_COMMAND: path.join(root, "workspace", ".cctb-send", "helper"),
+        },
+      }));
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        "Done\n[send-file:/tmp/fallback.png]",
+        expect.any(String),
+        undefined,
+        expect.stringContaining(path.join("workspace", ".telegram-out")),
+        "en",
+      );
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("starts the side-channel with an embedded helper when the bridge cannot pass turn-scoped env", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const close = vi.fn().mockResolvedValue(undefined);
+    const startSideChannelSendServer = vi.fn().mockResolvedValue({
+      url: "http://127.0.0.1:12345/send/token",
+      token: "token",
+      getSentFilePaths: () => [],
+      close,
+    });
+    const createSideChannelSendHelper = vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-send", "helper"));
+    const bridge = {
+      supportsTurnScopedEnv: false,
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: "final response",
+      }),
+    };
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("hello"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        startSideChannelSendServer,
+        createSideChannelSendHelper,
+        deliverTelegramResponse: vi.fn().mockResolvedValue(0),
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(startSideChannelSendServer).toHaveBeenCalled();
+      expect(createSideChannelSendHelper).toHaveBeenCalledWith(
+        expect.stringContaining(".cctb-send"),
+        undefined,
+        {
+          CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+          CCTB_SEND_TOKEN: "token",
+        },
+      );
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        sideChannelCommand: path.join(root, "workspace", ".cctb-send", "helper"),
+        extraEnv: undefined,
+      }));
+      expect(close).toHaveBeenCalledTimes(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

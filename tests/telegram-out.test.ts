@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyTelegramOutLimits,
   createTelegramOutDir,
+  pruneStaleCctbSendDirs,
   describeTelegramOutFiles,
   listTelegramOutFiles,
 } from "../src/runtime/telegram-out.js";
@@ -103,6 +104,29 @@ describe("telegram-out", () => {
 
       expect(created.dirPath).toBe(path.join(telegramOutRoot, "req-new"));
       await expect(readdir(telegramOutRoot)).resolves.toEqual(["req-fresh", "req-new"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes stale cctb-send helper directories", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const helperRoot = path.join(root, "workspace", ".cctb-send");
+    const staleDir = path.join(helperRoot, "req-stale");
+    const freshDir = path.join(helperRoot, "req-fresh");
+
+    try {
+      await mkdir(staleDir, { recursive: true });
+      await mkdir(freshDir, { recursive: true });
+      const now = new Date();
+      const staleAt = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
+      const freshAt = new Date(now.getTime() - 60 * 60 * 1000);
+      await utimes(staleDir, staleAt, staleAt);
+      await utimes(freshDir, freshAt, freshAt);
+
+      await pruneStaleCctbSendDirs(root, "req-new");
+
+      await expect(readdir(helperRoot)).resolves.toEqual(["req-fresh"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

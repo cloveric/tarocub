@@ -58,6 +58,47 @@ describe("deliverTelegramResponse", () => {
         chatId: 123,
         metadata: expect.objectContaining({
           fileName: "report.txt",
+          via: "post-turn",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("marks side-channel accepted files in the timeline", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const filePath = path.join(workspaceDir, "chart.png");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await mkdir(workspaceDir, { recursive: true });
+      await writeFile(filePath, "png", "utf8");
+
+      await deliverTelegramResponse(
+        api as never,
+        123,
+        `[send-file:${filePath}]`,
+        inboxDir,
+        undefined,
+        undefined,
+        "en",
+        { source: "side-channel" },
+      );
+
+      const timeline = parseTimelineEvents(await readFile(path.join(path.dirname(inboxDir), "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.accepted",
+        metadata: expect.objectContaining({
+          fileName: "chart.png",
+          via: "side-channel",
         }),
       }));
     } finally {

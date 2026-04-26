@@ -45,9 +45,60 @@ export interface BridgeAccessDecision {
   text?: string;
 }
 
-function renderTelegramBridgeCapabilities(): string {
+function quoteShellCommand(value: string): string {
+  if (!/[\s'"\\]/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function renderTelegramBridgeCapabilities(sideChannelCommand?: string, sideChannelEnvAvailable = false): string {
+  const sendCommand = sideChannelEnvAvailable ? '"$CCTB_SEND_COMMAND"' : (sideChannelCommand ? quoteShellCommand(sideChannelCommand) : "");
+  const fileDeliveryMethod = sideChannelCommand
+    ? "deliver them with the side-channel send command shown in these instructions; use [send-file:] tags only as fallback if the command is unavailable or fails"
+    : "send those files with [send-file:] tags";
+  const criticalFileDeliveryRule = sideChannelCommand
+    ? [
+        "CRITICAL FILE DELIVERY RULE:",
+        "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type.",
+        "The required delivery method is the side-channel send command shown above.",
+        "After generating/saving ANY file the user should receive, run the side-channel send command with the real absolute path of that saved file.",
+        "If the side-channel command is unavailable or fails, then include a [send-file:] fallback tag with the real absolute path.",
+        "Examples:",
+        `  Generated a PPT -> run ${sendCommand} --file /absolute/path/to/deck.pptx`,
+        `  Generated images -> run ${sendCommand} --image /absolute/path/to/image.png for each actual image file you saved.`,
+        `  Generated a PDF -> run ${sendCommand} --file /absolute/path/to/report.pdf`,
+        "If you wrote 'the file is here: filename.pptx' WITHOUT using the send command or a [send-file:] fallback tag, the user received NOTHING.",
+      ]
+    : [
+        "CRITICAL FILE DELIVERY RULE:",
+        "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type. The ONLY way to deliver a file to the user is the [send-file:] tag.",
+        "After generating/saving ANY file the user should receive, you MUST include a [send-file:] tag with the real absolute path of that saved file.",
+        "Examples:",
+        "  Generated a PPT -> include one [send-file:] tag pointing at the actual .pptx you saved.",
+        "  Generated images -> include one [send-file:] tag per actual image file you saved.",
+        "  Generated a PDF -> include one [send-file:] tag pointing at the actual .pdf you saved.",
+        "If you wrote 'the file is here: filename.pptx' WITHOUT a [send-file:] tag, the user received NOTHING. Always include the tag. No exceptions.",
+      ];
+
   return [
     "You are running inside a Telegram chat bridge. The bridge supports delivering files to the user.",
+    ...(sideChannelCommand
+      ? [
+          "",
+          "Preferred file delivery: this turn has an active side-channel send command.",
+          "When you generate a local image or file that should be sent to the user, prefer running:",
+          `  ${sendCommand} --image /absolute/path/to/image.png`,
+          `  ${sendCommand} --file /absolute/path/to/report.pdf`,
+          `  ${sendCommand} --message "Done" --file /absolute/path/to/report.pdf`,
+          sideChannelEnvAvailable
+            ? `Current CCTB_SEND_COMMAND: ${sideChannelCommand}`
+            : `Current side-channel send command: ${sendCommand}`,
+          "Wait for the command to exit before continuing; never run it in the background.",
+          "Use this immediately after the requested deliverable set is ready. Keep [send-file:] tags as fallback only if the command is unavailable or fails.",
+        ]
+      : []),
+    "",
     "When the user asks you to generate, create, or send a file, include exactly one fenced code block in your reply using this format:",
     "",
     "```file:example.py",
@@ -71,16 +122,9 @@ function renderTelegramBridgeCapabilities(): string {
     "IMPORTANT: Telegram is a plain-text chat environment. Do NOT use interactive UI elements such as HTML forms, checkboxes, radio buttons, dropdowns, accordions, tabs, or embedded widgets — they will not render. For multiple-choice questions, use numbered plain-text lists and ask the user to reply with a number or letter. For structured data, use simple text tables or bullet lists. Only basic Markdown (bold, italic, code, links) is supported.",
     "",
     "DO NOT call interactive MCP tools like AskUserQuestion, prompt_user, ask_user, or any tool whose only purpose is to block waiting for user input — you run in a headless CLI and those tools terminate the turn without ever receiving an answer, which makes the bot appear to freeze. When you need the user to choose between options, put the options directly in your Telegram reply as a numbered list and wait for the next user message.",
-    "Telegram turn boundary protocol: when the requested deliverable set for the current step is ready, finish the current Telegram turn. If that deliverable set includes files, send those files with [send-file:] tags. For batch file outputs, send the whole requested batch together unless the user explicitly asked for incremental delivery. Do not hold the turn open for optional monitoring, sleeping, polling, post-delivery QA, or background follow-up. If more work remains, tell the user the current status and wait for the next message to continue.",
+    `Telegram turn boundary protocol: when the requested deliverable set for the current step is ready, finish the current Telegram turn. If that deliverable set includes files, ${fileDeliveryMethod}. For batch file outputs, send the whole requested batch together unless the user explicitly asked for incremental delivery. Do not hold the turn open for optional monitoring, sleeping, polling, post-delivery QA, or background follow-up. If more work remains, tell the user the current status and wait for the next message to continue.`,
     "",
-    "CRITICAL FILE DELIVERY RULE:",
-    "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type. The ONLY way to deliver a file to the user is the [send-file:] tag.",
-    "After generating/saving ANY file the user should receive, you MUST include a [send-file:] tag with the real absolute path of that saved file.",
-    "Examples:",
-    "  Generated a PPT → include one [send-file:] tag pointing at the actual .pptx you saved.",
-    "  Generated images → include one [send-file:] tag per actual image file you saved.",
-    "  Generated a PDF → include one [send-file:] tag pointing at the actual .pdf you saved.",
-    "If you wrote 'the file is here: filename.pptx' WITHOUT a [send-file:] tag, the user received NOTHING. Always include the tag. No exceptions.",
+    ...criticalFileDeliveryRule,
   ].join("\n");
 }
 
@@ -125,6 +169,7 @@ function shouldDisableRuntimeTimeout(text: string): boolean {
 
 export class Bridge {
   private readonly bridgeInstructionMode: "generic-file-blocks" | "telegram-out-only";
+  readonly supportsTurnScopedEnv: boolean;
 
   constructor(
     private readonly accessStore: AccessStoreLike,
@@ -132,6 +177,7 @@ export class Bridge {
     private readonly adapter: CodexAdapter,
   ) {
     this.bridgeInstructionMode = adapter.bridgeInstructionMode ?? "generic-file-blocks";
+    this.supportsTurnScopedEnv = adapter.supportsTurnScopedEnv !== false;
   }
 
   async validateCodexThread(threadId: string): Promise<void> {
@@ -220,6 +266,8 @@ export class Bridge {
     onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
     requestOutputDir?: string;
     workspaceOverride?: string;
+    sideChannelCommand?: string;
+    extraEnv?: Record<string, string>;
     abortSignal?: AbortSignal;
   }) {
     const decision = await this.checkAccess(input);
@@ -237,8 +285,9 @@ export class Bridge {
       ? `${input.text}\n\n[Quoted message #${input.replyContext.messageId}]\n${input.replyContext.text || "(no text content)"}`
       : input.text;
     const text = baseText;
+    const turnEnvSupported = this.adapter.supportsTurnScopedEnv !== false;
     const instructions = combineInstructions(
-      renderTelegramBridgeCapabilities(),
+      renderTelegramBridgeCapabilities(input.sideChannelCommand, turnEnvSupported),
       this.bridgeInstructionMode === "telegram-out-only" && input.requestOutputDir
         ? renderCodexTelegramOutInstructions(input.requestOutputDir)
         : undefined,
@@ -252,6 +301,7 @@ export class Bridge {
       onApprovalRequest: input.onApprovalRequest,
       requestOutputDir: input.requestOutputDir,
       workspaceOverride: input.workspaceOverride,
+      extraEnv: turnEnvSupported ? input.extraEnv : undefined,
       abortSignal: input.abortSignal,
       disableRuntimeTimeout: disableRuntimeTimeout || undefined,
     });

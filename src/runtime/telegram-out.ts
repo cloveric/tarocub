@@ -29,7 +29,11 @@ export function resolveTelegramOutDir(stateDir: string, requestId: string): stri
   return path.join(stateDir, "workspace", ".telegram-out", requestId);
 }
 
-async function pruneStaleTelegramOutDirs(rootDir: string, preserveRequestId: string): Promise<void> {
+export function resolveCctbSendDir(stateDir: string, requestId: string): string {
+  return path.join(stateDir, "workspace", ".cctb-send", requestId);
+}
+
+async function pruneStaleRequestDirs(rootDir: string, preserveRequestId: string): Promise<void> {
   let entries;
   try {
     entries = await readdir(rootDir, { withFileTypes: true });
@@ -61,6 +65,14 @@ async function pruneStaleTelegramOutDirs(rootDir: string, preserveRequestId: str
 
     await rm(entryPath, { recursive: true, force: true }).catch(() => {});
   }));
+}
+
+async function pruneStaleTelegramOutDirs(rootDir: string, preserveRequestId: string): Promise<void> {
+  await pruneStaleRequestDirs(rootDir, preserveRequestId);
+}
+
+export async function pruneStaleCctbSendDirs(stateDir: string, preserveRequestId: string): Promise<void> {
+  await pruneStaleRequestDirs(path.dirname(resolveCctbSendDir(stateDir, preserveRequestId)), preserveRequestId);
 }
 
 export async function createTelegramOutDir(stateDir: string, requestId: string): Promise<TelegramOutRequest> {

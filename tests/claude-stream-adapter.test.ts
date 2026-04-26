@@ -114,6 +114,8 @@ describe("ClaudeStreamAdapter", () => {
       "stream-json",
       "--output-format",
       "stream-json",
+      "--permission-prompt-tool",
+      "stdio",
     ]);
     children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
     children[0].stdout.emitData('{"type":"assistant","message":{"content":[{"type":"text","text":"ONE"}]},"session_id":"session-123"}\n');
@@ -160,6 +162,8 @@ describe("ClaudeStreamAdapter", () => {
       "stream-json",
       "--output-format",
       "stream-json",
+      "--permission-prompt-tool",
+      "stdio",
       "-r",
       "session-abc",
     ]);
@@ -275,6 +279,81 @@ describe("ClaudeStreamAdapter", () => {
     children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":true,"result":"Permission denied","session_id":"session-123"}\n');
 
     await expect(resultPromise).rejects.toThrow("Permission denied");
+  });
+
+  it("routes Claude stdio permission requests through the Telegram approval callback", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const approvalRequest = vi.fn().mockResolvedValue({ behavior: "allow", scope: "once" });
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const resultPromise = adapter.sendUserMessage("telegram-12345", {
+      text: "Use a tool",
+      files: [],
+      onApprovalRequest: approvalRequest,
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData(JSON.stringify({
+      type: "control_request",
+      request_id: "approval-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Write",
+        input: { file_path: "/tmp/a.txt", content: "hello" },
+        cwd: "/tmp/workspace",
+      },
+    }) + "\n");
+
+    await waitFor(() => children[0].stdin.lines.length === 2);
+    expect(approvalRequest).toHaveBeenCalledWith(expect.objectContaining({
+      engine: "claude",
+      toolName: "Write",
+      toolInput: { file_path: "/tmp/a.txt", content: "hello" },
+      cwd: "/tmp/workspace",
+      sessionId: "session-123",
+    }));
+    expect(JSON.parse(children[0].stdin.lines[1] ?? "{}")).toEqual({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: "approval-1",
+        response: {
+          behavior: "allow",
+          updatedInput: { file_path: "/tmp/a.txt", content: "hello" },
+        },
+      },
+    });
+
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"DONE","session_id":"session-123"}\n');
+    await expect(resultPromise).resolves.toEqual({
+      text: "DONE",
+      sessionId: "session-123",
+    });
+  });
+
+  it("keeps intermediate send-file tags when the final Claude result only summarizes delivery", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Generate files",
+      files: [],
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"assistant","message":{"content":[{"type":"text","text":"Ready. [send-file:/tmp/a.png]"}]},"session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"I sent the image.","session_id":"session-123"}\n');
+
+    await expect(promise).resolves.toEqual({
+      text: "Ready. [send-file:/tmp/a.png]\nI sent the image.",
+      sessionId: "session-123",
+    });
   });
 
   it("does not time out — engine runs until completion", async () => {

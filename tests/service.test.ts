@@ -27,7 +27,7 @@ import {
   renderErrorMessage,
   renderWorkingMessage,
 } from "../src/telegram/message-renderer.js";
-import { ProcessClaudeAdapter } from "../src/codex/claude-adapter.js";
+import { ClaudeStreamAdapter } from "../src/codex/claude-stream-adapter.js";
 import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import * as auditLog from "../src/state/audit-log.js";
@@ -365,7 +365,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessClaudeAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(ClaudeStreamAdapter);
       // Claude bots no longer isolate CLAUDE_CONFIG_DIR — they share the
       // user's ~/.claude/ so OAuth refresh tokens don't race across instances.
       expect((result.bridge as any).adapter.childEnv.CLAUDE_CONFIG_DIR).toBeUndefined();

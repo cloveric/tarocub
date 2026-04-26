@@ -165,6 +165,20 @@ open -e ~/.cctb/work/agent.md
 
 ---
 
+## Agent 任务里的文件投递
+
+每个 Telegram turn 运行时，bridge 会给 CLI 环境注入一个短生命周期的本地发送 helper。Agent 生成完文件后，优先用它直接投递：
+
+```bash
+"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png
+"$CCTB_SEND_COMMAND" --file /absolute/path/to/report.pdf
+"$CCTB_SEND_COMMAND" --message "Done" --file /absolute/path/to/report.pdf
+```
+
+当前默认的 Codex 和 Claude process runtime 都支持。helper 只把文件路径 POST 到本 turn 的 localhost 端点；bridge 仍会校验文件必须位于实例工作区或 `/resume` 指定项目目录下，才会真正发到 Telegram。旧的 `[send-file:/absolute/path]` 标签仍然保留，作为 helper 不可用时的 fallback。
+
+---
+
 ## YOLO 模式
 
 如果你希望 Telegram bot 免打断运行，推荐开启 `telegram yolo on`。如果保持 YOLO 关闭，bridge 会用 Telegram 审批按钮接住无头审批：Claude 可以按单个权限请求审批；Codex process 模式会先问你是否允许本轮自动执行，通过后这一轮用 `--full-auto` 跑。`unsafe` 只适合完全可信的本地环境。

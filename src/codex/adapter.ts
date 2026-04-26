@@ -42,12 +42,14 @@ export interface CodexUserMessageInput {
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   requestOutputDir?: string;
   workspaceOverride?: string;
+  extraEnv?: Record<string, string>;
   abortSignal?: AbortSignal;
   disableRuntimeTimeout?: boolean;
 }
 
 export interface CodexAdapter {
   bridgeInstructionMode?: "generic-file-blocks" | "telegram-out-only";
+  supportsTurnScopedEnv?: boolean;
   createSession(chatId: number): Promise<CodexSessionHandle>;
   sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse>;
   validateExternalSession?(sessionId: string): Promise<void>;

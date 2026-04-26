@@ -166,6 +166,20 @@ open -e ~/.cctb/work/agent.md
 
 ---
 
+## File Delivery From Agent Tasks
+
+During each active Telegram turn, the bridge injects a short-lived local send helper into the CLI environment. Agents should prefer it when they finish a generated file:
+
+```bash
+"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png
+"$CCTB_SEND_COMMAND" --file /absolute/path/to/report.pdf
+"$CCTB_SEND_COMMAND" --message "Done" --file /absolute/path/to/report.pdf
+```
+
+This works for the default Codex and Claude process runtimes. The helper posts only file paths to a one-turn localhost endpoint; the bridge still validates that files live under the instance workspace or the `/resume` project before sending them to Telegram. The older `[send-file:/absolute/path]` tag remains as a fallback when the helper is unavailable.
+
+---
+
 ## YOLO Mode
 
 For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the CLI supports a headless path: Claude can approve individual permission prompts; Codex process mode asks once before the turn, then runs the approved turn with `--full-auto`. Keep `unsafe` for fully trusted local environments only.

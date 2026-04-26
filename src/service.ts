@@ -7,7 +7,7 @@ import path from "node:path";
 import { resolveConfig, resolveInstanceStateDir, type EnvSource } from "./config.js";
 import { Bridge } from "./runtime/bridge.js";
 import { ProcessCodexAdapter } from "./codex/process-adapter.js";
-import { ProcessClaudeAdapter } from "./codex/claude-adapter.js";
+import { ClaudeStreamAdapter } from "./codex/claude-stream-adapter.js";
 import { CodexAppServerAdapter } from "./codex/app-server-adapter.js";
 import type { CodexAdapter } from "./codex/adapter.js";
 import { AccessStore } from "./state/access-store.js";
@@ -575,7 +575,7 @@ async function createAdapter(
     // auto-memory survive the upgrade.
     await migrateClaudeEngineHomeIfPresent(config.stateDir, env);
     await mkdir(workspacePath, { recursive: true });
-    return new ProcessClaudeAdapter(resolveClaudeExecutable(env), {
+    return new ClaudeStreamAdapter(resolveClaudeExecutable(env), {
       childEnv,
       instructionsPath,
       configPath,

@@ -21,6 +21,8 @@ import type {
   CodexAdapter,
   CodexAdapterResponse,
   CodexSessionHandle,
+  EngineApprovalDecision,
+  EngineApprovalRequest,
   CodexUserMessageInput,
 } from "./adapter.js";
 import type { ApprovalMode } from "./process-adapter.js";
@@ -59,18 +61,42 @@ type ClaudeStreamEvent = {
   session_id?: string;
   result?: string;
   is_error?: boolean;
+  request_id?: string;
+  request?: {
+    subtype?: string;
+    tool_name?: string;
+    toolName?: string;
+    input?: unknown;
+    tool_input?: unknown;
+    toolInput?: unknown;
+    cwd?: string;
+    permission_suggestions?: unknown[];
+    permissionSuggestions?: unknown[];
+  };
   message?: {
     content?: Array<{
       type?: string;
       text?: string;
     }>;
   };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+  total_cost_usd?: number;
 };
 
 type PendingTurn = {
   assistantText: string;
+  intermediateDeliveryText: string;
   resolve: (value: CodexAdapterResponse) => void;
   reject: (error: Error) => void;
+  onProgress?: (partialText: string) => void;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  approvalAbortController: AbortController;
+  abortSignal?: AbortSignal;
+  abortHandler?: () => void;
   timeout?: ReturnType<typeof setTimeout>;
 };
 
@@ -82,6 +108,7 @@ type ClaudeWorker = {
   instructions: string | null;
   approvalMode: ApprovalMode;
   engineOptionsKey: string;
+  sessionApprovedKeys: Set<string>;
 };
 
 const MAX_INSTRUCTIONS_CHARS = 16_000;
@@ -127,8 +154,101 @@ function combineInstructions(primary: string | null, secondary: string | null): 
   return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
+function appendAssistantText(existing: string, next: string): string {
+  if (!next) {
+    return existing;
+  }
+
+  return existing ? `${existing}\n${next}` : next;
+}
+
+function extractSendFileTags(text: string): string[] {
+  return Array.from(text.matchAll(/\[send-file:[^\]]+\]/g), (match) => match[0]);
+}
+
+function hasSendFileTag(text: string): boolean {
+  return /\[send-file:[^\]]+\]/.test(text);
+}
+
+function mergeIntermediateDeliveryText(finalResult: string, intermediateDeliveryText: string): string {
+  if (!intermediateDeliveryText) {
+    return finalResult;
+  }
+
+  if (!finalResult) {
+    return intermediateDeliveryText;
+  }
+
+  if (finalResult.includes(intermediateDeliveryText)) {
+    return finalResult;
+  }
+
+  if (intermediateDeliveryText.includes(finalResult)) {
+    return intermediateDeliveryText;
+  }
+
+  const finalSendFileTags = new Set(extractSendFileTags(finalResult));
+  const intermediateSendFileTags = extractSendFileTags(intermediateDeliveryText);
+  if (
+    intermediateSendFileTags.length > 0 &&
+    intermediateSendFileTags.every((tag) => finalSendFileTags.has(tag))
+  ) {
+    return finalResult;
+  }
+
+  return appendAssistantText(intermediateDeliveryText, finalResult);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function toApprovalInput(parsed: ClaudeStreamEvent, sessionId: string | null): EngineApprovalRequest {
+  const request = parsed.request ?? {};
+  const toolName = request.tool_name ?? request.toolName;
+  const toolInput = request.input ?? request.tool_input ?? request.toolInput ?? {};
+  return {
+    engine: "claude",
+    toolName: typeof toolName === "string" && toolName.trim() ? toolName : "Unknown tool",
+    toolInput,
+    cwd: typeof request.cwd === "string" ? request.cwd : undefined,
+    sessionId: sessionId ?? undefined,
+    permissionSuggestions: request.permission_suggestions ?? request.permissionSuggestions,
+  };
+}
+
+function sessionApprovalKey(request: EngineApprovalRequest): string {
+  return `${request.toolName}:${canonicalJson(request.toolInput)}`;
+}
+
+function renderPermissionResponse(decision: EngineApprovalDecision, originalInput: unknown): Record<string, unknown> {
+  if (decision.behavior === "deny") {
+    return {
+      behavior: "deny",
+      message: "Denied from Telegram.",
+    };
+  }
+
+  return {
+    behavior: "allow",
+    updatedInput: originalInput ?? {},
+  };
+}
+
 export class ClaudeStreamAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "generic-file-blocks" as const;
+  readonly supportsTurnScopedEnv = false;
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnClaude: SpawnClaude;
   private readonly instructionsPath: string | undefined;
@@ -231,7 +351,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const prompt = this.buildPrompt(input);
     const worker = this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, engineOptions);
 
-    const response = await this.sendTurn(worker, prompt, input.abortSignal);
+    const response = await this.sendTurn(worker, prompt, input);
     const nextSessionId = response.sessionId;
     if (nextSessionId && nextSessionId !== sessionId) {
       this.workers.delete(sessionId);
@@ -270,7 +390,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       sessionId = resumedSessionId;
     }
 
-    const args = ["-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json"];
+    const args = ["-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-prompt-tool", "stdio"];
     if (agentInstructions) {
       args.push("--system-prompt", agentInstructions);
     }
@@ -312,6 +432,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       instructions: combinedKey,
       approvalMode,
       engineOptionsKey: optionsKey,
+      sessionApprovedKeys: new Set(),
     };
 
     child.stdout?.on("data", (chunk) => {
@@ -371,8 +492,21 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           .map((item) => item.text ?? "")
           .join("") ?? "";
       if (text) {
-        worker.pendingTurn.assistantText = text;
+        worker.pendingTurn.assistantText = appendAssistantText(worker.pendingTurn.assistantText, text);
+        if (hasSendFileTag(text)) {
+          worker.pendingTurn.intermediateDeliveryText = appendAssistantText(worker.pendingTurn.intermediateDeliveryText, text);
+        }
+        worker.pendingTurn.onProgress?.(worker.pendingTurn.assistantText);
       }
+      return;
+    }
+
+    if (parsed.type === "control_request") {
+      void this.handleControlRequest(worker, parsed);
+      return;
+    }
+
+    if (parsed.type === "control_cancel_request") {
       return;
     }
 
@@ -384,14 +518,69 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         pending.reject(new Error((parsed.result ?? pending.assistantText ?? "Claude reported an error").trim()));
         return;
       }
+      const text = parsed.result
+        ? mergeIntermediateDeliveryText(parsed.result, pending.intermediateDeliveryText)
+        : pending.assistantText;
       pending.resolve({
-        text: (parsed.result ?? pending.assistantText ?? "").trim() || "Claude completed the request.",
+        text: text.trim() || "Claude completed the request.",
         sessionId: worker.currentSessionId ?? undefined,
+        usage: parsed.usage
+          ? {
+              inputTokens: parsed.usage.input_tokens ?? 0,
+              outputTokens: parsed.usage.output_tokens ?? 0,
+              cachedTokens: parsed.usage.cache_read_input_tokens,
+              costUsd: parsed.total_cost_usd,
+            }
+          : undefined,
       });
     }
   }
 
-  private async sendTurn(worker: ClaudeWorker, prompt: string, abortSignal?: AbortSignal): Promise<CodexAdapterResponse> {
+  private async handleControlRequest(worker: ClaudeWorker, parsed: ClaudeStreamEvent): Promise<void> {
+    const requestId = parsed.request_id;
+    const pending = worker.pendingTurn;
+    if (!requestId) {
+      return;
+    }
+
+    const request = toApprovalInput(parsed, worker.currentSessionId);
+    if (request.abortSignal === undefined && pending?.approvalAbortController) {
+      request.abortSignal = pending.approvalAbortController.signal;
+    }
+
+    const toolInput = parsed.request?.input ?? parsed.request?.tool_input ?? parsed.request?.toolInput ?? {};
+    let decision: EngineApprovalDecision;
+    if (worker.approvalMode !== "normal") {
+      decision = { behavior: "allow", scope: "session" };
+    } else if (!pending?.onApprovalRequest) {
+      decision = { behavior: "deny" };
+    } else {
+      const key = sessionApprovalKey(request);
+      if (worker.sessionApprovedKeys.has(key)) {
+        decision = { behavior: "allow", scope: "session" };
+      } else {
+        try {
+          decision = await pending.onApprovalRequest(request);
+          if (decision.behavior === "allow" && decision.scope === "session") {
+            worker.sessionApprovedKeys.add(key);
+          }
+        } catch {
+          decision = { behavior: "deny" };
+        }
+      }
+    }
+
+    this.writeJson(worker, {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: requestId,
+        response: renderPermissionResponse(decision, toolInput),
+      },
+    });
+  }
+
+  private async sendTurn(worker: ClaudeWorker, prompt: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
     if (worker.pendingTurn) {
       throw new Error("Claude session already has an in-flight turn");
     }
@@ -399,19 +588,25 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     return await new Promise<CodexAdapterResponse>((resolve, reject) => {
       const pendingTurn: PendingTurn = {
         assistantText: "",
+        intermediateDeliveryText: "",
+        onProgress: input.onProgress,
+        onApprovalRequest: input.onApprovalRequest,
+        approvalAbortController: new AbortController(),
         resolve,
         reject,
       };
       worker.pendingTurn = pendingTurn;
 
-      if (abortSignal) {
+      if (input.abortSignal) {
         const onAbort = () => {
           killProcessTree(worker.child.pid);
           this.failWorker(worker, new Error("Task was stopped by user"));
           this.removeWorker(worker);
         };
-        if (abortSignal.aborted) { onAbort(); return; }
-        abortSignal.addEventListener("abort", onAbort, { once: true });
+        if (input.abortSignal.aborted) { onAbort(); return; }
+        pendingTurn.abortSignal = input.abortSignal;
+        pendingTurn.abortHandler = onAbort;
+        input.abortSignal.addEventListener("abort", onAbort, { once: true });
       }
 
       worker.child.stdin?.write(
@@ -439,6 +634,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     });
   }
 
+  private writeJson(worker: ClaudeWorker, payload: unknown): void {
+    worker.child.stdin?.write(JSON.stringify(payload) + "\n", (error) => {
+      if (error) {
+        this.failWorker(worker, error);
+        this.removeWorker(worker);
+      }
+    });
+  }
+
   destroy(): void {
     for (const worker of this.workers.values()) {
       killProcessTree(worker.child.pid);
@@ -461,6 +665,11 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private clearPendingTurnTimeout(pending: PendingTurn | null | undefined): void {
+    pending?.approvalAbortController.abort();
+    if (pending?.abortSignal && pending.abortHandler) {
+      pending.abortSignal.removeEventListener("abort", pending.abortHandler);
+      pending.abortHandler = undefined;
+    }
     if (pending?.timeout) {
       clearTimeout(pending.timeout);
       pending.timeout = undefined;

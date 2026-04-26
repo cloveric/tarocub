@@ -164,6 +164,101 @@ describe("Bridge", () => {
     expect(instructions).not.toContain("ready, send it with [send-file:] tags");
   });
 
+  it("prefers the active side-channel command for file delivery when available", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "generate a PNG",
+      replyContext: undefined,
+      files: [],
+      sideChannelCommand: "/tmp/workspace/.cctb-send/helper",
+      extraEnv: {
+        CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+        CCTB_SEND_TOKEN: "token",
+        CCTB_SEND_COMMAND: "/tmp/workspace/.cctb-send/helper",
+      },
+    });
+
+    const payload = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    expect(payload.instructions).toContain("Preferred file delivery");
+    expect(payload.instructions).toContain('"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png');
+    expect(payload.instructions).toContain("Wait for the command to exit before continuing; never run it in the background.");
+    expect(payload.instructions).toContain("Keep [send-file:] tags as fallback only");
+    expect(payload.instructions).toContain("The required delivery method is the side-channel send command shown above");
+    expect(payload.instructions).not.toContain("The ONLY way to deliver a file to the user is the [send-file:] tag");
+    expect(payload.instructions).not.toContain("After generating/saving ANY file the user should receive, you MUST include a [send-file:] tag");
+    expect(payload.extraEnv).toEqual({
+      CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+      CCTB_SEND_TOKEN: "token",
+      CCTB_SEND_COMMAND: "/tmp/workspace/.cctb-send/helper",
+    });
+  });
+
+  it("advertises literal side-channel helper paths for adapters without turn-scoped env support", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      supportsTurnScopedEnv: false,
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "generate a PNG",
+      replyContext: undefined,
+      files: [],
+      sideChannelCommand: "/tmp/workspace/.cctb-send/helper",
+      extraEnv: {
+        CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+        CCTB_SEND_TOKEN: "token",
+        CCTB_SEND_COMMAND: "/tmp/workspace/.cctb-send/helper",
+      },
+    });
+
+    const payload = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
+    expect(payload.instructions).toContain("Preferred file delivery");
+    expect(payload.instructions).toContain("/tmp/workspace/.cctb-send/helper --image /absolute/path/to/image.png");
+    expect(payload.instructions).not.toContain('"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png');
+    expect(payload.extraEnv).toBeUndefined();
+  });
+
   it("rejects a message when the chat is not on the allowlist", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

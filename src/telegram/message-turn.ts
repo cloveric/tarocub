@@ -5,6 +5,8 @@ import {
   applyTelegramOutLimits as defaultApplyTelegramOutLimits,
   createTelegramOutDir as defaultCreateTelegramOutDir,
   describeTelegramOutFiles as defaultDescribeTelegramOutFiles,
+  pruneStaleCctbSendDirs as defaultPruneStaleCctbSendDirs,
+  resolveCctbSendDir,
 } from "../runtime/telegram-out.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import {
@@ -20,6 +22,11 @@ import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { InlineKeyboardButton, TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
+import {
+  createSideChannelSendHelper as defaultCreateSideChannelSendHelper,
+  startSideChannelSendServer as defaultStartSideChannelSendServer,
+  type SideChannelSendServer,
+} from "./side-channel-send.js";
 
 export interface WorkflowAwareTurnState {
   workflowRecordId?: string;
@@ -37,8 +44,9 @@ export interface WorkflowAwareTurnConfig {
 }
 
 export interface WorkflowAwareTurnContext {
-  api: Pick<TelegramApi, "sendMessage" | "getFile" | "downloadFile">;
+  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "getFile" | "downloadFile">;
   bridge: {
+    supportsTurnScopedEnv?: boolean;
     handleAuthorizedMessage(input: {
       chatId: number;
       userId: number;
@@ -50,6 +58,8 @@ export interface WorkflowAwareTurnContext {
       onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
       requestOutputDir?: string;
       workspaceOverride?: string;
+      sideChannelCommand?: string;
+      extraEnv?: Record<string, string>;
       abortSignal?: AbortSignal;
     }): Promise<{
       text: string;
@@ -74,6 +84,24 @@ function defaultBuildContinueAnalysisKeyboard(uploadId: string): { inlineKeyboar
   };
 }
 
+function stripAlreadySentSideChannelTags(text: string, sentFilePaths: readonly string[]): string {
+  if (sentFilePaths.length === 0) {
+    return text;
+  }
+  const sent = new Set(sentFilePaths);
+  return text
+    .split(/\r?\n/)
+    .map((line) => ({
+      original: line,
+      stripped: line.replace(/\[send-file:([^\]]+)\]/g, (tag, filePath: string) => sent.has(filePath.trim()) ? "" : tag),
+    }))
+    .filter(({ original, stripped }) => stripped.trim() || !original.trim())
+    .map(({ stripped }) => stripped)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function ensureInboxDirExists(inboxDir: string): Promise<void> {
   await mkdir(inboxDir, { recursive: true });
 }
@@ -93,6 +121,9 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   createTelegramOutDir?: typeof defaultCreateTelegramOutDir;
   describeTelegramOutFiles?: typeof defaultDescribeTelegramOutFiles;
   applyTelegramOutLimits?: typeof defaultApplyTelegramOutLimits;
+  pruneStaleCctbSendDirs?: typeof defaultPruneStaleCctbSendDirs;
+  startSideChannelSendServer?: typeof defaultStartSideChannelSendServer;
+  createSideChannelSendHelper?: typeof defaultCreateSideChannelSendHelper;
   buildContinueAnalysisKeyboard?: typeof defaultBuildContinueAnalysisKeyboard;
   deliverTelegramResponse: (
     api: WorkflowAwareTurnContext["api"],
@@ -125,6 +156,9 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     createTelegramOutDir = defaultCreateTelegramOutDir,
     describeTelegramOutFiles = defaultDescribeTelegramOutFiles,
     applyTelegramOutLimits = defaultApplyTelegramOutLimits,
+    pruneStaleCctbSendDirs = defaultPruneStaleCctbSendDirs,
+    startSideChannelSendServer = defaultStartSideChannelSendServer,
+    createSideChannelSendHelper = defaultCreateSideChannelSendHelper,
     buildContinueAnalysisKeyboard = defaultBuildContinueAnalysisKeyboard,
     deliverTelegramResponse,
     sendTelegramOutFile,
@@ -169,8 +203,9 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     });
   }
 
+  const requestId = `${Date.now()}-${normalized.chatId}`;
   if (cfg.engine === "codex") {
-    state.telegramOutDirPath = (await createTelegramOutDir(stateDir, `${Date.now()}-${normalized.chatId}`)).dirPath;
+    state.telegramOutDirPath = (await createTelegramOutDir(stateDir, requestId)).dirPath;
   }
 
   if (workflowResult?.kind === "reply") {
@@ -250,31 +285,78 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     }
   }
 
-  const result = await context.bridge.handleAuthorizedMessage({
-    chatId: normalized.chatId,
-    userId: normalized.userId,
-    chatType: normalized.chatType,
-    locale,
-    text: requestText,
-    replyContext,
-    files: requestFiles,
-    onApprovalRequest: context.onApprovalRequest,
-    requestOutputDir: state.telegramOutDirPath,
-    workspaceOverride: cfg.resume?.workspacePath,
-    abortSignal: context.abortSignal,
-  });
+  let sideChannel: SideChannelSendServer | undefined;
+  let result: Awaited<ReturnType<WorkflowAwareTurnContext["bridge"]["handleAuthorizedMessage"]>> | undefined;
+  let deliveredText = "";
+  let sideChannelCommand: string | undefined;
+  let sideChannelEnv: Record<string, string> | undefined;
+  try {
+    sideChannel = await startSideChannelSendServer({
+      api: context.api,
+      chatId: normalized.chatId,
+      inboxDir: context.inboxDir,
+      workspaceOverride: cfg.resume?.workspacePath,
+      requestOutputDir: state.telegramOutDirPath,
+      locale,
+    });
+    await pruneStaleCctbSendDirs(stateDir, requestId);
+    const helperRoot = cfg.resume?.workspacePath
+      ? path.join(cfg.resume.workspacePath, ".cctb-send", requestId)
+      : resolveCctbSendDir(stateDir, requestId);
+    sideChannelCommand = await createSideChannelSendHelper(helperRoot, undefined, {
+      CCTB_SEND_URL: sideChannel.url,
+      CCTB_SEND_TOKEN: sideChannel.token,
+    });
+    if (context.bridge.supportsTurnScopedEnv !== false) {
+      sideChannelEnv = {
+        CCTB_SEND_URL: sideChannel.url,
+        CCTB_SEND_TOKEN: sideChannel.token,
+        CCTB_SEND_COMMAND: sideChannelCommand,
+      };
+    }
+  } catch {
+    await sideChannel?.close().catch(() => {});
+    sideChannel = undefined;
+    sideChannelCommand = undefined;
+    sideChannelEnv = undefined;
+  }
 
-  await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+  try {
+    result = await context.bridge.handleAuthorizedMessage({
+      chatId: normalized.chatId,
+      userId: normalized.userId,
+      chatType: normalized.chatType,
+      locale,
+      text: requestText,
+      replyContext,
+      files: requestFiles,
+      onApprovalRequest: context.onApprovalRequest,
+      requestOutputDir: state.telegramOutDirPath,
+      workspaceOverride: cfg.resume?.workspacePath,
+      sideChannelCommand,
+      extraEnv: sideChannelEnv,
+      abortSignal: context.abortSignal,
+    });
 
-  await deliverTelegramResponse(
-    context.api,
-    normalized.chatId,
-    result.text,
-    context.inboxDir,
-    cfg.resume?.workspacePath,
-    state.telegramOutDirPath,
-    locale,
-  );
+    await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+
+    deliveredText = stripAlreadySentSideChannelTags(result.text, sideChannel?.getSentFilePaths() ?? []);
+    await deliverTelegramResponse(
+      context.api,
+      normalized.chatId,
+      deliveredText,
+      context.inboxDir,
+      cfg.resume?.workspacePath,
+      state.telegramOutDirPath,
+      locale,
+    );
+  } finally {
+    await sideChannel?.close().catch(() => {});
+  }
+
+  if (!result) {
+    throw new Error("Telegram turn finished without an engine result");
+  }
 
   if (state.telegramOutDirPath) {
     const describedFiles = await describeTelegramOutFiles(state.telegramOutDirPath);
@@ -313,8 +395,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     metadata: {
       durationMs: Date.now() - startedAt,
       attachments: normalized.attachments.length,
-      responseChars: result.text.length,
-      chunkCount: chunkTelegramMessage(result.text).length,
+      responseChars: deliveredText.length,
+      chunkCount: chunkTelegramMessage(deliveredText).length,
     },
   });
 }

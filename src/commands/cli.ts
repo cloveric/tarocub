@@ -42,6 +42,7 @@ import {
   type ServiceCommandDeps,
 } from "./service.js";
 import { applyEngineSelection } from "../telegram/instance-config.js";
+import { runSideChannelSendCommand } from "../telegram/side-channel-send.js";
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -1090,6 +1091,8 @@ Commands:
   logs rotate [--instance <name>]             Rotate log files now (auto on service start)
   backup [--instance <name>] [--out <path>]   Back up instance state to a .cctb.gz archive (pure Node)
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
+  send [--message <text>] [--image <path>] [--file <path>]
+                                              Send files/text through the active Telegram turn side-channel
   dashboard                                   Open a visual status dashboard in the browser
   help                                        Show this help message`;
 
@@ -1396,6 +1399,12 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
     const persisted = await writeInstanceBotToken(env, instanceName, botToken);
 
     logger.log(`Configured Telegram bot token for instance "${persisted.instanceName}".`);
+    return true;
+  }
+
+  if (normalized[0] === "send") {
+    await runSideChannelSendCommand(normalized.slice(1), { env });
+    logger.log("Sent via active Telegram turn.");
     return true;
   }
 
