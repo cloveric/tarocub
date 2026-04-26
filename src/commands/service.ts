@@ -7,6 +7,7 @@ import { resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { normalizeInstanceName } from "../instance.js";
 import { resolveInstanceLockPath, type InstanceLockRecord } from "../state/instance-lock.js";
 import { InstanceLockRecordSchema } from "../state/instance-lock-schema.js";
+import { RuntimeStateStore } from "../state/runtime-state.js";
 import { RuntimeStateSchema } from "../state/runtime-state-schema.js";
 import { AccessStore } from "../state/access-store.js";
 import {
@@ -559,6 +560,7 @@ export async function startServiceInstance(
   }
 
   await mkdir(paths.stateDir, { recursive: true });
+  await new RuntimeStateStore(path.join(paths.stateDir, "runtime-state.json")).resetActiveTurns();
 
   // Rotate logs before truncating on start
   const { rotateInstanceLogs } = await import("../state/log-rotation.js");

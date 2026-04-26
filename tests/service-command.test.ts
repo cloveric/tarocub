@@ -1305,7 +1305,10 @@ describe("telegram service commands", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, ".cctb", "default");
     const lockPath = resolveInstanceLockPath(stateDir);
+    const runtimeStatePath = path.join(stateDir, "runtime-state.json");
     const killProcessTree = vi.fn();
+    const spawnDetached = vi.fn();
+    let started = false;
 
     try {
       await mkdir(stateDir, { recursive: true });
@@ -1318,7 +1321,7 @@ describe("telegram service commands", () => {
         }),
       );
       await writeFile(
-        path.join(stateDir, "runtime-state.json"),
+        runtimeStatePath,
         JSON.stringify({
           lastHandledUpdateId: null,
           activeTurnCount: 1,
@@ -1340,6 +1343,46 @@ describe("telegram service commands", () => {
       })).rejects.toThrow('Instance "default" has 1 active Telegram turn');
 
       expect(killProcessTree).not.toHaveBeenCalled();
+
+      const messages: string[] = [];
+      const handled = await runCli(["telegram", "service", "restart", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => {
+            if (pid === 54321) {
+              return killProcessTree.mock.calls.length === 0;
+            }
+
+            return pid === 12345 && started;
+          },
+          isExpectedServiceProcess: (pid) => pid === 54321 || (pid === 12345 && started),
+          killProcessTree,
+          spawnDetached: (command, args, options) => {
+            started = true;
+            writeFileSync(
+              lockPath,
+              JSON.stringify({
+                pid: 12345,
+                token: "token-2",
+                acquiredAt: new Date().toISOString(),
+              }),
+              "utf8",
+            );
+            spawnDetached(command, args, options);
+          },
+          sleep: async () => {},
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(killProcessTree).toHaveBeenCalledWith(54321);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(messages).toEqual(['Started instance "default" with pid 12345.']);
+      await expect(readFile(runtimeStatePath, "utf8").then((raw) => JSON.parse(raw))).resolves.toMatchObject({
+        activeTurnCount: 0,
+      });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
