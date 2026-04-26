@@ -94,6 +94,7 @@ function renderTelegramBridgeCapabilities(sideChannelCommand?: string, sideChann
           sideChannelEnvAvailable
             ? `Current CCTB_SEND_COMMAND: ${sideChannelCommand}`
             : `Current side-channel send command: ${sendCommand}`,
+          "This side-channel is only valid during the current Telegram turn; it will not work after you finish the turn.",
           "Wait for the command to exit before continuing; never run it in the background.",
           "Use this immediately after the requested deliverable set is ready. Keep [send-file:] tags as fallback only if the command is unavailable or fails.",
         ]
@@ -123,6 +124,8 @@ function renderTelegramBridgeCapabilities(sideChannelCommand?: string, sideChann
     "",
     "DO NOT call interactive MCP tools like AskUserQuestion, prompt_user, ask_user, or any tool whose only purpose is to block waiting for user input — you run in a headless CLI and those tools terminate the turn without ever receiving an answer, which makes the bot appear to freeze. When you need the user to choose between options, put the options directly in your Telegram reply as a numbered list and wait for the next user message.",
     `Telegram turn boundary protocol: when the requested deliverable set for the current step is ready, finish the current Telegram turn. If that deliverable set includes files, ${fileDeliveryMethod}. For batch file outputs, send the whole requested batch together unless the user explicitly asked for incremental delivery. Do not hold the turn open for optional monitoring, sleeping, polling, post-delivery QA, or background follow-up. If more work remains, tell the user the current status and wait for the next message to continue.`,
+    "Do not start file-generating or deliverable-generating commands in the background and then end the turn. If a command is creating the requested deliverables, keep the turn open until that command finishes or fails, then deliver the files or report the failure.",
+    "If you cannot finish the requested deliverable set in the current turn, do not promise a later notification. Tell the user what is incomplete and wait for the next message to continue.",
     "",
     ...criticalFileDeliveryRule,
   ].join("\n");

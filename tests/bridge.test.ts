@@ -159,6 +159,8 @@ describe("Bridge", () => {
     expect(instructions).toContain("requested deliverable set for the current step");
     expect(instructions).toContain("If that deliverable set includes files");
     expect(instructions).toContain("send the whole requested batch together");
+    expect(instructions).toContain("Do not start file-generating or deliverable-generating commands in the background");
+    expect(instructions).toContain("keep the turn open until that command finishes or fails");
     expect(instructions).toContain("finish the current Telegram turn");
     expect(instructions).toContain("wait for the next message to continue");
     expect(instructions).not.toContain("ready, send it with [send-file:] tags");
@@ -204,6 +206,7 @@ describe("Bridge", () => {
     expect(payload.instructions).toContain("Preferred file delivery");
     expect(payload.instructions).toContain('"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png');
     expect(payload.instructions).toContain("Wait for the command to exit before continuing; never run it in the background.");
+    expect(payload.instructions).toContain("This side-channel is only valid during the current Telegram turn");
     expect(payload.instructions).toContain("Keep [send-file:] tags as fallback only");
     expect(payload.instructions).toContain("The required delivery method is the side-channel send command shown above");
     expect(payload.instructions).not.toContain("The ONLY way to deliver a file to the user is the [send-file:] tag");
