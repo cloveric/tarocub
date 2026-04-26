@@ -81,6 +81,7 @@ export async function rotateInstanceLogs(stateDir: string, options: RotateOption
   const files = [
     path.join(stateDir, "audit.log.jsonl"),
     path.join(stateDir, "timeline.log.jsonl"),
+    path.join(stateDir, "service.lifecycle.log.jsonl"),
     path.join(stateDir, "service.stdout.log"),
     path.join(stateDir, "service.stderr.log"),
   ];

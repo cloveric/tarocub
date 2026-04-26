@@ -12,8 +12,19 @@ import { loadBusConfig } from "./bus/bus-config.js";
 import { createBusServer, startBusServer, stopBusServer } from "./bus/bus-server.js";
 import { createBusTalkHandler } from "./bus/bus-handler.js";
 import { pruneStaleInstances, registerInstance, deregisterInstance, resolveChannelRoot } from "./bus/bus-registry.js";
+import { appendServiceLifecycleEventSync } from "./runtime/service-lifecycle-log.js";
+
+function renderLifecycleError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.stack || error.message;
+  }
+  return String(error);
+}
 
 async function main(): Promise<void> {
+  let logLifecycleEvent: (input: Parameters<typeof appendServiceLifecycleEventSync>[1]) => void = () => {};
+  let removeUncaughtExceptionMonitor: (() => void) | undefined;
+
   try {
     const argv = process.argv.slice(2);
 
@@ -38,22 +49,65 @@ async function main(): Promise<void> {
     );
 
     const serviceConfig = resolveConfig(resolvedEnv);
+    logLifecycleEvent = (event) => appendServiceLifecycleEventSync(serviceConfig.stateDir, event);
+    logLifecycleEvent({
+      type: "service.starting",
+      instanceName,
+      metadata: {
+        argv: process.argv.slice(2),
+      },
+    });
+
+    const uncaughtExceptionMonitor = (error: Error, origin: string) => {
+      logLifecycleEvent({
+        type: "process.uncaught_exception",
+        instanceName,
+        outcome: "error",
+        detail: error.message,
+        metadata: {
+          origin,
+          stack: error.stack,
+        },
+      });
+    };
+    process.on("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
+    removeUncaughtExceptionMonitor = () => {
+      process.removeListener("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
+    };
+
     const instanceLock = await acquireInstanceLock(serviceConfig.stateDir);
-    const releaseLockOnExit = () => {
+    const releaseLockOnExit = (code: number) => {
+      logLifecycleEvent({
+        type: "process.exit",
+        instanceName,
+        metadata: { code },
+      });
       instanceLock.releaseSync();
     };
 
     process.once("exit", releaseLockOnExit);
 
     const abortController = new AbortController();
-    const shutdown = () => {
+    const shutdown = (signal: "SIGTERM" | "SIGINT") => {
+      logLifecycleEvent({
+        type: "process.signal",
+        instanceName,
+        detail: signal,
+      });
       abortController.abort();
     };
-    process.once("SIGTERM", shutdown);
-    process.once("SIGINT", shutdown);
+    const shutdownSigterm = () => shutdown("SIGTERM");
+    const shutdownSigint = () => shutdown("SIGINT");
+    process.once("SIGTERM", shutdownSigterm);
+    process.once("SIGINT", shutdownSigint);
 
     const { api, bridge, config } = await createServiceDependencies(resolvedEnv);
     await registerBotCommands(api);
+    logLifecycleEvent({
+      type: "service.started",
+      instanceName,
+      outcome: "success",
+    });
 
     let busServer: ReturnType<typeof createBusServer> | null = null;
     const channelRoot = resolveChannelRoot(config.stateDir);
@@ -83,13 +137,29 @@ async function main(): Promise<void> {
         await stopBusServer(busServer);
         await deregisterInstance(channelRoot, instanceName);
       }
-      process.removeListener("SIGTERM", shutdown);
-      process.removeListener("SIGINT", shutdown);
+      logLifecycleEvent({
+        type: "service.stopped",
+        instanceName,
+        outcome: "success",
+      });
+      process.removeListener("SIGTERM", shutdownSigterm);
+      process.removeListener("SIGINT", shutdownSigint);
       process.removeListener("exit", releaseLockOnExit);
+      removeUncaughtExceptionMonitor?.();
       await instanceLock.release();
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logLifecycleEvent({
+      type: "service.fatal",
+      instanceName: parseServiceInstanceName(process.argv.slice(2)),
+      outcome: "error",
+      detail: message,
+      metadata: {
+        error: renderLifecycleError(error),
+      },
+    });
+    removeUncaughtExceptionMonitor?.();
     console.error(message);
     process.exitCode = 1;
   }
