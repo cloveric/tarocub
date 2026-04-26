@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -131,6 +131,10 @@ function stripDeliveredStreamTextFragments(text: string, fragments: readonly str
 
 async function ensureInboxDirExists(inboxDir: string): Promise<void> {
   await mkdir(inboxDir, { recursive: true });
+}
+
+async function resolveExistingPath(filePath: string): Promise<string> {
+  return await realpath(filePath).catch(() => filePath);
 }
 
 export async function executeWorkflowAwareTelegramTurn(input: {
@@ -492,6 +496,9 @@ export async function executeWorkflowAwareTelegramTurn(input: {
 
   if (state.telegramOutDirPath) {
     const describedFiles = await describeTelegramOutFiles(state.telegramOutDirPath);
+    const alreadyDeliveredRealPaths = new Set(
+      await Promise.all(getAlreadyDeliveredFilePaths().map((filePath) => resolveExistingPath(filePath))),
+    );
     const limitedFiles = applyTelegramOutLimits(describedFiles, {
       maxFiles: 5,
       maxFileBytes: 512_000,
@@ -499,6 +506,10 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     });
 
     for (const file of limitedFiles.accepted) {
+      const fileRealPath = await resolveExistingPath(file.path);
+      if (alreadyDeliveredRealPaths.has(fileRealPath)) {
+        continue;
+      }
       const contents = await readFile(file.path);
       await sendTelegramOutFile(normalized.chatId, file.name, contents);
     }

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -6513,6 +6513,60 @@ describe("polling helpers", () => {
         "hello.txt",
         expect.any(Uint8Array),
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resend a stream-delivered file during the final flush", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-")));
+    const inboxDir = path.join(root, "inbox");
+    const workspaceDir = path.join(root, "workspace");
+    const filePath = path.join(workspaceDir, "chart.txt");
+    await mkdir(workspaceDir, { recursive: true });
+    await writeFile(path.join(root, "config.json"), JSON.stringify({ engine: "claude" }) + "\n", "utf8");
+    await writeFile(filePath, "chart", "utf8");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 12 }),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ onEngineEvent }) => {
+        onEngineEvent?.({
+          type: "assistant_text",
+          text: `Generated chart.\n[send-file:${filePath}]`,
+        });
+        return {
+          text: `Generated chart.\n[send-file:${filePath}]`,
+        };
+      }),
+    };
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "send chart",
+          replyContext: undefined,
+          attachments: [],
+        },
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+      );
+
+      expect(api.sendDocument).toHaveBeenCalledTimes(1);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "chart.txt", expect.any(Uint8Array));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

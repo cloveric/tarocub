@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -508,6 +508,69 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(state).toMatchObject({
         deliveredFilesBeforeError: [deliveredPath],
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resend telegram-out files already delivered by the side-channel", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const deliveredPaths: string[] = [];
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ requestOutputDir }: { requestOutputDir?: string }) => {
+        if (!requestOutputDir) {
+          throw new Error("missing request output dir");
+        }
+        const filePath = path.join(requestOutputDir, "report.txt");
+        await writeFile(filePath, "report", "utf8");
+        deliveredPaths.push(filePath);
+        return { text: "Done" };
+      }),
+    };
+    const sendTelegramOutFile = vi.fn();
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("make report"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 102,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        startSideChannelSendServer: vi.fn().mockResolvedValue({
+          url: "http://127.0.0.1:12345/send/token",
+          token: "token",
+          getSentFilePaths: () => deliveredPaths,
+          close: vi.fn().mockResolvedValue(undefined),
+        }),
+        createSideChannelSendHelper: vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-send", "helper")),
+        deliverTelegramResponse: vi.fn().mockResolvedValue(0),
+        sendTelegramOutFile,
+      });
+
+      expect(sendTelegramOutFile).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

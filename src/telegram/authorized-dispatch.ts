@@ -14,7 +14,7 @@ import { handleLocalSessionTelegramCommand as defaultHandleLocalSessionTelegramC
 import { handleSimpleLocalTelegramCommand as defaultHandleSimpleLocalTelegramCommand } from "./simple-commands.js";
 import type { TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
-import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
+import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 
 export interface AuthorizedTelegramDispatchConfig {
   engine: "codex" | "claude";
@@ -38,6 +38,7 @@ export interface AuthorizedTelegramDispatchContext {
       replyContext?: NormalizedTelegramMessage["replyContext"];
       files: string[];
       onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+      onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
       requestOutputDir?: string;
       workspaceOverride?: string;
       sideChannelCommand?: string;
@@ -72,6 +73,10 @@ export interface AuthorizedTelegramDispatchDeps {
     workspaceOverride: string | undefined,
     requestOutputDir: string | undefined,
     locale: Locale,
+    options?: {
+      onFileAccepted?: (sourcePath: string) => void;
+      source?: "post-turn" | "side-channel" | "stream-event";
+    },
   ) => Promise<number>;
   sendTelegramOutFile: (chatId: number, filename: string, contents: Uint8Array) => Promise<void>;
   updateWorkflowBestEffort: (

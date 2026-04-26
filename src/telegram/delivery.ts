@@ -165,8 +165,8 @@ export async function handleNormalizedTelegramMessage(
         sessionStore,
         turnState,
         updateInstanceConfig: async (updater) => await updateInstanceConfig(stateDir, updater),
-        deliverTelegramResponse: async (_api, chatId, text, inboxDir, workspaceOverride, requestOutputDir, turnLocale) => (
-          deliverTelegramResponse(context.api, chatId, text, inboxDir, workspaceOverride, requestOutputDir, turnLocale)
+        deliverTelegramResponse: async (_api, chatId, text, inboxDir, workspaceOverride, requestOutputDir, turnLocale, options) => (
+          deliverTelegramResponse(context.api, chatId, text, inboxDir, workspaceOverride, requestOutputDir, turnLocale, options)
         ),
         sendTelegramOutFile: async (chatId, filename, contents) => {
           await sendFileOrPhoto(context.api, chatId, filename, contents);
