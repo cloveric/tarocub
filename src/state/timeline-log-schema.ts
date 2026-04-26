@@ -23,6 +23,8 @@ export const TimelineEventSchema = z.object({
     "workflow.prepared",
     "workflow.failed",
     "workflow.completed",
+    "engine.event",
+    "engine.event.delivery_failed",
     "file.accepted",
     "file.rejected",
     "budget.blocked",

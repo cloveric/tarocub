@@ -19,6 +19,8 @@ export interface TimelineEvent {
     | "workflow.prepared"
     | "workflow.failed"
     | "workflow.completed"
+    | "engine.event"
+    | "engine.event.delivery_failed"
     | "file.accepted"
     | "file.rejected"
     | "budget.blocked"

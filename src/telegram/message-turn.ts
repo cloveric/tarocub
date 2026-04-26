@@ -21,7 +21,7 @@ import { appendUpdateHandleAuditEventBestEffort, maybeReplyWithBudgetExhausted, 
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { InlineKeyboardButton, TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
-import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
+import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import {
   createSideChannelSendHelper as defaultCreateSideChannelSendHelper,
   startSideChannelSendServer as defaultStartSideChannelSendServer,
@@ -56,6 +56,7 @@ export interface WorkflowAwareTurnContext {
       replyContext?: NormalizedTelegramMessage["replyContext"];
       files: string[];
       onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+      onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
       requestOutputDir?: string;
       workspaceOverride?: string;
       sideChannelCommand?: string;
@@ -102,6 +103,31 @@ function stripAlreadySentSideChannelTags(text: string, sentFilePaths: readonly s
     .trim();
 }
 
+function hasSendFileTag(text: string): boolean {
+  return /\[send-file:[^\]]+\]/.test(text);
+}
+
+function extractSendFilePaths(text: string): string[] {
+  return Array.from(text.matchAll(/\[send-file:([^\]]+)\]/g), (match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value));
+}
+
+function stripSendFileTags(text: string): string {
+  return text.replace(/\[send-file:[^\]]+\]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function stripDeliveredStreamTextFragments(text: string, fragments: readonly string[]): string {
+  let next = text;
+  for (const fragment of fragments) {
+    const trimmed = fragment.trim();
+    if (!trimmed) {
+      continue;
+    }
+    next = next.replace(trimmed, "");
+  }
+  return next.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 async function ensureInboxDirExists(inboxDir: string): Promise<void> {
   await mkdir(inboxDir, { recursive: true });
 }
@@ -133,6 +159,10 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     workspaceOverride: string | undefined,
     requestOutputDir: string | undefined,
     locale: Locale,
+    options?: {
+      onFileAccepted?: (sourcePath: string) => void;
+      source?: "post-turn" | "side-channel" | "stream-event";
+    },
   ) => Promise<number>;
   sendTelegramOutFile: (chatId: number, filename: string, contents: Uint8Array) => Promise<void>;
   updateWorkflowBestEffort?: (
@@ -290,6 +320,84 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   let deliveredText = "";
   let sideChannelCommand: string | undefined;
   let sideChannelEnv: Record<string, string> | undefined;
+  const streamDeliveredFilePaths = new Set<string>();
+  const streamPendingFilePaths = new Set<string>();
+  const streamDeliveredTextFragments: string[] = [];
+  const streamDeliveryPromises: Promise<void>[] = [];
+  const getAlreadyDeliveredFilePaths = () => [
+    ...(sideChannel?.getSentFilePaths() ?? []),
+    ...streamDeliveredFilePaths,
+  ];
+  const handleEngineEvent = (event: EngineStreamEvent): void => {
+    void appendTimelineEventBestEffort(stateDir, {
+      type: "engine.event",
+      instanceName: context.instanceName,
+      channel: "telegram",
+      chatId: normalized.chatId,
+      userId: normalized.userId,
+      updateId: context.updateId,
+      detail: event.type,
+      metadata: {
+        toolName: "toolName" in event ? event.toolName : undefined,
+        textChars: "text" in event ? event.text.length : undefined,
+        hasSendFileTag: event.type === "assistant_text" ? hasSendFileTag(event.text) : undefined,
+      },
+    });
+
+    if (event.type !== "assistant_text" || !hasSendFileTag(event.text)) {
+      return;
+    }
+
+    const eventText = stripAlreadySentSideChannelTags(event.text, getAlreadyDeliveredFilePaths());
+    if (!eventText || !hasSendFileTag(eventText)) {
+      return;
+    }
+    const eventFilePaths = extractSendFilePaths(eventText);
+    const pendingOnlyPaths = eventFilePaths.filter((filePath) => !streamDeliveredFilePaths.has(filePath));
+    if (pendingOnlyPaths.length > 0 && pendingOnlyPaths.every((filePath) => streamPendingFilePaths.has(filePath))) {
+      return;
+    }
+    for (const filePath of pendingOnlyPaths) {
+      streamPendingFilePaths.add(filePath);
+    }
+    const eventTextFragment = stripSendFileTags(eventText);
+
+    const delivery = deliverTelegramResponse(
+      context.api,
+      normalized.chatId,
+      eventText,
+      context.inboxDir,
+      cfg.resume?.workspacePath,
+      state.telegramOutDirPath,
+      locale,
+      {
+        source: "stream-event",
+        onFileAccepted: (sourcePath) => {
+          streamDeliveredFilePaths.add(sourcePath);
+          streamPendingFilePaths.delete(sourcePath);
+        },
+      },
+    ).then(() => {
+      if (eventTextFragment) {
+        streamDeliveredTextFragments.push(eventTextFragment);
+      }
+    }).catch((error) => {
+      for (const filePath of pendingOnlyPaths) {
+        streamPendingFilePaths.delete(filePath);
+      }
+      void appendTimelineEventBestEffort(stateDir, {
+        type: "engine.event.delivery_failed",
+        instanceName: context.instanceName,
+        channel: "telegram",
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    });
+    streamDeliveryPromises.push(delivery);
+  };
   try {
     sideChannel = await startSideChannelSendServer({
       api: context.api,
@@ -331,6 +439,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       replyContext,
       files: requestFiles,
       onApprovalRequest: context.onApprovalRequest,
+      onEngineEvent: handleEngineEvent,
       requestOutputDir: state.telegramOutDirPath,
       workspaceOverride: cfg.resume?.workspacePath,
       sideChannelCommand,
@@ -340,7 +449,11 @@ export async function executeWorkflowAwareTelegramTurn(input: {
 
     await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
 
-    deliveredText = stripAlreadySentSideChannelTags(result.text, sideChannel?.getSentFilePaths() ?? []);
+    await Promise.allSettled(streamDeliveryPromises);
+    deliveredText = stripDeliveredStreamTextFragments(
+      stripAlreadySentSideChannelTags(result.text, getAlreadyDeliveredFilePaths()),
+      streamDeliveredTextFragments,
+    );
     await deliverTelegramResponse(
       context.api,
       normalized.chatId,

@@ -334,6 +334,59 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("emits structured Claude stream events for tools, text, permission, and result", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: unknown[] = [];
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Use tools",
+      files: [],
+      onApprovalRequest: vi.fn().mockResolvedValue({ behavior: "deny" }),
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData(JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "I should inspect files" },
+          { type: "tool_use", name: "Bash", input: { command: "ls" } },
+          { type: "text", text: "Working..." },
+        ],
+      },
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "control_request",
+      request_id: "approval-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Bash",
+        input: { command: "rm -rf /tmp/example" },
+      },
+    }) + "\n");
+
+    await waitFor(() => children[0].stdin.lines.length === 2);
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"DONE","session_id":"session-123"}\n');
+    await promise;
+
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "session", sessionId: "session-123" }),
+      expect.objectContaining({ type: "thinking", text: "I should inspect files", sessionId: "session-123" }),
+      expect.objectContaining({ type: "tool_use", toolName: "Bash", toolInput: { command: "ls" }, sessionId: "session-123" }),
+      expect.objectContaining({ type: "assistant_text", text: "Working...", sessionId: "session-123" }),
+      expect.objectContaining({ type: "permission_request", toolName: "Bash", toolInput: { command: "rm -rf /tmp/example" }, sessionId: "session-123" }),
+      expect.objectContaining({ type: "result", text: "DONE", sessionId: "session-123" }),
+    ]));
+  });
+
   it("keeps intermediate send-file tags when the final Claude result only summarizes delivery", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {

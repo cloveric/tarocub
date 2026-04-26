@@ -23,6 +23,7 @@ import type {
   CodexSessionHandle,
   EngineApprovalDecision,
   EngineApprovalRequest,
+  EngineStreamEvent,
   CodexUserMessageInput,
 } from "./adapter.js";
 import type { ApprovalMode } from "./process-adapter.js";
@@ -77,6 +78,9 @@ type ClaudeStreamEvent = {
     content?: Array<{
       type?: string;
       text?: string;
+      thinking?: string;
+      name?: string;
+      input?: unknown;
     }>;
   };
   usage?: {
@@ -94,6 +98,7 @@ type PendingTurn = {
   reject: (error: Error) => void;
   onProgress?: (partialText: string) => void;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   approvalAbortController: AbortController;
   abortSignal?: AbortSignal;
   abortHandler?: () => void;
@@ -485,18 +490,52 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.currentSessionId = parsed.session_id;
     }
 
+    if (parsed.type === "system" && parsed.subtype === "init" && worker.pendingTurn) {
+      this.emitEngineEvent(worker, {
+        type: "session",
+        sessionId: worker.currentSessionId ?? undefined,
+      });
+      return;
+    }
+
     if (parsed.type === "assistant" && worker.pendingTurn) {
-      const text =
-        parsed.message?.content
-          ?.filter((item) => item.type === "text" && typeof item.text === "string")
-          .map((item) => item.text ?? "")
-          .join("") ?? "";
+      const textParts: string[] = [];
+      for (const item of parsed.message?.content ?? []) {
+        if (item.type === "thinking" && typeof item.thinking === "string" && item.thinking) {
+          this.emitEngineEvent(worker, {
+            type: "thinking",
+            text: item.thinking,
+            sessionId: worker.currentSessionId ?? undefined,
+          });
+          continue;
+        }
+
+        if (item.type === "tool_use") {
+          this.emitEngineEvent(worker, {
+            type: "tool_use",
+            toolName: typeof item.name === "string" && item.name ? item.name : "Unknown tool",
+            toolInput: item.input,
+            sessionId: worker.currentSessionId ?? undefined,
+          });
+          continue;
+        }
+
+        if (item.type === "text" && typeof item.text === "string") {
+          textParts.push(item.text);
+        }
+      }
+      const text = textParts.join("");
       if (text) {
         worker.pendingTurn.assistantText = appendAssistantText(worker.pendingTurn.assistantText, text);
         if (hasSendFileTag(text)) {
           worker.pendingTurn.intermediateDeliveryText = appendAssistantText(worker.pendingTurn.intermediateDeliveryText, text);
         }
         worker.pendingTurn.onProgress?.(worker.pendingTurn.assistantText);
+        this.emitEngineEvent(worker, {
+          type: "assistant_text",
+          text,
+          sessionId: worker.currentSessionId ?? undefined,
+        });
       }
       return;
     }
@@ -512,15 +551,22 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     if (parsed.type === "result" && worker.pendingTurn) {
       const pending = worker.pendingTurn;
-      worker.pendingTurn = null;
-      this.clearPendingTurnTimeout(pending);
       if (parsed.is_error) {
+        worker.pendingTurn = null;
+        this.clearPendingTurnTimeout(pending);
         pending.reject(new Error((parsed.result ?? pending.assistantText ?? "Claude reported an error").trim()));
         return;
       }
       const text = parsed.result
         ? mergeIntermediateDeliveryText(parsed.result, pending.intermediateDeliveryText)
         : pending.assistantText;
+      this.emitEngineEvent(worker, {
+        type: "result",
+        text,
+        sessionId: worker.currentSessionId ?? undefined,
+      });
+      worker.pendingTurn = null;
+      this.clearPendingTurnTimeout(pending);
       pending.resolve({
         text: text.trim() || "Claude completed the request.",
         sessionId: worker.currentSessionId ?? undefined,
@@ -549,6 +595,12 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     const toolInput = parsed.request?.input ?? parsed.request?.tool_input ?? parsed.request?.toolInput ?? {};
+    this.emitEngineEvent(worker, {
+      type: "permission_request",
+      toolName: request.toolName,
+      toolInput: request.toolInput,
+      sessionId: worker.currentSessionId ?? undefined,
+    });
     let decision: EngineApprovalDecision;
     if (worker.approvalMode !== "normal") {
       decision = { behavior: "allow", scope: "session" };
@@ -591,6 +643,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         intermediateDeliveryText: "",
         onProgress: input.onProgress,
         onApprovalRequest: input.onApprovalRequest,
+        onEngineEvent: input.onEngineEvent,
         approvalAbortController: new AbortController(),
         resolve,
         reject,
@@ -641,6 +694,19 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         this.removeWorker(worker);
       }
     });
+  }
+
+  private emitEngineEvent(worker: ClaudeWorker, event: EngineStreamEvent): void {
+    const handler = worker.pendingTurn?.onEngineEvent;
+    if (!handler) {
+      return;
+    }
+
+    try {
+      void Promise.resolve(handler(event)).catch(() => undefined);
+    } catch {
+      // Event delivery is best-effort; it must not break the engine turn.
+    }
   }
 
   destroy(): void {

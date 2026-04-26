@@ -192,6 +192,128 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("delivers stream send-file events before final turn delivery and strips duplicate final tags", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const generatedPath = path.join(root, "workspace", "chart.png");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
+        input.onEngineEvent?.({
+          type: "tool_use",
+          toolName: "Write",
+          toolInput: { file_path: generatedPath },
+        });
+        input.onEngineEvent?.({
+          type: "assistant_text",
+          text: `Generated chart.\n[send-file:${generatedPath}]`,
+        });
+        input.onEngineEvent?.({
+          type: "assistant_text",
+          text: `Generated chart.\n[send-file:${generatedPath}]`,
+        });
+        return {
+          text: `Generated chart.\n[send-file:${generatedPath}]`,
+        };
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockImplementation(async (
+      _api,
+      _chatId,
+      text: string,
+      _inboxDir,
+      _workspaceOverride,
+      _requestOutputDir,
+      _locale,
+      options,
+    ) => {
+      if (text.includes("[send-file:")) {
+        options?.onFileAccepted?.(generatedPath);
+        return 1;
+      }
+      return 0;
+    });
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("make chart"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 99,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(deliverTelegramResponse).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        123,
+        `Generated chart.\n[send-file:${generatedPath}]`,
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+        expect.objectContaining({
+          source: "stream-event",
+          onFileAccepted: expect.any(Function),
+        }),
+      );
+      expect(deliverTelegramResponse).toHaveBeenCalledTimes(2);
+      expect(deliverTelegramResponse).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        123,
+        "",
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+      );
+
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "engine.event",
+          detail: "tool_use",
+          metadata: expect.objectContaining({
+            toolName: "Write",
+          }),
+        }),
+        expect.objectContaining({
+          type: "engine.event",
+          detail: "assistant_text",
+          metadata: expect.objectContaining({
+            hasSendFileTag: true,
+          }),
+        }),
+      ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("starts the side-channel with an embedded helper when the bridge cannot pass turn-scoped env", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {

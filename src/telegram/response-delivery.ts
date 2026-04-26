@@ -168,7 +168,7 @@ export async function deliverTelegramResponse(
   locale: Locale = "en",
   options: {
     onFileAccepted?: (sourcePath: string) => void;
-    source?: "post-turn" | "side-channel";
+    source?: "post-turn" | "side-channel" | "stream-event";
   } = {},
 ): Promise<number> {
   let filesSent = 0;

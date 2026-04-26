@@ -34,12 +34,46 @@ export type EngineApprovalDecision =
       behavior: "deny";
     };
 
+export type EngineStreamEvent =
+  | {
+      type: "session";
+      sessionId?: string;
+    }
+  | {
+      type: "assistant_text";
+      text: string;
+      sessionId?: string;
+    }
+  | {
+      type: "thinking";
+      text: string;
+      sessionId?: string;
+    }
+  | {
+      type: "tool_use";
+      toolName: string;
+      toolInput?: unknown;
+      sessionId?: string;
+    }
+  | {
+      type: "permission_request";
+      toolName: string;
+      toolInput?: unknown;
+      sessionId?: string;
+    }
+  | {
+      type: "result";
+      text: string;
+      sessionId?: string;
+    };
+
 export interface CodexUserMessageInput {
   text: string;
   files: string[];
   instructions?: string;
   onProgress?: (partialText: string) => void;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   requestOutputDir?: string;
   workspaceOverride?: string;
   extraEnv?: Record<string, string>;

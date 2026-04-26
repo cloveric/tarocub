@@ -1380,7 +1380,7 @@ describe("polling helpers", () => {
       logger,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForCondition(() => maxConcurrentCalls === 1);
     expect(maxConcurrentCalls).toBe(1);
 
     releaseFirstCall.resolve();
