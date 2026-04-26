@@ -18,15 +18,15 @@
 <h3 align="center">
   Put the real Codex and Claude Code CLI on Telegram.<br>
   Not an API wrapper — the actual CLI, with native sessions, local files, and real tool use.<br>
-  Run one bot or a small bot team: isolated instances by default, Agent Bus when you need delegation, fan-out, pipelines, or a coordinator-led crew.
+  Reliable file delivery included: generated images, PDFs, decks, and reports can be sent directly from the agent turn.
 </h3>
 
 <p align="center">
-  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local resume, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
+  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, side-channel file delivery, local resume, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">File Delivery</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
@@ -711,12 +711,22 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
   </tr>
   <tr>
     <td>
+      <h3>Reliable File Delivery</h3>
+      <p>Agents can send generated images, PDFs, decks, and reports during the active Telegram turn via <code>CCTB_SEND_COMMAND</code>. The bridge validates paths, supports <code>[send-file:]</code> fallback, and de-dupes stream/side-channel files before the final sweep.</p>
+    </td>
+    <td>
       <h3>Streaming Progress</h3>
       <p>See AI responses as they're generated — the Telegram message updates live every 2 seconds during Codex/Claude execution, instead of waiting for completion.</p>
     </td>
+  </tr>
+  <tr>
     <td>
       <h3>Production Resilience</h3>
       <p>Long polling (~0ms latency), exponential backoff, 429 auto-retry, 409 conflict auto-shutdown, graceful SIGTERM/SIGINT, fault-tolerant batch processing.</p>
+    </td>
+    <td>
+      <h3>Mobile-Friendly Outputs</h3>
+      <p>Use Telegram as the control surface while the real CLI works on your machine. Final artifacts are delivered back as Telegram attachments, not just local paths.</p>
     </td>
   </tr>
   <tr>

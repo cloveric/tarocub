@@ -18,15 +18,15 @@
 <h3 align="center">
   把真正的 Codex 和 Claude Code CLI 搬到 Telegram。<br>
   不是 API 封装 — 是原生 CLI，带原生会话、本地文件和真实工具调用。<br>
-  既能单 bot 使用，也能跑一个小型 bot 团队：默认隔离，需要协作时通过 Agent Bus 做委托、并行、链式和 coordinator 主导的 crew workflow。
+  内置可靠文件投递：agent 生成的图片、PDF、PPT 和报告可以在当前 turn 里直接发回 Telegram。
 </h3>
 
 <p align="center">
-  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地续接、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
+  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、side-channel 文件投递、本地续接、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
 </p>
 
 <p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件投递</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
@@ -685,12 +685,22 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   </tr>
   <tr>
     <td>
+      <h3>可靠文件投递</h3>
+      <p>agent 可在当前 Telegram turn 里通过 <code>CCTB_SEND_COMMAND</code> 直接发送生成的图片、PDF、PPT 和报告。bridge 会校验路径、保留 <code>[send-file:]</code> fallback，并在最终扫描前对 stream/side-channel 已投递文件去重。</p>
+    </td>
+    <td>
       <h3>流式进度</h3>
       <p>AI 生成回复时，Telegram 消息每 2 秒实时更新，不再干等 "Running..."。</p>
     </td>
+  </tr>
+  <tr>
     <td>
       <h3>YOLO 模式</h3>
       <p>一条命令让 AI 自动审批一切 — 双引擎通用，按实例配置，热加载生效。</p>
+    </td>
+    <td>
+      <h3>手机端友好交付</h3>
+      <p>Telegram 只是控制面，真正的 CLI 仍在你的电脑上工作。最终产物会作为 Telegram 附件发回，而不是只告诉你一个本地路径。</p>
     </td>
   </tr>
   <tr>
