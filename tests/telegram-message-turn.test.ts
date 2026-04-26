@@ -450,6 +450,70 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("does not repair explanatory text that quotes deferred-delivery phrases", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const explanatoryText = [
+      "现在逻辑链是：",
+      "1. 如果 engine 最终回复里出现类似“等通知 / 等 batch 通知 / wait for notification”，bridge 不会把这条回复发给 Telegram。",
+      "2. 这不是直接承诺稍后通知，而是在解释拦截机制。",
+      "所以现在不是只改 prompt 了。",
+    ].join("\n");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: explanatoryText,
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(0);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "zh",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("解释逻辑"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "bot6",
+          updateId: 104,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        explanatoryText,
+        expect.any(String),
+        undefined,
+        expect.stringContaining(path.join("workspace", ".telegram-out")),
+        "zh",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("waits for stream deliveries to settle when the engine turn fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {
