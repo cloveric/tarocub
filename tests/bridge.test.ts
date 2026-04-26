@@ -161,6 +161,7 @@ describe("Bridge", () => {
     expect(instructions).toContain("send the whole requested batch together");
     expect(instructions).toContain("Do not start file-generating or deliverable-generating commands in the background");
     expect(instructions).toContain("keep the turn open until that command finishes or fails");
+    expect(instructions).toContain("Waiting for a command that is creating requested deliverables is required work, not optional monitoring");
     expect(instructions).toContain("Do not reply that a batch is running or ask the user to wait for a later notification");
     expect(instructions).toContain("Do not say \"等通知\"");
     expect(instructions).toContain("finish the current Telegram turn");
