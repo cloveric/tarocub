@@ -122,6 +122,7 @@ describe("ProcessClaudeAdapter", () => {
       expect(calls[0]?.command).toBe("claude");
       expect(calls[0]?.args).toEqual([
         "-p",
+        "--verbose",
         "--output-format",
         "stream-json",
         "--system-prompt",

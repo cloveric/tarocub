@@ -294,7 +294,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     const prompt = parts.join("\n");
 
     // Build args
-    const args: string[] = ["-p", "--output-format", "stream-json"];
+    const args: string[] = ["-p", "--verbose", "--output-format", "stream-json"];
 
     // Agent personality from agent.md → --system-prompt
     if (agentInstructions) {
