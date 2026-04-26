@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { classifyFailure, isStaleSessionError } from "../runtime/error-classification.js";
 import { SessionStateError } from "../runtime/session-manager.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
@@ -58,6 +60,28 @@ function shouldUseNonRepairableResetSessionGuidance(
     errorText.includes("session store") ||
     errorText.includes("session binding")
   );
+}
+
+function renderDeliveredFilesBeforeErrorMessage(filePaths: readonly string[] | undefined, locale: Locale): string | undefined {
+  if (!filePaths || filePaths.length === 0) {
+    return undefined;
+  }
+
+  const names = [...new Set(filePaths.map((filePath) => path.basename(filePath)).filter(Boolean))];
+  if (names.length === 0) {
+    return undefined;
+  }
+
+  const preview = names.slice(0, 3).join(", ");
+  const remaining = names.length > 3 ? names.length - 3 : 0;
+  if (locale === "zh") {
+    const more = remaining > 0 ? `，另有 ${remaining} 个` : "";
+    return `文件已送达，但引擎在生成最终文字回复时断开。已发送 ${names.length} 个文件：${preview}${more}。如果文件可用，这一轮不用重跑。`;
+  }
+
+  const more = remaining > 0 ? `, and ${remaining} more` : "";
+  const noun = names.length === 1 ? "file was" : "files were";
+  return `File delivery completed, but the engine disconnected while generating the final text reply. ${names.length} ${noun} already sent: ${preview}${more}. If the file is usable, you do not need to rerun this turn.`;
 }
 
 export async function maybeRetryTelegramTurnError(input: {
@@ -158,13 +182,19 @@ export async function finalizeTelegramTurnError(input: {
   } = input;
 
   const message = classifiedError instanceof Error ? classifiedError.message : String(classifiedError);
-  const errorMessage = shouldUseNonRepairableResetSessionGuidance(classifiedError, failureCategory, normalized.text)
+  const deliveredFilesMessage = renderDeliveredFilesBeforeErrorMessage(turnState.deliveredFilesBeforeError, locale);
+  const baseErrorMessage = shouldUseNonRepairableResetSessionGuidance(classifiedError, failureCategory, normalized.text)
     ? renderSessionStateErrorMessage(false, locale)
     : classifiedError instanceof SessionStateError
     ? renderSessionStateErrorMessage(classifiedError.repairable, locale)
     : turnState.failureHint
     ? `${renderCategorizedErrorMessage(failureCategory, message, locale, engine)}\n${turnState.failureHint}`
     : renderCategorizedErrorMessage(failureCategory, message, locale, engine);
+  const errorMessage = deliveredFilesMessage
+    ? turnState.failureHint
+      ? `${deliveredFilesMessage}\n${turnState.failureHint}`
+      : deliveredFilesMessage
+    : baseErrorMessage;
   let workflowCleanupError: unknown;
 
   if (turnState.workflowRecordId) {
@@ -209,6 +239,7 @@ export async function finalizeTelegramTurnError(input: {
       durationMs: Date.now() - startedAt,
       attachments: normalized.attachments.length,
       failureCategory,
+      deliveredFilesBeforeError: turnState.deliveredFilesBeforeError?.length,
       workflowCleanupError:
         workflowCleanupError === undefined
           ? undefined

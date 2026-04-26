@@ -33,6 +33,7 @@ export interface WorkflowAwareTurnState {
   archiveSummaryDelivered: boolean;
   failureHint?: string;
   telegramOutDirPath?: string;
+  deliveredFilesBeforeError?: string[];
 }
 
 export interface WorkflowAwareTurnConfig {
@@ -430,6 +431,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   }
 
   let streamDeliveriesSettled = false;
+  let turnError: unknown;
   try {
     result = await context.bridge.handleAuthorizedMessage({
       chatId: normalized.chatId,
@@ -465,11 +467,23 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       state.telegramOutDirPath,
       locale,
     );
+  } catch (error) {
+    turnError = error;
   } finally {
     if (!streamDeliveriesSettled) {
       await Promise.allSettled(streamDeliveryPromises);
     }
+    if (turnError !== undefined) {
+      const deliveredFilePaths = [...new Set(getAlreadyDeliveredFilePaths())];
+      if (deliveredFilePaths.length > 0) {
+        state.deliveredFilesBeforeError = deliveredFilePaths;
+      }
+    }
     await sideChannel?.close().catch(() => {});
+  }
+
+  if (turnError !== undefined) {
+    throw turnError;
   }
 
   if (!result) {

@@ -884,9 +884,9 @@ describe("polling helpers", () => {
     expect(result.hadUpdates).toBe(true);
     expect(result.conflict).toBe(false);
 
-    // Wait for background processing to complete
-    await new Promise((r) => setTimeout(r, 100));
-    expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("continues processing later updates after a failed update", async () => {

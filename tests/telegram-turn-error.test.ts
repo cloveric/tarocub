@@ -195,4 +195,42 @@ describe("finalizeTelegramTurnError", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("explains when files were delivered before the engine failed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-turn-error-"));
+    const normalized = createNormalizedMessage("enhance image");
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1 });
+
+    try {
+      await finalizeTelegramTurnError({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized,
+        context: {
+          api: { sendMessage },
+          instanceName: "default",
+          updateId: 101,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        classifiedError: new Error("stream disconnected before completion"),
+        failureCategory: "engine-cli",
+        turnState: {
+          archiveSummaryDelivered: false,
+          failureHint: undefined,
+          telegramOutDirPath: undefined,
+          deliveredFilesBeforeError: ["/tmp/moon-ultraclear-4x.png"],
+        },
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        123,
+        "File delivery completed, but the engine disconnected while generating the final text reply. 1 file was already sent: moon-ultraclear-4x.png. If the file is usable, you do not need to rerun this turn.",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
