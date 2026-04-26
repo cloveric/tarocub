@@ -124,6 +124,46 @@ describe("Bridge", () => {
     expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.disableRuntimeTimeout).toBeUndefined();
   });
 
+  it("tells agents to finish the Telegram turn once deliverables are ready", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "generate images",
+      replyContext: undefined,
+      files: [],
+    });
+
+    const instructions = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions;
+    expect(instructions).toContain("Telegram turn boundary protocol");
+    expect(instructions).toContain("requested deliverable set for the current step");
+    expect(instructions).toContain("If that deliverable set includes files");
+    expect(instructions).toContain("send the whole requested batch together");
+    expect(instructions).toContain("finish the current Telegram turn");
+    expect(instructions).toContain("wait for the next message to continue");
+    expect(instructions).not.toContain("ready, send it with [send-file:] tags");
+  });
+
   it("rejects a message when the chat is not on the allowlist", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

@@ -208,7 +208,7 @@ describe("ProcessClaudeAdapter", () => {
     expect(server?.type).toBe("stdio");
     expect(server?.command).toBeTruthy();
     expect(server?.args?.[0]).toMatch(/claude-permission-mcp-server\.(?:js|ts)$/);
-    expect(server?.env?.CCTB_CLAUDE_APPROVAL_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/claude-permission$/);
+    expect(server?.env?.CCTB_CLAUDE_APPROVAL_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/claude-permission\/[A-Za-z0-9_-]+$/);
 
     const promptToolIndex = calls[0]?.args.indexOf("--permission-prompt-tool") ?? -1;
     expect(promptToolIndex).toBeGreaterThanOrEqual(0);

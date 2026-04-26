@@ -194,6 +194,12 @@ export async function deliverTelegramResponse(
   }
   const markdownLinks = extractMarkdownAbsoluteLinks(text);
   for (const link of markdownLinks) {
+    if (isPlaceholderFilePath(link.path)) {
+      if (!rejected.some((item) => item.path === link.path && item.reason === "placeholder-path")) {
+        rejected.push({ path: link.path, reason: "placeholder-path" });
+      }
+      continue;
+    }
     if (!filePaths.includes(link.path)) {
       filePaths.push(link.path);
     }

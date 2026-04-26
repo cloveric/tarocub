@@ -169,6 +169,8 @@ open -e ~/.cctb/work/agent.md
 
 如果你希望 Telegram bot 免打断运行，推荐开启 `telegram yolo on`。如果保持 YOLO 关闭，bridge 会用 Telegram 审批按钮接住无头审批：Claude 可以按单个权限请求审批；Codex process 模式会先问你是否允许本轮自动执行，通过后这一轮用 `--full-auto` 跑。`unsafe` 只适合完全可信的本地环境。
 
+Claude 审批按钮会启动一个短生命周期的 localhost MCP bridge，并带随机 URL token。它能挡住盲扫本地端口的进程，但同一用户下能查看进程命令行的本地进程仍可能看到 token。所以 YOLO 关闭时的审批适合单用户工作站便利操作，不等于多用户隔离边界。
+
 ```bash
 npm run dev -- telegram yolo on --instance work      # 安全自动审批
 npm run dev -- telegram yolo unsafe --instance work   # 跳过所有检查

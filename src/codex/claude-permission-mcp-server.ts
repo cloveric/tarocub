@@ -1,3 +1,7 @@
+import { z } from "zod";
+
+import { APPROVAL_BRIDGE_FETCH_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
+
 type JsonRpcRequest = {
   jsonrpc?: string;
   id?: string | number;
@@ -8,6 +12,12 @@ type JsonRpcRequest = {
     protocolVersion?: string;
   };
 };
+
+const ApprovalBridgeResponseSchema = z.object({
+  behavior: z.enum(["allow", "deny"]),
+  updatedInput: z.unknown().optional(),
+  message: z.string().optional(),
+}).passthrough();
 
 function sendResponse(id: string | number | undefined, result: Record<string, unknown>): void {
   if (id === undefined) {
@@ -52,7 +62,7 @@ async function resolvePermission(args: Record<string, unknown>): Promise<Record<
         "Content-Type": "application/json",
       },
       body: JSON.stringify(args),
-      signal: AbortSignal.timeout(30 * 60 * 1000),
+      signal: AbortSignal.timeout(APPROVAL_BRIDGE_FETCH_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -62,9 +72,9 @@ async function resolvePermission(args: Record<string, unknown>): Promise<Record<
       };
     }
 
-    const payload = await response.json();
-    if (typeof payload === "object" && payload !== null) {
-      return payload as Record<string, unknown>;
+    const payload = ApprovalBridgeResponseSchema.safeParse(await response.json());
+    if (payload.success) {
+      return payload.data;
     }
   } catch (error) {
     return {

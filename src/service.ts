@@ -16,7 +16,7 @@ import { SessionStore } from "./state/session-store.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
 import { TelegramApi } from "./telegram/api.js";
 import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
-import { handleTelegramApprovalCommand } from "./telegram/approval-requests.js";
+import { handleTelegramApprovalCommand, isTelegramApprovalCommand } from "./telegram/approval-requests.js";
 import { normalizeUpdate } from "./telegram/update-normalizer.js";
 import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
@@ -925,7 +925,24 @@ export async function processTelegramUpdates(
         continue;
       }
 
-      if (await handleTelegramApprovalCommand({ normalized, api: context.api })) {
+      if (isTelegramApprovalCommand(normalized.text)) {
+        const locale = (await loadStopLocale(context.inboxDir)) === "zh" ? "zh" : "en";
+        const accessDecision = await context.bridge.checkAccess({
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          chatType: normalized.chatType,
+          locale,
+        });
+
+        if (accessDecision.kind === "allow") {
+          await handleTelegramApprovalCommand({ normalized, api: context.api });
+        } else {
+          if (normalized.callbackQueryId) {
+            try { await context.api.answerCallbackQuery(normalized.callbackQueryId); } catch { /* best effort */ }
+          }
+          const msg = accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
+          try { await context.api.sendMessage(normalized.chatId, msg); } catch { /* best effort */ }
+        }
         nextOffset = advanceOffset(nextOffset, completedOffset);
         if (updateId !== undefined) {
           await runtimeStateStore.markHandledUpdateId(updateId);

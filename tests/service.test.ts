@@ -574,6 +574,7 @@ describe("polling helpers", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
       editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      answerCallbackQuery: vi.fn().mockResolvedValue(undefined),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
       sendMediaGroup: vi.fn().mockResolvedValue(undefined),
     };
@@ -1492,6 +1493,69 @@ describe("polling helpers", () => {
     await firstRun;
 
     expect(aborted).toBe(false);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "This chat is not authorized for this instance.");
+  });
+
+  it("does not let unauthorized chats probe approval commands", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockImplementation(async ({ userId }: { userId: number }) => (
+        userId === 456
+          ? { kind: "allow" }
+          : { kind: "deny", text: "This chat is not authorized for this instance." }
+      )),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    await processTelegramUpdates(
+      [{ update_id: 3, message: { chat: { id: 123, type: "private" }, from: { id: 999 }, text: "/approve" } }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "This chat is not authorized for this instance.");
+    expect(api.sendMessage).not.toHaveBeenCalledWith(123, "No pending approval.");
+  });
+
+  it("acknowledges unauthorized approval callback queries", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      answerCallbackQuery: vi.fn().mockResolvedValue(undefined),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "deny", text: "This chat is not authorized for this instance." }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    await processTelegramUpdates(
+      [{
+        update_id: 4,
+        callback_query: {
+          id: "callback-1",
+          from: { id: 999 },
+          data: "approval:abc123:once",
+          message: { chat: { id: 123, type: "private" } },
+        },
+      }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    expect(api.answerCallbackQuery).toHaveBeenCalledWith("callback-1");
     expect(api.sendMessage).toHaveBeenCalledWith(123, "This chat is not authorized for this instance.");
   });
 

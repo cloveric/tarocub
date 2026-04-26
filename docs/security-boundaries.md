@@ -260,10 +260,12 @@ The provider CLI is not a pure function. It is a privileged local subprocess wit
 - adapter interfaces keep provider-specific parsing contained
 - runtime normalizes auth errors, session handling, and usage accounting above the adapter layer
 - Telegram-specific instructions explicitly forbid interactive prompt tools and define the file-delivery contract
+- Claude Telegram approvals use a loopback MCP bridge with a per-request random URL token; this defends against blind local port probes, not against same-user process inspection
 
 ### Residual risk
 
 - provider behavior can change underneath the bridge
+- same-user local processes may inspect provider CLI command lines, including transient MCP config used for Claude approvals
 - array/object output formats, auth-expiry paths, and session-rebind semantics need regression coverage
 - bugs at this layer usually become product-level reliability issues quickly
 

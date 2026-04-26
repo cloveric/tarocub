@@ -1,8 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
 
 import type { EngineApprovalDecision, EngineApprovalRequest } from "./adapter.js";
 
@@ -20,6 +22,17 @@ export interface ClaudePermissionHookInput {
   toolInput?: unknown;
   tool_use_id?: string;
 }
+
+const ClaudePermissionHookInputSchema = z.object({
+  session_id: z.string().optional(),
+  cwd: z.string().optional(),
+  tool_name: z.string().optional(),
+  toolName: z.string().optional(),
+  input: z.unknown().optional(),
+  tool_input: z.unknown().optional(),
+  toolInput: z.unknown().optional(),
+  tool_use_id: z.string().optional(),
+}).passthrough();
 
 export interface ClaudePermissionHookServer {
   url: string;
@@ -115,7 +128,8 @@ function readRequestJson(request: IncomingMessage): Promise<ClaudePermissionHook
     request.on("error", reject);
     request.on("end", () => {
       try {
-        resolve(body.trim() ? JSON.parse(body) as ClaudePermissionHookInput : {});
+        const parsed = body.trim() ? JSON.parse(body) : {};
+        resolve(ClaudePermissionHookInputSchema.parse(parsed));
       } catch (error) {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -149,7 +163,22 @@ function toEngineApprovalRequest(input: ClaudePermissionHookInput, abortSignal?:
 
 function sessionApprovalKey(input: ClaudePermissionHookInput): string {
   const request = toEngineApprovalRequest(input);
-  return `${request.toolName}:${JSON.stringify(request.toolInput)}`;
+  return `${request.toolName}:${canonicalJson(request.toolInput)}`;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
 }
 
 export async function startClaudePermissionHookServer(
@@ -157,9 +186,12 @@ export async function startClaudePermissionHookServer(
 ): Promise<ClaudePermissionHookServer> {
   const sessionApprovedKeys = new Set<string>();
   const approvalAbortController = new AbortController();
+  const token = randomUUID();
+  const hookPath = `${CLAUDE_PERMISSION_HOOK_PATH}/${token}`;
 
   const server = createServer(async (request, response) => {
-    if (request.method !== "POST" || request.url !== CLAUDE_PERMISSION_HOOK_PATH) {
+    const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (request.method !== "POST" || requestPath !== hookPath) {
       writeJson(response, 404, { error: "not found" });
       return;
     }
@@ -204,7 +236,7 @@ export async function startClaudePermissionHookServer(
   }
 
   return {
-    url: `http://127.0.0.1:${address.port}${CLAUDE_PERMISSION_HOOK_PATH}`,
+    url: `http://127.0.0.1:${address.port}${hookPath}`,
     close: async () => {
       approvalAbortController.abort();
       await closeServer(server);

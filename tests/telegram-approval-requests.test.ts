@@ -15,8 +15,18 @@ function createApi() {
   };
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms = 100): Promise<T> {
+  return await Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error("timed out waiting for approval")), ms);
+    }),
+  ]);
+}
+
 describe("telegram approval requests", () => {
   afterEach(() => {
+    vi.useRealTimers();
     clearPendingTelegramApprovalsForTest();
   });
 
@@ -111,6 +121,127 @@ describe("telegram approval requests", () => {
 
     await expect(pending).resolves.toEqual({ behavior: "allow", scope: "session" });
     expect(api.editMessage).toHaveBeenCalledWith(123, 11, "Approved for this turn. Claude is resuming...", { inlineKeyboard: null });
+  });
+
+  it("resolves the oldest pending request for the same chat and user", async () => {
+    const api = createApi();
+    const otherUserPending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 999,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "first" },
+      },
+    });
+    const otherApprovalId = api.sendMessage.mock.calls[0]?.[2]?.inlineKeyboard?.[0]?.[0]?.callbackData!.split(":")[1]!;
+    const myPending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "second" },
+      },
+    });
+
+    await expect(handleTelegramApprovalCommand({
+      normalized: {
+        chatId: 123,
+        userId: 456,
+        chatType: "private",
+        text: "/approve session",
+        attachments: [],
+      },
+      api,
+    })).resolves.toBe(true);
+
+    await expect(withTimeout(myPending)).resolves.toEqual({ behavior: "allow", scope: "session" });
+
+    await handleTelegramApprovalCommand({
+      normalized: {
+        chatId: 123,
+        userId: 999,
+        chatType: "private",
+        text: `/approval ${otherApprovalId} deny`,
+        attachments: [],
+      },
+      api,
+    });
+    await expect(otherUserPending).resolves.toEqual({ behavior: "deny" });
+  });
+
+  it("does not treat /approve argument substrings as session approvals", async () => {
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "npm test" },
+      },
+    });
+
+    await expect(handleTelegramApprovalCommand({
+      normalized: {
+        chatId: 123,
+        userId: 456,
+        chatType: "private",
+        text: "/approve do not sessionize this",
+        attachments: [],
+      },
+      api,
+    })).resolves.toBe(true);
+
+    await expect(pending).resolves.toEqual({ behavior: "allow", scope: "once" });
+  });
+
+  it("resolves /deny with an explicit approval id", async () => {
+    const api = createApi();
+    const firstPending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "first" },
+      },
+    });
+    const firstApprovalId = api.sendMessage.mock.calls[0]?.[2]?.inlineKeyboard?.[0]?.[0]?.callbackData!.split(":")[1]!;
+    const secondPending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "second" },
+      },
+    });
+
+    await expect(handleTelegramApprovalCommand({
+      normalized: {
+        chatId: 123,
+        userId: 456,
+        chatType: "private",
+        text: `/deny ${firstApprovalId}`,
+        attachments: [],
+      },
+      api,
+    })).resolves.toBe(true);
+
+    await expect(firstPending).resolves.toEqual({ behavior: "deny" });
+    await expect(withTimeout(secondPending)).rejects.toThrow("timed out waiting for approval");
   });
 
   it("renders Codex approval prompts and decisions as Codex", async () => {
@@ -213,6 +344,7 @@ describe("telegram approval requests", () => {
 
     abortController.abort();
     await expect(pending).resolves.toEqual({ behavior: "deny" });
+    expect(api.editMessage).toHaveBeenCalledWith(123, 11, "Approval canceled (denied).", { inlineKeyboard: null });
 
     await expect(handleTelegramApprovalCommand({
       normalized: {
@@ -225,5 +357,28 @@ describe("telegram approval requests", () => {
       api,
     })).resolves.toBe(true);
     expect(api.sendMessage).toHaveBeenLastCalledWith(123, "No pending approval.");
+  });
+
+  it("edits the approval prompt when the request expires", async () => {
+    vi.useFakeTimers();
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: {
+          command: "npm test",
+        },
+      },
+    });
+
+    await vi.runAllTimersAsync();
+
+    await expect(pending).resolves.toEqual({ behavior: "deny" });
+    expect(api.editMessage).toHaveBeenCalledWith(123, 11, "Approval expired (denied).", { inlineKeyboard: null });
   });
 });

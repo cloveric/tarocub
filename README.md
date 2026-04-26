@@ -170,6 +170,8 @@ open -e ~/.cctb/work/agent.md
 
 For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the CLI supports a headless path: Claude can approve individual permission prompts; Codex process mode asks once before the turn, then runs the approved turn with `--full-auto`. Keep `unsafe` for fully trusted local environments only.
 
+Claude approval buttons use a short-lived localhost MCP bridge with a random URL token. This protects against blind local port scans, but the token is still visible to same-user local processes that can inspect process command lines. Treat YOLO-off approval as a single-user workstation convenience, not a multi-user isolation boundary.
+
 ```powershell
 npm run dev -- telegram yolo on --instance work      # Safe auto-approve
 npm run dev -- telegram yolo unsafe --instance work   # Skip ALL checks
