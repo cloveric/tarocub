@@ -176,7 +176,8 @@ export async function deliverTelegramResponse(
 ): Promise<number> {
   let filesSent = 0;
   const fileMatch = text.match(/```file:([^\n]+)\n([\s\S]*?)```/);
-  if (fileMatch) {
+  const isWholeResponseFileBlock = fileMatch && text.replace(fileMatch[0], "").trim().length === 0;
+  if (fileMatch && isWholeResponseFileBlock && Buffer.byteLength(fileMatch[2] ?? "", "utf8") > 0) {
     const [, fileName, fileBody] = fileMatch;
     await sendFileOrPhoto(api, chatId, fileName.trim(), fileBody);
     return 1;

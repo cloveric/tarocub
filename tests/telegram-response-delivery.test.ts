@@ -66,6 +66,72 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
+  it("does not turn explanatory file fenced-block examples into attachments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+    const text = [
+      "Small files use this syntax:",
+      "```file:example.txt",
+      "hello",
+      "```",
+    ].join("\n");
+
+    try {
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        text,
+        inboxDir,
+        workspaceDir,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, text, { parseMode: "Markdown" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still sends an attachment when the whole response is one file fenced block", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        "```file:example.txt\nhello\n```",
+        inboxDir,
+        workspaceDir,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(1);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "example.txt", "hello\n");
+      expect(api.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("marks side-channel accepted files in the timeline", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);

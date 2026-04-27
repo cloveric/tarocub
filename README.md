@@ -39,6 +39,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.4.5** — prevents explanatory ````file:...```` fenced-block examples from being mis-delivered as Telegram documents; inline file blocks now send only when the whole response is one non-empty file block.
 - **v4.4.4** — tightens explicit delivery-count repair so short replies like "Done" plus too few files are retried, while explicit partial-failure reports are allowed through.
 - **v4.4.3** — adds a conservative delivery manifest for explicit multi-file requests, so replies for requests like "generate 2 images" are repaired when fewer files were actually delivered.
 - **v4.4.2** — restricts turn-scoped child-process environment injection to the side-channel delivery variables (`CCTB_SEND_URL`, `CCTB_SEND_TOKEN`, `CCTB_SEND_COMMAND`) for both Codex and Claude process runtimes.
