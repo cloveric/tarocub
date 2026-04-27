@@ -39,7 +39,8 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
-- **v4.5.0** — adds stable `telegram send` delivery outside active turns, allows explicit send commands to use any readable absolute path, removes manifest/contract/count-based/wakeup delivery repair state, and keeps hidden `.telegram-out` files out of auto-delivery.
+- **v4.5.1** — moves Telegram file-delivery instructions into per-instance `agent.md`, shortens the per-turn prompt to a static transport reminder, adds generated-instructions migration with `--dry-run` and backup-on-`--force`, and hardens `cctb send` reliability tests.
+- **v4.5.0** — adds stable explicit send delivery outside active turns, allows explicit send commands to use any readable absolute path, removes manifest/contract/count-based/wakeup delivery repair state, and keeps hidden `.telegram-out` files out of auto-delivery.
 - **v4.4.6** — releases superseded file workflows before auth/stale-session retry, adds delivery-ledger mismatch telemetry, hardens side-channel bearer checks, avoids delivery-guard false positives in audit replies, and raises pairing-code entropy.
 - **v4.4.5** — prevents explanatory ````file:...```` fenced-block examples from being mis-delivered as Telegram documents; inline file blocks now send only when the whole response is one non-empty file block.
 - **v4.4.4** — tightens explicit delivery-count repair so short replies like "Done" plus too few files are retried, while explicit partial-failure reports are allowed through.
@@ -178,15 +179,15 @@ open -e ~/.cctb/work/agent.md
 
 ## File Delivery From Agent Tasks
 
-During each active Telegram turn, the bridge injects a short-lived local send helper into the CLI environment. Agents should prefer it when they finish a generated file:
+During each active Telegram turn, the bridge injects a stable `cctb` command into the engine process `PATH`. Agents should prefer it when they finish a generated file:
 
 ```bash
-"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png
-"$CCTB_SEND_COMMAND" --file /absolute/path/to/report.pdf
-"$CCTB_SEND_COMMAND" --message "Done" --file /absolute/path/to/report.pdf
+cctb send --image /absolute/path/to/image.png
+cctb send --file /absolute/path/to/report.pdf
+cctb send --message "Done" --file /absolute/path/to/report.pdf
 ```
 
-The same delivery path is also available as a stable CLI command. Inside an active Telegram turn it uses the turn-scoped side-channel; outside an active turn it falls back to the configured instance and the active Telegram session:
+Inside an active Telegram turn, `cctb send` uses the turn-scoped side-channel and preserves the current chat/session context. The same delivery path is also available through the repository CLI outside an active turn, where it falls back to the configured instance and active Telegram session:
 
 ```bash
 telegram send --image /absolute/path/to/image.png
@@ -197,19 +198,28 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 
 Current delivery rules:
 
-- Prefer `CCTB_SEND_COMMAND` for existing files, images, PDFs, decks, and other binary outputs.
-- Use `telegram send` when you need the same explicit delivery command outside an active turn, or when no turn-scoped helper is available.
+- Prefer `cctb send` for existing files, images, PDFs, decks, and other binary outputs during active Telegram turns.
+- Use `telegram send` when you need the same explicit delivery command outside an active turn, or when the turn-scoped `cctb` helper is unavailable.
 - Explicit send commands accept any readable absolute file path.
-- Use `[send-file:/absolute/path]` only as fallback when explicit send commands are unavailable or fail.
+- Use `[send-file:/absolute/path]` / `[send-image:/absolute/path]` only as fallback when explicit send commands are unavailable or fail.
 - Small text/code files can still use the `file:name.ext` fenced-block form.
 - The helper is scoped to one Telegram turn. It will not work after the turn finishes.
 - Plain `[send-file:]` fallback tags still validate that files live under the instance workspace or the active `/resume` project before sending.
 - Accepted and rejected file deliveries are recorded as turn-level receipts, so the bridge can decide completion from structured delivery evidence instead of text claims.
 - If a file was already sent by stream delivery or the side-channel helper, the final `.telegram-out` sweep skips that same real path to avoid duplicate Telegram attachments.
+- Request-scoped `.telegram-out/<requestId>/` directories are runtime buffers and are pruned after 24 hours.
 - The bridge no longer keeps manifest, pending-contract, or count-based state to infer future delivery intent across ordinary chat turns.
 - Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures.
 
 This works for the default Codex and Claude process runtimes. File delivery is explicit: generate the file, call the send command, and rely on the resulting receipt.
+
+After upgrading from an older release, refresh generated instance instructions with:
+
+```bash
+telegram instructions upgrade --all
+```
+
+This safely replaces old generated Telegram Transport blocks and appends the block when missing. Custom transport sections are left untouched unless you rerun with `--force`; use `--dry-run` first to preview cross-instance changes. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
 
 ---
 

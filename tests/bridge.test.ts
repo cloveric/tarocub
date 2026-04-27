@@ -43,15 +43,9 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).toHaveBeenCalledWith("telegram-84", expect.objectContaining({
       text: "hello",
       files: [],
-      instructions: expect.stringContaining("Telegram chat bridge"),
+      instructions: undefined,
       requestOutputDir: undefined,
     }));
-    expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions).toContain(
-      "Small text/code files: use one fenced `file:name.ext` block",
-    );
-    expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions).toContain(
-      "deliver it as a Telegram document attachment",
-    );
     expect(result.text).toBe("done");
     expect(sessionManager.bindSession).not.toHaveBeenCalled();
   });
@@ -124,7 +118,7 @@ describe("Bridge", () => {
     expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.disableRuntimeTimeout).toBeUndefined();
   });
 
-  it("keeps file delivery instructions concise without turn-boundary pressure", async () => {
+  it("does not inject file delivery instructions when instance agent.md owns transport rules", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         multiChat: false,
@@ -155,23 +149,10 @@ describe("Bridge", () => {
     });
 
     const instructions = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions;
-    expect(instructions).toContain("CRITICAL FILE DELIVERY RULE");
-    expect(instructions).toContain("You CANNOT send files by mentioning their name or path in chat text");
-    expect(instructions.length).toBeLessThan(700);
-    expect(instructions).not.toContain("Telegram turn boundary protocol");
-    expect(instructions).not.toContain("requested deliverable set for the current step");
-    expect(instructions).not.toContain("send the whole requested batch together");
-    expect(instructions).not.toContain("Do not start file-generating or deliverable-generating commands in the background");
-    expect(instructions).not.toContain("keep the turn open until that command finishes or fails");
-    expect(instructions).not.toContain("Waiting for a command that is creating requested deliverables is required work, not optional monitoring");
-    expect(instructions).not.toContain("Do not reply that a batch is running or ask the user to wait for a later notification");
-    expect(instructions).not.toContain("Do not say \"等通知\"");
-    expect(instructions).not.toContain("ready, send it with [send-file:] tags");
-    expect(instructions).not.toContain("Wrong: [send-file:");
-    expect(instructions).not.toContain("Generated a PPT");
+    expect(instructions).toBeUndefined();
   });
 
-  it("prefers the active side-channel command for file delivery when available", async () => {
+  it("passes the active side-channel env without repeating file delivery instructions", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         multiChat: false,
@@ -208,17 +189,7 @@ describe("Bridge", () => {
     });
 
     const payload = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-    expect(payload.instructions).toContain("File send command (preferred)");
-    expect(payload.instructions).toContain('"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png');
-    expect(payload.instructions).toContain("Valid only this Telegram turn");
-    expect(payload.instructions).toContain("telegram send --image /absolute/path/to/image.png");
-    expect(payload.instructions).toContain("last resort [send-file:<real absolute path>]");
-    expect(payload.instructions.length).toBeLessThan(1_300);
-    expect(payload.instructions).not.toContain("never run it in the background");
-    expect(payload.instructions).not.toContain("Generated a PPT");
-    expect(payload.instructions).not.toContain("Wrong: [send-file:");
-    expect(payload.instructions).not.toContain("The ONLY way to deliver a file to the user is the [send-file:] tag");
-    expect(payload.instructions).not.toContain("After generating/saving ANY file the user should receive, you MUST include a [send-file:] tag");
+    expect(payload.instructions).toBeUndefined();
     expect(payload.extraEnv).toEqual({
       CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
       CCTB_SEND_TOKEN: "token",
@@ -226,7 +197,7 @@ describe("Bridge", () => {
     });
   });
 
-  it("advertises literal side-channel helper paths for adapters without turn-scoped env support", async () => {
+  it("does not advertise side-channel helper paths for adapters without turn-scoped env support", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         multiChat: false,
@@ -264,10 +235,7 @@ describe("Bridge", () => {
     });
 
     const payload = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-    expect(payload.instructions).toContain("File send command (preferred)");
-    expect(payload.instructions).toContain("/tmp/workspace/.cctb-send/helper --image /absolute/path/to/image.png");
-    expect(payload.instructions.length).toBeLessThan(1_300);
-    expect(payload.instructions).not.toContain('"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png');
+    expect(payload.instructions).toBeUndefined();
     expect(payload.extraEnv).toBeUndefined();
   });
 
@@ -837,12 +805,9 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).toHaveBeenCalledWith("telegram-84", expect.objectContaining({
       text: "answer this\n\n[Quoted message #99]\nquoted text",
       files: [],
-      instructions: expect.stringContaining("Telegram chat bridge"),
+      instructions: undefined,
       requestOutputDir: undefined,
     }));
-    expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions).toContain(
-      "deliver it as a Telegram document attachment",
-    );
   });
 
   it("does not append quoted archive-summary text when continue has no reply context", async () => {
@@ -888,7 +853,7 @@ describe("Bridge", () => {
     );
   });
 
-  it("passes codex telegram-out instructions separately from user text", async () => {
+  it("passes codex telegram-out metadata without adding per-turn instructions", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         policy: "allowlist",
@@ -924,16 +889,14 @@ describe("Bridge", () => {
       expect.objectContaining({
         text: "generate a file",
         requestOutputDir: "C:\\tmp\\workspace\\.telegram-out\\req-123",
-        instructions: expect.stringContaining("[Codex Telegram-Out]"),
+        instructions: undefined,
       }),
     );
     const call = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-    expect(call?.instructions).toContain("Files placed there are auto-delivered after the turn");
-    expect(call?.instructions).toContain("[send-file:");
-    expect(call?.instructions.length).toBeLessThan(1_400);
+    expect(call?.instructions).toBeUndefined();
   });
 
-  it("injects bridge capabilities for codex adapters too", async () => {
+  it("does not inject bridge capabilities for codex adapters", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         policy: "allowlist",
@@ -967,12 +930,12 @@ describe("Bridge", () => {
       "telegram-84",
       expect.objectContaining({
         text: "文件在哪里",
-        instructions: expect.stringContaining("[send-file:"),
+        instructions: undefined,
       }),
     );
   });
 
-  it("uses only the codex telegram-out contract for codex file delivery", async () => {
+  it("uses codex telegram-out metadata without an extra prompt contract", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         policy: "allowlist",
@@ -1005,7 +968,7 @@ describe("Bridge", () => {
 
     const call = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
     expect(call?.text).toBe("生成一个文件并发给我");
-    expect(call?.instructions).toContain("[Codex Telegram-Out]");
-    expect(call?.instructions).toContain("[send-file:");
+    expect(call?.requestOutputDir).toBe("C:\\tmp\\workspace\\.telegram-out\\req-123");
+    expect(call?.instructions).toBeUndefined();
   });
 });

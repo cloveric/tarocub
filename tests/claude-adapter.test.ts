@@ -187,6 +187,7 @@ describe("ProcessClaudeAdapter", () => {
         CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
         CCTB_SEND_TOKEN: "token",
         CCTB_SEND_COMMAND: "/tmp/.cctb-send/helper",
+        PATH: `/tmp/.cctb-bin${path.delimiter}/usr/bin`,
         LD_PRELOAD: "/tmp/injected.dylib",
         NODE_OPTIONS: "--require /tmp/injected.js",
       },
@@ -201,6 +202,7 @@ describe("ProcessClaudeAdapter", () => {
       CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
       CCTB_SEND_TOKEN: "token",
       CCTB_SEND_COMMAND: "/tmp/.cctb-send/helper",
+      PATH: `/tmp/.cctb-bin${path.delimiter}/usr/bin`,
     });
     expect(calls[0]?.options.env?.LD_PRELOAD).toBeUndefined();
     expect(calls[0]?.options.env?.NODE_OPTIONS).toBeUndefined();

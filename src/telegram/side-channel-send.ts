@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import path from "node:path";
@@ -31,6 +31,12 @@ export interface SideChannelSendServer {
   close: () => Promise<void>;
 }
 
+interface RejectedDeliveryLike {
+  path?: unknown;
+  reason?: unknown;
+  detail?: unknown;
+}
+
 export interface SideChannelSendServerOptions {
   api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">;
   chatId: number;
@@ -43,6 +49,43 @@ export interface SideChannelSendServerOptions {
 const MAX_SIDE_CHANNEL_BODY_BYTES = 64 * 1024;
 const MAX_SIDE_CHANNEL_FILES = 20;
 const SIDE_CHANNEL_CLOSE_TIMEOUT_MS = 1000;
+
+export function formatRejectedDeliverySummary(rejected: readonly RejectedDeliveryLike[]): string {
+  return rejected
+    .map((receipt) => {
+      const filePath = typeof receipt.path === "string" ? receipt.path : "";
+      const reason = typeof receipt.reason === "string" ? receipt.reason : "";
+      const detail = typeof receipt.detail === "string" && receipt.detail ? ` (${receipt.detail})` : "";
+      if (!filePath || !reason) {
+        return "";
+      }
+      return `${filePath} — ${reason}${detail}`;
+    })
+    .filter(Boolean)
+    .join("; ");
+}
+
+function renderSideChannelHttpError(responseText: string, fallback: string): string {
+  const trimmed = responseText.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      error?: unknown;
+      rejected?: unknown;
+    };
+    const message = typeof parsed.error === "string" && parsed.error.trim()
+      ? parsed.error.trim()
+      : fallback;
+    const rejected = Array.isArray(parsed.rejected)
+      ? formatRejectedDeliverySummary(parsed.rejected as RejectedDeliveryLike[])
+      : "";
+    return rejected ? `${message}: ${rejected}` : message;
+  } catch {
+    return trimmed;
+  }
+}
 
 function assertAbsoluteFilePaths(paths: string[]): void {
   const relativePath = paths.find((filePath) => !isAbsoluteFilePath(filePath));
@@ -142,7 +185,7 @@ export async function runSideChannelSendCommand(
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw new Error(text.trim() || `side-channel send failed with HTTP ${response.status}`);
+    throw new Error(renderSideChannelHttpError(text, `side-channel send failed with HTTP ${response.status}`));
   }
 }
 
@@ -201,7 +244,10 @@ export function renderSideChannelDeliveryText(payload: SideChannelSendPayload): 
   if (payload.message) {
     lines.push(payload.message);
   }
-  for (const filePath of [...payload.images, ...payload.files]) {
+  for (const filePath of payload.images) {
+    lines.push(`[send-image:${filePath}]`);
+  }
+  for (const filePath of payload.files) {
     lines.push(`[send-file:${filePath}]`);
   }
   return lines.join("\n");
@@ -341,9 +387,31 @@ function quoteSh(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function defaultBridgeCliCommand(...args: string[]): string[] {
+  return [
+    process.execPath,
+    path.resolve(process.argv[1] ?? "dist/src/index.js"),
+    ...args,
+  ];
+}
+
+async function writeFileIfChanged(filePath: string, contents: string): Promise<void> {
+  try {
+    if (await readFile(filePath, "utf8") === contents) {
+      return;
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT") {
+      throw error;
+    }
+  }
+  await writeFile(filePath, contents, "utf8");
+}
+
 export async function createSideChannelSendHelper(
   dirPath: string,
-  cliCommand: string[] = [process.execPath, process.argv[1] ?? "dist/src/index.js", "send"],
+  cliCommand: string[] = defaultBridgeCliCommand("send"),
   embeddedEnv?: Pick<SideChannelSendEnv, "CCTB_SEND_URL" | "CCTB_SEND_TOKEN">,
 ): Promise<string> {
   await mkdir(dirPath, { recursive: true });
@@ -364,6 +432,25 @@ export async function createSideChannelSendHelper(
     embeddedEnv?.CCTB_SEND_TOKEN ? `CCTB_SEND_TOKEN=${quoteSh(embeddedEnv.CCTB_SEND_TOKEN)}\nexport CCTB_SEND_TOKEN` : "",
   ].filter(Boolean);
   await writeFile(helperPath, `#!/usr/bin/env sh\n${envLines.join("\n")}${envLines.length > 0 ? "\n" : ""}exec ${command} "$@"\n`, "utf8");
+  await chmod(helperPath, 0o700);
+  return helperPath;
+}
+
+export async function createStableCctbCommandHelper(
+  dirPath: string,
+  cliCommand: string[] = defaultBridgeCliCommand(),
+): Promise<string> {
+  await mkdir(dirPath, { recursive: true });
+  const helperPath = path.join(dirPath, process.platform === "win32" ? "cctb.cmd" : "cctb");
+
+  if (process.platform === "win32") {
+    const command = cliCommand.map((part) => `"${part.replace(/"/g, '""')}"`).join(" ");
+    await writeFileIfChanged(helperPath, `@echo off\r\n${command} %*\r\n`);
+    return helperPath;
+  }
+
+  const command = cliCommand.map(quoteSh).join(" ");
+  await writeFileIfChanged(helperPath, `#!/usr/bin/env sh\nexec ${command} "$@"\n`);
   await chmod(helperPath, 0o700);
   return helperPath;
 }

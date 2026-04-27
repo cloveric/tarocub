@@ -39,6 +39,8 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.5.1** — 将 Telegram 文件投递规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留一段静态 transport 提醒；新增 generated instructions 迁移命令，支持 `--dry-run` 预览和 `--force` 前自动备份，并补齐 `cctb send` 可靠性回归测试。
+- **v4.5.0** — 新增稳定的显式发送链路，active turn 外也能用 `telegram send`；显式发送命令可读取任意可读绝对路径；移除 manifest / pending contract / 数量判断 / wakeup repair 这类 delivery 状态，并避免隐藏 `.telegram-out` 文件被自动投递。
 - **v4.4.2** — Codex/Claude process runtime 的 turn 级子进程环境变量注入改为 allowlist，只允许文件交付 side-channel 需要的 `CCTB_SEND_URL`、`CCTB_SEND_TOKEN`、`CCTB_SEND_COMMAND`。
 - **v4.4.1** — Codex process runtime 接入和 Claude 同一套 engine-event 通道，可透出结构化 `session` 与完成态 `assistant_text` 事件；本地 Codex rollout 扫描也加了 visited/depth 防护。
 - **v4.4.0** — 新增 Delivery Protocol v2：turn 级交付 ledger、side-channel 结构化 accepted/rejected receipt，以及可基于 side-channel、stream、最终 `[send-file:]` 和 `.telegram-out` 真实证据判断完成的交付门禁。
@@ -172,27 +174,47 @@ open -e ~/.cctb/work/agent.md
 
 ## Agent 任务里的文件投递
 
-每个 Telegram turn 运行时，bridge 会给 CLI 环境注入一个短生命周期的本地发送 helper。Agent 生成完文件后，优先用它直接投递：
+每个 Telegram turn 运行时，bridge 会把稳定的 `cctb` 命令注入到 engine 进程的 `PATH`。Agent 生成完文件后，优先用它直接投递：
 
 ```bash
-"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png
-"$CCTB_SEND_COMMAND" --file /absolute/path/to/report.pdf
-"$CCTB_SEND_COMMAND" --message "Done" --file /absolute/path/to/report.pdf
+cctb send --image /absolute/path/to/image.png
+cctb send --file /absolute/path/to/report.pdf
+cctb send --message "Done" --file /absolute/path/to/report.pdf
+```
+
+在 active Telegram turn 内，`cctb send` 会走 turn-scoped side-channel，并保留当前 chat/session 上下文。active turn 外也可以直接用仓库 CLI，它会回退到已配置实例和当前活跃 Telegram session：
+
+```bash
+telegram send --image /absolute/path/to/image.png
+telegram send --file /absolute/path/to/report.pdf
+telegram send --chat 123456789 --file /absolute/path/to/report.pdf
+telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.png
 ```
 
 当前投递约定：
 
-- 已存在的文件、图片、PDF、PPT、二进制产物，优先用 `CCTB_SEND_COMMAND`。必须等待命令退出，不要后台运行。
-- 只有 helper 不可用或失败时，才用 `[send-file:/absolute/path]` 作为 fallback。
+- active Telegram turn 内，已存在的文件、图片、PDF、PPT、二进制产物，优先用 `cctb send`。
+- active turn 外，或者 turn-scoped `cctb` helper 不可用时，用 `telegram send` 做同一条显式投递链路。
+- 显式发送命令接受任意可读绝对路径。
+- 只有显式发送命令不可用或失败时，才用 `[send-file:/absolute/path]` / `[send-image:/absolute/path]` 作为 fallback。
 - 小型文本/代码文件仍可用 `file:name.ext` fenced-block 形式返回。
 - helper 只在当前 Telegram turn 有效，turn 结束后不能再用。
 - bridge 会校验每个文件必须位于实例工作区或当前 `/resume` 项目目录下，才会真正发送。
 - 文件投递成功和拒绝都会记录为 turn 级 receipt，所以 bridge 可以用结构化交付证据判断是否完成，而不是相信文本声明。
 - 如果某个文件已经通过 stream delivery 或 side-channel helper 发过，最终 `.telegram-out` 扫描会按真实路径跳过它，避免 Telegram 重复附件。
-- 对明确要生成/导出/发送图片或文件的请求，bridge 会把最终回复和真实交付证据对上。类似“batch 跑起来了，稍后 check”或“图片已生成”但没有实际文件投递的回复，会被拦截并自动 repair。
+- request-scoped `.telegram-out/<requestId>/` 目录只是运行时缓冲区，24 小时后自动清理。
+- bridge 不再保留 manifest、pending contract 或基于数量的状态来推断普通聊天 turn 里的未来交付意图。
 - 纯文本任务不会误当成文件交付失败，例如图片分析、图片描述、内联报告；除非用户明确要求保存、导出、发送或交付文件。
 
-当前默认的 Codex 和 Claude process runtime 都支持。长时间生成文件的任务里，agent 应该等当前这批交付物完成后立刻发送文件并结束 turn，不要继续睡眠、轮询、做可选 QA，或承诺稍后通知。
+当前默认的 Codex 和 Claude process runtime 都支持。文件投递现在是显式动作：生成文件，调用发送命令，然后依赖 receipt。
+
+从旧版本升级后，可以刷新已生成的实例指令：
+
+```bash
+telegram instructions upgrade --all
+```
+
+这个命令会安全替换旧的 generated Telegram Transport block；缺少 transport section 时会追加。自定义 transport section 默认不会覆盖，除非显式加 `--force`；建议先用 `--dry-run` 预览跨实例变更。`--force` 覆盖前会在原文件旁边创建 `agent.md.bak.<timestamp>` 备份。
 
 ---
 

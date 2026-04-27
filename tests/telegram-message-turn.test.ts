@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { executeWorkflowAwareTelegramTurn } from "../src/telegram/message-turn.js";
+import { deliverTelegramResponse as deliverActualTelegramResponse } from "../src/telegram/response-delivery.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
@@ -127,6 +128,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       close,
     });
     const createSideChannelSendHelper = vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-send", "helper"));
+    const createStableCctbCommandHelper = vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-bin", "cctb"));
     const bridge = {
       handleAuthorizedMessage: vi.fn().mockResolvedValue({
         text: "Done\n[send-file:/tmp/generated.png]\n[send-file:/tmp/fallback.png]",
@@ -159,6 +161,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         state,
         startSideChannelSendServer,
         createSideChannelSendHelper,
+        createStableCctbCommandHelper,
         deliverTelegramResponse,
         sendTelegramOutFile: vi.fn(),
       });
@@ -169,13 +172,17 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       const helperRoot = createSideChannelSendHelper.mock.calls[0]?.[0] as string;
       expect(helperRoot).toContain(path.join("workspace", ".cctb-send"));
       expect(helperRoot).not.toContain(".telegram-out");
+      expect(createStableCctbCommandHelper).toHaveBeenCalledWith(
+        path.join(root, "workspace", ".cctb-bin"),
+      );
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         sideChannelCommand: path.join(root, "workspace", ".cctb-send", "helper"),
-        extraEnv: {
+        extraEnv: expect.objectContaining({
           CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
           CCTB_SEND_TOKEN: "token",
           CCTB_SEND_COMMAND: path.join(root, "workspace", ".cctb-send", "helper"),
-        },
+          PATH: expect.stringContaining(path.join(root, "workspace", ".cctb-bin")),
+        }),
       }));
       expect(deliverTelegramResponse).toHaveBeenCalledWith(
         expect.anything(),
@@ -192,6 +199,55 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       );
       expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prepares the stable cctb command helper for every env-supported turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const createStableCctbCommandHelper = vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-bin", "cctb"));
+
+    try {
+      for (const text of ["first", "second"]) {
+        const state = {
+          archiveSummaryDelivered: false,
+          workflowRecordId: undefined as string | undefined,
+          failureHint: undefined as string | undefined,
+        };
+        await executeWorkflowAwareTelegramTurn({
+          stateDir: root,
+          startedAt: Date.now() - 10,
+          locale: "en",
+          cfg: { engine: "codex" },
+          normalized: createNormalizedMessage(text),
+          context: {
+            api: {
+              sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+              sendDocument: vi.fn(),
+              sendPhoto: vi.fn(),
+              getFile: vi.fn(),
+              downloadFile: vi.fn(),
+            },
+            bridge: {
+              handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "ok" }),
+            } as never,
+            inboxDir: path.join(root, "inbox"),
+          },
+          workflowStore: {
+            update: vi.fn(),
+          } as never,
+          downloadedAttachments: [],
+          state,
+          createStableCctbCommandHelper,
+          deliverTelegramResponse: vi.fn().mockResolvedValue(0),
+          sendTelegramOutFile: vi.fn(),
+        });
+      }
+
+      expect(createStableCctbCommandHelper).toHaveBeenCalledTimes(2);
+      expect(createStableCctbCommandHelper).toHaveBeenNthCalledWith(1, path.join(root, "workspace", ".cctb-bin"));
+      expect(createStableCctbCommandHelper).toHaveBeenNthCalledWith(2, path.join(root, "workspace", ".cctb-bin"));
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -375,6 +431,157 @@ describe("executeWorkflowAwareTelegramTurn", () => {
           }),
         }),
       ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("notifies only once when the same stream and final send-file tag is rejected", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const missingPath = path.join(root, "workspace", "missing.png");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
+        input.onEngineEvent?.({
+          type: "assistant_text",
+          text: `[send-file:${missingPath}]`,
+        });
+        return {
+          text: `[send-file:${missingPath}]`,
+        };
+      }),
+    };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn(),
+      sendPhoto: vi.fn(),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+
+    try {
+      await mkdir(path.join(root, "workspace"), { recursive: true });
+
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("make chart"),
+        context: {
+          api,
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse: deliverActualTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining(missingPath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers stream send-image events and strips duplicate final tags", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const generatedPath = path.join(root, "workspace", "chart.png");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
+        input.onEngineEvent?.({
+          type: "assistant_text",
+          text: `Generated chart.\n[send-image:${generatedPath}]`,
+        });
+        return {
+          text: `Generated chart.\n[send-image:${generatedPath}]`,
+        };
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockImplementation(async (
+      _api,
+      _chatId,
+      text: string,
+      _inboxDir,
+      _workspaceOverride,
+      _requestOutputDir,
+      _locale,
+      options,
+    ) => {
+      if (text.includes("[send-image:")) {
+        options?.onDeliveryAccepted?.({
+          path: generatedPath,
+          realPath: generatedPath,
+          fileName: "chart.png",
+          source: options.source ?? "post-turn",
+        });
+        return 1;
+      }
+      return 0;
+    });
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("make chart"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        `Generated chart.\n[send-image:${generatedPath}]`,
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+        expect.objectContaining({
+          source: "stream-event",
+        }),
+      );
+      expect(deliverTelegramResponse).toHaveBeenLastCalledWith(
+        expect.anything(),
+        123,
+        "",
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2847,7 +3054,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
-  it("starts the side-channel with an embedded helper when the bridge cannot pass turn-scoped env", async () => {
+  it("does not create side-channel helpers when the bridge cannot pass turn-scoped env", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {
       archiveSummaryDelivered: false,
@@ -2862,6 +3069,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       close,
     });
     const createSideChannelSendHelper = vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-send", "helper"));
+    const createStableCctbCommandHelper = vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-bin", "cctb"));
     const bridge = {
       supportsTurnScopedEnv: false,
       handleAuthorizedMessage: vi.fn().mockResolvedValue({
@@ -2894,24 +3102,19 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         state,
         startSideChannelSendServer,
         createSideChannelSendHelper,
+        createStableCctbCommandHelper,
         deliverTelegramResponse: vi.fn().mockResolvedValue(0),
         sendTelegramOutFile: vi.fn(),
       });
 
-      expect(startSideChannelSendServer).toHaveBeenCalled();
-      expect(createSideChannelSendHelper).toHaveBeenCalledWith(
-        expect.stringContaining(".cctb-send"),
-        undefined,
-        {
-          CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
-          CCTB_SEND_TOKEN: "token",
-        },
-      );
+      expect(startSideChannelSendServer).not.toHaveBeenCalled();
+      expect(createSideChannelSendHelper).not.toHaveBeenCalled();
+      expect(createStableCctbCommandHelper).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
-        sideChannelCommand: path.join(root, "workspace", ".cctb-send", "helper"),
+        sideChannelCommand: undefined,
         extraEnv: undefined,
       }));
-      expect(close).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readlink, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -23,6 +23,65 @@ describe("telegram-out", () => {
       expect(result.requestId).toBe("req-123");
       expect(result.dirPath).toBe(path.join(root, "workspace", ".telegram-out", "req-123"));
       await expect(stat(result.dirPath)).resolves.toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a stable current alias for the active request directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+
+    try {
+      const result = await createTelegramOutDir(root, "req-123");
+      const aliasPath = path.join(root, "workspace", ".telegram-out", "current");
+
+      await expect(lstat(aliasPath)).resolves.toEqual(expect.objectContaining({
+        isSymbolicLink: expect.any(Function),
+      }));
+      expect((await lstat(aliasPath)).isSymbolicLink()).toBe(true);
+      await expect(readlink(aliasPath)).resolves.toBe(result.dirPath);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("continues when the current alias cannot be created", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const warnings: Array<{ aliasPath: string; targetDirPath: string; error: unknown }> = [];
+
+    try {
+      const result = await createTelegramOutDir(root, "req-123", undefined, {
+        linkCurrentAlias: async () => {
+          throw new Error("symlink unavailable");
+        },
+        onAliasWarning: (warning) => {
+          warnings.push(warning);
+        },
+      });
+
+      expect(result.dirPath).toBe(path.join(root, "workspace", ".telegram-out", "req-123"));
+      await expect(stat(result.dirPath)).resolves.toBeTruthy();
+      expect(warnings).toEqual([
+        expect.objectContaining({
+          aliasPath: path.join(root, "workspace", ".telegram-out", "current"),
+          targetDirPath: result.dirPath,
+        }),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a current alias in the resumed workspace when provided", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const resumeWorkspace = path.join(root, "resume-project");
+
+    try {
+      const result = await createTelegramOutDir(root, "req-123", resumeWorkspace);
+      const aliasPath = path.join(resumeWorkspace, ".telegram-out", "current");
+
+      expect((await lstat(aliasPath)).isSymbolicLink()).toBe(true);
+      await expect(readlink(aliasPath)).resolves.toBe(result.dirPath);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -105,7 +164,30 @@ describe("telegram-out", () => {
       const created = await createTelegramOutDir(root, "req-new");
 
       expect(created.dirPath).toBe(path.join(telegramOutRoot, "req-new"));
-      await expect(readdir(telegramOutRoot)).resolves.toEqual(["req-fresh", "req-new"]);
+      await expect(readdir(telegramOutRoot)).resolves.toEqual(["current", "req-fresh", "req-new"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes request directories older than 24 hours", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const telegramOutRoot = path.join(root, "workspace", ".telegram-out");
+    const staleDir = path.join(telegramOutRoot, "req-25h");
+    const freshDir = path.join(telegramOutRoot, "req-23h");
+
+    try {
+      await mkdir(staleDir, { recursive: true });
+      await mkdir(freshDir, { recursive: true });
+      const now = new Date();
+      const staleAt = new Date(now.getTime() - 25 * 60 * 60 * 1000);
+      const freshAt = new Date(now.getTime() - 23 * 60 * 60 * 1000);
+      await utimes(staleDir, staleAt, staleAt);
+      await utimes(freshDir, freshAt, freshAt);
+
+      await pruneStaleTelegramRuntimeDirs(root);
+
+      await expect(readdir(telegramOutRoot)).resolves.toEqual(["req-23h"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,10 +1,18 @@
-import { readFile, rename, unlink, writeFile, mkdir } from "node:fs/promises";
+import { readFile, readdir, rename, unlink, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { AccessStore } from "../state/access-store.js";
 import { normalizeInstanceName } from "../instance.js";
-import { resolveInstanceAccessStatePath, type InstanceTokenEnv, writeInstanceBotToken } from "./access.js";
+import {
+  ensureDefaultInstanceAgentInstructions,
+  resolveInstanceAccessStatePath,
+  resolveInstanceAgentInstructionsPath,
+  upgradeInstanceAgentInstructions,
+  type InstanceAgentInstructionsUpgradeResult,
+  type InstanceTokenEnv,
+  writeInstanceBotToken,
+} from "./access.js";
 import {
   appendAuditEvent,
   filterAuditEvents,
@@ -292,6 +300,7 @@ async function runAccessCommand(
       outcome: "success",
       metadata: { code },
     });
+    await ensureDefaultInstanceAgentInstructions(env, instanceName);
     logger.log(`Redeemed pairing code for instance "${instanceName}" and chat ${pairedUser.telegramChatId}.`);
     return true;
   }
@@ -787,13 +796,7 @@ function resolveAgentMdPath(
   env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR">,
   instanceName: string,
 ): string {
-  const stateDir = resolveInstanceStateDir({
-    HOME: env.HOME,
-    USERPROFILE: env.USERPROFILE,
-    CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
-    CODEX_TELEGRAM_INSTANCE: instanceName,
-  });
-  return path.join(stateDir, "agent.md");
+  return resolveInstanceAgentInstructionsPath(env, instanceName);
 }
 
 async function runInstructionsCommand(
@@ -802,7 +805,7 @@ async function runInstructionsCommand(
   logger: CliLogger,
 ): Promise<boolean> {
   if (argv.length < 2) {
-    throw new Error("Usage: telegram instructions <show|set|path> [--instance <name>] [file-path]");
+    throw new Error("Usage: telegram instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run] [file-path]");
   }
 
   const subcommand = argv[1];
@@ -847,7 +850,90 @@ async function runInstructionsCommand(
     return true;
   }
 
-  throw new Error("Usage: telegram instructions <show|set|path> [--instance <name>] [file-path]");
+  if (subcommand === "upgrade") {
+    const force = extractBooleanFlag(argv.slice(2), "--force");
+    const dryRun = extractBooleanFlag(force.args, "--dry-run");
+    const all = extractBooleanFlag(dryRun.args, "--all");
+    const { instanceName, args } = extractInstanceOption(all.args);
+    if (args.length !== 0) {
+      throw new Error("Usage: telegram instructions upgrade [--instance <name>] [--all] [--force] [--dry-run]");
+    }
+
+    let instanceNames = [instanceName];
+    if (all.enabled) {
+      try {
+        const dirents = await readdir(resolveChannelsDirFromEnv(env), { withFileTypes: true });
+        instanceNames = dirents
+          .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+          .map((entry) => entry.name)
+          .sort();
+      } catch {
+        instanceNames = [];
+      }
+      if (instanceNames.length === 0) {
+        logger.log("No instances found.");
+        return true;
+      }
+    }
+
+    const summary = { upgraded: 0, current: 0, skippedCustom: 0, failed: 0 };
+    for (const name of instanceNames) {
+      try {
+        const result = await upgradeInstanceAgentInstructions(env, name, {
+          force: force.enabled,
+          dryRun: dryRun.enabled,
+        });
+        logInstructionsUpgradeResult(logger, name, result);
+        if (result.status === "current") {
+          summary.current++;
+        } else if (result.status === "manual-review") {
+          summary.skippedCustom++;
+        } else {
+          summary.upgraded++;
+        }
+      } catch (error) {
+        if (!all.enabled) {
+          throw error;
+        }
+        summary.failed++;
+        logger.log(`Failed to upgrade instructions for instance "${name}": ${formatCliError(error)}`);
+      }
+    }
+    if (all.enabled) {
+      logger.log(`Summary: upgraded ${summary.upgraded}, current ${summary.current}, skipped custom ${summary.skippedCustom}, failed ${summary.failed}.`);
+    }
+    return true;
+  }
+
+  throw new Error("Usage: telegram instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run] [file-path]");
+}
+
+function formatCliError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function logInstructionsUpgradeResult(
+  logger: CliLogger,
+  instanceName: string,
+  result: InstanceAgentInstructionsUpgradeResult,
+): void {
+  const would = result.dryRun ? "Would " : "";
+  if (result.status === "created") {
+    logger.log(`${would}${result.dryRun ? "create" : "Created"} instructions for instance "${instanceName}" at ${result.path}`);
+  } else if (result.status === "current") {
+    logger.log(`Instance "${instanceName}" instructions already current.`);
+  } else if (result.status === "upgraded") {
+    logger.log(`${would}${result.dryRun ? "upgrade" : "Upgraded"} instructions for instance "${instanceName}" at ${result.path}`);
+  } else if (result.status === "appended") {
+    logger.log(`${would}${result.dryRun ? "append" : "Appended"} Telegram transport instructions for instance "${instanceName}" at ${result.path}`);
+  } else if (result.status === "force-upgraded") {
+    logger.log(`${would}${result.dryRun ? "force-upgrade" : "Force-upgraded"} instructions for instance "${instanceName}" at ${result.path}`);
+    if (result.backupPath) {
+      logger.log(`Previous instructions backed up to ${result.backupPath}`);
+    }
+  } else {
+    logger.log(`Instance "${instanceName}" instructions: manual review required; run "telegram instructions upgrade --instance ${instanceName} --force" to replace the custom Telegram Transport block.`);
+  }
 }
 
 function resolveConfigJsonPath(
@@ -1098,7 +1184,7 @@ Commands:
                                               View audit trail
   timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]
                                               View timeline trail
-  instructions <show|set|path> [--instance <name>]
+  instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run]
                                               Manage per-instance agent.md
   yolo [on|off|unsafe] [--instance <name>]    Toggle YOLO auto-approval mode
   engine [codex|claude] [--instance <name>]   Switch AI engine per instance
@@ -1166,7 +1252,7 @@ async function runInstanceCommand(
     let entries: string[];
     try {
       const dirents = await fs.readdir(channelsDir, { withFileTypes: true });
-      entries = dirents.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+      entries = dirents.filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name).sort();
     } catch {
       entries = [];
     }

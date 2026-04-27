@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, mkdir, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -29,6 +29,15 @@ describe("runCli", () => {
 
       const envPath = path.join(tempDir, ".cctb", "default", ".env");
       await expect(readFile(envPath, "utf8")).resolves.toBe('TELEGRAM_BOT_TOKEN="bot-token-123"\n');
+      const agentPath = path.join(tempDir, ".cctb", "default", "agent.md");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("## Telegram Transport");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("cctb send --file PATH");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("[send-file:<absolute path>]");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("Plain text only");
+      await expect(readFile(agentPath, "utf8")).resolves.not.toContain(".telegram-out/current");
+      await expect(readFile(agentPath, "utf8")).resolves.not.toContain("CCTB_SEND_COMMAND");
+      await expect(readFile(agentPath, "utf8")).resolves.not.toContain(".cctb-send/");
+      await expect(readFile(agentPath, "utf8")).resolves.not.toContain("- Telegram is plain text");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -51,6 +60,9 @@ describe("runCli", () => {
 
       const envPath = path.join(tempDir, ".cctb", "alpha", ".env");
       await expect(readFile(envPath, "utf8")).resolves.toBe('TELEGRAM_BOT_TOKEN="bot-token-456"\n');
+      const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("## Telegram Transport");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("Plain text only");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -95,12 +107,15 @@ describe("runCli", () => {
       const envPath = path.join(tempDir, ".cctb", "default", ".env");
       await mkdir(path.dirname(envPath), { recursive: true });
       await writeFile(envPath, "EXTRA=1\nTELEGRAM_BOT_TOKEN=old-token\nKEEP=2\n", "utf8");
+      const agentPath = path.join(tempDir, ".cctb", "default", "agent.md");
+      await writeFile(agentPath, "custom instructions", "utf8");
 
       await runCli(["telegram", "configure", "new-token"], {
         env: { USERPROFILE: tempDir },
       });
 
       await expect(readFile(envPath, "utf8")).resolves.toBe("EXTRA=1\nKEEP=2\nTELEGRAM_BOT_TOKEN=\"new-token\"\n");
+      await expect(readFile(agentPath, "utf8")).resolves.toBe("custom instructions");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -128,7 +143,6 @@ describe("runCli", () => {
       });
 
       const handled = await runCli([
-        "telegram",
         "send",
         "--message",
         "Chart ready",
@@ -166,6 +180,75 @@ describe("runCli", () => {
     }
   });
 
+  it("surfaces configured send rejection details when a requested file cannot be delivered", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const missingPath = path.join(tempDir, "project", "missing.pdf");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await mkdir(path.dirname(missingPath), { recursive: true });
+
+      await expect(runCli([
+        "send",
+        "--chat",
+        "84",
+        "--file",
+        missingPath,
+      ], {
+        env: { USERPROFILE: tempDir },
+        sendDeps: {
+          cwd: path.join(tempDir, "project"),
+          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
+          createTelegramApi: vi.fn().mockReturnValue(api),
+        },
+      })).rejects.toThrow(`1 file not delivered: ${missingPath} — not-found`);
+      expect(api.sendMessage).toHaveBeenCalledWith(84, expect.stringContaining(missingPath));
+      expect(api.sendDocument).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails configured send with a readable error for oversized files", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const largePath = path.join(tempDir, "project", "large.bin");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await mkdir(path.dirname(largePath), { recursive: true });
+      await writeFile(largePath, "");
+      await truncate(largePath, 50_000_001);
+
+      await expect(runCli([
+        "send",
+        "--chat",
+        "84",
+        "--file",
+        largePath,
+      ], {
+        env: { USERPROFILE: tempDir },
+        sendDeps: {
+          cwd: path.join(tempDir, "project"),
+          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
+          createTelegramApi: vi.fn().mockReturnValue(api),
+        },
+      })).rejects.toThrow(`1 file not delivered: ${largePath} — too-large`);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.sendMessage).toHaveBeenCalledWith(84, expect.stringContaining("too large"));
+      expect(api.sendDocument).not.toHaveBeenCalled();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("routes send through the active turn side-channel when CCTB_SEND_URL is set", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
@@ -175,7 +258,6 @@ describe("runCli", () => {
       vi.stubGlobal("fetch", fetchFn);
 
       const handled = await runCli([
-        "telegram",
         "send",
         "--instance",
         "bot2",
@@ -226,7 +308,7 @@ describe("runCli", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 
     try {
-      await expect(runCli(["telegram", "send"], {
+      await expect(runCli(["send"], {
         env: { USERPROFILE: tempDir },
       })).rejects.toThrow("Usage: send [--message <text>] [--image <path>] [--file <path>] [text]");
     } finally {
@@ -253,7 +335,7 @@ describe("runCli", () => {
         updatedAt: now,
       });
 
-      await expect(runCli(["telegram", "send", "--message", "hello"], {
+      await expect(runCli(["send", "--message", "hello"], {
         env: { USERPROFILE: tempDir },
         sendDeps: {
           readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
@@ -293,6 +375,8 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages).toEqual(['Redeemed pairing code for instance "default" and chat 84.']);
       expect((await store.getStatus()).pairedUsers).toBe(1);
+      const agentPath = path.join(tempDir, ".cctb", "default", "agent.md");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("## Telegram Transport");
 
       await expect(
         runCli(["telegram", "access", "pair", "ZZZZZZ"], {
@@ -488,6 +572,7 @@ describe("runCli", () => {
     try {
       const stateDir = path.join(tempDir, ".cctb", "alpha");
       await mkdir(stateDir, { recursive: true });
+      await mkdir(path.join(tempDir, ".cctb", ".restore-backup-alpha"), { recursive: true });
       await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }), "utf8");
       await writeFile(
         path.join(stateDir, "instance.lock.json"),
@@ -1148,6 +1233,203 @@ describe("runCli", () => {
       expect(messages[1]).toBe(path.join(tempDir, ".cctb", "alpha", "agent.md"));
       expect(messages[2]).toContain('Instance "alpha" instructions:');
       expect(messages[2]).toContain("You are bot alpha.");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades a legacy generated Telegram transport block", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const legacy = [
+      "## Telegram Transport",
+      "",
+      "Plain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`, or one fenced `file:name.ext` block for small text/code; never claim delivery by path only.",
+      "",
+    ].join("\n");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, legacy, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
+      const upgraded = await readFile(agentPath, "utf8");
+      expect(upgraded).toContain("[send-file:<absolute path>]");
+      expect(upgraded).not.toContain(", or one fenced");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades an older generated Telegram transport block that referenced telegram-out/current", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const legacy = [
+      "## Telegram Transport",
+      "",
+      "Plain text only; ask in chat, not blocking prompt tools; deliver files with `telegram send --file PATH` / `telegram send --image PATH`, write disk outputs to `.telegram-out/current`, or use one fenced `file:name.ext` block for small text/code; never claim delivery by only naming a path.",
+      "",
+    ].join("\n");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, legacy, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
+      const upgraded = await readFile(agentPath, "utf8");
+      expect(upgraded).toContain("cctb send --file PATH");
+      expect(upgraded).toContain("[send-file:<absolute path>]");
+      expect(upgraded).not.toContain(".telegram-out/current");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite a custom Telegram transport block without --force", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const custom = "## Telegram Transport\n\nUse my private relay.\n";
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, custom, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("manual review required");
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(custom);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("force-upgrades a custom Telegram transport block while preserving other notes", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, "# Notes\nkeep me\n\n## Telegram Transport\n\nUse my private relay.\n\n## Other\nalso keep me\n", "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      const upgraded = await readFile(agentPath, "utf8");
+      expect(messages[0]).toContain('Force-upgraded instructions for instance "alpha"');
+      expect(messages[1]).toContain("Previous instructions backed up to");
+      expect(upgraded).toContain("# Notes\nkeep me");
+      expect(upgraded).toContain("[send-image:<absolute path>]");
+      expect(upgraded).toContain("## Other\nalso keep me");
+      expect(upgraded).not.toContain("Use my private relay");
+      const backupName = (await readdir(path.dirname(agentPath))).find((name) => name.startsWith("agent.md.bak."));
+      expect(backupName).toBeDefined();
+      await expect(readFile(path.join(path.dirname(agentPath), backupName ?? ""), "utf8")).resolves.toContain("Use my private relay");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dry-runs an instructions upgrade without writing files", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const legacy = "## Telegram Transport\n\nPlain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`, or one fenced `file:name.ext` block for small text/code; never claim delivery by path only.\n";
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, legacy, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha", "--dry-run"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Would upgrade instructions for instance "alpha"');
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(legacy);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades all instance instruction files", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const legacy = "## Telegram Transport\n\nPlain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`, or one fenced `file:name.ext` block for small text/code; never claim delivery by path only.\n";
+
+    try {
+      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
+      await mkdir(path.join(tempDir, ".cctb", "beta"), { recursive: true });
+      await mkdir(path.join(tempDir, ".cctb", ".restore-backup-alpha"), { recursive: true });
+      await writeFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), legacy, "utf8");
+      await writeFile(path.join(tempDir, ".cctb", "beta", "agent.md"), "custom", "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--all"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual(expect.arrayContaining([
+        expect.stringContaining('Upgraded instructions for instance "alpha"'),
+        expect.stringContaining('Appended Telegram transport instructions for instance "beta"'),
+      ]));
+      await expect(readFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), "utf8")).resolves.toContain("[send-file:<absolute path>]");
+      await expect(readFile(path.join(tempDir, ".cctb", "beta", "agent.md"), "utf8")).resolves.toContain("[send-file:<absolute path>]");
+      await expect(readFile(path.join(tempDir, ".cctb", ".restore-backup-alpha", "agent.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues upgrading all instances when one instance fails", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const legacy = "## Telegram Transport\n\nPlain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`, or one fenced `file:name.ext` block for small text/code; never claim delivery by path only.\n";
+
+    try {
+      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
+      await mkdir(path.join(tempDir, ".cctb", "bad", "agent.md"), { recursive: true });
+      await mkdir(path.join(tempDir, ".cctb", "custom"), { recursive: true });
+      await writeFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), legacy, "utf8");
+      await writeFile(path.join(tempDir, ".cctb", "custom", "agent.md"), "## Telegram Transport\n\nUse my private relay.\n", "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--all"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual(expect.arrayContaining([
+        expect.stringContaining('Upgraded instructions for instance "alpha"'),
+        expect.stringContaining('Failed to upgrade instructions for instance "bad"'),
+        expect.stringContaining('Instance "custom" instructions: manual review required'),
+        expect.stringContaining("Summary: upgraded 1, current 0, skipped custom 1, failed 1."),
+      ]));
+      await expect(readFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), "utf8")).resolves.toContain("[send-file:<absolute path>]");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

@@ -45,61 +45,6 @@ export interface BridgeAccessDecision {
   text?: string;
 }
 
-function quoteShellCommand(value: string): string {
-  if (!/[\s'"\\]/.test(value)) {
-    return value;
-  }
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function renderTelegramBridgeCapabilities(sideChannelCommand?: string, sideChannelEnvAvailable = false): string {
-  const sendCommand = sideChannelEnvAvailable ? '"$CCTB_SEND_COMMAND"' : (sideChannelCommand ? quoteShellCommand(sideChannelCommand) : "");
-  const sideChannelInstructions = sideChannelCommand
-    ? [
-        "",
-        "File send command (preferred):",
-        `  ${sendCommand} --image /absolute/path/to/image.png`,
-        `  ${sendCommand} --file /absolute/path/to/report.pdf`,
-        `  ${sendCommand} --message "Done" --file /absolute/path/to/report.pdf`,
-        sideChannelEnvAvailable
-          ? `CCTB_SEND_COMMAND=${sideChannelCommand}`
-          : `Side-channel command: ${sendCommand}`,
-        "Valid only this Telegram turn. Fallback: `telegram send --image /absolute/path/to/image.png` or `telegram send --file /absolute/path/to/report.pdf`; last resort [send-file:<real absolute path>].",
-      ]
-    : [];
-  const fileDeliveryMethod = sideChannelCommand
-    ? "Use the explicit send command first; [send-file:<real absolute path>] only as fallback."
-    : "Use [send-file:<real absolute path>] for existing file attachments.";
-
-  return [
-    "Telegram chat bridge: plain text only; use numbered choices, not UI widgets; do not call blocking ask/prompt tools.",
-    ...sideChannelInstructions,
-    "",
-    "Small text/code files: use one fenced `file:name.ext` block; the bridge will deliver it as a Telegram document attachment.",
-    "",
-    "CRITICAL FILE DELIVERY RULE:",
-    "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type.",
-    fileDeliveryMethod,
-  ].join("\n");
-}
-
-function renderCodexTelegramOutInstructions(requestOutputDir: string): string {
-  return [
-    "[Codex Telegram-Out]",
-    `Disk deliverables: write final files to ${requestOutputDir}`,
-    "Files placed there are auto-delivered after the turn; keep scratch/temp files elsewhere.",
-    "Small text/code: use one `file:name.ext` fenced block. Existing-file fallback: [send-file:<real absolute path>].",
-  ].join("\n");
-}
-
-function combineInstructions(...values: Array<string | undefined>): string | undefined {
-  const parts = values
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value));
-
-  return parts.length > 0 ? parts.join("\n\n") : undefined;
-}
-
 function shouldDisableRuntimeTimeout(text: string): boolean {
   const normalized = text.toLowerCase();
   return [
@@ -114,7 +59,6 @@ function shouldDisableRuntimeTimeout(text: string): boolean {
 }
 
 export class Bridge {
-  private readonly bridgeInstructionMode: "generic-file-blocks" | "telegram-out-only";
   readonly supportsTurnScopedEnv: boolean;
 
   constructor(
@@ -122,7 +66,6 @@ export class Bridge {
     private readonly sessionManager: SessionManagerLike,
     private readonly adapter: CodexAdapter,
   ) {
-    this.bridgeInstructionMode = adapter.bridgeInstructionMode ?? "generic-file-blocks";
     this.supportsTurnScopedEnv = adapter.supportsTurnScopedEnv !== false;
   }
 
@@ -233,17 +176,11 @@ export class Bridge {
       : input.text;
     const text = baseText;
     const turnEnvSupported = this.adapter.supportsTurnScopedEnv !== false;
-    const instructions = combineInstructions(
-      renderTelegramBridgeCapabilities(input.sideChannelCommand, turnEnvSupported),
-      this.bridgeInstructionMode === "telegram-out-only" && input.requestOutputDir
-        ? renderCodexTelegramOutInstructions(input.requestOutputDir)
-        : undefined,
-    );
     const disableRuntimeTimeout = shouldDisableRuntimeTimeout(input.text);
     const response = await this.adapter.sendUserMessage(session.sessionId, {
       text,
       files: input.files,
-      instructions,
+      instructions: undefined,
       onProgress: input.onProgress,
       onApprovalRequest: input.onApprovalRequest,
       onEngineEvent: input.onEngineEvent,

@@ -1,9 +1,20 @@
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 
 export interface TelegramOutRequest {
   requestId: string;
   dirPath: string;
+}
+
+export interface TelegramOutAliasWarning {
+  aliasPath: string;
+  targetDirPath: string;
+  error: unknown;
+}
+
+export interface TelegramOutDirOptions {
+  onAliasWarning?: (warning: TelegramOutAliasWarning) => void | Promise<void>;
+  linkCurrentAlias?: (aliasPath: string, targetDirPath: string) => Promise<void>;
 }
 
 export interface TelegramOutFileInfo {
@@ -23,7 +34,7 @@ export interface TelegramOutLimitResult {
   skipped: TelegramOutFileInfo[];
 }
 
-const TELEGRAM_OUT_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const TELEGRAM_OUT_RETENTION_MS = 24 * 60 * 60_000;
 
 export function resolveTelegramOutDir(stateDir: string, requestId: string): string {
   return path.join(stateDir, "workspace", ".telegram-out", requestId);
@@ -31,6 +42,33 @@ export function resolveTelegramOutDir(stateDir: string, requestId: string): stri
 
 export function resolveCctbSendDir(stateDir: string, requestId: string): string {
   return path.join(stateDir, "workspace", ".cctb-send", requestId);
+}
+
+export function resolveTelegramOutCurrentAlias(workspacePath: string): string {
+  return path.join(workspacePath, ".telegram-out", "current");
+}
+
+async function pointCurrentAlias(aliasPath: string, targetDirPath: string): Promise<void> {
+  await mkdir(path.dirname(aliasPath), { recursive: true });
+  await rm(aliasPath, { recursive: true, force: true });
+  await symlink(targetDirPath, aliasPath, process.platform === "win32" ? "junction" : "dir");
+}
+
+async function pointCurrentAliasBestEffort(
+  aliasPath: string,
+  targetDirPath: string,
+  options: TelegramOutDirOptions | undefined,
+): Promise<void> {
+  const linkCurrentAlias = options?.linkCurrentAlias ?? pointCurrentAlias;
+  try {
+    await linkCurrentAlias(aliasPath, targetDirPath);
+  } catch (error) {
+    try {
+      await options?.onAliasWarning?.({ aliasPath, targetDirPath, error });
+    } catch {
+      // Alias creation is a convenience path; requestOutputDir remains authoritative.
+    }
+  }
 }
 
 async function pruneStaleRequestDirs(rootDir: string, preserveRequestId?: string): Promise<void> {
@@ -86,11 +124,20 @@ export async function pruneStaleTelegramRuntimeDirs(stateDir: string, workspaceP
   }
 }
 
-export async function createTelegramOutDir(stateDir: string, requestId: string): Promise<TelegramOutRequest> {
+export async function createTelegramOutDir(
+  stateDir: string,
+  requestId: string,
+  workspacePath?: string,
+  options?: TelegramOutDirOptions,
+): Promise<TelegramOutRequest> {
   const dirPath = resolveTelegramOutDir(stateDir, requestId);
   await mkdir(path.dirname(dirPath), { recursive: true });
   await pruneStaleTelegramOutDirs(path.dirname(dirPath), requestId);
   await mkdir(dirPath, { recursive: true });
+  await pointCurrentAliasBestEffort(resolveTelegramOutCurrentAlias(path.join(stateDir, "workspace")), dirPath, options);
+  if (workspacePath) {
+    await pointCurrentAliasBestEffort(resolveTelegramOutCurrentAlias(workspacePath), dirPath, options);
+  }
   return { requestId, dirPath };
 }
 

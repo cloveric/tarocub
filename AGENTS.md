@@ -10,3 +10,5 @@ That file is the source of truth for:
 - required regression tests by change area
 
 If you change behavior rather than comments/docs, prefer focused tests first, then `npm run build`.
+
+Static Telegram transport rules live in instance-level `~/.cctb/<instance>/agent.md`; see [docs/telegram-instance-agent.md](docs/telegram-instance-agent.md). When changing those rules or file-delivery behavior, update that doc and sync affected instance `agent.md` files. Do not put Telegram transport rules or turn-scoped paths into resumed project `AGENTS.md` / `CLAUDE.md`.

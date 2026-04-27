@@ -406,6 +406,48 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("reports stale instance instructions in service doctor", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "agent.md"),
+        "## Telegram Transport\n\nPlain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`, or one fenced `file:name.ext` block for small text/code; never claim delivery by path only.\n",
+        "utf8",
+      );
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "service", "doctor", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("- fail instructions:");
+      expect(messages[0]).toContain("run \"telegram instructions upgrade --instance alpha\"");
+      expect(messages[0]).toContain("Healthy: no");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports latest failure category and unresolved tasks in doctor output", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

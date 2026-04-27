@@ -4,8 +4,14 @@ import { resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { normalizeInstanceName } from "../instance.js";
 import { TelegramApi } from "../telegram/api.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
+import type { DeliveryRejectedReceipt } from "../telegram/delivery-ledger.js";
 import { deliverTelegramResponse } from "../telegram/response-delivery.js";
-import { parseSideChannelSendArgs, renderSideChannelDeliveryText, type SideChannelSendPayload } from "../telegram/side-channel-send.js";
+import {
+  formatRejectedDeliverySummary,
+  parseSideChannelSendArgs,
+  renderSideChannelDeliveryText,
+  type SideChannelSendPayload,
+} from "../telegram/side-channel-send.js";
 import { readConfiguredBotToken } from "../service.js";
 import { SessionStore } from "../state/session-store.js";
 
@@ -159,6 +165,7 @@ export async function runConfiguredSendCommand(
   const config = await loadInstanceConfig(stateDir);
   const api = (deps.createTelegramApi ?? ((token: string) => new TelegramApi(token)))(botToken);
   const requestedFileCount = new Set([...payload.images, ...payload.files]).size;
+  const rejectedReceipts: DeliveryRejectedReceipt[] = [];
   const filesSent = await (deps.deliverTelegramResponse ?? deliverTelegramResponse)(
     api,
     chatId,
@@ -169,12 +176,17 @@ export async function runConfiguredSendCommand(
     config.locale,
     {
       allowAnyAbsolutePath: true,
+      onDeliveryRejected: (receipt) => {
+        rejectedReceipts.push(receipt);
+      },
     },
   );
 
   if (filesSent < requestedFileCount) {
     const missingCount = requestedFileCount - filesSent;
-    throw new Error(`${missingCount} file${missingCount === 1 ? "" : "s"} not delivered.`);
+    const rejected = formatRejectedDeliverySummary(rejectedReceipts);
+    const message = `${missingCount} file${missingCount === 1 ? "" : "s"} not delivered`;
+    throw new Error(rejected ? `${message}: ${rejected}` : `${message}.`);
   }
 
   return { chatId, filesSent };

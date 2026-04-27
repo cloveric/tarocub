@@ -2,6 +2,7 @@ const ALLOWED_TURN_EXTRA_ENV_KEYS = new Set([
   "CCTB_SEND_URL",
   "CCTB_SEND_TOKEN",
   "CCTB_SEND_COMMAND",
+  "PATH",
 ]);
 
 export function mergeAllowedTurnExtraEnv(

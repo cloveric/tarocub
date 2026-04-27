@@ -48,9 +48,10 @@ export async function sendFileOrPhoto(
   chatId: number,
   filename: string,
   contents: Uint8Array | string,
+  options: { preferPhoto?: boolean } = {},
 ): Promise<void> {
   const payload = typeof contents === "string" ? new TextEncoder().encode(contents) : contents;
-  if (isImageFile(filename) && payload.length > IMAGE_SIZE_THRESHOLD) {
+  if (isImageFile(filename) && (options.preferPhoto || payload.length > IMAGE_SIZE_THRESHOLD)) {
     try {
       await api.sendPhoto(chatId, filename, payload, filename);
       return;
@@ -69,7 +70,8 @@ export type DeliveryRejectReason =
   | "placeholder-path"
   | "not-found"
   | "permission-denied"
-  | "read-error";
+  | "read-error"
+  | "send-error";
 
 function renderRejectReason(reason: DeliveryRejectReason, detail: string | undefined, locale: Locale): string {
   if (locale === "zh") {
@@ -82,6 +84,7 @@ function renderRejectReason(reason: DeliveryRejectReason, detail: string | undef
       case "not-found": return "文件不存在";
       case "permission-denied": return "无读取权限";
       case "read-error": return "读取失败";
+      case "send-error": return detail ? `发送失败（${detail}）` : "发送失败";
     }
   }
   switch (reason) {
@@ -93,7 +96,13 @@ function renderRejectReason(reason: DeliveryRejectReason, detail: string | undef
     case "not-found": return "file not found";
     case "permission-denied": return "permission denied";
     case "read-error": return "read error";
+    case "send-error": return detail ? `send failed (${detail})` : "send failed";
   }
+}
+
+interface FileCandidate {
+  path: string;
+  preferPhoto: boolean;
 }
 
 export async function deliverTelegramResponse(
@@ -122,23 +131,41 @@ export async function deliverTelegramResponse(
     return 1;
   }
 
-  const filePaths: string[] = [];
+  const fileCandidates: FileCandidate[] = [];
   const rejected: Array<{ path: string; reason: DeliveryRejectReason; detail?: string }> = [];
   let cleanedText = text;
   const sendFilePattern = /\[send-file:([^\]]+)\]/g;
+  const sendImagePattern = /\[send-image:([^\]]+)\]/g;
   let sendFileMatch: RegExpExecArray | null;
-  let sawSendFileTag = false;
-  while ((sendFileMatch = sendFilePattern.exec(text)) !== null) {
-    sawSendFileTag = true;
-    const p = sendFileMatch[1]!.trim();
-    if (!options.allowAnyAbsolutePath && isStaticPlaceholderFilePath(p)) {
-      continue;
-    } else if (isAbsoluteFilePath(p) && !filePaths.includes(p)) {
-      filePaths.push(p);
+
+  function addCandidate(filePath: string, preferPhoto: boolean): void {
+    const existing = fileCandidates.find((candidate) => candidate.path === filePath);
+    if (existing) {
+      existing.preferPhoto = existing.preferPhoto || preferPhoto;
+      return;
     }
+    fileCandidates.push({ path: filePath, preferPhoto });
   }
-  if (filePaths.length > 0 || sawSendFileTag) {
+
+  let sawFileDeliveryTag = false;
+  const collectDeliveryTags = (pattern: RegExp, preferPhoto: boolean): void => {
+    while ((sendFileMatch = pattern.exec(text)) !== null) {
+      sawFileDeliveryTag = true;
+      const p = sendFileMatch[1]!.trim();
+      if (!options.allowAnyAbsolutePath && isStaticPlaceholderFilePath(p)) {
+        continue;
+      } else if (isAbsoluteFilePath(p)) {
+        addCandidate(p, preferPhoto);
+      }
+    }
+  };
+
+  collectDeliveryTags(sendFilePattern, false);
+  collectDeliveryTags(sendImagePattern, true);
+
+  if (fileCandidates.length > 0 || sawFileDeliveryTag) {
     cleanedText = cleanedText.replace(sendFilePattern, "");
+    cleanedText = cleanedText.replace(sendImagePattern, "");
     cleanedText = cleanedText.replace(/\n{3,}/g, "\n\n").trim();
   }
 
@@ -149,7 +176,7 @@ export async function deliverTelegramResponse(
     }
   }
 
-  const acceptedFiles: Array<{ sourcePath: string; realPath: string; filename: string; contents: Uint8Array | string }> = [];
+  const acceptedFiles: Array<{ sourcePath: string; realPath: string; filename: string; contents: Uint8Array | string; preferPhoto: boolean }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
@@ -159,7 +186,7 @@ export async function deliverTelegramResponse(
     ? `${await realpath(requestOutputDir).catch(() => requestOutputDir)}${path.sep}`
     : null;
 
-  for (const filePath of filePaths) {
+  for (const { path: filePath, preferPhoto } of fileCandidates) {
     try {
       const real = await realpath(filePath);
       if (!options.allowAnyAbsolutePath) {
@@ -183,7 +210,7 @@ export async function deliverTelegramResponse(
       }
       const contents = await readFile(real);
       const fileName = path.basename(filePath);
-      acceptedFiles.push({ sourcePath: filePath, realPath: real, filename: fileName, contents });
+      acceptedFiles.push({ sourcePath: filePath, realPath: real, filename: fileName, contents, preferPhoto });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
       if (
@@ -200,7 +227,17 @@ export async function deliverTelegramResponse(
   }
 
   for (const file of acceptedFiles) {
-    await sendFileOrPhoto(api, chatId, file.filename, file.contents);
+    try {
+      await sendFileOrPhoto(api, chatId, file.filename, file.contents, { preferPhoto: file.preferPhoto });
+    } catch (error) {
+      rejected.push({
+        path: file.sourcePath,
+        reason: "send-error",
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    filesSent++;
     options.onFileAccepted?.(file.sourcePath);
     options.onDeliveryAccepted?.({
       path: file.sourcePath,
@@ -246,7 +283,6 @@ export async function deliverTelegramResponse(
       });
     }
     if (options.notifyRejected === false) {
-      filesSent += acceptedFiles.length;
       return filesSent;
     }
     const MAX_SHOWN = 5;
@@ -265,6 +301,5 @@ export async function deliverTelegramResponse(
     await api.sendMessage(chatId, lines.join("\n"));
   }
 
-  filesSent += acceptedFiles.length;
   return filesSent;
 }

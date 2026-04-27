@@ -29,6 +29,7 @@ import {
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import {
+  createStableCctbCommandHelper as defaultCreateStableCctbCommandHelper,
   createSideChannelSendHelper as defaultCreateSideChannelSendHelper,
   startSideChannelSendServer as defaultStartSideChannelSendServer,
   type SideChannelSendServer,
@@ -101,7 +102,7 @@ function stripAlreadySentSideChannelTags(text: string, sentFilePaths: readonly s
     .split(/\r?\n/)
     .map((line) => ({
       original: line,
-      stripped: line.replace(/\[send-file:([^\]]+)\]/g, (tag, filePath: string) => sent.has(filePath.trim()) ? "" : tag),
+      stripped: line.replace(/\[send-(?:file|image):([^\]]+)\]/g, (tag, filePath: string) => sent.has(filePath.trim()) ? "" : tag),
     }))
     .filter(({ original, stripped }) => stripped.trim() || !original.trim())
     .map(({ stripped }) => stripped)
@@ -111,7 +112,7 @@ function stripAlreadySentSideChannelTags(text: string, sentFilePaths: readonly s
 }
 
 function hasSendFileTag(text: string): boolean {
-  return /\[send-file:[^\]]+\]/.test(text);
+  return /\[send-(?:file|image):[^\]]+\]/.test(text);
 }
 
 const TELEGRAM_OUT_AUTO_DELIVERY_LIMITS = {
@@ -121,12 +122,12 @@ const TELEGRAM_OUT_AUTO_DELIVERY_LIMITS = {
 };
 
 function extractSendFilePaths(text: string): string[] {
-  return Array.from(text.matchAll(/\[send-file:([^\]]+)\]/g), (match) => match[1]?.trim())
+  return Array.from(text.matchAll(/\[send-(?:file|image):([^\]]+)\]/g), (match) => match[1]?.trim())
     .filter((value): value is string => Boolean(value));
 }
 
 function stripSendFileTags(text: string): string {
-  return text.replace(/\[send-file:[^\]]+\]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return text.replace(/\[send-(?:file|image):[^\]]+\]/g, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function stripDeliveredStreamTextFragments(text: string, fragments: readonly string[]): string {
@@ -167,6 +168,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   pruneStaleCctbSendDirs?: typeof defaultPruneStaleCctbSendDirs;
   startSideChannelSendServer?: typeof defaultStartSideChannelSendServer;
   createSideChannelSendHelper?: typeof defaultCreateSideChannelSendHelper;
+  createStableCctbCommandHelper?: typeof defaultCreateStableCctbCommandHelper;
   buildContinueAnalysisKeyboard?: typeof defaultBuildContinueAnalysisKeyboard;
   deliverTelegramResponse: (
     api: WorkflowAwareTurnContext["api"],
@@ -209,6 +211,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     pruneStaleCctbSendDirs = defaultPruneStaleCctbSendDirs,
     startSideChannelSendServer = defaultStartSideChannelSendServer,
     createSideChannelSendHelper = defaultCreateSideChannelSendHelper,
+    createStableCctbCommandHelper = defaultCreateStableCctbCommandHelper,
     buildContinueAnalysisKeyboard = defaultBuildContinueAnalysisKeyboard,
     deliverTelegramResponse,
     sendTelegramOutFile,
@@ -255,7 +258,24 @@ export async function executeWorkflowAwareTelegramTurn(input: {
 
   const requestId = `${Date.now()}-${normalized.chatId}`;
   if (cfg.engine === "codex") {
-    state.telegramOutDirPath = (await createTelegramOutDir(stateDir, requestId)).dirPath;
+    state.telegramOutDirPath = (await createTelegramOutDir(stateDir, requestId, cfg.resume?.workspacePath, {
+      onAliasWarning: async ({ aliasPath, error }) => {
+        await appendTimelineEventBestEffort(stateDir, {
+          type: "engine.event",
+          instanceName: context.instanceName,
+          channel: "telegram",
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          outcome: "warning",
+          detail: "telegram-out current alias failed",
+          metadata: {
+            aliasPath,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }, "telegram-out alias warning");
+      },
+    })).dirPath;
   }
 
   if (workflowResult?.kind === "reply") {
@@ -340,6 +360,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   let deliveredText = "";
   let sideChannelCommand: string | undefined;
   let sideChannelEnv: Record<string, string> | undefined;
+  let stableCctbCommandDir: string | undefined;
   const deliveryLedger = new TurnDeliveryLedger();
   const streamDeliveredFilePaths = new Set<string>();
   const streamPendingFilePaths = new Set<string>();
@@ -471,27 +492,31 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     streamDeliveryPromises.push(delivery);
   };
   try {
-    sideChannel = await startSideChannelSendServer({
-      api: context.api,
-      chatId: normalized.chatId,
-      inboxDir: context.inboxDir,
-      workspaceOverride: cfg.resume?.workspacePath,
-      requestOutputDir: state.telegramOutDirPath,
-      locale,
-    });
-    const helperRoot = cfg.resume?.workspacePath
-      ? path.join(cfg.resume.workspacePath, ".cctb-send", requestId)
-      : resolveCctbSendDir(stateDir, requestId);
-    await pruneStaleCctbSendDirs(stateDir, requestId, cfg.resume?.workspacePath);
-    sideChannelCommand = await createSideChannelSendHelper(helperRoot, undefined, {
-      CCTB_SEND_URL: sideChannel.url,
-      CCTB_SEND_TOKEN: sideChannel.token,
-    });
     if (context.bridge.supportsTurnScopedEnv !== false) {
+      sideChannel = await startSideChannelSendServer({
+        api: context.api,
+        chatId: normalized.chatId,
+        inboxDir: context.inboxDir,
+        workspaceOverride: cfg.resume?.workspacePath,
+        requestOutputDir: state.telegramOutDirPath,
+        locale,
+      });
+      const helperRoot = cfg.resume?.workspacePath
+        ? path.join(cfg.resume.workspacePath, ".cctb-send", requestId)
+        : resolveCctbSendDir(stateDir, requestId);
+      await pruneStaleCctbSendDirs(stateDir, requestId, cfg.resume?.workspacePath);
+      sideChannelCommand = await createSideChannelSendHelper(helperRoot, undefined, {
+        CCTB_SEND_URL: sideChannel.url,
+        CCTB_SEND_TOKEN: sideChannel.token,
+      });
+      stableCctbCommandDir = path.join(stateDir, "workspace", ".cctb-bin");
+      await createStableCctbCommandHelper(stableCctbCommandDir);
+      const currentPath = process.env.PATH ?? "";
       sideChannelEnv = {
         CCTB_SEND_URL: sideChannel.url,
         CCTB_SEND_TOKEN: sideChannel.token,
         CCTB_SEND_COMMAND: sideChannelCommand,
+        PATH: currentPath ? `${stableCctbCommandDir}${path.delimiter}${currentPath}` : stableCctbCommandDir,
       };
     }
   } catch {

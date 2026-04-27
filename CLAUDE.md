@@ -5,8 +5,11 @@
 Before modifying Telegram flow, bus flow, state/config handling, usage/budget/audit logic, or file delivery, read:
 
 - `docs/entrypoint-map.md`
+- `docs/telegram-instance-agent.md` when changing static Telegram transport instructions
 
 That file is the source of truth for codebase navigation and test selection.
+
+Static Telegram transport rules belong in instance-level `~/.cctb/<instance>/agent.md`, not in resumed project `AGENTS.md` or `CLAUDE.md`. If those rules change, update `docs/telegram-instance-agent.md` and sync affected instance `agent.md` files.
 
 ## Mission
 

@@ -35,6 +35,7 @@ import {
   resolveEngineRuntime,
 } from "../service.js";
 import { inspectSessions as inspectSessionBindings } from "./session.js";
+import { inspectInstanceAgentInstructions } from "./access.js";
 
 export interface ServiceCommandEnv
   extends Pick<
@@ -898,6 +899,16 @@ export async function runServiceDoctor(
     detail: existsSync(legacyLaunchAgentPath)
       ? `Legacy launchd plist still exists at ${legacyLaunchAgentPath}. Remove it with "bash scripts/cleanup-legacy-launchd.sh ${status.instanceName}" so service stop/start cannot fight a stale launchd entry.`
       : "No legacy launchd plist detected.",
+  });
+  const instructions = await inspectInstanceAgentInstructions(env, instanceName);
+  checks.push({
+    name: "instructions",
+    ok: instructions.state === "current" || instructions.state === "missing",
+    detail: instructions.state === "current"
+      ? `Instance instructions are current at ${instructions.path}.`
+      : instructions.state === "missing"
+        ? `${instructions.detail}; service can run without it. To add the standard transport block, run "telegram instructions upgrade --instance ${status.instanceName}".`
+        : `${instructions.detail}; run "telegram instructions upgrade --instance ${status.instanceName}"${instructions.state === "custom-transport" ? " or review and use --force" : ""}.`,
   });
   checks.push({
     name: "sessions",
