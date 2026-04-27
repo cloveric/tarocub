@@ -39,6 +39,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.4.3** — adds a conservative delivery manifest for explicit multi-file requests, so replies for requests like "generate 2 images" are repaired when fewer files were actually delivered.
 - **v4.4.2** — restricts turn-scoped child-process environment injection to the side-channel delivery variables (`CCTB_SEND_URL`, `CCTB_SEND_TOKEN`, `CCTB_SEND_COMMAND`) for both Codex and Claude process runtimes.
 - **v4.4.1** — brings Codex process runtime into the same engine-event path as Claude for structured `session` and completed `assistant_text` events, and caps local Codex rollout scanning with visited/depth guards.
 - **v4.4.0** — adds Delivery Protocol v2: a turn-level delivery ledger, structured side-channel accepted/rejected receipts, and a completion gate that can trust real receipts across side-channel, stream, final `[send-file:]`, and `.telegram-out` delivery paths.
@@ -189,6 +190,7 @@ Current delivery contract:
 - The helper is scoped to one Telegram turn. It will not work after the turn finishes.
 - The bridge validates that every file lives under the instance workspace or the active `/resume` project before sending it.
 - Accepted and rejected file deliveries are recorded as turn-level receipts, so the bridge can decide completion from structured delivery evidence instead of text claims.
+- When a request explicitly names a deliverable count, such as "2 images" or "两张图", the bridge requires enough unique delivery evidence before accepting a completion reply.
 - If a file was already sent by stream delivery or the side-channel helper, the final `.telegram-out` sweep skips that same real path to avoid duplicate Telegram attachments.
 - For deliverable-producing requests, the bridge checks final replies against real delivery evidence. Replies such as "the batch is running, I will check later" or "the image was generated" without any actual file delivery are blocked and repaired automatically.
 - Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures unless the user explicitly asked for a file/export/send/save action.

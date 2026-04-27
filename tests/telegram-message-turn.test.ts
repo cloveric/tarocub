@@ -976,6 +976,100 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("repairs explicit multi-file requests when fewer files were delivered than requested", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const deliveredPath = path.join(root, "workspace", "chart-1.png");
+    const chartOnePath = path.join(root, "workspace", "chart-1.png");
+    const chartTwoPath = path.join(root, "workspace", "chart-2.png");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockResolvedValueOnce({
+          text: "Generated 2 images: chart-1.png and chart-2.png",
+        })
+        .mockResolvedValueOnce({
+          text: `Done\n[send-file:${chartOnePath}]\n[send-file:${chartTwoPath}]`,
+        }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(2);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("generate 2 images"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 111,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        startSideChannelSendServer: vi.fn().mockResolvedValue({
+          url: "http://127.0.0.1:12345/send/token",
+          token: "token",
+          getSentFilePaths: () => [],
+          getDeliveryReceipts: () => ({
+            accepted: [
+              {
+                path: deliveredPath,
+                realPath: deliveredPath,
+                fileName: "chart-1.png",
+                bytes: 3,
+                source: "side-channel",
+              },
+            ],
+            rejected: [],
+          }),
+          close: vi.fn().mockResolvedValue(undefined),
+        }),
+        createSideChannelSendHelper: vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-send", "helper")),
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        text: expect.stringContaining("Bridge delivery repair"),
+        files: [],
+        replyContext: undefined,
+      }));
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        `Done\n[send-file:${chartTwoPath}]`,
+        expect.any(String),
+        undefined,
+        expect.stringContaining(path.join("workspace", ".telegram-out")),
+        "en",
+        expect.objectContaining({
+          source: "post-turn",
+          onDeliveryAccepted: expect.any(Function),
+          onDeliveryRejected: expect.any(Function),
+        }),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not repair explanatory text that quotes deferred-delivery phrases", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {

@@ -114,8 +114,8 @@ function hasSendFileTag(text: string): boolean {
   return /\[send-file:[^\]]+\]/.test(text);
 }
 
-function hasInlineFileBlock(text: string): boolean {
-  return /```file:[^\n]+\n[\s\S]*?```/.test(text);
+function countInlineFileBlocks(text: string): number {
+  return Array.from(text.matchAll(/```file:[^\n]+\n[\s\S]*?```/g)).length;
 }
 
 const DEFERRED_DELIVERY_REPLY_PATTERNS = [
@@ -146,6 +146,68 @@ const DELIVERABLE_COMPLETION_REPLY_PATTERNS = [
 ];
 const EXPLANATORY_DEFERRED_DELIVERY_CONTEXT_PATTERN =
   /(?:出现类似|类似|例如|比如|不要|不能|不会|不是|不应该|拦截|机制|解释|截图|错误行为|根因|prompt|bridge|repair|example|quote|quoted|do not|don't|not valid)/i;
+const MAX_DELIVERY_MANIFEST_EXPECTED_FILES = 20;
+const DELIVERY_COUNT_NOUN_PATTERN =
+  "(?:图片|圖片|图像|圖像|图|圖|照片|海报|海報|文件|报告|報告|文档|文檔|档案|檔案|image|images|photo|photos|picture|pictures|poster|posters|file|files|document|documents|report|reports|pdfs?|docx|pptx|xlsx|pngs?|jpe?gs?|webps?|zips?)";
+const DELIVERY_COUNT_PATTERNS = [
+  new RegExp(`(?<count>\\d{1,2})\\s*(?:张|張|个|個|份)?\\s*${DELIVERY_COUNT_NOUN_PATTERN}`, "i"),
+  new RegExp(`(?<count>one|two|three|four|five|six|seven|eight|nine|ten)\\s+${DELIVERY_COUNT_NOUN_PATTERN}`, "i"),
+  new RegExp(`(?<count>[一二两兩三四五六七八九十]{1,3})\\s*(?:张|張|个|個|份)?\\s*${DELIVERY_COUNT_NOUN_PATTERN}`),
+];
+const ENGLISH_COUNT_VALUES: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+};
+const CHINESE_DIGIT_VALUES: Record<string, number> = {
+  一: 1,
+  二: 2,
+  两: 2,
+  兩: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+interface DeliveryManifest {
+  expectedFileCount?: number;
+}
+
+function parseChineseCount(value: string): number | undefined {
+  if (value === "十") {
+    return 10;
+  }
+  if (value.startsWith("十")) {
+    return 10 + (CHINESE_DIGIT_VALUES[value.slice(1)] ?? 0);
+  }
+  const tensMatch = value.match(/^([一二两兩三四五六七八九])十([一二两兩三四五六七八九])?$/);
+  if (tensMatch) {
+    return CHINESE_DIGIT_VALUES[tensMatch[1]!]! * 10 + (tensMatch[2] ? CHINESE_DIGIT_VALUES[tensMatch[2]]! : 0);
+  }
+  return CHINESE_DIGIT_VALUES[value];
+}
+
+function parseDeliveryCount(value: string): number | undefined {
+  const normalized = value.toLowerCase();
+  const parsed = /^\d+$/.test(normalized)
+    ? Number.parseInt(normalized, 10)
+    : ENGLISH_COUNT_VALUES[normalized] ?? parseChineseCount(value);
+  if (!parsed || parsed < 1 || parsed > MAX_DELIVERY_MANIFEST_EXPECTED_FILES) {
+    return undefined;
+  }
+  return parsed;
+}
 
 function isDeferredDeliveryReply(text: string): boolean {
   const normalized = stripSendFileTags(text).trim();
@@ -171,6 +233,20 @@ function isLikelyDeliverableRequest(text: string): boolean {
     return false;
   }
   return DELIVERABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function buildDeliveryManifest(requestText: string): DeliveryManifest {
+  if (!isLikelyDeliverableRequest(requestText)) {
+    return {};
+  }
+  for (const pattern of DELIVERY_COUNT_PATTERNS) {
+    const match = pattern.exec(requestText);
+    const count = match?.groups?.count ? parseDeliveryCount(match.groups.count) : undefined;
+    if (count) {
+      return { expectedFileCount: count };
+    }
+  }
+  return {};
 }
 
 function isUndeliveredDeliverableCompletionReply(input: {
@@ -378,6 +454,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   const requestFiles = workflowResult?.kind === "direct"
     ? [...workflowResult.files]
     : downloadedAttachments.map((attachment) => attachment.localPath);
+  const deliveryManifest = buildDeliveryManifest(requestText);
 
   if (await maybeReplyWithBudgetExhausted(stateDir, cfg.budgetUsd, locale, context, normalized)) {
     return;
@@ -553,9 +630,9 @@ export async function executeWorkflowAwareTelegramTurn(input: {
 
   let turnError: unknown;
   try {
-    const hasAcceptedTelegramOutFiles = async (): Promise<boolean> => {
+    const getAcceptedTelegramOutFilePaths = async (): Promise<string[]> => {
       if (!state.telegramOutDirPath) {
-        return false;
+        return [];
       }
       const describedFiles = await describeTelegramOutFiles(state.telegramOutDirPath);
       const limitedFiles = applyTelegramOutLimits(describedFiles, {
@@ -563,7 +640,15 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         maxFileBytes: 512_000,
         maxTotalBytes: 1_500_000,
       });
-      return limitedFiles.accepted.length > 0;
+      return limitedFiles.accepted.map((file) => file.path);
+    };
+    const countDeliveryEvidence = async (responseText: string): Promise<number> => {
+      const paths = new Set([
+        ...getAlreadyDeliveredFilePaths(),
+        ...extractSendFilePaths(responseText),
+        ...(await getAcceptedTelegramOutFilePaths()),
+      ]);
+      return paths.size + countInlineFileBlocks(responseText);
     };
     const getDeliveryRepairReason = async (responseText: string): Promise<"deferred" | "undelivered" | undefined> => {
       await Promise.allSettled(streamDeliveryPromises);
@@ -571,12 +656,12 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         return "deferred";
       }
       syncSideChannelReceipts();
+      const deliveryEvidenceCount = await countDeliveryEvidence(responseText);
+      const deliveryManifestSatisfied = !deliveryManifest.expectedFileCount ||
+        deliveryEvidenceCount >= deliveryManifest.expectedFileCount;
       const hasFileDeliveryEvidence =
-        hasSendFileTag(responseText) ||
-        hasInlineFileBlock(responseText) ||
-        deliveryLedger.isSatisfiedForDeliverableRequest() ||
-        getAlreadyDeliveredFilePaths().length > 0 ||
-        await hasAcceptedTelegramOutFiles();
+        deliveryEvidenceCount > 0 &&
+        deliveryManifestSatisfied;
       if (isUndeliveredDeliverableCompletionReply({
         requestText,
         responseText,
