@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,6 +8,7 @@ import type {
   CodexAdapterResponse,
   CodexSessionHandle,
   CodexUserMessageInput,
+  EngineStreamEvent,
 } from "./adapter.js";
 import { killProcessTree } from "./process-tree.js";
 
@@ -39,6 +40,7 @@ type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => Pr
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_OUTPUT_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_STDERR_TAIL_BYTES = 128 * 1024;
+const MAX_CODEX_ROLLOUT_SCAN_DEPTH = 16;
 export const CODEX_PROCESS_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_PROCESS_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
 
@@ -81,6 +83,8 @@ type CodexTurnState = {
   usage: { inputTokens: number; outputTokens: number; cachedTokens: number } | null;
 };
 
+type EmitEngineEvent = (event: EngineStreamEvent) => void;
+
 function createTurnState(): CodexTurnState {
   return {
     threadId: null,
@@ -91,7 +95,7 @@ function createTurnState(): CodexTurnState {
   };
 }
 
-function updateTurnStateFromLine(state: CodexTurnState, line: string): void {
+function updateTurnStateFromLine(state: CodexTurnState, line: string, emitEngineEvent?: EmitEngineEvent): void {
   let event: CodexJsonEvent;
   try {
     event = JSON.parse(line) as CodexJsonEvent;
@@ -101,6 +105,7 @@ function updateTurnStateFromLine(state: CodexTurnState, line: string): void {
 
   if (event.type === "thread.started" && typeof event.thread_id === "string") {
     state.threadId = event.thread_id;
+    emitEngineEvent?.({ type: "session", sessionId: event.thread_id });
     return;
   }
 
@@ -110,6 +115,11 @@ function updateTurnStateFromLine(state: CodexTurnState, line: string): void {
     typeof event.item.text === "string"
   ) {
     state.lastAgentMessage = event.item.text;
+    emitEngineEvent?.({
+      type: "assistant_text",
+      text: event.item.text,
+      sessionId: state.threadId ?? undefined,
+    });
     return;
   }
 
@@ -288,18 +298,32 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
   private async hasLocalRolloutFile(codexHome: string, sessionId: string): Promise<boolean> {
     const pending = [
-      path.join(codexHome, "sessions"),
-      path.join(codexHome, "archived_sessions"),
+      { dir: path.join(codexHome, "sessions"), depth: 0 },
+      { dir: path.join(codexHome, "archived_sessions"), depth: 0 },
     ];
+    const visited = new Set<string>();
 
     while (pending.length > 0) {
-      const current = pending.pop()!;
+      const { dir: current, depth } = pending.pop()!;
+      let visitedKey = current;
+      try {
+        visitedKey = await realpath(current);
+      } catch {
+        // The following readdir will handle missing or unreadable paths.
+      }
+      if (visited.has(visitedKey)) {
+        continue;
+      }
+      visited.add(visitedKey);
+
       try {
         const entries = await readdir(current, { withFileTypes: true, encoding: "utf8" });
         for (const entry of entries) {
           const entryPath = path.join(current, entry.name);
           if (entry.isDirectory()) {
-            pending.push(entryPath);
+            if (depth < MAX_CODEX_ROLLOUT_SCAN_DEPTH) {
+              pending.push({ dir: entryPath, depth: depth + 1 });
+            }
             continue;
           }
           if (entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(`-${sessionId}.jsonl`)) {
@@ -432,6 +456,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
       input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
       input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
       input.extraEnv,
+      input.onEngineEvent,
     );
 
     if (result.state.lastTurnFailureMessage) {
@@ -474,6 +499,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
     timeoutMs: number | null = this.turnTimeoutMs,
     inactivityTimeoutMs: number | null = this.inactivityTimeoutMs,
     extraEnv?: Record<string, string>,
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>,
   ): Promise<{ state: CodexTurnState; stderrTail: string; exitCode: number | null }> {
     const invocation = buildCommandInvocation(this.codexExecutable, args);
     const child = this.spawnCodex(invocation.command, invocation.args, {
@@ -492,6 +518,16 @@ export class ProcessCodexAdapter implements CodexAdapter {
       let totalTimeout: ReturnType<typeof setTimeout> | undefined;
       let inactivityTimeout: ReturnType<typeof setTimeout> | undefined;
       let abortCleanup: (() => void) | undefined;
+      const emitEngineEvent: EmitEngineEvent = (event) => {
+        if (!onEngineEvent) {
+          return;
+        }
+        try {
+          Promise.resolve(onEngineEvent(event)).catch(() => undefined);
+        } catch {
+          // Stream event observers are best-effort and must not fail the engine turn.
+        }
+      };
 
       const clearTimers = () => {
         totalTimeout && clearTimeout(totalTimeout);
@@ -558,7 +594,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
           clearAbortListener();
           const trailingLine = stdoutLineBuffer.trim();
           if (trailingLine) {
-            updateTurnStateFromLine(state, trailingLine);
+            updateTurnStateFromLine(state, trailingLine, emitEngineEvent);
           }
           resolve({ state, stderrTail, exitCode: code });
         }
@@ -575,7 +611,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
         const lines = stdoutLineBuffer.split(/\r?\n/);
         stdoutLineBuffer = lines.pop() ?? "";
         for (const line of lines.map((value) => value.trim()).filter(Boolean)) {
-          updateTurnStateFromLine(state, line);
+          updateTurnStateFromLine(state, line, emitEngineEvent);
         }
       });
 

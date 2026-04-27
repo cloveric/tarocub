@@ -193,6 +193,33 @@ describe("ProcessCodexAdapter", () => {
     expect(progressUpdates).toEqual([]);
   });
 
+  it("emits engine events from structured Codex stdout", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const engineEvents: unknown[] = [];
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+      onEngineEvent: (event) => {
+        engineEvents.push(event);
+      },
+    });
+
+    child.stdout.emitData('{"type":"thread.started","thread_id":"thread-456"}\n');
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"Hello back"}}\n');
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: "Hello back",
+      sessionId: "thread-456",
+    });
+    expect(engineEvents).toEqual([
+      { type: "session", sessionId: "thread-456" },
+      { type: "assistant_text", text: "Hello back", sessionId: "thread-456" },
+    ]);
+  });
+
   it("pre-approves normal Codex turns before running them with full-auto", async () => {
     const { spawnCodex, child, calls } = createSpawnHarness();
     const approvals: unknown[] = [];
@@ -323,6 +350,26 @@ describe("ProcessCodexAdapter", () => {
       const adapter = new ProcessCodexAdapter("codex", { CODEX_HOME: codexHome });
 
       await expect(adapter.validateExternalSession("thread-archived")).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("caps local Codex rollout scanning depth", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-session-depth-"));
+    const codexHome = path.join(root, ".codex");
+    try {
+      let deepPath = path.join(codexHome, "sessions");
+      for (let index = 0; index < 32; index++) {
+        deepPath = path.join(deepPath, `level-${index}`);
+      }
+      await mkdir(deepPath, { recursive: true });
+      await writeFile(path.join(deepPath, "rollout-2026-04-27T00-00-00-thread-too-deep.jsonl"), "{}\n", "utf8");
+      const adapter = new ProcessCodexAdapter("codex", { CODEX_HOME: codexHome });
+
+      await expect(adapter.validateExternalSession("thread-too-deep")).rejects.toThrow(
+        "codex process could not resume thread thread-too-deep",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
