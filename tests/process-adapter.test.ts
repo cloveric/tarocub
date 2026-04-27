@@ -220,6 +220,36 @@ describe("ProcessCodexAdapter", () => {
     ]);
   });
 
+  it("only forwards side-channel extra env keys to the Codex child process", async () => {
+    const { spawnCodex, child, calls } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+      extraEnv: {
+        CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+        CCTB_SEND_TOKEN: "token",
+        CCTB_SEND_COMMAND: "/tmp/.cctb-send/helper",
+        LD_PRELOAD: "/tmp/injected.dylib",
+        NODE_OPTIONS: "--require /tmp/injected.js",
+      },
+    });
+    await waitForSpawn(calls);
+
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n');
+    child.close(0);
+    await promise;
+
+    expect(calls[0]?.options.env).toMatchObject({
+      CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+      CCTB_SEND_TOKEN: "token",
+      CCTB_SEND_COMMAND: "/tmp/.cctb-send/helper",
+    });
+    expect(calls[0]?.options.env?.LD_PRELOAD).toBeUndefined();
+    expect(calls[0]?.options.env?.NODE_OPTIONS).toBeUndefined();
+  });
+
   it("pre-approves normal Codex turns before running them with full-auto", async () => {
     const { spawnCodex, child, calls } = createSpawnHarness();
     const approvals: unknown[] = [];

@@ -176,6 +176,36 @@ describe("ProcessClaudeAdapter", () => {
     }
   });
 
+  it("only forwards side-channel extra env keys to the Claude child process", async () => {
+    const { child, calls, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+      extraEnv: {
+        CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+        CCTB_SEND_TOKEN: "token",
+        CCTB_SEND_COMMAND: "/tmp/.cctb-send/helper",
+        LD_PRELOAD: "/tmp/injected.dylib",
+        NODE_OPTIONS: "--require /tmp/injected.js",
+      },
+    });
+    await waitForSpawn(calls);
+
+    child.stdout.emitData('{"type":"result","result":"ok","session_id":"session-abc"}');
+    child.close(0);
+    await promise;
+
+    expect(calls[0]?.options.env).toMatchObject({
+      CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+      CCTB_SEND_TOKEN: "token",
+      CCTB_SEND_COMMAND: "/tmp/.cctb-send/helper",
+    });
+    expect(calls[0]?.options.env?.LD_PRELOAD).toBeUndefined();
+    expect(calls[0]?.options.env?.NODE_OPTIONS).toBeUndefined();
+  });
+
   it("injects a Claude permission prompt MCP tool when Telegram approval is available", async () => {
     const { child, calls, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter("claude", {

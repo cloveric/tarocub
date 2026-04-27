@@ -39,6 +39,7 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.4.2** — Codex/Claude process runtime 的 turn 级子进程环境变量注入改为 allowlist，只允许文件交付 side-channel 需要的 `CCTB_SEND_URL`、`CCTB_SEND_TOKEN`、`CCTB_SEND_COMMAND`。
 - **v4.4.1** — Codex process runtime 接入和 Claude 同一套 engine-event 通道，可透出结构化 `session` 与完成态 `assistant_text` 事件；本地 Codex rollout 扫描也加了 visited/depth 防护。
 - **v4.4.0** — 新增 Delivery Protocol v2：turn 级交付 ledger、side-channel 结构化 accepted/rejected receipt，以及可基于 side-channel、stream、最终 `[send-file:]` 和 `.telegram-out` 真实证据判断完成的交付门禁。
 - **v4.3.9** — 加固交付完成门禁：如果 agent 在图片/文件 batch 仍在跑时结束 turn，或者只说文件已生成但没有 side-channel、`[send-file:]`、stream 或 `.telegram-out` 的真实交付证据，bridge 会拦住这条回复并自动 repair，而不是让 Telegram 收不到文件。

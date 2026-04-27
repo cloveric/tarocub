@@ -39,6 +39,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.4.2** — restricts turn-scoped child-process environment injection to the side-channel delivery variables (`CCTB_SEND_URL`, `CCTB_SEND_TOKEN`, `CCTB_SEND_COMMAND`) for both Codex and Claude process runtimes.
 - **v4.4.1** — brings Codex process runtime into the same engine-event path as Claude for structured `session` and completed `assistant_text` events, and caps local Codex rollout scanning with visited/depth guards.
 - **v4.4.0** — adds Delivery Protocol v2: a turn-level delivery ledger, structured side-channel accepted/rejected receipts, and a completion gate that can trust real receipts across side-channel, stream, final `[send-file:]`, and `.telegram-out` delivery paths.
 - **v4.3.9** — hardens deliverable completion: if an agent ends a turn while a file/image batch is still running, or claims files were generated without any side-channel, `[send-file:]`, stream, or `.telegram-out` delivery evidence, the bridge blocks that reply and repairs the turn instead of leaving Telegram without the files.

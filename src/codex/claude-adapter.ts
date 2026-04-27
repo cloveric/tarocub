@@ -16,6 +16,7 @@ import {
 } from "./claude-permission-hook.js";
 import { killProcessTree } from "./process-tree.js";
 import type { ApprovalMode } from "./process-adapter.js";
+import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -505,7 +506,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     const child = this.spawnClaude(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
-      env: extraEnv ? { ...this.childEnv, ...extraEnv } : this.childEnv,
+      env: mergeAllowedTurnExtraEnv(this.childEnv, extraEnv),
       cwd: cwdOverride ?? this.workspacePath,
       windowsHide: true,
     });
