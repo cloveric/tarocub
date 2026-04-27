@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { TelegramApi } from "./api.js";
+import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 
 function isMarkdownParseError(error: unknown): boolean {
@@ -55,7 +56,7 @@ export async function sendFileOrPhoto(
   await api.sendDocument(chatId, filename, contents);
 }
 
-type RejectReason =
+export type DeliveryRejectReason =
   | "outside-workspace"
   | "outside-request-output"
   | "not-a-file"
@@ -65,7 +66,7 @@ type RejectReason =
   | "permission-denied"
   | "read-error";
 
-function renderRejectReason(reason: RejectReason, detail: string | undefined, locale: Locale): string {
+function renderRejectReason(reason: DeliveryRejectReason, detail: string | undefined, locale: Locale): string {
   if (locale === "zh") {
     switch (reason) {
       case "outside-workspace": return "超出工作目录";
@@ -168,7 +169,9 @@ export async function deliverTelegramResponse(
   locale: Locale = "en",
   options: {
     onFileAccepted?: (sourcePath: string) => void;
-    source?: "post-turn" | "side-channel" | "stream-event";
+    onDeliveryAccepted?: (receipt: DeliveryAcceptedReceipt) => void;
+    onDeliveryRejected?: (receipt: DeliveryRejectedReceipt) => void;
+    source?: DeliverySource;
   } = {},
 ): Promise<number> {
   let filesSent = 0;
@@ -180,7 +183,7 @@ export async function deliverTelegramResponse(
   }
 
   const filePaths: string[] = [];
-  const rejected: Array<{ path: string; reason: RejectReason; detail?: string }> = [];
+  const rejected: Array<{ path: string; reason: DeliveryRejectReason; detail?: string }> = [];
   let cleanedText = text;
   const sendFilePattern = /\[send-file:([^\]]+)\]/g;
   let sendFileMatch: RegExpExecArray | null;
@@ -224,8 +227,7 @@ export async function deliverTelegramResponse(
     }
   }
 
-  const imageFiles: Array<{ sourcePath: string; filename: string; contents: Uint8Array }> = [];
-  const otherFiles: Array<{ sourcePath: string; filename: string; contents: Uint8Array | string }> = [];
+  const acceptedFiles: Array<{ sourcePath: string; realPath: string; filename: string; contents: Uint8Array | string }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
   const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
@@ -257,23 +259,25 @@ export async function deliverTelegramResponse(
       }
       const contents = await readFile(real);
       const fileName = path.basename(filePath);
-      if (isImageFile(fileName)) {
-        imageFiles.push({ sourcePath: filePath, filename: fileName, contents });
-      } else {
-        otherFiles.push({ sourcePath: filePath, filename: fileName, contents });
-      }
+      acceptedFiles.push({ sourcePath: filePath, realPath: real, filename: fileName, contents });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
-      const reason: RejectReason =
+      const reason: DeliveryRejectReason =
         code === "ENOENT" ? "not-found" : code === "EACCES" ? "permission-denied" : "read-error";
       rejected.push({ path: filePath, reason });
     }
   }
 
-  const allFiles = [...imageFiles, ...otherFiles];
-  for (const file of allFiles) {
+  for (const file of acceptedFiles) {
     await sendFileOrPhoto(api, chatId, file.filename, file.contents);
     options.onFileAccepted?.(file.sourcePath);
+    options.onDeliveryAccepted?.({
+      path: file.sourcePath,
+      realPath: file.realPath,
+      fileName: file.filename,
+      bytes: typeof file.contents === "string" ? Buffer.byteLength(file.contents) : file.contents.length,
+      source: options.source ?? "post-turn",
+    });
     await appendTimelineEventBestEffort(deliveryStateDir, {
       type: "file.accepted",
       channel: "telegram",
@@ -313,11 +317,19 @@ export async function deliverTelegramResponse(
       ? "文件必须位于本 bot 的工作目录内（或通过 /resume 指定的项目目录）。"
       : "Files must live under the bot's workspace (or a /resume'd project dir).";
     const lines = [header, ...shown.map(({ path: p, reason, detail }) => `• ${p} — ${renderRejectReason(reason, detail, locale)}`)];
+    for (const item of rejected) {
+      options.onDeliveryRejected?.({
+        path: item.path,
+        reason: item.reason,
+        detail: item.detail,
+        source: options.source ?? "post-turn",
+      });
+    }
     if (extra > 0) lines.push(moreLine);
     lines.push(footer);
     await api.sendMessage(chatId, lines.join("\n"));
   }
 
-  filesSent += allFiles.length;
+  filesSent += acceptedFiles.length;
   return filesSent;
 }

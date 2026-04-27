@@ -125,8 +125,25 @@ describe("side-channel send command", () => {
       await expect(response.json()).resolves.toEqual(expect.objectContaining({
         ok: false,
         error: expect.stringContaining("not delivered"),
+        rejected: [
+          expect.objectContaining({
+            path: outsideFile,
+            reason: "outside-workspace",
+            source: "side-channel",
+          }),
+        ],
       }));
       expect(server.getSentFilePaths()).toEqual([]);
+      expect(server.getDeliveryReceipts()).toEqual(expect.objectContaining({
+        accepted: [],
+        rejected: [
+          expect.objectContaining({
+            path: outsideFile,
+            reason: "outside-workspace",
+            source: "side-channel",
+          }),
+        ],
+      }));
     } finally {
       await server.close();
       await rm(root, { recursive: true, force: true });

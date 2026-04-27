@@ -185,6 +185,11 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         undefined,
         expect.stringContaining(path.join("workspace", ".telegram-out")),
         "en",
+        expect.objectContaining({
+          source: "post-turn",
+          onDeliveryAccepted: expect.any(Function),
+          onDeliveryRejected: expect.any(Function),
+        }),
       );
       expect(close).toHaveBeenCalledTimes(1);
     } finally {
@@ -438,6 +443,11 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         undefined,
         undefined,
         "zh",
+        expect.objectContaining({
+          source: "post-turn",
+          onDeliveryAccepted: expect.any(Function),
+          onDeliveryRejected: expect.any(Function),
+        }),
       );
       const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
@@ -513,6 +523,11 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         undefined,
         undefined,
         "zh",
+        expect.objectContaining({
+          source: "post-turn",
+          onDeliveryAccepted: expect.any(Function),
+          onDeliveryRejected: expect.any(Function),
+        }),
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -582,6 +597,11 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         undefined,
         undefined,
         "zh",
+        expect.objectContaining({
+          source: "post-turn",
+          onDeliveryAccepted: expect.any(Function),
+          onDeliveryRejected: expect.any(Function),
+        }),
       );
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -814,6 +834,143 @@ describe("executeWorkflowAwareTelegramTurn", () => {
 
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
       expect(sendTelegramOutFile).toHaveBeenCalledWith(123, "report.txt", expect.any(Uint8Array));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not repair deliverable completion replies when the response contains an inline file block", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const responseText = "Report generated:\n```file:report.txt\nhello\n```";
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: responseText,
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(1);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("generate a report file"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 111,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        responseText,
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not repair deliverable completion replies when the side-channel has accepted receipts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const deliveredPath = path.join(root, "workspace", "chart.png");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: "Image generated: chart.png",
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(0);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("generate an image file"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 110,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        startSideChannelSendServer: vi.fn().mockResolvedValue({
+          url: "http://127.0.0.1:12345/send/token",
+          token: "token",
+          getSentFilePaths: () => [],
+          getDeliveryReceipts: () => ({
+            accepted: [
+              {
+                path: deliveredPath,
+                realPath: deliveredPath,
+                fileName: "chart.png",
+                bytes: 3,
+                source: "side-channel",
+              },
+            ],
+            rejected: [],
+          }),
+          close: vi.fn().mockResolvedValue(undefined),
+        }),
+        createSideChannelSendHelper: vi.fn().mockResolvedValue(path.join(root, "workspace", ".cctb-send", "helper")),
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        "Image generated: chart.png",
+        expect.any(String),
+        undefined,
+        expect.stringContaining(path.join("workspace", ".telegram-out")),
+        "en",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Socket } from "node:net";
 import path from "node:path";
 
+import type { DeliveryAcceptedReceipt, DeliveryReceipts, DeliveryRejectedReceipt } from "./delivery-ledger.js";
 import { deliverTelegramResponse } from "./response-delivery.js";
 import type { TelegramApi } from "./api.js";
 import type { Locale } from "./message-renderer.js";
@@ -25,6 +26,7 @@ export interface SideChannelSendServer {
   url: string;
   token: string;
   getSentFilePaths: () => string[];
+  getDeliveryReceipts: () => DeliveryReceipts;
   close: () => Promise<void>;
 }
 
@@ -221,6 +223,8 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
   const token = randomBytes(24).toString("base64url");
   const expectedPath = `/send/${token}`;
   const sentFilePaths = new Set<string>();
+  const acceptedReceipts: DeliveryAcceptedReceipt[] = [];
+  const rejectedReceipts: DeliveryRejectedReceipt[] = [];
   const sockets = new Set<Socket>();
   const server = createServer(async (req, res) => {
     try {
@@ -239,6 +243,8 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
       const payload = normalizePayload(await readJsonBody(req));
       const requestedFilePaths = uniqueFilePaths(payload);
       const acceptedFilePaths = new Set<string>();
+      const requestAcceptedReceipts: DeliveryAcceptedReceipt[] = [];
+      const requestRejectedReceipts: DeliveryRejectedReceipt[] = [];
       const filesSent = await deliverTelegramResponse(
         options.api,
         options.chatId,
@@ -249,9 +255,15 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
         options.locale,
         {
           source: "side-channel",
-          onFileAccepted: (sourcePath) => {
-            acceptedFilePaths.add(sourcePath);
-            sentFilePaths.add(sourcePath);
+          onDeliveryAccepted: (receipt) => {
+            acceptedFilePaths.add(receipt.path);
+            sentFilePaths.add(receipt.path);
+            acceptedReceipts.push(receipt);
+            requestAcceptedReceipts.push(receipt);
+          },
+          onDeliveryRejected: (receipt) => {
+            rejectedReceipts.push(receipt);
+            requestRejectedReceipts.push(receipt);
           },
         },
       );
@@ -261,10 +273,17 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
           ok: false,
           error: `${missingCount} file${missingCount === 1 ? "" : "s"} not delivered by side-channel send`,
           filesSent,
+          accepted: requestAcceptedReceipts,
+          rejected: requestRejectedReceipts,
         });
         return;
       }
-      sendJson(res, 200, { ok: true, filesSent });
+      sendJson(res, 200, {
+        ok: true,
+        filesSent,
+        accepted: requestAcceptedReceipts,
+        rejected: requestRejectedReceipts,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       sendJson(res, 400, { ok: false, error: message });
@@ -294,6 +313,10 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
     url: `http://127.0.0.1:${address.port}${expectedPath}`,
     token,
     getSentFilePaths: () => [...sentFilePaths],
+    getDeliveryReceipts: () => ({
+      accepted: [...acceptedReceipts],
+      rejected: [...rejectedReceipts],
+    }),
     close: async () => {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {

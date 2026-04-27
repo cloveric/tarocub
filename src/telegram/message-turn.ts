@@ -20,6 +20,12 @@ import type { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { appendUpdateHandleAuditEventBestEffort, maybeReplyWithBudgetExhausted, recordTurnUsageAndBudgetAudit } from "./turn-bookkeeping.js";
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { InlineKeyboardButton, TelegramApi } from "./api.js";
+import {
+  TurnDeliveryLedger,
+  type DeliveryAcceptedReceipt,
+  type DeliveryReceipts,
+  type DeliveryRejectedReceipt,
+} from "./delivery-ledger.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import {
@@ -106,6 +112,10 @@ function stripAlreadySentSideChannelTags(text: string, sentFilePaths: readonly s
 
 function hasSendFileTag(text: string): boolean {
   return /\[send-file:[^\]]+\]/.test(text);
+}
+
+function hasInlineFileBlock(text: string): boolean {
+  return /```file:[^\n]+\n[\s\S]*?```/.test(text);
 }
 
 const DEFERRED_DELIVERY_REPLY_PATTERNS = [
@@ -254,6 +264,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     locale: Locale,
     options?: {
       onFileAccepted?: (sourcePath: string) => void;
+      onDeliveryAccepted?: (receipt: DeliveryAcceptedReceipt) => void;
+      onDeliveryRejected?: (receipt: DeliveryRejectedReceipt) => void;
       source?: "post-turn" | "side-channel" | "stream-event";
     },
   ) => Promise<number>;
@@ -413,14 +425,25 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   let deliveredText = "";
   let sideChannelCommand: string | undefined;
   let sideChannelEnv: Record<string, string> | undefined;
+  const deliveryLedger = new TurnDeliveryLedger();
   const streamDeliveredFilePaths = new Set<string>();
   const streamPendingFilePaths = new Set<string>();
   const streamDeliveredTextFragments: string[] = [];
   const streamDeliveryPromises: Promise<void>[] = [];
-  const getAlreadyDeliveredFilePaths = () => [
-    ...(sideChannel?.getSentFilePaths() ?? []),
-    ...streamDeliveredFilePaths,
-  ];
+  const syncSideChannelReceipts = () => {
+    const getReceipts = (sideChannel as (SideChannelSendServer & {
+      getDeliveryReceipts?: () => DeliveryReceipts;
+    }) | undefined)?.getDeliveryReceipts;
+    deliveryLedger.merge(getReceipts?.());
+  };
+  const getAlreadyDeliveredFilePaths = () => {
+    syncSideChannelReceipts();
+    return [
+      ...(sideChannel?.getSentFilePaths() ?? []),
+      ...streamDeliveredFilePaths,
+      ...deliveryLedger.acceptedPaths(),
+    ];
+  };
   const handleEngineEvent = (event: EngineStreamEvent): void => {
     void appendTimelineEventBestEffort(stateDir, {
       type: "engine.event",
@@ -468,6 +491,12 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         onFileAccepted: (sourcePath) => {
           streamDeliveredFilePaths.add(sourcePath);
           streamPendingFilePaths.delete(sourcePath);
+        },
+        onDeliveryAccepted: (receipt) => {
+          deliveryLedger.recordAccepted(receipt);
+        },
+        onDeliveryRejected: (receipt) => {
+          deliveryLedger.recordRejected(receipt);
         },
       },
     ).then(() => {
@@ -541,8 +570,11 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       if (isDeferredDeliveryReply(responseText)) {
         return "deferred";
       }
+      syncSideChannelReceipts();
       const hasFileDeliveryEvidence =
         hasSendFileTag(responseText) ||
+        hasInlineFileBlock(responseText) ||
+        deliveryLedger.isSatisfiedForDeliverableRequest() ||
         getAlreadyDeliveredFilePaths().length > 0 ||
         await hasAcceptedTelegramOutFiles();
       if (isUndeliveredDeliverableCompletionReply({
@@ -620,15 +652,39 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       stripAlreadySentSideChannelTags(result.text, getAlreadyDeliveredFilePaths()),
       streamDeliveredTextFragments,
     );
-    await deliverTelegramResponse(
-      context.api,
-      normalized.chatId,
-      deliveredText,
-      context.inboxDir,
-      cfg.resume?.workspacePath,
-      state.telegramOutDirPath,
-      locale,
-    );
+    const postTurnDeliveryOptions = hasSendFileTag(deliveredText)
+      ? {
+        source: "post-turn" as const,
+        onDeliveryAccepted: (receipt: Parameters<TurnDeliveryLedger["recordAccepted"]>[0]) => {
+          deliveryLedger.recordAccepted(receipt);
+        },
+        onDeliveryRejected: (receipt: Parameters<TurnDeliveryLedger["recordRejected"]>[0]) => {
+          deliveryLedger.recordRejected(receipt);
+        },
+      }
+      : undefined;
+    if (postTurnDeliveryOptions) {
+      await deliverTelegramResponse(
+        context.api,
+        normalized.chatId,
+        deliveredText,
+        context.inboxDir,
+        cfg.resume?.workspacePath,
+        state.telegramOutDirPath,
+        locale,
+        postTurnDeliveryOptions,
+      );
+    } else {
+      await deliverTelegramResponse(
+        context.api,
+        normalized.chatId,
+        deliveredText,
+        context.inboxDir,
+        cfg.resume?.workspacePath,
+        state.telegramOutDirPath,
+        locale,
+      );
+    }
   } catch (error) {
     turnError = error;
   } finally {
@@ -668,6 +724,13 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       }
       const contents = await readFile(file.path);
       await sendTelegramOutFile(normalized.chatId, file.name, contents);
+      deliveryLedger.recordAccepted({
+        path: file.path,
+        realPath: fileRealPath,
+        fileName: file.name,
+        bytes: contents.length,
+        source: "telegram-out",
+      });
     }
   }
 
