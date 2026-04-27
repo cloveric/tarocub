@@ -146,6 +146,10 @@ const DELIVERABLE_COMPLETION_REPLY_PATTERNS = [
 ];
 const EXPLANATORY_DEFERRED_DELIVERY_CONTEXT_PATTERN =
   /(?:出现类似|类似|例如|比如|不要|不能|不会|不是|不应该|拦截|机制|解释|截图|错误行为|根因|prompt|bridge|repair|example|quote|quoted|do not|don't|not valid)/i;
+const INCOMPLETE_DELIVERY_REPORT_PATTERN =
+  /(?:无法|不能|失败|未能|缺少|不完整|部分|只(?:生成|完成|发送|發送|交付)|failed|unable|could not|can't|cannot|missing|incomplete|partial|only\s+(?:generated|sent|delivered|created))/i;
+const SHORT_COMPLETION_REPLY_PATTERN =
+  /^(?:done|ready|completed|finished|完成|好了|已完成|搞定|处理完了|處理完了)[\s.!。！]*$/i;
 const MAX_DELIVERY_MANIFEST_EXPECTED_FILES = 20;
 const DELIVERY_COUNT_NOUN_PATTERN =
   "(?:图片|圖片|图像|圖像|图|圖|照片|海报|海報|文件|报告|報告|文档|文檔|档案|檔案|image|images|photo|photos|picture|pictures|poster|posters|file|files|document|documents|report|reports|pdfs?|docx|pptx|xlsx|pngs?|jpe?gs?|webps?|zips?)";
@@ -247,6 +251,17 @@ function buildDeliveryManifest(requestText: string): DeliveryManifest {
     }
   }
   return {};
+}
+
+function isIncompleteDeliveryReport(text: string): boolean {
+  return INCOMPLETE_DELIVERY_REPORT_PATTERN.test(stripSendFileTags(text));
+}
+
+function isShortCompletionReply(text: string): boolean {
+  const normalized = stripSendFileTags(text)
+    .replace(/```file:[^\n]+\n[\s\S]*?```/g, "")
+    .trim();
+  return SHORT_COMPLETION_REPLY_PATTERN.test(normalized);
 }
 
 function isUndeliveredDeliverableCompletionReply(input: {
@@ -662,6 +677,14 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       const hasFileDeliveryEvidence =
         deliveryEvidenceCount > 0 &&
         deliveryManifestSatisfied;
+      if (
+        deliveryManifest.expectedFileCount &&
+        !deliveryManifestSatisfied &&
+        !isIncompleteDeliveryReport(responseText) &&
+        (deliveryEvidenceCount > 0 || hasSendFileTag(responseText) || isShortCompletionReply(responseText))
+      ) {
+        return "undelivered";
+      }
       if (isUndeliveredDeliverableCompletionReply({
         requestText,
         responseText,
