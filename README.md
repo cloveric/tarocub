@@ -39,6 +39,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.3.9** — hardens deliverable completion: if an agent ends a turn while a file/image batch is still running, or claims files were generated without any side-channel, `[send-file:]`, stream, or `.telegram-out` delivery evidence, the bridge blocks that reply and repairs the turn instead of leaving Telegram without the files.
 - **v4.3.8** — documents the current file-delivery contract: prefer the per-turn `CCTB_SEND_COMMAND` side-channel, keep `[send-file:]` only as fallback, and de-dupe stream/side-channel deliveries against the final `.telegram-out` sweep.
 - **v4.3.3** — refines Telegram diagnostics: copied example send-file paths are classified as placeholders case-insensitively, and engine transport errors now use the current instance engine instead of guessing from the error text.
 - **v4.3.2** — tightens Telegram runtime state handling across both runtimes: Codex now defaults to the simpler process runtime, stale telegram-out outputs and engine/session mismatches are fenced off, and the remaining app-server shared-turn edge cases are hardened for optional use.
@@ -185,6 +186,8 @@ Current delivery contract:
 - The helper is scoped to one Telegram turn. It will not work after the turn finishes.
 - The bridge validates that every file lives under the instance workspace or the active `/resume` project before sending it.
 - If a file was already sent by stream delivery or the side-channel helper, the final `.telegram-out` sweep skips that same real path to avoid duplicate Telegram attachments.
+- For deliverable-producing requests, the bridge checks final replies against real delivery evidence. Replies such as "the batch is running, I will check later" or "the image was generated" without any actual file delivery are blocked and repaired automatically.
+- Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures unless the user explicitly asked for a file/export/send/save action.
 
 This works for the default Codex and Claude process runtimes. For long file-producing tasks, the agent should keep the turn open until the requested deliverable set is complete, send the files, then finish the turn instead of sleeping, polling, or promising a later notification.
 

@@ -39,6 +39,7 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.3.9** — 加固交付完成门禁：如果 agent 在图片/文件 batch 仍在跑时结束 turn，或者只说文件已生成但没有 side-channel、`[send-file:]`、stream 或 `.telegram-out` 的真实交付证据，bridge 会拦住这条回复并自动 repair，而不是让 Telegram 收不到文件。
 - **v4.3.8** — 补充当前文件投递约定：优先使用每 turn 注入的 `CCTB_SEND_COMMAND` side-channel，`[send-file:]` 只作为 fallback，并且 stream/side-channel 已投递文件会和最终 `.telegram-out` 扫描去重。
 - **v4.3.3** — 细化 Telegram 诊断：复制出来的示例 send-file 路径会按大小写不敏感方式识别为占位路径；engine transport 错误也改为使用当前实例引擎，而不是只靠错误文本猜。
 - **v4.3.2** — 继续收紧 Telegram 运行时状态边界：Codex 默认改走更稳定的 process runtime，旧 telegram-out 产物和引擎/会话错配会被挡住，可选 app-server 路径剩余的共享 turn 边角问题也补齐了防护。
@@ -184,6 +185,8 @@ open -e ~/.cctb/work/agent.md
 - helper 只在当前 Telegram turn 有效，turn 结束后不能再用。
 - bridge 会校验每个文件必须位于实例工作区或当前 `/resume` 项目目录下，才会真正发送。
 - 如果某个文件已经通过 stream delivery 或 side-channel helper 发过，最终 `.telegram-out` 扫描会按真实路径跳过它，避免 Telegram 重复附件。
+- 对明确要生成/导出/发送图片或文件的请求，bridge 会把最终回复和真实交付证据对上。类似“batch 跑起来了，稍后 check”或“图片已生成”但没有实际文件投递的回复，会被拦截并自动 repair。
+- 纯文本任务不会误当成文件交付失败，例如图片分析、图片描述、内联报告；除非用户明确要求保存、导出、发送或交付文件。
 
 当前默认的 Codex 和 Claude process runtime 都支持。长时间生成文件的任务里，agent 应该等当前这批交付物完成后立刻发送文件并结束 turn，不要继续睡眠、轮询、做可选 QA，或承诺稍后通知。
 
