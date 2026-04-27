@@ -8,6 +8,7 @@ import type { DeliveryAcceptedReceipt, DeliveryReceipts, DeliveryRejectedReceipt
 import { deliverTelegramResponse } from "./response-delivery.js";
 import type { TelegramApi } from "./api.js";
 import type { Locale } from "./message-renderer.js";
+import { isAbsoluteFilePath } from "./file-paths.js";
 
 export interface SideChannelSendPayload {
   message?: string;
@@ -42,10 +43,6 @@ export interface SideChannelSendServerOptions {
 const MAX_SIDE_CHANNEL_BODY_BYTES = 64 * 1024;
 const MAX_SIDE_CHANNEL_FILES = 20;
 const SIDE_CHANNEL_CLOSE_TIMEOUT_MS = 1000;
-
-function isAbsoluteFilePath(value: string): boolean {
-  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
-}
 
 function assertAbsoluteFilePaths(paths: string[]): void {
   const relativePath = paths.find((filePath) => !isAbsoluteFilePath(filePath));
@@ -199,7 +196,7 @@ function normalizePayload(value: unknown): SideChannelSendPayload {
   return { message, images, files };
 }
 
-function payloadToDeliveryText(payload: SideChannelSendPayload): string {
+export function renderSideChannelDeliveryText(payload: SideChannelSendPayload): string {
   const lines: string[] = [];
   if (payload.message) {
     lines.push(payload.message);
@@ -234,7 +231,8 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
       if (
         req.method !== "POST" ||
         requestUrl.pathname !== expectedPath ||
-        (bearer && !safeEqual(bearer, token))
+        !bearer ||
+        !safeEqual(bearer, token)
       ) {
         sendJson(res, 404, { ok: false, error: "not found" });
         return;
@@ -248,13 +246,14 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
       const filesSent = await deliverTelegramResponse(
         options.api,
         options.chatId,
-        payloadToDeliveryText(payload),
+        renderSideChannelDeliveryText(payload),
         options.inboxDir,
         options.workspaceOverride,
         options.requestOutputDir,
         options.locale,
         {
           source: "side-channel",
+          allowAnyAbsolutePath: true,
           onDeliveryAccepted: (receipt) => {
             acceptedFilePaths.add(receipt.path);
             sentFilePaths.add(receipt.path);

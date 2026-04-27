@@ -2,7 +2,9 @@ import path from "node:path";
 
 import { runCli } from "./commands/cli.js";
 import { acquireInstanceLock } from "./state/instance-lock.js";
+import { rotateInstanceStructuredLogs } from "./state/log-rotation.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
+import { FileWorkflowStore } from "./state/file-workflow-store.js";
 import { resolveConfig } from "./config.js";
 import {
   createServiceDependencies,
@@ -16,6 +18,8 @@ import { createBusServer, startBusServer, stopBusServer } from "./bus/bus-server
 import { createBusTalkHandler } from "./bus/bus-handler.js";
 import { pruneStaleInstances, registerInstance, deregisterInstance, resolveChannelRoot } from "./bus/bus-registry.js";
 import { appendServiceLifecycleEventSync } from "./runtime/service-lifecycle-log.js";
+import { pruneStaleTelegramRuntimeDirs } from "./runtime/telegram-out.js";
+import { loadInstanceConfig } from "./telegram/instance-config.js";
 
 function renderLifecycleError(error: unknown): string {
   if (error instanceof Error) {
@@ -104,9 +108,31 @@ async function main(): Promise<void> {
     process.once("SIGTERM", shutdownSigterm);
     process.once("SIGINT", shutdownSigint);
 
+    await rotateInstanceStructuredLogs(serviceConfig.stateDir);
     await new RuntimeStateStore(path.join(serviceConfig.stateDir, "runtime-state.json")).resetActiveTurns();
+    try {
+      await new FileWorkflowStore(serviceConfig.stateDir).failInterruptedProcessing();
+    } catch (error) {
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        instanceName,
+        outcome: "error",
+        detail: renderLifecycleError(error),
+      });
+    }
 
     const { api, bridge, config } = await createServiceDependencies(resolvedEnv);
+    const instanceConfig = await loadInstanceConfig(config.stateDir);
+    try {
+      await pruneStaleTelegramRuntimeDirs(config.stateDir, instanceConfig.resume?.workspacePath);
+    } catch (error) {
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        instanceName,
+        outcome: "error",
+        detail: renderLifecycleError(error),
+      });
+    }
     await registerBotCommands(api);
     logLifecycleEvent({
       type: "service.started",

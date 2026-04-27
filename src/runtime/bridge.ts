@@ -54,99 +54,41 @@ function quoteShellCommand(value: string): string {
 
 function renderTelegramBridgeCapabilities(sideChannelCommand?: string, sideChannelEnvAvailable = false): string {
   const sendCommand = sideChannelEnvAvailable ? '"$CCTB_SEND_COMMAND"' : (sideChannelCommand ? quoteShellCommand(sideChannelCommand) : "");
-  const fileDeliveryMethod = sideChannelCommand
-    ? "deliver them with the side-channel send command shown in these instructions; use [send-file:] tags only as fallback if the command is unavailable or fails"
-    : "send those files with [send-file:] tags";
-  const criticalFileDeliveryRule = sideChannelCommand
+  const sideChannelInstructions = sideChannelCommand
     ? [
-        "CRITICAL FILE DELIVERY RULE:",
-        "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type.",
-        "The required delivery method is the side-channel send command shown above.",
-        "After generating/saving ANY file the user should receive, run the side-channel send command with the real absolute path of that saved file.",
-        "If the side-channel command is unavailable or fails, then include a [send-file:] fallback tag with the real absolute path.",
-        "Examples:",
-        `  Generated a PPT -> run ${sendCommand} --file /absolute/path/to/deck.pptx`,
-        `  Generated images -> run ${sendCommand} --image /absolute/path/to/image.png for each actual image file you saved.`,
-        `  Generated a PDF -> run ${sendCommand} --file /absolute/path/to/report.pdf`,
-        "If you wrote 'the file is here: filename.pptx' WITHOUT using the send command or a [send-file:] fallback tag, the user received NOTHING.",
+        "",
+        "File send command (preferred):",
+        `  ${sendCommand} --image /absolute/path/to/image.png`,
+        `  ${sendCommand} --file /absolute/path/to/report.pdf`,
+        `  ${sendCommand} --message "Done" --file /absolute/path/to/report.pdf`,
+        sideChannelEnvAvailable
+          ? `CCTB_SEND_COMMAND=${sideChannelCommand}`
+          : `Side-channel command: ${sendCommand}`,
+        "Valid only this Telegram turn. Fallback: `telegram send --image /absolute/path/to/image.png` or `telegram send --file /absolute/path/to/report.pdf`; last resort [send-file:<real absolute path>].",
       ]
-    : [
-        "CRITICAL FILE DELIVERY RULE:",
-        "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type. The ONLY way to deliver a file to the user is the [send-file:] tag.",
-        "After generating/saving ANY file the user should receive, you MUST include a [send-file:] tag with the real absolute path of that saved file.",
-        "Examples:",
-        "  Generated a PPT -> include one [send-file:] tag pointing at the actual .pptx you saved.",
-        "  Generated images -> include one [send-file:] tag per actual image file you saved.",
-        "  Generated a PDF -> include one [send-file:] tag pointing at the actual .pdf you saved.",
-        "If you wrote 'the file is here: filename.pptx' WITHOUT a [send-file:] tag, the user received NOTHING. Always include the tag. No exceptions.",
-      ];
+    : [];
+  const fileDeliveryMethod = sideChannelCommand
+    ? "Use the explicit send command first; [send-file:<real absolute path>] only as fallback."
+    : "Use [send-file:<real absolute path>] for existing file attachments.";
 
   return [
-    "You are running inside a Telegram chat bridge. The bridge supports delivering files to the user.",
-    ...(sideChannelCommand
-      ? [
-          "",
-          "Preferred file delivery: this turn has an active side-channel send command.",
-          "When you generate a local image or file that should be sent to the user, prefer running:",
-          `  ${sendCommand} --image /absolute/path/to/image.png`,
-          `  ${sendCommand} --file /absolute/path/to/report.pdf`,
-          `  ${sendCommand} --message "Done" --file /absolute/path/to/report.pdf`,
-          sideChannelEnvAvailable
-            ? `Current CCTB_SEND_COMMAND: ${sideChannelCommand}`
-            : `Current side-channel send command: ${sendCommand}`,
-          "This side-channel is only valid during the current Telegram turn; it will not work after you finish the turn.",
-          "Wait for the command to exit before continuing; never run it in the background.",
-          "Use this immediately after the requested deliverable set is ready. Keep [send-file:] tags as fallback only if the command is unavailable or fails.",
-        ]
-      : []),
+    "Telegram chat bridge: plain text only; use numbered choices, not UI widgets; do not call blocking ask/prompt tools.",
+    ...sideChannelInstructions,
     "",
-    "When the user asks you to generate, create, or send a file, include exactly one fenced code block in your reply using this format:",
+    "Small text/code files: use one fenced `file:name.ext` block; the bridge will deliver it as a Telegram document attachment.",
     "",
-    "```file:example.py",
-    "print('hello')",
-    "```",
-    "",
-    "The bridge will automatically extract the block and deliver it as a Telegram document attachment.",
-    "Use this for small text or code files only.",
-    "",
-    "To send an existing file from disk (images, PDFs, binaries, or any file already saved to the workspace), use this tag anywhere in your reply:",
-    "  [send-file:<real absolute path to the file>]",
-    "The bridge will read the file from disk and deliver it to the user. You can include multiple [send-file:...] tags. For images, the bridge automatically compresses them for Telegram. This is the ONLY way to send binary files — do NOT put binary content in ```file:``` blocks.",
-    "The [send-file:...] tag must contain ONLY the absolute file path and nothing else.",
-    "Never copy placeholder paths such as /absolute/path, /absolute/path/to/file.png, or /path/to/file.ext. If you do not have a real saved file path, do not emit a [send-file:] tag.",
-    "Do NOT include XML/HTML tags, quotes, punctuation, explanations, or trailing text inside the tag.",
-    "Wrong: [send-file:/path/to/file.png</content>]",
-    "Wrong: [send-file:'/path/to/file.png']",
-    "Wrong: [send-file:/path/to/file.png.]",
-    "Right: [send-file:<the exact absolute path of an existing saved file>]",
-    "",
-    "IMPORTANT: Telegram is a plain-text chat environment. Do NOT use interactive UI elements such as HTML forms, checkboxes, radio buttons, dropdowns, accordions, tabs, or embedded widgets — they will not render. For multiple-choice questions, use numbered plain-text lists and ask the user to reply with a number or letter. For structured data, use simple text tables or bullet lists. Only basic Markdown (bold, italic, code, links) is supported.",
-    "",
-    "DO NOT call interactive MCP tools like AskUserQuestion, prompt_user, ask_user, or any tool whose only purpose is to block waiting for user input — you run in a headless CLI and those tools terminate the turn without ever receiving an answer, which makes the bot appear to freeze. When you need the user to choose between options, put the options directly in your Telegram reply as a numbered list and wait for the next user message.",
-    `Telegram turn boundary protocol: when the requested deliverable set for the current step is ready, finish the current Telegram turn. If that deliverable set includes files, ${fileDeliveryMethod}. For batch file outputs, send the whole requested batch together unless the user explicitly asked for incremental delivery. Waiting for a command that is creating requested deliverables is required work, not optional monitoring. After the requested deliverables are delivered, do not hold the turn open for optional monitoring, sleeping, polling, post-delivery QA, or background follow-up. If non-deliverable work remains, tell the user the current status and wait for the next message to continue.`,
-    "Do not start file-generating or deliverable-generating commands in the background and then end the turn. If a command is creating the requested deliverables, keep the turn open until that command finishes or fails, then deliver the files or report the failure.",
-    "Do not reply that a batch is running or ask the user to wait for a later notification. Do not say \"等通知\", \"wait for notification\", or similar for deliverable-generating work.",
-    "If you cannot finish the requested deliverable set in the current turn, do not promise a later notification. Tell the user what is incomplete and wait for the next message to continue.",
-    "",
-    ...criticalFileDeliveryRule,
+    "CRITICAL FILE DELIVERY RULE:",
+    "You CANNOT send files by mentioning their name or path in chat text. The user CANNOT see or click filenames you type.",
+    fileDeliveryMethod,
   ].join("\n");
 }
 
 function renderCodexTelegramOutInstructions(requestOutputDir: string): string {
   return [
-    "[Codex Telegram-Out Contract]",
-    "For small text or code files, prefer returning exactly one fenced block in this format:",
-    "",
-    "```file:example.txt",
-    "hello",
-    "```",
-    "",
-    "The bridge will extract that block and deliver it as a Telegram attachment.",
-    "Use the output directory below only when the file must exist on disk, is large, or is not suitable for an inline file block.",
-    `If you need to return a file to the user, write the final file into: ${requestOutputDir}`,
-    "Only place files intended for Telegram delivery in that directory.",
-    "Do not place scratch or temporary files there.",
-    "Files written there will be returned to the user after the task completes.",
+    "[Codex Telegram-Out]",
+    `Disk deliverables: write final files to ${requestOutputDir}`,
+    "Files placed there are auto-delivered after the turn; keep scratch/temp files elsewhere.",
+    "Small text/code: use one `file:name.ext` fenced block. Existing-file fallback: [send-file:<real absolute path>].",
   ].join("\n");
 }
 

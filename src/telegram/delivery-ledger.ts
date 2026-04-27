@@ -61,12 +61,4 @@ export class TurnDeliveryLedger {
   acceptedPaths(): string[] {
     return this.accepted().map((receipt) => receipt.realPath ?? receipt.path);
   }
-
-  hasAcceptedDelivery(): boolean {
-    return this.acceptedByPath.size > 0;
-  }
-
-  isSatisfiedForDeliverableRequest(): boolean {
-    return this.hasAcceptedDelivery();
-  }
 }

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyTelegramOutLimits,
   createTelegramOutDir,
+  pruneStaleTelegramRuntimeDirs,
   pruneStaleCctbSendDirs,
   describeTelegramOutFiles,
   listTelegramOutFiles,
@@ -27,13 +28,14 @@ describe("telegram-out", () => {
     }
   });
 
-  it("lists only regular files in deterministic order", async () => {
+  it("lists only visible regular files in deterministic order", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
     const request = await createTelegramOutDir(root, "req-123");
 
     try {
       await writeFile(path.join(request.dirPath, "b.txt"), "b", "utf8");
       await writeFile(path.join(request.dirPath, "a.txt"), "a", "utf8");
+      await writeFile(path.join(request.dirPath, ".scratch.json"), "{}", "utf8");
 
       await expect(listTelegramOutFiles(request.dirPath)).resolves.toEqual([
         path.join(request.dirPath, "a.txt"),
@@ -154,6 +156,59 @@ describe("telegram-out", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(resumeWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes stale telegram-out and cctb-send request dirs on startup maintenance", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const resumeWorkspace = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-resume-"));
+    const staleTelegramOut = path.join(root, "workspace", ".telegram-out", "req-stale");
+    const freshTelegramOut = path.join(root, "workspace", ".telegram-out", "req-fresh");
+    const staleSend = path.join(root, "workspace", ".cctb-send", "req-stale");
+    const freshSend = path.join(root, "workspace", ".cctb-send", "req-fresh");
+    const staleResumeSend = path.join(resumeWorkspace, ".cctb-send", "req-stale");
+    const freshResumeSend = path.join(resumeWorkspace, ".cctb-send", "req-fresh");
+
+    try {
+      await Promise.all([
+        mkdir(staleTelegramOut, { recursive: true }),
+        mkdir(freshTelegramOut, { recursive: true }),
+        mkdir(staleSend, { recursive: true }),
+        mkdir(freshSend, { recursive: true }),
+        mkdir(staleResumeSend, { recursive: true }),
+        mkdir(freshResumeSend, { recursive: true }),
+      ]);
+      const now = new Date();
+      const staleAt = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
+      const freshAt = new Date(now.getTime() - 60 * 60 * 1000);
+      for (const dir of [staleTelegramOut, staleSend, staleResumeSend]) {
+        await utimes(dir, staleAt, staleAt);
+      }
+      for (const dir of [freshTelegramOut, freshSend, freshResumeSend]) {
+        await utimes(dir, freshAt, freshAt);
+      }
+
+      await pruneStaleTelegramRuntimeDirs(root, resumeWorkspace);
+
+      await expect(readdir(path.dirname(staleTelegramOut))).resolves.toEqual(["req-fresh"]);
+      await expect(readdir(path.dirname(staleSend))).resolves.toEqual(["req-fresh"]);
+      await expect(readdir(path.dirname(staleResumeSend))).resolves.toEqual(["req-fresh"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(resumeWorkspace, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail startup pruning when runtime roots are malformed files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+
+    try {
+      await mkdir(path.join(root, "workspace"), { recursive: true });
+      await writeFile(path.join(root, "workspace", ".telegram-out"), "not a directory", "utf8");
+
+      await expect(pruneStaleTelegramRuntimeDirs(root)).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 });

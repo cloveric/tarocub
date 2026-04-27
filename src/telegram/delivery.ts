@@ -29,6 +29,65 @@ async function updateWorkflowBestEffort(
   }
 }
 
+async function releaseRetrySupersededWorkflowBestEffort(input: {
+  stateDir: string;
+  normalized: NormalizedTelegramMessage;
+  context: TelegramDeliveryContext;
+  workflowStore: FileWorkflowStore;
+  turnState: {
+    workflowRecordId?: string;
+    archiveSummaryDelivered: boolean;
+  };
+  reason: "auth refresh" | "stale session";
+  failureCategory: ReturnType<typeof classifyFailure>;
+}): Promise<void> {
+  const { stateDir, normalized, context, workflowStore, turnState, reason, failureCategory } = input;
+  if (!turnState.workflowRecordId || turnState.archiveSummaryDelivered) {
+    return;
+  }
+
+  const workflowRecordId = turnState.workflowRecordId;
+  try {
+    let detail = "workflow released before retry";
+    if (normalized.attachments.length > 0) {
+      const removed = await workflowStore.remove(workflowRecordId);
+      if (!removed) {
+        return;
+      }
+      detail = "workflow removed before retry";
+    } else {
+      let released = false;
+      await workflowStore.update(workflowRecordId, (record) => {
+        if (record.kind === "archive" && record.status === "processing") {
+          record.status = "awaiting_continue";
+          released = true;
+        }
+      });
+      if (!released) {
+        return;
+      }
+    }
+
+    turnState.workflowRecordId = undefined;
+    await appendTimelineEventBestEffort(stateDir, {
+      type: "workflow.failed",
+      instanceName: context.instanceName,
+      channel: "telegram",
+      chatId: normalized.chatId,
+      userId: normalized.userId,
+      updateId: context.updateId,
+      detail,
+      metadata: {
+        workflowRecordId,
+        retryReason: reason,
+        failureCategory,
+      },
+    });
+  } catch {
+    // Retry should still proceed; a later operator cleanup can remove stale bookkeeping.
+  }
+}
+
 import {
   renderErrorMessage,
   renderUnauthorizedMessage,
@@ -192,6 +251,17 @@ export async function handleNormalizedTelegramMessage(
       context,
       sessionStore,
       stopTyping,
+      beforeRetry: async (reason) => {
+        await releaseRetrySupersededWorkflowBestEffort({
+          stateDir,
+          normalized,
+          context,
+          workflowStore,
+          turnState,
+          reason,
+          failureCategory,
+        });
+      },
       restart: async () => {
         await handleNormalizedTelegramMessage(normalized, context);
       },

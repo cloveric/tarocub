@@ -132,6 +132,37 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
+  it("does not treat file fenced blocks with backticks in the filename as attachments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+    const text = "```file:bad`name.txt\nhello\n```";
+
+    try {
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        text,
+        inboxDir,
+        workspaceDir,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, text, { parseMode: "Markdown" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("marks side-channel accepted files in the timeline", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
@@ -217,7 +248,7 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
-  it("reports copied send-file placeholder paths as placeholders instead of missing files", async () => {
+  it("silently ignores copied send-file placeholder paths", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
     const inboxDir = path.join(realRoot, "instance", "inbox");
@@ -241,25 +272,13 @@ describe("deliverTelegramResponse", () => {
       expect(filesSent).toBe(0);
       expect(api.sendDocument).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "我会发给你。", { parseMode: "Markdown" });
-      expect(api.sendMessage).toHaveBeenNthCalledWith(
-        2,
-        123,
-        expect.stringContaining("/absolute/path — 示例占位路径，不是真实文件"),
-      );
-      const timeline = parseTimelineEvents(await readFile(path.join(path.dirname(inboxDir), "timeline.log.jsonl"), "utf8"));
-      expect(timeline).toContainEqual(expect.objectContaining({
-        type: "file.rejected",
-        metadata: expect.objectContaining({
-          path: "/absolute/path",
-          reason: "placeholder-path",
-        }),
-      }));
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("reports copied example workspace placeholders case-insensitively", async () => {
+  it("silently ignores copied example workspace placeholders case-insensitively", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
     const inboxDir = path.join(realRoot, "instance", "inbox");
@@ -283,24 +302,106 @@ describe("deliverTelegramResponse", () => {
 
       expect(filesSent).toBe(0);
       expect(api.sendDocument).not.toHaveBeenCalled();
-      expect(api.sendMessage).toHaveBeenCalledWith(
-        123,
-        expect.stringContaining(`${placeholderPath} — placeholder path, not a real file`),
-      );
-      const timeline = parseTimelineEvents(await readFile(path.join(path.dirname(inboxDir), "timeline.log.jsonl"), "utf8"));
-      expect(timeline).toContainEqual(expect.objectContaining({
-        type: "file.rejected",
-        metadata: expect.objectContaining({
-          path: placeholderPath,
-          reason: "placeholder-path",
-        }),
-      }));
+      expect(api.sendMessage).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("reports markdown absolute links to example placeholders as placeholders", async () => {
+  it("silently ignores short absolute example placeholders instead of probing the filesystem", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const placeholderPath = "/abs/path.png";
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `[send-file:${placeholderPath}]`,
+        inboxDir,
+        undefined,
+        undefined,
+        "zh",
+      );
+
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("silently ignores missing temp example placeholders in fallback text", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const placeholderPath = path.join(os.tmpdir(), "example-cctb-placeholder.png");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `Example only.\n[send-file:${placeholderPath}]`,
+        inboxDir,
+        workspaceDir,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Example only.", { parseMode: "Markdown" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat an existing explicit temp example path as a placeholder", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const filePath = path.join(realRoot, "example.png");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await writeFile(filePath, "real image bytes", "utf8");
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `[send-file:${filePath}]`,
+        inboxDir,
+        undefined,
+        undefined,
+        "en",
+        { allowAnyAbsolutePath: true },
+      );
+
+      expect(filesSent).toBe(1);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "example.png", expect.any(Uint8Array));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves markdown absolute links as ordinary chat text", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
     const inboxDir = path.join(realRoot, "instance", "inbox");
@@ -324,18 +425,9 @@ describe("deliverTelegramResponse", () => {
 
       expect(filesSent).toBe(0);
       expect(api.sendDocument).not.toHaveBeenCalled();
-      expect(api.sendMessage).toHaveBeenCalledWith(
-        123,
-        expect.stringContaining(`${placeholderPath} — placeholder path, not a real file`),
-      );
-      const timeline = parseTimelineEvents(await readFile(path.join(path.dirname(inboxDir), "timeline.log.jsonl"), "utf8"));
-      expect(timeline).toContainEqual(expect.objectContaining({
-        type: "file.rejected",
-        metadata: expect.objectContaining({
-          path: placeholderPath,
-          reason: "placeholder-path",
-        }),
-      }));
+      expect(api.sendMessage).toHaveBeenCalledWith(123, `Here it is: ![out](${placeholderPath})`, {
+        parseMode: "Markdown",
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -425,7 +517,7 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
-  it("extracts Markdown-linked files whose absolute path contains parentheses", async () => {
+  it("does not extract Markdown-linked files whose absolute path contains parentheses", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
     const inboxDir = path.join(realRoot, "instance", "inbox");
@@ -452,8 +544,9 @@ describe("deliverTelegramResponse", () => {
         "en",
       );
 
-      expect(filesSent).toBe(1);
-      expect(api.sendDocument).toHaveBeenCalledWith(123, "sheet.xlsx", expect.any(Uint8Array));
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, `[download me](${filePath})`, { parseMode: "Markdown" });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

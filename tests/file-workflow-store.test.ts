@@ -97,6 +97,115 @@ describe("FileWorkflowStore", () => {
     }
   });
 
+  it("marks stale preparing and processing workflows failed without touching waiting archives", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new FileWorkflowStore(stateDir);
+
+    try {
+      await store.append({
+        uploadId: "old-processing",
+        chatId: 100,
+        userId: 100,
+        kind: "document",
+        status: "processing",
+        sourceFiles: ["a.pdf"],
+        derivedFiles: [],
+        summary: "old",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      });
+      await store.append({
+        uploadId: "old-preparing",
+        chatId: 100,
+        userId: 100,
+        kind: "archive",
+        status: "preparing",
+        sourceFiles: ["b.zip"],
+        derivedFiles: [],
+        summary: "preparing",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      });
+      await store.append({
+        uploadId: "waiting",
+        chatId: 100,
+        userId: 100,
+        kind: "archive",
+        status: "awaiting_continue",
+        sourceFiles: ["c.zip"],
+        derivedFiles: [],
+        summary: "waiting",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      });
+
+      await expect(store.failStaleProcessing(new Date("2026-04-10T00:30:00.000Z"), "stale startup cleanup")).resolves.toBe(2);
+      await expect(store.find("old-processing")).resolves.toEqual(expect.objectContaining({
+        status: "failed",
+        summary: expect.stringContaining("stale startup cleanup"),
+      }));
+      await expect(store.find("old-preparing")).resolves.toEqual(expect.objectContaining({ status: "failed" }));
+      await expect(store.find("waiting")).resolves.toEqual(expect.objectContaining({ status: "awaiting_continue" }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks interrupted preparing and processing workflows failed after restart", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new FileWorkflowStore(stateDir);
+
+    try {
+      const updatedAt = "2026-04-10T00:29:00.000Z";
+      await store.append({
+        uploadId: "recent-processing",
+        chatId: 100,
+        userId: 100,
+        kind: "document",
+        status: "processing",
+        sourceFiles: ["a.pdf"],
+        derivedFiles: [],
+        summary: "recent",
+        createdAt: updatedAt,
+        updatedAt,
+      });
+      await store.append({
+        uploadId: "recent-preparing",
+        chatId: 100,
+        userId: 100,
+        kind: "archive",
+        status: "preparing",
+        sourceFiles: ["b.zip"],
+        derivedFiles: [],
+        summary: "preparing",
+        createdAt: updatedAt,
+        updatedAt,
+      });
+      await store.append({
+        uploadId: "waiting",
+        chatId: 100,
+        userId: 100,
+        kind: "archive",
+        status: "awaiting_continue",
+        sourceFiles: ["c.zip"],
+        derivedFiles: [],
+        summary: "waiting",
+        createdAt: updatedAt,
+        updatedAt,
+      });
+
+      await expect(store.failInterruptedProcessing("restart cleanup")).resolves.toBe(2);
+      await expect(store.find("recent-processing")).resolves.toEqual(expect.objectContaining({
+        status: "failed",
+        summary: expect.stringContaining("restart cleanup"),
+      }));
+      await expect(store.find("recent-preparing")).resolves.toEqual(expect.objectContaining({ status: "failed" }));
+      await expect(store.find("waiting")).resolves.toEqual(expect.objectContaining({ status: "awaiting_continue" }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolves awaiting archives by summary message id", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new FileWorkflowStore(stateDir);

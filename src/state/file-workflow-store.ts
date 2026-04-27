@@ -214,6 +214,43 @@ export class FileWorkflowStore {
     return updated;
   }
 
+  private async failProcessingRecords(
+    shouldFail: (record: FileWorkflowRecord) => boolean,
+    summary: string,
+  ): Promise<number> {
+    const now = new Date().toISOString();
+    let failed = 0;
+
+    await this.enqueueWrite(async () => {
+      const state = await this.load();
+      for (const record of state.records) {
+        if (
+          (record.status === "preparing" || record.status === "processing") &&
+          shouldFail(record)
+        ) {
+          record.status = "failed";
+          record.updatedAt = now;
+          record.summary = record.summary ? `${record.summary}\n\n${summary}` : summary;
+          failed += 1;
+        }
+      }
+      if (failed > 0) {
+        await this.store.write(state);
+      }
+    });
+
+    return failed;
+  }
+
+  async failStaleProcessing(cutoff: Date, summary = "Workflow failed after service restart."): Promise<number> {
+    const cutoffIso = cutoff.toISOString();
+    return await this.failProcessingRecords((record) => record.updatedAt < cutoffIso, summary);
+  }
+
+  async failInterruptedProcessing(summary = "Workflow failed after service restart."): Promise<number> {
+    return await this.failProcessingRecords(() => true, summary);
+  }
+
   async getLatestAwaitingArchive(chatId: number): Promise<FileWorkflowRecord | null> {
     const state = await this.load();
     const candidates = state.records.filter((record) => record.chatId === chatId && record.kind === "archive" && record.status === "awaiting_continue");

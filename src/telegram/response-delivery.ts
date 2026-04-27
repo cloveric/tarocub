@@ -4,6 +4,11 @@ import path from "node:path";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { TelegramApi } from "./api.js";
 import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
+import {
+  isAbsoluteFilePath,
+  isLikelyCopiedPlaceholderFilePath,
+  isStaticPlaceholderFilePath,
+} from "./file-paths.js";
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 
 function isMarkdownParseError(error: unknown): boolean {
@@ -91,74 +96,6 @@ function renderRejectReason(reason: DeliveryRejectReason, detail: string | undef
   }
 }
 
-function isAbsoluteFilePath(value: string): boolean {
-  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
-}
-
-function isPlaceholderFilePath(value: string): boolean {
-  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-  return (
-    normalized === "/absolute/path" ||
-    normalized.startsWith("/absolute/path/") ||
-    normalized === "/path/to" ||
-    normalized.startsWith("/path/to/") ||
-    normalized.startsWith("/users/cloveric/.cctb/example/")
-  );
-}
-
-function hasAbsoluteFileLineSuffix(value: string): boolean {
-  return /:\d+(?::\d+)?$/.test(value);
-}
-
-function extractMarkdownAbsoluteLinks(text: string): Array<{ start: number; end: number; path: string }> {
-  const links: Array<{ start: number; end: number; path: string }> = [];
-  const opener = /!?\[[^\]]*\]\(/g;
-
-  for (const match of text.matchAll(opener)) {
-    const start = match.index ?? -1;
-    if (start < 0) continue;
-    const pathStart = start + match[0].length;
-    if (pathStart >= text.length) continue;
-
-    let pathEnd = pathStart;
-    let pathValue = "";
-    if (text[pathStart] === "<") {
-      const closing = text.indexOf(">", pathStart + 1);
-      if (closing === -1 || text[closing + 1] !== ")") {
-        continue;
-      }
-      pathEnd = closing + 1;
-      pathValue = text.slice(pathStart + 1, closing);
-    } else {
-      let depth = 1;
-      for (let index = pathStart; index < text.length; index++) {
-        const char = text[index]!;
-        if (char === "(") depth += 1;
-        if (char === ")") depth -= 1;
-        if (depth === 0) {
-          pathEnd = index;
-          pathValue = text.slice(pathStart, index);
-          break;
-        }
-      }
-      if (depth !== 0) {
-        continue;
-      }
-    }
-
-    const trimmed = pathValue.trim();
-    if (!isAbsoluteFilePath(trimmed)) {
-      continue;
-    }
-    if (hasAbsoluteFileLineSuffix(trimmed)) {
-      continue;
-    }
-    links.push({ start, end: pathEnd + 1, path: trimmed });
-  }
-
-  return links;
-}
-
 export async function deliverTelegramResponse(
   api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">,
   chatId: number,
@@ -172,10 +109,12 @@ export async function deliverTelegramResponse(
     onDeliveryAccepted?: (receipt: DeliveryAcceptedReceipt) => void;
     onDeliveryRejected?: (receipt: DeliveryRejectedReceipt) => void;
     source?: DeliverySource;
+    allowAnyAbsolutePath?: boolean;
+    notifyRejected?: boolean;
   } = {},
 ): Promise<number> {
   let filesSent = 0;
-  const fileMatch = text.match(/```file:([^\n]+)\n([\s\S]*?)```/);
+  const fileMatch = text.match(/```file:([^\n`]+)\n([\s\S]*?)```/);
   const isWholeResponseFileBlock = fileMatch && text.replace(fileMatch[0], "").trim().length === 0;
   if (fileMatch && isWholeResponseFileBlock && Buffer.byteLength(fileMatch[2] ?? "", "utf8") > 0) {
     const [, fileName, fileBody] = fileMatch;
@@ -192,32 +131,14 @@ export async function deliverTelegramResponse(
   while ((sendFileMatch = sendFilePattern.exec(text)) !== null) {
     sawSendFileTag = true;
     const p = sendFileMatch[1]!.trim();
-    if (isPlaceholderFilePath(p)) {
-      if (!rejected.some((item) => item.path === p && item.reason === "placeholder-path")) {
-        rejected.push({ path: p, reason: "placeholder-path" });
-      }
+    if (!options.allowAnyAbsolutePath && isStaticPlaceholderFilePath(p)) {
+      continue;
     } else if (isAbsoluteFilePath(p) && !filePaths.includes(p)) {
       filePaths.push(p);
     }
   }
-  const markdownLinks = extractMarkdownAbsoluteLinks(text);
-  for (const link of markdownLinks) {
-    if (isPlaceholderFilePath(link.path)) {
-      if (!rejected.some((item) => item.path === link.path && item.reason === "placeholder-path")) {
-        rejected.push({ path: link.path, reason: "placeholder-path" });
-      }
-      continue;
-    }
-    if (!filePaths.includes(link.path)) {
-      filePaths.push(link.path);
-    }
-  }
-
-  if (filePaths.length > 0 || sawSendFileTag || markdownLinks.length > 0) {
+  if (filePaths.length > 0 || sawSendFileTag) {
     cleanedText = cleanedText.replace(sendFilePattern, "");
-    for (const link of [...markdownLinks].sort((left, right) => right.start - left.start)) {
-      cleanedText = `${cleanedText.slice(0, link.start)}${cleanedText.slice(link.end)}`;
-    }
     cleanedText = cleanedText.replace(/\n{3,}/g, "\n\n").trim();
   }
 
@@ -241,13 +162,15 @@ export async function deliverTelegramResponse(
   for (const filePath of filePaths) {
     try {
       const real = await realpath(filePath);
-      if (requestOutputPrefix && real.startsWith(telegramOutPrefix) && !real.startsWith(requestOutputPrefix)) {
-        rejected.push({ path: filePath, reason: "outside-request-output" });
-        continue;
-      }
-      if (!real.startsWith(workspacePrefix) && !(overridePrefix && real.startsWith(overridePrefix))) {
-        rejected.push({ path: filePath, reason: "outside-workspace" });
-        continue;
+      if (!options.allowAnyAbsolutePath) {
+        if (requestOutputPrefix && real.startsWith(telegramOutPrefix) && !real.startsWith(requestOutputPrefix)) {
+          rejected.push({ path: filePath, reason: "outside-request-output" });
+          continue;
+        }
+        if (!real.startsWith(workspacePrefix) && !(overridePrefix && real.startsWith(overridePrefix))) {
+          rejected.push({ path: filePath, reason: "outside-workspace" });
+          continue;
+        }
       }
       const stats = await lstat(real);
       if (!stats.isFile()) {
@@ -263,6 +186,13 @@ export async function deliverTelegramResponse(
       acceptedFiles.push({ sourcePath: filePath, realPath: real, filename: fileName, contents });
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
+      if (
+        code === "ENOENT" &&
+        !options.allowAnyAbsolutePath &&
+        isLikelyCopiedPlaceholderFilePath(filePath)
+      ) {
+        continue;
+      }
       const reason: DeliveryRejectReason =
         code === "ENOENT" ? "not-found" : code === "EACCES" ? "permission-denied" : "read-error";
       rejected.push({ path: filePath, reason });
@@ -307,6 +237,18 @@ export async function deliverTelegramResponse(
         },
       }, "file delivery timeline event");
     }
+    for (const item of rejected) {
+      options.onDeliveryRejected?.({
+        path: item.path,
+        reason: item.reason,
+        detail: item.detail,
+        source: options.source ?? "post-turn",
+      });
+    }
+    if (options.notifyRejected === false) {
+      filesSent += acceptedFiles.length;
+      return filesSent;
+    }
     const MAX_SHOWN = 5;
     const shown = rejected.slice(0, MAX_SHOWN);
     const extra = rejected.length - shown.length;
@@ -318,14 +260,6 @@ export async function deliverTelegramResponse(
       ? "文件必须位于本 bot 的工作目录内（或通过 /resume 指定的项目目录）。"
       : "Files must live under the bot's workspace (or a /resume'd project dir).";
     const lines = [header, ...shown.map(({ path: p, reason, detail }) => `• ${p} — ${renderRejectReason(reason, detail, locale)}`)];
-    for (const item of rejected) {
-      options.onDeliveryRejected?.({
-        path: item.path,
-        reason: item.reason,
-        detail: item.detail,
-        source: options.source ?? "post-turn",
-      });
-    }
     if (extra > 0) lines.push(moreLine);
     lines.push(footer);
     await api.sendMessage(chatId, lines.join("\n"));

@@ -106,6 +106,169 @@ describe("runCli", () => {
     }
   });
 
+  it("sends attachments through the configured instance when no active turn side-channel is present", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const filePath = path.join(tempDir, "project", "chart.png");
+    const api = {
+      sendMessage: vi.fn(),
+      sendDocument: vi.fn(),
+      sendPhoto: vi.fn(),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(1);
+
+    try {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, "png", "utf8");
+      await new SessionStore(path.join(tempDir, ".cctb", "default", "session.json")).upsert({
+        telegramChatId: 84,
+        codexSessionId: "telegram-84",
+        status: "idle",
+        updatedAt: new Date().toISOString(),
+      });
+
+      const handled = await runCli([
+        "telegram",
+        "send",
+        "--message",
+        "Chart ready",
+        "--file",
+        filePath,
+      ], {
+        env: { USERPROFILE: tempDir },
+        logger: {
+          log: (message) => messages.push(message),
+        },
+        sendDeps: {
+          cwd: path.join(tempDir, "project"),
+          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
+          createTelegramApi: vi.fn().mockReturnValue(api),
+          deliverTelegramResponse,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        api,
+        84,
+        `Chart ready\n[send-file:${filePath}]`,
+        path.join(tempDir, ".cctb", "default", "inbox"),
+        path.join(tempDir, "project"),
+        undefined,
+        "en",
+        expect.objectContaining({
+          allowAnyAbsolutePath: true,
+        }),
+      );
+      expect(messages).toEqual(["Sent to Telegram chat 84 (1 file)."]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes send through the active turn side-channel when CCTB_SEND_URL is set", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+
+    try {
+      vi.stubGlobal("fetch", fetchFn);
+
+      const handled = await runCli([
+        "telegram",
+        "send",
+        "--instance",
+        "bot2",
+        "--chat",
+        "84",
+        "--message",
+        "Chart ready",
+        "--file",
+        "/tmp/chart.png",
+      ], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+          CCTB_SEND_TOKEN: "secret",
+        },
+        logger: {
+          log: (message) => messages.push(message),
+        },
+        sendDeps: {
+          readConfiguredBotToken: vi.fn().mockRejectedValue(new Error("configured fallback should not run")),
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(fetchFn).toHaveBeenCalledWith(
+        "http://127.0.0.1:12345/send/token",
+        expect.objectContaining({
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer secret",
+          },
+          body: JSON.stringify({
+            message: "Chart ready",
+            images: [],
+            files: ["/tmp/chart.png"],
+          }),
+        }),
+      );
+      expect(messages).toEqual(["Sent via active Telegram turn."]);
+    } finally {
+      vi.unstubAllGlobals();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("validates send payload before requiring a configured bot token", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+
+    try {
+      await expect(runCli(["telegram", "send"], {
+        env: { USERPROFILE: tempDir },
+      })).rejects.toThrow("Usage: send [--message <text>] [--image <path>] [--file <path>] [text]");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires --chat for configured send when an instance has multiple sessions", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+
+    try {
+      const store = new SessionStore(path.join(tempDir, ".cctb", "default", "session.json"));
+      const now = new Date().toISOString();
+      await store.upsert({
+        telegramChatId: 84,
+        codexSessionId: "telegram-84",
+        status: "idle",
+        updatedAt: now,
+      });
+      await store.upsert({
+        telegramChatId: 85,
+        codexSessionId: "telegram-85",
+        status: "idle",
+        updatedAt: now,
+      });
+
+      await expect(runCli(["telegram", "send", "--message", "hello"], {
+        env: { USERPROFILE: tempDir },
+        sendDeps: {
+          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
+          createTelegramApi: vi.fn().mockReturnValue({
+            sendMessage: vi.fn(),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+          }),
+        },
+      })).rejects.toThrow("Multiple Telegram sessions found; pass --chat <id>.");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("redeems a pairing code for the default instance and rejects invalid codes", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
@@ -196,7 +359,7 @@ describe("runCli", () => {
         'Allowed chat 123 for instance "alpha".',
       ]);
       expect(messages[4]).toMatch(
-        /^Instance: alpha\nPolicy: allowlist\nMulti-chat: off\nPaired users: 0\nAllowlist: 123\nPending pairs: [A-Z2-9]{6} chat 84 expires 2026-04-08T00:05:00\.000Z$/,
+        /^Instance: alpha\nPolicy: allowlist\nMulti-chat: off\nPaired users: 0\nAllowlist: 123\nPending pairs: [A-Z2-9]{8} chat 84 expires 2026-04-08T00:05:00\.000Z$/,
       );
     } finally {
       await rm(tempDir, { recursive: true, force: true });

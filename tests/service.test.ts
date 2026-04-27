@@ -30,6 +30,7 @@ import {
 import { ClaudeStreamAdapter } from "../src/codex/claude-stream-adapter.js";
 import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
+import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import * as auditLog from "../src/state/audit-log.js";
 import * as busClient from "../src/bus/bus-client.js";
 import { AccessStore } from "../src/state/access-store.js";
@@ -1559,6 +1560,58 @@ describe("polling helpers", () => {
     expect(api.sendMessage).toHaveBeenCalledWith(123, "This chat is not authorized for this instance.");
   });
 
+  it("audits failed best-effort approval denial delivery", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const api = {
+      sendMessage: vi.fn().mockRejectedValue(new Error("telegram down")),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      answerCallbackQuery: vi.fn().mockRejectedValue(new Error("ack down")),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "deny", text: "This chat is not authorized for this instance." }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(root, "inbox");
+
+    try {
+      await processTelegramUpdates(
+        [{
+          update_id: 44,
+          callback_query: {
+            id: "callback-44",
+            from: { id: 999 },
+            data: "approval:abc123:once",
+            message: { chat: { id: 123, type: "private" } },
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+        logger,
+      );
+
+      const events = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "telegram.delivery",
+          outcome: "error",
+          detail: "ack down",
+          metadata: expect.objectContaining({ action: "approval.answerCallbackQuery" }),
+        }),
+        expect.objectContaining({
+          type: "telegram.delivery",
+          outcome: "error",
+          detail: "telegram down",
+          metadata: expect.objectContaining({ action: "approval.sendMessage" }),
+        }),
+      ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("stops the in-flight task and skips queued same-chat jobs", async () => {
     const logger = { error: vi.fn() };
     const api = {
@@ -1802,6 +1855,143 @@ describe("polling helpers", () => {
       expect((bridge.handleAuthorizedMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.text).toContain("[Image Uploads]");
       await expect(readFile(path.join(inboxDir, "doc-1-report.pdf"), "utf8")).resolves.toBe("x");
       await expect(readFile(path.join(inboxDir, "photo-1.jpg"), "utf8")).resolves.toBe("x");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears the stale attachment workflow before retrying after auth refresh", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn().mockResolvedValue({ file_path: "photos/pic.jpg" }),
+      downloadFile: vi
+        .fn()
+        .mockImplementation(async (_filePath: string, destinationPath: string) => await writeFile(destinationPath, "x")),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn()
+        .mockRejectedValueOnce(new Error("401 Unauthorized"))
+        .mockResolvedValueOnce({ text: "done" }),
+    };
+    const onAuthRetry = vi.fn().mockResolvedValue(undefined);
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "please analyze this image",
+          replyContext: undefined,
+          attachments: [{ fileId: "photo-1", kind: "photo" }],
+        },
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+          onAuthRetry,
+        },
+      );
+
+      const workflowState = JSON.parse(await readFile(path.join(root, "file-workflow.json"), "utf8")) as {
+        records: Array<{ status: string }>;
+      };
+      expect(onAuthRetry).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(workflowState.records).toHaveLength(1);
+      expect(workflowState.records[0]?.status).toBe("completed");
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "workflow.failed",
+        detail: "workflow removed before retry",
+        metadata: expect.objectContaining({
+          retryReason: "auth refresh",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases an archive continuation workflow before retrying after auth refresh", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await writeFile(
+      path.join(root, "file-workflow.json"),
+      JSON.stringify({
+        records: [
+          {
+            uploadId: "a0000000-0000-0000-0000-000000000001",
+            chatId: 123,
+            userId: 456,
+            kind: "archive",
+            status: "awaiting_continue",
+            sourceFiles: ["repo.zip"],
+            derivedFiles: [],
+            summary: "archive summary",
+            extractedPath: path.join(root, "workspace", ".telegram-files", "archive", "extracted"),
+            createdAt: "2026-04-10T00:00:00.000Z",
+            updatedAt: "2026-04-10T00:00:00.000Z",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn()
+        .mockRejectedValueOnce(new Error("401 Unauthorized"))
+        .mockResolvedValueOnce({ text: "archive done" }),
+    };
+    const onAuthRetry = vi.fn().mockResolvedValue(undefined);
+
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "/continue --upload a0000000-0000-0000-0000-000000000001",
+          replyContext: undefined,
+          attachments: [],
+        },
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+          onAuthRetry,
+        },
+      );
+
+      const workflowState = JSON.parse(await readFile(path.join(root, "file-workflow.json"), "utf8")) as {
+        records: Array<{ status: string }>;
+      };
+      expect(onAuthRetry).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(workflowState.records).toHaveLength(1);
+      expect(workflowState.records[0]?.status).toBe("completed");
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "workflow.failed",
+        detail: "workflow released before retry",
+        metadata: expect.objectContaining({
+          retryReason: "auth refresh",
+        }),
+      }));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

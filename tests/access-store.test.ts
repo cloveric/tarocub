@@ -114,7 +114,7 @@ describe("AccessStore", () => {
         now: new Date("2026-04-08T00:00:00Z"),
       });
 
-      expect(issued.code).toHaveLength(6);
+      expect(issued.code).toHaveLength(8);
 
       const pairedUser = await store.redeemPairingCode(issued.code, new Date("2026-04-08T00:01:00Z"));
 
@@ -170,7 +170,7 @@ describe("AccessStore", () => {
   it("reuses the active pending pairing code for the same user and chat", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
-      setRandomIntSequence([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]);
+      setRandomIntSequence([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
       const store = new AccessStore(path.join(dir, "access.json"));
 
       const firstIssued = await store.issuePairingCode({
@@ -186,10 +186,10 @@ describe("AccessStore", () => {
 
       const state = await store.load();
 
-      expect(firstIssued.code).toBe("AAAAAA");
-      expect(secondIssued.code).toBe("AAAAAA");
+      expect(firstIssued.code).toBe("AAAAAAAA");
+      expect(secondIssued.code).toBe("AAAAAAAA");
       expect(state.pendingPairs).toHaveLength(1);
-      expect(state.pendingPairs[0]?.code).toBe("AAAAAA");
+      expect(state.pendingPairs[0]?.code).toBe("AAAAAAAA");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -369,7 +369,7 @@ describe("AccessStore", () => {
   it("blocks issuing a second pairing code while another chat already holds the single-chat lock", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
-      setRandomIntSequence([0, 0, 0, 0, 0, 0]);
+      setRandomIntSequence([0, 0, 0, 0, 0, 0, 0, 0]);
       const store = new AccessStore(path.join(dir, "access.json"));
 
       const firstCode = await store.issuePairingCode({

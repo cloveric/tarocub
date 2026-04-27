@@ -6,7 +6,7 @@ import { JsonStore } from "./json-store.js";
 import type { AccessPolicy, AccessState, PairedUser, PendingPair } from "../types.js";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const CODE_LENGTH = 6;
+const CODE_LENGTH = 8;
 const PAIRING_TTL_MS = 5 * 60 * 1000;
 
 function createDefaultAccessState(): AccessState {

@@ -43,6 +43,7 @@ import {
 } from "./service.js";
 import { applyEngineSelection } from "../telegram/instance-config.js";
 import { runSideChannelSendCommand } from "../telegram/side-channel-send.js";
+import { runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps } from "./send.js";
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -52,9 +53,13 @@ export interface CliOptions {
   env?: Pick<
     EnvSource,
     "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
-  >;
+  > & {
+    CCTB_SEND_URL?: string;
+    CCTB_SEND_TOKEN?: string;
+  };
   logger?: CliLogger;
   serviceDeps?: ServiceCommandDeps;
+  sendDeps?: ConfiguredSendDeps;
 }
 
 function normalizeCommandArgs(argv: string[]): string[] {
@@ -1106,7 +1111,7 @@ Commands:
   backup [--instance <name>] [--out <path>]   Back up instance state to a .cctb.gz archive (pure Node)
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
-                                              Send files/text through the active Telegram turn side-channel
+                                              Send files/text through the active turn side-channel or configured Telegram session
   dashboard                                   Open a visual status dashboard in the browser
   help                                        Show this help message`;
 
@@ -1417,8 +1422,16 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   }
 
   if (normalized[0] === "send") {
-    await runSideChannelSendCommand(normalized.slice(1), { env });
-    logger.log("Sent via active Telegram turn.");
+    if (env.CCTB_SEND_URL) {
+      await runSideChannelSendCommand(stripSendRoutingArgs(normalized.slice(1)), { env });
+      logger.log("Sent via active Telegram turn.");
+      return true;
+    }
+
+    const result = await runConfiguredSendCommand(normalized.slice(1), env, options.sendDeps);
+    logger.log(result.filesSent > 0
+      ? `Sent to Telegram chat ${result.chatId} (${result.filesSent} file${result.filesSent === 1 ? "" : "s"}).`
+      : `Sent to Telegram chat ${result.chatId}.`);
     return true;
   }
 

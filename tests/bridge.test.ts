@@ -47,7 +47,7 @@ describe("Bridge", () => {
       requestOutputDir: undefined,
     }));
     expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions).toContain(
-      "```file:example.py",
+      "Small text/code files: use one fenced `file:name.ext` block",
     );
     expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions).toContain(
       "deliver it as a Telegram document attachment",
@@ -124,7 +124,7 @@ describe("Bridge", () => {
     expect((adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.disableRuntimeTimeout).toBeUndefined();
   });
 
-  it("tells agents to finish the Telegram turn once deliverables are ready", async () => {
+  it("keeps file delivery instructions concise without turn-boundary pressure", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         multiChat: false,
@@ -155,18 +155,20 @@ describe("Bridge", () => {
     });
 
     const instructions = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.instructions;
-    expect(instructions).toContain("Telegram turn boundary protocol");
-    expect(instructions).toContain("requested deliverable set for the current step");
-    expect(instructions).toContain("If that deliverable set includes files");
-    expect(instructions).toContain("send the whole requested batch together");
-    expect(instructions).toContain("Do not start file-generating or deliverable-generating commands in the background");
-    expect(instructions).toContain("keep the turn open until that command finishes or fails");
-    expect(instructions).toContain("Waiting for a command that is creating requested deliverables is required work, not optional monitoring");
-    expect(instructions).toContain("Do not reply that a batch is running or ask the user to wait for a later notification");
-    expect(instructions).toContain("Do not say \"等通知\"");
-    expect(instructions).toContain("finish the current Telegram turn");
-    expect(instructions).toContain("wait for the next message to continue");
+    expect(instructions).toContain("CRITICAL FILE DELIVERY RULE");
+    expect(instructions).toContain("You CANNOT send files by mentioning their name or path in chat text");
+    expect(instructions.length).toBeLessThan(700);
+    expect(instructions).not.toContain("Telegram turn boundary protocol");
+    expect(instructions).not.toContain("requested deliverable set for the current step");
+    expect(instructions).not.toContain("send the whole requested batch together");
+    expect(instructions).not.toContain("Do not start file-generating or deliverable-generating commands in the background");
+    expect(instructions).not.toContain("keep the turn open until that command finishes or fails");
+    expect(instructions).not.toContain("Waiting for a command that is creating requested deliverables is required work, not optional monitoring");
+    expect(instructions).not.toContain("Do not reply that a batch is running or ask the user to wait for a later notification");
+    expect(instructions).not.toContain("Do not say \"等通知\"");
     expect(instructions).not.toContain("ready, send it with [send-file:] tags");
+    expect(instructions).not.toContain("Wrong: [send-file:");
+    expect(instructions).not.toContain("Generated a PPT");
   });
 
   it("prefers the active side-channel command for file delivery when available", async () => {
@@ -206,12 +208,15 @@ describe("Bridge", () => {
     });
 
     const payload = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-    expect(payload.instructions).toContain("Preferred file delivery");
+    expect(payload.instructions).toContain("File send command (preferred)");
     expect(payload.instructions).toContain('"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png');
-    expect(payload.instructions).toContain("Wait for the command to exit before continuing; never run it in the background.");
-    expect(payload.instructions).toContain("This side-channel is only valid during the current Telegram turn");
-    expect(payload.instructions).toContain("Keep [send-file:] tags as fallback only");
-    expect(payload.instructions).toContain("The required delivery method is the side-channel send command shown above");
+    expect(payload.instructions).toContain("Valid only this Telegram turn");
+    expect(payload.instructions).toContain("telegram send --image /absolute/path/to/image.png");
+    expect(payload.instructions).toContain("last resort [send-file:<real absolute path>]");
+    expect(payload.instructions.length).toBeLessThan(1_300);
+    expect(payload.instructions).not.toContain("never run it in the background");
+    expect(payload.instructions).not.toContain("Generated a PPT");
+    expect(payload.instructions).not.toContain("Wrong: [send-file:");
     expect(payload.instructions).not.toContain("The ONLY way to deliver a file to the user is the [send-file:] tag");
     expect(payload.instructions).not.toContain("After generating/saving ANY file the user should receive, you MUST include a [send-file:] tag");
     expect(payload.extraEnv).toEqual({
@@ -259,8 +264,9 @@ describe("Bridge", () => {
     });
 
     const payload = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-    expect(payload.instructions).toContain("Preferred file delivery");
+    expect(payload.instructions).toContain("File send command (preferred)");
     expect(payload.instructions).toContain("/tmp/workspace/.cctb-send/helper --image /absolute/path/to/image.png");
+    expect(payload.instructions.length).toBeLessThan(1_300);
     expect(payload.instructions).not.toContain('"$CCTB_SEND_COMMAND" --image /absolute/path/to/image.png');
     expect(payload.extraEnv).toBeUndefined();
   });
@@ -677,7 +683,7 @@ describe("Bridge", () => {
         files: [],
       });
 
-      expect(result.text).toMatch(/^Pair this private chat with code [A-Z2-9]{6}$/);
+      expect(result.text).toMatch(/^Pair this private chat with code [A-Z2-9]{8}$/);
       expect(sessionManager.getOrCreateSession).not.toHaveBeenCalled();
       expect(adapter.sendUserMessage).not.toHaveBeenCalled();
     } finally {
@@ -918,12 +924,13 @@ describe("Bridge", () => {
       expect.objectContaining({
         text: "generate a file",
         requestOutputDir: "C:\\tmp\\workspace\\.telegram-out\\req-123",
-        instructions: expect.stringContaining("[Codex Telegram-Out Contract]"),
+        instructions: expect.stringContaining("[Codex Telegram-Out]"),
       }),
     );
     const call = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-    expect(call?.instructions).toContain("Files written there will be returned to the user after the task completes.");
+    expect(call?.instructions).toContain("Files placed there are auto-delivered after the turn");
     expect(call?.instructions).toContain("[send-file:");
+    expect(call?.instructions.length).toBeLessThan(1_400);
   });
 
   it("injects bridge capabilities for codex adapters too", async () => {
@@ -998,7 +1005,7 @@ describe("Bridge", () => {
 
     const call = (adapter.sendUserMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
     expect(call?.text).toBe("生成一个文件并发给我");
-    expect(call?.instructions).toContain("[Codex Telegram-Out Contract]");
+    expect(call?.instructions).toContain("[Codex Telegram-Out]");
     expect(call?.instructions).toContain("[send-file:");
   });
 });

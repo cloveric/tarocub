@@ -18,10 +18,7 @@ import {
   type TelegramTurnContext,
 } from "./turn-bookkeeping.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
-
-function isResetCommand(text: string): boolean {
-  return /^\/reset(?:@\w+)?(?:\s|$)/i.test(text.trim());
-}
+import { isResetCommand } from "./command-detection.js";
 
 function shouldUseNonRepairableResetSessionGuidance(
   error: unknown,
@@ -99,9 +96,10 @@ export async function maybeRetryTelegramTurnError(input: {
   };
   sessionStore: Pick<SessionStore, "removeByChatId">;
   stopTyping: () => void;
+  beforeRetry?: (reason: "auth refresh" | "stale session") => Promise<void>;
   restart: () => Promise<void>;
 }): Promise<boolean> {
-  const { stateDir, normalized, classifiedError, failureCategory, context, sessionStore, stopTyping, restart } = input;
+  const { stateDir, normalized, classifiedError, failureCategory, context, sessionStore, stopTyping, beforeRetry, restart } = input;
 
   if (context.abortSignal?.aborted) {
     return true;
@@ -122,6 +120,7 @@ export async function maybeRetryTelegramTurnError(input: {
         detail: "auth refresh",
       });
       stopTyping();
+      await beforeRetry?.("auth refresh");
       await restart();
       return true;
     } catch {
@@ -144,6 +143,7 @@ export async function maybeRetryTelegramTurnError(input: {
         detail: "stale session",
       });
       stopTyping();
+      await beforeRetry?.("stale session");
       await restart();
       return true;
     } catch {

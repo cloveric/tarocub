@@ -9,6 +9,7 @@ import {
   type TelegramTurnContext,
 } from "./turn-bookkeeping.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
+import { isResetCommand } from "./command-detection.js";
 
 export interface SessionCommandConfig {
   engine: "codex" | "claude";
@@ -47,10 +48,6 @@ const pendingResumeScans = new Map<number, {
   scannedAt: number;
   sessions: ScannedSession[];
 }>();
-
-function isResetCommand(text: string): boolean {
-  return /^\/reset(?:@\w+)?(?:\s|$)/i.test(text.trim());
-}
 
 type ResumeCommand =
   | { kind: "scan" }

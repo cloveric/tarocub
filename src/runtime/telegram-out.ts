@@ -33,13 +33,13 @@ export function resolveCctbSendDir(stateDir: string, requestId: string): string 
   return path.join(stateDir, "workspace", ".cctb-send", requestId);
 }
 
-async function pruneStaleRequestDirs(rootDir: string, preserveRequestId: string): Promise<void> {
+async function pruneStaleRequestDirs(rootDir: string, preserveRequestId?: string): Promise<void> {
   let entries;
   try {
     entries = await readdir(rootDir, { withFileTypes: true });
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM") {
       return;
     }
     throw error;
@@ -78,6 +78,14 @@ export async function pruneStaleCctbSendDirs(stateDir: string, preserveRequestId
   }
 }
 
+export async function pruneStaleTelegramRuntimeDirs(stateDir: string, workspacePath?: string): Promise<void> {
+  await pruneStaleRequestDirs(path.join(stateDir, "workspace", ".telegram-out"));
+  await pruneStaleRequestDirs(path.join(stateDir, "workspace", ".cctb-send"));
+  if (workspacePath) {
+    await pruneStaleRequestDirs(path.join(workspacePath, ".cctb-send"));
+  }
+}
+
 export async function createTelegramOutDir(stateDir: string, requestId: string): Promise<TelegramOutRequest> {
   const dirPath = resolveTelegramOutDir(stateDir, requestId);
   await mkdir(path.dirname(dirPath), { recursive: true });
@@ -89,7 +97,7 @@ export async function createTelegramOutDir(stateDir: string, requestId: string):
 export async function listTelegramOutFiles(dirPath: string): Promise<string[]> {
   const entries = await readdir(dirPath, { withFileTypes: true });
   return entries
-    .filter((entry) => entry.isFile())
+    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
     .map((entry) => path.join(dirPath, entry.name))
     .sort((left, right) => left.localeCompare(right));
 }

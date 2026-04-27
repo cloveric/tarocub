@@ -45,6 +45,32 @@ export interface ResolvedBotIdentity {
   username?: string;
 }
 
+async function appendTelegramDeliveryFailureAuditBestEffort(
+  context: TelegramServiceContext,
+  normalized: NonNullable<ReturnType<typeof normalizeUpdate>>,
+  updateId: number | undefined,
+  action: string,
+  error: unknown,
+): Promise<void> {
+  try {
+    await appendAuditEvent(path.dirname(context.inboxDir), {
+      type: "telegram.delivery",
+      instanceName: context.instanceName,
+      chatId: normalized.chatId,
+      userId: normalized.userId,
+      updateId,
+      outcome: "error",
+      detail: error instanceof Error ? error.message : String(error),
+      metadata: {
+        action,
+        failureCategory: classifyFailure(error),
+      },
+    });
+  } catch {
+    // Keep the polling loop alive even if audit persistence is unavailable.
+  }
+}
+
 export function parseServiceInstanceName(argv: string[]): string {
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
@@ -938,10 +964,18 @@ export async function processTelegramUpdates(
           await handleTelegramApprovalCommand({ normalized, api: context.api });
         } else {
           if (normalized.callbackQueryId) {
-            try { await context.api.answerCallbackQuery(normalized.callbackQueryId); } catch { /* best effort */ }
+            try {
+              await context.api.answerCallbackQuery(normalized.callbackQueryId);
+            } catch (error) {
+              await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "approval.answerCallbackQuery", error);
+            }
           }
           const msg = accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
-          try { await context.api.sendMessage(normalized.chatId, msg); } catch { /* best effort */ }
+          try {
+            await context.api.sendMessage(normalized.chatId, msg);
+          } catch (error) {
+            await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "approval.sendMessage", error);
+          }
         }
         nextOffset = advanceOffset(nextOffset, completedOffset);
         if (updateId !== undefined) {
@@ -972,7 +1006,11 @@ export async function processTelegramUpdates(
             ? locale === "zh" ? "已停止当前任务。" : "Current task stopped."
             : locale === "zh" ? "当前没有运行中的任务。" : "No task is currently running."
           : accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
-        try { await context.api.sendMessage(normalized.chatId, msg); } catch { /* best effort */ }
+        try {
+          await context.api.sendMessage(normalized.chatId, msg);
+        } catch (error) {
+          await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "stop.sendMessage", error);
+        }
         nextOffset = advanceOffset(nextOffset, completedOffset);
         if (updateId !== undefined) {
           await runtimeStateStore.markHandledUpdateId(updateId);

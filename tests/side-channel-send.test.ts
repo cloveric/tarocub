@@ -90,7 +90,7 @@ describe("side-channel send command", () => {
     }
   });
 
-  it("returns an error when requested files are rejected", async () => {
+  it("sends explicit side-channel files from arbitrary absolute paths", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "side-channel-send-"));
     const inboxDir = path.join(root, "instance", "inbox");
     const outsideFile = path.join(root, "outside.txt");
@@ -121,29 +121,62 @@ describe("side-channel send command", () => {
         }),
       });
 
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual(expect.objectContaining({
-        ok: false,
-        error: expect.stringContaining("not delivered"),
-        rejected: [
+        ok: true,
+        accepted: [
           expect.objectContaining({
             path: outsideFile,
-            reason: "outside-workspace",
             source: "side-channel",
           }),
         ],
       }));
-      expect(server.getSentFilePaths()).toEqual([]);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "outside.txt", expect.any(Uint8Array));
+      expect(server.getSentFilePaths()).toEqual([outsideFile]);
       expect(server.getDeliveryReceipts()).toEqual(expect.objectContaining({
-        accepted: [],
-        rejected: [
+        accepted: [
           expect.objectContaining({
             path: outsideFile,
-            reason: "outside-workspace",
             source: "side-channel",
           }),
         ],
+        rejected: [],
       }));
+    } finally {
+      await server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects side-channel requests without the bearer token", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "side-channel-send-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+    const server = await startSideChannelSendServer({
+      api,
+      chatId: 123,
+      inboxDir: path.join(root, "instance", "inbox"),
+      locale: "en",
+    });
+
+    try {
+      const response = await fetch(server.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          message: "done",
+          images: [],
+          files: [],
+        }),
+      });
+
+      expect(response.status).toBe(404);
+      expect(api.sendMessage).not.toHaveBeenCalled();
     } finally {
       await server.close();
       await rm(root, { recursive: true, force: true });

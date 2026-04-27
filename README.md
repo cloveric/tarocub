@@ -39,9 +39,11 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.5.0** — adds stable `telegram send` delivery outside active turns, allows explicit send commands to use any readable absolute path, removes manifest/contract/count-based/wakeup delivery repair state, and keeps hidden `.telegram-out` files out of auto-delivery.
+- **v4.4.6** — releases superseded file workflows before auth/stale-session retry, adds delivery-ledger mismatch telemetry, hardens side-channel bearer checks, avoids delivery-guard false positives in audit replies, and raises pairing-code entropy.
 - **v4.4.5** — prevents explanatory ````file:...```` fenced-block examples from being mis-delivered as Telegram documents; inline file blocks now send only when the whole response is one non-empty file block.
 - **v4.4.4** — tightens explicit delivery-count repair so short replies like "Done" plus too few files are retried, while explicit partial-failure reports are allowed through.
-- **v4.4.3** — adds a conservative delivery manifest for explicit multi-file requests, so replies for requests like "generate 2 images" are repaired when fewer files were actually delivered.
+- **v4.4.3** — adds conservative delivery-count checks for explicit multi-file requests, so replies for requests like "generate 2 images" are repaired when fewer files were actually delivered.
 - **v4.4.2** — restricts turn-scoped child-process environment injection to the side-channel delivery variables (`CCTB_SEND_URL`, `CCTB_SEND_TOKEN`, `CCTB_SEND_COMMAND`) for both Codex and Claude process runtimes.
 - **v4.4.1** — brings Codex process runtime into the same engine-event path as Claude for structured `session` and completed `assistant_text` events, and caps local Codex rollout scanning with visited/depth guards.
 - **v4.4.0** — adds Delivery Protocol v2: a turn-level delivery ledger, structured side-channel accepted/rejected receipts, and a completion gate that can trust real receipts across side-channel, stream, final `[send-file:]`, and `.telegram-out` delivery paths.
@@ -184,20 +186,30 @@ During each active Telegram turn, the bridge injects a short-lived local send he
 "$CCTB_SEND_COMMAND" --message "Done" --file /absolute/path/to/report.pdf
 ```
 
-Current delivery contract:
+The same delivery path is also available as a stable CLI command. Inside an active Telegram turn it uses the turn-scoped side-channel; outside an active turn it falls back to the configured instance and the active Telegram session:
 
-- Prefer `CCTB_SEND_COMMAND` for existing files, images, PDFs, decks, and other binary outputs. Wait for the command to exit; do not run it in the background.
-- Use `[send-file:/absolute/path]` only as fallback when the helper is unavailable or fails.
+```bash
+telegram send --image /absolute/path/to/image.png
+telegram send --file /absolute/path/to/report.pdf
+telegram send --chat 123456789 --file /absolute/path/to/report.pdf
+telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.png
+```
+
+Current delivery rules:
+
+- Prefer `CCTB_SEND_COMMAND` for existing files, images, PDFs, decks, and other binary outputs.
+- Use `telegram send` when you need the same explicit delivery command outside an active turn, or when no turn-scoped helper is available.
+- Explicit send commands accept any readable absolute file path.
+- Use `[send-file:/absolute/path]` only as fallback when explicit send commands are unavailable or fail.
 - Small text/code files can still use the `file:name.ext` fenced-block form.
 - The helper is scoped to one Telegram turn. It will not work after the turn finishes.
-- The bridge validates that every file lives under the instance workspace or the active `/resume` project before sending it.
+- Plain `[send-file:]` fallback tags still validate that files live under the instance workspace or the active `/resume` project before sending.
 - Accepted and rejected file deliveries are recorded as turn-level receipts, so the bridge can decide completion from structured delivery evidence instead of text claims.
-- When a request explicitly names a deliverable count, such as "2 images" or "两张图", the bridge requires enough unique delivery evidence before accepting a completion reply.
 - If a file was already sent by stream delivery or the side-channel helper, the final `.telegram-out` sweep skips that same real path to avoid duplicate Telegram attachments.
-- For deliverable-producing requests, the bridge checks final replies against real delivery evidence. Replies such as "the batch is running, I will check later" or "the image was generated" without any actual file delivery are blocked and repaired automatically.
-- Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures unless the user explicitly asked for a file/export/send/save action.
+- The bridge no longer keeps manifest, pending-contract, or count-based state to infer future delivery intent across ordinary chat turns.
+- Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures.
 
-This works for the default Codex and Claude process runtimes. For long file-producing tasks, the agent should keep the turn open until the requested deliverable set is complete, send the files, then finish the turn instead of sleeping, polling, or promising a later notification.
+This works for the default Codex and Claude process runtimes. File delivery is explicit: generate the file, call the send command, and rely on the resulting receipt.
 
 ---
 

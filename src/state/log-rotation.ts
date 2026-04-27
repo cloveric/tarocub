@@ -74,17 +74,23 @@ export async function rotateIfNeeded(filePath: string, options: RotateOptions = 
   return true;
 }
 
-/**
- * Rotate all standard instance log files.
- */
-export async function rotateInstanceLogs(stateDir: string, options: RotateOptions = DEFAULT_ROTATE_OPTIONS): Promise<string[]> {
-  const files = [
-    path.join(stateDir, "audit.log.jsonl"),
-    path.join(stateDir, "timeline.log.jsonl"),
-    path.join(stateDir, "service.lifecycle.log.jsonl"),
-    path.join(stateDir, "service.stdout.log"),
-    path.join(stateDir, "service.stderr.log"),
-  ];
+const STRUCTURED_INSTANCE_LOG_FILES = [
+  "audit.log.jsonl",
+  "timeline.log.jsonl",
+  "service.lifecycle.log.jsonl",
+];
+
+const PROCESS_INSTANCE_LOG_FILES = [
+  "service.stdout.log",
+  "service.stderr.log",
+];
+
+async function rotateInstanceLogFiles(
+  stateDir: string,
+  fileNames: readonly string[],
+  options: RotateOptions,
+): Promise<string[]> {
+  const files = fileNames.map((fileName) => path.join(stateDir, fileName));
   const rotated: string[] = [];
   for (const file of files) {
     if (await rotateIfNeeded(file, options)) {
@@ -92,4 +98,22 @@ export async function rotateInstanceLogs(stateDir: string, options: RotateOption
     }
   }
   return rotated;
+}
+
+/**
+ * Rotate append-by-path logs from inside the service process. This deliberately
+ * excludes stdout/stderr because those file descriptors may already be open.
+ */
+export async function rotateInstanceStructuredLogs(stateDir: string, options: RotateOptions = DEFAULT_ROTATE_OPTIONS): Promise<string[]> {
+  return rotateInstanceLogFiles(stateDir, STRUCTURED_INSTANCE_LOG_FILES, options);
+}
+
+/**
+ * Rotate all standard instance log files before spawning the service process.
+ */
+export async function rotateInstanceLogs(stateDir: string, options: RotateOptions = DEFAULT_ROTATE_OPTIONS): Promise<string[]> {
+  return rotateInstanceLogFiles(stateDir, [
+    ...STRUCTURED_INSTANCE_LOG_FILES,
+    ...PROCESS_INSTANCE_LOG_FILES,
+  ], options);
 }
