@@ -114,26 +114,79 @@ const DEFERRED_DELIVERY_REPLY_PATTERNS = [
   /(?:wait|waiting)[\s\S]{0,24}(?:notify|notification|batch)/i,
   /(?:notify you|will notify|i'll notify)[\s\S]{0,24}(?:later|when|once)?/i,
 ];
+const DEFERRED_DELIVERY_IN_PROGRESS_PATTERNS = [
+  /(?:batch|批量|批处理)[\s\S]{0,48}(?:跑起来|跑起來|启动|啟動|started|running|in progress|生成中|处理中|處理中)/i,
+  /(?:P\s*\d+\s*[-到至]\s*P?\s*\d+|P\s*\d+\s*(?:\+|和|与|與)\s*P?\s*\d+)[\s\S]{0,64}(?:batch|跑起来|跑起來|启动|啟動|started|running|in progress|生成中|处理中|處理中)/i,
+  /(?:图片|圖片|图文|圖文|image|images|files?|交付物|deliverables?)[\s\S]{0,64}(?:后台|後台|background|生成中|处理中|處理中|running|in progress)/i,
+  /(?:batch|批量|批处理|P\s*\d+|图片|圖片|图文|圖文|image|images|files?|交付物|deliverables?)[\s\S]{0,96}(?:\d+\s*(?:分钟|分鐘|分|minutes?|mins?)|稍后|稍後|一会儿|一會兒|later|after)[\s\S]{0,64}(?:check|检查|檢查|回来|回來|主动|主動|继续|繼續|再看|复查|複查|发|發|发送|傳|传|deliver|send)/i,
+];
+const DELIVERABLE_REQUEST_PATTERNS = [
+  /(?:生成|制作|製作|做|写|寫|撰写|撰寫|画|畫|绘制|繪製|出图|出圖|制图|製圖|导出|導出|保存|发送|發送|发给|發給|交付|增强|增強|放大|修复|修復|转换|轉換)[\s\S]{0,64}(?:图片|圖片|图文|圖文|图|圖|照片|海报|海報|文件|报告|報告|PPT|PDF|Word|Excel|表格|image|images|photo|poster|file|files|report|slides?|deck|pdf|docx|pptx|xlsx|png|jpe?g|webp)/i,
+  /(?:create|generate|draw|make|write|export|send|deliver|upscale|enhance|convert|save)[\s\S]{0,64}(?:image|images|photo|poster|file|files|report|slides?|deck|pdf|docx|pptx|xlsx|png|jpe?g|webp|图片|圖片|图文|圖文|文件|报告|報告)/i,
+];
+const TEXT_ONLY_CONTENT_REQUEST_PATTERNS = [
+  /(?:生成|制作|製作|做|写|寫|撰写|撰寫)[\s\S]{0,64}(?:图片|圖片|图像|圖像|图|圖|image)[\s\S]{0,24}(?:描述|说明|說明|分析|报告|報告|提示词|提示詞|prompt|caption|description|analysis)/i,
+  /(?:generate|create|write|make)[\s\S]{0,64}(?:report|summary|description|caption|prompt|analysis)/i,
+];
+const EXPLICIT_FILE_DELIVERY_REQUEST_PATTERN =
+  /(?:文件|档案|檔案|保存|导出|導出|发送|發送|发给|發給|交付|下载|下載|file|export|send|deliver|save|download|pdf|docx|pptx|xlsx|png|jpe?g|webp|zip)/i;
+const DELIVERABLE_COMPLETION_REPLY_PATTERNS = [
+  /(?:已生成|生成(?:完成|好了)?|已做好|做好了|已保存|保存为|保存為|导出(?:完成)?|導出(?:完成)?|created|generated|saved|exported|ready)[\s\S]{0,80}(?:P\s*\d+|图片|圖片|图文|圖文|图|圖|文件|报告|報告|image|images|photo|poster|file|files|report|pdf|docx|pptx|xlsx|png|jpe?g|webp|\.(?:png|jpe?g|webp|pdf|docx|pptx|xlsx|zip|txt|md)\b)/i,
+  /(?:P\s*\d+|图片|圖片|图文|圖文|图|圖|文件|报告|報告|image|images|photo|poster|file|files|report|pdf|docx|pptx|xlsx|png|jpe?g|webp|\.(?:png|jpe?g|webp|pdf|docx|pptx|xlsx|zip|txt|md)\b)[\s\S]{0,80}(?:已生成|生成(?:完成|好了)?|已做好|做好了|已保存|保存为|保存為|导出(?:完成)?|導出(?:完成)?|created|generated|saved|exported|ready)/i,
+];
 const EXPLANATORY_DEFERRED_DELIVERY_CONTEXT_PATTERN =
   /(?:出现类似|类似|例如|比如|不要|不能|不会|不是|不应该|拦截|机制|解释|截图|错误行为|根因|prompt|bridge|repair|example|quote|quoted|do not|don't|not valid)/i;
 
 function isDeferredDeliveryReply(text: string): boolean {
-  const normalized = text.trim();
-  if (!normalized || hasSendFileTag(normalized)) {
+  const normalized = stripSendFileTags(text).trim();
+  if (!normalized) {
     return false;
   }
   return normalized.split(/\r?\n/).some((line) => {
     if (EXPLANATORY_DEFERRED_DELIVERY_CONTEXT_PATTERN.test(line)) {
       return false;
     }
-    return DEFERRED_DELIVERY_REPLY_PATTERNS.some((pattern) => pattern.test(line));
+    return [
+      ...DEFERRED_DELIVERY_REPLY_PATTERNS,
+      ...DEFERRED_DELIVERY_IN_PROGRESS_PATTERNS,
+    ].some((pattern) => pattern.test(line));
+  });
+}
+
+function isLikelyDeliverableRequest(text: string): boolean {
+  if (
+    TEXT_ONLY_CONTENT_REQUEST_PATTERNS.some((pattern) => pattern.test(text)) &&
+    !EXPLICIT_FILE_DELIVERY_REQUEST_PATTERN.test(text)
+  ) {
+    return false;
+  }
+  return DELIVERABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function isUndeliveredDeliverableCompletionReply(input: {
+  requestText: string;
+  responseText: string;
+  hasFileDeliveryEvidence: boolean;
+}): boolean {
+  if (input.hasFileDeliveryEvidence || !isLikelyDeliverableRequest(input.requestText)) {
+    return false;
+  }
+  const normalized = stripSendFileTags(input.responseText).trim();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.split(/\r?\n/).some((line) => {
+    if (EXPLANATORY_DEFERRED_DELIVERY_CONTEXT_PATTERN.test(line)) {
+      return false;
+    }
+    return DELIVERABLE_COMPLETION_REPLY_PATTERNS.some((pattern) => pattern.test(line));
   });
 }
 
 function buildDeferredDeliveryRepairPrompt(previousText: string): string {
   return [
     "[Bridge delivery repair]",
-    "Your previous reply ended the Telegram turn by promising a later notification for requested deliverables:",
+    "Your previous reply ended the Telegram turn before completing requested file delivery:",
     previousText.trim(),
     "",
     "That is not valid in this Telegram bridge. Do not send that reply to the user.",
@@ -469,9 +522,38 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     sideChannelEnv = undefined;
   }
 
-  let streamDeliveriesSettled = false;
   let turnError: unknown;
   try {
+    const hasAcceptedTelegramOutFiles = async (): Promise<boolean> => {
+      if (!state.telegramOutDirPath) {
+        return false;
+      }
+      const describedFiles = await describeTelegramOutFiles(state.telegramOutDirPath);
+      const limitedFiles = applyTelegramOutLimits(describedFiles, {
+        maxFiles: 5,
+        maxFileBytes: 512_000,
+        maxTotalBytes: 1_500_000,
+      });
+      return limitedFiles.accepted.length > 0;
+    };
+    const getDeliveryRepairReason = async (responseText: string): Promise<"deferred" | "undelivered" | undefined> => {
+      await Promise.allSettled(streamDeliveryPromises);
+      if (isDeferredDeliveryReply(responseText)) {
+        return "deferred";
+      }
+      const hasFileDeliveryEvidence =
+        hasSendFileTag(responseText) ||
+        getAlreadyDeliveredFilePaths().length > 0 ||
+        await hasAcceptedTelegramOutFiles();
+      if (isUndeliveredDeliverableCompletionReply({
+        requestText,
+        responseText,
+        hasFileDeliveryEvidence,
+      })) {
+        return "undelivered";
+      }
+      return undefined;
+    };
     const runEngineTurn = async (input: {
       text: string;
       files: string[];
@@ -500,7 +582,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     });
     await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
 
-    for (let repairAttempt = 1; repairAttempt <= 2 && isDeferredDeliveryReply(result.text); repairAttempt += 1) {
+    let repairReason = await getDeliveryRepairReason(result.text);
+    for (let repairAttempt = 1; repairAttempt <= 2 && repairReason; repairAttempt += 1) {
       await appendTimelineEventBestEffort(stateDir, {
         type: "turn.retried",
         instanceName: context.instanceName,
@@ -512,6 +595,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         detail: "deferred delivery repair",
         metadata: {
           repairAttempt,
+          repairReason,
           responseChars: result.text.length,
         },
       });
@@ -521,17 +605,17 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         replyContext: undefined,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+      repairReason = await getDeliveryRepairReason(result.text);
     }
 
-    if (isDeferredDeliveryReply(result.text)) {
+    if (repairReason) {
       state.failureHint = locale === "zh"
-        ? "引擎提前结束了仍在生成交付物的任务。bridge 已阻止发送“等通知”式回复，请重试或继续追问当前任务。"
-        : "The engine ended a deliverable-generating task with a later-notification reply. The bridge blocked that reply; retry or continue the current task.";
-      throw new Error("Engine returned a deferred delivery notification instead of completing deliverables");
+        ? "引擎提前结束了仍在生成或尚未交付的任务。bridge 已阻止发送未完成交付回复，请重试或继续追问当前任务。"
+        : "The engine ended a deliverable-generating task before completing file delivery. The bridge blocked that reply; retry or continue the current task.";
+      throw new Error("Engine returned a delivery-incomplete reply instead of completing deliverables");
     }
 
     await Promise.allSettled(streamDeliveryPromises);
-    streamDeliveriesSettled = true;
     deliveredText = stripDeliveredStreamTextFragments(
       stripAlreadySentSideChannelTags(result.text, getAlreadyDeliveredFilePaths()),
       streamDeliveredTextFragments,
@@ -548,9 +632,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   } catch (error) {
     turnError = error;
   } finally {
-    if (!streamDeliveriesSettled) {
-      await Promise.allSettled(streamDeliveryPromises);
-    }
+    await Promise.allSettled(streamDeliveryPromises);
     if (turnError !== undefined) {
       const deliveredFilePaths = [...new Set(getAlreadyDeliveredFilePaths())];
       if (deliveredFilePaths.length > 0) {
