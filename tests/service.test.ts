@@ -772,6 +772,79 @@ describe("polling helpers", () => {
     }
   });
 
+  it("does not advance the handled update watermark past an unfinished lower update", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const runtimeStatePath = path.join(root, "runtime-state.json");
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async () => {
+        started.resolve();
+        await release.promise;
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      await mkdir(root, { recursive: true });
+      await writeFile(runtimeStatePath, JSON.stringify({
+        schemaVersion: 1,
+        lastHandledUpdateId: 9,
+        activeTurnCount: 0,
+      }), "utf8");
+
+      const run = processTelegramUpdates(
+        [
+          {
+            update_id: 10,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              text: "long task",
+            },
+          },
+          {
+            update_id: 11,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      await started.promise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await expect(readFile(runtimeStatePath, "utf8").then(JSON.parse)).resolves.toMatchObject({
+        lastHandledUpdateId: 9,
+      });
+
+      release.resolve();
+      await run;
+      await expect(readFile(runtimeStatePath, "utf8").then(JSON.parse)).resolves.toMatchObject({
+        lastHandledUpdateId: 11,
+      });
+    } finally {
+      release.resolve();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps processing increasing update ids", async () => {
     const logger = {
       error: vi.fn(),

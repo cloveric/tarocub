@@ -39,6 +39,7 @@
 - bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
 - 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
 - `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
+- **v4.5.2** — 修复 Telegram update watermark 推进逻辑，后来的 update 不会再越过尚未完成的早期 turn 推进 `lastHandledUpdateId`，避免快速连续消息被错误当成 duplicate 跳过。
 - **v4.5.1** — 将 Telegram 文件投递规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留一段静态 transport 提醒；新增 generated instructions 迁移命令，支持 `--dry-run` 预览和 `--force` 前自动备份，并补齐 `cctb send` 可靠性回归测试。
 - **v4.5.0** — 新增稳定的显式发送链路，active turn 外也能用 `telegram send`；显式发送命令可读取任意可读绝对路径；移除 manifest / pending contract / 数量判断 / wakeup repair 这类 delivery 状态，并避免隐藏 `.telegram-out` 文件被自动投递。
 - **v4.4.2** — Codex/Claude process runtime 的 turn 级子进程环境变量注入改为 allowlist，只允许文件交付 side-channel 需要的 `CCTB_SEND_URL`、`CCTB_SEND_TOKEN`、`CCTB_SEND_COMMAND`。

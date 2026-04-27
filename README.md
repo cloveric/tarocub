@@ -39,6 +39,7 @@
 - Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
 - The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
 - `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
+- **v4.5.2** — fixes Telegram update watermark handling so later updates cannot advance `lastHandledUpdateId` past an unfinished earlier turn, preventing rapid follow-up messages from being incorrectly skipped as duplicates.
 - **v4.5.1** — moves Telegram file-delivery instructions into per-instance `agent.md`, shortens the per-turn prompt to a static transport reminder, adds generated-instructions migration with `--dry-run` and backup-on-`--force`, and hardens `cctb send` reliability tests.
 - **v4.5.0** — adds stable explicit send delivery outside active turns, allows explicit send commands to use any readable absolute path, removes manifest/contract/count-based/wakeup delivery repair state, and keeps hidden `.telegram-out` files out of auto-delivery.
 - **v4.4.6** — releases superseded file workflows before auth/stale-session retry, adds delivery-ledger mismatch telemetry, hardens side-channel bearer checks, avoids delivery-guard false positives in audit replies, and raises pairing-code entropy.

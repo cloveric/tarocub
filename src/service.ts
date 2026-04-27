@@ -691,6 +691,7 @@ export async function lookupTelegramBotIdentity(api: TelegramApi): Promise<Resol
 const defaultChatQueue = new ChatQueue();
 const activeTasks = new Map<number, AbortController>();
 const enqueuedUpdateIds = new Set<number>();
+const completedOutOfOrderUpdateIds = new Set<number>();
 const stoppedTaskChats = new Set<number>();
 const STOPPED_TASK_BOUNDARY = [
   "[Previous task was explicitly stopped by the user.]",
@@ -701,6 +702,7 @@ const STOPPED_TASK_BOUNDARY = [
 /** @internal — test-only reset for module-level dedup state */
 export function _resetEnqueuedUpdateIds(): void {
   enqueuedUpdateIds.clear();
+  completedOutOfOrderUpdateIds.clear();
 }
 
 /** @internal — test-only reset for module-level stopped-task state */
@@ -880,12 +882,43 @@ export async function processTelegramUpdates(
   const runtimeState = await runtimeStateStore.load();
   let lastHandledUpdateId = runtimeState.lastHandledUpdateId;
 
+  const markUpdateCompleted = async (updateId: number): Promise<void> => {
+    if (lastHandledUpdateId !== null && updateId <= lastHandledUpdateId) {
+      completedOutOfOrderUpdateIds.delete(updateId);
+      return;
+    }
+
+    const expectedNext = lastHandledUpdateId === null ? updateId : lastHandledUpdateId + 1;
+    if (updateId !== expectedNext) {
+      completedOutOfOrderUpdateIds.add(updateId);
+      return;
+    }
+
+    let nextCompletedUpdateId = updateId;
+    while (true) {
+      await runtimeStateStore.markHandledUpdateId(nextCompletedUpdateId);
+      lastHandledUpdateId = nextCompletedUpdateId;
+      completedOutOfOrderUpdateIds.delete(nextCompletedUpdateId);
+
+      const followingUpdateId = nextCompletedUpdateId + 1;
+      if (!completedOutOfOrderUpdateIds.has(followingUpdateId)) {
+        break;
+      }
+      nextCompletedUpdateId = followingUpdateId;
+    }
+  };
+
   for (const update of updates) {
     const updateId = getUpdateId(update);
     const completedOffset = updateId === undefined ? undefined : updateId + 1;
 
     try {
       if (updateId !== undefined && enqueuedUpdateIds.has(updateId)) {
+        nextOffset = advanceOffset(nextOffset, completedOffset);
+        continue;
+      }
+
+      if (updateId !== undefined && completedOutOfOrderUpdateIds.has(updateId)) {
         nextOffset = advanceOffset(nextOffset, completedOffset);
         continue;
       }
@@ -905,8 +938,7 @@ export async function processTelegramUpdates(
       if (!normalized) {
         const membershipUpdate = extractMembershipUpdate(update);
         if (updateId !== undefined) {
-          await runtimeStateStore.markHandledUpdateId(updateId);
-          lastHandledUpdateId = updateId;
+          await markUpdateCompleted(updateId);
         }
         if (membershipUpdate) {
           await appendAuditEvent(path.dirname(context.inboxDir), {
@@ -936,8 +968,7 @@ export async function processTelegramUpdates(
 
       if (!normalized.text && normalized.attachments.length === 0) {
         if (updateId !== undefined) {
-          await runtimeStateStore.markHandledUpdateId(updateId);
-          lastHandledUpdateId = updateId;
+          await markUpdateCompleted(updateId);
         }
         await appendAuditEvent(path.dirname(context.inboxDir), {
           type: "update.skip",
@@ -979,8 +1010,7 @@ export async function processTelegramUpdates(
         }
         nextOffset = advanceOffset(nextOffset, completedOffset);
         if (updateId !== undefined) {
-          await runtimeStateStore.markHandledUpdateId(updateId);
-          lastHandledUpdateId = updateId;
+          await markUpdateCompleted(updateId);
         }
         continue;
       }
@@ -1013,8 +1043,7 @@ export async function processTelegramUpdates(
         }
         nextOffset = advanceOffset(nextOffset, completedOffset);
         if (updateId !== undefined) {
-          await runtimeStateStore.markHandledUpdateId(updateId);
-          lastHandledUpdateId = updateId;
+          await markUpdateCompleted(updateId);
         }
         continue;
       }
@@ -1082,8 +1111,7 @@ export async function processTelegramUpdates(
     try {
       await queued.run;
       if (queued.updateId !== undefined) {
-        await runtimeStateStore.markHandledUpdateId(queued.updateId);
-        lastHandledUpdateId = queued.updateId;
+        await markUpdateCompleted(queued.updateId);
         enqueuedUpdateIds.delete(queued.updateId);
       }
       nextOffset = advanceOffset(nextOffset, queued.completedOffset);
