@@ -4,6 +4,7 @@ import { runCli } from "./commands/cli.js";
 import { acquireInstanceLock } from "./state/instance-lock.js";
 import { rotateInstanceStructuredLogs } from "./state/log-rotation.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
+import { recoverLastHandledUpdateIdFromAudit } from "./state/runtime-state-recovery.js";
 import { FileWorkflowStore } from "./state/file-workflow-store.js";
 import { resolveConfig } from "./config.js";
 import {
@@ -109,6 +110,16 @@ async function main(): Promise<void> {
     process.once("SIGINT", shutdownSigint);
 
     await rotateInstanceStructuredLogs(serviceConfig.stateDir);
+    try {
+      await recoverLastHandledUpdateIdFromAudit(serviceConfig.stateDir);
+    } catch (error) {
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        instanceName,
+        outcome: "error",
+        detail: `recover update watermark: ${renderLifecycleError(error)}`,
+      });
+    }
     await new RuntimeStateStore(path.join(serviceConfig.stateDir, "runtime-state.json")).resetActiveTurns();
     try {
       await new FileWorkflowStore(serviceConfig.stateDir).failInterruptedProcessing();

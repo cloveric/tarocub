@@ -35,6 +35,7 @@
 
 ### What Changed Recently
 
+- **v4.5.3** — recovers a stale Telegram update watermark from audit history on service startup, preventing old completed tasks from replaying after restart.
 - **v4.5.2** — fixes Telegram update watermark ordering, so rapid follow-up messages cannot be skipped while an earlier turn is still finishing.
 - **v4.5.1** — moves Telegram transport rules into each instance's `agent.md`, leaving only one short static Telegram reminder in the per-turn prompt. File delivery now prefers `cctb send --file PATH` / `cctb send --image PATH`.
 - **v4.5.0** — simplifies file delivery around explicit send receipts and removes the old manifest/contract/count-repair/wakeup delivery state.

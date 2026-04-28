@@ -35,6 +35,7 @@
 
 ### 最近这波变化
 
+- **v4.5.3** — 服务启动时会从 audit 历史恢复 stale 的 Telegram update watermark，避免重启后重复执行已经完成的旧任务。
 - **v4.5.2** — 修复 Telegram update watermark 顺序推进，早期 turn 还在收尾时，后续快速消息不会再被错误当成 duplicate 跳过。
 - **v4.5.1** — 将 Telegram transport 规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留一条很短的静态提醒。文件投递优先使用 `cctb send --file PATH` / `cctb send --image PATH`。
 - **v4.5.0** — 文件投递改为围绕显式 send receipt，移除旧的 manifest / contract / 数量 repair / wakeup delivery 状态。
