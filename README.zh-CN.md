@@ -259,18 +259,17 @@ Claude 报告精确 USD 费用，Codex 仅报告 token 数。
 
 ---
 
-## 详细度控制
+## 运行可见性与 Timeline
 
-控制流式进度显示的精细程度：
+turn 运行期间，bridge 会向 Telegram 发送 typing action，并把结构化事件写入 `timeline.log.jsonl` / `audit.log.jsonl`。长工具调用不会实时编辑聊天里的消息内容；需要排查时看：
 
 ```bash
-npm run dev -- telegram verbosity 0 --instance work   # 安静 — 无实时更新
-npm run dev -- telegram verbosity 1 --instance work   # 正常 — 每 2 秒更新（默认）
-npm run dev -- telegram verbosity 2 --instance work   # 详细 — 每 1 秒更新
-npm run dev -- telegram verbosity --instance work      # 查看当前级别
+npm run dev -- telegram timeline --instance work
+npm run dev -- telegram dashboard --instance work
+npm run dev -- telegram service status --instance work
 ```
 
-存储在 `config.json`，热加载生效。
+`telegram verbosity` 仍作为兼容配置保留，但当前 Codex/Claude process runtime 使用的是 typing action + timeline/audit 事件，不会把模型的中间输出实时改写到 Telegram 消息里。
 
 ---
 
@@ -358,7 +357,7 @@ Bot 列出最近的 session：
 3. Claude CLI 在原目录用 `-r <sessionId>` 继续
 4. `/detach` 会优先恢复 /resume 前的旧对话；如果没有旧对话，再回到默认工作区。本地 session 文件本身不会被改动
 
-**零污染：** `--append-system-prompt` 是每次调用时传入的，不会写进 session 文件。bridge 指令不会泄漏到你的本地会话中。
+**零污染：** bridge 和实例指令都是每次调用时传入，不会写回本地 session 文件。
 
 ### Codex thread 绑定
 
@@ -688,7 +687,7 @@ npm run dev -- telegram service start --instance work
 Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     → 加载 config.json（引擎） → 加载 agent.md → 会话查找
     → Codex Exec 或 Claude -p（新建或恢复）
-    → 流式进度更新（每 2 秒） → 最终渲染 → 发送 → 审计
+    → typing action + timeline 事件 → 最终渲染 → 发送 → 审计
 ```
 
 ---
@@ -722,8 +721,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
       <p><code>/resume</code> 可以接上电脑里的 Claude Code 本地 session；<code>/resume thread &lt;thread-id&gt;</code> 可以绑定已有 Codex thread。手机上继续之前的工作，不丢上下文。</p>
     </td>
     <td>
-      <h3>流式进度</h3>
-      <p>AI 生成回复时，Telegram 消息每 2 秒实时更新，不再干等 "Running..."。</p>
+      <h3>运行可见性</h3>
+      <p>turn 运行时 Telegram 会显示 typing，timeline/audit 会记录 session、工具调用、文件 receipt、重试和完成状态，方便排查。</p>
     </td>
   </tr>
   <tr>
@@ -752,8 +751,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
       <p>按实例统计 token 消耗和 USD 费用。<code>telegram usage</code> 随时查看花费。</p>
     </td>
     <td>
-      <h3>详细度控制</h3>
-      <p>按实例设置输出级别：0 = 安静，1 = 正常（2 秒），2 = 详细（1 秒）。</p>
+      <h3>Timeline 与 Dashboard</h3>
+      <p><code>telegram timeline</code>、<code>telegram service status</code>、<code>telegram dashboard</code> 可以查看当前 turn 状态、最近失败、文件 receipt 和 crew 快照。</p>
     </td>
   </tr>
   <tr>
@@ -763,7 +762,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     </td>
     <td>
       <h3>文件投递</h3>
-      <p>生成的图片、PDF、PPT 和报告仍可通过每 turn helper 或 <code>[send-file:]</code> fallback 作为 Telegram 附件发回。</p>
+      <p>生成的图片、PDF、PPT 和报告可在 active turn 内通过 <code>cctb send</code> 投递，active turn 外通过 <code>telegram send</code> 投递，必要时再用 <code>[send-file:]</code> / <code>[send-image:]</code> fallback。</p>
     </td>
   </tr>
   <tr>
@@ -813,7 +812,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `telegram engine [codex\|claude]` | 按实例切换 AI 引擎 |
 | `telegram yolo [on\|off\|unsafe]` | 切换自动审批模式 |
 | `telegram usage` | 查看 token 用量和费用估算 |
-| `telegram verbosity [0\|1\|2]` | 设置流式进度显示级别 |
+| `telegram verbosity [0\|1\|2]` | 保留的兼容配置；当前 process runtime 使用 typing action + timeline/audit 事件 |
 | `telegram budget [show\|set\|clear]` | 按实例费用上限（达到上限时拦截请求） |
 | `telegram timeline` | 查看结构化生命周期事件，支持过滤 |
 | `telegram instance [list\|rename\|delete]` | 通过 CLI 管理实例 |

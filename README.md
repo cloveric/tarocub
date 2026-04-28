@@ -258,18 +258,17 @@ Claude reports exact USD cost. Codex reports tokens only (cost shows as "unknown
 
 ---
 
-## Verbosity Control
+## Turn Activity And Timeline
 
-Control how much streaming progress you see:
+While a turn runs, the bridge sends Telegram typing actions and records structured events in `timeline.log.jsonl` / `audit.log.jsonl`. Long tool calls are not live-edited into the chat; inspect them with:
 
 ```bash
-npm run dev -- telegram verbosity 0 --instance work   # Quiet — no live updates
-npm run dev -- telegram verbosity 1 --instance work   # Normal — update every 2s (default)
-npm run dev -- telegram verbosity 2 --instance work   # Detailed — update every 1s
-npm run dev -- telegram verbosity --instance work      # Check current level
+npm run dev -- telegram timeline --instance work
+npm run dev -- telegram dashboard --instance work
+npm run dev -- telegram service status --instance work
 ```
 
-Stored in `config.json`, hot-reloadable.
+`telegram verbosity` is kept as a compatibility config knob, but the current Codex/Claude process runtimes use typing actions plus timeline/audit events rather than live-editing partial model output into Telegram.
 
 ---
 
@@ -372,7 +371,7 @@ Now every message you send goes through the original session — same context, s
 3. Claude CLI resumes with `-r <sessionId>` in the original directory
 4. `/detach` returns to the pre-/resume conversation when one exists; otherwise it falls back to the default workspace without touching the original local session file
 
-**No pollution:** `--append-system-prompt` is per-invocation and doesn't persist in session files. The bridge instructions won't leak into your local session.
+**No pollution:** bridge and instance instructions are passed per invocation and are not written back into local session files.
 
 ### Codex thread attach
 
@@ -704,7 +703,7 @@ npm run dev -- telegram service start --instance work
 Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     → Load config.json (engine) → Load agent.md → Session Lookup
     → Codex Exec or Claude -p (new or resume)
-    → Stream progress to placeholder (every 2s) → Final Render → Deliver → Audit
+    → Typing action + timeline events → Final Render → Deliver → Audit
 ```
 
 ---
@@ -748,8 +747,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
       <p><code>/resume</code> picks up existing Claude Code local sessions, and <code>/resume thread &lt;thread-id&gt;</code> attaches Codex threads, so you can continue desktop work from Telegram without losing context.</p>
     </td>
     <td>
-      <h3>Streaming Progress</h3>
-      <p>See AI responses as they're generated — the Telegram message updates live every 2 seconds during Codex/Claude execution, instead of waiting for completion.</p>
+      <h3>Runtime Visibility</h3>
+      <p>Telegram shows typing while a turn runs, and structured timeline/audit events record sessions, tool calls, file receipts, retries, and completion status for debugging.</p>
     </td>
   </tr>
   <tr>
@@ -768,8 +767,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
       <p>Per-instance token counts (input/output/cached) and USD cost. <code>telegram usage</code> to check spend anytime.</p>
     </td>
     <td>
-      <h3>Verbosity Control</h3>
-      <p>Per-instance output level: 0 = quiet, 1 = normal (2s), 2 = detailed (1s). <code>telegram verbosity 2</code> to see more.</p>
+      <h3>Timeline & Dashboard</h3>
+      <p><code>telegram timeline</code>, <code>telegram service status</code>, and <code>telegram dashboard</code> expose current turn state, recent failures, file receipts, and crew snapshots.</p>
     </td>
   </tr>
   <tr>
@@ -779,7 +778,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>File Delivery</h3>
-      <p>Generated images, PDFs, decks, and reports can still be delivered as Telegram attachments through the per-turn helper or <code>[send-file:]</code> fallback.</p>
+      <p>Generated images, PDFs, decks, and reports are delivered through <code>cctb send</code> during active turns, <code>telegram send</code> outside turns, or <code>[send-file:]</code> / <code>[send-image:]</code> as a fallback.</p>
     </td>
   </tr>
   <tr>
@@ -829,7 +828,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 | `telegram engine [codex\|claude]` | Switch AI engine per instance |
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
 | `telegram usage` | Show token usage and estimated cost |
-| `telegram verbosity [0\|1\|2]` | Set streaming progress level |
+| `telegram verbosity [0\|1\|2]` | Store the legacy verbosity setting; current process runtimes use typing actions plus timeline/audit events |
 | `telegram budget [show\|set\|clear]` | Per-instance cost cap (blocks requests when exceeded) |
 | `telegram timeline` | Inspect structured lifecycle events with filters |
 | `telegram instance [list\|rename\|delete]` | Manage instances from the CLI |
