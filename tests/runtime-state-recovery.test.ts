@@ -49,6 +49,31 @@ describe("runtime state recovery", () => {
     }
   });
 
+  it("recovers from large rotated audit logs without overflowing the call stack", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new RuntimeStateStore(path.join(tempDir, "runtime-state.json"));
+
+    try {
+      await store.markHandledUpdateId(875);
+      // 160k events exceeds the V8 argument-spread range that broke recovery
+      // on real rotated audit logs, while keeping the regression test fast.
+      const auditLines = Array.from({ length: 160_000 }, (_, index) =>
+        JSON.stringify({
+          timestamp: "2026-04-28T00:00:00.000Z",
+          type: "update.handle",
+          updateId: index + 1,
+          outcome: "success",
+        }),
+      );
+      await writeFile(path.join(tempDir, "audit.log.jsonl.1"), auditLines.join("\n"), "utf8");
+
+      await expect(recoverLastHandledUpdateIdFromAudit(tempDir, store)).resolves.toBe(160_000);
+      await expect(store.load()).resolves.toMatchObject({ lastHandledUpdateId: 160_000 });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not recover from failed update handle events", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new RuntimeStateStore(path.join(tempDir, "runtime-state.json"));

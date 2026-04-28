@@ -419,7 +419,9 @@ export async function prepareAttachmentWorkflow(input: {
 
   const promptSections: string[] = [input.text.trim() || "Please analyze the uploaded files."];
   if (documentSections.length > 0) {
-    promptSections.push(...documentSections);
+    for (const section of documentSections) {
+      promptSections.push(section);
+    }
   }
   if (imageSections.length > 0) {
     promptSections.push(

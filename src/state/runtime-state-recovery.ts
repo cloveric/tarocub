@@ -29,21 +29,25 @@ function isHandledUpdateAuditEvent(event: AuditEvent): boolean {
 export function findRecoveredLastHandledUpdateId(events: AuditEvent[]): number | null {
   let maxUpdateId: number | null = null;
   for (const event of events) {
-    if (!isHandledUpdateAuditEvent(event)) {
-      continue;
-    }
-    maxUpdateId = maxUpdateId === null ? event.updateId! : Math.max(maxUpdateId, event.updateId!);
+    maxUpdateId = updateRecoveredLastHandledUpdateId(maxUpdateId, event);
   }
   return maxUpdateId;
 }
 
-async function readAuditEventsFromRotations(stateDir: string): Promise<AuditEvent[]> {
+function updateRecoveredLastHandledUpdateId(current: number | null, event: AuditEvent): number | null {
+  if (!isHandledUpdateAuditEvent(event)) {
+    return current;
+  }
+  return current === null ? event.updateId! : Math.max(current, event.updateId!);
+}
+
+async function findRecoveredLastHandledUpdateIdFromRotations(stateDir: string): Promise<number | null> {
   let entries: string[];
   try {
     entries = await readdir(stateDir);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+      return null;
     }
     throw error;
   }
@@ -52,10 +56,12 @@ async function readAuditEventsFromRotations(stateDir: string): Promise<AuditEven
     .filter((entry) => AUDIT_LOG_FILE_RE.test(entry))
     .map((entry) => path.join(stateDir, entry));
 
-  const events: AuditEvent[] = [];
+  let maxUpdateId: number | null = null;
   for (const filePath of auditFiles) {
     try {
-      events.push(...parseAuditEvents(await readFile(filePath, "utf8")));
+      for (const event of parseAuditEvents(await readFile(filePath, "utf8"))) {
+        maxUpdateId = updateRecoveredLastHandledUpdateId(maxUpdateId, event);
+      }
     } catch (error) {
       if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
         continue;
@@ -63,14 +69,14 @@ async function readAuditEventsFromRotations(stateDir: string): Promise<AuditEven
       throw error;
     }
   }
-  return events;
+  return maxUpdateId;
 }
 
 export async function recoverLastHandledUpdateIdFromAudit(
   stateDir: string,
   store = new RuntimeStateStore(path.join(stateDir, "runtime-state.json")),
 ): Promise<number | null> {
-  const recoveredUpdateId = findRecoveredLastHandledUpdateId(await readAuditEventsFromRotations(stateDir));
+  const recoveredUpdateId = await findRecoveredLastHandledUpdateIdFromRotations(stateDir);
   if (recoveredUpdateId === null) {
     return null;
   }

@@ -314,7 +314,9 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     // Build prompt with files
     const parts: string[] = [];
     parts.push(input.text);
-    parts.push(...input.files.map((file) => `Attachment: ${file}`));
+    for (const file of input.files) {
+      parts.push(`Attachment: ${file}`);
+    }
     const prompt = parts.join("\n");
 
     // Build args

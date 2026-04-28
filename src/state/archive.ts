@@ -44,7 +44,9 @@ async function walkDirectory(root: string, current: string = root): Promise<stri
     }
     if (stats.isDirectory()) {
       const nested = await walkDirectory(root, full);
-      results.push(...nested);
+      for (const filePath of nested) {
+        results.push(filePath);
+      }
     } else if (stats.isFile()) {
       results.push(full);
     }

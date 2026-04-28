@@ -409,7 +409,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private buildPrompt(input: CodexUserMessageInput): string {
     const parts: string[] = [];
     parts.push(input.text);
-    parts.push(...input.files.map((file) => `Attachment: ${file}`));
+    for (const file of input.files) {
+      parts.push(`Attachment: ${file}`);
+    }
     return parts.join("\n");
   }
 

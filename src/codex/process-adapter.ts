@@ -411,7 +411,9 @@ export class ProcessCodexAdapter implements CodexAdapter {
       parts.push("---");
     }
     parts.push(input.text);
-    parts.push(...input.files.map((file) => `Attachment: ${file}`));
+    for (const file of input.files) {
+      parts.push(`Attachment: ${file}`);
+    }
     const prompt = parts.join("\n");
     const approvalMode = this.configPath ? await this.loadApprovalMode() : "normal";
     const engineOptions = this.configPath ? await this.loadEngineOptions() : {};
