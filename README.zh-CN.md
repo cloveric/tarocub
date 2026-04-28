@@ -35,28 +35,20 @@
 
 ### 最近这波变化
 
-- Telegram 主链路已经拆成更小的模块，不再是一个巨大的 `delivery.ts`。
-- bot 协作能力现在包括 `/ask`、`/fan`、`/chain`、`/verify`，以及 coordinator 主导的 `crew` workflow。
-- 运行状态除了 `audit.log.jsonl`，还会写结构化 `timeline.log.jsonl` 和 `crew-runs/*.json`。
-- `telegram service status`、`telegram service doctor`、`telegram timeline`、`telegram dashboard` 现在能看见更多运行细节。
-- **v4.5.2** — 修复 Telegram update watermark 推进逻辑，后来的 update 不会再越过尚未完成的早期 turn 推进 `lastHandledUpdateId`，避免快速连续消息被错误当成 duplicate 跳过。
-- **v4.5.1** — 将 Telegram 文件投递规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留一段静态 transport 提醒；新增 generated instructions 迁移命令，支持 `--dry-run` 预览和 `--force` 前自动备份，并补齐 `cctb send` 可靠性回归测试。
-- **v4.5.0** — 新增稳定的显式发送链路，active turn 外也能用 `telegram send`；显式发送命令可读取任意可读绝对路径；移除 manifest / pending contract / 数量判断 / wakeup repair 这类 delivery 状态，并避免隐藏 `.telegram-out` 文件被自动投递。
-- **v4.4.2** — Codex/Claude process runtime 的 turn 级子进程环境变量注入改为 allowlist，只允许文件交付 side-channel 需要的 `CCTB_SEND_URL`、`CCTB_SEND_TOKEN`、`CCTB_SEND_COMMAND`。
-- **v4.4.1** — Codex process runtime 接入和 Claude 同一套 engine-event 通道，可透出结构化 `session` 与完成态 `assistant_text` 事件；本地 Codex rollout 扫描也加了 visited/depth 防护。
-- **v4.4.0** — 新增 Delivery Protocol v2：turn 级交付 ledger、side-channel 结构化 accepted/rejected receipt，以及可基于 side-channel、stream、最终 `[send-file:]` 和 `.telegram-out` 真实证据判断完成的交付门禁。
-- **v4.3.9** — 加固交付完成门禁：如果 agent 在图片/文件 batch 仍在跑时结束 turn，或者只说文件已生成但没有 side-channel、`[send-file:]`、stream 或 `.telegram-out` 的真实交付证据，bridge 会拦住这条回复并自动 repair，而不是让 Telegram 收不到文件。
-- **v4.3.8** — 补充当前文件投递约定：优先使用每 turn 注入的 `CCTB_SEND_COMMAND` side-channel，`[send-file:]` 只作为 fallback，并且 stream/side-channel 已投递文件会和最终 `.telegram-out` 扫描去重。
-- **v4.3.3** — 细化 Telegram 诊断：复制出来的示例 send-file 路径会按大小写不敏感方式识别为占位路径；engine transport 错误也改为使用当前实例引擎，而不是只靠错误文本猜。
-- **v4.3.2** — 继续收紧 Telegram 运行时状态边界：Codex 默认改走更稳定的 process runtime，旧 telegram-out 产物和引擎/会话错配会被挡住，可选 app-server 路径剩余的共享 turn 边角问题也补齐了防护。
-- **v4.3.1** — 单聊模式下如果配对兑换被拦，不再吞掉 pending pairing code；有其他挂起配对时也不能直接关回 multi-chat；并且 service 启动与运行时的配置解析统一走同一个校验读取路径。
-- **当前默认值** — Telegram 里的 Codex 实例现在默认走 process runtime，以换取更稳定的长会话表现；Claude 继续保持原有的 process runtime。
-- **v4.3.0** — 默认改为一实例一聊天，新增显式 `telegram access multi on|off` 开关；并支持直接在 Telegram 里用 `/engine` 切换引擎。
-- **v4.2.0** — 新增 Claude 认证 smoke 检查、更强的 service 环境诊断，以及移除旧 autostart 之后对残留 legacy launchd plist 的清理指引。
-- **v4.1.0** — 新增 coordinator 主导的 `crew` 持久化 run 状态，并补了一轮 state/runtime 边界加固，包括 schema 兼容、文件投递和共享状态写入。
-- **v4.0.0** — 内部 bus 正式走 `v1` 协议（兼容老报文）：带 `protocolVersion`、`capabilities`、结构化 `errorCode` 和 `retryable` 标志。详见 [`docs/bus-protocol.md`](./docs/bus-protocol.md)。
-- Peer 活性改为 `GET /api/health` 探活 + `cc-telegram-bridge` 指纹校验，端口被别的进程占用时不会再被误判成活着。
-- 所有状态文件都走 zod 校验 + 原子写（先写临时文件再 rename）；`UsageStore` 写入串行化，并发 turn 不再丢 usage。
+- **v4.5.2** — 修复 Telegram update watermark 顺序推进，早期 turn 还在收尾时，后续快速消息不会再被错误当成 duplicate 跳过。
+- **v4.5.1** — 将 Telegram transport 规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留一条很短的静态提醒。文件投递优先使用 `cctb send --file PATH` / `cctb send --image PATH`。
+- **v4.5.0** — 文件投递改为围绕显式 send receipt，移除旧的 manifest / contract / 数量 repair / wakeup delivery 状态。
+- 更早的 4.x 版本加入了 Codex/Claude 双 process runtime、Agent Bus、crew workflow、timeline/audit、service doctor、dashboard 和 Delivery Protocol v2。
+
+**从 v4.5.0 或更早版本升级：** 更新代码后请刷新已生成的实例指令，让旧 bot 拿到新的短 Telegram Transport block：
+
+```bash
+telegram instructions upgrade --all --dry-run
+telegram instructions upgrade --all
+telegram service restart --all
+```
+
+只有当某个实例有自定义 transport block 且你确认要覆盖时，才使用 `--force`。强制覆盖前会在原文件旁边创建 `agent.md.bak.<timestamp>` 备份。
 
 ---
 
@@ -209,13 +201,14 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 
 当前默认的 Codex 和 Claude process runtime 都支持。文件投递现在是显式动作：生成文件，调用发送命令，然后依赖 receipt。
 
-从旧版本升级后，可以刷新已生成的实例指令：
+从 v4.5.0 或更早版本升级时，请刷新已生成的实例指令：
 
 ```bash
+telegram instructions upgrade --all --dry-run
 telegram instructions upgrade --all
 ```
 
-这个命令会安全替换旧的 generated Telegram Transport block；缺少 transport section 时会追加。自定义 transport section 默认不会覆盖，除非显式加 `--force`；建议先用 `--dry-run` 预览跨实例变更。`--force` 覆盖前会在原文件旁边创建 `agent.md.bak.<timestamp>` 备份。
+这个命令会安全替换旧的 generated Telegram Transport block；缺少 transport section 时会追加。自定义 transport section 默认不会覆盖，除非显式加 `--force`。`--force` 覆盖前会在原文件旁边创建 `agent.md.bak.<timestamp>` 备份。
 
 ---
 

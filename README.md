@@ -35,32 +35,20 @@
 
 ### What Changed Recently
 
-- The Telegram runtime was split into smaller modules instead of one giant `delivery.ts`.
-- Agent collaboration now covers `/ask`, `/fan`, `/chain`, `/verify`, and a coordinator-led `crew` workflow.
-- The bridge now keeps structured `timeline.log.jsonl` and `crew-runs/*.json` state for better visibility and recovery.
-- `telegram service status`, `telegram service doctor`, `telegram timeline`, and `telegram dashboard` now expose much richer runtime health.
-- **v4.5.2** — fixes Telegram update watermark handling so later updates cannot advance `lastHandledUpdateId` past an unfinished earlier turn, preventing rapid follow-up messages from being incorrectly skipped as duplicates.
-- **v4.5.1** — moves Telegram file-delivery instructions into per-instance `agent.md`, shortens the per-turn prompt to a static transport reminder, adds generated-instructions migration with `--dry-run` and backup-on-`--force`, and hardens `cctb send` reliability tests.
-- **v4.5.0** — adds stable explicit send delivery outside active turns, allows explicit send commands to use any readable absolute path, removes manifest/contract/count-based/wakeup delivery repair state, and keeps hidden `.telegram-out` files out of auto-delivery.
-- **v4.4.6** — releases superseded file workflows before auth/stale-session retry, adds delivery-ledger mismatch telemetry, hardens side-channel bearer checks, avoids delivery-guard false positives in audit replies, and raises pairing-code entropy.
-- **v4.4.5** — prevents explanatory ````file:...```` fenced-block examples from being mis-delivered as Telegram documents; inline file blocks now send only when the whole response is one non-empty file block.
-- **v4.4.4** — tightens explicit delivery-count repair so short replies like "Done" plus too few files are retried, while explicit partial-failure reports are allowed through.
-- **v4.4.3** — adds conservative delivery-count checks for explicit multi-file requests, so replies for requests like "generate 2 images" are repaired when fewer files were actually delivered.
-- **v4.4.2** — restricts turn-scoped child-process environment injection to the side-channel delivery variables (`CCTB_SEND_URL`, `CCTB_SEND_TOKEN`, `CCTB_SEND_COMMAND`) for both Codex and Claude process runtimes.
-- **v4.4.1** — brings Codex process runtime into the same engine-event path as Claude for structured `session` and completed `assistant_text` events, and caps local Codex rollout scanning with visited/depth guards.
-- **v4.4.0** — adds Delivery Protocol v2: a turn-level delivery ledger, structured side-channel accepted/rejected receipts, and a completion gate that can trust real receipts across side-channel, stream, final `[send-file:]`, and `.telegram-out` delivery paths.
-- **v4.3.9** — hardens deliverable completion: if an agent ends a turn while a file/image batch is still running, or claims files were generated without any side-channel, `[send-file:]`, stream, or `.telegram-out` delivery evidence, the bridge blocks that reply and repairs the turn instead of leaving Telegram without the files.
-- **v4.3.8** — documents the current file-delivery contract: prefer the per-turn `CCTB_SEND_COMMAND` side-channel, keep `[send-file:]` only as fallback, and de-dupe stream/side-channel deliveries against the final `.telegram-out` sweep.
-- **v4.3.3** — refines Telegram diagnostics: copied example send-file paths are classified as placeholders case-insensitively, and engine transport errors now use the current instance engine instead of guessing from the error text.
-- **v4.3.2** — tightens Telegram runtime state handling across both runtimes: Codex now defaults to the simpler process runtime, stale telegram-out outputs and engine/session mismatches are fenced off, and the remaining app-server shared-turn edge cases are hardened for optional use.
-- **v4.3.1** — preserves pending pairing codes when single-chat mode blocks redemption, refuses to turn multi-chat off while another chat is still pending pairing, and makes service startup/runtime config parsing use the same validated config reader.
-- **Current default** — Codex instances now use the process runtime in Telegram for better stability under long-running bot sessions; Claude keeps its existing process runtime.
-- **v4.3.0** — makes single-chat-per-instance the default, adds explicit `telegram access multi on|off` control, and exposes `/engine` switching directly in Telegram.
-- **v4.2.0** — adds Claude auth smoke checks, stronger service environment diagnostics, and cleanup guidance for stale legacy launchd plists after removing the old autostart path.
-- **v4.1.0** — adds coordinator-led `crew` runs with persisted run state, plus a round of state/runtime hardening around schemas, file delivery, and shared state writes.
-- **v4.0.0** — the bus now speaks a compatibility-first `v1` protocol: protocol versioning, explicit capabilities, structured error codes, and `retryable` flags. See [`docs/bus-protocol.md`](./docs/bus-protocol.md).
-- Peer liveness is probed via `GET /api/health` with a `cc-telegram-bridge` fingerprint, so a reused local port can no longer fake a live peer.
-- All state files are zod-validated and written atomically (stage-then-rename); `UsageStore` writes are serialized to eliminate concurrent-turn races.
+- **v4.5.2** — fixes Telegram update watermark ordering, so rapid follow-up messages cannot be skipped while an earlier turn is still finishing.
+- **v4.5.1** — moves Telegram transport rules into each instance's `agent.md`, leaving only one short static Telegram reminder in the per-turn prompt. File delivery now prefers `cctb send --file PATH` / `cctb send --image PATH`.
+- **v4.5.0** — simplifies file delivery around explicit send receipts and removes the old manifest/contract/count-repair/wakeup delivery state.
+- Earlier 4.x releases added the dual Codex/Claude process runtimes, Agent Bus, crew workflows, timeline/audit logs, service doctor, dashboard, and Delivery Protocol v2.
+
+**Upgrading from v4.5.0 or earlier:** refresh generated instance instructions after updating so old bots get the short Telegram Transport block:
+
+```bash
+telegram instructions upgrade --all --dry-run
+telegram instructions upgrade --all
+telegram service restart --all
+```
+
+Use `--force` only for instances with a custom transport block you intentionally want to replace. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
 
 ---
 
@@ -214,13 +202,14 @@ Current delivery rules:
 
 This works for the default Codex and Claude process runtimes. File delivery is explicit: generate the file, call the send command, and rely on the resulting receipt.
 
-After upgrading from an older release, refresh generated instance instructions with:
+When upgrading from v4.5.0 or earlier, refresh generated instance instructions with:
 
 ```bash
+telegram instructions upgrade --all --dry-run
 telegram instructions upgrade --all
 ```
 
-This safely replaces old generated Telegram Transport blocks and appends the block when missing. Custom transport sections are left untouched unless you rerun with `--force`; use `--dry-run` first to preview cross-instance changes. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
+This safely replaces old generated Telegram Transport blocks and appends the block when missing. Custom transport sections are left untouched unless you rerun with `--force`. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
 
 ---
 
