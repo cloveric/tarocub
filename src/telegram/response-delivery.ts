@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { TelegramApi } from "./api.js";
+import { extractDeliveryTagMatches, stripDeliveryTags } from "./delivery-tags.js";
 import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
 import {
   isAbsoluteFilePath,
@@ -134,9 +135,6 @@ export async function deliverTelegramResponse(
   const fileCandidates: FileCandidate[] = [];
   const rejected: Array<{ path: string; reason: DeliveryRejectReason; detail?: string }> = [];
   let cleanedText = text;
-  const sendFilePattern = /\[send-file:([^\]]+)\]/g;
-  const sendImagePattern = /\[send-image:([^\]]+)\]/g;
-  let sendFileMatch: RegExpExecArray | null;
 
   function addCandidate(filePath: string, preferPhoto: boolean): void {
     const existing = fileCandidates.find((candidate) => candidate.path === filePath);
@@ -147,26 +145,18 @@ export async function deliverTelegramResponse(
     fileCandidates.push({ path: filePath, preferPhoto });
   }
 
-  let sawFileDeliveryTag = false;
-  const collectDeliveryTags = (pattern: RegExp, preferPhoto: boolean): void => {
-    while ((sendFileMatch = pattern.exec(text)) !== null) {
-      sawFileDeliveryTag = true;
-      const p = sendFileMatch[1]!.trim();
-      if (!options.allowAnyAbsolutePath && isStaticPlaceholderFilePath(p)) {
-        continue;
-      } else if (isAbsoluteFilePath(p)) {
-        addCandidate(p, preferPhoto);
-      }
+  const deliveryTags = extractDeliveryTagMatches(text);
+  for (const tag of deliveryTags) {
+    const p = tag.path;
+    if (!options.allowAnyAbsolutePath && isStaticPlaceholderFilePath(p)) {
+      continue;
+    } else if (isAbsoluteFilePath(p)) {
+      addCandidate(p, tag.preferPhoto);
     }
-  };
+  }
 
-  collectDeliveryTags(sendFilePattern, false);
-  collectDeliveryTags(sendImagePattern, true);
-
-  if (fileCandidates.length > 0 || sawFileDeliveryTag) {
-    cleanedText = cleanedText.replace(sendFilePattern, "");
-    cleanedText = cleanedText.replace(sendImagePattern, "");
-    cleanedText = cleanedText.replace(/\n{3,}/g, "\n\n").trim();
+  if (fileCandidates.length > 0 || deliveryTags.length > 0) {
+    cleanedText = stripDeliveryTags(cleanedText);
   }
 
   if (cleanedText) {
@@ -293,8 +283,8 @@ export async function deliverTelegramResponse(
       : `⚠ ${rejected.length} file${rejected.length === 1 ? "" : "s"} not delivered:`;
     const moreLine = locale === "zh" ? `…还有 ${extra} 个` : `… and ${extra} more`;
     const footer = locale === "zh"
-      ? "文件必须位于本 bot 的工作目录内（或通过 /resume 指定的项目目录）。"
-      : "Files must live under the bot's workspace (or a /resume'd project dir).";
+      ? "fallback 标签引用的文件必须位于本 bot 的工作目录内（或通过 /resume 指定的项目目录）；当前 turn 内发送其他可读绝对路径请用 `cctb send --file PATH`。"
+      : "Fallback tag files must live under the bot workspace (or a /resume'd project dir); use `cctb send --file PATH` during the active turn for other readable absolute paths.";
     const lines = [header, ...shown.map(({ path: p, reason, detail }) => `• ${p} — ${renderRejectReason(reason, detail, locale)}`)];
     if (extra > 0) lines.push(moreLine);
     lines.push(footer);

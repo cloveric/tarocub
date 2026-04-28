@@ -20,6 +20,7 @@ import type { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { appendUpdateHandleAuditEventBestEffort, maybeReplyWithBudgetExhausted, recordTurnUsageAndBudgetAudit } from "./turn-bookkeeping.js";
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { InlineKeyboardButton, TelegramApi } from "./api.js";
+import { extractDeliveryTagMatches, hasDeliveryTag, stripDeliveryTags } from "./delivery-tags.js";
 import {
   TurnDeliveryLedger,
   type DeliveryAcceptedReceipt,
@@ -98,21 +99,11 @@ function stripAlreadySentSideChannelTags(text: string, sentFilePaths: readonly s
     return text;
   }
   const sent = new Set(sentFilePaths);
-  return text
-    .split(/\r?\n/)
-    .map((line) => ({
-      original: line,
-      stripped: line.replace(/\[send-(?:file|image):([^\]]+)\]/g, (tag, filePath: string) => sent.has(filePath.trim()) ? "" : tag),
-    }))
-    .filter(({ original, stripped }) => stripped.trim() || !original.trim())
-    .map(({ stripped }) => stripped)
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return stripDeliveryTags(text, (match) => sent.has(match.path)).replace(/\n{2,}/g, "\n").trim();
 }
 
 function hasSendFileTag(text: string): boolean {
-  return /\[send-(?:file|image):[^\]]+\]/.test(text);
+  return hasDeliveryTag(text);
 }
 
 const TELEGRAM_OUT_AUTO_DELIVERY_LIMITS = {
@@ -122,12 +113,11 @@ const TELEGRAM_OUT_AUTO_DELIVERY_LIMITS = {
 };
 
 function extractSendFilePaths(text: string): string[] {
-  return Array.from(text.matchAll(/\[send-(?:file|image):([^\]]+)\]/g), (match) => match[1]?.trim())
-    .filter((value): value is string => Boolean(value));
+  return extractDeliveryTagMatches(text).map((match) => match.path);
 }
 
 function stripSendFileTags(text: string): string {
-  return text.replace(/\[send-(?:file|image):[^\]]+\]/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return stripDeliveryTags(text);
 }
 
 function stripDeliveredStreamTextFragments(text: string, fragments: readonly string[]): string {
