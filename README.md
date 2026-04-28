@@ -855,7 +855,7 @@ Telegram users can also use:
 
 - `/status`
 - `/engine [claude|codex]` — switch engine for the current instance (the bridge resets stale bindings automatically)
-- `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`xhigh` is Opus 4.7+ only)
+- `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
 - `/model [name|off]` — switch model
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot

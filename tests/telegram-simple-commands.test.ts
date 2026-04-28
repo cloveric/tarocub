@@ -90,6 +90,84 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("downgrades Codex /effort max to xhigh with an explicit message", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, string>) => void) => {
+      const cfg: Record<string, string> = {};
+      mutate(cfg);
+      expect(cfg.effort).toBe("xhigh");
+    });
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/effort max"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 79,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Codex does not support max effort; using xhigh instead.");
+
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "effort",
+          value: "xhigh",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Claude /effort max unchanged", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, string>) => void) => {
+      const cfg: Record<string, string> = {};
+      mutate(cfg);
+      expect(cfg.effort).toBe("max");
+    });
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/effort max"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 80,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Effort set to max.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("shows Claude model choices on bare /model", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {

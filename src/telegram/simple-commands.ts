@@ -174,13 +174,20 @@ export async function handleSimpleLocalTelegramCommand(input: {
   const effortCmd = parseEffortCommand(normalized.text);
   if (effortCmd) {
     let effortMessage: string;
+    let auditValue = effortCmd.level || "query";
     if (!effortCmd.level) {
       const current = cfg.effort ?? "default";
       effortMessage = locale === "zh" ? `当前 effort: ${current}` : `Current effort: ${current}`;
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel)) {
-      await updateInstanceConfig((c) => { c.effort = effortCmd.level; });
-      effortMessage = locale === "zh" ? `Effort 已设为 ${effortCmd.level}。` : `Effort set to ${effortCmd.level}.`;
+      const effectiveLevel = cfg.engine !== "claude" && effortCmd.level === "max" ? "xhigh" : effortCmd.level;
+      auditValue = effectiveLevel;
+      await updateInstanceConfig((c) => { c.effort = effectiveLevel; });
+      effortMessage = cfg.engine !== "claude" && effortCmd.level === "max"
+        ? locale === "zh"
+          ? "Codex 不支持 max，已改用 xhigh。"
+          : "Codex does not support max effort; using xhigh instead."
+        : locale === "zh" ? `Effort 已设为 ${effortCmd.level}。` : `Effort set to ${effortCmd.level}.`;
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (effortCmd.level === "off" || effortCmd.level === "default") {
       await updateInstanceConfig((c) => { delete c.effort; });
@@ -197,7 +204,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
       startedAt,
       command: "effort",
       responseText: effortMessage,
-      metadata: { value: effortCmd.level || "query" },
+      metadata: { value: auditValue },
     });
     return true;
   }

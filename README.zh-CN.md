@@ -839,7 +839,7 @@ Telegram 用户也可以使用：
 
 - `/status`
 - `/engine [claude|codex]` — 切换当前实例引擎（桥会自动清掉陈旧绑定）
-- `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`xhigh` 仅 Opus 4.7+ 可用）
+- `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`max` 仅 Claude 可用；Codex 会改用 `xhigh`）
 - `/model [名称|off]` — 切换模型
 - `/btw <问题>` — 旁问（不影响当前会话）
 - `/ask <实例> <提示>` — 委托给指定 peer bot
