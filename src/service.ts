@@ -1016,34 +1016,43 @@ export async function processTelegramUpdates(
       }
 
       if (/^\/stop(?:@\w+)?(?:\s|$)/i.test(normalized.text.trim())) {
-        const locale = (await loadStopLocale(context.inboxDir)) === "zh" ? "zh" : "en";
-        const accessDecision = await context.bridge.checkAccess({
-          chatId: normalized.chatId,
-          userId: normalized.userId,
-          chatType: normalized.chatType,
-          locale,
-        });
-
-        const stopped = accessDecision.kind === "allow"
-          ? abortChatTask(normalized.chatId, chatQueue)
-          : false;
-        if (stopped) {
-          stoppedTaskChats.add(normalized.chatId);
-        }
-
-        const msg = accessDecision.kind === "allow"
-          ? stopped
-            ? locale === "zh" ? "已停止当前任务。" : "Current task stopped."
-            : locale === "zh" ? "当前没有运行中的任务。" : "No task is currently running."
-          : accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
-        try {
-          await context.api.sendMessage(normalized.chatId, msg);
-        } catch (error) {
-          await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "stop.sendMessage", error);
-        }
-        nextOffset = advanceOffset(nextOffset, completedOffset);
         if (updateId !== undefined) {
-          await markUpdateCompleted(updateId);
+          enqueuedUpdateIds.add(updateId);
+        }
+        try {
+          const locale = (await loadStopLocale(context.inboxDir)) === "zh" ? "zh" : "en";
+          const accessDecision = await context.bridge.checkAccess({
+            chatId: normalized.chatId,
+            userId: normalized.userId,
+            chatType: normalized.chatType,
+            locale,
+          });
+
+          const stopped = accessDecision.kind === "allow"
+            ? abortChatTask(normalized.chatId, chatQueue)
+            : false;
+          if (stopped) {
+            stoppedTaskChats.add(normalized.chatId);
+          }
+
+          const msg = accessDecision.kind === "allow"
+            ? stopped
+              ? locale === "zh" ? "已停止当前任务。" : "Current task stopped."
+              : locale === "zh" ? "当前没有运行中的任务。" : "No task is currently running."
+            : accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
+          try {
+            await context.api.sendMessage(normalized.chatId, msg);
+          } catch (error) {
+            await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "stop.sendMessage", error);
+          }
+          nextOffset = advanceOffset(nextOffset, completedOffset);
+          if (updateId !== undefined) {
+            await markUpdateCompleted(updateId);
+          }
+        } finally {
+          if (updateId !== undefined) {
+            enqueuedUpdateIds.delete(updateId);
+          }
         }
         continue;
       }

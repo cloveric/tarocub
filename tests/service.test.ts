@@ -1743,6 +1743,48 @@ describe("polling helpers", () => {
     expect(api.sendMessage).toHaveBeenCalledWith(123, "Current task stopped.");
   });
 
+  it("does not reply twice when the same /stop update is fetched while the command is still in flight", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const accessStarted = createDeferred<void>();
+    const allowAccess = createDeferred<void>();
+    let accessCalls = 0;
+    const bridge = {
+      checkAccess: vi.fn().mockImplementation(async () => {
+        accessCalls += 1;
+        accessStarted.resolve();
+        await allowAccess.promise;
+        return { kind: "allow" };
+      }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const update = { update_id: 42, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "/stop" } };
+
+    try {
+      await mkdir(inboxDir, { recursive: true });
+      const firstRun = processTelegramUpdates([update], { api: api as never, bridge: bridge as never, inboxDir }, logger);
+      await accessStarted.promise;
+      const secondRun = processTelegramUpdates([update], { api: api as never, bridge: bridge as never, inboxDir }, logger);
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      allowAccess.resolve();
+      await Promise.all([firstRun, secondRun]);
+
+      expect(accessCalls).toBe(1);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "No task is currently running.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("treats the first plain message after /stop as a fresh request instead of continuing the stopped task", async () => {
     const logger = { error: vi.fn() };
     const api = {
