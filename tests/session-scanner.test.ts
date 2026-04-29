@@ -24,6 +24,10 @@ describe("tryDecodeWorkspacePath", () => {
     }
   });
 
+  it("resolves a Windows drive-letter path", () => {
+    expect(tryDecodeWorkspacePath("E--claude", (candidate) => candidate === "E:/claude")).toBe("E:/claude");
+  });
+
   it("resolves a directory name containing dashes", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cctb-decode-"));
     const target = path.join(root, "cc-telegram-bridge");

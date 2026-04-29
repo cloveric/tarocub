@@ -26,12 +26,21 @@ export interface ScannedSession {
   displayName: string;
 }
 
+type ExistingDirPredicate = (p: string) => boolean;
+
 function isExistingDir(p: string): boolean {
   try {
     return statSync(p).isDirectory();
   } catch {
     return false;
   }
+}
+
+function joinDecodedPath(current: string, segment: string): string {
+  if (!current) {
+    return `/${segment}`;
+  }
+  return current.endsWith("/") ? `${current}${segment}` : `${current}/${segment}`;
 }
 
 /**
@@ -42,14 +51,19 @@ function isExistingDir(p: string): boolean {
  * `foo-bar`).  We prefer the **longest** dash-joined match at each step
  * so that project names containing dashes (e.g. `cc-telegram-bridge`) are
  * resolved correctly even when shorter sub-paths also exist on disk.
+ *
+ * Windows drive-letter workspaces are encoded without a leading slash
+ * (e.g. `E:/claude` -> `E--claude`), so they need a separate root seed.
  */
-export function tryDecodeWorkspacePath(dirName: string): string | null {
-  if (!dirName.startsWith("-")) return null;
+export function tryDecodeWorkspacePath(dirName: string, existingDir: ExistingDirPredicate = isExistingDir): string | null {
+  const windowsDriveMatch = /^([A-Za-z])--/.exec(dirName);
+  const isWindowsDrivePath = Boolean(windowsDriveMatch);
+  if (!dirName.startsWith("-") && !isWindowsDrivePath) return null;
 
-  const parts = dirName.slice(1).split("-");
+  const parts = isWindowsDrivePath ? dirName.slice(3).split("-") : dirName.slice(1).split("-");
   if (parts.length === 0) return null;
 
-  let current = "";
+  let current = isWindowsDrivePath ? `${windowsDriveMatch![1]}:/` : "";
   let i = 0;
 
   while (i < parts.length) {
@@ -62,8 +76,8 @@ export function tryDecodeWorkspacePath(dirName: string): string | null {
       let dotFound = false;
       for (let j = parts.length - 1; j >= i; j--) {
         const dotJoined = "." + parts.slice(i, j + 1).join("-");
-        const candidate = current + "/" + dotJoined;
-        if (isExistingDir(candidate)) {
+        const candidate = joinDecodedPath(current, dotJoined);
+        if (existingDir(candidate)) {
           current = candidate;
           i = j + 1;
           dotFound = true;
@@ -72,7 +86,7 @@ export function tryDecodeWorkspacePath(dirName: string): string | null {
       }
       if (!dotFound) {
         // Fallback: take just the first segment with dot prefix
-        current = current + "/." + parts[i]!;
+        current = joinDecodedPath(current, `.${parts[i]!}`);
         i++;
       }
       continue;
@@ -85,8 +99,8 @@ export function tryDecodeWorkspacePath(dirName: string): string | null {
     let found = false;
     for (let j = parts.length - 1; j > i; j--) {
       const joined = parts.slice(i, j + 1).join("-");
-      const candidate = current + "/" + joined;
-      if (isExistingDir(candidate)) {
+      const candidate = joinDecodedPath(current, joined);
+      if (existingDir(candidate)) {
         current = candidate;
         i = j + 1;
         found = true;
@@ -96,12 +110,12 @@ export function tryDecodeWorkspacePath(dirName: string): string | null {
 
     if (!found) {
       // Single segment — accept as slash-separated path component
-      current = current + "/" + segment;
+      current = joinDecodedPath(current, segment);
       i++;
     }
   }
 
-  return isExistingDir(current) ? current : null;
+  return existingDir(current) ? current : null;
 }
 
 function extractDisplayName(dirName: string): string {
