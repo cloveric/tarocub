@@ -6,7 +6,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS,
   CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
+  CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS,
   CODEX_APP_SERVER_TURN_TIMEOUT_MS,
   CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS,
   CodexAppServerAdapter,
@@ -100,6 +102,82 @@ describe("CodexAppServerAdapter", () => {
 
   it("defaults the inactivity watchdog to fifteen minutes", () => {
     expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(15 * 60_000);
+  });
+
+  it("times out and destroys app-server when initialize never replies", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child, spawnFn } = createSpawnHarness();
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(child.stdin.lines).toHaveLength(1);
+      expect(JSON.parse(child.stdin.lines[0] ?? "{}").method).toBe("initialize");
+
+      const assertion = expect(promise).rejects.toThrow("Codex app-server initialize timed out");
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS);
+      await assertion;
+      expect(child.killCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out and destroys app-server when thread/start never replies", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child, spawnFn } = createSpawnHarness();
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(child.stdin.lines).toHaveLength(2);
+      expect(JSON.parse(child.stdin.lines[1] ?? "{}").method).toBe("thread/start");
+
+      const assertion = expect(promise).rejects.toThrow("Codex app-server thread/start timed out");
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
+      await assertion;
+      expect(child.killCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out and destroys app-server when thread/resume never replies", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child, spawnFn } = createSpawnHarness();
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+      const promise = adapter.sendUserMessage("thread-previous", {
+        text: "Hello",
+        files: [],
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(child.stdin.lines).toHaveLength(2);
+      expect(JSON.parse(child.stdin.lines[1] ?? "{}").method).toBe("thread/resume");
+
+      const assertion = expect(promise).rejects.toThrow("Codex app-server thread/resume timed out");
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
+      await assertion;
+      expect(child.killCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("times out waiting for idle app-server state", async () => {

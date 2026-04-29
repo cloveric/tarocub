@@ -41,6 +41,7 @@ const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_DIAGNOSTIC_CHARS = 4_000;
 export const CODEX_APP_SERVER_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS = 15 * 60_000;
+export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 60_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 type ApprovalMode = "normal" | "full-auto" | "bypass";
@@ -345,16 +346,24 @@ export class CodexAppServerAdapter implements CodexAdapter {
       this.resetChildState();
     });
 
-    await this.request("initialize", {
-      clientInfo: {
-        name: "cc-telegram-bridge",
-        title: "cc-telegram-bridge",
-        version: "0.1.0",
+    await this.request(
+      "initialize",
+      {
+        clientInfo: {
+          name: "cc-telegram-bridge",
+          title: "cc-telegram-bridge",
+          version: "0.1.0",
+        },
+        capabilities: {
+          experimentalApi: true,
+        },
       },
-      capabilities: {
-        experimentalApi: true,
+      {
+        timeoutMs: CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS,
+        timeoutMessage: `Codex app-server initialize timed out after ${Math.max(1, Math.round(CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS / 1000))} seconds`,
+        destroyOnTimeout: true,
       },
-    });
+    );
   }
 
   private handleStdout(chunk: string): void {
@@ -619,12 +628,20 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private async startThread(): Promise<string> {
-    const result = (await this.request("thread/start", {
-      cwd: this.cwd,
-      approvalPolicy: "never",
-      experimentalRawEvents: false,
-      persistExtendedHistory: true,
-    })) as { thread?: { id?: string } };
+    const result = (await this.request(
+      "thread/start",
+      {
+        cwd: this.cwd,
+        approvalPolicy: "never",
+        experimentalRawEvents: false,
+        persistExtendedHistory: true,
+      },
+      {
+        timeoutMs: this.threadReadTimeoutMs,
+        timeoutMessage: `Codex app-server thread/start timed out after ${Math.max(1, Math.round(this.threadReadTimeoutMs / 1000))} seconds`,
+        destroyOnTimeout: true,
+      },
+    )) as { thread?: { id?: string } };
 
     const threadId = result.thread?.id;
     if (!threadId) {
@@ -640,9 +657,17 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return threadId;
     }
 
-    const result = (await this.request("thread/resume", {
-      threadId,
-    })) as { thread?: { id?: string } };
+    const result = (await this.request(
+      "thread/resume",
+      {
+        threadId,
+      },
+      {
+        timeoutMs: this.threadReadTimeoutMs,
+        timeoutMessage: `Codex app-server thread/resume timed out after ${Math.max(1, Math.round(this.threadReadTimeoutMs / 1000))} seconds`,
+        destroyOnTimeout: true,
+      },
+    )) as { thread?: { id?: string } };
     const resumedThreadId = result.thread?.id;
 
     if (!resumedThreadId) {
