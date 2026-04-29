@@ -22,11 +22,11 @@
 </h3>
 
 <p align="center">
-  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、多 bot Agent Bus、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
+  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、Telegram 投递的定时任务、多 bot Agent Bus、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
 </p>
 
 <p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#定时任务--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
@@ -35,6 +35,7 @@
 
 ### 最近这波变化
 
+- **v4.5.7** — 文件投递和 Telegram 定时任务统一到注册过的 `[tool:{...}]` layer；新增更安全的 `tool-call` fenced block；加强 stream/post-turn 去重；cron 增加时区、过期 runOnce 处理、文件锁、任务上限和失败 receipt。
 - **v4.5.3** — 服务启动时会从 audit 历史恢复 stale 的 Telegram update watermark，避免重启后重复执行已经完成的旧任务。
 - **v4.5.2** — 修复 Telegram update watermark 顺序推进，早期 turn 还在收尾时，后续快速消息不会再被错误当成 duplicate 跳过。
 - **v4.5.1+** — 将 Telegram transport 规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留很短的静态提醒。文件投递现在统一走注册过的 `[tool:...]` layer，`cctb send` 保留给 CLI 工作流。
@@ -50,6 +51,17 @@ telegram service restart --all
 ```
 
 只有当某个实例有自定义 transport block 且你确认要覆盖时，才使用 `--force`。强制覆盖前会在原文件旁边创建 `agent.md.bak.<timestamp>` 备份。
+
+---
+
+## 为什么是这套架构
+
+- **跑的是真 CLI，不是假 API 包装。** bridge 直接运行 Codex 和 Claude Code，所以本地工具、认证、会话、工作区和引擎原生行为都保留。
+- **一套协议覆盖所有 runtime。** 文件投递和 Telegram cron 都走 schema-backed `[tool:{...}]` tag，所以 process runtime、stream runtime、Claude、Codex 都能用同一条 bridge 链路。
+- **Prompt 更短，动态秘密更少。** 稳定 transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。
+- **看 receipt，不信口头声明。** 文件投递和定时任务创建都有结构化 accepted/rejected receipt；模型说“完成了”不等于真的交付成功。
+- **运维可观察。** timeline、audit、doctor、dashboard、usage tracking 和 cron 状态都能帮助定位失败，而不是让问题静默消失。
+- **旧 bot 安全升级。** generated `agent.md` 会在启动时自动升级；自定义 transport section 需要显式 `--force`，并且会先备份。
 
 ---
 
@@ -228,6 +240,40 @@ telegram instructions upgrade --all
 ```
 
 这个命令会安全替换旧的 generated Telegram Transport block；缺少 transport section 时会追加。自定义 transport section 默认不会覆盖，除非显式加 `--force`。`--force` 覆盖前会在原文件旁边创建 `agent.md.bak.<timestamp>` 备份。
+
+---
+
+## 定时任务 / Cron
+
+Agent 可以通过和文件投递同一套 tool layer 创建 Telegram 投递的提醒和周期任务：
+
+```text
+[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]
+[tool:{"name":"cron.add","payload":{"at":"2026-05-01T09:00:00Z","prompt":"Monday standup"}}]
+[tool:{"name":"cron.add","payload":{"cron":"0 9 * * 1","prompt":"weekly summary"}}]
+```
+
+用户也可以直接在 Telegram 里管理任务：
+
+```text
+/cron list
+/cron add 0 9 * * 1 weekly summary
+/cron rm <job-id>
+/cron toggle <job-id>
+/cron run <job-id>
+```
+
+这套 cron 是为了 Telegram 投递设计的，不是 Claude/Codex 自己的 session-local reminder：
+
+- 任务持久化在实例状态里，bot 重启后仍会加载。
+- `chatId`、`userId`、`chatType` 由 bridge 注入，不信任 agent payload 里的同名字段。
+- 支持相对提醒（`in`）、绝对时间（`at`）和 5 字段 cron 表达式（`cron`）。
+- 每个任务会保存 timezone；默认跟随运行 bot 的服务器/实例环境。
+- 停机太久后，过期的一次性提醒会标记为 missed，不会在启动时暴雨式补发。
+- 周期任务会记录失败次数和有上限的 run history，连续失败后可以自动停用。
+- 每个 chat 有任务数量上限，防止任务递归创建导致无限增长。
+
+人类运维仍然可以用 CLI 检查和调试；但 generated `agent.md` 会要求 agent 使用 `[tool:{...}]` layer，这样 Claude/Codex 的 process 和 stream runtime 行为一致。
 
 ---
 

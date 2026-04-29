@@ -22,11 +22,11 @@
 </h3>
 
 <p align="center">
-  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, multi-bot Agent Bus, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
+  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, Telegram-delivered scheduled tasks, multi-bot Agent Bus, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">Files</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#scheduled-tasks--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
@@ -35,6 +35,7 @@
 
 ### What Changed Recently
 
+- **v4.5.7** — unifies file delivery and Telegram scheduled tasks around the registered `[tool:{...}]` layer, adds safer `tool-call` fenced blocks, hardens stream/post-turn dedupe, and improves cron reliability with timezones, stale-run handling, file locks, job caps, and failure receipts.
 - **v4.5.3** — recovers a stale Telegram update watermark from audit history on service startup, preventing old completed tasks from replaying after restart.
 - **v4.5.2** — fixes Telegram update watermark ordering, so rapid follow-up messages cannot be skipped while an earlier turn is still finishing.
 - **v4.5.1+** — moves Telegram transport rules into each instance's `agent.md`, leaving only a short static Telegram reminder in the per-turn prompt. File delivery now uses the registered `[tool:...]` layer, with `cctb send` kept for CLI workflows.
@@ -50,6 +51,17 @@ telegram service restart --all
 ```
 
 Use `--force` only for instances with a custom transport block you intentionally want to replace. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
+
+---
+
+## Why This Bridge
+
+- **Real CLI behavior, not an API imitation.** The bridge runs Codex and Claude Code directly, so local tools, auth, sessions, workspaces, and engine-specific behavior stay intact.
+- **One protocol for every runtime shape.** File delivery and Telegram cron scheduling use schema-backed `[tool:{...}]` tags, so process runtimes, stream runtimes, Claude, and Codex can all use the same bridge path.
+- **Shorter prompts, fewer dynamic secrets.** Instance-level `agent.md` holds the stable transport rules; per-turn prompts no longer need request ids, temp directories, or side-channel tokens.
+- **Receipts over claims.** File delivery and scheduled-task creation produce structured accepted/rejected receipts, so the bridge does not trust text like "done" unless a delivery mechanism actually succeeded.
+- **Operationally inspectable.** Timeline logs, audit logs, doctor, dashboard, usage tracking, and cron state make failures diagnosable instead of invisible.
+- **Safe upgrades for existing bots.** Generated `agent.md` blocks are auto-upgraded on startup, while custom transport sections require explicit `--force` and get backed up first.
 
 ---
 
@@ -229,6 +241,40 @@ telegram instructions upgrade --all
 ```
 
 This safely replaces old generated Telegram Transport blocks and appends the block when missing. Custom transport sections are left untouched unless you rerun with `--force`. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
+
+---
+
+## Scheduled Tasks / Cron
+
+Agents can schedule Telegram-delivered reminders and recurring tasks through the same tool layer used for file delivery:
+
+```text
+[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]
+[tool:{"name":"cron.add","payload":{"at":"2026-05-01T09:00:00Z","prompt":"Monday standup"}}]
+[tool:{"name":"cron.add","payload":{"cron":"0 9 * * 1","prompt":"weekly summary"}}]
+```
+
+Users can also manage tasks directly in Telegram:
+
+```text
+/cron list
+/cron add 0 9 * * 1 weekly summary
+/cron rm <job-id>
+/cron toggle <job-id>
+/cron run <job-id>
+```
+
+Cron behavior is designed for Telegram delivery, not session-local reminders:
+
+- Jobs are persisted in the instance state and survive bot restarts.
+- `chatId`, `userId`, and `chatType` are injected by the bridge, not trusted from the agent payload.
+- Relative reminders (`in`), absolute reminders (`at`), and recurring 5-field cron expressions (`cron`) are supported.
+- Each job stores timezone information; by default it follows the server/instance environment where the bot runs.
+- Missed one-shot reminders older than the grace window are marked missed instead of firing as a burst after long downtime.
+- Recurring jobs track failures, keep capped run history, and can be disabled after repeated failures.
+- Per-chat job caps prevent accidental recursive job creation from growing without bound.
+
+For human operators, the CLI remains available for inspection and debugging, but generated `agent.md` instructions tell agents to use the `[tool:{...}]` layer so Claude/Codex process and stream runtimes behave consistently.
 
 ---
 
