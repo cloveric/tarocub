@@ -163,7 +163,10 @@ describe("CodexAppServerAdapter", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(JSON.parse(childB.stdin.lines[1] ?? "{}").method).toBe("thread/start");
 
-      const assertion = expect(promise).rejects.toThrow("Codex app-server thread/start timed out");
+      const assertion = expect(promise).rejects.toMatchObject({
+        name: "ThreadReadTimeoutError",
+        message: expect.stringContaining("Codex app-server thread/start timed out"),
+      });
       await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
       await assertion;
       expect(childB.killCalls).toBe(1);
@@ -256,7 +259,10 @@ describe("CodexAppServerAdapter", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(JSON.parse(childB.stdin.lines[1] ?? "{}").method).toBe("thread/resume");
 
-      const assertion = expect(promise).rejects.toThrow("Codex app-server thread/resume timed out");
+      const assertion = expect(promise).rejects.toMatchObject({
+        name: "ThreadReadTimeoutError",
+        message: expect.stringContaining("Codex app-server thread/resume timed out"),
+      });
       await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
       await assertion;
       expect(childB.killCalls).toBe(1);

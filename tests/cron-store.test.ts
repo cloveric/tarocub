@@ -169,6 +169,41 @@ describe("CronStore", () => {
     });
   });
 
+  it("caps enabled jobs per chat while allowing other chats and disabled jobs", async () => {
+    await withStateDir(async (_dir, store) => {
+      for (let index = 0; index < 50; index++) {
+        await store.add({ chatId: 1, userId: 10, cronExpr: "* * * * *", prompt: `p${index}` });
+      }
+
+      await expect(store.add({ chatId: 1, userId: 10, cronExpr: "* * * * *", prompt: "overflow" })).rejects.toThrow(
+        "maximum enabled cron jobs per chat",
+      );
+      await expect(store.add({ chatId: 2, userId: 10, cronExpr: "* * * * *", prompt: "other chat" })).resolves.toMatchObject({
+        chatId: 2,
+      });
+      await expect(
+        store.add({ chatId: 1, userId: 10, cronExpr: "* * * * *", prompt: "disabled", enabled: false }),
+      ).resolves.toMatchObject({ enabled: false });
+    });
+  });
+
+  it("enforces the per-chat cap when enabling a disabled job", async () => {
+    await withStateDir(async (_dir, store) => {
+      const disabled = await store.add({
+        chatId: 1,
+        userId: 10,
+        cronExpr: "* * * * *",
+        prompt: "disabled",
+        enabled: false,
+      });
+      for (let index = 0; index < 50; index++) {
+        await store.add({ chatId: 1, userId: 10, cronExpr: "* * * * *", prompt: `p${index}` });
+      }
+
+      await expect(store.update(disabled.id, { enabled: true })).rejects.toThrow("maximum enabled cron jobs per chat");
+    });
+  });
+
   it("serializes concurrent writes (no lost updates)", async () => {
     await withStateDir(async (_dir, store) => {
       const adds = await Promise.all(

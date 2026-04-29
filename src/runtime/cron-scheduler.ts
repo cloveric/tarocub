@@ -36,6 +36,7 @@ interface RunningJob {
 
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
+const RUN_ONCE_MISSED_GRACE_MS = 60 * 60_000;
 
 /**
  * Validates a cron expression by attempting to construct a paused Cron instance.
@@ -377,6 +378,11 @@ export class CronScheduler {
       this.logger.warn(`cron: skipping one-shot job ${job.id} with invalid targetAt "${job.targetAt}"`);
       return;
     }
+    const overdueMs = Date.now() - targetMs;
+    if (overdueMs > RUN_ONCE_MISSED_GRACE_MS) {
+      void this.markRunOnceMissed(job, overdueMs);
+      return;
+    }
     const delay = Math.max(0, targetMs - Date.now());
     const timer = setTimeout(() => {
       if (delay > MAX_TIMEOUT_DELAY_MS) {
@@ -387,6 +393,34 @@ export class CronScheduler {
     }, Math.min(delay, MAX_TIMEOUT_DELAY_MS));
     timer.unref?.();
     this.running.set(job.id, { stop: () => clearTimeout(timer) });
+  }
+
+  private async markRunOnceMissed(job: CronJobRecord, overdueMs: number): Promise<void> {
+    const message = `missed scheduled run after downtime (${Math.round(overdueMs / 60_000)} minutes late)`;
+    const ranAt = new Date().toISOString();
+    try {
+      const failed = await this.store.recordRun(job.id, { success: false, error: message, ranAt });
+      if (failed) {
+        await this.store.update(job.id, { enabled: false });
+      }
+      await appendTimelineEventBestEffort(this.stateDir, {
+        type: "cron.skipped",
+        instanceName: this.instanceName,
+        channel: "telegram",
+        chatId: job.chatId,
+        userId: job.userId,
+        outcome: "error",
+        detail: message,
+        metadata: {
+          cronJobId: job.id,
+          reason: "missed_run_once",
+          overdueMs,
+        },
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`cron: failed to mark one-shot job ${job.id} as missed: ${detail}`);
+    }
   }
 
   private executeWithTracking(

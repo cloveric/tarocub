@@ -85,7 +85,12 @@ export function tryDecodeWorkspacePath(dirName: string, existingDir: ExistingDir
         }
       }
       if (!dotFound) {
-        // Fallback: take just the first segment with dot prefix
+        if (isWindowsDrivePath) {
+          // Windows drive roots also encode `E:/foo/bar` as `E--foo-bar`.
+          // If the dot-prefixed candidate does not exist, treat the extra
+          // dash as the drive separator rather than inventing `/.bar`.
+          continue;
+        }
         current = joinDecodedPath(current, `.${parts[i]!}`);
         i++;
       }

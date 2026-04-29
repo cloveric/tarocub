@@ -445,6 +445,23 @@ describe("ProcessCodexAdapter", () => {
     await expect(promise).rejects.toThrow("codex failed");
   });
 
+  it("keeps both the head and tail of oversized stderr diagnostics", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stderr.emitData(`STACK_START\n${"x".repeat(20_000)}\nSTACK_END`);
+    child.close(2);
+
+    await expect(promise).rejects.toThrow("STACK_START");
+    await expect(promise).rejects.toThrow("STACK_END");
+    await expect(promise).rejects.toThrow("bytes elided");
+  });
+
   it("prefers structured turn failure messages over stderr noise", async () => {
     const { spawnCodex, child } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);

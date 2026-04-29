@@ -28,6 +28,14 @@ describe("tryDecodeWorkspacePath", () => {
     expect(tryDecodeWorkspacePath("E--claude", (candidate) => candidate === "E:/claude")).toBe("E:/claude");
   });
 
+  it("does not turn ambiguous Windows double dashes into bogus empty segments", () => {
+    expect(tryDecodeWorkspacePath("E--C--D", (candidate) => candidate === "E:/C/D")).toBe("E:/C/D");
+  });
+
+  it("still resolves real dot-prefixed Windows segments when they exist", () => {
+    expect(tryDecodeWorkspacePath("E--C--D", (candidate) => candidate === "E:/C/.D")).toBe("E:/C/.D");
+  });
+
   it("resolves a directory name containing dashes", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cctb-decode-"));
     const target = path.join(root, "cc-telegram-bridge");

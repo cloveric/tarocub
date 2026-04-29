@@ -153,6 +153,36 @@ describe("CronScheduler", () => {
     });
   });
 
+  it("marks stale one-shot jobs missed instead of firing a boot storm", async () => {
+    await withDeps(async ({ stateDir, store, scheduler, executor }) => {
+      const targetAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+      const job = await store.add({
+        chatId: 1,
+        userId: 1,
+        cronExpr: "* * * * *",
+        prompt: "stale once",
+        runOnce: true,
+        targetAt,
+      });
+
+      await scheduler.start();
+
+      await vi.waitFor(async () => {
+        const reloaded = await store.get(job.id);
+        expect(reloaded?.enabled).toBe(false);
+      });
+      expect(executor).not.toHaveBeenCalled();
+      const reloaded = await store.get(job.id);
+      expect(reloaded?.lastError).toContain("missed scheduled run");
+
+      await vi.waitFor(async () => {
+        const timeline = await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8").catch(() => "");
+        expect(timeline).toContain('"type":"cron.skipped"');
+        expect(timeline).toContain('"reason":"missed_run_once"');
+      });
+    });
+  });
+
   it("runJobNow records failure when executor throws", async () => {
     await withDeps(async ({ store, scheduler, executor }) => {
       executor.mockRejectedValueOnce(new Error("boom"));

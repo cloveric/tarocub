@@ -41,7 +41,7 @@ type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => Pr
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_OUTPUT_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_STRUCTURED_OUTPUT_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
-const MAX_STDERR_TAIL_BYTES = 4 * 1024;
+const MAX_STDERR_DIAGNOSTIC_BYTES = 4 * 1024;
 const MAX_CODEX_ROLLOUT_SCAN_DEPTH = 16;
 export const CODEX_PROCESS_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_PROCESS_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
@@ -148,22 +148,40 @@ function looksLikeStructuredCodexLine(value: string): boolean {
   return /^\s*\{\s*(?:"type"\s*:|"jsonrpc"\s*:|"id"\s*:|"method"\s*:)/.test(value);
 }
 
-function appendTail(existing: string, chunk: string, maxBytes: number): string {
+function sliceUtf8Prefix(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+
+  let end = Math.min(value.length, maxBytes);
+  while (end > 0 && Buffer.byteLength(value.slice(0, end), "utf8") > maxBytes) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+function sliceUtf8Suffix(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+
+  let start = Math.max(0, value.length - maxBytes);
+  while (start < value.length && Buffer.byteLength(value.slice(start), "utf8") > maxBytes) {
+    start += 1;
+  }
+  return value.slice(start);
+}
+
+function appendHeadTailDiagnostic(existing: string, chunk: string, maxBytes: number): string {
   const combined = existing + chunk;
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) {
     return combined;
   }
 
-  let start = combined.length - maxBytes;
-  if (start < 0) {
-    start = 0;
-  }
-
-  while (start < combined.length && Buffer.byteLength(combined.slice(start), "utf8") > maxBytes) {
-    start += 1;
-  }
-
-  return combined.slice(start);
+  const head = sliceUtf8Prefix(combined, Math.floor(maxBytes / 2));
+  const tail = sliceUtf8Suffix(combined, Math.floor(maxBytes / 2));
+  const omittedBytes = Math.max(0, Buffer.byteLength(combined, "utf8") - Buffer.byteLength(head, "utf8") - Buffer.byteLength(tail, "utf8"));
+  return `${head}\n[... ${omittedBytes} bytes elided ...]\n${tail}`;
 }
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
@@ -640,7 +658,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
       child.stderr?.on("data", (chunk) => {
         resetInactivityTimeout();
-        stderrTail = appendTail(stderrTail, chunk.toString(), MAX_STDERR_TAIL_BYTES);
+        stderrTail = appendHeadTailDiagnostic(stderrTail, chunk.toString(), MAX_STDERR_DIAGNOSTIC_BYTES);
       });
 
       if (abortSignal) {

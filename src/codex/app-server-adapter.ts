@@ -62,6 +62,24 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
+class CodexAppServerRequestTimeoutError extends Error {
+  constructor(message: string, readonly childGeneration: number) {
+    super(message);
+    this.name = "CodexAppServerRequestTimeoutError";
+  }
+}
+
+class ThreadReadTimeoutError extends CodexAppServerRequestTimeoutError {
+  constructor(message: string, childGeneration: number) {
+    super(message, childGeneration);
+    this.name = "ThreadReadTimeoutError";
+  }
+}
+
+function isThreadReadTimeoutError(error: unknown): error is ThreadReadTimeoutError {
+  return error instanceof ThreadReadTimeoutError || (error instanceof Error && error.name === "ThreadReadTimeoutError");
+}
+
 type PendingTurn = {
   chunks: string[];
   finalText?: string;
@@ -128,6 +146,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private lineBuffer = "";
   private stderrTail = "";
   private stdoutDiagnosticTail = "";
+  private childGeneration = 0;
   private nextRequestId = 1;
   private readonly pendingRequests = new Map<number, PendingRequest>();
   private readonly nonBlockingRequestIds = new Set<number>();
@@ -325,6 +344,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     });
 
     this.child = child;
+    const childGeneration = ++this.childGeneration;
     child.stdout?.on("data", (chunk) => {
       this.handleStdout(chunk.toString());
     });
@@ -336,11 +356,17 @@ export class CodexAppServerAdapter implements CodexAdapter {
     });
 
     child.once("error", (error) => {
+      if (childGeneration !== this.childGeneration) {
+        return;
+      }
       this.failAllPending(this.withDiagnostics(error instanceof Error ? error.message : String(error)));
       this.resetChildState();
     });
 
     child.once("close", (code) => {
+      if (childGeneration !== this.childGeneration) {
+        return;
+      }
       this.failAllPending(this.withDiagnostics(`codex app-server exited with code ${code}`));
       this.resetChildState();
     });
@@ -559,6 +585,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     const id = this.nextRequestId++;
+    const requestChildGeneration = this.childGeneration;
     return new Promise<unknown>((resolve, reject) => {
       let settled = false;
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -601,14 +628,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
       });
       if (typeof options?.timeoutMs === "number" && options.timeoutMs > 0) {
         timeout = setTimeout(() => {
-          rejectOnce(
-            this.withDiagnostics(
-              options.timeoutMessage ?? `codex app-server ${method} timed out after ${options.timeoutMs}ms`,
-            ),
-          );
+          rejectOnce(this.createRequestTimeoutError(
+            method,
+            options.timeoutMessage ?? `codex app-server ${method} timed out after ${options.timeoutMs}ms`,
+            requestChildGeneration,
+          ));
           if (options.destroyOnTimeout) {
             queueMicrotask(() => {
-              this.destroy();
+              this.destroy(requestChildGeneration);
             });
           }
         }, options.timeoutMs);
@@ -717,21 +744,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
     try {
       return await operation();
     } catch (error) {
-      if (!this.isThreadReadTimeout(error)) {
+      if (!isThreadReadTimeoutError(error)) {
         throw error;
       }
-      this.destroy();
-      // request() also schedules destroyOnTimeout; yield once so that queued
-      // cleanup cannot destroy the replacement app-server.
-      await Promise.resolve();
+      this.destroy(error.childGeneration);
       await this.ensureInitialized(runtimeOptions);
       return await operation();
     }
-  }
-
-  private isThreadReadTimeout(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return /Codex app-server thread\/(?:start|resume) timed out/i.test(message);
   }
 
   private async startTurn(
@@ -956,7 +975,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return { text: "" };
   }
 
-  destroy(): void {
+  destroy(expectedChildGeneration?: number): void {
+    if (expectedChildGeneration !== undefined && expectedChildGeneration !== this.childGeneration) {
+      return;
+    }
     this.child?.kill?.();
     this.failAllPending(this.withDiagnostics("Adapter destroyed"));
     this.resetChildState();
@@ -1083,5 +1105,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     return new Error(`${message}\n\n[engine diagnostics]\n${sections.join("\n\n")}`);
+  }
+
+  private createRequestTimeoutError(method: string, message: string, childGeneration: number): Error {
+    const withDiagnostics = this.withDiagnostics(message).message;
+    if (method === "thread/start" || method === "thread/resume") {
+      return new ThreadReadTimeoutError(withDiagnostics, childGeneration);
+    }
+    return new CodexAppServerRequestTimeoutError(withDiagnostics, childGeneration);
   }
 }
