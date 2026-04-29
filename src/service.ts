@@ -17,7 +17,7 @@ import { RuntimeStateStore } from "./state/runtime-state.js";
 import { TelegramApi } from "./telegram/api.js";
 import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
 import { handleTelegramApprovalCommand, isTelegramApprovalCommand } from "./telegram/approval-requests.js";
-import { normalizeUpdate } from "./telegram/update-normalizer.js";
+import { normalizeUpdate, type NormalizedTelegramMessage } from "./telegram/update-normalizer.js";
 import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
 import { ChatQueue } from "./runtime/chat-queue.js";
@@ -411,12 +411,12 @@ export async function readApprovalMode(configPath: string): Promise<ApprovalMode
   return (await readInstanceRuntimeConfig(configPath)).approvalMode;
 }
 
-export function resolveEngineRuntime(engine: EngineType, _approvalMode: ApprovalMode): "app-server" | "process" {
+export function resolveEngineRuntime(engine: EngineType, _approvalMode: ApprovalMode): "app-server" | "process" | "stream" {
   if (engine === "claude") {
-    return "process";
+    return "stream";
   }
 
-  return "process";
+  return "app-server";
 }
 
 function resolveClaudeExecutable(env: EnvSource): string {
@@ -669,6 +669,7 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "resume", description: "Resume Claude local session or attach Codex thread" },
   { command: "detach", description: "Detach resumed session or current Codex thread" },
   { command: "stop", description: "Stop the current running task" },
+  { command: "cron", description: "List or manage scheduled tasks (e.g. /cron add 0 9 * * * morning summary)" },
   { command: "help", description: "Show available commands" },
 ];
 
@@ -719,6 +720,44 @@ export function abortChatTask(chatId: number, chatQueue: ChatQueue = defaultChat
     return true;
   }
   return hadPending;
+}
+
+export async function runQueuedTelegramTurn(
+  normalized: NormalizedTelegramMessage,
+  context: TelegramDeliveryContext,
+  chatQueue: ChatQueue = defaultChatQueue,
+): Promise<void> {
+  await chatQueue.enqueue(
+    normalized.chatId,
+    async () => {
+      if (context.abortSignal?.aborted) {
+        throw new Error("queued Telegram turn was aborted before execution");
+      }
+      const taskController = new AbortController();
+      const forwardAbort = () => taskController.abort();
+      context.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
+
+      activeTasks.set(normalized.chatId, taskController);
+      await getRuntimeStateStore(context.inboxDir).markTurnStarted();
+      try {
+        await handleNormalizedTelegramMessage(normalized, {
+          ...context,
+          abortSignal: taskController.signal,
+        });
+      } finally {
+        context.abortSignal?.removeEventListener("abort", forwardAbort);
+        if (activeTasks.get(normalized.chatId) === taskController) {
+          activeTasks.delete(normalized.chatId);
+        }
+        await getRuntimeStateStore(context.inboxDir).markTurnCompleted();
+      }
+    },
+    {
+      onSkipped: () => {
+        throw new Error("queued Telegram turn was skipped before execution");
+      },
+    },
+  );
 }
 const runtimeStateStoreCache = new Map<string, RuntimeStateStore>();
 

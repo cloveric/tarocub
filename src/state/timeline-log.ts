@@ -21,11 +21,17 @@ export interface TimelineEvent {
     | "workflow.completed"
     | "engine.event"
     | "engine.event.delivery_failed"
+    | "tool.executed"
     | "delivery.ledger_mismatch"
     | "file.accepted"
     | "file.rejected"
     | "budget.blocked"
-    | "budget.threshold_reached";
+    | "budget.threshold_reached"
+    | "cron.triggered"
+    | "cron.completed"
+    | "cron.skipped"
+    | "cron.disabled_after_failures"
+    | "cron.failure_notification_failed";
   instanceName?: string;
   channel?: "telegram" | "bus";
   chatId?: number;

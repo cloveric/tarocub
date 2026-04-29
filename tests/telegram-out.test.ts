@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, mkdir, readlink, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readlink, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -99,6 +99,42 @@ describe("telegram-out", () => {
       await expect(listTelegramOutFiles(request.dirPath)).resolves.toEqual([
         path.join(request.dirPath, "a.txt"),
         path.join(request.dirPath, "b.txt"),
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow a request directory symlink when collecting auto-delivery files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const request = await createTelegramOutDir(root, "req-123");
+    const outsideDir = path.join(root, "outside");
+
+    try {
+      await mkdir(outsideDir, { recursive: true });
+      await writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
+      await rm(request.dirPath, { recursive: true, force: true });
+      await symlink(outsideDir, request.dirPath, process.platform === "win32" ? "junction" : "dir");
+
+      await expect(listTelegramOutFiles(request.dirPath)).resolves.toEqual([]);
+      await expect(describeTelegramOutFiles(request.dirPath)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not follow symlinked files inside the request directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const request = await createTelegramOutDir(root, "req-123");
+    const outsideFile = path.join(root, "secret.txt");
+
+    try {
+      await writeFile(path.join(request.dirPath, "safe.txt"), "safe", "utf8");
+      await writeFile(outsideFile, "secret", "utf8");
+      await symlink(outsideFile, path.join(request.dirPath, "secret.txt"));
+
+      await expect(listTelegramOutFiles(request.dirPath)).resolves.toEqual([
+        path.join(request.dirPath, "safe.txt"),
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

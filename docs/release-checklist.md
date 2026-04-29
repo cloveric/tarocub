@@ -34,7 +34,13 @@ npm test -- tests/bus.test.ts tests/bus-handler.test.ts tests/service.test.ts
 ### State / Schema
 
 ```bash
-npm test -- tests/access-store.test.ts tests/session-store.test.ts tests/usage-store.test.ts tests/runtime-state.test.ts tests/file-workflow-store.test.ts tests/audit-log.test.ts tests/instance-lock.test.ts
+npm test -- tests/access-store.test.ts tests/session-store.test.ts tests/usage-store.test.ts tests/runtime-state.test.ts tests/file-workflow-store.test.ts tests/cron-store.test.ts tests/audit-log.test.ts tests/instance-lock.test.ts
+```
+
+### Scheduled Tasks / Cron
+
+```bash
+npm test -- tests/cron-store.test.ts tests/cron-scheduler.test.ts tests/cron-executor.test.ts tests/cron-tags.test.ts tests/cron-helper-server.test.ts tests/cron-cli.test.ts tests/telegram-cron-commands.test.ts tests/cli.test.ts
 ```
 
 ## 3. Manual Smoke Checks
@@ -56,6 +62,7 @@ If the change touched any of these, do an explicit sanity check:
 - bus auth / bus registry
 - `/resume`
 - file delivery
+- scheduled tasks / cron tag parsing and deprecated helper permissions
 - archive restore / backup
 - shared Claude/Codex config homes
 

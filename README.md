@@ -37,11 +37,11 @@
 
 - **v4.5.3** — recovers a stale Telegram update watermark from audit history on service startup, preventing old completed tasks from replaying after restart.
 - **v4.5.2** — fixes Telegram update watermark ordering, so rapid follow-up messages cannot be skipped while an earlier turn is still finishing.
-- **v4.5.1** — moves Telegram transport rules into each instance's `agent.md`, leaving only one short static Telegram reminder in the per-turn prompt. File delivery now prefers `cctb send --file PATH` / `cctb send --image PATH`.
+- **v4.5.1+** — moves Telegram transport rules into each instance's `agent.md`, leaving only a short static Telegram reminder in the per-turn prompt. File delivery now uses the registered `[tool:...]` layer, with `cctb send` kept for CLI workflows.
 - **v4.5.0** — simplifies file delivery around explicit send receipts and removes the old manifest/contract/count-repair/wakeup delivery state.
 - Earlier 4.x releases added the dual Codex/Claude process runtimes, Agent Bus, crew workflows, timeline/audit logs, service doctor, dashboard, and Delivery Protocol v2.
 
-**Upgrading from v4.5.0 or earlier:** refresh generated instance instructions after updating so old bots get the short Telegram Transport block:
+**Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the short Telegram Transport and Scheduled Tasks sections:
 
 ```bash
 telegram instructions upgrade --all --dry-run
@@ -169,7 +169,23 @@ open -e ~/.cctb/work/agent.md
 
 ## File Delivery From Agent Tasks
 
-During each active Telegram turn, the bridge injects a stable `cctb` command into the engine process `PATH`. Agents should prefer it when they finish a generated file:
+During each active Telegram turn, the bridge can deliver generated files through the registered Telegram tool layer. The canonical agent-facing form is an inline tool tag:
+
+```text
+[tool:{"name":"send.file","payload":{"path":"/absolute/path/to/report.pdf"}}]
+[tool:{"name":"send.image","payload":{"path":"/absolute/path/to/image.png"}}]
+[tool:{"name":"send.batch","payload":{"message":"Done","images":["/absolute/path/to/image.png"],"files":["/absolute/path/to/report.pdf"]}}]
+```
+
+For larger or quote-heavy payloads, the same tool envelope can be emitted as a fenced block:
+
+````text
+```tool
+{"name":"send.file","payload":{"path":"/absolute/path/to/report.pdf"}}
+```
+````
+
+For CLI workflows, the bridge also injects a stable `cctb` command into turn-scoped engine processes:
 
 ```bash
 cctb send --image /absolute/path/to/image.png
@@ -188,10 +204,12 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 
 Current delivery rules:
 
-- Prefer `cctb send` for existing files, images, PDFs, decks, and other binary outputs during active Telegram turns.
+- Agents should use `[tool:...]` delivery tags for existing files, images, PDFs, decks, and other binary outputs.
+- `[tool:...]` examples are generated from the registered tool schema/examples, and fenced `tool` blocks execute through the same parser.
+- `cctb send` remains available for turn-scoped CLI workflows and is internally routed through the same send tool layer.
 - Use `telegram send` when you need the same explicit delivery command outside an active turn, or when the turn-scoped `cctb` helper is unavailable.
 - Explicit send commands accept any readable absolute file path.
-- Use `[send-file:/absolute/path]` / `[send-image:/absolute/path]` only as fallback when explicit send commands are unavailable or fail.
+- Legacy `[send-file:/absolute/path]` / `[send-image:/absolute/path]` tags remain supported, but are normalized into the send tool layer before delivery.
 - Small text/code files can still use the `file:name.ext` fenced-block form.
 - The helper is scoped to one Telegram turn. It will not work after the turn finishes.
 - Plain `[send-file:]` fallback tags still validate that files live under the instance workspace or the active `/resume` project before sending.
@@ -201,7 +219,7 @@ Current delivery rules:
 - The bridge no longer keeps manifest, pending-contract, or count-based state to infer future delivery intent across ordinary chat turns.
 - Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures.
 
-This works for the default Codex and Claude process runtimes. File delivery is explicit: generate the file, call the send command, and rely on the resulting receipt.
+This works for Codex, Claude, process, and stream runtimes because the canonical path only requires the agent to emit text. File delivery is explicit: generate the file, emit the tool tag or call the send command, and rely on the resulting receipt.
 
 When upgrading from v4.5.0 or earlier, refresh generated instance instructions with:
 
@@ -216,7 +234,7 @@ This safely replaces old generated Telegram Transport blocks and appends the blo
 
 ## YOLO Mode
 
-For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the CLI supports a headless path: Claude can approve individual permission prompts; Codex process mode asks once before the turn, then runs the approved turn with `--full-auto`. Keep `unsafe` for fully trusted local environments only.
+For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the engine supports a headless path: Claude can approve individual permission prompts; Codex app-server mode maps YOLO settings to the app-server sandbox mode. Keep `unsafe` for fully trusted local environments only.
 
 Claude approval buttons use a short-lived localhost MCP bridge with a random URL token. This protects against blind local port scans, but the token is still visible to same-user local processes that can inspect process command lines. Treat YOLO-off approval as a single-user workstation convenience, not a multi-user isolation boundary.
 
@@ -390,7 +408,7 @@ That binds the current Telegram chat to the existing Codex thread. From then on:
 
 This is an attach flow, not a local session import: the thread stays server-side and the bridge only binds the known thread ID to the current chat.
 
-Note: the default Codex process runtime validates `/resume thread <thread-id>` against the local Codex session index. Thread IDs unknown to the local machine still fail closed instead of being guessed.
+Note: the default Codex app-server runtime validates `/resume thread <thread-id>` through the local Codex runtime. Thread IDs unknown to the local machine still fail closed instead of being guessed.
 
 ---
 
@@ -779,7 +797,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>File Delivery</h3>
-      <p>Generated images, PDFs, decks, and reports are delivered through <code>cctb send</code> during active turns, <code>telegram send</code> outside turns, or <code>[send-file:]</code> / <code>[send-image:]</code> as a fallback.</p>
+      <p>Generated images, PDFs, decks, and reports are delivered through registered <code>[tool:...]</code> send tags, with <code>cctb send</code> and <code>telegram send</code> as CLI entrypoints.</p>
     </td>
   </tr>
   <tr>

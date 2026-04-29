@@ -13,6 +13,7 @@ import {
   pollTelegramUpdates,
   registerBotCommands,
   resolveServiceEnvForInstance,
+  runQueuedTelegramTurn,
 } from "./service.js";
 import { loadBusConfig } from "./bus/bus-config.js";
 import { createBusServer, startBusServer, stopBusServer } from "./bus/bus-server.js";
@@ -21,6 +22,9 @@ import { pruneStaleInstances, registerInstance, deregisterInstance, resolveChann
 import { appendServiceLifecycleEventSync } from "./runtime/service-lifecycle-log.js";
 import { pruneStaleTelegramRuntimeDirs } from "./runtime/telegram-out.js";
 import { loadInstanceConfig } from "./telegram/instance-config.js";
+import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-executor.js";
+import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
+import { upgradeInstanceAgentInstructions } from "./commands/access.js";
 
 function renderLifecycleError(error: unknown): string {
   if (error instanceof Error) {
@@ -120,6 +124,38 @@ async function main(): Promise<void> {
         detail: `recover update watermark: ${renderLifecycleError(error)}`,
       });
     }
+
+    // Auto-upgrade agent.md to the current generated template if the user
+    // hasn't customized the Telegram Transport section. This keeps existing
+    // bots in sync with new dispatch rules (e.g. Scheduled Tasks added in
+    // v4.5.6) without requiring the operator to run `telegram instructions
+    // upgrade` manually. force:false leaves custom-transport content alone.
+    try {
+      const result = await upgradeInstanceAgentInstructions(
+        {
+          HOME: resolvedEnv.HOME,
+          USERPROFILE: resolvedEnv.USERPROFILE,
+          CODEX_TELEGRAM_STATE_DIR: resolvedEnv.CODEX_TELEGRAM_STATE_DIR,
+        },
+        instanceName,
+        { force: false },
+      );
+      if (result.changed) {
+        logLifecycleEvent({
+          type: "service.startup_maintenance",
+          instanceName,
+          outcome: "success",
+          detail: `agent.md ${result.status}`,
+        });
+      }
+    } catch (error) {
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        instanceName,
+        outcome: "error",
+        detail: `agent.md upgrade: ${renderLifecycleError(error)}`,
+      });
+    }
     await new RuntimeStateStore(path.join(serviceConfig.stateDir, "runtime-state.json")).resetActiveTurns();
     try {
       await new FileWorkflowStore(serviceConfig.stateDir).failInterruptedProcessing();
@@ -145,6 +181,30 @@ async function main(): Promise<void> {
       });
     }
     await registerBotCommands(api);
+
+    try {
+      const cronExecutor = buildCronExecutor({
+        api,
+        bridge,
+        inboxDir: config.inboxDir,
+        instanceName,
+        handler: runQueuedTelegramTurn,
+      });
+      await initializeCronRuntime({
+        stateDir: config.stateDir,
+        executor: cronExecutor,
+        instanceName,
+        onJobFailure: (job, detail) => sendCronFailureNotification(api, job, detail),
+      });
+    } catch (error) {
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        instanceName,
+        outcome: "error",
+        detail: `cron runtime init: ${renderLifecycleError(error)}`,
+      });
+    }
+
     logLifecycleEvent({
       type: "service.started",
       instanceName,
@@ -175,6 +235,16 @@ async function main(): Promise<void> {
     try {
       await pollTelegramUpdates(api, bridge, config.inboxDir, console, abortController.signal);
     } finally {
+      try {
+        await shutdownCronRuntime();
+      } catch (error) {
+        logLifecycleEvent({
+          type: "service.startup_maintenance",
+          instanceName,
+          outcome: "error",
+          detail: `cron runtime shutdown: ${renderLifecycleError(error)}`,
+        });
+      }
       if (busServer) {
         await stopBusServer(busServer);
         await deregisterInstance(channelRoot, instanceName);

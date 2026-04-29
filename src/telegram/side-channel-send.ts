@@ -4,8 +4,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Socket } from "node:net";
 import path from "node:path";
 
+import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 import type { DeliveryAcceptedReceipt, DeliveryReceipts, DeliveryRejectedReceipt } from "./delivery-ledger.js";
-import { deliverTelegramResponse } from "./response-delivery.js";
 import type { TelegramApi } from "./api.js";
 import type { Locale } from "./message-renderer.js";
 import { isAbsoluteFilePath } from "./file-paths.js";
@@ -289,34 +289,41 @@ export async function startSideChannelSendServer(options: SideChannelSendServerO
       const acceptedFilePaths = new Set<string>();
       const requestAcceptedReceipts: DeliveryAcceptedReceipt[] = [];
       const requestRejectedReceipts: DeliveryRejectedReceipt[] = [];
-      const filesSent = await deliverTelegramResponse(
-        options.api,
-        options.chatId,
-        renderSideChannelDeliveryText(payload),
-        options.inboxDir,
-        options.workspaceOverride,
-        options.requestOutputDir,
-        options.locale,
-        {
-          source: "side-channel",
-          allowAnyAbsolutePath: true,
-          onDeliveryAccepted: (receipt) => {
-            acceptedFilePaths.add(receipt.path);
-            sentFilePaths.add(receipt.path);
-            acceptedReceipts.push(receipt);
-            requestAcceptedReceipts.push(receipt);
-          },
-          onDeliveryRejected: (receipt) => {
-            rejectedReceipts.push(receipt);
-            requestRejectedReceipts.push(receipt);
+      const result = await executeTelegramTool({
+        name: "send.batch",
+        payload,
+        context: {
+          cronRuntime: null,
+          stateDir: path.dirname(options.inboxDir),
+          chatId: options.chatId,
+          userId: 0,
+          locale: options.locale,
+          delivery: {
+            api: options.api,
+            inboxDir: options.inboxDir,
+            workspaceOverride: options.workspaceOverride,
+            requestOutputDir: options.requestOutputDir,
+            source: "side-channel",
+            allowAnyAbsolutePath: true,
+            onDeliveryAccepted: (receipt) => {
+              acceptedFilePaths.add(receipt.path);
+              sentFilePaths.add(receipt.path);
+              acceptedReceipts.push(receipt);
+              requestAcceptedReceipts.push(receipt);
+            },
+            onDeliveryRejected: (receipt) => {
+              rejectedReceipts.push(receipt);
+              requestRejectedReceipts.push(receipt);
+            },
           },
         },
-      );
+      });
+      const filesSent = typeof result.metadata?.filesSent === "number" ? result.metadata.filesSent : 0;
       if (acceptedFilePaths.size < requestedFilePaths.length) {
         const missingCount = requestedFilePaths.length - acceptedFilePaths.size;
         sendJson(res, 400, {
           ok: false,
-          error: `${missingCount} file${missingCount === 1 ? "" : "s"} not delivered by side-channel send`,
+          error: result.error ?? `${missingCount} file${missingCount === 1 ? "" : "s"} not delivered by side-channel send`,
           filesSent,
           accepted: requestAcceptedReceipts,
           rejected: requestRejectedReceipts,

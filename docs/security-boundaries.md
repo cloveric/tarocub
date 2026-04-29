@@ -149,8 +149,9 @@ File delivery is the highest-risk boundary in the product because it turns model
 
 ### Current enforcement
 
-- [src/runtime/bridge.ts](/Users/cloveric/projects/cc-telegram-bridge/src/runtime/bridge.ts:33) teaches the engine that `[send-file:/absolute/path]` is the only binary delivery mechanism
-- [src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts:539) extracts `[send-file:]`, Markdown image, and Markdown local-link references
+- Instance `agent.md` teaches the engine to use registered `[tool:{"name":"send.file",...}]` / `[tool:{"name":"send.image",...}]` delivery tags for binary delivery
+- [src/telegram/tool-tags.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/tool-tags.ts) parses generic tool tags, and [src/telegram/legacy-delivery-tool-tags.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/legacy-delivery-tool-tags.ts) normalizes legacy `[send-file:]` / `[send-image:]` tags into the same tool layer
+- [src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts:539) extracts legacy `[send-file:]`, Markdown image, and Markdown local-link references
 - [src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts:581) resolves `realpath()` before policy checks
 - delivery only permits canonical paths under the bot workspace or the active `/resume` workspace override
 - non-files, oversized files, missing files, and permission failures are rejected and surfaced back to the user
@@ -163,7 +164,7 @@ File delivery is the highest-risk boundary in the product because it turns model
 
 ### Design rule
 
-Any change touching file extraction, `[send-file:]`, `/resume`, workspace roots, or canonical path checks requires explicit security review and regression tests.
+Any change touching file extraction, `[tool:]` send tags, legacy `[send-file:]`, `/resume`, workspace roots, or canonical path checks requires explicit security review and regression tests.
 
 ## 4. Per-Instance State Boundary
 

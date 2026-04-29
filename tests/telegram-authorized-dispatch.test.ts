@@ -158,6 +158,65 @@ describe("dispatchAuthorizedTelegramMessage", () => {
     }));
   });
 
+  it("does not treat cron-sourced slash text as a Telegram command", async () => {
+    const normalized = createNormalizedMessage("/cron list");
+    const executeWorkflowAwareTelegramTurn = vi.fn().mockResolvedValue(undefined);
+    const handleCronCommand = vi.fn();
+
+    await dispatchAuthorizedTelegramMessage({
+      stateDir: "/tmp/state",
+      startedAt: Date.now(),
+      locale: "en",
+      cfg: { engine: "claude" },
+      normalized,
+      context: {
+        api: {
+          sendMessage: vi.fn(),
+          getFile: vi.fn(),
+          downloadFile: vi.fn(),
+        },
+        bridge: {},
+        inboxDir: "/tmp/inbox",
+        source: "cron",
+      } as never,
+      workflowStore: {
+        inspect: vi.fn(),
+        update: vi.fn(),
+      } as never,
+      deps: {
+        sessionStore: {
+          inspect: vi.fn(),
+          removeByChatId: vi.fn(),
+          upsert: vi.fn(),
+          findByChatIdSafe: vi.fn(),
+        } as never,
+        turnState: createTurnState(),
+        updateInstanceConfig: vi.fn(),
+        deliverTelegramResponse: vi.fn(),
+        sendTelegramOutFile: vi.fn(),
+        updateWorkflowBestEffort: vi.fn(),
+      },
+      handlers: {
+        handleCronCommand,
+        handleLocalSessionTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleLocalEngineTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleSimpleLocalTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleDelegationTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleCrewTelegramWorkflow: vi.fn().mockResolvedValue(false),
+        prepareTelegramMessageInput: vi.fn().mockResolvedValue({
+          kind: "ready",
+          text: "/cron list",
+          downloadedAttachments: [],
+        }),
+        executeWorkflowAwareTelegramTurn,
+      },
+    });
+
+    expect(handleCronCommand).not.toHaveBeenCalled();
+    expect(executeWorkflowAwareTelegramTurn).toHaveBeenCalledTimes(1);
+  });
+
+
   it("sends input-preparation replies without entering the workflow-aware turn", async () => {
     const normalized = createNormalizedMessage("voice");
     const sendMessage = vi.fn();

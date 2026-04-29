@@ -102,7 +102,9 @@ export interface TelegramDeliveryContext {
   inboxDir: string;
   instanceName?: string;
   updateId?: number;
+  source?: "telegram" | "cron";
   abortSignal?: AbortSignal;
+  sessionIdOverride?: string;
   onAuthRetry?: () => Promise<void>;
   _authRetried?: boolean;
   _staleSessionRetried?: boolean;

@@ -159,6 +159,7 @@ export class Bridge {
     sideChannelCommand?: string;
     extraEnv?: Record<string, string>;
     abortSignal?: AbortSignal;
+    sessionIdOverride?: string;
   }) {
     const decision = await this.checkAccess(input);
     if (decision.kind === "deny") {
@@ -170,7 +171,9 @@ export class Bridge {
       };
     }
 
-    const session = await this.sessionManager.getOrCreateSession(input.chatId);
+    const session = input.sessionIdOverride
+      ? { sessionId: input.sessionIdOverride }
+      : await this.sessionManager.getOrCreateSession(input.chatId);
     const baseText = input.replyContext
       ? `${input.text}\n\n[Quoted message #${input.replyContext.messageId}]\n${input.replyContext.text || "(no text content)"}`
       : input.text;
@@ -191,7 +194,7 @@ export class Bridge {
       disableRuntimeTimeout: disableRuntimeTimeout || undefined,
     });
 
-    if (response.sessionId && response.sessionId !== session.sessionId) {
+    if (!input.sessionIdOverride && response.sessionId && response.sessionId !== session.sessionId) {
       await this.sessionManager.bindSession(input.chatId, response.sessionId);
     }
 

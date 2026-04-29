@@ -52,6 +52,7 @@ import {
 import { applyEngineSelection } from "../telegram/instance-config.js";
 import { runSideChannelSendCommand } from "../telegram/side-channel-send.js";
 import { runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps } from "./send.js";
+import { runCronCli } from "../cron-cli.js";
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -1198,7 +1199,7 @@ Commands:
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
                                               Send files/text through the active turn side-channel or configured Telegram session
-  dashboard                                   Open a visual status dashboard in the browser
+  dashboard [--live]                         Open a visual status dashboard in the browser
   help                                        Show this help message`;
 
 function resolveStateDirForInstance(env: InstanceTokenEnv, instanceName: string): string {
@@ -1521,6 +1522,13 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
     return true;
   }
 
+  if (normalized[0] === "cron") {
+    const cronEnv: NodeJS.ProcessEnv = { ...env } as NodeJS.ProcessEnv;
+    const result = await runCronCli(normalized.slice(1), { env: cronEnv });
+    process.exitCode = result.exitCode;
+    return true;
+  }
+
   if (normalized[0] === "access") {
     return runAccessCommand(normalized, env, logger);
   }
@@ -1570,7 +1578,14 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   }
 
   if (normalized[0] === "dashboard") {
-    const { generateDashboard } = await import("./dashboard.js");
+    const live = normalized.includes("--live") || normalized.includes("--serve");
+    const { generateDashboard, serveDashboard } = await import("./dashboard.js");
+    if (live) {
+      const dashboard = await serveDashboard(env);
+      logger.log(`Live dashboard: ${dashboard.url} (press Ctrl+C to stop)`);
+      await dashboard.closed;
+      return true;
+    }
     const outPath = await generateDashboard(env);
     logger.log(`Dashboard generated: ${outPath}`);
     return true;

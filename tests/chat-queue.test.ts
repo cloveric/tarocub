@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ChatQueue } from "../src/runtime/chat-queue.js";
 
@@ -48,5 +48,26 @@ describe("ChatQueue", () => {
     });
 
     expect(events).toEqual(["reject-start", "recover-start"]);
+  });
+
+  it("can reject skipped pending jobs after clearPending", async () => {
+    const queue = new ChatQueue();
+    let release!: () => void;
+    const first = queue.enqueue(1, async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const second = queue.enqueue(
+      1,
+      async () => "ran",
+      { onSkipped: () => { throw new Error("skipped by stop"); } },
+    );
+
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    expect(queue.clearPending(1)).toBe(true);
+    release();
+    await first;
+    await expect(second).rejects.toThrow("skipped by stop");
   });
 });

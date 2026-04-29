@@ -11,6 +11,17 @@ export interface UsageRecord {
   totalCostUsd: number;
   requestCount: number;
   lastUpdatedAt: string;
+  daily?: Record<string, UsageBucket>;
+  monthly?: Record<string, UsageBucket>;
+}
+
+export interface UsageBucket {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCachedTokens: number;
+  totalCostUsd: number;
+  requestCount: number;
+  lastUpdatedAt: string;
 }
 
 const defaultUsage: UsageRecord = {
@@ -27,6 +38,26 @@ export interface TurnUsage {
   outputTokens: number;
   cachedTokens?: number;
   costUsd?: number;
+}
+
+function createEmptyBucket(): UsageBucket {
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCachedTokens: 0,
+    totalCostUsd: 0,
+    requestCount: 0,
+    lastUpdatedAt: "",
+  };
+}
+
+function addTurnUsage(target: UsageRecord | UsageBucket, turn: TurnUsage, timestamp: string): void {
+  target.totalInputTokens += turn.inputTokens;
+  target.totalOutputTokens += turn.outputTokens;
+  target.totalCachedTokens += turn.cachedTokens ?? 0;
+  target.totalCostUsd = Number((target.totalCostUsd + (turn.costUsd ?? 0)).toFixed(12));
+  target.requestCount += 1;
+  target.lastUpdatedAt = timestamp;
 }
 
 export class UsageStore {
@@ -50,16 +81,20 @@ export class UsageStore {
     return await this.store.read({ ...defaultUsage });
   }
 
-  async record(turn: TurnUsage): Promise<void> {
+  async record(turn: TurnUsage, now = new Date()): Promise<void> {
     const task = async () => {
       await withFileMutex(this.filePath, async () => {
         const current = await this.load();
-        current.totalInputTokens += turn.inputTokens;
-        current.totalOutputTokens += turn.outputTokens;
-        current.totalCachedTokens += turn.cachedTokens ?? 0;
-        current.totalCostUsd = Number((current.totalCostUsd + (turn.costUsd ?? 0)).toFixed(12));
-        current.requestCount += 1;
-        current.lastUpdatedAt = new Date().toISOString();
+        const timestamp = now.toISOString();
+        addTurnUsage(current, turn, timestamp);
+        const dayKey = timestamp.slice(0, 10);
+        const monthKey = timestamp.slice(0, 7);
+        current.daily ??= {};
+        current.monthly ??= {};
+        current.daily[dayKey] ??= createEmptyBucket();
+        current.monthly[monthKey] ??= createEmptyBucket();
+        addTurnUsage(current.daily[dayKey], turn, timestamp);
+        addTurnUsage(current.monthly[monthKey], turn, timestamp);
         await this.store.write(current);
       });
     };

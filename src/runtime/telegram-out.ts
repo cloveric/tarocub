@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm, stat, symlink } from "node:fs/promises";
+import { lstat, mkdir, realpath, readdir, rm, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 
 export interface TelegramOutRequest {
@@ -142,11 +142,52 @@ export async function createTelegramOutDir(
 }
 
 export async function listTelegramOutFiles(dirPath: string): Promise<string[]> {
-  const entries = await readdir(dirPath, { withFileTypes: true });
-  return entries
-    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
-    .map((entry) => path.join(dirPath, entry.name))
-    .sort((left, right) => left.localeCompare(right));
+  let rootMetadata;
+  let rootRealPath;
+  try {
+    rootMetadata = await lstat(dirPath);
+    if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink()) {
+      return [];
+    }
+    rootRealPath = await realpath(dirPath);
+  } catch {
+    return [];
+  }
+
+  let entries;
+  try {
+    entries = await readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || !entry.isFile()) {
+      continue;
+    }
+
+    const filePath = path.join(dirPath, entry.name);
+    let metadata;
+    let fileRealPath;
+    try {
+      metadata = await lstat(filePath);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        continue;
+      }
+      fileRealPath = await realpath(filePath);
+    } catch {
+      continue;
+    }
+
+    const relative = path.relative(rootRealPath, fileRealPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      continue;
+    }
+    files.push(filePath);
+  }
+
+  return files.sort((left, right) => left.localeCompare(right));
 }
 
 export async function describeTelegramOutFiles(dirPath: string): Promise<TelegramOutFileInfo[]> {

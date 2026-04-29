@@ -14,6 +14,7 @@ import {
   processTelegramUpdates,
   readInstanceBotTokenFromEnvFile,
   resolveServiceEnvForInstance,
+  resolveEngineRuntime,
   _resetEnqueuedUpdateIds,
   _resetStoppedTaskChats,
 } from "../src/service.js";
@@ -28,7 +29,7 @@ import {
   renderWorkingMessage,
 } from "../src/telegram/message-renderer.js";
 import { ClaudeStreamAdapter } from "../src/codex/claude-stream-adapter.js";
-import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
+import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import * as auditLog from "../src/state/audit-log.js";
@@ -137,6 +138,14 @@ describe("readInstanceBotTokenFromEnvFile", () => {
 });
 
 describe("createServiceDependenciesForInstance", () => {
+  it("reports Claude's default runtime as stream", () => {
+    expect(resolveEngineRuntime("claude", "normal")).toBe("stream");
+  });
+
+  it("reports Codex's default runtime as app-server", () => {
+    expect(resolveEngineRuntime("codex", "normal")).toBe("app-server");
+  });
+
   it("does not mutate process.env.TELEGRAM_BOT_TOKEN directly", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const envPath = path.join(root, ".cctb", "alpha", ".env");
@@ -168,7 +177,7 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
-  it("uses the process Codex adapter by default", async () => {
+  it("uses the app-server Codex adapter by default", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const envPath = path.join(root, ".cctb", "alpha", ".env");
 
@@ -184,7 +193,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
       // Codex bots now share ~/.codex/ directly — same reasoning as Claude.
       expect((result.bridge as any).adapter.childEnv.CODEX_HOME).toBeUndefined();
     } finally {
@@ -292,7 +301,7 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
-  it("keeps using the process adapter when codex yolo mode is enabled", async () => {
+  it("keeps using the app-server adapter when codex yolo mode is enabled", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(root, ".cctb", "alpha");
     const envPath = path.join(stateDir, ".env");
@@ -311,7 +320,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -337,7 +346,7 @@ describe("createServiceDependenciesForInstance", () => {
         "alpha",
       );
 
-      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
+      expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining(`Malformed ${configPath}`),
       );

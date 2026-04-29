@@ -31,9 +31,10 @@ describe("runCli", () => {
       await expect(readFile(envPath, "utf8")).resolves.toBe('TELEGRAM_BOT_TOKEN="bot-token-123"\n');
       const agentPath = path.join(tempDir, ".cctb", "default", "agent.md");
       await expect(readFile(agentPath, "utf8")).resolves.toContain("## Telegram Transport");
-      await expect(readFile(agentPath, "utf8")).resolves.toContain("cctb send --file PATH");
-      await expect(readFile(agentPath, "utf8")).resolves.toContain("[send-file:<absolute path>]");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain('"name":"send.file"');
       await expect(readFile(agentPath, "utf8")).resolves.toContain("Plain text only");
+      await expect(readFile(agentPath, "utf8")).resolves.not.toContain("cctb send --file PATH");
+      await expect(readFile(agentPath, "utf8")).resolves.not.toContain("[send-file:<absolute path>]");
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain(".telegram-out/current");
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain("CCTB_SEND_COMMAND");
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain(".cctb-send/");
@@ -1261,7 +1262,7 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
       const upgraded = await readFile(agentPath, "utf8");
-      expect(upgraded).toContain("[send-file:<absolute path>]");
+      expect(upgraded).toContain('"name":"send.file"');
       expect(upgraded).not.toContain(", or one fenced");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -1291,9 +1292,83 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
       const upgraded = await readFile(agentPath, "utf8");
-      expect(upgraded).toContain("cctb send --file PATH");
-      expect(upgraded).toContain("[send-file:<absolute path>]");
+      expect(upgraded).toContain('"name":"send.file"');
+      expect(upgraded).not.toContain("cctb send --file PATH");
       expect(upgraded).not.toContain(".telegram-out/current");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades generated transport plus scheduled-task instructions without duplicating scheduled-task blocks", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const legacy = [
+      "## Telegram Transport",
+      "",
+      "Plain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`; if `cctb` is unavailable, use `[send-file:<absolute path>]` / `[send-image:<absolute path>]`; small text/code may use one fenced `file:name.ext` block; never claim delivery by path only.",
+      "",
+      "## Scheduled Tasks",
+      "",
+      "For persistent recurring tasks that should send results back to this Telegram chat (\"every day at 9am summarize X\", \"每周一汇总…\"), use the Bash tool to call `cctb cron add --cron \"<m h dom mon dow>\" --prompt \"<task>\"` (env `CCTB_CRON_URL` / `CCTB_CRON_TOKEN` are already set; PATH already has `cctb`). Run `cctb cron --help` to see all subcommands (list, delete, toggle, etc.). The user can also type `/cron ...` directly in chat. Do NOT use the Claude Code `schedule` skill (detached, output won't reach Telegram), the `loop` skill (single-session only, dies when turn ends), or system `crontab`/`at` (won't survive bot restart). `ScheduleWakeup` is acceptable only for short within-turn waits (<10 minutes).",
+      "",
+    ].join("\n");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, legacy, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
+      const upgraded = await readFile(agentPath, "utf8");
+      expect(upgraded.match(/## Scheduled Tasks/g)).toHaveLength(1);
+      expect(upgraded).toContain('[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]');
+      expect(upgraded).not.toContain("cctb cron add");
+      expect(upgraded).not.toContain("PATH already has `cctb`");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades the native-scheduler warning scheduled-task block back to the short generated block", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const legacy = [
+      "## Telegram Transport",
+      "",
+      "Plain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`; if `cctb` is unavailable, use `[send-file:<absolute path>]` / `[send-image:<absolute path>]`; small text/code may use one fenced `file:name.ext` block; never claim delivery by path only.",
+      "",
+      "## Scheduled Tasks",
+      "",
+      "For Telegram-delivered reminders or recurring tasks, use `cctb cron add --in 10m --prompt \"...\"`, `cctb cron add --at ISO_TIME --prompt \"...\"`, or `cctb cron add --cron \"<m h dom mon dow>\" --prompt \"...\"` when available; use `cctb cron list` to inspect. If `cctb cron` is unavailable, ask the user to send `/cron add <m h dom mon dow> <task>` in chat. If the user explicitly asks for a native/session-local scheduler, you may use Claude/Codex native schedule, cron, automation, reminder, loop, CronCreate, or ScheduleWakeup tools, but first state that those jobs are session-local and may not persist or deliver through Telegram. Do not claim a Telegram reminder is scheduled unless the `cctb cron` or `/cron` command succeeds.",
+      "",
+    ].join("\n");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, legacy, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
+      const upgraded = await readFile(agentPath, "utf8");
+      expect(upgraded.match(/## Scheduled Tasks/g)).toHaveLength(1);
+      expect(upgraded).toContain("For reminders or recurring tasks");
+      expect(upgraded).toContain('[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]');
+      expect(upgraded).toContain("Use native/session-local schedulers only if the user explicitly asks");
+      expect(upgraded).not.toContain("cctb cron add");
+      expect(upgraded).not.toContain("CronCreate");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -1341,7 +1416,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain('Force-upgraded instructions for instance "alpha"');
       expect(messages[1]).toContain("Previous instructions backed up to");
       expect(upgraded).toContain("# Notes\nkeep me");
-      expect(upgraded).toContain("[send-image:<absolute path>]");
+      expect(upgraded).toContain('"name":"send.file"');
       expect(upgraded).toContain("## Other\nalso keep me");
       expect(upgraded).not.toContain("Use my private relay");
       const backupName = (await readdir(path.dirname(agentPath))).find((name) => name.startsWith("agent.md.bak."));
@@ -1397,8 +1472,8 @@ describe("runCli", () => {
         expect.stringContaining('Upgraded instructions for instance "alpha"'),
         expect.stringContaining('Appended Telegram transport instructions for instance "beta"'),
       ]));
-      await expect(readFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), "utf8")).resolves.toContain("[send-file:<absolute path>]");
-      await expect(readFile(path.join(tempDir, ".cctb", "beta", "agent.md"), "utf8")).resolves.toContain("[send-file:<absolute path>]");
+      await expect(readFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), "utf8")).resolves.toContain('"name":"send.file"');
+      await expect(readFile(path.join(tempDir, ".cctb", "beta", "agent.md"), "utf8")).resolves.toContain('"name":"send.file"');
       await expect(readFile(path.join(tempDir, ".cctb", ".restore-backup-alpha", "agent.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -1429,7 +1504,7 @@ describe("runCli", () => {
         expect.stringContaining('Instance "custom" instructions: manual review required'),
         expect.stringContaining("Summary: upgraded 1, current 0, skipped custom 1, failed 1."),
       ]));
-      await expect(readFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), "utf8")).resolves.toContain("[send-file:<absolute path>]");
+      await expect(readFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), "utf8")).resolves.toContain('"name":"send.file"');
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

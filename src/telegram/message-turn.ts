@@ -26,6 +26,7 @@ import {
   type DeliveryAcceptedReceipt,
   type DeliveryReceipts,
   type DeliveryRejectedReceipt,
+  type DeliverySource,
 } from "./delivery-ledger.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
@@ -35,6 +36,11 @@ import {
   startSideChannelSendServer as defaultStartSideChannelSendServer,
   type SideChannelSendServer,
 } from "./side-channel-send.js";
+import { getActiveCronRuntime } from "../runtime/cron-runtime.js";
+import { processCronAddTags, stripCronAddTags } from "./cron-tags.js";
+import { processTelegramToolTags, stripTelegramToolTags } from "./tool-tags.js";
+import { processLegacyDeliveryTagsAsTools } from "./legacy-delivery-tool-tags.js";
+import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 
 export interface WorkflowAwareTurnState {
   workflowRecordId?: string;
@@ -71,6 +77,7 @@ export interface WorkflowAwareTurnContext {
       sideChannelCommand?: string;
       extraEnv?: Record<string, string>;
       abortSignal?: AbortSignal;
+      sessionIdOverride?: string;
     }): Promise<{
       text: string;
       usage?: {
@@ -83,6 +90,7 @@ export interface WorkflowAwareTurnContext {
   };
   inboxDir: string;
   abortSignal?: AbortSignal;
+  sessionIdOverride?: string;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   instanceName?: string;
   updateId?: number;
@@ -132,6 +140,10 @@ function stripDeliveredStreamTextFragments(text: string, fragments: readonly str
   return next.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function toolResultHasDeliveryAttempt(result: { metadata?: Record<string, unknown> }): boolean {
+  return typeof result.metadata?.requested === "number";
+}
+
 async function ensureInboxDirExists(inboxDir: string): Promise<void> {
   await mkdir(inboxDir, { recursive: true });
 }
@@ -161,7 +173,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   createStableCctbCommandHelper?: typeof defaultCreateStableCctbCommandHelper;
   buildContinueAnalysisKeyboard?: typeof defaultBuildContinueAnalysisKeyboard;
   deliverTelegramResponse: (
-    api: WorkflowAwareTurnContext["api"],
+    api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">,
     chatId: number,
     text: string,
     inboxDir: string,
@@ -169,12 +181,13 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     requestOutputDir: string | undefined,
     locale: Locale,
     options?: {
-      onFileAccepted?: (sourcePath: string) => void;
-      onDeliveryAccepted?: (receipt: DeliveryAcceptedReceipt) => void;
-      onDeliveryRejected?: (receipt: DeliveryRejectedReceipt) => void;
-      source?: "post-turn" | "side-channel" | "stream-event";
-      notifyRejected?: boolean;
-    },
+        onFileAccepted?: (sourcePath: string) => void;
+        onDeliveryAccepted?: (receipt: DeliveryAcceptedReceipt) => void;
+        onDeliveryRejected?: (receipt: DeliveryRejectedReceipt) => void;
+        source?: DeliverySource;
+        allowAnyAbsolutePath?: boolean;
+        notifyRejected?: boolean;
+      },
   ) => Promise<number>;
   sendTelegramOutFile: (chatId: number, filename: string, contents: Uint8Array) => Promise<void>;
   updateWorkflowBestEffort?: (
@@ -423,7 +436,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       return;
     }
 
-    const eventText = stripAlreadySentSideChannelTags(event.text, getAlreadyDeliveredFilePaths());
+    const eventText = stripTelegramToolTags(stripCronAddTags(stripAlreadySentSideChannelTags(event.text, getAlreadyDeliveredFilePaths())));
     if (!eventText || !hasSendFileTag(eventText)) {
       return;
     }
@@ -437,32 +450,53 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     }
     const eventTextFragment = stripSendFileTags(eventText);
 
-    const delivery = deliverTelegramResponse(
-      context.api,
-      normalized.chatId,
-      eventText,
-      context.inboxDir,
-      cfg.resume?.workspacePath,
-      state.telegramOutDirPath,
-      locale,
-      {
-        source: "stream-event",
-        notifyRejected: false,
-        onFileAccepted: (sourcePath) => {
-          streamDeliveredFilePaths.add(sourcePath);
-          streamPendingFilePaths.delete(sourcePath);
-        },
-        onDeliveryAccepted: (receipt) => {
-          deliveryLedger.recordAccepted(receipt);
-        },
-        onDeliveryRejected: (receipt) => {
-          streamPendingFilePaths.delete(receipt.path);
-          deliveryLedger.recordRejected(receipt);
+    const eventTags = extractDeliveryTagMatches(eventText);
+    const delivery = executeTelegramTool({
+      name: "send.batch",
+      payload: {
+        ...(eventTextFragment ? { message: eventTextFragment } : {}),
+        images: eventTags.filter((tag) => tag.preferPhoto).map((tag) => tag.path),
+        files: eventTags.filter((tag) => !tag.preferPhoto).map((tag) => tag.path),
+      },
+      context: {
+        cronRuntime: getActiveCronRuntime(),
+        stateDir,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        chatType: normalized.chatType,
+        locale,
+        instanceName: context.instanceName,
+        updateId: context.updateId,
+        delivery: {
+          api: context.api,
+          inboxDir: context.inboxDir,
+          workspaceOverride: cfg.resume?.workspacePath,
+          requestOutputDir: state.telegramOutDirPath,
+          source: "stream-event",
+          notifyRejected: false,
+          deliverTelegramResponse,
+          onFileAccepted: (sourcePath) => {
+            streamDeliveredFilePaths.add(sourcePath);
+            streamPendingFilePaths.delete(sourcePath);
+          },
+          onDeliveryAccepted: (receipt) => {
+            deliveryLedger.recordAccepted(receipt);
+          },
+          onDeliveryRejected: (receipt) => {
+            streamPendingFilePaths.delete(receipt.path);
+            deliveryLedger.recordRejected(receipt);
+          },
         },
       },
-    ).then(() => {
-      if (eventTextFragment) {
+    }).then((result) => {
+      if (eventTextFragment && (result.ok || toolResultHasDeliveryAttempt(result))) {
         streamDeliveredTextFragments.push(eventTextFragment);
+      }
+      if (!result.ok) {
+        for (const filePath of pendingOnlyPaths) {
+          streamPendingFilePaths.delete(filePath);
+        }
+        return;
       }
     }).catch((error) => {
       for (const filePath of pendingOnlyPaths) {
@@ -537,6 +571,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       sideChannelCommand,
       extraEnv: sideChannelEnv,
       abortSignal: context.abortSignal,
+      sessionIdOverride: context.sessionIdOverride,
     });
 
     result = await runEngineTurn({
@@ -551,6 +586,76 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       stripAlreadySentSideChannelTags(result.text, getAlreadyDeliveredFilePaths()),
       streamDeliveredTextFragments,
     );
+    const originalLegacyDeliveryTags = extractDeliveryTagMatches(deliveredText).map((match) => match.tag);
+    deliveredText = await processTelegramToolTags({
+      text: deliveredText,
+      context: {
+        cronRuntime: getActiveCronRuntime(),
+        stateDir,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        chatType: normalized.chatType,
+        locale,
+        instanceName: context.instanceName,
+        updateId: context.updateId,
+        delivery: {
+          api: context.api,
+          inboxDir: context.inboxDir,
+          workspaceOverride: cfg.resume?.workspacePath,
+          requestOutputDir: state.telegramOutDirPath,
+          source: "post-turn",
+          notifyRejected: false,
+          deliverTelegramResponse,
+          onDeliveryAccepted: (receipt) => {
+            deliveryLedger.recordAccepted(receipt);
+          },
+          onDeliveryRejected: (receipt) => {
+            deliveryLedger.recordRejected(receipt);
+          },
+        },
+      },
+    });
+    deliveredText = await processCronAddTags({
+      text: deliveredText,
+      cronRuntime: getActiveCronRuntime(),
+      stateDir,
+      chatId: normalized.chatId,
+      userId: normalized.userId,
+      chatType: normalized.chatType,
+      locale,
+      instanceName: context.instanceName,
+      updateId: context.updateId,
+    });
+    deliveredText = await processLegacyDeliveryTagsAsTools({
+      text: deliveredText,
+      allowedTags: originalLegacyDeliveryTags,
+      ignoredPaths: getAlreadyDeliveredFilePaths(),
+      context: {
+        cronRuntime: getActiveCronRuntime(),
+        stateDir,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        chatType: normalized.chatType,
+        locale,
+        instanceName: context.instanceName,
+        updateId: context.updateId,
+        delivery: {
+          api: context.api,
+          inboxDir: context.inboxDir,
+          workspaceOverride: cfg.resume?.workspacePath,
+          requestOutputDir: state.telegramOutDirPath,
+          source: "post-turn",
+          notifyRejected: false,
+          deliverTelegramResponse,
+          onDeliveryAccepted: (receipt) => {
+            deliveryLedger.recordAccepted(receipt);
+          },
+          onDeliveryRejected: (receipt) => {
+            deliveryLedger.recordRejected(receipt);
+          },
+        },
+      },
+    });
     const postTurnDeliveryOptions = hasSendFileTag(deliveredText)
       ? {
         source: "post-turn" as const,

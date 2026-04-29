@@ -33,6 +33,7 @@ session.json
 runtime-state.json
 usage.json
 file-workflow.json
+cron-jobs.json
 audit.log.jsonl
 instance.lock.json
 workspace/
@@ -65,6 +66,7 @@ These files define how the instance should run.
 - `runtime-state.json`
 - `usage.json`
 - `file-workflow.json`
+- `cron-jobs.json`
 
 These files represent the durable control state of the instance.
 
@@ -121,6 +123,7 @@ Current examples:
 - `RuntimeStateStore`
 - `UsageStore`
 - `FileWorkflowStore`
+- `CronStore`
 
 ### Security rule
 
@@ -133,6 +136,7 @@ That includes:
 - session mappings
 - usage/cost history
 - workflow records
+- scheduled task prompts and history
 - audit events
 
 ## Per-File Model
@@ -436,6 +440,68 @@ There is currently no dedicated auto-repair path.
 Moderate sensitivity.
 
 It reveals usage volume, cost, and activity timing.
+
+## `cron-jobs.json`
+
+### Path
+
+`<stateDir>/cron-jobs.json`
+
+### Owner
+
+[src/state/cron-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/cron-store.ts:1)
+
+### Purpose
+
+Stores persistent Telegram scheduled tasks.
+
+Schema:
+
+- `jobs[]`
+  - `id`
+  - `chatId`
+  - `userId`
+  - `chatType`
+  - `cronExpr`
+  - `prompt`
+  - `description?`
+  - `enabled`
+  - `runOnce`
+  - `targetAt?`
+  - `sessionMode`
+  - `mute`
+  - `silent`
+  - `timeoutMins`
+  - `maxFailures`
+  - `createdAt`
+  - `updatedAt`
+  - `lastRunAt?`
+  - `lastSuccessAt?`
+  - `lastError?`
+  - `failureCount`
+  - `runHistory[]`
+
+### Authoritative data
+
+This file is authoritative for which scheduled jobs exist and whether they are enabled. `runOnce` jobs are disabled after their first execution attempt. Recurring jobs track consecutive `failureCount`, keep the latest 10 `runHistory` entries, and are disabled when `failureCount >= maxFailures`.
+
+### Write rules
+
+- built on `JsonStore`
+- writes are serialized per `CronStore` instance
+- scheduler and `/cron` commands should share the active runtime store where possible
+
+### Recovery rules
+
+- missing file -> no scheduled tasks
+- invalid file throws and prevents the cron runtime from starting
+- operator repair should quarantine/reset this file rather than silently dropping jobs
+
+### Sensitivity
+
+High sensitivity.
+
+It can contain durable prompts, chat IDs, user IDs, schedule intent, and last error details.
 
 ## `file-workflow.json`
 

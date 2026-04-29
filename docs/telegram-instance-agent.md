@@ -9,8 +9,14 @@ Recommended block:
 ```markdown
 ## Telegram Transport
 
-Plain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`; if `cctb` is unavailable, use `[send-file:<absolute path>]` / `[send-image:<absolute path>]`; small text/code may use one fenced `file:name.ext` block; never claim delivery by path only.
+Plain text only; ask in chat, not blocking prompt tools. For existing file delivery, emit one inline tool tag such as `[tool:{"name":"send.file","payload":{"path":"/absolute/path"}}]`, `[tool:{"name":"send.image","payload":{"path":"/absolute/image.png"}}]`, or `[tool:{"name":"send.batch","payload":{"message":"Done","images":["/absolute/image.png"],"files":["/absolute/report.pdf"]}}]`. Small text/code may use one fenced `file:name.ext` block; never claim delivery by path only.
+
+## Scheduled Tasks
+
+For reminders or recurring tasks, emit one inline tool tag, such as `[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]`, `[tool:{"name":"cron.add","payload":{"at":"2026-05-01T09:00:00Z","prompt":"Monday standup"}}]`, or `[tool:{"name":"cron.add","payload":{"cron":"0 9 * * 1","prompt":"weekly summary"}}]`. Use exactly one of `in`, `at`, or `cron`; optional `description` is shown in `/cron list`; never include `chatId` or `userId`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words. Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.
 ```
+
+The bridge also accepts a fenced `tool` block with the same JSON envelope for payloads that are easier to emit on multiple lines, but the default instance prompt stays inline to keep every turn short.
 
 When these rules change, sync the affected `~/.cctb/<instance>/agent.md` files. Do not write turn-scoped paths, request ids, or side-channel tokens into `agent.md`.
 

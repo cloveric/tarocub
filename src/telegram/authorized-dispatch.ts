@@ -12,10 +12,12 @@ import {
 import type { Locale } from "./message-renderer.js";
 import { handleLocalSessionTelegramCommand as defaultHandleLocalSessionTelegramCommand } from "./session-commands.js";
 import { handleSimpleLocalTelegramCommand as defaultHandleSimpleLocalTelegramCommand } from "./simple-commands.js";
+import { handleCronCommand as defaultHandleCronCommand, isCronCommand } from "./cron-commands.js";
+import { getActiveCronRuntime } from "../runtime/cron-runtime.js";
 import type { TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
-import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt } from "./delivery-ledger.js";
+import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
 
 export interface AuthorizedTelegramDispatchConfig {
   engine: "codex" | "claude";
@@ -45,6 +47,7 @@ export interface AuthorizedTelegramDispatchContext {
       sideChannelCommand?: string;
       extraEnv?: Record<string, string>;
       abortSignal?: AbortSignal;
+      sessionIdOverride?: string;
     }): Promise<{
       text: string;
       usage?: {
@@ -56,7 +59,9 @@ export interface AuthorizedTelegramDispatchContext {
     }>;
   };
   inboxDir: string;
+  source?: "telegram" | "cron";
   abortSignal?: AbortSignal;
+  sessionIdOverride?: string;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   instanceName?: string;
   updateId?: number;
@@ -67,7 +72,7 @@ export interface AuthorizedTelegramDispatchDeps {
   turnState: WorkflowAwareTurnState;
   updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
   deliverTelegramResponse: (
-    api: AuthorizedTelegramDispatchContext["api"],
+    api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">,
     chatId: number,
     text: string,
     inboxDir: string,
@@ -78,7 +83,8 @@ export interface AuthorizedTelegramDispatchDeps {
         onFileAccepted?: (sourcePath: string) => void;
         onDeliveryAccepted?: (receipt: DeliveryAcceptedReceipt) => void;
         onDeliveryRejected?: (receipt: DeliveryRejectedReceipt) => void;
-        source?: "post-turn" | "side-channel" | "stream-event";
+        source?: DeliverySource;
+        allowAnyAbsolutePath?: boolean;
         notifyRejected?: boolean;
       },
     ) => Promise<number>;
@@ -94,6 +100,7 @@ export interface AuthorizedTelegramDispatchHandlers {
   handleLocalSessionTelegramCommand?: typeof defaultHandleLocalSessionTelegramCommand;
   handleLocalEngineTelegramCommand?: typeof defaultHandleLocalEngineTelegramCommand;
   handleSimpleLocalTelegramCommand?: typeof defaultHandleSimpleLocalTelegramCommand;
+  handleCronCommand?: typeof defaultHandleCronCommand;
   handleDelegationTelegramCommand?: typeof defaultHandleDelegationTelegramCommand;
   handleCrewTelegramWorkflow?: typeof defaultHandleCrewTelegramWorkflow;
   prepareTelegramMessageInput?: typeof defaultPrepareTelegramMessageInput;
@@ -138,13 +145,42 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     handleLocalSessionTelegramCommand = defaultHandleLocalSessionTelegramCommand,
     handleLocalEngineTelegramCommand = defaultHandleLocalEngineTelegramCommand,
     handleSimpleLocalTelegramCommand = defaultHandleSimpleLocalTelegramCommand,
+    handleCronCommand = defaultHandleCronCommand,
     handleDelegationTelegramCommand = defaultHandleDelegationTelegramCommand,
     handleCrewTelegramWorkflow = defaultHandleCrewTelegramWorkflow,
     prepareTelegramMessageInput = defaultPrepareTelegramMessageInput,
     executeWorkflowAwareTelegramTurn = defaultExecuteWorkflowAwareTelegramTurn,
   } = handlers ?? {};
 
-  if (await handleLocalSessionTelegramCommand({
+  const allowTelegramCommands = context.source !== "cron";
+
+  if (allowTelegramCommands && isCronCommand(normalized.text)) {
+    const cronRuntime = getActiveCronRuntime();
+    if (cronRuntime) {
+      const result = await handleCronCommand(normalized.text, {
+        api: context.api,
+        store: cronRuntime.store,
+        scheduler: cronRuntime.scheduler,
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        chatType: normalized.chatType,
+        locale: locale === "zh" ? "zh" : "en",
+      });
+      if (result.handled) {
+        return;
+      }
+    } else {
+      await context.api.sendMessage(
+        normalized.chatId,
+        locale === "zh"
+          ? "定时任务子系统未启动，请联系运维。"
+          : "Cron subsystem is not running. Please contact the operator.",
+      );
+      return;
+    }
+  }
+
+  if (allowTelegramCommands && await handleLocalSessionTelegramCommand({
     stateDir,
     startedAt,
     locale,
@@ -161,7 +197,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     return;
   }
 
-  if (await handleLocalEngineTelegramCommand({
+  if (allowTelegramCommands && await handleLocalEngineTelegramCommand({
     stateDir,
     startedAt,
     locale,
@@ -179,7 +215,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     return;
   }
 
-  if (await handleSimpleLocalTelegramCommand({
+  if (allowTelegramCommands && await handleSimpleLocalTelegramCommand({
     stateDir,
     startedAt,
     locale,
@@ -220,7 +256,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     return;
   }
 
-  if (await handleDelegationTelegramCommand({
+  if (allowTelegramCommands && await handleDelegationTelegramCommand({
     stateDir,
     startedAt,
     locale,

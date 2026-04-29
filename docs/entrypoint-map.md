@@ -58,9 +58,28 @@ The Telegram path is now intentionally layered.
 - `src/telegram/turn-error.ts`
   Auth retry, stale-session retry, workflow cleanup, final error reply/audit.
 - `src/telegram/response-delivery.ts`
-  Text chunking, `[send-file:]` / Markdown file extraction, local file send, rejection notices.
+  Text chunking, legacy `[send-file:]` / Markdown file extraction, local file send, rejection notices.
+- `src/telegram/cron-tags.ts`
+  Parses `[cron-add:...]` transport tags and forwards them into the Telegram tool layer.
+- `src/telegram/tool-tags.ts`
+  Parses generic `[tool:{...}]` transport tags and fenced `tool` blocks, executes registered bridge tools, strips tags, and appends receipts.
+- `src/telegram/legacy-delivery-tool-tags.ts`
+  Normalizes legacy `[send-file:]` / `[send-image:]` response tags into the registered send tool layer before final turn delivery.
 - `src/telegram/turn-bookkeeping.ts`
   Telegram-side audit / budget reply / usage bookkeeping helpers.
+
+## Telegram Tool Layer
+
+- `src/tools/telegram-tool-registry.ts`
+  Registry for bridge-owned tools that can be invoked from Telegram response transports. Tool definitions include stable names, descriptions, input schemas, and executors.
+- `src/tools/telegram-tool-executor.ts`
+  Stable execution entrypoint for registered tools; records structured `tool.executed` timeline receipts.
+- `src/tools/send-file-tool.ts`
+  Implements `send.file`, `send.image`, and `send.batch` by delegating to Telegram response delivery with structured success/failure results.
+- `src/tools/cron-add-tool.ts`
+  Implements `cron.add` by validating payloads, injecting chat/user context, writing CronStore records, and refreshing the scheduler.
+- `src/tools/cron-management-tools.ts`
+  Implements `cron.list`, `cron.remove`, `cron.toggle`, and `cron.run` for current-chat task management.
 
 ## Shared Runtime Helpers
 
@@ -95,7 +114,9 @@ See `docs/state-model.md` before changing on-disk semantics.
 - `src/runtime/bridge.ts`
   High-level bridge behavior and access control.
 - `src/codex/process-adapter.ts`
-  Codex process adapter.
+  Codex one-shot process adapter.
+- `src/codex/app-server-adapter.ts`
+  Codex streaming/app-server adapter and the default Codex runtime.
 - `src/codex/claude-adapter.ts`
   Claude CLI adapter.
 - `src/codex/claude-stream-adapter.ts`

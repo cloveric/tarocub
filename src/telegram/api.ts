@@ -107,6 +107,7 @@ function isTelegramBotIdentity(value: unknown): value is TelegramBotIdentity {
 interface TelegramMessageOptions {
   inlineKeyboard?: InlineKeyboardButton[][] | null;
   parseMode?: "MarkdownV2" | "HTML" | "Markdown";
+  disableNotification?: boolean;
 }
 
 function isTelegramUpdateArray(value: unknown): value is unknown[] {
@@ -210,16 +211,28 @@ export class TelegramApi {
         ),
       };
     }
+    if (options?.disableNotification) {
+      body.disable_notification = true;
+    }
     return this.postJson("sendMessage", body, isTelegramMessage);
   }
 
-  async sendDocument(chatId: number, filename: string, contents: string | Uint8Array): Promise<TelegramMessage> {
+  async sendDocument(
+    chatId: number,
+    filename: string,
+    contents: string | Uint8Array,
+    options?: Pick<TelegramMessageOptions, "disableNotification">,
+  ): Promise<TelegramMessage> {
     const boundary = `----cc-telegram-bridge-${Math.random().toString(16).slice(2)}`;
     const payload =
       typeof contents === "string" ? new TextEncoder().encode(contents) : contents;
+    const notificationPart = options?.disableNotification
+      ? `--${boundary}\r\nContent-Disposition: form-data; name="disable_notification"\r\n\r\ntrue\r\n`
+      : "";
     const head =
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
+      notificationPart +
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="document"; filename="${filename}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`;
@@ -253,11 +266,21 @@ export class TelegramApi {
     return json.result;
   }
 
-  async sendPhoto(chatId: number, filename: string, contents: Uint8Array, caption?: string): Promise<TelegramMessage> {
+  async sendPhoto(
+    chatId: number,
+    filename: string,
+    contents: Uint8Array,
+    caption?: string,
+    options?: Pick<TelegramMessageOptions, "disableNotification">,
+  ): Promise<TelegramMessage> {
     const boundary = `----cc-telegram-bridge-${Math.random().toString(16).slice(2)}`;
+    const notificationPart = options?.disableNotification
+      ? `--${boundary}\r\nContent-Disposition: form-data; name="disable_notification"\r\n\r\ntrue\r\n`
+      : "";
     let head =
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
+      notificationPart +
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="photo"; filename="${filename}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`;
@@ -265,6 +288,7 @@ export class TelegramApi {
       head =
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
+        notificationPart +
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` +
         `--${boundary}\r\n` +
@@ -372,7 +396,11 @@ export class TelegramApi {
     return this.postJson("getMe", {}, isTelegramBotIdentity);
   }
 
-  async sendMediaGroup(chatId: number, photos: Array<{ filename: string; contents: Uint8Array; caption?: string }>): Promise<void> {
+  async sendMediaGroup(
+    chatId: number,
+    photos: Array<{ filename: string; contents: Uint8Array; caption?: string }>,
+    options?: Pick<TelegramMessageOptions, "disableNotification">,
+  ): Promise<void> {
     const boundary = `----cc-telegram-bridge-${Math.random().toString(16).slice(2)}`;
     const parts: Buffer[] = [];
 
@@ -384,6 +412,9 @@ export class TelegramApi {
 
     parts.push(Buffer.from(
       `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
+      (options?.disableNotification
+        ? `--${boundary}\r\nContent-Disposition: form-data; name="disable_notification"\r\n\r\ntrue\r\n`
+        : "") +
       `--${boundary}\r\nContent-Disposition: form-data; name="media"\r\n\r\n${JSON.stringify(media)}\r\n`,
       "utf8",
     ));

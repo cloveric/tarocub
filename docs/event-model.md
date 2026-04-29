@@ -51,10 +51,15 @@ Current event types:
 - `workflow.prepared`
 - `workflow.failed`
 - `workflow.completed`
+- `tool.executed`
 - `file.accepted`
 - `file.rejected`
 - `budget.blocked`
 - `budget.threshold_reached`
+- `cron.triggered`
+- `cron.completed`
+- `cron.skipped`
+- `cron.disabled_after_failures`
 
 ## Write Rules
 
@@ -76,6 +81,8 @@ Current event types:
   Written when an unfinished workflow is marked failed in error cleanup.
 - `workflow.completed`
   Written when workflow state is marked completed after a successful turn.
+- `tool.executed`
+  Written whenever a registered Telegram bridge tool is invoked, including `send.file`, `send.image`, `send.batch`, and cron tools. `outcome` is the structured tool status (`accepted`, `partial`, or `rejected`).
 - `file.accepted`
   Written for each outbound local file actually delivered to Telegram.
 - `file.rejected`
@@ -84,6 +91,14 @@ Current event types:
   Written when a turn is prevented from running because the instance is already over budget.
 - `budget.threshold_reached`
   Written after usage is recorded and the configured budget is crossed.
+- `cron.triggered`
+  Written when a persisted scheduled task begins an execution attempt.
+- `cron.completed`
+  Written when a scheduled task reports success or failure.
+- `cron.skipped`
+  Written when a scheduled task fire is intentionally skipped, for example because the same job is already running.
+- `cron.disabled_after_failures`
+  Written when a recurring scheduled task reaches its configured consecutive failure threshold and is disabled.
 
 ### Bus
 

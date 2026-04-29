@@ -101,6 +101,60 @@ describe("UsageStore", () => {
     }
   });
 
+  it("records daily and monthly usage buckets for dashboard analytics", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new UsageStore(stateDir);
+
+    try {
+      await store.record(
+        { inputTokens: 100, outputTokens: 40, cachedTokens: 20, costUsd: 0.01 },
+        new Date("2026-04-29T10:00:00.000Z"),
+      );
+      await store.record(
+        { inputTokens: 50, outputTokens: 10, cachedTokens: 5, costUsd: 0.02 },
+        new Date("2026-05-01T00:00:00.000Z"),
+      );
+
+      await expect(store.load()).resolves.toMatchObject({
+        requestCount: 2,
+        daily: {
+          "2026-04-29": {
+            requestCount: 1,
+            totalInputTokens: 100,
+            totalOutputTokens: 40,
+            totalCachedTokens: 20,
+            totalCostUsd: 0.01,
+          },
+          "2026-05-01": {
+            requestCount: 1,
+            totalInputTokens: 50,
+            totalOutputTokens: 10,
+            totalCachedTokens: 5,
+            totalCostUsd: 0.02,
+          },
+        },
+        monthly: {
+          "2026-04": {
+            requestCount: 1,
+            totalInputTokens: 100,
+            totalOutputTokens: 40,
+            totalCachedTokens: 20,
+            totalCostUsd: 0.01,
+          },
+          "2026-05": {
+            requestCount: 1,
+            totalInputTokens: 50,
+            totalOutputTokens: 10,
+            totalCachedTokens: 5,
+            totalCostUsd: 0.02,
+          },
+        },
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("serializes concurrent writes across separate processes", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const scriptPath = path.join(stateDir, "record-usage.ts");

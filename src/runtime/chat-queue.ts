@@ -3,7 +3,11 @@ export class ChatQueue {
   private readonly generations = new Map<number, number>();
   private readonly pendingCounts = new Map<number, number>();
 
-  enqueue<T>(chatId: number, job: () => Promise<T>): Promise<T> {
+  enqueue<T>(
+    chatId: number,
+    job: () => Promise<T>,
+    options: { onSkipped?: () => T | Promise<T> } = {},
+  ): Promise<T> {
     const previous = this.queues.get(chatId) ?? Promise.resolve();
     const generation = this.generations.get(chatId) ?? 0;
     this.pendingCounts.set(chatId, (this.pendingCounts.get(chatId) ?? 0) + 1);
@@ -16,6 +20,9 @@ export class ChatQueue {
       }
 
       if ((this.generations.get(chatId) ?? 0) !== generation) {
+        if (options.onSkipped) {
+          return await options.onSkipped();
+        }
         return undefined as T;
       }
 

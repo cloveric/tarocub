@@ -10,6 +10,15 @@ const UsageTimestampSchema = z.union([
   z.string().refine(isCanonicalIsoTimestamp, "must be a canonical ISO-8601 timestamp"),
 ]);
 
+export const UsageBucketSchema = z.object({
+  totalInputTokens: z.number().int().nonnegative(),
+  totalOutputTokens: z.number().int().nonnegative(),
+  totalCachedTokens: z.number().int().nonnegative(),
+  totalCostUsd: z.number().nonnegative(),
+  requestCount: z.number().int().nonnegative(),
+  lastUpdatedAt: UsageTimestampSchema,
+}).passthrough();
+
 export const UsageRecordSchema = z.object({
   totalInputTokens: z.number().int().nonnegative(),
   totalOutputTokens: z.number().int().nonnegative(),
@@ -17,4 +26,6 @@ export const UsageRecordSchema = z.object({
   totalCostUsd: z.number().nonnegative(),
   requestCount: z.number().int().nonnegative(),
   lastUpdatedAt: UsageTimestampSchema,
+  daily: z.record(z.string(), UsageBucketSchema).optional(),
+  monthly: z.record(z.string(), UsageBucketSchema).optional(),
 }).passthrough();

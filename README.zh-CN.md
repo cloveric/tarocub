@@ -37,11 +37,11 @@
 
 - **v4.5.3** — 服务启动时会从 audit 历史恢复 stale 的 Telegram update watermark，避免重启后重复执行已经完成的旧任务。
 - **v4.5.2** — 修复 Telegram update watermark 顺序推进，早期 turn 还在收尾时，后续快速消息不会再被错误当成 duplicate 跳过。
-- **v4.5.1** — 将 Telegram transport 规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留一条很短的静态提醒。文件投递优先使用 `cctb send --file PATH` / `cctb send --image PATH`。
+- **v4.5.1+** — 将 Telegram transport 规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留很短的静态提醒。文件投递现在统一走注册过的 `[tool:...]` layer，`cctb send` 保留给 CLI 工作流。
 - **v4.5.0** — 文件投递改为围绕显式 send receipt，移除旧的 manifest / contract / 数量 repair / wakeup delivery 状态。
 - 更早的 4.x 版本加入了 Codex/Claude 双 process runtime、Agent Bus、crew workflow、timeline/audit、service doctor、dashboard 和 Delivery Protocol v2。
 
-**从 v4.5.0 或更早版本升级：** 更新代码后请刷新已生成的实例指令，让旧 bot 拿到新的短 Telegram Transport block：
+**升级已有 generated 实例指令：** 更新代码后请刷新已生成的 `agent.md` block，让旧 bot 拿到新的短 Telegram Transport 和 Scheduled Tasks 段：
 
 ```bash
 telegram instructions upgrade --all --dry-run
@@ -168,7 +168,23 @@ open -e ~/.cctb/work/agent.md
 
 ## Agent 任务里的文件投递
 
-每个 Telegram turn 运行时，bridge 会把稳定的 `cctb` 命令注入到 engine 进程的 `PATH`。Agent 生成完文件后，优先用它直接投递：
+每个 Telegram turn 运行时，bridge 会通过注册过的 Telegram tool layer 投递生成文件。Agent 面向的标准形式是内联 tool tag：
+
+```text
+[tool:{"name":"send.file","payload":{"path":"/absolute/path/to/report.pdf"}}]
+[tool:{"name":"send.image","payload":{"path":"/absolute/path/to/image.png"}}]
+[tool:{"name":"send.batch","payload":{"message":"Done","images":["/absolute/path/to/image.png"],"files":["/absolute/path/to/report.pdf"]}}]
+```
+
+如果 payload 较长或包含很多引号，也可以输出同一个 tool envelope 的 fenced block：
+
+````text
+```tool
+{"name":"send.file","payload":{"path":"/absolute/path/to/report.pdf"}}
+```
+````
+
+CLI 工作流里，bridge 仍会把稳定的 `cctb` 命令注入到支持 turn-scoped env 的 engine 进程：
 
 ```bash
 cctb send --image /absolute/path/to/image.png
@@ -187,20 +203,22 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 
 当前投递约定：
 
-- active Telegram turn 内，已存在的文件、图片、PDF、PPT、二进制产物，优先用 `cctb send`。
+- Agent 应该用 `[tool:...]` 投递已存在的文件、图片、PDF、PPT 和其他二进制产物。
+- `[tool:...]` 示例由注册过的 tool schema/examples 生成，fenced `tool` block 也走同一个解析器。
+- `cctb send` 仍可用于 turn-scoped CLI 工作流，并且内部会走同一套 send tool layer。
 - active turn 外，或者 turn-scoped `cctb` helper 不可用时，用 `telegram send` 做同一条显式投递链路。
 - 显式发送命令接受任意可读绝对路径。
-- 只有显式发送命令不可用或失败时，才用 `[send-file:/absolute/path]` / `[send-image:/absolute/path]` 作为 fallback。
+- 旧的 `[send-file:/absolute/path]` / `[send-image:/absolute/path]` 仍兼容，但会先归一到 send tool layer 再投递。
 - 小型文本/代码文件仍可用 `file:name.ext` fenced-block 形式返回。
 - helper 只在当前 Telegram turn 有效，turn 结束后不能再用。
-- bridge 会校验每个文件必须位于实例工作区或当前 `/resume` 项目目录下，才会真正发送。
+- `[tool:...]` / `cctb send` / `telegram send` 显式发送接受任意可读绝对路径；旧 fallback tag 仍按兼容路径规则校验。
 - 文件投递成功和拒绝都会记录为 turn 级 receipt，所以 bridge 可以用结构化交付证据判断是否完成，而不是相信文本声明。
 - 如果某个文件已经通过 stream delivery 或 side-channel helper 发过，最终 `.telegram-out` 扫描会按真实路径跳过它，避免 Telegram 重复附件。
 - request-scoped `.telegram-out/<requestId>/` 目录只是运行时缓冲区，24 小时后自动清理。
 - bridge 不再保留 manifest、pending contract 或基于数量的状态来推断普通聊天 turn 里的未来交付意图。
 - 纯文本任务不会误当成文件交付失败，例如图片分析、图片描述、内联报告；除非用户明确要求保存、导出、发送或交付文件。
 
-当前默认的 Codex 和 Claude process runtime 都支持。文件投递现在是显式动作：生成文件，调用发送命令，然后依赖 receipt。
+这对 Codex、Claude、process 和 stream runtime 都有效，因为标准路径只要求 agent 能输出文本。文件投递现在是显式动作：生成文件，输出 tool tag 或调用发送命令，然后依赖 receipt。
 
 从 v4.5.0 或更早版本升级时，请刷新已生成的实例指令：
 
@@ -215,7 +233,7 @@ telegram instructions upgrade --all
 
 ## YOLO 模式
 
-如果你希望 Telegram bot 免打断运行，推荐开启 `telegram yolo on`。如果保持 YOLO 关闭，bridge 会用 Telegram 审批按钮接住无头审批：Claude 可以按单个权限请求审批；Codex process 模式会先问你是否允许本轮自动执行，通过后这一轮用 `--full-auto` 跑。`unsafe` 只适合完全可信的本地环境。
+如果你希望 Telegram bot 免打断运行，推荐开启 `telegram yolo on`。如果保持 YOLO 关闭，bridge 会用 Telegram 审批按钮接住无头审批：Claude 可以按单个权限请求审批；Codex app-server 模式会把 YOLO 设置映射到 app-server sandbox mode。`unsafe` 只适合完全可信的本地环境。
 
 Claude 审批按钮会启动一个短生命周期的 localhost MCP bridge，并带随机 URL token。它能挡住盲扫本地端口的进程，但同一用户下能查看进程命令行的本地进程仍可能看到 token。所以 YOLO 关闭时的审批适合单用户工作站便利操作，不等于多用户隔离边界。
 
@@ -376,7 +394,7 @@ Codex 没有和 Claude 一样的本地 session 扫描入口。如果你已经知
 
 这是一种“绑定已有 thread”的流程，不是导入本地 session：thread 仍然在服务端，bridge 只是在当前 chat 上绑定一个已知 thread id。
 
-注意：默认的 Codex process runtime 会先用本机的 Codex session index 验证 `/resume thread <thread-id>`。如果这个 thread id 不在本机索引里，仍然会 fail closed，而不是猜测绑定成功。
+注意：默认的 Codex app-server runtime 会通过本机 Codex runtime 验证 `/resume thread <thread-id>`。如果这个 thread id 不在本机索引里，仍然会 fail closed，而不是猜测绑定成功。
 
 ---
 
@@ -763,7 +781,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     </td>
     <td>
       <h3>文件投递</h3>
-      <p>生成的图片、PDF、PPT 和报告可在 active turn 内通过 <code>cctb send</code> 投递，active turn 外通过 <code>telegram send</code> 投递，必要时再用 <code>[send-file:]</code> / <code>[send-image:]</code> fallback。</p>
+      <p>生成的图片、PDF、PPT 和报告通过注册过的 <code>[tool:...]</code> send tag 投递，<code>cctb send</code> 和 <code>telegram send</code> 作为 CLI 入口。</p>
     </td>
   </tr>
   <tr>
