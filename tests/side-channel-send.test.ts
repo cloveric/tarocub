@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -117,6 +117,32 @@ describe("side-channel send command", () => {
       expect(helper).toContain("CCTB_SEND_TOKEN=");
       expect(helper).toContain("token");
       expect(helper).toContain("exec '/usr/bin/node' '/tmp/cctb.js' 'send' \"$@\"");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("locks down helper directories that contain turn-scoped tokens", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await mkdtemp(path.join(os.tmpdir(), "side-channel-send-"));
+
+    try {
+      const helperRoot = path.join(root, ".cctb-send", "request-1");
+      await chmod(root, 0o755);
+      const helperPath = await createSideChannelSendHelper(
+        helperRoot,
+        ["/usr/bin/node", "/tmp/cctb.js", "send"],
+        {
+          CCTB_SEND_URL: "http://127.0.0.1:1234/send/token",
+          CCTB_SEND_TOKEN: "token",
+        },
+      );
+
+      expect((await stat(path.dirname(helperRoot))).mode & 0o777).toBe(0o700);
+      expect((await stat(helperRoot)).mode & 0o777).toBe(0o700);
+      expect((await stat(helperPath)).mode & 0o777).toBe(0o700);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

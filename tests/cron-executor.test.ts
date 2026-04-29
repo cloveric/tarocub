@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildCronExecutor, sendCronFailureNotification } from "../src/runtime/cron-executor.js";
+import { CronAccessDeniedError } from "../src/runtime/cron-errors.js";
 import type { CronJobRecord } from "../src/state/cron-store-schema.js";
 
 function makeJob(overrides: Partial<CronJobRecord> = {}): CronJobRecord {
@@ -27,11 +28,18 @@ function makeJob(overrides: Partial<CronJobRecord> = {}): CronJobRecord {
   };
 }
 
+function makeBridge(overrides: Record<string, unknown> = {}) {
+  return {
+    checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+    ...overrides,
+  } as never;
+}
+
 describe("buildCronExecutor", () => {
   it("invokes the handler with a synthetic NormalizedTelegramMessage", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const api = { sendMessage: vi.fn() } as never;
-    const bridge = {} as never;
+    const bridge = makeBridge();
     const executor = buildCronExecutor({ api, bridge, inboxDir: "/tmp/inbox", handler });
 
     await executor(makeJob({ prompt: "do thing" }));
@@ -55,7 +63,7 @@ describe("buildCronExecutor", () => {
 
   it("replays the persisted chatType instead of hardcoding private", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
-    const executor = buildCronExecutor({ api: {} as never, bridge: {} as never, inboxDir: "/tmp", handler });
+    const executor = buildCronExecutor({ api: {} as never, bridge: makeBridge(), inboxDir: "/tmp", handler });
 
     await executor(makeJob({ chatType: "supergroup" }));
 
@@ -65,7 +73,7 @@ describe("buildCronExecutor", () => {
 
   it("does not pass an updateId (cron must not pollute Telegram watermark)", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
-    const executor = buildCronExecutor({ api: {} as never, bridge: {} as never, inboxDir: "/tmp", handler });
+    const executor = buildCronExecutor({ api: {} as never, bridge: makeBridge(), inboxDir: "/tmp", handler });
     await executor(makeJob());
     const [, context] = handler.mock.calls[0]!;
     expect(context.updateId).toBeUndefined();
@@ -73,7 +81,7 @@ describe("buildCronExecutor", () => {
 
   it("marks synthetic turns as cron-sourced so slash-like prompts run through the engine", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
-    const executor = buildCronExecutor({ api: {} as never, bridge: {} as never, inboxDir: "/tmp", handler });
+    const executor = buildCronExecutor({ api: {} as never, bridge: makeBridge(), inboxDir: "/tmp", handler });
 
     await executor(makeJob({ prompt: "/cron list" }));
 
@@ -101,7 +109,7 @@ describe("buildCronExecutor", () => {
     });
     const executor = buildCronExecutor({
       api: realApi as never,
-      bridge: {} as never,
+      bridge: makeBridge(),
       inboxDir: "/tmp",
       handler: handler as never,
     });
@@ -129,7 +137,7 @@ describe("buildCronExecutor", () => {
     });
     const executor = buildCronExecutor({
       api: realApi as never,
-      bridge: {} as never,
+      bridge: makeBridge(),
       inboxDir: "/tmp",
       handler: handler as never,
     });
@@ -152,7 +160,7 @@ describe("buildCronExecutor", () => {
     });
     const executor = buildCronExecutor({
       api: realApi as never,
-      bridge: {} as never,
+      bridge: makeBridge(),
       inboxDir: "/tmp",
       handler: handler as never,
     });
@@ -162,14 +170,32 @@ describe("buildCronExecutor", () => {
 
   it("propagates handler errors so scheduler.recordRun can mark them", async () => {
     const handler = vi.fn().mockRejectedValue(new Error("engine failed"));
-    const executor = buildCronExecutor({ api: {} as never, bridge: {} as never, inboxDir: "/tmp", handler });
+    const executor = buildCronExecutor({ api: {} as never, bridge: makeBridge(), inboxDir: "/tmp", handler });
     await expect(executor(makeJob())).rejects.toThrow("engine failed");
+  });
+
+  it("rejects unauthorized cron jobs before invoking the handler", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const bridge = makeBridge({
+      checkAccess: vi.fn().mockResolvedValue({ kind: "deny", text: "unauthorized" }),
+    });
+    const executor = buildCronExecutor({ api: {} as never, bridge, inboxDir: "/tmp", handler });
+
+    await expect(executor(makeJob({ locale: "en" }))).rejects.toThrow(CronAccessDeniedError);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect((bridge as { checkAccess: ReturnType<typeof vi.fn> }).checkAccess).toHaveBeenCalledWith({
+      chatId: 100,
+      userId: 200,
+      chatType: "private",
+      locale: "en",
+    });
   });
 
   it("passes abortSignal and an ephemeral session override for new_per_run jobs", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const signal = new AbortController().signal;
-    const executor = buildCronExecutor({ api: {} as never, bridge: {} as never, inboxDir: "/tmp", handler });
+    const executor = buildCronExecutor({ api: {} as never, bridge: makeBridge(), inboxDir: "/tmp", handler });
 
     await executor(makeJob({ sessionMode: "new_per_run" }), signal);
 

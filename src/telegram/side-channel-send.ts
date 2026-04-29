@@ -416,12 +416,21 @@ async function writeFileIfChanged(filePath: string, contents: string): Promise<v
   await writeFile(filePath, contents, "utf8");
 }
 
+async function secureSideChannelHelperDirectory(dirPath: string): Promise<void> {
+  await mkdir(dirPath, { recursive: true, mode: 0o700 });
+  await chmod(dirPath, 0o700);
+  const parentPath = path.dirname(dirPath);
+  if (path.basename(parentPath) === ".cctb-send") {
+    await chmod(parentPath, 0o700);
+  }
+}
+
 export async function createSideChannelSendHelper(
   dirPath: string,
   cliCommand: string[] = defaultBridgeCliCommand("send"),
   embeddedEnv?: Pick<SideChannelSendEnv, "CCTB_SEND_URL" | "CCTB_SEND_TOKEN">,
 ): Promise<string> {
-  await mkdir(dirPath, { recursive: true });
+  await secureSideChannelHelperDirectory(dirPath);
   const helperPath = path.join(dirPath, process.platform === "win32" ? "cctb-send.cmd" : "cctb-send");
   if (process.platform === "win32") {
     const command = cliCommand.map((part) => `"${part.replace(/"/g, '""')}"`).join(" ");
@@ -429,7 +438,10 @@ export async function createSideChannelSendHelper(
       embeddedEnv?.CCTB_SEND_URL ? `set "CCTB_SEND_URL=${embeddedEnv.CCTB_SEND_URL}"` : "",
       embeddedEnv?.CCTB_SEND_TOKEN ? `set "CCTB_SEND_TOKEN=${embeddedEnv.CCTB_SEND_TOKEN}"` : "",
     ].filter(Boolean);
-    await writeFile(helperPath, `@echo off\r\n${envLines.join("\r\n")}${envLines.length > 0 ? "\r\n" : ""}${command} %*\r\n`, "utf8");
+    await writeFile(helperPath, `@echo off\r\n${envLines.join("\r\n")}${envLines.length > 0 ? "\r\n" : ""}${command} %*\r\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     return helperPath;
   }
 
@@ -438,7 +450,10 @@ export async function createSideChannelSendHelper(
     embeddedEnv?.CCTB_SEND_URL ? `CCTB_SEND_URL=${quoteSh(embeddedEnv.CCTB_SEND_URL)}\nexport CCTB_SEND_URL` : "",
     embeddedEnv?.CCTB_SEND_TOKEN ? `CCTB_SEND_TOKEN=${quoteSh(embeddedEnv.CCTB_SEND_TOKEN)}\nexport CCTB_SEND_TOKEN` : "",
   ].filter(Boolean);
-  await writeFile(helperPath, `#!/usr/bin/env sh\n${envLines.join("\n")}${envLines.length > 0 ? "\n" : ""}exec ${command} "$@"\n`, "utf8");
+  await writeFile(helperPath, `#!/usr/bin/env sh\n${envLines.join("\n")}${envLines.length > 0 ? "\n" : ""}exec ${command} "$@"\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   await chmod(helperPath, 0o700);
   return helperPath;
 }

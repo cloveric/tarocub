@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { CronAccessDeniedError } from "../src/runtime/cron-errors.js";
 import { CronScheduler, validateCronExpression } from "../src/runtime/cron-scheduler.js";
 import { CronStore } from "../src/state/cron-store.js";
 
@@ -166,6 +167,31 @@ describe("CronScheduler", () => {
       expect(timeline).toContain('"type":"cron.disabled_after_failures"');
       expect(timeline).toContain(`"cronJobId":"${job.id}"`);
     });
+  });
+
+  it("disables unauthorized recurring jobs immediately without notifying the target chat", async () => {
+    const onJobFailure = vi.fn().mockResolvedValue(undefined);
+    await withDeps(async ({ stateDir, store, scheduler, executor }) => {
+      executor.mockRejectedValueOnce(new CronAccessDeniedError("cron access denied: unauthorized"));
+      const job = await store.add({
+        chatId: 1,
+        userId: 1,
+        cronExpr: "0 9 * * *",
+        prompt: "a",
+        maxFailures: 3,
+      });
+
+      await scheduler.runJobNow(job.id);
+
+      const reloaded = await store.get(job.id);
+      expect(reloaded?.enabled).toBe(false);
+      expect(reloaded?.failureCount).toBe(1);
+      expect(reloaded?.lastError).toBe("cron access denied: unauthorized");
+      expect(onJobFailure).not.toHaveBeenCalled();
+
+      const timeline = await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8");
+      expect(timeline).toContain('"reason":"access_denied"');
+    }, { onJobFailure });
   });
 
   it("notifies failures through onJobFailure", async () => {

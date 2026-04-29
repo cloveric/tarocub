@@ -83,7 +83,9 @@ function normalizeSinglePathPayload(payload: unknown, preferPhoto: boolean): Sen
 }
 
 function escapeEmbeddedDeliveryTags(message: string): string {
-  return message.replace(/\[(send-file|send-image):/g, "［$1:");
+  return message
+    .replace(/\[(send-file|send-image):([^\]\r\n]*)\]/g, "［$1:$2］")
+    .replace(/\[(send-file|send-image):/g, "［$1:");
 }
 
 function renderDeliveryText(payload: SendBatchPayload): string {

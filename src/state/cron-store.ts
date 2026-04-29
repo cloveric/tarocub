@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 
 import { JsonStore } from "./json-store.js";
+import { withFileMutex } from "./file-mutex.js";
 import {
   CronJobRecordSchema,
   CronStoreStateSchema,
@@ -71,11 +72,13 @@ function createDefaultState(): CronStoreState {
 }
 
 export class CronStore {
+  private readonly filePath: string;
   private readonly store: JsonStore<CronStoreState>;
   private pendingWrite: Promise<void> = Promise.resolve();
 
   constructor(stateDir: string) {
-    this.store = new JsonStore<CronStoreState>(resolveCronStorePath(stateDir), (value) => {
+    this.filePath = resolveCronStorePath(stateDir);
+    this.store = new JsonStore<CronStoreState>(this.filePath, (value) => {
       const result = CronStoreStateSchema.safeParse(value);
       if (result.success) {
         return { jobs: result.data.jobs };
@@ -217,7 +220,10 @@ export class CronStore {
   }
 
   private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.pendingWrite.then(task, task);
+    const run = this.pendingWrite.then(
+      () => withFileMutex(this.filePath, task),
+      () => withFileMutex(this.filePath, task),
+    );
     this.pendingWrite = run.then(
       () => undefined,
       () => undefined,

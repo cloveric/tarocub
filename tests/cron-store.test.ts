@@ -180,4 +180,18 @@ describe("CronStore", () => {
       await expect(store.list()).resolves.toHaveLength(10);
     });
   });
+
+  it("serializes writes across store instances that share the same file", async () => {
+    await withStateDir(async (stateDir, store) => {
+      const adds = await Promise.all(
+        Array.from({ length: 20 }, (_, i) => {
+          const isolatedStore = new CronStore(stateDir);
+          return isolatedStore.add({ chatId: 1, userId: 10, cronExpr: "* * * * *", prompt: `shared-${i}` });
+        }),
+      );
+      const ids = new Set(adds.map((job) => job.id));
+      expect(ids.size).toBe(20);
+      await expect(store.list()).resolves.toHaveLength(20);
+    });
+  });
 });

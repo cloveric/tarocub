@@ -4,6 +4,7 @@ import { appendAuditEvent } from "../state/audit-log.js";
 import { appendTimelineEventBestEffort } from "./timeline-events.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
 import type { CronStore } from "../state/cron-store.js";
+import { isCronAccessDeniedError } from "./cron-errors.js";
 
 async function appendAuditEventBestEffort(
   stateDir: string,
@@ -236,6 +237,7 @@ export class CronScheduler {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const accessDenied = isCronAccessDeniedError(error);
         this.logger.error(`cron: job ${id} failed: ${message}`);
         const failedRecord = await this.store.recordRun(id, { success: false, error: message, ranAt });
         await appendTimelineEventBestEffort(this.stateDir, {
@@ -248,7 +250,13 @@ export class CronScheduler {
           detail: message,
           metadata: { cronJobId: job.id },
         });
-        if (failedRecord && !failedRecord.runOnce && failedRecord.failureCount >= failedRecord.maxFailures) {
+        if (failedRecord && accessDenied) {
+          await this.disableAfterFailures(
+            failedRecord,
+            "cron job disabled because the target chat is no longer authorized",
+            "access_denied",
+          );
+        } else if (failedRecord && !failedRecord.runOnce && failedRecord.failureCount >= failedRecord.maxFailures) {
           await this.disableAfterFailures(failedRecord);
         }
         await appendAuditEventBestEffort(this.stateDir, {
@@ -260,7 +268,9 @@ export class CronScheduler {
           detail: message,
           metadata: { cronJobId: job.id },
         });
-        await this.notifyJobFailure(job, message);
+        if (!accessDenied) {
+          await this.notifyJobFailure(job, message);
+        }
       } finally {
         if (job.runOnce) {
           await this.store.update(id, { enabled: false });
@@ -313,7 +323,11 @@ export class CronScheduler {
     }
   }
 
-  private async disableAfterFailures(job: CronJobRecord): Promise<void> {
+  private async disableAfterFailures(
+    job: CronJobRecord,
+    detail = `cron job disabled after ${job.failureCount} consecutive failure(s)`,
+    reason = "max_failures",
+  ): Promise<void> {
     try {
       await this.store.update(job.id, { enabled: false });
       this.unscheduleJob(job.id);
@@ -324,11 +338,12 @@ export class CronScheduler {
         chatId: job.chatId,
         userId: job.userId,
         outcome: "disabled",
-        detail: `cron job disabled after ${job.failureCount} consecutive failure(s)`,
+        detail,
         metadata: {
           cronJobId: job.id,
           failureCount: job.failureCount,
           maxFailures: job.maxFailures,
+          reason,
         },
       });
     } catch (error) {

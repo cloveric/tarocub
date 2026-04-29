@@ -3,6 +3,7 @@ import type { TelegramApi } from "../telegram/api.js";
 import type { NormalizedTelegramMessage } from "../telegram/update-normalizer.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
 import type { handleNormalizedTelegramMessage } from "../telegram/delivery.js";
+import { CronAccessDeniedError } from "./cron-errors.js";
 
 export interface CronExecutorContext {
   api: TelegramApi;
@@ -119,6 +120,16 @@ function createCronSessionId(job: CronJobRecord): string {
 export function buildCronExecutor(options: BuildCronExecutorOptions): (job: CronJobRecord, abortSignal?: AbortSignal) => Promise<void> {
   const handler = options.handler;
   return async (job: CronJobRecord, abortSignal?: AbortSignal): Promise<void> => {
+    const accessDecision = await options.bridge.checkAccess({
+      chatId: job.chatId,
+      userId: job.userId,
+      chatType: job.chatType,
+      locale: job.locale,
+    });
+    if (accessDecision.kind !== "allow") {
+      throw new CronAccessDeniedError(accessDecision.text ? `cron access denied: ${accessDecision.text}` : undefined);
+    }
+
     const effectiveApi = job.mute
       ? muteTelegramApi(options.api)
       : job.silent
