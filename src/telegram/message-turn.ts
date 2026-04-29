@@ -38,7 +38,13 @@ import {
 } from "./side-channel-send.js";
 import { getActiveCronRuntime } from "../runtime/cron-runtime.js";
 import { processCronAddTags, stripCronAddTags } from "./cron-tags.js";
-import { processTelegramToolTags, stripTelegramToolTags } from "./tool-tags.js";
+import {
+  extractTelegramToolTagMatches,
+  parseTelegramToolTagPayload,
+  processTelegramToolTags,
+  stripTelegramToolTags,
+  type ToolTagMatch,
+} from "./tool-tags.js";
 import { processLegacyDeliveryTagsAsTools } from "./legacy-delivery-tool-tags.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 
@@ -142,6 +148,89 @@ function stripDeliveredStreamTextFragments(text: string, fragments: readonly str
 
 function toolResultHasDeliveryAttempt(result: { metadata?: Record<string, unknown> }): boolean {
   return typeof result.metadata?.requested === "number";
+}
+
+function payloadObject(payload: unknown): Record<string, unknown> | null {
+  try {
+    const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function toolPayloadStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function collectStreamSendToolTags(text: string): {
+  matches: ToolTagMatch[];
+  messages: string[];
+  images: string[];
+  files: string[];
+  paths: string[];
+} {
+  const matches: ToolTagMatch[] = [];
+  const messages: string[] = [];
+  const images: string[] = [];
+  const files: string[] = [];
+  for (const match of extractTelegramToolTagMatches(text)) {
+    try {
+      const parsed = parseTelegramToolTagPayload(match.payload);
+      const payload = payloadObject(parsed.payload);
+      if (!payload) {
+        continue;
+      }
+      const message = typeof payload.message === "string" ? payload.message.trim() : "";
+      if (parsed.name === "send.file" && typeof payload.path === "string") {
+        matches.push(match);
+        files.push(payload.path);
+        if (message) {
+          messages.push(message);
+        }
+        continue;
+      }
+      if (parsed.name === "send.image" && typeof payload.path === "string") {
+        matches.push(match);
+        images.push(payload.path);
+        if (message) {
+          messages.push(message);
+        }
+        continue;
+      }
+      if (parsed.name === "send.batch") {
+        const batchImages = toolPayloadStringArray(payload.images);
+        const batchFiles = toolPayloadStringArray(payload.files);
+        if (batchImages.length > 0 || batchFiles.length > 0) {
+          matches.push(match);
+          images.push(...batchImages);
+          files.push(...batchFiles);
+          if (message) {
+            messages.push(message);
+          }
+        }
+      }
+    } catch {
+      // Invalid tool tags are handled in the final post-turn pass so users see the error.
+    }
+  }
+  return {
+    matches,
+    messages,
+    images,
+    files,
+    paths: [...images, ...files],
+  };
+}
+
+function stripDeliveredToolTags(text: string, deliveredToolTags: ReadonlySet<string>): string {
+  if (deliveredToolTags.size === 0) {
+    return text;
+  }
+  const matches = extractTelegramToolTagMatches(text).filter((match) => deliveredToolTags.has(match.tag));
+  return stripTelegramToolTags(text, matches);
 }
 
 async function ensureInboxDirExists(inboxDir: string): Promise<void> {
@@ -367,6 +456,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   const deliveryLedger = new TurnDeliveryLedger();
   const streamDeliveredFilePaths = new Set<string>();
   const streamPendingFilePaths = new Set<string>();
+  const streamDeliveredToolTags = new Set<string>();
   const streamDeliveredTextFragments: string[] = [];
   const streamDeliveryPromises: Promise<void>[] = [];
   const syncSideChannelReceipts = () => {
@@ -432,16 +522,22 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       },
     });
 
-    if (event.type !== "assistant_text" || !hasSendFileTag(event.text)) {
+    if (event.type !== "assistant_text") {
       return;
     }
 
-    const eventText = stripTelegramToolTags(stripCronAddTags(stripAlreadySentSideChannelTags(event.text, getAlreadyDeliveredFilePaths())));
-    if (!eventText || !hasSendFileTag(eventText)) {
+    const rawEventText = stripAlreadySentSideChannelTags(event.text, getAlreadyDeliveredFilePaths());
+    const streamSendToolTags = collectStreamSendToolTags(rawEventText);
+    const eventText = stripTelegramToolTags(stripCronAddTags(rawEventText));
+    const legacyTags = extractDeliveryTagMatches(eventText);
+    if (!hasSendFileTag(eventText) && streamSendToolTags.paths.length === 0) {
       return;
     }
-    const eventFilePaths = extractSendFilePaths(eventText);
+    const eventFilePaths = [...extractSendFilePaths(eventText), ...streamSendToolTags.paths];
     const pendingOnlyPaths = eventFilePaths.filter((filePath) => !streamDeliveredFilePaths.has(filePath));
+    if (eventFilePaths.length > 0 && pendingOnlyPaths.length === 0) {
+      return;
+    }
     if (pendingOnlyPaths.length > 0 && pendingOnlyPaths.every((filePath) => streamPendingFilePaths.has(filePath))) {
       return;
     }
@@ -449,14 +545,22 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       streamPendingFilePaths.add(filePath);
     }
     const eventTextFragment = stripSendFileTags(eventText);
-
-    const eventTags = extractDeliveryTagMatches(eventText);
+    const deliveryMessage = [
+      eventTextFragment,
+      ...streamSendToolTags.messages,
+    ].filter((part) => part.trim()).join("\n");
     const delivery = executeTelegramTool({
       name: "send.batch",
       payload: {
-        ...(eventTextFragment ? { message: eventTextFragment } : {}),
-        images: eventTags.filter((tag) => tag.preferPhoto).map((tag) => tag.path),
-        files: eventTags.filter((tag) => !tag.preferPhoto).map((tag) => tag.path),
+        ...(deliveryMessage ? { message: deliveryMessage } : {}),
+        images: [
+          ...legacyTags.filter((tag) => tag.preferPhoto).map((tag) => tag.path),
+          ...streamSendToolTags.images,
+        ],
+        files: [
+          ...legacyTags.filter((tag) => !tag.preferPhoto).map((tag) => tag.path),
+          ...streamSendToolTags.files,
+        ],
       },
       context: {
         cronRuntime: getActiveCronRuntime(),
@@ -480,6 +584,14 @@ export async function executeWorkflowAwareTelegramTurn(input: {
             streamPendingFilePaths.delete(sourcePath);
           },
           onDeliveryAccepted: (receipt) => {
+            streamDeliveredFilePaths.add(receipt.path);
+            if (receipt.realPath) {
+              streamDeliveredFilePaths.add(receipt.realPath);
+            }
+            streamPendingFilePaths.delete(receipt.path);
+            if (receipt.realPath) {
+              streamPendingFilePaths.delete(receipt.realPath);
+            }
             deliveryLedger.recordAccepted(receipt);
           },
           onDeliveryRejected: (receipt) => {
@@ -491,6 +603,11 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     }).then((result) => {
       if (eventTextFragment && (result.ok || toolResultHasDeliveryAttempt(result))) {
         streamDeliveredTextFragments.push(eventTextFragment);
+      }
+      if (result.ok || toolResultHasDeliveryAttempt(result)) {
+        for (const match of streamSendToolTags.matches) {
+          streamDeliveredToolTags.add(match.tag);
+        }
       }
       if (!result.ok) {
         for (const filePath of pendingOnlyPaths) {
@@ -583,7 +700,10 @@ export async function executeWorkflowAwareTelegramTurn(input: {
 
     await Promise.allSettled(streamDeliveryPromises);
     deliveredText = stripDeliveredStreamTextFragments(
-      stripAlreadySentSideChannelTags(result.text, getAlreadyDeliveredFilePaths()),
+      stripDeliveredToolTags(
+        stripAlreadySentSideChannelTags(result.text, getAlreadyDeliveredFilePaths()),
+        streamDeliveredToolTags,
+      ),
       streamDeliveredTextFragments,
     );
     const originalLegacyDeliveryTags = extractDeliveryTagMatches(deliveredText).map((match) => match.tag);

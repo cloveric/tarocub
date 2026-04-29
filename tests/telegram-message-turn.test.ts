@@ -520,6 +520,94 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("delivers stream send.file tool tags before final turn delivery and strips duplicate final tags", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const generatedPath = path.join(root, "workspace", "chart.png");
+    const toolTag = `[tool:{"name":"send.file","payload":{"path":"${generatedPath}"}}]`;
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
+        input.onEngineEvent?.({
+          type: "assistant_text",
+          text: `Generated chart.\n${toolTag}`,
+        });
+        input.onEngineEvent?.({
+          type: "assistant_text",
+          text: `Generated chart.\n${toolTag}`,
+        });
+        return {
+          text: `Generated chart.\n${toolTag}`,
+        };
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockImplementation(async (
+      api,
+      chatId,
+      text: string,
+      _inboxDir,
+      _workspaceOverride,
+      _requestOutputDir,
+      _locale,
+      options,
+    ) => {
+      if (text.includes("[send-file:")) {
+        options?.onFileAccepted?.(generatedPath);
+        options?.onDeliveryAccepted?.({
+          path: generatedPath,
+          realPath: generatedPath,
+          fileName: "chart.png",
+          bytes: 5,
+          source: options.source ?? "post-turn",
+        });
+        return 1;
+      }
+      return 0;
+    });
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("make chart"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 100,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      const fileDeliveryCalls = deliverTelegramResponse.mock.calls
+        .filter((call) => String(call[2]).includes("[send-file:"));
+      expect(fileDeliveryCalls).toHaveLength(1);
+      expect(fileDeliveryCalls[0]?.[7]).toMatchObject({ source: "stream-event" });
+      const finalText = deliverTelegramResponse.mock.calls.at(-1)![2] as string;
+      expect(finalText).toBe("");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("routes final legacy send-file tags through the send.file tool before final text delivery", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {

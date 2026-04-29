@@ -62,7 +62,7 @@ The Telegram path is now intentionally layered.
 - `src/telegram/cron-tags.ts`
   Parses `[cron-add:...]` transport tags and forwards them into the Telegram tool layer.
 - `src/telegram/tool-tags.ts`
-  Parses generic `[tool:{...}]` transport tags and fenced `tool` blocks, executes registered bridge tools, strips tags, and appends receipts.
+  Parses generic `[tool:{...}]` transport tags and explicit fenced `tool-call` blocks, executes registered bridge tools, strips tags, and appends receipts.
 - `src/telegram/legacy-delivery-tool-tags.ts`
   Normalizes legacy `[send-file:]` / `[send-image:]` response tags into the registered send tool layer before final turn delivery.
 - `src/telegram/turn-bookkeeping.ts`

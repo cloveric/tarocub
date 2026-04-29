@@ -180,7 +180,7 @@ During each active Telegram turn, the bridge can deliver generated files through
 For larger or quote-heavy payloads, the same tool envelope can be emitted as a fenced block:
 
 ````text
-```tool
+```tool-call
 {"name":"send.file","payload":{"path":"/absolute/path/to/report.pdf"}}
 ```
 ````
@@ -205,7 +205,7 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 Current delivery rules:
 
 - Agents should use `[tool:...]` delivery tags for existing files, images, PDFs, decks, and other binary outputs.
-- `[tool:...]` examples are generated from the registered tool schema/examples, and fenced `tool` blocks execute through the same parser.
+- `[tool:...]` examples are generated from the registered tool schema/examples; explicit fenced `tool-call` blocks execute through the same parser.
 - `cctb send` remains available for turn-scoped CLI workflows and is internally routed through the same send tool layer.
 - Use `telegram send` when you need the same explicit delivery command outside an active turn, or when the turn-scoped `cctb` helper is unavailable.
 - Explicit send commands accept any readable absolute file path.

@@ -88,7 +88,7 @@ describe("telegram tool tags", () => {
     }
   });
 
-  it("executes fenced tool blocks through the same generic tool layer", async () => {
+  it("executes explicit fenced tool-call blocks through the same generic tool layer", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-29T05:00:00.000Z"));
     try {
@@ -96,7 +96,7 @@ describe("telegram tool tags", () => {
         const text = await processTelegramToolTags({
           text: [
             "schedule this",
-            "```tool",
+            "```tool-call",
             JSON.stringify({ name: "cron.add", payload: { in: "10m", prompt: "check [mail] inbox" } }),
             "```",
           ].join("\n"),
@@ -109,13 +109,37 @@ describe("telegram tool tags", () => {
           },
         });
 
-        expect(text).not.toContain("```tool");
+        expect(text).not.toContain("```tool-call");
         expect(text).toContain("Scheduled task added");
         expect((await store.list())[0]?.prompt).toBe("check [mail] inbox");
       });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("treats plain fenced tool blocks as documentation, not executable calls", async () => {
+    await withContext(async ({ stateDir, store, scheduler }) => {
+      const text = await processTelegramToolTags({
+        text: [
+          "example:",
+          "```tool",
+          JSON.stringify({ name: "cron.add", payload: { in: "10m", prompt: "should not run" } }),
+          "```",
+        ].join("\n"),
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "en",
+        },
+      });
+
+      expect(text).toContain("```tool");
+      expect(text).not.toContain("Scheduled task added");
+      expect(await store.list()).toHaveLength(0);
+    });
   });
 
   it("does not execute tool block examples nested inside another fenced block", async () => {
@@ -192,6 +216,62 @@ describe("telegram tool tags", () => {
       expect(text).not.toContain("[tool:");
       expect(text).toContain("File delivered");
       expect(api.sendDocument).toHaveBeenCalledWith(123, "report.txt", expect.any(Uint8Array));
+    });
+  });
+
+  it("allows explicit send.file tool tags to deliver readable absolute paths outside the workspace", async () => {
+    await withContext(async ({ stateDir, store, scheduler, inboxDir, api }) => {
+      const outsidePath = path.join(path.dirname(stateDir), "desktop-report.txt");
+      await writeFile(outsidePath, "hello", "utf8");
+
+      const text = await processTelegramToolTags({
+        text: `done\n[tool:{"name":"send.file","payload":{"path":"${outsidePath}"}}]`,
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "en",
+          delivery: {
+            api,
+            inboxDir,
+            source: "post-turn",
+          },
+        },
+      });
+
+      expect(text).toContain("File delivered");
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "desktop-report.txt", expect.any(Uint8Array));
+    });
+  });
+
+  it("deduplicates repeated send.file tool tags in one response", async () => {
+    await withContext(async ({ stateDir, store, scheduler, workspaceDir, inboxDir, api }) => {
+      const filePath = path.join(workspaceDir, "report.txt");
+      await writeFile(filePath, "hello", "utf8");
+
+      const text = await processTelegramToolTags({
+        text: [
+          "done",
+          `[tool:{"name":"send.file","payload":{"path":"${filePath}"}}]`,
+          `[tool:{"name":"send.file","payload":{"path":"${filePath}"}}]`,
+        ].join("\n"),
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "en",
+          delivery: {
+            api,
+            inboxDir,
+            source: "post-turn",
+          },
+        },
+      });
+
+      expect(text).not.toContain("[tool:");
+      expect(api.sendDocument).toHaveBeenCalledTimes(1);
     });
   });
 

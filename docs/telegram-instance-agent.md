@@ -16,7 +16,7 @@ Plain text only; ask in chat, not blocking prompt tools. For existing file deliv
 For reminders or recurring tasks, emit one inline tool tag, such as `[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]`, `[tool:{"name":"cron.add","payload":{"at":"2026-05-01T09:00:00Z","prompt":"Monday standup"}}]`, or `[tool:{"name":"cron.add","payload":{"cron":"0 9 * * 1","prompt":"weekly summary"}}]`. Use exactly one of `in`, `at`, or `cron`; optional `description` is shown in `/cron list`; never include `chatId` or `userId`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words. Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.
 ```
 
-The bridge also accepts a fenced `tool` block with the same JSON envelope for payloads that are easier to emit on multiple lines, but the default instance prompt stays inline to keep every turn short.
+The bridge also accepts an explicit fenced `tool-call` block with the same JSON envelope for payloads that are easier to emit on multiple lines. Plain fenced `tool` examples are treated as documentation, not executable calls.
 
 When these rules change, sync the affected `~/.cctb/<instance>/agent.md` files. Do not write turn-scoped paths, request ids, or side-channel tokens into `agent.md`.
 

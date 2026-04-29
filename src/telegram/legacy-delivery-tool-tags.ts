@@ -58,7 +58,15 @@ export async function processLegacyDeliveryTagsAsTools(input: ProcessLegacyDeliv
       images,
       files,
     },
-    context: input.context,
+    context: {
+      ...input.context,
+      delivery: input.context.delivery
+        ? {
+          ...input.context.delivery,
+          allowAnyAbsolutePath: input.context.delivery.allowAnyAbsolutePath ?? false,
+        }
+        : undefined,
+    },
   });
 
   if (input.includeMessageInDelivery) {

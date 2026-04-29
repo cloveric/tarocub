@@ -9,7 +9,7 @@
 当前 bridge 让引擎调用定时任务（cron）有**两条路径**：
 
 1. **CLI 路径**：引擎的 Bash 工具运行 `cctb cron add ...`，通过 per-turn 环境变量 `CCTB_CRON_URL` / `CCTB_CRON_TOKEN` 找到一个 per-turn HTTP helper server，发 POST 请求。
-2. **Tool 标签路径**：引擎在响应文本里输出 `[tool:{"name":"cron.add","payload":{...}}]`（或 fenced `tool` block），bridge 在投递前解析，然后转入内部 `cron.add` tool 落库。旧 `[cron-add:{...JSON...}]` 仍作为兼容别名保留。
+2. **Tool 标签路径**：引擎在响应文本里输出 `[tool:{"name":"cron.add","payload":{...}}]`（或显式 fenced `tool-call` block），bridge 在投递前解析，然后转入内部 `cron.add` tool 落库。旧 `[cron-add:{...JSON...}]` 仍作为兼容别名保留。
 
 两条路径的存在原因：
 - CLI 路径**只在 per-turn 重新 spawn 进程的 adapter 上工作**（`ProcessCodexAdapter`、`ProcessClaudeAdapter`），因为 helper URL/token 每轮都换、要新进程才能拿到。
@@ -78,7 +78,7 @@
 ```
 
 bridge 行为：
-1. 扫描 inline `[tool:...]` 标签和 fenced `tool` block；普通 markdown code 示例不会误触发。
+1. 扫描 inline `[tool:...]` 标签和显式 fenced `tool-call` block；普通 markdown code 示例不会误触发。
 2. 对每个匹配：把 JSON payload 和 dispatch context 交给 `executeTelegramTool({ name: "cron.add", ... })`。
 3. `cron.add` tool 负责解析 JSON → 构造 `CronJobInput`（chatId/userId 来自 context）→ `cronStore.add()` → `scheduler.refresh()`。
 4. 把所有标签从用户可见文本中剥掉。

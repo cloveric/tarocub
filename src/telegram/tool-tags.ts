@@ -120,11 +120,11 @@ export function extractTelegramToolTagMatches(text: string): ToolTagMatch[] {
 function extractFencedToolBlockMatches(text: string): ToolTagMatch[] {
   const ranges = findFencedCodeRanges(text);
   return ranges
-    .filter((range) => range.info.split(/\s+/)[0] === "tool")
+    .filter((range) => range.info.split(/\s+/)[0] === "tool-call")
     .filter((range) => {
       const parent = ranges.find((candidate) =>
         candidate !== range &&
-        candidate.info.split(/\s+/)[0] !== "tool" &&
+        candidate.info.split(/\s+/)[0] !== "tool-call" &&
         range.start > candidate.start &&
         range.start < candidate.end
       );
@@ -198,7 +198,7 @@ export function stripTelegramToolTags(text: string, matches = extractTelegramToo
   return next.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function parseToolTagPayload(raw: string): { name: string; payload: unknown } {
+export function parseTelegramToolTagPayload(raw: string): { name: string; payload: unknown } {
   const parsed = JSON.parse(raw) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("tool tag payload must be a JSON object");
@@ -218,6 +218,73 @@ function parseToolTagPayload(raw: string): { name: string; payload: unknown } {
   };
 }
 
+function payloadObject(payload: unknown): Record<string, unknown> | null {
+  try {
+    const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSendToolName(name: string): boolean {
+  return name === "send.file" || name === "send.image" || name === "send.batch";
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function sendToolRequestedPaths(name: string, payload: unknown): string[] {
+  const body = payloadObject(payload);
+  if (!body || !isSendToolName(name)) {
+    return [];
+  }
+  if ((name === "send.file" || name === "send.image") && typeof body.path === "string") {
+    return [body.path];
+  }
+  if (name === "send.batch") {
+    return [...stringArray(body.images), ...stringArray(body.files)];
+  }
+  return [];
+}
+
+function filterAlreadyDeliveredSendPayload(
+  name: string,
+  payload: unknown,
+  deliveredPaths: ReadonlySet<string>,
+): unknown | null {
+  if (!isSendToolName(name)) {
+    return payload;
+  }
+  const body = payloadObject(payload);
+  if (!body) {
+    return payload;
+  }
+
+  if ((name === "send.file" || name === "send.image") && typeof body.path === "string") {
+    return deliveredPaths.has(body.path) ? null : payload;
+  }
+  if (name !== "send.batch") {
+    return payload;
+  }
+
+  const images = stringArray(body.images);
+  const files = stringArray(body.files);
+  const hadFiles = images.length > 0 || files.length > 0;
+  const filtered = {
+    ...body,
+    images: images.filter((filePath) => !deliveredPaths.has(filePath)),
+    files: files.filter((filePath) => !deliveredPaths.has(filePath)),
+  };
+  if (hadFiles && filtered.images.length === 0 && filtered.files.length === 0) {
+    return null;
+  }
+  return filtered;
+}
+
 function renderToolTagFailure(detail: string, context: TelegramToolContext): string {
   return context.locale === "zh" ? `✗ 工具调用失败：${detail}` : `✗ Tool call failed: ${detail}`;
 }
@@ -229,14 +296,41 @@ export async function processTelegramToolTags(input: ProcessTelegramToolTagsInpu
   }
 
   const messages: string[] = [];
+  const deliveredPaths = new Set<string>();
   for (const match of matches) {
     try {
-      const parsed = parseToolTagPayload(match.payload);
+      const parsed = parseTelegramToolTagPayload(match.payload);
+      const payload = filterAlreadyDeliveredSendPayload(parsed.name, parsed.payload, deliveredPaths);
+      if (payload === null) {
+        continue;
+      }
+      const context = input.context.delivery && isSendToolName(parsed.name)
+        ? {
+          ...input.context,
+          delivery: {
+            ...input.context.delivery,
+            onDeliveryAccepted: (
+              receipt: Parameters<NonNullable<NonNullable<TelegramToolContext["delivery"]>["onDeliveryAccepted"]>>[0],
+            ) => {
+              deliveredPaths.add(receipt.path);
+              if (receipt.realPath) {
+                deliveredPaths.add(receipt.realPath);
+              }
+              input.context.delivery?.onDeliveryAccepted?.(receipt);
+            },
+          },
+        }
+        : input.context;
       const result = await executeTelegramTool({
         name: parsed.name,
-        payload: parsed.payload,
-        context: input.context,
+        payload,
+        context,
       });
+      if (result.ok && isSendToolName(parsed.name)) {
+        for (const filePath of sendToolRequestedPaths(parsed.name, payload)) {
+          deliveredPaths.add(filePath);
+        }
+      }
       messages.push(result.message);
     } catch (error) {
       messages.push(renderToolTagFailure(error instanceof Error ? error.message : String(error), input.context));

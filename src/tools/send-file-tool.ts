@@ -136,7 +136,7 @@ export async function executeSendBatchTool(payload: unknown, context: TelegramTo
       context.locale,
       {
         source: delivery.source ?? "post-turn",
-        allowAnyAbsolutePath: delivery.allowAnyAbsolutePath,
+        allowAnyAbsolutePath: delivery.allowAnyAbsolutePath ?? true,
         notifyRejected: delivery.notifyRejected,
         onFileAccepted: (sourcePath) => {
           acceptedPaths.add(sourcePath);

@@ -179,7 +179,7 @@ open -e ~/.cctb/work/agent.md
 如果 payload 较长或包含很多引号，也可以输出同一个 tool envelope 的 fenced block：
 
 ````text
-```tool
+```tool-call
 {"name":"send.file","payload":{"path":"/absolute/path/to/report.pdf"}}
 ```
 ````
@@ -204,7 +204,7 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 当前投递约定：
 
 - Agent 应该用 `[tool:...]` 投递已存在的文件、图片、PDF、PPT 和其他二进制产物。
-- `[tool:...]` 示例由注册过的 tool schema/examples 生成，fenced `tool` block 也走同一个解析器。
+- `[tool:...]` 示例由注册过的 tool schema/examples 生成；显式 fenced `tool-call` block 也走同一个解析器。
 - `cctb send` 仍可用于 turn-scoped CLI 工作流，并且内部会走同一套 send tool layer。
 - active turn 外，或者 turn-scoped `cctb` helper 不可用时，用 `telegram send` 做同一条显式投递链路。
 - 显式发送命令接受任意可读绝对路径。
