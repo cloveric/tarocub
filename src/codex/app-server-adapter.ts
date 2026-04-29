@@ -360,17 +360,25 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private handleStdout(chunk: string): void {
     this.lineBuffer += chunk;
 
-    if (this.lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
-      this.failAllPending(this.withDiagnostics("Engine output exceeded maximum buffer size"));
-      this.child?.kill?.();
-      return;
-    }
-
     const lines = this.lineBuffer.split(/\r?\n/);
     this.lineBuffer = lines.pop() ?? "";
 
     for (const line of lines.map((value) => value.trim()).filter(Boolean)) {
+      if (line.length > MAX_LINE_BUFFER_BYTES && !this.looksLikeJsonRpcLine(line)) {
+        this.appendOversizedStdoutDiagnostic(line);
+        continue;
+      }
       this.handleMessage(line);
+    }
+
+    if (this.lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
+      if (this.looksLikeJsonRpcLine(this.lineBuffer)) {
+        this.failAllPending(this.withDiagnostics("Engine output exceeded maximum buffer size"));
+        this.child?.kill?.();
+        return;
+      }
+      this.appendOversizedStdoutDiagnostic(this.lineBuffer);
+      this.lineBuffer = "";
     }
   }
 
@@ -973,6 +981,30 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     this.stdoutDiagnosticTail = this.appendTail(this.stdoutDiagnosticTail, normalized);
+  }
+
+  private looksLikeJsonRpcLine(value: string): boolean {
+    const trimmed = value.trimStart();
+    if (!trimmed.startsWith("{")) {
+      return false;
+    }
+    if (/^\{\s*"timestamp"\s*:/.test(trimmed) || /^\{\s*"level"\s*:/.test(trimmed)) {
+      return false;
+    }
+    return (
+      trimmed.includes("\"id\"") ||
+      trimmed.includes("\"method\"") ||
+      trimmed.includes("\"result\"") ||
+      trimmed.includes("\"error\"")
+    );
+  }
+
+  private appendOversizedStdoutDiagnostic(value: string): void {
+    const suffix = value.slice(-MAX_DIAGNOSTIC_CHARS);
+    this.appendDiagnostic(
+      "stdout",
+      `omitted oversized non-JSON stdout diagnostic (${value.length} chars):\n${suffix}`,
+    );
   }
 
   private appendTail(existing: string, chunk: string): string {

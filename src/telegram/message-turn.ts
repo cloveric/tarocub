@@ -107,7 +107,7 @@ function stripAlreadySentSideChannelTags(text: string, sentFilePaths: readonly s
     return text;
   }
   const sent = new Set(sentFilePaths);
-  return stripDeliveryTags(text, (match) => sent.has(match.path)).replace(/\n{2,}/g, "\n").trim();
+  return stripDeliveryTags(text, (match) => sent.has(match.path)).trim();
 }
 
 function hasSendFileTag(text: string): boolean {

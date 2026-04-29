@@ -844,14 +844,26 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       failureHint: undefined as string | undefined,
     };
     const generatedPath = path.join(root, "workspace", "chart.png");
+    const deliveredText = [
+      "Generated chart.",
+      "",
+      "Chart details.",
+    ].join("\n");
+    const taggedText = [
+      "Generated chart.",
+      "",
+      `[send-image:${generatedPath}]`,
+      "",
+      "Chart details.",
+    ].join("\n");
     const bridge = {
       handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
         input.onEngineEvent?.({
           type: "assistant_text",
-          text: `Generated chart.\n[send-image:${generatedPath}]`,
+          text: taggedText,
         });
         return {
-          text: `Generated chart.\n[send-image:${generatedPath}]`,
+          text: taggedText,
         };
       }),
     };
@@ -904,10 +916,11 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         sendTelegramOutFile: vi.fn(),
       });
 
-      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+      expect(deliverTelegramResponse).toHaveBeenNthCalledWith(
+        1,
         expect.anything(),
         123,
-        `Generated chart.\n[send-image:${generatedPath}]`,
+        expect.stringContaining(deliveredText),
         expect.any(String),
         undefined,
         undefined,
@@ -920,6 +933,15 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         expect.anything(),
         123,
         "",
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+      );
+      expect(deliverTelegramResponse).not.toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        deliveredText,
         expect.any(String),
         undefined,
         undefined,

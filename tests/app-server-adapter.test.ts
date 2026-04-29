@@ -943,6 +943,32 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(1);
   });
 
+  it("drops oversized non-JSON stdout diagnostics without killing the app-server turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"timestamp":"2026-04-29T10:18:00Z","level":"WARN","fields":{"message":"<html>' + "x".repeat(1024 * 1024 + 1));
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(promise).resolves.toEqual({
+      text: "ok",
+      sessionId: "thread-123",
+    });
+    expect(child.killCalls).toBe(0);
+  });
+
   it("rejects when app-server stdin write fails", async () => {
     const { child, spawnFn } = createSpawnHarness();
     child.stdin.nextError = new Error("pipe broken");
