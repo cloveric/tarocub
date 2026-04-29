@@ -36,6 +36,7 @@ export interface CronJobSnapshot {
   lastError: string | null;
   failureCount: number;
   maxFailures: number;
+  timezone: string | null;
   prompt: string;
   chatId: number;
   userId: number;
@@ -292,9 +293,9 @@ function deriveCurrentTask(
   };
 }
 
-function nextCronRunIso(expr: string): string | null {
+function nextCronRunIso(expr: string, timezone?: string): string | null {
   try {
-    const cron = new Cron(expr, { paused: true });
+    const cron = new Cron(expr, { paused: true, timezone });
     const next = cron.nextRun();
     cron.stop();
     return next?.toISOString() ?? null;
@@ -314,7 +315,7 @@ function toCronJobSnapshot(job: CronJobRecord): CronJobSnapshot {
     nextRunAt: job.enabled
       ? kind === "once"
         ? targetAt
-        : nextCronRunIso(job.cronExpr)
+        : nextCronRunIso(job.cronExpr, job.timezone)
       : null,
     targetAt,
     lastRunAt: job.lastRunAt ?? null,
@@ -322,6 +323,7 @@ function toCronJobSnapshot(job: CronJobRecord): CronJobSnapshot {
     lastError: job.lastError ?? null,
     failureCount: job.failureCount,
     maxFailures: job.maxFailures,
+    timezone: job.timezone ?? null,
     prompt: job.prompt,
     chatId: job.chatId,
     userId: job.userId,
@@ -642,6 +644,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
           <div class="cron-prompt">${esc(job.prompt)}</div>
           <div class="cron-meta">
             <span>${esc(job.schedule)}</span>
+            ${job.timezone ? `<span>TZ ${esc(job.timezone)}</span>` : ""}
             <span>next ${next}</span>
             <span>last ${last}</span>
             ${failures}

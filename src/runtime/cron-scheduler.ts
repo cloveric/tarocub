@@ -41,9 +41,9 @@ const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
  * Validates a cron expression by attempting to construct a paused Cron instance.
  * Returns the next-fire date if valid, or null if invalid.
  */
-export function validateCronExpression(expr: string): Date | null {
+export function validateCronExpression(expr: string, timezone?: string): Date | null {
   try {
-    const probe = new Cron(expr, { paused: true });
+    const probe = new Cron(expr, { paused: true, timezone });
     const next = probe.nextRun();
     probe.stop();
     return next;
@@ -123,11 +123,11 @@ export class CronScheduler {
       this.scheduleRunOnceJob(job);
       return;
     }
-    if (validateCronExpression(job.cronExpr) === null) {
+    if (validateCronExpression(job.cronExpr, job.timezone) === null) {
       this.logger.warn(`cron: skipping job ${job.id} with invalid expression "${job.cronExpr}"`);
       return;
     }
-    const cron = new Cron(job.cronExpr, () => {
+    const cron = new Cron(job.cronExpr, { timezone: job.timezone }, () => {
       void this.runJob(job.id);
     });
     this.running.set(job.id, { stop: () => cron.stop() });
@@ -206,6 +206,7 @@ export class CronScheduler {
         metadata: {
           cronJobId: job.id,
           cronExpr: job.cronExpr,
+          timezone: job.timezone,
           sessionMode: job.sessionMode,
           mute: job.mute,
         },

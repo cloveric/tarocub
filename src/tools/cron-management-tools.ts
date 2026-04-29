@@ -40,7 +40,9 @@ function requireCronRuntime(context: TelegramToolContext): NonNullable<TelegramT
 }
 
 function renderSchedule(job: CronJobRecord): string {
-  return job.runOnce && job.targetAt ? job.targetAt : job.cronExpr;
+  return job.runOnce && job.targetAt
+    ? job.targetAt
+    : `${job.cronExpr}${job.timezone ? `  TZ ${job.timezone}` : ""}`;
 }
 
 function renderJob(job: CronJobRecord, index: number, locale: TelegramToolContext["locale"]): string {

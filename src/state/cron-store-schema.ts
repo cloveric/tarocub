@@ -1,11 +1,14 @@
 import { z } from "zod";
 
+import { normalizeCronTimezone } from "./cron-timezone.js";
+
 function isCanonicalIsoTimestamp(value: string): boolean {
   const parsed = new Date(value);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
 }
 
 const IsoTimestampSchema = z.string().refine(isCanonicalIsoTimestamp, "must be a canonical ISO-8601 timestamp");
+const TimezoneSchema = z.string().refine((value) => normalizeCronTimezone(value) !== undefined, "must be a valid IANA timezone");
 
 export const CronJobIdSchema = z.string().regex(/^[a-f0-9]{8}$/, "cron id must be 8-char lowercase hex");
 
@@ -25,6 +28,7 @@ export const CronJobRecordSchema = z.object({
   chatType: z.string().min(1).default("private"),
   locale: CronLocaleSchema.optional(),
   cronExpr: z.string().min(1).max(120),
+  timezone: TimezoneSchema.optional(),
   prompt: z.string().min(1).max(4000),
   description: z.string().max(200).optional(),
   enabled: z.boolean().default(true),

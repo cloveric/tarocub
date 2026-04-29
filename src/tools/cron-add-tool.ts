@@ -2,6 +2,7 @@ import type { CronRuntime } from "../runtime/cron-runtime.js";
 import { validateCronExpression } from "../runtime/cron-scheduler.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { CronJobInput, CronJobRecord } from "../state/cron-store.js";
+import { normalizeCronTimezone } from "../state/cron-timezone.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import type { TelegramToolContext, TelegramToolResult } from "./telegram-tool-types.js";
 
@@ -97,6 +98,10 @@ function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "cha
   }
   const body = parsedPayload as Record<string, unknown>;
   const prompt = asPrompt(body.prompt);
+  const timezone = normalizeCronTimezone(body.timezone);
+  if (body.timezone !== undefined && timezone === undefined) {
+    throw new Error("timezone must be a valid IANA timezone like Asia/Shanghai");
+  }
   const hasIn = body.in !== undefined && body.in !== null && body.in !== "";
   const hasAt = body.at !== undefined && body.at !== null && body.at !== "";
   const hasCron = body.cron !== undefined && body.cron !== null && body.cron !== "";
@@ -107,7 +112,7 @@ function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "cha
 
   if (hasCron) {
     const cronExpr = asOptionalString(body.cron, "cron", 120)!;
-    if (validateCronExpression(cronExpr) === null) {
+    if (validateCronExpression(cronExpr, timezone) === null) {
       throw new Error(`invalid cron expression: "${cronExpr}"`);
     }
     return {
@@ -116,6 +121,7 @@ function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "cha
       chatType: context.chatType ?? "private",
       locale: context.locale,
       cronExpr,
+      timezone,
       prompt,
       description: asOptionalString(body.description, "description", 200),
       maxFailures: asOptionalInteger(body.maxFailures, "maxFailures", 1, 100),
@@ -147,6 +153,7 @@ function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "cha
     chatType: context.chatType ?? "private",
     locale: context.locale,
     cronExpr: cronExprFromRunAt(targetAt),
+    timezone,
     prompt,
     description: asOptionalString(body.description, "description", 200),
     maxFailures: asOptionalInteger(body.maxFailures, "maxFailures", 1, 100),
@@ -157,9 +164,10 @@ function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "cha
 
 function renderAccepted(record: CronJobRecord, locale: Locale): string {
   const when = record.runOnce && record.targetAt ? record.targetAt : record.cronExpr;
+  const timezone = record.timezone && !record.runOnce ? ` (${record.timezone})` : "";
   return locale === "zh"
-    ? `✓ 已添加定时任务  ID  ${record.id}\n⏰ ${when}\n📝 ${record.prompt}`
-    : `✓ Scheduled task added  ID  ${record.id}\n⏰ ${when}\n📝 ${record.prompt}`;
+    ? `✓ 已添加定时任务  ID  ${record.id}\n⏰ ${when}${timezone}\n📝 ${record.prompt}`
+    : `✓ Scheduled task added  ID  ${record.id}\n⏰ ${when}${timezone}\n📝 ${record.prompt}`;
 }
 
 function renderRejected(detail: string, locale: Locale): string {
@@ -189,6 +197,7 @@ export async function executeCronAddTool(payload: unknown, context: CronAddToolC
         cronJobId: record.id,
         targetAt: record.targetAt,
         cronExpr: record.cronExpr,
+        timezone: record.timezone,
       },
     });
     return { ok: true, status: "accepted", message, metadata: { cronJobId: record.id } };

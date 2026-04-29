@@ -7,6 +7,7 @@ import {
   formatSchemaError,
   type ConfigFile,
 } from "../state/config-file-schema.js";
+import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron-timezone.js";
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -28,6 +29,7 @@ export interface InstanceConfig {
   budgetUsd: number | undefined;
   effort: EffortLevel | undefined;
   model: string | undefined;
+  timezone: string;
   resume: ResumeState | undefined;
 }
 
@@ -54,6 +56,7 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   budgetUsd: undefined,
   effort: undefined,
   model: undefined,
+  timezone: resolveDefaultCronTimezone(),
   resume: undefined,
 };
 
@@ -125,6 +128,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,
     effort,
     model: typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined,
+    timezone: normalizeCronTimezone(config.timezone) ?? DEFAULT_INSTANCE_CONFIG.timezone,
     resume: parseResumeState(config.resume),
   };
 }

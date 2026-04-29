@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -33,6 +33,7 @@ describe("CronStore", () => {
       });
       expect(record.id).toMatch(/^[a-f0-9]{8}$/);
       expect(record.enabled).toBe(true);
+      expect(record.timezone).toBeDefined();
       expect(record.sessionMode).toBe("reuse");
       expect(record.mute).toBe(false);
       expect(record.silent).toBe(false);
@@ -192,6 +193,52 @@ describe("CronStore", () => {
       const ids = new Set(adds.map((job) => job.id));
       expect(ids.size).toBe(20);
       await expect(store.list()).resolves.toHaveLength(20);
+    });
+  });
+
+  it("persists the configured default timezone for new jobs", async () => {
+    await withStateDir(async (stateDir) => {
+      const store = new CronStore(stateDir, { defaultTimezone: "Asia/Shanghai" });
+
+      const record = await store.add({ chatId: 1, userId: 10, cronExpr: "0 9 * * *", prompt: "morning" });
+
+      expect(record.timezone).toBe("Asia/Shanghai");
+      await expect(store.get(record.id)).resolves.toMatchObject({ timezone: "Asia/Shanghai" });
+    });
+  });
+
+  it("applies the configured default timezone to legacy jobs without a timezone", async () => {
+    await withStateDir(async (stateDir) => {
+      const filePath = resolveCronStorePath(stateDir);
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          schemaVersion: 1,
+          jobs: [{
+            id: "abcd1234",
+            chatId: 1,
+            userId: 10,
+            chatType: "private",
+            cronExpr: "0 9 * * *",
+            prompt: "legacy",
+            enabled: true,
+            runOnce: false,
+            sessionMode: "reuse",
+            mute: false,
+            silent: false,
+            timeoutMins: 30,
+            maxFailures: 3,
+            createdAt: "2026-04-29T00:00:00.000Z",
+            updatedAt: "2026-04-29T00:00:00.000Z",
+            failureCount: 0,
+            runHistory: [],
+          }],
+        }),
+        "utf8",
+      );
+      const store = new CronStore(stateDir, { defaultTimezone: "Asia/Shanghai" });
+
+      await expect(store.get("abcd1234")).resolves.toMatchObject({ timezone: "Asia/Shanghai" });
     });
   });
 });

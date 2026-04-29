@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { JsonStore } from "./json-store.js";
 import { withFileMutex } from "./file-mutex.js";
+import { normalizeCronTimezone, resolveDefaultCronTimezone } from "./cron-timezone.js";
 import {
   CronJobRecordSchema,
   CronStoreStateSchema,
@@ -19,6 +20,7 @@ export interface CronJobInput {
   chatType?: string;
   locale?: CronLocale;
   cronExpr: string;
+  timezone?: string;
   prompt: string;
   description?: string;
   enabled?: boolean;
@@ -33,6 +35,7 @@ export interface CronJobInput {
 
 export interface CronJobUpdate {
   cronExpr?: string;
+  timezone?: string;
   prompt?: string;
   description?: string | null;
   enabled?: boolean;
@@ -74,14 +77,21 @@ function createDefaultState(): CronStoreState {
 export class CronStore {
   private readonly filePath: string;
   private readonly store: JsonStore<CronStoreState>;
+  private readonly defaultTimezone: string;
   private pendingWrite: Promise<void> = Promise.resolve();
 
-  constructor(stateDir: string) {
+  constructor(stateDir: string, options: { defaultTimezone?: string } = {}) {
     this.filePath = resolveCronStorePath(stateDir);
+    this.defaultTimezone = normalizeCronTimezone(options.defaultTimezone) ?? resolveDefaultCronTimezone();
     this.store = new JsonStore<CronStoreState>(this.filePath, (value) => {
       const result = CronStoreStateSchema.safeParse(value);
       if (result.success) {
-        return { jobs: result.data.jobs };
+        return {
+          jobs: result.data.jobs.map((job) => ({
+            ...job,
+            timezone: job.timezone ?? this.defaultTimezone,
+          })),
+        };
       }
       throw new Error(`invalid cron store state: ${result.error.message}`);
     });
@@ -114,6 +124,7 @@ export class CronStore {
         chatType: input.chatType ?? "private",
         locale: input.locale,
         cronExpr: input.cronExpr,
+        timezone: normalizeCronTimezone(input.timezone) ?? this.defaultTimezone,
         prompt: input.prompt,
         description: input.description,
         enabled: input.enabled ?? true,
@@ -157,6 +168,9 @@ export class CronStore {
       const merged: CronJobRecord = {
         ...existing,
         cronExpr: patch.cronExpr ?? existing.cronExpr,
+        timezone: patch.timezone === undefined
+          ? existing.timezone
+          : normalizeCronTimezone(patch.timezone) ?? this.defaultTimezone,
         prompt: patch.prompt ?? existing.prompt,
         description:
           patch.description === null

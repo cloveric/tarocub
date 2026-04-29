@@ -194,6 +194,7 @@ async function main(): Promise<void> {
         stateDir: config.stateDir,
         executor: cronExecutor,
         instanceName,
+        defaultTimezone: instanceConfig.timezone,
         onJobFailure: (job, detail) => sendCronFailureNotification(api, job, detail),
       });
     } catch (error) {

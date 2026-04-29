@@ -320,6 +320,7 @@ describe("collectInstanceSnapshots", () => {
             lastError: "engine failed",
             failureCount: 2,
             maxFailures: 3,
+            timezone: "Asia/Shanghai",
             prompt: "drink water",
             chatId: 100,
             userId: 200,

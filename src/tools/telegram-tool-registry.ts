@@ -249,6 +249,7 @@ export function createDefaultTelegramToolRegistry(): TelegramToolRegistry {
         in: { type: "string", pattern: "^\\d{1,6}(s|m|h|d)$" },
         at: { type: "string", format: "date-time" },
         cron: { type: "string", maxLength: 120 },
+        timezone: { type: "string", description: "Optional IANA timezone, for example Asia/Shanghai. Defaults to the bot instance timezone." },
         description: { type: "string", maxLength: 200 },
         maxFailures: { type: "number" },
         chatId: { type: "number", description: "Deprecated compatibility field; ignored in favor of the current Telegram chat context." },

@@ -140,7 +140,8 @@ function renderJob(job: CronJobRecord, index: number, locale: CronLocale): strin
   const exprLine = job.runOnce && job.targetAt
     ? human
     : human ? `${job.cronExpr}  (${human})` : job.cronExpr;
-  lines.push(`   ⏰ ${exprLine}`);
+  const timezone = job.timezone && !job.runOnce ? `  TZ ${job.timezone}` : "";
+  lines.push(`   ⏰ ${exprLine}${timezone}`);
   lines.push(`   📝 ${job.prompt}`);
   if (job.lastRunAt) {
     const rel = humanizeRelative(job.lastRunAt, locale);
@@ -248,9 +249,10 @@ async function handleAdd(rest: string, context: CronCommandContext): Promise<voi
 
   const human = humanizeCronExpr(cronExpr, context.locale);
   const exprLine = human ? `${cronExpr}  (${human})` : cronExpr;
+  const timezone = record.timezone ? `  TZ ${record.timezone}` : "";
   const msg = context.locale === "zh"
-    ? `✓ 已添加任务  ID  ${record.id}\n⏰ ${exprLine}\n📝 ${prompt}`
-    : `✓ Added task  ID  ${record.id}\n⏰ ${exprLine}\n📝 ${prompt}`;
+    ? `✓ 已添加任务  ID  ${record.id}\n⏰ ${exprLine}${timezone}\n📝 ${prompt}`
+    : `✓ Added task  ID  ${record.id}\n⏰ ${exprLine}${timezone}\n📝 ${prompt}`;
   await context.api.sendMessage(context.chatId, msg);
 }
 

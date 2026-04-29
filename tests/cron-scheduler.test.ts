@@ -52,6 +52,26 @@ describe("validateCronExpression", () => {
 });
 
 describe("CronScheduler", () => {
+  it("computes recurring runs in the persisted timezone", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-29T12:59:59.000Z"));
+    try {
+      await withDeps(async ({ store }) => {
+        const job = await store.add({
+          chatId: 1,
+          userId: 1,
+          cronExpr: "0 9 * * *",
+          prompt: "a",
+          timezone: "America/New_York",
+        } as never);
+
+        expect(validateCronExpression(job.cronExpr, job.timezone)?.toISOString()).toBe("2026-04-29T13:00:00.000Z");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("loads existing enabled jobs at start()", async () => {
     await withDeps(async ({ store, scheduler }) => {
       const a = await store.add({ chatId: 1, userId: 1, cronExpr: "0 9 * * *", prompt: "a" });

@@ -31,12 +31,13 @@ export interface InitializeCronRuntimeOptions {
   stateDir: string;
   executor: CronExecutor;
   instanceName?: string;
+  defaultTimezone?: string;
   logger?: Pick<Console, "error" | "warn">;
   onJobFailure?: CronFailureHandler;
 }
 
 export async function initializeCronRuntime(options: InitializeCronRuntimeOptions): Promise<CronRuntime> {
-  const store = new CronStore(options.stateDir);
+  const store = new CronStore(options.stateDir, { defaultTimezone: options.defaultTimezone });
   const scheduler = new CronScheduler({
     store,
     executor: options.executor,

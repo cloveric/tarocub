@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadInstanceConfig, updateInstanceConfig } from "../src/telegram/instance-config.js";
+import { resolveDefaultCronTimezone } from "../src/state/cron-timezone.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -22,6 +23,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: undefined,
         effort: undefined,
         model: undefined,
+        timezone: resolveDefaultCronTimezone(),
         resume: undefined,
       });
     } finally {
@@ -43,6 +45,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: undefined,
         effort: undefined,
         model: undefined,
+        timezone: resolveDefaultCronTimezone(),
         resume: undefined,
       });
       expect(errorSpy).toHaveBeenCalledOnce();
@@ -65,6 +68,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: undefined,
         effort: undefined,
         model: undefined,
+        timezone: resolveDefaultCronTimezone(),
         resume: undefined,
       });
       expect(errorSpy).toHaveBeenCalledOnce();
@@ -86,6 +90,7 @@ describe("loadInstanceConfig", () => {
           budgetUsd: 10,
           effort: "high",
           model: " claude-sonnet ",
+          timezone: "Asia/Shanghai",
           resume: {
             sessionId: "session-1",
             dirName: "project-dir",
@@ -102,6 +107,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: 10,
         effort: "high",
         model: "claude-sonnet",
+        timezone: "Asia/Shanghai",
         resume: {
           sessionId: "session-1",
           dirName: "project-dir",
