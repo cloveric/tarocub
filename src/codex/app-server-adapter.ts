@@ -38,6 +38,7 @@ type AppServerChildProcess = {
 type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => AppServerChildProcess;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
+const MAX_PROTOCOL_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_DIAGNOSTIC_CHARS = 4_000;
 export const CODEX_APP_SERVER_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS = 15 * 60_000;
@@ -373,7 +374,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     this.lineBuffer = lines.pop() ?? "";
 
     for (const line of lines.map((value) => value.trim()).filter(Boolean)) {
-      if (line.length > MAX_LINE_BUFFER_BYTES) {
+      if (line.length > MAX_LINE_BUFFER_BYTES && !this.looksLikeJsonRpcLine(line)) {
         this.appendOversizedStdoutDiagnostic(line);
         continue;
       }
@@ -381,6 +382,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     if (this.lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
+      if (this.looksLikeJsonRpcLine(this.lineBuffer)) {
+        if (this.lineBuffer.length > MAX_PROTOCOL_LINE_BUFFER_BYTES) {
+          this.failAllPending(this.withDiagnostics("Codex app-server JSON-RPC output exceeded maximum buffer size"));
+          this.child?.kill?.();
+          this.resetChildState();
+        }
+        return;
+      }
       this.appendOversizedStdoutDiagnostic(this.lineBuffer);
       this.lineBuffer = "";
     }
@@ -1001,6 +1010,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     this.stdoutDiagnosticTail = this.appendTail(this.stdoutDiagnosticTail, normalized);
+  }
+
+  private looksLikeJsonRpcLine(value: string): boolean {
+    return /^\s*\{\s*(?:"jsonrpc"\s*:|"id"\s*:|"method"\s*:)/.test(value);
   }
 
   private appendOversizedStdoutDiagnostic(value: string): void {

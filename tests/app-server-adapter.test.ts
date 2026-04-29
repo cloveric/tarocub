@@ -1073,6 +1073,53 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(0);
   });
 
+  it("accepts oversized top-level json-rpc responses from large resumed threads", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("thread-large", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    expect(JSON.parse(child.stdin.lines[1] ?? "{}").method).toBe("thread/resume");
+
+    child.stdout.emitData(
+      JSON.stringify({
+        id: 2,
+        result: {
+          thread: {
+            id: "thread-large",
+            turns: [
+              {
+                items: [
+                  {
+                    type: "agentMessage",
+                    text: "x".repeat(1024 * 1024 + 1),
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }) + "\n",
+    );
+    await waitFor(() => child.stdin.lines.length >= 3);
+    expect(JSON.parse(child.stdin.lines[2] ?? "{}").method).toBe("turn/start");
+
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-large","item":{"type":"agentMessage","text":"ok"}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-large","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(promise).resolves.toEqual({
+      text: "ok",
+      sessionId: undefined,
+    });
+    expect(child.killCalls).toBe(0);
+  });
+
   it("rejects when app-server stdin write fails", async () => {
     const { child, spawnFn } = createSpawnHarness();
     child.stdin.nextError = new Error("pipe broken");
