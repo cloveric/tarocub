@@ -131,8 +131,17 @@ describe("CodexAppServerAdapter", () => {
   it("times out and destroys app-server when thread/start never replies", async () => {
     vi.useFakeTimers();
     try {
-      const { child, spawnFn } = createSpawnHarness();
-      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+      const childA = new FakeChildProcess();
+      const childB = new FakeChildProcess();
+      const children = [childA, childB];
+      const spawnFn = () => {
+        const child = children.shift();
+        if (!child) {
+          throw new Error("no more fake children");
+        }
+        return child;
+      };
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn as never);
 
       const promise = adapter.sendUserMessage("telegram-12345", {
         text: "Hello",
@@ -140,15 +149,73 @@ describe("CodexAppServerAdapter", () => {
       });
 
       await vi.advanceTimersByTimeAsync(0);
-      child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+      childA.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
       await vi.advanceTimersByTimeAsync(0);
-      expect(child.stdin.lines).toHaveLength(2);
-      expect(JSON.parse(child.stdin.lines[1] ?? "{}").method).toBe("thread/start");
+      expect(childA.stdin.lines).toHaveLength(2);
+      expect(JSON.parse(childA.stdin.lines[1] ?? "{}").method).toBe("thread/start");
+
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(childA.killCalls).toBe(1);
+      const retryInitialize = JSON.parse(childB.stdin.lines[0] ?? "{}");
+      expect(retryInitialize.method).toBe("initialize");
+      childB.stdout.emitData(`{"id":${retryInitialize.id},"result":{"platformOs":"windows"}}\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(JSON.parse(childB.stdin.lines[1] ?? "{}").method).toBe("thread/start");
 
       const assertion = expect(promise).rejects.toThrow("Codex app-server thread/start timed out");
       await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
       await assertion;
-      expect(child.killCalls).toBe(1);
+      expect(childB.killCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries thread/start once on a fresh app-server after a read timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const childA = new FakeChildProcess();
+      const childB = new FakeChildProcess();
+      const children = [childA, childB];
+      const spawnFn = () => {
+        const child = children.shift();
+        if (!child) {
+          throw new Error("no more fake children");
+        }
+        return child;
+      };
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn as never);
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      childA.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(JSON.parse(childA.stdin.lines[1] ?? "{}").method).toBe("thread/start");
+
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(childA.killCalls).toBe(1);
+      const retryInitialize = JSON.parse(childB.stdin.lines[0] ?? "{}");
+      expect(retryInitialize.method).toBe("initialize");
+
+      childB.stdout.emitData(`{"id":${retryInitialize.id},"result":{"platformOs":"windows"}}\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      const retryThreadStart = JSON.parse(childB.stdin.lines[1] ?? "{}");
+      childB.stdout.emitData(`{"id":${retryThreadStart.id},"result":{"thread":{"id":"thread-retry"}}}\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(JSON.parse(childB.stdin.lines[2] ?? "{}").method).toBe("turn/start");
+      childB.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-retry","item":{"type":"agentMessage","text":"ok after retry"}}}\n');
+      childB.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-retry","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+
+      await expect(promise).resolves.toEqual({
+        text: "ok after retry",
+        sessionId: "thread-retry",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -157,8 +224,17 @@ describe("CodexAppServerAdapter", () => {
   it("times out and destroys app-server when thread/resume never replies", async () => {
     vi.useFakeTimers();
     try {
-      const { child, spawnFn } = createSpawnHarness();
-      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+      const childA = new FakeChildProcess();
+      const childB = new FakeChildProcess();
+      const children = [childA, childB];
+      const spawnFn = () => {
+        const child = children.shift();
+        if (!child) {
+          throw new Error("no more fake children");
+        }
+        return child;
+      };
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn as never);
 
       const promise = adapter.sendUserMessage("thread-previous", {
         text: "Hello",
@@ -166,15 +242,24 @@ describe("CodexAppServerAdapter", () => {
       });
 
       await vi.advanceTimersByTimeAsync(0);
-      child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+      childA.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
       await vi.advanceTimersByTimeAsync(0);
-      expect(child.stdin.lines).toHaveLength(2);
-      expect(JSON.parse(child.stdin.lines[1] ?? "{}").method).toBe("thread/resume");
+      expect(childA.stdin.lines).toHaveLength(2);
+      expect(JSON.parse(childA.stdin.lines[1] ?? "{}").method).toBe("thread/resume");
+
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(childA.killCalls).toBe(1);
+      const retryInitialize = JSON.parse(childB.stdin.lines[0] ?? "{}");
+      expect(retryInitialize.method).toBe("initialize");
+      childB.stdout.emitData(`{"id":${retryInitialize.id},"result":{"platformOs":"windows"}}\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(JSON.parse(childB.stdin.lines[1] ?? "{}").method).toBe("thread/resume");
 
       const assertion = expect(promise).rejects.toThrow("Codex app-server thread/resume timed out");
       await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS);
       await assertion;
-      expect(child.killCalls).toBe(1);
+      expect(childB.killCalls).toBe(1);
     } finally {
       vi.useRealTimers();
     }

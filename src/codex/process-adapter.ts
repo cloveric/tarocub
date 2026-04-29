@@ -40,7 +40,8 @@ type ProcessChildLike = {
 type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => ProcessChildLike;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_OUTPUT_LINE_BUFFER_BYTES = 1024 * 1024;
-const MAX_STDERR_TAIL_BYTES = 128 * 1024;
+const MAX_STRUCTURED_OUTPUT_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
+const MAX_STDERR_TAIL_BYTES = 4 * 1024;
 const MAX_CODEX_ROLLOUT_SCAN_DEPTH = 16;
 export const CODEX_PROCESS_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_PROCESS_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
@@ -141,6 +142,10 @@ function updateTurnStateFromLine(state: CodexTurnState, line: string, emitEngine
   if (event.type === "error" && typeof event.message === "string" && event.message.trim()) {
     state.lastErrorMessage = event.message;
   }
+}
+
+function looksLikeStructuredCodexLine(value: string): boolean {
+  return /^\s*\{\s*(?:"type"\s*:|"jsonrpc"\s*:|"id"\s*:|"method"\s*:)/.test(value);
 }
 
 function appendTail(existing: string, chunk: string, maxBytes: number): string {
@@ -606,15 +611,30 @@ export class ProcessCodexAdapter implements CodexAdapter {
       child.stdout?.on("data", (chunk) => {
         resetInactivityTimeout();
         stdoutLineBuffer += chunk.toString();
-        if (!settled && stdoutLineBuffer.length > MAX_OUTPUT_LINE_BUFFER_BYTES) {
-          rejectAndKill(new Error("Engine output exceeded maximum buffer size"));
-          return;
-        }
 
         const lines = stdoutLineBuffer.split(/\r?\n/);
         stdoutLineBuffer = lines.pop() ?? "";
         for (const line of lines.map((value) => value.trim()).filter(Boolean)) {
+          if (line.length > MAX_OUTPUT_LINE_BUFFER_BYTES) {
+            if (!looksLikeStructuredCodexLine(line)) {
+              rejectAndKill(new Error("Engine output exceeded maximum buffer size"));
+              return;
+            }
+            if (line.length > MAX_STRUCTURED_OUTPUT_LINE_BUFFER_BYTES) {
+              rejectAndKill(new Error("Engine structured output exceeded maximum buffer size"));
+              return;
+            }
+          }
           updateTurnStateFromLine(state, line, emitEngineEvent);
+        }
+        if (!settled && stdoutLineBuffer.length > MAX_OUTPUT_LINE_BUFFER_BYTES) {
+          if (looksLikeStructuredCodexLine(stdoutLineBuffer)) {
+            if (stdoutLineBuffer.length > MAX_STRUCTURED_OUTPUT_LINE_BUFFER_BYTES) {
+              rejectAndKill(new Error("Engine structured output exceeded maximum buffer size"));
+            }
+            return;
+          }
+          rejectAndKill(new Error("Engine output exceeded maximum buffer size"));
         }
       });
 

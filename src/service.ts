@@ -388,10 +388,12 @@ async function seedIsolatedClaudeConfig(
 
 export type EngineType = "codex" | "claude";
 type ApprovalMode = "normal" | "full-auto" | "bypass";
+type CodexRuntime = "app-server" | "process";
 
 export async function readInstanceRuntimeConfig(configPath: string): Promise<{
   engine: EngineType;
   approvalMode: ApprovalMode;
+  codexRuntime: CodexRuntime | undefined;
 }> {
   const parsed = await readValidatedConfigFile(configPath);
   return {
@@ -400,6 +402,10 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
       parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass"
         ? parsed.approvalMode
         : "normal",
+    codexRuntime:
+      parsed.codexRuntime === "process" || parsed.codexRuntime === "app-server"
+        ? parsed.codexRuntime
+        : undefined,
   };
 }
 
@@ -411,12 +417,16 @@ export async function readApprovalMode(configPath: string): Promise<ApprovalMode
   return (await readInstanceRuntimeConfig(configPath)).approvalMode;
 }
 
-export function resolveEngineRuntime(engine: EngineType, _approvalMode: ApprovalMode): "app-server" | "process" | "stream" {
+export function resolveEngineRuntime(
+  engine: EngineType,
+  _approvalMode: ApprovalMode,
+  codexRuntime?: CodexRuntime,
+): "app-server" | "process" | "stream" {
   if (engine === "claude") {
     return "stream";
   }
 
-  return "app-server";
+  return codexRuntime ?? "app-server";
 }
 
 function resolveClaudeExecutable(env: EnvSource): string {
@@ -577,6 +587,7 @@ async function createAdapter(
   const engine = runtimeConfig.engine;
   const workspacePath = path.join(config.stateDir, "workspace");
   const approvalMode = runtimeConfig.approvalMode;
+  const engineRuntime = resolveEngineRuntime(engine, approvalMode, runtimeConfig.codexRuntime);
   const childEnv = buildAdapterChildEnv(env);
 
   if (engine === "claude") {
@@ -613,7 +624,7 @@ async function createAdapter(
   // CODEX_HOME (or its absence) from the parent env, so they end up on the
   // same config dir as the user's main Codex CLI — avoiding the OAuth
   // refresh-token race at the cost of a wider blast radius.
-  if (resolveEngineRuntime(engine, approvalMode) === "app-server") {
+  if (engineRuntime === "app-server") {
     await mkdir(workspacePath, { recursive: true });
     return new CodexAppServerAdapter(
       config.codexExecutable,

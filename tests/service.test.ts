@@ -30,6 +30,7 @@ import {
 } from "../src/telegram/message-renderer.js";
 import { ClaudeStreamAdapter } from "../src/codex/claude-stream-adapter.js";
 import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
+import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import * as auditLog from "../src/state/audit-log.js";
@@ -144,6 +145,10 @@ describe("createServiceDependenciesForInstance", () => {
 
   it("reports Codex's default runtime as app-server", () => {
     expect(resolveEngineRuntime("codex", "normal")).toBe("app-server");
+  });
+
+  it("honors the Codex runtime override", () => {
+    expect(resolveEngineRuntime("codex", "normal", "process")).toBe("process");
   });
 
   it("does not mutate process.env.TELEGRAM_BOT_TOKEN directly", async () => {
@@ -321,6 +326,31 @@ describe("createServiceDependenciesForInstance", () => {
       );
 
       expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the process Codex adapter when configured", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, JSON.stringify({ codexRuntime: "process" }) + "\n", "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CODEX_EXECUTABLE: "codex",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

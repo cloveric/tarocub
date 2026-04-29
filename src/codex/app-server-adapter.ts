@@ -43,7 +43,7 @@ const MAX_DIAGNOSTIC_CHARS = 4_000;
 export const CODEX_APP_SERVER_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS = 15 * 60_000;
 export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS = 30_000;
-export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 60_000;
+export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 180_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 type ApprovalMode = "normal" | "full-auto" | "bypass";
 
@@ -185,9 +185,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       input.instructions ?? null,
     );
     const prompt = this.buildPrompt(input, instructions);
-    const threadId = isLogicalTelegramSessionId(sessionId)
-      ? await this.startThread()
-      : await this.resolveThreadForMessage(sessionId);
+    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions);
     const text = await this.startTurn(
       threadId,
       prompt,
@@ -210,7 +208,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return;
     }
 
-    await this.ensureThreadLoaded(sessionId);
+    await this.retryThreadReadAfterTimeout(() => this.ensureThreadLoaded(sessionId), runtimeOptions);
   }
 
   private async loadRuntimeOptions(): Promise<{
@@ -698,6 +696,42 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
       throw error;
     }
+  }
+
+  private async resolveThreadForMessageWithRetry(
+    sessionId: string,
+    runtimeOptions: Awaited<ReturnType<CodexAppServerAdapter["loadRuntimeOptions"]>>,
+  ): Promise<string> {
+    return this.retryThreadReadAfterTimeout(
+      () => isLogicalTelegramSessionId(sessionId)
+        ? this.startThread()
+        : this.resolveThreadForMessage(sessionId),
+      runtimeOptions,
+    );
+  }
+
+  private async retryThreadReadAfterTimeout<T>(
+    operation: () => Promise<T>,
+    runtimeOptions: Awaited<ReturnType<CodexAppServerAdapter["loadRuntimeOptions"]>>,
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!this.isThreadReadTimeout(error)) {
+        throw error;
+      }
+      this.destroy();
+      // request() also schedules destroyOnTimeout; yield once so that queued
+      // cleanup cannot destroy the replacement app-server.
+      await Promise.resolve();
+      await this.ensureInitialized(runtimeOptions);
+      return await operation();
+    }
+  }
+
+  private isThreadReadTimeout(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /Codex app-server thread\/(?:start|resume) timed out/i.test(message);
   }
 
   private async startTurn(

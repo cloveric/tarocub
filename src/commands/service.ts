@@ -656,6 +656,7 @@ export async function getServiceStatus(
   const runtimeConfig = await readInstanceRuntimeConfig(configPath);
   const engine = runtimeConfig.engine;
   const approvalMode = runtimeConfig.approvalMode;
+  const engineRuntime = resolveEngineRuntime(engine, approvalMode, runtimeConfig.codexRuntime);
   const sessionSummary = await inspectSessionBindings(env, paths.instanceName);
   const lastHandledUpdateId = await getLastHandledUpdateId(path.join(paths.stateDir, "inbox"));
   const readToken = deps.readConfiguredBotToken ?? readConfiguredBotToken;
@@ -745,7 +746,7 @@ export async function getServiceStatus(
     running,
     pid: running ? pid : null,
     engine,
-    runtime: resolveEngineRuntime(engine, approvalMode),
+    runtime: engineRuntime,
     lockPath: paths.lockPath,
     stateDir: paths.stateDir,
     stdoutPath: paths.stdoutPath,

@@ -577,6 +577,30 @@ describe("ProcessCodexAdapter", () => {
     await expect(promise).rejects.toThrow(/maximum buffer size/i);
   });
 
+  it("allows oversized structured Codex stdout lines", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const largeText = "x".repeat(1024 * 1024 + 1);
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: largeText } }) + "\n");
+    child.stdout.emitData('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2,"cached_input_tokens":3}}\n');
+    child.close(0);
+
+    const response = await promise;
+    expect(response.text).toHaveLength(largeText.length);
+    expect(response.text).toBe(largeText);
+    expect(response.usage).toEqual({
+      inputTokens: 1,
+      outputTokens: 2,
+      cachedTokens: 3,
+    });
+  });
+
   it("does not fail when stderr is noisy but stdout still produces a valid result", async () => {
     const { spawnCodex, child } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);
