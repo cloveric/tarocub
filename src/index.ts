@@ -127,8 +127,8 @@ async function main(): Promise<void> {
 
     // Auto-upgrade agent.md to the current generated template if the user
     // hasn't customized the Telegram Transport section. This keeps existing
-    // bots in sync with new dispatch rules (e.g. Scheduled Tasks added in
-    // v4.5.6) without requiring the operator to run `telegram instructions
+    // bots in sync with new dispatch rules (e.g. the tool-layer transport
+    // updates in v4.5.7) without requiring the operator to run `telegram instructions
     // upgrade` manually. force:false leaves custom-transport content alone.
     try {
       const result = await upgradeInstanceAgentInstructions(
