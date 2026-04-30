@@ -218,8 +218,13 @@ File delivery is one of the highest-risk parts of the product because it crosses
 The intended model is:
 
 - inline fenced file blocks for small text/code files
-- explicit `[send-file:/absolute/path]` tags for existing files
-- path restrictions to the workspace and controlled output areas
+- explicit `[tool:{"name":"send.file","payload":{"path":"/absolute/path"}}]`,
+  `[tool:{"name":"send.image","payload":{"path":"/absolute/image.png"}}]`, or
+  `send.batch` tags for existing files
+- legacy `[send-file:/absolute/path]` / `[send-image:/absolute/path]` tags are
+  compatibility-only and should not appear in new agent instructions or examples
+- path restrictions for legacy tags, plus explicit receipt tracking for all tool
+  deliveries
 
 This boundary has already been a source of security bugs. Any new work here should default to conservative path validation and regression tests.
 

@@ -35,6 +35,7 @@
 
 ### 最近这波变化
 
+- **v4.5.8** — 文档明确 `[tool:{...}]` 是 generated 实例指令唯一使用的投递 tag；旧 `[send-file:]` / `[send-image:]` 仅作为兼容层保留；补充文件投递信任边界说明。
 - **v4.5.7** — 文件投递和 Telegram 定时任务统一到注册过的 `[tool:{...}]` layer；新增更安全的 `tool-call` fenced block；加强 stream/post-turn 去重；cron 增加时区、过期 runOnce 处理、文件锁、任务上限和失败 receipt。
 - **v4.5.3** — 服务启动时会从 audit 历史恢复 stale 的 Telegram update watermark，避免重启后重复执行已经完成的旧任务。
 - **v4.5.2** — 修复 Telegram update watermark 顺序推进，早期 turn 还在收尾时，后续快速消息不会再被错误当成 duplicate 跳过。
@@ -215,15 +216,15 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 
 当前投递约定：
 
-- Agent 应该用 `[tool:...]` 投递已存在的文件、图片、PDF、PPT 和其他二进制产物。
+- Agent 应该用 `[tool:...]` 投递已存在的文件、图片、PDF、PPT 和其他二进制产物。这是生成实例指令唯一教给 agent 的投递 tag 格式。
 - `[tool:...]` 示例由注册过的 tool schema/examples 生成；显式 fenced `tool-call` block 也走同一个解析器。
 - `cctb send` 仍可用于 turn-scoped CLI 工作流，并且内部会走同一套 send tool layer。
 - active turn 外，或者 turn-scoped `cctb` helper 不可用时，用 `telegram send` 做同一条显式投递链路。
 - 显式发送命令接受任意可读绝对路径。
-- 旧的 `[send-file:/absolute/path]` / `[send-image:/absolute/path]` 仍兼容，但会先归一到 send tool layer 再投递。
+- 旧的 `[send-file:/absolute/path]` / `[send-image:/absolute/path]` 仅作为旧会话和历史输出兼容保留。新的 agent 指令、system prompt 和示例不要再使用它们。
 - 小型文本/代码文件仍可用 `file:name.ext` fenced-block 形式返回。
 - helper 只在当前 Telegram turn 有效，turn 结束后不能再用。
-- `[tool:...]` / `cctb send` / `telegram send` 显式发送接受任意可读绝对路径；旧 fallback tag 仍按兼容路径规则校验。
+- `[tool:...]` / `cctb send` / `telegram send` 显式发送接受任意可读绝对路径；legacy fallback tag 仍按旧的 workspace / `/resume` 路径规则校验。
 - 文件投递成功和拒绝都会记录为 turn 级 receipt，所以 bridge 可以用结构化交付证据判断是否完成，而不是相信文本声明。
 - 如果某个文件已经通过 stream delivery 或 side-channel helper 发过，最终 `.telegram-out` 扫描会按真实路径跳过它，避免 Telegram 重复附件。
 - request-scoped `.telegram-out/<requestId>/` 目录只是运行时缓冲区，24 小时后自动清理。

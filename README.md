@@ -35,6 +35,7 @@
 
 ### What Changed Recently
 
+- **v4.5.8** — documents `[tool:{...}]` as the only generated delivery tag format, keeps legacy `[send-file:]` / `[send-image:]` tags as compatibility-only, and clarifies the file-delivery trust boundary.
 - **v4.5.7** — unifies file delivery and Telegram scheduled tasks around the registered `[tool:{...}]` layer, adds safer `tool-call` fenced blocks, hardens stream/post-turn dedupe, and improves cron reliability with timezones, stale-run handling, file locks, job caps, and failure receipts.
 - **v4.5.3** — recovers a stale Telegram update watermark from audit history on service startup, preventing old completed tasks from replaying after restart.
 - **v4.5.2** — fixes Telegram update watermark ordering, so rapid follow-up messages cannot be skipped while an earlier turn is still finishing.
@@ -216,15 +217,15 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 
 Current delivery rules:
 
-- Agents should use `[tool:...]` delivery tags for existing files, images, PDFs, decks, and other binary outputs.
+- Agents should use `[tool:...]` delivery tags for existing files, images, PDFs, decks, and other binary outputs. This is the only delivery tag format generated instance instructions teach.
 - `[tool:...]` examples are generated from the registered tool schema/examples; explicit fenced `tool-call` blocks execute through the same parser.
 - `cctb send` remains available for turn-scoped CLI workflows and is internally routed through the same send tool layer.
 - Use `telegram send` when you need the same explicit delivery command outside an active turn, or when the turn-scoped `cctb` helper is unavailable.
 - Explicit send commands accept any readable absolute file path.
-- Legacy `[send-file:/absolute/path]` / `[send-image:/absolute/path]` tags remain supported, but are normalized into the send tool layer before delivery.
+- Legacy `[send-file:/absolute/path]` / `[send-image:/absolute/path]` tags are accepted only for older sessions and copied historical output. Do not use them in new agent instructions, system prompts, or examples.
 - Small text/code files can still use the `file:name.ext` fenced-block form.
 - The helper is scoped to one Telegram turn. It will not work after the turn finishes.
-- Plain `[send-file:]` fallback tags still validate that files live under the instance workspace or the active `/resume` project before sending.
+- Legacy fallback tags still validate that files live under the instance workspace or the active `/resume` project before sending.
 - Accepted and rejected file deliveries are recorded as turn-level receipts, so the bridge can decide completion from structured delivery evidence instead of text claims.
 - If a file was already sent by stream delivery or the side-channel helper, the final `.telegram-out` sweep skips that same real path to avoid duplicate Telegram attachments.
 - Request-scoped `.telegram-out/<requestId>/` directories are runtime buffers and are pruned after 24 hours.
