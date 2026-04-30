@@ -57,12 +57,12 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 ## Why This Bridge
 
-- **Real CLI behavior, not an API imitation.** The bridge runs Codex and Claude Code directly, so local tools, auth, sessions, workspaces, and engine-specific behavior stay intact.
-- **One protocol for every runtime shape.** File delivery and Telegram cron scheduling use schema-backed `[tool:{...}]` tags, so process runtimes, stream runtimes, Claude, and Codex can all use the same bridge path.
-- **Shorter prompts, fewer dynamic secrets.** Instance-level `agent.md` holds the stable transport rules; per-turn prompts no longer need request ids, temp directories, or side-channel tokens.
-- **Receipts over claims.** File delivery and scheduled-task creation produce structured accepted/rejected receipts, so the bridge does not trust text like "done" unless a delivery mechanism actually succeeded.
-- **Operationally inspectable.** Timeline logs, audit logs, doctor, dashboard, usage tracking, and cron state make failures diagnosable instead of invisible.
-- **Safe upgrades for existing bots.** Generated `agent.md` blocks are auto-upgraded on startup, while custom transport sections require explicit `--force` and get backed up first.
+- **Native CLI first.** The bridge runs the real Codex and Claude Code CLIs, so local auth, project files, sessions, approvals, and engine-specific behavior remain the same as on your desktop.
+- **Multi-engine without separate playbooks.** Each bot can choose Codex or Claude, process or stream runtime, while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
+- **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
+- **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
+- **Receipts over claims.** File delivery and scheduled-task creation produce structured accepted/rejected receipts, so "done" only counts when the bridge actually delivered or scheduled something.
+- **Operable by default.** Timeline logs, audit logs, doctor, dashboard, usage tracking, cron state, and generated-instruction upgrades make failures visible and recovery repeatable.
 
 ---
 

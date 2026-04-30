@@ -57,12 +57,12 @@ telegram service restart --all
 
 ## 为什么是这套架构
 
-- **跑的是真 CLI，不是假 API 包装。** bridge 直接运行 Codex 和 Claude Code，所以本地工具、认证、会话、工作区和引擎原生行为都保留。
-- **一套协议覆盖所有 runtime。** 文件投递和 Telegram cron 都走 schema-backed `[tool:{...}]` tag，所以 process runtime、stream runtime、Claude、Codex 都能用同一条 bridge 链路。
-- **Prompt 更短，动态秘密更少。** 稳定 transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。
-- **看 receipt，不信口头声明。** 文件投递和定时任务创建都有结构化 accepted/rejected receipt；模型说“完成了”不等于真的交付成功。
-- **运维可观察。** timeline、audit、doctor、dashboard、usage tracking 和 cron 状态都能帮助定位失败，而不是让问题静默消失。
-- **旧 bot 安全升级。** generated `agent.md` 会在启动时自动升级；自定义 transport section 需要显式 `--force`，并且会先备份。
+- **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex 和 Claude Code CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
+- **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex 或 Claude、process 或 stream runtime，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
+- **Telegram 能力放在 bridge，而不是模型记忆里。** 发文件、cron 持久化、receipt、权限检查和失败重试由 bridge 代码负责，所以换模型、重启实例、续接会话后仍然有稳定语义。
+- **Prompt 短，规则稳定。** transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。
+- **看 receipt，不信口头声明。** 文件投递和定时任务创建都有结构化 accepted/rejected receipt；只有 bridge 真正发出文件或写入任务，才算完成。
+- **默认可运维。** timeline、audit、doctor、dashboard、usage tracking、cron 状态和 generated 指令升级，让失败可见，也让恢复流程可重复。
 
 ---
 
