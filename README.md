@@ -35,6 +35,7 @@
 
 ### What Changed Recently
 
+- **v4.5.10** — adds Codex Fast Mode control with `/fast on|off|status`, forwarding `fast_mode` and `service_tier="fast"` to both Codex process and app-server runtimes while keeping Claude instances rejected cleanly.
 - **v4.5.9** — hardens schema-backed tool delivery receipts: malformed `[tool:{...}]` JSON or rejected send tools no longer preserve misleading “already sent” model text; batch/long delivery now prefers fenced `tool-call` blocks, and generated `agent.md` upgrades clean up duplicate scheduler residue.
 - **v4.5.8** — documents `[tool:{...}]` as the only generated delivery tag format, keeps legacy `[send-file:]` / `[send-image:]` tags as compatibility-only, and clarifies the file-delivery trust boundary.
 - **v4.5.7** — unifies file delivery and Telegram scheduled tasks around the registered `[tool:{...}]` layer, adds safer `tool-call` fenced blocks, hardens stream/post-turn dedupe, and improves cron reliability with timezones, stale-run handling, file locks, job caps, and failure receipts.

@@ -23,6 +23,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: undefined,
         effort: undefined,
         model: undefined,
+        codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
       });
@@ -45,6 +46,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: undefined,
         effort: undefined,
         model: undefined,
+        codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
       });
@@ -68,6 +70,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: undefined,
         effort: undefined,
         model: undefined,
+        codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
       });
@@ -90,6 +93,7 @@ describe("loadInstanceConfig", () => {
           budgetUsd: 10,
           effort: "high",
           model: " claude-sonnet ",
+          codexServiceTier: "fast",
           timezone: "Asia/Shanghai",
           resume: {
             sessionId: "session-1",
@@ -107,6 +111,7 @@ describe("loadInstanceConfig", () => {
         budgetUsd: 10,
         effort: "high",
         model: "claude-sonnet",
+        codexServiceTier: "fast",
         timezone: "Asia/Shanghai",
         resume: {
           sessionId: "session-1",
@@ -119,9 +124,33 @@ describe("loadInstanceConfig", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
-});
+  });
 
-describe("updateInstanceConfig", () => {
+  it("rejects standard as a dead Codex service tier value", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await writeFile(path.join(root, "config.json"), JSON.stringify({ codexServiceTier: "standard" }), "utf8");
+
+      await expect(loadInstanceConfig(root)).resolves.toEqual({
+        engine: "codex",
+        locale: "en",
+        verbosity: 1,
+        budgetUsd: undefined,
+        effort: undefined,
+        model: undefined,
+        codexServiceTier: undefined,
+        timezone: resolveDefaultCronTimezone(),
+        resume: undefined,
+      });
+      expect(errorSpy).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  describe("updateInstanceConfig", () => {
   it("creates config.json and preserves existing fields across updates", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
 

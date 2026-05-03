@@ -380,17 +380,18 @@ export class ProcessCodexAdapter implements CodexAdapter {
     }
   }
 
-  private async loadEngineOptions(): Promise<{ effort?: string; model?: string }> {
+  private async loadEngineOptions(): Promise<{ effort?: string; model?: string; codexServiceTier?: "fast" }> {
     if (!this.configPath) {
       return {};
     }
 
     try {
       const raw = await readFile(this.configPath, "utf8");
-      const parsed = JSON.parse(raw) as { effort?: string; model?: string };
+      const parsed = JSON.parse(raw) as { effort?: string; model?: string; codexServiceTier?: string };
       return {
         effort: typeof parsed.effort === "string" ? parsed.effort : undefined,
         model: typeof parsed.model === "string" ? parsed.model : undefined,
+        codexServiceTier: parsed.codexServiceTier === "fast" ? "fast" : undefined,
       };
     } catch {
       return {};
@@ -470,6 +471,9 @@ export class ProcessCodexAdapter implements CodexAdapter {
     }
     if (engineOptions.model) {
       engineFlags.push("-m", engineOptions.model);
+    }
+    if (engineOptions.codexServiceTier === "fast") {
+      engineFlags.push("--enable", "fast_mode", "-c", 'service_tier="fast"');
     }
     const args = isLogicalTelegramSessionId(sessionId)
       ? ["exec", "--json", "--skip-git-repo-check", ...effectiveApprovalFlags, ...engineFlags, "-"]

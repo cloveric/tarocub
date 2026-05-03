@@ -234,6 +234,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     approvalMode: ApprovalMode;
     effort?: string;
     model?: string;
+    codexServiceTier?: "fast";
     initializeArgs: string[];
     initializeKey: string;
   }> {
@@ -252,6 +253,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         : "normal";
     const effort = typeof parsed.effort === "string" ? parsed.effort : undefined;
     const model = typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : undefined;
+    const codexServiceTier = parsed.codexServiceTier === "fast" ? "fast" : undefined;
     const initializeArgs = ["app-server"];
 
     if (approvalMode === "bypass") {
@@ -269,12 +271,17 @@ export class CodexAppServerAdapter implements CodexAdapter {
       initializeArgs.push("-c", `model="${model}"`);
     }
 
+    if (codexServiceTier === "fast") {
+      initializeArgs.push("--enable", "fast_mode", "-c", 'service_tier="fast"');
+    }
+
     return {
       approvalMode,
       effort,
       model,
+      codexServiceTier,
       initializeArgs,
-      initializeKey: JSON.stringify({ approvalMode, effort, model }),
+      initializeKey: JSON.stringify({ approvalMode, effort, model, codexServiceTier }),
     };
   }
 

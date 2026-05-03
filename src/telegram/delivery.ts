@@ -198,6 +198,7 @@ export async function handleNormalizedTelegramMessage(
         budgetUsd: cfg.budgetUsd,
         effort: cfg.effort,
         model: cfg.model,
+        codexServiceTier: cfg.codexServiceTier,
         resume: cfg.resume,
       },
       normalized,

@@ -474,13 +474,13 @@ describe("CodexAppServerAdapter", () => {
     }
   });
 
-  it("forwards model and effort overrides into app-server startup config", async () => {
+  it("forwards model, effort, and Codex fast mode into app-server startup config", async () => {
     const { child, calls, spawnFn } = createSpawnHarness();
     const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
     const configPath = path.join(root, "config.json");
 
     try {
-      await writeFile(configPath, JSON.stringify({ model: "gpt-5.3-codex", effort: "max" }) + "\n", "utf8");
+      await writeFile(configPath, JSON.stringify({ model: "gpt-5.4", effort: "max", codexServiceTier: "fast" }) + "\n", "utf8");
       const adapter = new CodexAppServerAdapter(
         "codex",
         process.cwd(),
@@ -502,7 +502,11 @@ describe("CodexAppServerAdapter", () => {
         "-c",
         'model_reasoning_effort="xhigh"',
         "-c",
-        'model="gpt-5.3-codex"',
+        'model="gpt-5.4"',
+        "--enable",
+        "fast_mode",
+        "-c",
+        'service_tier="fast"',
       ]);
       child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
       await waitFor(() => child.stdin.lines.length >= 2);

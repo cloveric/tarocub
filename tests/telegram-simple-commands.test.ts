@@ -168,6 +168,187 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("enables Codex fast mode through the config mutator", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, string>) => void) => {
+      const cfg: Record<string, string> = {};
+      mutate(cfg);
+      expect(cfg.codexServiceTier).toBe("fast");
+    });
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/fast on"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 81,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Codex Fast Mode enabled. Supported models run faster but consume more credits.",
+      );
+
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "fast",
+          value: "fast",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects /fast for Claude instances", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/fast on"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 82,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Fast Mode is Codex-only.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("disables Codex fast mode through /fast off", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, string>) => void) => {
+      const cfg: Record<string, string> = { codexServiceTier: "fast" };
+      mutate(cfg);
+      expect(cfg.codexServiceTier).toBeUndefined();
+    });
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex", codexServiceTier: "fast" },
+        normalized: createNormalizedMessage("/fast off"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 83,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Codex Fast Mode disabled.");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports Codex fast mode status without mutating config", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex", codexServiceTier: "fast" },
+        normalized: createNormalizedMessage("/fast status"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 84,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Codex Fast Mode: on");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps malformed /fast commands local instead of forwarding them to the engine", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/fast on extra"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 85,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /fast [on|off|status]");
+
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "fast",
+          value: "invalid",
+        }),
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("shows Claude model choices on bare /model", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {

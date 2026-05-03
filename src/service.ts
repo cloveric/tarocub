@@ -670,6 +670,7 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "context", description: "Show Claude context fill level (Claude only)" },
   { command: "usage", description: "Show cumulative token & cost usage for this instance" },
   { command: "effort", description: "Set effort level (low/medium/high/xhigh/max/off)" },
+  { command: "fast", description: "Toggle Codex Fast Mode (on/off/status)" },
   { command: "model", description: "Set model (opus/sonnet/o3/off; append [1m] for 1M context)" },
   { command: "btw", description: "Ask a side question without affecting session" },
   { command: "continue", description: "Continue a paused task" },

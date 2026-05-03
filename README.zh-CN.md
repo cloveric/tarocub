@@ -35,6 +35,7 @@
 
 ### 最近这波变化
 
+- **v4.5.10** — 新增 Codex Fast Mode 控制：`/fast on|off|status` 会把 `fast_mode` 和 `service_tier="fast"` 透传到 Codex process / app-server runtime，Claude 实例会明确拒绝。
 - **v4.5.9** — 加强 schema-backed tool 投递 receipt：`[tool:{...}]` JSON 写坏或 send tool 被拒绝时，不再保留模型口头说的“已发出”；批量/长文本投递优先使用 fenced `tool-call` block，并且 generated `agent.md` 升级会清理重复 scheduler 残留。
 - **v4.5.8** — 文档明确 `[tool:{...}]` 是 generated 实例指令唯一使用的投递 tag；旧 `[send-file:]` / `[send-image:]` 仅作为兼容层保留；补充文件投递信任边界说明。
 - **v4.5.7** — 文件投递和 Telegram 定时任务统一到注册过的 `[tool:{...}]` layer；新增更安全的 `tool-call` fenced block；加强 stream/post-turn 去重；cron 增加时区、过期 runOnce 处理、文件锁、任务上限和失败 receipt。

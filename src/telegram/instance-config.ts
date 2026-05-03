@@ -29,6 +29,7 @@ export interface InstanceConfig {
   budgetUsd: number | undefined;
   effort: EffortLevel | undefined;
   model: string | undefined;
+  codexServiceTier: "fast" | undefined;
   timezone: string;
   resume: ResumeState | undefined;
 }
@@ -56,6 +57,7 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   budgetUsd: undefined,
   effort: undefined,
   model: undefined,
+  codexServiceTier: undefined,
   timezone: resolveDefaultCronTimezone(),
   resume: undefined,
 };
@@ -75,6 +77,9 @@ export function applyEngineSelection(
   const clearedModel = previousEngine !== undefined && previousEngine !== engine && hadModelOverride;
   if (clearedModel) {
     delete config.model;
+  }
+  if (engine === "claude") {
+    delete config.codexServiceTier;
   }
 
   return { clearedModel };
@@ -128,6 +133,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,
     effort,
     model: typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined,
+    codexServiceTier: config.codexServiceTier === "fast" ? "fast" : undefined,
     timezone: normalizeCronTimezone(config.timezone) ?? DEFAULT_INSTANCE_CONFIG.timezone,
     resume: parseResumeState(config.resume),
   };

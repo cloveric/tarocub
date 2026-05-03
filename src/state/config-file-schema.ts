@@ -18,6 +18,7 @@ export const ConfigFileSchema = z.object({
   budgetUsd: z.number().positive().optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
   model: z.string().optional(),
+  codexServiceTier: z.literal("fast").optional(),
   timezone: z.string().optional(),
   resume: ResumeStateFileSchema.optional(),
   bus: z.unknown().optional(),

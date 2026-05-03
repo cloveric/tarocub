@@ -39,6 +39,13 @@ function parseModelCommand(text: string): { model: string } | null {
   return { model: match[1] ?? "" };
 }
 
+function parseFastCommand(text: string): { action: string } | null {
+  const match = text.trim().match(/^\/fast(?:@\w+)?(?:\s+(.*))?$/i);
+  if (!match) return null;
+  const action = (match[1] ?? "").trim().toLowerCase();
+  return { action: action || "status" };
+}
+
 export async function handleSimpleLocalTelegramCommand(input: {
   stateDir: string;
   startedAt: number;
@@ -47,6 +54,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
     engine?: "codex" | "claude";
     effort?: string;
     model?: string;
+    codexServiceTier?: "fast";
   };
   normalized: NormalizedTelegramMessage;
   context: TelegramTurnContext;
@@ -230,6 +238,48 @@ export async function handleSimpleLocalTelegramCommand(input: {
       command: "model",
       responseText: modelMessage,
       metadata: { value: modelCmd.model || "query" },
+    });
+    return true;
+  }
+
+  const fastCmd = parseFastCommand(normalized.text);
+  if (fastCmd) {
+    let fastMessage: string;
+    let auditValue = fastCmd.action || "status";
+    if (cfg.engine === "claude") {
+      fastMessage = locale === "zh" ? "Fast Mode 仅 Codex 支持。" : "Fast Mode is Codex-only.";
+      await context.api.sendMessage(normalized.chatId, fastMessage);
+      auditValue = "rejected-claude";
+    } else if (fastCmd.action === "on" || fastCmd.action === "enable" || fastCmd.action === "fast") {
+      await updateInstanceConfig((c) => { c.codexServiceTier = "fast"; });
+      fastMessage = locale === "zh"
+        ? "Codex Fast Mode 已开启。支持的模型会更快，但会消耗更多 credits。"
+        : "Codex Fast Mode enabled. Supported models run faster but consume more credits.";
+      await context.api.sendMessage(normalized.chatId, fastMessage);
+      auditValue = "fast";
+    } else if (fastCmd.action === "off" || fastCmd.action === "disable" || fastCmd.action === "standard" || fastCmd.action === "default") {
+      await updateInstanceConfig((c) => { delete c.codexServiceTier; });
+      fastMessage = locale === "zh" ? "Codex Fast Mode 已关闭。" : "Codex Fast Mode disabled.";
+      await context.api.sendMessage(normalized.chatId, fastMessage);
+      auditValue = "standard";
+    } else if (fastCmd.action === "status") {
+      const current = cfg.codexServiceTier === "fast" ? "on" : "off";
+      fastMessage = locale === "zh" ? `Codex Fast Mode: ${current}` : `Codex Fast Mode: ${current}`;
+      await context.api.sendMessage(normalized.chatId, fastMessage);
+      auditValue = current;
+    } else {
+      auditValue = "invalid";
+      fastMessage = locale === "zh"
+        ? "用法: /fast [on|off|status]"
+        : "Usage: /fast [on|off|status]";
+      await context.api.sendMessage(normalized.chatId, fastMessage);
+    }
+
+    await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+      startedAt,
+      command: "fast",
+      responseText: fastMessage,
+      metadata: { value: auditValue },
     });
     return true;
   }

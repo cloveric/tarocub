@@ -24,6 +24,7 @@ export interface AuthorizedTelegramDispatchConfig {
   budgetUsd?: number;
   effort?: string;
   model?: string;
+  codexServiceTier?: "fast";
   resume?: ResumeState;
 }
 
@@ -223,6 +224,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
       engine: cfg.engine,
       effort: cfg.effort,
       model: cfg.model,
+      codexServiceTier: cfg.codexServiceTier,
     },
     normalized,
     context,
