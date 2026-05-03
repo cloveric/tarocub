@@ -1374,6 +1374,34 @@ describe("runCli", () => {
     }
   });
 
+  it("removes duplicated generated scheduler residue from current agent instructions", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const residue = "Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.";
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await runCli(["telegram", "configure", "--instance", "alpha", "bot-token-456"], {
+        env: { USERPROFILE: tempDir },
+      });
+      const current = await readFile(agentPath, "utf8");
+      await writeFile(agentPath, `${current}\n${residue}\n\n## Local Notes\n\nKeep this note.\n`, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "upgrade", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
+      const upgraded = await readFile(agentPath, "utf8");
+      expect(upgraded.match(new RegExp(residue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
+      expect(upgraded).toContain("## Local Notes\n\nKeep this note.");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not overwrite a custom Telegram transport block without --force", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

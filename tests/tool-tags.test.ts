@@ -275,6 +275,48 @@ describe("telegram tool tags", () => {
     });
   });
 
+  it("does not preserve misleading delivery claims when a tool tag contains malformed JSON", async () => {
+    await withContext(async ({ stateDir, store, scheduler }) => {
+      const text = await processTelegramToolTags({
+        text: '9 张图 + 800 字正文都已发出。\n[tool:{"name":"send.batch","payload":{"message":"Done" "images":["/tmp/a.png"]}}]',
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "zh",
+        },
+      });
+
+      expect(text).not.toContain("已发出");
+      expect(text).toContain("工具调用失败");
+      expect(text).toContain("JSON");
+    });
+  });
+
+  it("does not preserve misleading delivery claims when a send tool is rejected", async () => {
+    await withContext(async ({ stateDir, store, scheduler, inboxDir, api }) => {
+      const text = await processTelegramToolTags({
+        text: 'Done, file sent.\n[tool:{"name":"send.file","payload":{"path":"/tmp/cctb-missing-report.txt"}}]',
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "en",
+          delivery: {
+            api,
+            inboxDir,
+            source: "post-turn",
+          },
+        },
+      });
+
+      expect(text).not.toContain("Done, file sent.");
+      expect(text).toContain("File delivery failed");
+    });
+  });
+
   it("escapes embedded legacy delivery tags in send.batch messages", async () => {
     await withContext(async ({ stateDir, store, scheduler, inboxDir, api }) => {
       const deliverTelegramResponse = vi.fn().mockResolvedValue(0);

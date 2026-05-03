@@ -35,11 +35,24 @@ function toolExample(name: string, index = 0): string {
   return toolTag(name, payload);
 }
 
+function toolCallBlockExample(name: string, index = 0): string {
+  const tool = defaultTelegramToolRegistry.get(name);
+  const payload = tool?.examples?.[index];
+  if (!payload) {
+    throw new Error(`missing generated agent example for tool: ${name}`);
+  }
+  return [
+    "```tool-call",
+    JSON.stringify({ name: registeredToolName(name), payload }),
+    "```",
+  ].join("\n");
+}
+
 export function renderDefaultInstanceAgentInstructions(): string {
   return [
   "## Telegram Transport",
   "",
-  `Plain text only; ask in chat, not blocking prompt tools. For existing file delivery, emit one inline tool tag such as ${toolExample("send.file")}, ${toolExample("send.image")}, or ${toolExample("send.batch")}. Small text/code may use one fenced \`file:name.ext\` block; never claim delivery by path only.`,
+  `Plain text only; ask in chat, not blocking prompt tools. For one existing file/image, emit one inline tool tag such as ${toolExample("send.file")} or ${toolExample("send.image")}. For batch delivery or long messages, emit a fenced tool-call block like:\n${toolCallBlockExample("send.batch")}\nSmall text/code may use one fenced \`file:name.ext\` block. Never claim delivery succeeded in your own words; let the bridge receipt confirm it.`,
   "",
   "## Scheduled Tasks",
   "",
@@ -50,7 +63,15 @@ export function renderDefaultInstanceAgentInstructions(): string {
 
 export const DEFAULT_INSTANCE_AGENT_INSTRUCTIONS = renderDefaultInstanceAgentInstructions();
 
+const NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE =
+  "Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.";
+
 const GENERATED_SCHEDULED_TASKS_BLOCKS = [
+  [
+    "## Scheduled Tasks",
+    "",
+    `For reminders or recurring tasks, emit one inline tool tag, such as ${toolExample("cron.add", 0)}, ${toolExample("cron.add", 1)}, or ${toolExample("cron.add", 2)}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words. ${NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE}`,
+  ].join("\n"),
   [
     "## Scheduled Tasks",
     "",
@@ -94,6 +115,11 @@ const GENERATED_SCHEDULED_TASKS_BLOCKS = [
 ];
 
 const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
+  [
+    "## Telegram Transport",
+    "",
+    `Plain text only; ask in chat, not blocking prompt tools. For existing file delivery, emit one inline tool tag such as ${toolExample("send.file")}, ${toolExample("send.image")}, or ${toolExample("send.batch")}. Small text/code may use one fenced \`file:name.ext\` block; never claim delivery by path only.`,
+  ].join("\n"),
   [
     "## Telegram Transport",
     "",
@@ -163,7 +189,15 @@ export function inspectInstanceAgentInstructionsContent(
   if (!trimmed) {
     return { state: "empty", path: agentPath, detail: "agent.md is empty" };
   }
-  if (trimmed.includes(trimForCompare(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS))) {
+  const defaultInstructions = trimForCompare(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS);
+  if (trimmed.startsWith(defaultInstructions)) {
+    const afterDefault = trimmed.slice(defaultInstructions.length);
+    if (stripGeneratedScheduledTasksResidue(afterDefault) !== afterDefault.trimStart()) {
+      return { state: "legacy-generated", path: agentPath, detail: "agent.md contains generated instruction residue" };
+    }
+    return { state: "current", path: agentPath, detail: "Telegram transport instructions are current" };
+  }
+  if (trimmed.includes(defaultInstructions)) {
     return { state: "current", path: agentPath, detail: "Telegram transport instructions are current" };
   }
 
@@ -180,6 +214,14 @@ export function inspectInstanceAgentInstructionsContent(
   return { state: "custom-transport", path: agentPath, detail: "Telegram Transport section is custom or unknown" };
 }
 
+function stripGeneratedScheduledTasksResidue(content: string): string {
+  let remaining = content.trimStart();
+  while (remaining.startsWith(NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE)) {
+    remaining = remaining.slice(NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE.length).trimStart();
+  }
+  return remaining;
+}
+
 function replaceTelegramTransportSection(content: string): string {
   const normalized = content.replace(/\r\n/g, "\n");
   const section = findTelegramTransportSection(normalized);
@@ -190,12 +232,17 @@ function replaceTelegramTransportSection(content: string): string {
 
   const before = normalized.slice(0, section.start).trimEnd();
   let after = normalized.slice(section.end).trimStart();
+  let strippedGeneratedScheduledTasks = false;
   for (const block of GENERATED_SCHEDULED_TASKS_BLOCKS) {
-    const normalizedBlock = trimForCompare(block);
-    if (trimForCompare(after).startsWith(normalizedBlock)) {
-      after = after.slice(after.indexOf("## Scheduled Tasks") + block.length).trimStart();
+    const normalizedBlock = block.replace(/\r\n/g, "\n");
+    if (after.startsWith(normalizedBlock)) {
+      after = after.slice(normalizedBlock.length).trimStart();
+      strippedGeneratedScheduledTasks = true;
       break;
     }
+  }
+  if (strippedGeneratedScheduledTasks) {
+    after = stripGeneratedScheduledTasksResidue(after);
   }
   return `${before}${before ? "\n\n" : ""}${DEFAULT_INSTANCE_AGENT_INSTRUCTIONS}${after ? `\n\n${after}` : ""}`;
 }

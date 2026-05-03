@@ -289,6 +289,19 @@ function renderToolTagFailure(detail: string, context: TelegramToolContext): str
   return context.locale === "zh" ? `✗ 工具调用失败：${detail}` : `✗ Tool call failed: ${detail}`;
 }
 
+function renderInvalidToolTagJsonFailure(context: TelegramToolContext): string {
+  return renderToolTagFailure(
+    context.locale === "zh"
+      ? "tool tag JSON 格式无效，未执行。批量文件或长文本请改用 fenced tool-call 代码块。"
+      : "invalid JSON in tool tag; nothing was executed. Use a fenced tool-call block for batch files or long text.",
+    context,
+  );
+}
+
+function renderCaughtToolExecutionFailure(error: unknown, context: TelegramToolContext): string {
+  return renderToolTagFailure(error instanceof Error ? error.message : String(error), context);
+}
+
 export async function processTelegramToolTags(input: ProcessTelegramToolTagsInput): Promise<string> {
   const matches = extractTelegramToolTagMatches(input.text);
   if (matches.length === 0) {
@@ -297,9 +310,20 @@ export async function processTelegramToolTags(input: ProcessTelegramToolTagsInpu
 
   const messages: string[] = [];
   const deliveredPaths = new Set<string>();
+  let hadRejectedTool = false;
   for (const match of matches) {
+    let parsed: { name: string; payload: unknown };
     try {
-      const parsed = parseTelegramToolTagPayload(match.payload);
+      parsed = parseTelegramToolTagPayload(match.payload);
+    } catch (error) {
+      hadRejectedTool = true;
+      messages.push(error instanceof SyntaxError
+        ? renderInvalidToolTagJsonFailure(input.context)
+        : renderCaughtToolExecutionFailure(error, input.context));
+      continue;
+    }
+
+    try {
       const payload = filterAlreadyDeliveredSendPayload(parsed.name, parsed.payload, deliveredPaths);
       if (payload === null) {
         continue;
@@ -331,14 +355,18 @@ export async function processTelegramToolTags(input: ProcessTelegramToolTagsInpu
           deliveredPaths.add(filePath);
         }
       }
+      if (!result.ok) {
+        hadRejectedTool = true;
+      }
       messages.push(result.message);
     } catch (error) {
-      messages.push(renderToolTagFailure(error instanceof Error ? error.message : String(error), input.context));
+      hadRejectedTool = true;
+      messages.push(renderCaughtToolExecutionFailure(error, input.context));
     }
   }
 
-  return [
-    stripTelegramToolTags(input.text, matches),
-    ...messages,
-  ].filter((part) => part.trim()).join("\n\n");
+  const strippedText = stripTelegramToolTags(input.text, matches);
+  return (hadRejectedTool ? messages : [strippedText, ...messages])
+    .filter((part) => part.trim())
+    .join("\n\n");
 }

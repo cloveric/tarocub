@@ -35,6 +35,7 @@
 
 ### 最近这波变化
 
+- **v4.5.9** — 加强 schema-backed tool 投递 receipt：`[tool:{...}]` JSON 写坏或 send tool 被拒绝时，不再保留模型口头说的“已发出”；批量/长文本投递优先使用 fenced `tool-call` block，并且 generated `agent.md` 升级会清理重复 scheduler 残留。
 - **v4.5.8** — 文档明确 `[tool:{...}]` 是 generated 实例指令唯一使用的投递 tag；旧 `[send-file:]` / `[send-image:]` 仅作为兼容层保留；补充文件投递信任边界说明。
 - **v4.5.7** — 文件投递和 Telegram 定时任务统一到注册过的 `[tool:{...}]` layer；新增更安全的 `tool-call` fenced block；加强 stream/post-turn 去重；cron 增加时区、过期 runOnce 处理、文件锁、任务上限和失败 receipt。
 - **v4.5.3** — 服务启动时会从 audit 历史恢复 stale 的 Telegram update watermark，避免重启后重复执行已经完成的旧任务。
@@ -58,6 +59,7 @@ telegram service restart --all
 ## 为什么是这套架构
 
 - **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex 和 Claude Code CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
+- **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。
 - **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex 或 Claude、process 或 stream runtime，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
 - **Telegram 能力放在 bridge，而不是模型记忆里。** 发文件、cron 持久化、receipt、权限检查和失败重试由 bridge 代码负责，所以换模型、重启实例、续接会话后仍然有稳定语义。
 - **Prompt 短，规则稳定。** transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。

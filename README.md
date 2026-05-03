@@ -35,6 +35,7 @@
 
 ### What Changed Recently
 
+- **v4.5.9** — hardens schema-backed tool delivery receipts: malformed `[tool:{...}]` JSON or rejected send tools no longer preserve misleading “already sent” model text; batch/long delivery now prefers fenced `tool-call` blocks, and generated `agent.md` upgrades clean up duplicate scheduler residue.
 - **v4.5.8** — documents `[tool:{...}]` as the only generated delivery tag format, keeps legacy `[send-file:]` / `[send-image:]` tags as compatibility-only, and clarifies the file-delivery trust boundary.
 - **v4.5.7** — unifies file delivery and Telegram scheduled tasks around the registered `[tool:{...}]` layer, adds safer `tool-call` fenced blocks, hardens stream/post-turn dedupe, and improves cron reliability with timezones, stale-run handling, file locks, job caps, and failure receipts.
 - **v4.5.3** — recovers a stale Telegram update watermark from audit history on service startup, preventing old completed tasks from replaying after restart.
@@ -58,6 +59,7 @@ Use `--force` only for instances with a custom transport block you intentionally
 ## Why This Bridge
 
 - **Native CLI first.** The bridge runs the real Codex and Claude Code CLIs, so local auth, project files, sessions, approvals, and engine-specific behavior remain the same as on your desktop.
+- **Resume desktop work from anywhere.** Pick up an existing local Codex or Claude Code session from Telegram, send files or instructions while away, then continue the same project back on the desktop.
 - **Multi-engine without separate playbooks.** Each bot can choose Codex or Claude, process or stream runtime, while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
 - **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
 - **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
