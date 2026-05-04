@@ -384,7 +384,19 @@ huggingface-cli download Qwen/Qwen3-ASR-0.6B --local-dir models/Qwen3-ASR-0.6B
 | HTTP 服务 | `POST http://127.0.0.1:8412/transcribe` | ~2-3s | 模型常驻内存，推荐 |
 | CLI 备用 | `~/projects/qwen3-asr/transcribe.py <文件>` | ~30s | 每次加载模型 |
 
-**自定义 ASR：** 修改 `src/telegram/delivery.ts` 中的 `transcribeVoice()` 函数即可适配其他 ASR 引擎。
+**可选 ASR 守护：**
+
+bridge 默认不会主动启动任意 ASR 进程。只有你显式在实例 `.env` 里配置修复命令后，它才会在 HTTP ASR 连续失败后尝试重启本地 ASR 服务：
+
+```bash
+ASR_SERVICE_COMMAND='curl -fsS --max-time 2 -X POST http://127.0.0.1:8412/shutdown >/dev/null 2>&1 || true; sleep 2; cd "$HOME/projects/qwen3-asr" && exec "$HOME/projects/qwen3-asr/venv/bin/python3" "$HOME/projects/qwen3-asr/server.py" >> "$HOME/.cctb/asr-server.log" 2>&1'
+ASR_RESTART_AFTER_FAILURES=2
+ASR_RESTART_COOLDOWN_MS=60000
+```
+
+这个守护只覆盖常驻 HTTP ASR 服务。CLI 备用仍然可以转写，但不会被当作 daemon 管理。
+
+**自定义 ASR：** 修改 `src/telegram/message-input.ts` 中的 `createDefaultTranscribeVoice()` 函数即可适配其他 ASR 引擎。
 
 ---
 

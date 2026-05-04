@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { prepareTelegramMessageInput } from "../src/telegram/message-input.js";
+import { createDefaultTranscribeVoice, prepareTelegramMessageInput } from "../src/telegram/message-input.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
 function createNormalizedMessage(
@@ -86,5 +86,27 @@ describe("prepareTelegramMessageInput", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("createDefaultTranscribeVoice", () => {
+  it("records ASR HTTP failures with the watchdog before falling back", async () => {
+    const watchdog = {
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("connection refused"));
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl,
+      watchdog,
+    });
+
+    await expect(transcribeVoice("/tmp/voice.ogg")).rejects.toThrow("ASR not configured");
+
+    expect(watchdog.recordFailure).toHaveBeenCalledTimes(1);
+    expect(watchdog.recordSuccess).not.toHaveBeenCalled();
   });
 });

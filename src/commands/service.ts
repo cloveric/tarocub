@@ -31,6 +31,7 @@ import {
   getLastHandledUpdateId,
   lookupTelegramBotIdentity,
   readConfiguredBotToken,
+  readInstanceServiceEnvFromEnvFile,
   readInstanceRuntimeConfig,
   resolveEngineRuntime,
 } from "../service.js";
@@ -47,7 +48,11 @@ export interface ServiceCommandDeps {
   cwd?: string;
   isProcessAlive?: (pid: number) => boolean;
   isExpectedServiceProcess?: (pid: number, entryPath: string, instanceName: string) => boolean;
-  spawnDetached?: (command: string, args: string[], options: { cwd: string; stdoutPath: string; stderrPath: string }) => void;
+  spawnDetached?: (
+    command: string,
+    args: string[],
+    options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
+  ) => void;
   sleep?: (ms: number) => Promise<void>;
   killProcessTree?: (pid: number) => void;
   readTextFile?: (filePath: string) => Promise<string>;
@@ -234,7 +239,7 @@ function defaultIsExpectedServiceProcess(pid: number, entryPath: string, instanc
 function defaultSpawnDetached(
   command: string,
   args: string[],
-  options: { cwd: string; stdoutPath: string; stderrPath: string },
+  options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
 ): void {
   const stdoutFd = openSync(options.stdoutPath, "a");
   const stderrFd = openSync(options.stderrPath, "a");
@@ -242,6 +247,7 @@ function defaultSpawnDetached(
     cwd: options.cwd,
     detached: true,
     stdio: ["ignore", stdoutFd, stderrFd],
+    env: options.env ? { ...process.env, ...options.env } : undefined,
     ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
   child.unref();
@@ -570,10 +576,19 @@ export async function startServiceInstance(
   await writeFile(paths.stdoutPath, "", "utf8");
   await writeFile(paths.stderrPath, "", "utf8");
 
+  const instanceServiceEnv = await readInstanceServiceEnvFromEnvFile({
+    HOME: env.HOME,
+    USERPROFILE: env.USERPROFILE,
+    CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
+    CODEX_TELEGRAM_INSTANCE: paths.instanceName,
+  });
+  const serviceEnv = Object.keys(instanceServiceEnv).length > 0 ? instanceServiceEnv : undefined;
+
   spawnDetachedProcess(process.execPath, [paths.entryPath, "--instance", paths.instanceName], {
     cwd,
     stdoutPath: paths.stdoutPath,
     stderrPath: paths.stderrPath,
+    ...(serviceEnv ? { env: serviceEnv } : {}),
   });
 
   for (let attempt = 0; attempt < 20; attempt++) {

@@ -99,7 +99,16 @@ export function parseServiceInstanceName(argv: string[]): string {
   return "default";
 }
 
-function parseDotEnvValue(rawLine: string): string | null {
+const INSTANCE_SERVICE_ENV_KEYS = new Set([
+  "ASR_HTTP_URL",
+  "ASR_CLI_PYTHON",
+  "ASR_CLI_SCRIPT",
+  "ASR_SERVICE_COMMAND",
+  "ASR_RESTART_AFTER_FAILURES",
+  "ASR_RESTART_COOLDOWN_MS",
+]);
+
+function parseDotEnvEntry(rawLine: string): { key: string; value: string } | null {
   const trimmed = rawLine.trim();
 
   if (!trimmed || trimmed.startsWith("#")) {
@@ -112,7 +121,7 @@ function parseDotEnvValue(rawLine: string): string | null {
   }
 
   const key = trimmed.slice(0, separatorIndex).trim();
-  if (key !== "TELEGRAM_BOT_TOKEN") {
+  if (!key) {
     return null;
   }
 
@@ -122,14 +131,23 @@ function parseDotEnvValue(rawLine: string): string | null {
   }
 
   if (rawValue.startsWith("\"")) {
-    return JSON.parse(rawValue) as string;
+    return { key, value: JSON.parse(rawValue) as string };
   }
 
   if (rawValue.startsWith("'") && rawValue.endsWith("'")) {
-    return rawValue.slice(1, -1);
+    return { key, value: rawValue.slice(1, -1) };
   }
 
-  return rawValue;
+  return { key, value: rawValue };
+}
+
+function parseDotEnvValue(rawLine: string): string | null {
+  const entry = parseDotEnvEntry(rawLine);
+  if (entry === null || entry.key !== "TELEGRAM_BOT_TOKEN") {
+    return null;
+  }
+
+  return entry.value;
 }
 
 export async function readInstanceBotTokenFromEnvFile(env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR">): Promise<string | null> {
@@ -152,6 +170,31 @@ export async function readInstanceBotTokenFromEnvFile(env: Pick<EnvSource, "HOME
   }
 
   return null;
+}
+
+export async function readInstanceServiceEnvFromEnvFile(
+  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR">,
+): Promise<NodeJS.ProcessEnv> {
+  const stateDir = resolveInstanceStateDir(env);
+  const envPath = path.join(stateDir, ".env");
+  const serviceEnv: NodeJS.ProcessEnv = {};
+
+  try {
+    const contents = await readFile(envPath, "utf8");
+
+    for (const line of contents.split(/\r?\n/)) {
+      const entry = parseDotEnvEntry(line);
+      if (entry !== null && INSTANCE_SERVICE_ENV_KEYS.has(entry.key)) {
+        serviceEnv[entry.key] = entry.value;
+      }
+    }
+  } catch (error) {
+    if (typeof error !== "object" || error === null || !("code" in error) || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  return serviceEnv;
 }
 
 export async function readConfiguredBotToken(

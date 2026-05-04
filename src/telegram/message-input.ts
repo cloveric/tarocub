@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { DownloadedAttachment } from "../runtime/file-workflow.js";
 import type { TelegramApi } from "./api.js";
+import { createAsrWatchdogFromEnv, type AsrWatchdog } from "./asr-watchdog.js";
 import type { Locale } from "./message-renderer.js";
 import type { NormalizedTelegramAttachment, NormalizedTelegramMessage } from "./update-normalizer.js";
 
@@ -68,41 +69,78 @@ const ASR_CLI_PYTHON = process.env.ASR_CLI_PYTHON
   ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/venv/bin/python3") : undefined);
 const ASR_CLI_SCRIPT = process.env.ASR_CLI_SCRIPT
   ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/transcribe.py") : undefined);
+const asrWatchdog = createAsrWatchdogFromEnv();
 
-async function defaultTranscribeVoice(audioPath: string): Promise<string> {
-  if (ASR_HTTP_URL) {
+export function createDefaultTranscribeVoice(options: {
+  httpUrl?: string;
+  cliPython?: string;
+  cliScript?: string;
+  fetchImpl?: typeof fetch;
+  watchdog?: AsrWatchdog;
+} = {}): (audioPath: string) => Promise<string> {
+  const httpUrl = options.httpUrl ?? ASR_HTTP_URL;
+  const cliPython = options.cliPython ?? ASR_CLI_PYTHON;
+  const cliScript = options.cliScript ?? ASR_CLI_SCRIPT;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const watchdog = options.watchdog ?? asrWatchdog;
+
+  async function recordHttpSuccess(): Promise<void> {
     try {
-      const response = await fetch(ASR_HTTP_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: audioPath }),
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (response.ok) {
-        const text = await response.text();
-        if (text.trim()) return text.trim();
-      }
+      watchdog.recordSuccess();
     } catch {
-      // HTTP server unreachable — fall back to CLI if configured
+      // Watchdog diagnostics must never break transcription.
     }
   }
 
-  if (!ASR_CLI_PYTHON || !ASR_CLI_SCRIPT) {
-    throw new Error(
-      "ASR not configured: set ASR_HTTP_URL or ASR_CLI_PYTHON + ASR_CLI_SCRIPT env vars, or install the qwen3-asr defaults at ~/projects/qwen3-asr/.",
-    );
+  async function recordHttpFailure(error: unknown): Promise<void> {
+    try {
+      await watchdog.recordFailure(error);
+    } catch {
+      // Watchdog diagnostics must never break CLI fallback.
+    }
   }
 
-  return new Promise<string>((resolve, reject) => {
-    execFile(ASR_CLI_PYTHON, [ASR_CLI_SCRIPT, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(stderr?.trim() || error.message));
-        return;
+  return async function defaultTranscribeVoice(audioPath: string): Promise<string> {
+    if (httpUrl) {
+      try {
+        const response = await fetchImpl(httpUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: audioPath }),
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (response.ok) {
+          await recordHttpSuccess();
+          const text = await response.text();
+          if (text.trim()) return text.trim();
+        } else {
+          await recordHttpFailure(new Error(`ASR HTTP server returned ${response.status}`));
+        }
+      } catch (error) {
+        await recordHttpFailure(error);
+        // HTTP server unreachable — fall back to CLI if configured
       }
-      resolve(stdout.trim());
+    }
+
+    if (!cliPython || !cliScript) {
+      throw new Error(
+        "ASR not configured: set ASR_HTTP_URL or ASR_CLI_PYTHON + ASR_CLI_SCRIPT env vars, or install the qwen3-asr defaults at ~/projects/qwen3-asr/.",
+      );
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      execFile(cliPython, [cliScript, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(stderr?.trim() || error.message));
+          return;
+        }
+        resolve(stdout.trim());
+      });
     });
-  });
+  };
 }
+
+const defaultTranscribeVoice = (audioPath: string): Promise<string> => createDefaultTranscribeVoice()(audioPath);
 
 async function defaultDownloadAttachments(
   api: Pick<TelegramApi, "getFile" | "downloadFile">,

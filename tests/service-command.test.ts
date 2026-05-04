@@ -64,6 +64,64 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("passes explicit ASR watchdog env from the instance .env when starting a service", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const spawnDetached = vi.fn();
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, ".env"),
+        [
+          'TELEGRAM_BOT_TOKEN="secret-token"',
+          'ASR_SERVICE_COMMAND="cd ~/projects/qwen3-asr && ./server.py"',
+          "ASR_RESTART_AFTER_FAILURES=2",
+          "ASR_RESTART_COOLDOWN_MS=60000",
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const handled = await runCli(["telegram", "service", "start", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          spawnDetached: (command, args, options) => {
+            writeFileSync(
+              lockPath,
+              JSON.stringify({
+                pid: 12345,
+                token: "token",
+                acquiredAt: new Date().toISOString(),
+              }),
+              "utf8",
+            );
+            spawnDetached(command, args, options);
+          },
+          sleep: async () => {
+            await Promise.resolve();
+          },
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(spawnDetached.mock.calls[0]?.[2].env).toMatchObject({
+        ASR_SERVICE_COMMAND: "cd ~/projects/qwen3-asr && ./server.py",
+        ASR_RESTART_AFTER_FAILURES: "2",
+        ASR_RESTART_COOLDOWN_MS: "60000",
+      });
+      expect(spawnDetached.mock.calls[0]?.[2].env?.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("waits for a fresh lock before reporting a restart as started", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

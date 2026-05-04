@@ -396,9 +396,21 @@ python ~/projects/qwen3-asr/server.py
 # Qwen3-ASR server listening on http://127.0.0.1:8412
 ```
 
+**Optional ASR watchdog:**
+
+By default the bridge does not start arbitrary ASR processes. If you want it to repair a local ASR server after repeated HTTP failures, add an explicit command to the instance `.env`:
+
+```bash
+ASR_SERVICE_COMMAND='curl -fsS --max-time 2 -X POST http://127.0.0.1:8412/shutdown >/dev/null 2>&1 || true; sleep 2; cd "$HOME/projects/qwen3-asr" && exec "$HOME/projects/qwen3-asr/venv/bin/python3" "$HOME/projects/qwen3-asr/server.py" >> "$HOME/.cctb/asr-server.log" 2>&1'
+ASR_RESTART_AFTER_FAILURES=2
+ASR_RESTART_COOLDOWN_MS=60000
+```
+
+The watchdog only covers the warm HTTP ASR path. CLI fallback still exists for transcription, but it is not daemon-managed.
+
 **Custom ASR integration:**
 
-To use a different ASR engine, modify the `transcribeVoice()` function in `src/telegram/delivery.ts`. The function receives the local path to an `.ogg` audio file and should return the transcribed text as a string.
+To use a different ASR engine, modify the `createDefaultTranscribeVoice()` function in `src/telegram/message-input.ts`. The function receives the local path to an `.ogg` audio file and should return the transcribed text as a string.
 
 ---
 
