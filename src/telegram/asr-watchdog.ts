@@ -30,10 +30,30 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
   return parsed;
 }
 
+export function buildAsrServiceShellInvocation(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  env: { ComSpec?: string } = process.env,
+): { command: string; args: string[] } {
+  if (platform === "win32") {
+    return {
+      command: env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", command],
+    };
+  }
+
+  return {
+    command: "/bin/sh",
+    args: ["-lc", command],
+  };
+}
+
 function defaultSpawnService(command: string): void {
-  const child = spawn("/bin/sh", ["-lc", command], {
+  const invocation = buildAsrServiceShellInvocation(command);
+  const child = spawn(invocation.command, invocation.args, {
     detached: true,
     stdio: "ignore",
+    ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
   child.unref();
 }
@@ -73,8 +93,9 @@ export function createAsrWatchdog(options: AsrWatchdogOptions = {}): AsrWatchdog
     consecutiveFailures = 0;
     logger.warn(`ASR watchdog starting repair command after failure: ${summarizeError(error)}`);
 
-    restartInFlight = Promise.resolve()
-      .then(() => spawnService(serviceCommand))
+    restartInFlight = (async () => {
+      await spawnService(serviceCommand);
+    })()
       .catch((spawnError) => {
         logger.warn(`ASR watchdog repair command failed to start: ${summarizeError(spawnError)}`);
       })

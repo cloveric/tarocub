@@ -109,4 +109,29 @@ describe("createDefaultTranscribeVoice", () => {
     expect(watchdog.recordFailure).toHaveBeenCalledTimes(1);
     expect(watchdog.recordSuccess).not.toHaveBeenCalled();
   });
+
+  it("treats an empty ASR HTTP response as a watchdog failure", async () => {
+    const watchdog = {
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "",
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl,
+      watchdog,
+    });
+
+    await expect(transcribeVoice("/tmp/voice.ogg")).rejects.toThrow("ASR not configured");
+
+    expect(watchdog.recordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      message: "ASR HTTP server returned an empty transcript",
+    }));
+    expect(watchdog.recordSuccess).not.toHaveBeenCalled();
+  });
 });

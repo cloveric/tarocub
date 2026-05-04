@@ -110,9 +110,12 @@ export function createDefaultTranscribeVoice(options: {
           signal: AbortSignal.timeout(30_000),
         });
         if (response.ok) {
-          await recordHttpSuccess();
           const text = await response.text();
-          if (text.trim()) return text.trim();
+          if (text.trim()) {
+            await recordHttpSuccess();
+            return text.trim();
+          }
+          await recordHttpFailure(new Error("ASR HTTP server returned an empty transcript"));
         } else {
           await recordHttpFailure(new Error(`ASR HTTP server returned ${response.status}`));
         }
