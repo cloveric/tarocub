@@ -24,6 +24,7 @@ export const CronRunHistoryEntrySchema = z.object({
 export const CronJobRecordSchema = z.object({
   id: CronJobIdSchema,
   chatId: z.number().int(),
+  messageThreadId: z.number().int().optional(),
   userId: z.number().int(),
   chatType: z.string().min(1).default("private"),
   locale: CronLocaleSchema.optional(),

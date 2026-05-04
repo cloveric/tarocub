@@ -445,6 +445,28 @@ describe("ProcessCodexAdapter", () => {
     await expect(promise).rejects.toThrow("codex failed");
   });
 
+  it("keeps the assistant response when Codex only reports plugin warm-cache diagnostics", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "Hello",
+      files: [],
+    });
+
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"answer survived"}}\n');
+    child.stderr.emitData(
+      [
+        "2026-05-04T02:46:05Z  WARN codex_core::plugins::manager: failed to warm featured plugin ids cache error=remote plugin sync request to https://chatgpt.com/backend-api/plugins/featured failed with status 403 Forbidden: <html>challenge</html>",
+        "2026-05-04T02:46:53Z  WARN codex_core_plugins::manifest: ignoring interface.defaultPrompt: prompt must be at most 128 characters path=/Users/test/.codex/.tmp/plugins/plugins/build-ios-apps/.codex-plugin/plugin.json",
+        "2026-05-04T02:46:53Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'",
+      ].join("\n"),
+    );
+    child.close(1);
+
+    await expect(promise).resolves.toEqual({ text: "answer survived" });
+  });
+
   it("keeps both the head and tail of oversized stderr diagnostics", async () => {
     const { spawnCodex, child } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);

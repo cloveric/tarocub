@@ -1,3 +1,5 @@
+import { getTelegramConversationKey } from "./conversation-key.js";
+
 export interface NormalizedTelegramAttachment {
   fileId: string;
   fileName?: string;
@@ -8,6 +10,8 @@ export interface NormalizedTelegramMessage {
   chatId: number;
   userId: number;
   chatType: string;
+  messageThreadId?: number;
+  conversationKey?: string;
   text: string;
   callbackQueryId?: string;
   replyContext?: {
@@ -49,10 +53,13 @@ function normalizeCallbackQuery(callbackQuery: any, text: string): NormalizedTel
     return null;
   }
 
+  const messageThreadId = typeof message?.message_thread_id === "number" ? message.message_thread_id : undefined;
   return {
     chatId,
     userId,
     chatType,
+    ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+    conversationKey: getTelegramConversationKey(chatId, messageThreadId),
     text,
     callbackQueryId: typeof callbackQuery.id === "string" ? callbackQuery.id : undefined,
     attachments: [],
@@ -162,10 +169,13 @@ export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
     return null;
   }
 
+  const messageThreadId = typeof message?.message_thread_id === "number" ? message.message_thread_id : undefined;
   return {
     chatId,
     userId,
     chatType,
+    ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+    conversationKey: getTelegramConversationKey(chatId, messageThreadId),
     text:
       typeof message.text === "string"
         ? message.text

@@ -9,6 +9,8 @@ export interface TelegramToolContext {
   chatId: number;
   userId: number;
   chatType?: string;
+  messageThreadId?: number;
+  conversationKey?: string;
   locale: Locale;
   instanceName?: string;
   updateId?: number;

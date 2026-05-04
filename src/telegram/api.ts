@@ -104,10 +104,11 @@ function isTelegramBotIdentity(value: unknown): value is TelegramBotIdentity {
   );
 }
 
-interface TelegramMessageOptions {
+export interface TelegramMessageOptions {
   inlineKeyboard?: InlineKeyboardButton[][] | null;
   parseMode?: "MarkdownV2" | "HTML" | "Markdown";
   disableNotification?: boolean;
+  messageThreadId?: number;
 }
 
 function isTelegramUpdateArray(value: unknown): value is unknown[] {
@@ -116,6 +117,10 @@ function isTelegramUpdateArray(value: unknown): value is unknown[] {
 
 export class TelegramApi {
   constructor(private readonly botToken: string) {}
+
+  recreate(): TelegramApi {
+    return new TelegramApi(this.botToken);
+  }
 
   private buildUrl(method: string): string {
     return `https://api.telegram.org/bot${this.botToken}/${method}`;
@@ -214,6 +219,9 @@ export class TelegramApi {
     if (options?.disableNotification) {
       body.disable_notification = true;
     }
+    if (typeof options?.messageThreadId === "number") {
+      body.message_thread_id = options.messageThreadId;
+    }
     return this.postJson("sendMessage", body, isTelegramMessage);
   }
 
@@ -221,7 +229,7 @@ export class TelegramApi {
     chatId: number,
     filename: string,
     contents: string | Uint8Array,
-    options?: Pick<TelegramMessageOptions, "disableNotification">,
+    options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
   ): Promise<TelegramMessage> {
     const boundary = `----cc-telegram-bridge-${Math.random().toString(16).slice(2)}`;
     const payload =
@@ -229,10 +237,14 @@ export class TelegramApi {
     const notificationPart = options?.disableNotification
       ? `--${boundary}\r\nContent-Disposition: form-data; name="disable_notification"\r\n\r\ntrue\r\n`
       : "";
+    const threadPart = typeof options?.messageThreadId === "number"
+      ? `--${boundary}\r\nContent-Disposition: form-data; name="message_thread_id"\r\n\r\n${options.messageThreadId}\r\n`
+      : "";
     const head =
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
       notificationPart +
+      threadPart +
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="document"; filename="${filename}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`;
@@ -271,16 +283,20 @@ export class TelegramApi {
     filename: string,
     contents: Uint8Array,
     caption?: string,
-    options?: Pick<TelegramMessageOptions, "disableNotification">,
+    options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
   ): Promise<TelegramMessage> {
     const boundary = `----cc-telegram-bridge-${Math.random().toString(16).slice(2)}`;
     const notificationPart = options?.disableNotification
       ? `--${boundary}\r\nContent-Disposition: form-data; name="disable_notification"\r\n\r\ntrue\r\n`
       : "";
+    const threadPart = typeof options?.messageThreadId === "number"
+      ? `--${boundary}\r\nContent-Disposition: form-data; name="message_thread_id"\r\n\r\n${options.messageThreadId}\r\n`
+      : "";
     let head =
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
       notificationPart +
+      threadPart +
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="photo"; filename="${filename}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`;
@@ -289,6 +305,7 @@ export class TelegramApi {
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
         notificationPart +
+        threadPart +
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` +
         `--${boundary}\r\n` +
@@ -399,7 +416,7 @@ export class TelegramApi {
   async sendMediaGroup(
     chatId: number,
     photos: Array<{ filename: string; contents: Uint8Array; caption?: string }>,
-    options?: Pick<TelegramMessageOptions, "disableNotification">,
+    options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
   ): Promise<void> {
     const boundary = `----cc-telegram-bridge-${Math.random().toString(16).slice(2)}`;
     const parts: Buffer[] = [];
@@ -414,6 +431,9 @@ export class TelegramApi {
       `--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
       (options?.disableNotification
         ? `--${boundary}\r\nContent-Disposition: form-data; name="disable_notification"\r\n\r\ntrue\r\n`
+        : "") +
+      (typeof options?.messageThreadId === "number"
+        ? `--${boundary}\r\nContent-Disposition: form-data; name="message_thread_id"\r\n\r\n${options.messageThreadId}\r\n`
         : "") +
       `--${boundary}\r\nContent-Disposition: form-data; name="media"\r\n\r\n${JSON.stringify(media)}\r\n`,
       "utf8",
@@ -442,11 +462,69 @@ export class TelegramApi {
     }
   }
 
-  async sendChatAction(chatId: number, action: "typing" = "typing"): Promise<void> {
-    await this.postJson("sendChatAction", { chat_id: chatId, action }, (v): v is true => v === true);
+  async sendChatAction(
+    chatId: number,
+    action: "typing" = "typing",
+    options?: Pick<TelegramMessageOptions, "messageThreadId">,
+  ): Promise<void> {
+    await this.postJson(
+      "sendChatAction",
+      {
+        chat_id: chatId,
+        action,
+        ...(typeof options?.messageThreadId === "number" ? { message_thread_id: options.messageThreadId } : {}),
+      },
+      (v): v is true => v === true,
+    );
+  }
+
+  async leaveChat(chatId: number): Promise<void> {
+    await this.postJson("leaveChat", { chat_id: chatId }, (v): v is true => v === true);
   }
 
   async setMyCommands(commands: Array<{ command: string; description: string }>): Promise<void> {
     await this.postJson("setMyCommands", { commands }, (v): v is true => v === true);
   }
+}
+
+export function withTelegramMessageThread<T extends TelegramApi>(api: T, messageThreadId?: number): T {
+  if (typeof messageThreadId !== "number") {
+    return api;
+  }
+
+  return new Proxy(api, {
+    get(target, prop, receiver) {
+      switch (prop) {
+        case "sendMessage":
+          return async (chatId: number, text: string, options?: TelegramMessageOptions) =>
+            target.sendMessage(chatId, text, { ...options, messageThreadId });
+        case "sendDocument":
+          return async (
+            chatId: number,
+            filename: string,
+            contents: string | Uint8Array,
+            options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
+          ) => target.sendDocument(chatId, filename, contents, { ...options, messageThreadId });
+        case "sendPhoto":
+          return async (
+            chatId: number,
+            filename: string,
+            contents: Uint8Array,
+            caption?: string,
+            options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
+          ) => target.sendPhoto(chatId, filename, contents, caption, { ...options, messageThreadId });
+        case "sendMediaGroup":
+          return async (
+            chatId: number,
+            photos: Array<{ filename: string; contents: Uint8Array; caption?: string }>,
+            options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
+          ) => target.sendMediaGroup(chatId, photos, { ...options, messageThreadId });
+        case "sendChatAction":
+          return async (chatId: number, action: "typing" = "typing") =>
+            target.sendChatAction(chatId, action, { messageThreadId });
+        default:
+          return Reflect.get(target, prop, receiver);
+      }
+    },
+  });
 }

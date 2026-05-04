@@ -8,6 +8,15 @@ import { Bridge, type AccessStoreLike, type SessionManagerLike } from "../src/ru
 import type { CodexAdapter } from "../src/codex/adapter.js";
 import { AccessStore } from "../src/state/access-store.js";
 
+function groupMode(allowedChatIds: number[]) {
+  return {
+    loadGroupMode: vi.fn().mockResolvedValue({
+      enabled: true,
+      allowedChatIds,
+    }),
+  };
+}
+
 describe("Bridge", () => {
   it("routes an authorized message through the current session", async () => {
     const accessStore: AccessStoreLike = {
@@ -48,6 +57,50 @@ describe("Bridge", () => {
     }));
     expect(result.text).toBe("done");
     expect(sessionManager.bindSession).not.toHaveBeenCalled();
+  });
+
+  it("uses the Telegram topic conversation key when present", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "pairing",
+        pairedUsers: [{ telegramUserId: 42, telegramChatId: 84, pairedAt: "2026-05-04T00:00:00.000Z" }],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "topic-session" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done", sessionId: "topic-session-2" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter, groupMode([-100123]));
+    await bridge.handleAuthorizedMessage({
+      chatId: -100123,
+      userId: 42,
+      chatType: "supergroup",
+      messageThreadId: 7,
+      conversationKey: "chat:-100123:topic:7",
+      text: "hello topic",
+      replyContext: undefined,
+      files: [],
+    });
+
+    expect(sessionManager.getOrCreateSession).toHaveBeenCalledWith({
+      chatId: -100123,
+      messageThreadId: 7,
+      conversationKey: "chat:-100123:topic:7",
+    });
+    expect(sessionManager.bindSession).toHaveBeenCalledWith({
+      chatId: -100123,
+      messageThreadId: 7,
+      conversationKey: "chat:-100123:topic:7",
+    }, "topic-session-2");
   });
 
   it("disables runtime timeout only when the user explicitly asks for a long task", async () => {
@@ -387,7 +440,7 @@ describe("Bridge", () => {
         replyContext: undefined,
         files: [],
       }),
-    ).resolves.toEqual({ text: "此 bot 只接受私聊。" });
+    ).resolves.toEqual({ text: "此聊天未被授权使用该实例。" });
 
     await expect(
       bridge.handleAuthorizedMessage({
@@ -692,7 +745,7 @@ describe("Bridge", () => {
     expect(sessionManager.bindSession).toHaveBeenCalledWith(84, "thread-123");
   });
 
-  it("rejects non-private chats with a product-facing message", async () => {
+  it("rejects unauthorized non-private chats with a product-facing message", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         policy: "allowlist",
@@ -714,14 +767,62 @@ describe("Bridge", () => {
     const bridge = new Bridge(accessStore, sessionManager, adapter);
     await expect(
       bridge.handleAuthorizedMessage({
-        chatId: 84,
-        userId: 84,
+        chatId: -10084,
+        userId: 999,
         chatType: "group",
         text: "hello",
         replyContext: undefined,
         files: [],
       }),
-    ).resolves.toEqual({ text: "This bot only accepts private chats." });
+    ).resolves.toEqual({ text: "This chat is not authorized for this instance." });
+  });
+
+  it("requires both an allowed group chat and an authorized user for group messages", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [42],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "topic-session" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter, groupMode([-10084]));
+    await expect(bridge.handleAuthorizedMessage({
+      chatId: -10084,
+      userId: 42,
+      chatType: "supergroup",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+    })).resolves.toEqual({ text: "done" });
+
+    await expect(bridge.handleAuthorizedMessage({
+      chatId: -10084,
+      userId: 999,
+      chatType: "supergroup",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+    })).resolves.toEqual({ text: "This chat is not authorized for this instance." });
+
+    await expect(bridge.handleAuthorizedMessage({
+      chatId: -10099,
+      userId: 42,
+      chatType: "supergroup",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+    })).resolves.toEqual({ text: "This chat is not authorized for this instance." });
   });
 
   it("localizes private-chat-required and pairing replies when locale is zh", async () => {
@@ -755,7 +856,7 @@ describe("Bridge", () => {
         files: [],
         locale: "zh",
       }),
-    ).resolves.toEqual({ text: "此 bot 只接受私聊。" });
+    ).resolves.toEqual({ text: "此聊天未被授权使用该实例。" });
 
     await expect(
       bridge.handleAuthorizedMessage({

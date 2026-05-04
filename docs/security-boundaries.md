@@ -78,8 +78,9 @@ Telegram is an untrusted remote input source until access control passes.
 ### Current enforcement
 
 - [src/runtime/bridge.ts](/Users/cloveric/projects/cc-telegram-bridge/src/runtime/bridge.ts:114) rejects or challenges normal chats according to `pairing` or `allowlist`
-- non-private chats are rejected for normal Telegram use
-- unauthorized inputs are answered at the delivery layer before engine execution
+- non-private chats require both an authorized Telegram user and an explicitly allowed group chat
+- ordinary group messages are ignored unless they mention the bot or reply to the bot
+- unauthorized group inputs are silent and audited; private unauthorized inputs are answered before engine execution
 - Telegram messages are normalized before command handling
 
 ### Residual risk

@@ -119,6 +119,73 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("uses unique telegram-out request ids for parallel topics in the same chat", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const stateFor = () => ({
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    });
+    const requestIds: string[] = [];
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_777_777_777_777);
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "ok" }),
+    };
+
+    const makeTopicMessage = (messageThreadId: number): NormalizedTelegramMessage => ({
+      chatId: -100123,
+      userId: 456,
+      chatType: "supergroup",
+      messageThreadId,
+      conversationKey: `chat:-100123:topic:${messageThreadId}`,
+      text: "hello",
+      attachments: [],
+    });
+
+    try {
+      for (const messageThreadId of [10, 20]) {
+        await executeWorkflowAwareTelegramTurn({
+          stateDir: root,
+          startedAt: Date.now() - 10,
+          locale: "en",
+          cfg: { engine: "codex" },
+          normalized: makeTopicMessage(messageThreadId),
+          context: {
+            api: {
+              sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+              getFile: vi.fn(),
+              downloadFile: vi.fn(),
+            } as never,
+            bridge: bridge as never,
+            inboxDir: path.join(root, "inbox"),
+            instanceName: "default",
+            updateId: messageThreadId,
+          },
+          workflowStore: {
+            update: vi.fn(),
+          } as never,
+          downloadedAttachments: [],
+          state: stateFor(),
+          createTelegramOutDir: vi.fn().mockImplementation(async (_stateDir, requestId: string) => {
+            requestIds.push(requestId);
+            return {
+              requestId,
+              dirPath: path.join(root, "workspace", ".telegram-out", requestId),
+            };
+          }),
+          deliverTelegramResponse: vi.fn().mockResolvedValue(0),
+          sendTelegramOutFile: vi.fn(),
+        });
+      }
+
+      expect(requestIds).toHaveLength(2);
+      expect(new Set(requestIds).size).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("handles cron-add fallback tags from engines without turn-scoped cron env", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-29T05:00:00.000Z"));

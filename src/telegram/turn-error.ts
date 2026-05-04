@@ -19,6 +19,7 @@ import {
 } from "./turn-bookkeeping.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import { isResetCommand } from "./command-detection.js";
+import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
 function shouldUseNonRepairableResetSessionGuidance(
   error: unknown,
@@ -94,7 +95,9 @@ export async function maybeRetryTelegramTurnError(input: {
     instanceName?: string;
     updateId?: number;
   };
-  sessionStore: Pick<SessionStore, "removeByChatId">;
+  sessionStore: Pick<SessionStore, "removeByChatId"> & {
+    removeByConversationKey?(conversationKey: string): Promise<boolean | void>;
+  };
   stopTyping: () => void;
   beforeRetry?: (reason: "auth refresh" | "stale session") => Promise<void>;
   restart: () => Promise<void>;
@@ -130,7 +133,11 @@ export async function maybeRetryTelegramTurnError(input: {
 
   if (isStaleSessionError(classifiedError) && !context._staleSessionRetried) {
     try {
-      await sessionStore.removeByChatId(normalized.chatId);
+      if (sessionStore.removeByConversationKey) {
+        await sessionStore.removeByConversationKey(getNormalizedTelegramConversationKey(normalized));
+      } else {
+        await sessionStore.removeByChatId(normalized.chatId);
+      }
       context._staleSessionRetried = true;
       await appendTimelineEventBestEffort(stateDir, {
         type: "turn.retried",

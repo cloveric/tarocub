@@ -21,6 +21,8 @@ const SuspendedConversationStateSchema = z.object({
 
 export const SessionRecordSchema = z.object({
   telegramChatId: z.number().int(),
+  telegramThreadId: z.number().int().optional(),
+  conversationKey: z.string().min(1).optional(),
   codexSessionId: z.string(),
   status: z.enum(["idle", "running", "queued", "blocked"]),
   updatedAt: IsoTimestampSchema,

@@ -13,6 +13,8 @@ export interface CronCommandContext {
   chatId: number;
   userId: number;
   chatType?: string;
+  messageThreadId?: number;
+  conversationKey?: string;
   locale: CronLocale;
 }
 
@@ -184,7 +186,7 @@ function renderHelp(locale: CronLocale): string {
 }
 
 async function handleList(context: CronCommandContext): Promise<void> {
-  const jobs = await context.store.listByChat(context.chatId);
+  const jobs = await context.store.listByConversation(context.chatId, context.messageThreadId);
   if (jobs.length === 0) {
     const msg = context.locale === "zh"
       ? "暂无定时任务。用 `/cron add 0 9 * * * 早安总结` 添加一个。"
@@ -230,6 +232,7 @@ async function handleAdd(rest: string, context: CronCommandContext): Promise<voi
   try {
     record = await context.store.add({
       chatId: context.chatId,
+      messageThreadId: context.messageThreadId,
       userId: context.userId,
       chatType: context.chatType ?? "private",
       locale: context.locale,
@@ -268,7 +271,7 @@ async function ensureChatJob(
     return null;
   }
   const job = await context.store.get(id);
-  if (!job || job.chatId !== context.chatId) {
+  if (!job || job.chatId !== context.chatId || job.messageThreadId !== context.messageThreadId) {
     const msg = context.locale === "zh"
       ? `未找到任务：${id}`
       : `Task not found: ${id}`;

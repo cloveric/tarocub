@@ -26,6 +26,11 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        groupMode: {
+          enabled: true,
+          allowedChatIds: [],
+          listenAllChatIds: [],
+        },
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -49,6 +54,11 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        groupMode: {
+          enabled: true,
+          allowedChatIds: [],
+          listenAllChatIds: [],
+        },
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
@@ -73,6 +83,11 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        groupMode: {
+          enabled: true,
+          allowedChatIds: [],
+          listenAllChatIds: [],
+        },
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
@@ -100,6 +115,11 @@ describe("loadInstanceConfig", () => {
             dirName: "project-dir",
             workspacePath: "/tmp/workspace",
           },
+          groupMode: {
+            enabled: false,
+            allowedChatIds: [-100123, -100123, 42.5],
+            listenAllChatIds: [-100123, -100123, 42.5],
+          },
         }),
         "utf8",
       );
@@ -119,11 +139,15 @@ describe("loadInstanceConfig", () => {
           workspacePath: "/tmp/workspace",
           symlinkPath: undefined,
         },
+        groupMode: {
+          enabled: false,
+          allowedChatIds: [-100123],
+          listenAllChatIds: [-100123],
+        },
       });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
   });
 
   it("rejects standard as a dead Codex service tier value", async () => {
@@ -143,14 +167,20 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        groupMode: {
+          enabled: true,
+          allowedChatIds: [],
+          listenAllChatIds: [],
+        },
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
 
-  describe("updateInstanceConfig", () => {
+describe("updateInstanceConfig", () => {
   it("creates config.json and preserves existing fields across updates", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
 
@@ -169,6 +199,25 @@ describe("loadInstanceConfig", () => {
         locale: "zh",
         model: "claude-opus",
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves all fields across concurrent updates", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+
+    try {
+      await Promise.all(Array.from({ length: 20 }, async (_, index) => {
+        await updateInstanceConfig(root, (config) => {
+          config[`field${index}`] = index;
+        });
+      }));
+
+      const persisted = JSON.parse(await readFile(path.join(root, "config.json"), "utf8")) as Record<string, unknown>;
+      for (let index = 0; index < 20; index++) {
+        expect(persisted[`field${index}`]).toBe(index);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }

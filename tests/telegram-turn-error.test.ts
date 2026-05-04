@@ -101,6 +101,44 @@ describe("maybeRetryTelegramTurnError", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("clears stale topic session by conversation key", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-turn-error-"));
+    const normalized = createNormalizedMessage("hello");
+    normalized.chatId = -100123;
+    normalized.chatType = "supergroup";
+    normalized.messageThreadId = 77;
+    normalized.conversationKey = "chat:-100123:topic:77";
+    const removeByChatId = vi.fn().mockResolvedValue(undefined);
+    const removeByConversationKey = vi.fn().mockResolvedValue(undefined);
+    const restart = vi.fn().mockResolvedValue(undefined);
+    const stopTyping = vi.fn();
+
+    try {
+      const handled = await maybeRetryTelegramTurnError({
+        stateDir: root,
+        normalized,
+        classifiedError: new Error("no such session"),
+        failureCategory: "session-state",
+        context: {
+          instanceName: "default",
+          updateId: 12,
+        },
+        sessionStore: {
+          removeByChatId,
+          removeByConversationKey,
+        } as never,
+        stopTyping,
+        restart,
+      });
+
+      expect(handled).toBe(true);
+      expect(removeByConversationKey).toHaveBeenCalledWith("chat:-100123:topic:77");
+      expect(removeByChatId).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("finalizeTelegramTurnError", () => {

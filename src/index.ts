@@ -9,6 +9,7 @@ import { FileWorkflowStore } from "./state/file-workflow-store.js";
 import { resolveConfig } from "./config.js";
 import {
   createServiceDependencies,
+  lookupTelegramBotIdentity,
   parseServiceInstanceName,
   pollTelegramUpdates,
   registerBotCommands,
@@ -181,6 +182,17 @@ async function main(): Promise<void> {
       });
     }
     await registerBotCommands(api);
+    let botUsername: string | undefined;
+    try {
+      botUsername = (await lookupTelegramBotIdentity(api)).username;
+    } catch (error) {
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        instanceName,
+        outcome: "error",
+        detail: `bot identity lookup: ${renderLifecycleError(error)}`,
+      });
+    }
 
     try {
       const cronExecutor = buildCronExecutor({
@@ -234,7 +246,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      await pollTelegramUpdates(api, bridge, config.inboxDir, console, abortController.signal);
+      await pollTelegramUpdates(api, bridge, config.inboxDir, console, abortController.signal, { botUsername });
     } finally {
       try {
         await shutdownCronRuntime();

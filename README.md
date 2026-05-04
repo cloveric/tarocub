@@ -22,11 +22,11 @@
 </h3>
 
 <p align="center">
-  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, Telegram-delivered scheduled tasks, multi-bot Agent Bus, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
+  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, Telegram groups/topics, Telegram-delivered scheduled tasks, multi-bot Agent Bus, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">Files</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#scheduled-tasks--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-groups-and-topics">Groups</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">Files</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#scheduled-tasks--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
@@ -35,7 +35,7 @@
 
 ### What Changed Recently
 
-- **v4.5.10** — adds Codex Fast Mode control with `/fast on|off|status`, forwarding `fast_mode` and `service_tier="fast"` to both Codex process and app-server runtimes while keeping Claude instances rejected cleanly.
+- **v4.5.10** — adds Codex Fast Mode control with `/fast on|off|status`, forwarding `fast_mode` and `service_tier="fast"` to both Codex process and app-server runtimes while keeping Claude instances rejected cleanly. Fast Mode is experimental in unattended bridge use: if Codex starts returning engine-runtime failures, turn it off with `/fast off`; if the instance is already unhealthy, restart the instance once after the current turn is idle.
 - **v4.5.9** — hardens schema-backed tool delivery receipts: malformed `[tool:{...}]` JSON or rejected send tools no longer preserve misleading “already sent” model text; batch/long delivery now prefers fenced `tool-call` blocks, and generated `agent.md` upgrades clean up duplicate scheduler residue.
 - **v4.5.8** — documents `[tool:{...}]` as the only generated delivery tag format, keeps legacy `[send-file:]` / `[send-image:]` tags as compatibility-only, and clarifies the file-delivery trust boundary.
 - **v4.5.7** — unifies file delivery and Telegram scheduled tasks around the registered `[tool:{...}]` layer, adds safer `tool-call` fenced blocks, hardens stream/post-turn dedupe, and improves cron reliability with timezones, stale-run handling, file locks, job caps, and failure receipts.
@@ -61,6 +61,7 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 - **Native CLI first.** The bridge runs the real Codex and Claude Code CLIs, so local auth, project files, sessions, approvals, and engine-specific behavior remain the same as on your desktop.
 - **Resume desktop work from anywhere.** Pick up an existing local Codex or Claude Code session from Telegram, send files or instructions while away, then continue the same project back on the desktop.
+- **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation.
 - **Multi-engine without separate playbooks.** Each bot can choose Codex or Claude, process or stream runtime, while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
 - **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
 - **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
@@ -925,6 +926,7 @@ Telegram users can also use:
 - `/engine [claude|codex]` — switch engine for the current instance (the bridge resets stale bindings automatically)
 - `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
 - `/model [name|off]` — switch model
+- `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
 - `/fan <prompt>` — query current bot plus configured parallel bots
@@ -1008,6 +1010,24 @@ npm run dev -- telegram status [--instance work]
 ```
 
 Use `telegram access multi on --instance <name>` only when you really want one bot instance to serve multiple chats. New and legacy instances both default to `off` unless you explicitly change it.
+
+### Telegram Groups And Topics
+
+Group usage has a second allow layer: the Telegram user must already be authorized, and the group chat must be explicitly allowed from inside that group:
+
+```text
+/group status
+/group allow
+/group deny
+/group on
+/group off
+/group all
+/group at
+```
+
+By default, ordinary group messages are ignored unless they mention the bot username or reply to one of the bot's messages. Slash commands still work. Use `/group all` inside a group if you want that allowed group to behave like an always-listening shared chat; use `/group at` in the same group to return to the safer default. For `/group all` to hear ordinary messages, promote the bot to admin in that group so Telegram actually delivers ordinary group messages to it. BotFather privacy mode can also affect delivery, but group admin is the practical setup path. Unauthorized group messages are silent and only audited, so strangers cannot make the bot spam a group.
+
+Forum topics are isolated conversations: each topic gets its own engine session and cron scope. Within the same topic, authorized users share that topic's session context; use a separate topic when you want a separate temporary conversation.
 
 ---
 
@@ -1104,6 +1124,18 @@ Mount `~/.cctb` to persist state across container restarts.
 3. Verify the engine is installed: `codex --version` or `claude --version`
 4. If the instance uses Claude, run `npm run smoke:claude-auth`
 5. If `service doctor` reports `legacy-launchd`, clean it with `bash scripts/cleanup-legacy-launchd.sh --all`
+
+</details>
+
+<details>
+<summary><strong>Codex Fast Mode causes engine-runtime failures</strong></summary>
+
+Fast Mode is a Codex CLI feature, but in unattended bridge instances it can surface upstream Codex diagnostics such as plugin warm-cache or Cloudflare challenge failures. The bridge preserves a completed assistant response when Codex only reports non-blocking plugin diagnostics, but real Codex errors still fail the turn.
+
+1. Send `/fast off` in the affected bot.
+2. Try one simple message such as `hi`.
+3. If it still fails, restart that bot instance once after the current turn is idle.
+4. Avoid force-restarting the same bot while it is generating a reply; that can kill the active Codex child process and appear as `codex exited with code null`.
 
 </details>
 

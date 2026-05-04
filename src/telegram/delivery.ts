@@ -93,8 +93,9 @@ import {
   renderUnauthorizedMessage,
   type Locale,
 } from "./message-renderer.js";
-import { TelegramApi } from "./api.js";
+import { TelegramApi, withTelegramMessageThread } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
+import { handleGroupCommand, isGroupCommand } from "./group-commands.js";
 
 export interface TelegramDeliveryContext {
   api: TelegramApi;
@@ -114,6 +115,12 @@ export async function handleNormalizedTelegramMessage(
   normalized: NormalizedTelegramMessage,
   context: TelegramDeliveryContext,
 ): Promise<void> {
+  if (normalized.messageThreadId !== undefined) {
+    context = {
+      ...context,
+      api: withTelegramMessageThread(context.api, normalized.messageThreadId),
+    };
+  }
   const startedAt = Date.now();
   let typingInterval: ReturnType<typeof setInterval> | undefined;
   const turnState = {
@@ -127,6 +134,27 @@ export async function handleNormalizedTelegramMessage(
   const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
   const cfg = await loadInstanceConfig(stateDir);
   const locale = cfg.locale;
+
+  if (isGroupCommand(normalized.text)) {
+    const handled = await handleGroupCommand({
+      stateDir,
+      startedAt,
+      locale,
+      cfg: {
+        groupMode: cfg.groupMode,
+      },
+      normalized,
+      context: {
+        ...context,
+        bridge: context.bridge,
+        api: context.api,
+      },
+      updateInstanceConfig: async (updater) => await updateInstanceConfig(stateDir, updater),
+    });
+    if (handled) {
+      return;
+    }
+  }
 
   const startTyping = () => {
     if (typingInterval) {
@@ -152,7 +180,6 @@ export async function handleNormalizedTelegramMessage(
         // Callback acks are advisory; continuation should still proceed.
       }
     }
-    startTyping();
     await appendTimelineEventBestEffort(stateDir, {
       type: "input.received",
       instanceName: context.instanceName,
@@ -171,10 +198,23 @@ export async function handleNormalizedTelegramMessage(
       chatId: normalized.chatId,
       userId: normalized.userId,
       chatType: normalized.chatType,
+      messageThreadId: normalized.messageThreadId,
+      conversationKey: normalized.conversationKey,
       locale,
     });
 
     if (accessDecision.kind === "reply" || accessDecision.kind === "deny") {
+      if (normalized.chatType !== "private" && normalized.chatType !== "bus") {
+        await appendUpdateReplyAuditEventBestEffort(path.dirname(context.inboxDir), context, normalized, {
+          detail: accessDecision.text,
+          metadata: {
+            durationMs: Date.now() - startedAt,
+            attachments: normalized.attachments.length,
+            silenced: true,
+          },
+        });
+        return;
+      }
       await context.api.sendMessage(
         normalized.chatId,
         accessDecision.text ?? renderErrorMessage(renderUnauthorizedMessage(locale), locale),
@@ -188,6 +228,8 @@ export async function handleNormalizedTelegramMessage(
       });
       return;
     }
+
+    startTyping();
 
     await dispatchAuthorizedTelegramMessage({
       stateDir,
@@ -210,6 +252,7 @@ export async function handleNormalizedTelegramMessage(
             return await requestTelegramApproval({
               api: context.api,
               chatId: normalized.chatId,
+              messageThreadId: normalized.messageThreadId,
               userId: normalized.userId,
               locale,
               request,

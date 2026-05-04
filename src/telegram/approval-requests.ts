@@ -4,6 +4,7 @@ import { inspect } from "node:util";
 import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
 import type { TelegramApi } from "./api.js";
 import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "./approval-timeouts.js";
+import { getNormalizedTelegramConversationKey, getTelegramConversationKey } from "./conversation-key.js";
 import type { Locale } from "./message-renderer.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
@@ -13,6 +14,7 @@ type ApprovalChoice = "once" | "session" | "deny";
 interface PendingApproval {
   id: string;
   chatId: number;
+  messageThreadId?: number;
   userId: number;
   locale: Locale;
   engine: EngineApprovalRequest["engine"];
@@ -140,8 +142,19 @@ function resolvePending(pending: PendingApproval, choice: ApprovalChoice): Engin
   return decision;
 }
 
-function findOldestPendingForChatAndUser(chatId: number, userId: number): PendingApproval | undefined {
-  return [...pendingApprovals.values()].find((pending) => pending.chatId === chatId && pending.userId === userId);
+function pendingConversationKey(pending: Pick<PendingApproval, "chatId" | "messageThreadId">): string {
+  return getTelegramConversationKey(pending.chatId, pending.messageThreadId);
+}
+
+function findOldestPendingForConversationAndUser(
+  chatId: number,
+  messageThreadId: number | undefined,
+  userId: number,
+): PendingApproval | undefined {
+  const conversationKey = getTelegramConversationKey(chatId, messageThreadId);
+  return [...pendingApprovals.values()].find(
+    (pending) => pendingConversationKey(pending) === conversationKey && pending.userId === userId,
+  );
 }
 
 function parseApprovalCommand(text: string): { kind: "id"; id: string; choice: ApprovalChoice } | { kind: "chat"; choice: ApprovalChoice } | null {
@@ -190,6 +203,7 @@ export function isTelegramApprovalCommand(text: string): boolean {
 export async function requestTelegramApproval(input: {
   api: ApprovalApi;
   chatId: number;
+  messageThreadId?: number;
   userId: number;
   locale: Locale;
   request: EngineApprovalRequest;
@@ -214,6 +228,7 @@ export async function requestTelegramApproval(input: {
     const pending: PendingApproval = {
       id,
       chatId: input.chatId,
+      messageThreadId: input.messageThreadId,
       userId: input.userId,
       locale: input.locale,
       engine: input.request.engine,
@@ -313,7 +328,11 @@ export async function handleTelegramApprovalCommand(input: {
 
   const pending = parsed.kind === "id"
     ? pendingApprovals.get(parsed.id)
-    : findOldestPendingForChatAndUser(input.normalized.chatId, input.normalized.userId);
+    : findOldestPendingForConversationAndUser(
+      input.normalized.chatId,
+      input.normalized.messageThreadId,
+      input.normalized.userId,
+    );
 
   if (!pending) {
     await input.api.sendMessage(input.normalized.chatId, "No pending approval.");
@@ -322,6 +341,11 @@ export async function handleTelegramApprovalCommand(input: {
 
   if (pending.chatId !== input.normalized.chatId) {
     await input.api.sendMessage(input.normalized.chatId, "This approval request belongs to another chat.");
+    return true;
+  }
+
+  if (pendingConversationKey(pending) !== getNormalizedTelegramConversationKey(input.normalized)) {
+    await input.api.sendMessage(input.normalized.chatId, "This approval request belongs to another topic.");
     return true;
   }
 

@@ -1,5 +1,6 @@
 import { SessionStore } from "../state/session-store.js";
 import type { CodexAdapter } from "../codex/adapter.js";
+import { getTelegramConversationKey } from "../telegram/conversation-key.js";
 
 export class SessionStateError extends Error {
   readonly repairable: boolean;
@@ -22,8 +23,13 @@ export class SessionManager {
     private readonly adapter: CodexAdapter,
   ) {}
 
-  async getOrCreateSession(chatId: number): Promise<{ sessionId: string }> {
-    const existing = await this.sessionStore.findByChatIdSafe(chatId);
+  async getOrCreateSession(scope: number | { chatId: number; messageThreadId?: number; conversationKey?: string }): Promise<{ sessionId: string }> {
+    const chatId = typeof scope === "number" ? scope : scope.chatId;
+    const messageThreadId = typeof scope === "number" ? undefined : scope.messageThreadId;
+    const conversationKey = typeof scope === "number"
+      ? getTelegramConversationKey(scope)
+      : scope.conversationKey ?? getTelegramConversationKey(scope.chatId, scope.messageThreadId);
+    const existing = await this.sessionStore.findByConversationKeySafe(conversationKey);
 
     if (existing.warning) {
       throw new SessionStateError(
@@ -36,13 +42,20 @@ export class SessionManager {
       return { sessionId: existing.record.codexSessionId };
     }
 
-    return { sessionId: `telegram-${chatId}` };
+    return { sessionId: messageThreadId === undefined ? `telegram-${chatId}` : `telegram-${chatId}-topic-${messageThreadId}` };
   }
 
-  async bindSession(chatId: number, sessionId: string): Promise<void> {
-    const existing = await this.sessionStore.findByChatId(chatId);
+  async bindSession(scope: number | { chatId: number; messageThreadId?: number; conversationKey?: string }, sessionId: string): Promise<void> {
+    const chatId = typeof scope === "number" ? scope : scope.chatId;
+    const messageThreadId = typeof scope === "number" ? undefined : scope.messageThreadId;
+    const conversationKey = typeof scope === "number"
+      ? getTelegramConversationKey(scope)
+      : scope.conversationKey ?? getTelegramConversationKey(scope.chatId, scope.messageThreadId);
+    const existing = await this.sessionStore.findByConversationKey(conversationKey);
     await this.sessionStore.upsert({
       telegramChatId: chatId,
+      telegramThreadId: messageThreadId,
+      conversationKey,
       codexSessionId: sessionId,
       status: "idle",
       updatedAt: new Date().toISOString(),

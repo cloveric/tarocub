@@ -71,7 +71,7 @@ function renderJob(job: CronJobRecord, index: number, locale: TelegramToolContex
 async function getCurrentChatJob(id: string, context: TelegramToolContext): Promise<CronJobRecord> {
   const runtime = requireCronRuntime(context);
   const job = await runtime.store.get(id);
-  if (!job || job.chatId !== context.chatId) {
+  if (!job || job.chatId !== context.chatId || job.messageThreadId !== context.messageThreadId) {
     throw new Error(context.locale === "zh" ? `未找到任务：${id}` : `Task not found: ${id}`);
   }
   return job;
@@ -80,7 +80,7 @@ async function getCurrentChatJob(id: string, context: TelegramToolContext): Prom
 export async function executeCronListTool(_payload: unknown, context: TelegramToolContext): Promise<TelegramToolResult> {
   try {
     const runtime = requireCronRuntime(context);
-    const jobs = await runtime.store.listByChat(context.chatId);
+    const jobs = await runtime.store.listByConversation(context.chatId, context.messageThreadId);
     if (jobs.length === 0) {
       return {
         ok: true,

@@ -91,7 +91,10 @@ function parsePayload(payload: unknown): unknown {
   return typeof payload === "string" ? JSON.parse(payload) : payload;
 }
 
-function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "chatId" | "userId" | "chatType" | "locale">): CronJobInput {
+function buildCronInput(
+  payload: unknown,
+  context: Pick<CronAddToolContext, "chatId" | "messageThreadId" | "userId" | "chatType" | "locale">,
+): CronJobInput {
   const parsedPayload = parsePayload(payload);
   if (!parsedPayload || typeof parsedPayload !== "object" || Array.isArray(parsedPayload)) {
     throw new Error("cron-add payload must be a JSON object");
@@ -117,6 +120,7 @@ function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "cha
     }
     return {
       chatId: context.chatId,
+      messageThreadId: context.messageThreadId,
       userId: context.userId,
       chatType: context.chatType ?? "private",
       locale: context.locale,
@@ -149,6 +153,7 @@ function buildCronInput(payload: unknown, context: Pick<CronAddToolContext, "cha
 
   return {
     chatId: context.chatId,
+    messageThreadId: context.messageThreadId,
     userId: context.userId,
     chatType: context.chatType ?? "private",
     locale: context.locale,

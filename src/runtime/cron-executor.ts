@@ -4,6 +4,7 @@ import type { NormalizedTelegramMessage } from "../telegram/update-normalizer.js
 import type { CronJobRecord } from "../state/cron-store-schema.js";
 import type { handleNormalizedTelegramMessage } from "../telegram/delivery.js";
 import { CronAccessDeniedError } from "./cron-errors.js";
+import { getTelegramConversationKey } from "../telegram/conversation-key.js";
 
 export interface CronExecutorContext {
   api: TelegramApi;
@@ -93,6 +94,8 @@ function silentTelegramApi(api: TelegramApi): TelegramApi {
 function buildSyntheticMessage(job: CronJobRecord): NormalizedTelegramMessage {
   return {
     chatId: job.chatId,
+    messageThreadId: job.messageThreadId,
+    conversationKey: getTelegramConversationKey(job.chatId, job.messageThreadId),
     userId: job.userId,
     chatType: job.chatType,
     text: job.prompt,
@@ -124,6 +127,12 @@ export function buildCronExecutor(options: BuildCronExecutorOptions): (job: Cron
       chatId: job.chatId,
       userId: job.userId,
       chatType: job.chatType,
+      ...(job.messageThreadId !== undefined
+        ? {
+          messageThreadId: job.messageThreadId,
+          conversationKey: getTelegramConversationKey(job.chatId, job.messageThreadId),
+        }
+        : {}),
       locale: job.locale,
     });
     if (accessDecision.kind !== "allow") {
@@ -160,5 +169,9 @@ export async function sendCronFailureNotification(
   const message = job.locale === "zh"
     ? `⚠️ 定时任务执行失败\nID  ${job.id}\n📝 ${job.prompt}\n错误：${detail}`
     : `⚠️ Scheduled task failed\nID  ${job.id}\n📝 ${job.prompt}\nError: ${detail}`;
-  await api.sendMessage(job.chatId, message, job.silent ? { disableNotification: true } : undefined);
+  const options = {
+    ...(job.silent ? { disableNotification: true } : {}),
+    ...(typeof job.messageThreadId === "number" ? { messageThreadId: job.messageThreadId } : {}),
+  };
+  await api.sendMessage(job.chatId, message, Object.keys(options).length > 0 ? options : undefined);
 }

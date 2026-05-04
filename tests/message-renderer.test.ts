@@ -252,7 +252,30 @@ describe("normalizeUpdate", () => {
       chatId: 123,
       userId: 456,
       chatType: "private",
+      conversationKey: "chat:123",
       text: "hello",
+      replyContext: undefined,
+      attachments: [],
+    });
+  });
+
+  it("normalizes Telegram forum topic messages into a distinct conversation key", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: -100123, type: "supergroup" },
+          from: { id: 456 },
+          message_thread_id: 42,
+          text: "topic message",
+        },
+      }),
+    ).toEqual({
+      chatId: -100123,
+      userId: 456,
+      chatType: "supergroup",
+      messageThreadId: 42,
+      conversationKey: "chat:-100123:topic:42",
+      text: "topic message",
       replyContext: undefined,
       attachments: [],
     });
@@ -275,6 +298,7 @@ describe("normalizeUpdate", () => {
       chatId: 123,
       userId: 456,
       chatType: "private",
+      conversationKey: "chat:123",
       text: "reply",
       replyContext: {
         messageId: 99,
@@ -301,6 +325,7 @@ describe("normalizeUpdate", () => {
       chatId: 123,
       userId: 456,
       chatType: "private",
+      conversationKey: "chat:123",
       text: "hello",
       replyContext: undefined,
       attachments: [
@@ -329,6 +354,7 @@ describe("normalizeUpdate", () => {
       chatId: 123,
       userId: 456,
       chatType: "private",
+      conversationKey: "chat:123",
       text: "",
       replyContext: undefined,
       attachments: [
@@ -527,6 +553,23 @@ describe("TelegramApi", () => {
 
     await expect(api.sendMessage(1, "working")).resolves.toEqual({ message_id: 9, text: "working" });
     await expect(api.editMessage(1, 9, "done")).resolves.toEqual({ message_id: 9, text: "done" });
+
+    fetchMock.mockRestore();
+  });
+
+  it("passes Telegram forum topic ids to sendMessage", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({ ok: true, result: { message_id: 9, text: "working" } }),
+    } as unknown as Response);
+    const api = new TelegramApi("token");
+
+    await api.sendMessage(-100123, "working", { messageThreadId: 42 });
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.message_thread_id).toBe(42);
 
     fetchMock.mockRestore();
   });

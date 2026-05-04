@@ -15,6 +15,8 @@ export interface ProcessCronAddTagsInput {
   chatId: number;
   userId: number;
   chatType?: string;
+  messageThreadId?: number;
+  conversationKey?: string;
   locale: Locale;
   instanceName?: string;
   updateId?: number;
@@ -192,6 +194,8 @@ export async function processCronAddTags(input: ProcessCronAddTagsInput): Promis
         chatId: input.chatId,
         userId: input.userId,
         chatType: input.chatType,
+        messageThreadId: input.messageThreadId,
+        conversationKey: input.conversationKey,
         locale: input.locale,
         instanceName: input.instanceName,
         updateId: input.updateId,

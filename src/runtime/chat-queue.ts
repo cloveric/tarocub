@@ -1,10 +1,10 @@
 export class ChatQueue {
-  private readonly queues = new Map<number, Promise<unknown>>();
-  private readonly generations = new Map<number, number>();
-  private readonly pendingCounts = new Map<number, number>();
+  private readonly queues = new Map<string | number, Promise<unknown>>();
+  private readonly generations = new Map<string | number, number>();
+  private readonly pendingCounts = new Map<string | number, number>();
 
   enqueue<T>(
-    chatId: number,
+    chatId: string | number,
     job: () => Promise<T>,
     options: { onSkipped?: () => T | Promise<T> } = {},
   ): Promise<T> {
@@ -41,7 +41,7 @@ export class ChatQueue {
     return run;
   }
 
-  clearPending(chatId: number): boolean {
+  clearPending(chatId: string | number): boolean {
     const hadPending = (this.pendingCounts.get(chatId) ?? 0) > 0;
     this.generations.set(chatId, (this.generations.get(chatId) ?? 0) + 1);
     return hadPending;

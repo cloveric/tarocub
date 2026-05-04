@@ -10,6 +10,7 @@ import {
 } from "./turn-bookkeeping.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import { isResetCommand } from "./command-detection.js";
+import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
 export interface SessionCommandConfig {
   engine: "codex" | "claude";
@@ -29,9 +30,23 @@ export interface SessionCommandStore {
     warning?: string;
     repairable?: boolean;
   }>;
+  findByConversationKeySafe?(conversationKey: string): Promise<{
+    record: {
+      codexSessionId: string;
+      suspendedPrevious?: {
+        sessionId: string | null;
+        resume: ResumeState | null;
+      };
+    } | null;
+    warning?: string;
+    repairable?: boolean;
+  }>;
   removeByChatId(chatId: number): Promise<boolean | void>;
+  removeByConversationKey?(conversationKey: string): Promise<boolean | void>;
   upsert(record: {
     telegramChatId: number;
+    telegramThreadId?: number;
+    conversationKey?: string;
     codexSessionId: string;
     status: "idle";
     updatedAt: string;
@@ -44,7 +59,7 @@ export interface SessionCommandStore {
 
 const RESUME_SCAN_TTL_MS = 10 * 60 * 1000;
 
-const pendingResumeScans = new Map<number, {
+const pendingResumeScans = new Map<string, {
   scannedAt: number;
   sessions: ScannedSession[];
 }>();
@@ -79,14 +94,14 @@ export function resetPendingResumeScans(): void {
   pendingResumeScans.clear();
 }
 
-function getPendingResumeScan(chatId: number): ScannedSession[] | null {
-  const entry = pendingResumeScans.get(chatId);
+function getPendingResumeScan(conversationKey: string): ScannedSession[] | null {
+  const entry = pendingResumeScans.get(conversationKey);
   if (!entry) {
     return null;
   }
 
   if (Date.now() - entry.scannedAt > RESUME_SCAN_TTL_MS) {
-    pendingResumeScans.delete(chatId);
+    pendingResumeScans.delete(conversationKey);
     return null;
   }
 
@@ -117,6 +132,39 @@ function buildSuspendedPreviousSnapshot(input: {
   };
 }
 
+function findSessionForConversation(
+  store: SessionCommandStore,
+  normalized: NormalizedTelegramMessage,
+): ReturnType<SessionCommandStore["findByChatIdSafe"]> {
+  const conversationKey = getNormalizedTelegramConversationKey(normalized);
+  return store.findByConversationKeySafe
+    ? store.findByConversationKeySafe(conversationKey)
+    : store.findByChatIdSafe(normalized.chatId);
+}
+
+function removeSessionForConversation(
+  store: SessionCommandStore,
+  normalized: NormalizedTelegramMessage,
+): Promise<boolean | void> {
+  const conversationKey = getNormalizedTelegramConversationKey(normalized);
+  return store.removeByConversationKey
+    ? store.removeByConversationKey(conversationKey)
+    : store.removeByChatId(normalized.chatId);
+}
+
+function sessionScopeRecordFields(normalized: NormalizedTelegramMessage): {
+  telegramThreadId?: number;
+  conversationKey?: string;
+} {
+  if (normalized.messageThreadId === undefined) {
+    return {};
+  }
+  return {
+    telegramThreadId: normalized.messageThreadId,
+    conversationKey: getNormalizedTelegramConversationKey(normalized),
+  };
+}
+
 export async function handleLocalSessionTelegramCommand(input: {
   stateDir: string;
   startedAt: number;
@@ -143,6 +191,7 @@ export async function handleLocalSessionTelegramCommand(input: {
     scanRecentSessions = scanRecentClaudeSessions,
     formatSessionListMessage = formatSessionList,
   } = input;
+  const conversationKey = getNormalizedTelegramConversationKey(normalized);
 
   if (isResetCommand(normalized.text)) {
     const inspectedState = await sessionStore.inspect();
@@ -155,7 +204,7 @@ export async function handleLocalSessionTelegramCommand(input: {
       );
     }
 
-    await sessionStore.removeByChatId(normalized.chatId);
+    await removeSessionForConversation(sessionStore, normalized);
 
     if (cfg.resume) {
       if (cfg.resume.symlinkPath) {
@@ -226,9 +275,10 @@ export async function handleLocalSessionTelegramCommand(input: {
         return true;
       }
 
-      const existing = await sessionStore.findByChatIdSafe(normalized.chatId);
+      const existing = await findSessionForConversation(sessionStore, normalized);
       await sessionStore.upsert({
         telegramChatId: normalized.chatId,
+        ...sessionScopeRecordFields(normalized),
         codexSessionId: resumeCmd.threadId,
         status: "idle",
         updatedAt: new Date().toISOString(),
@@ -276,14 +326,14 @@ export async function handleLocalSessionTelegramCommand(input: {
         await context.api.sendMessage(normalized.chatId, resumeAuditText);
       } else {
         resumeAuditText = formatSessionListMessage(sessions, locale);
-        pendingResumeScans.set(normalized.chatId, {
+        pendingResumeScans.set(conversationKey, {
           scannedAt: Date.now(),
           sessions,
         });
         await context.api.sendMessage(normalized.chatId, resumeAuditText);
       }
     } else {
-      const cached = getPendingResumeScan(normalized.chatId);
+      const cached = getPendingResumeScan(conversationKey);
       if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
         resumeAuditText = locale === "zh"
           ? "无效选择，请先发 /resume 扫描。"
@@ -291,7 +341,7 @@ export async function handleLocalSessionTelegramCommand(input: {
         await context.api.sendMessage(normalized.chatId, resumeAuditText);
       } else {
         const picked = cached[resumeCmd.pick - 1]!;
-        pendingResumeScans.delete(normalized.chatId);
+        pendingResumeScans.delete(conversationKey);
 
         if (!picked.workspacePath) {
           resumeAuditText = locale === "zh"
@@ -299,9 +349,10 @@ export async function handleLocalSessionTelegramCommand(input: {
             : `Cannot resolve workspace path for session (${picked.dirName}).`;
           await context.api.sendMessage(normalized.chatId, resumeAuditText);
         } else {
-          const existing = await sessionStore.findByChatIdSafe(normalized.chatId);
+          const existing = await findSessionForConversation(sessionStore, normalized);
           await sessionStore.upsert({
             telegramChatId: normalized.chatId,
+            ...sessionScopeRecordFields(normalized),
             codexSessionId: picked.sessionId,
             status: "idle",
             updatedAt: new Date().toISOString(),
@@ -336,19 +387,20 @@ export async function handleLocalSessionTelegramCommand(input: {
   }
 
   if (isDetachCommand(normalized.text)) {
-    const current = await sessionStore.findByChatIdSafe(normalized.chatId);
+    const current = await findSessionForConversation(sessionStore, normalized);
     let detachMessage: string;
     if (current.record?.suspendedPrevious) {
       const previous = current.record.suspendedPrevious;
       if (previous.sessionId) {
         await sessionStore.upsert({
           telegramChatId: normalized.chatId,
+          ...sessionScopeRecordFields(normalized),
           codexSessionId: previous.sessionId,
           status: "idle",
           updatedAt: new Date().toISOString(),
         });
       } else {
-        await sessionStore.removeByChatId(normalized.chatId);
+        await removeSessionForConversation(sessionStore, normalized);
       }
 
       await updateInstanceConfig((c) => {
@@ -377,7 +429,7 @@ export async function handleLocalSessionTelegramCommand(input: {
         }
       }
 
-      await sessionStore.removeByChatId(normalized.chatId);
+      await removeSessionForConversation(sessionStore, normalized);
       await updateInstanceConfig((c) => { delete c.resume; });
 
       detachMessage = locale === "zh"
@@ -385,7 +437,7 @@ export async function handleLocalSessionTelegramCommand(input: {
         : "Detached from resumed session. Back to default workspace.";
       await context.api.sendMessage(normalized.chatId, detachMessage);
     } else if (cfg.engine === "codex") {
-      const removed = await sessionStore.removeByChatId(normalized.chatId);
+      const removed = await removeSessionForConversation(sessionStore, normalized);
       detachMessage = removed
         ? (locale === "zh"
           ? "已断开当前 Codex thread。下一条消息会新建 thread。"

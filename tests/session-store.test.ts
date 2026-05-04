@@ -136,6 +136,37 @@ describe("SessionStore", () => {
     }
   });
 
+  it("keeps Telegram forum topic sessions separate within the same group chat", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const store = new SessionStore(filePath);
+
+    try {
+      await store.upsert(createRecord({
+        telegramChatId: -100123,
+        telegramThreadId: 10,
+        conversationKey: "chat:-100123:topic:10",
+        codexSessionId: "thread-topic-10",
+      }));
+      await store.upsert(createRecord({
+        telegramChatId: -100123,
+        telegramThreadId: 20,
+        conversationKey: "chat:-100123:topic:20",
+        codexSessionId: "thread-topic-20",
+      }));
+
+      await expect(store.findByConversationKey("chat:-100123:topic:10")).resolves.toEqual(expect.objectContaining({
+        codexSessionId: "thread-topic-10",
+      }));
+      await expect(store.findByConversationKey("chat:-100123:topic:20")).resolves.toEqual(expect.objectContaining({
+        codexSessionId: "thread-topic-20",
+      }));
+      await expect(store.findByChatId(-100123)).resolves.toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("upsert keeps concurrent writes from losing records", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const filePath = path.join(tempDir, "session.json");

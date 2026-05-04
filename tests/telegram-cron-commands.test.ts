@@ -62,6 +62,14 @@ function makeContext(h: Harness, locale: "zh" | "en" = "en"): CronCommandContext
   };
 }
 
+function makeTopicContext(h: Harness, messageThreadId: number, locale: "zh" | "en" = "en"): CronCommandContext {
+  return {
+    ...makeContext(h, locale),
+    chatType: "supergroup",
+    messageThreadId,
+  };
+}
+
 describe("isCronCommand", () => {
   it("matches /cron variants", () => {
     expect(isCronCommand("/cron")).toBe(true);
@@ -160,6 +168,30 @@ describe("handleCronCommand", () => {
         expect.stringContaining("No scheduled tasks"),
       );
     });
+
+    it("filters by Telegram forum topic within the same group chat", async () => {
+      await h.store.add({
+        chatId: CHAT_ID,
+        userId: USER_ID,
+        chatType: "supergroup",
+        messageThreadId: 10,
+        cronExpr: "* * * * *",
+        prompt: "topic ten",
+      });
+      await h.store.add({
+        chatId: CHAT_ID,
+        userId: USER_ID,
+        chatType: "supergroup",
+        messageThreadId: 20,
+        cronExpr: "* * * * *",
+        prompt: "topic twenty",
+      });
+
+      await handleCronCommand("/cron", makeTopicContext(h, 10, "en"));
+      const msg = h.api.sendMessage.mock.calls[0]![1] as string;
+      expect(msg).toContain("topic ten");
+      expect(msg).not.toContain("topic twenty");
+    });
   });
 
   describe("add", () => {
@@ -173,6 +205,17 @@ describe("handleCronCommand", () => {
         CHAT_ID,
         expect.stringMatching(/Added task/),
       );
+    });
+
+    it("stores the current Telegram forum topic on added jobs", async () => {
+      await handleCronCommand("/cron add 0 9 * * * topic reminder", makeTopicContext(h, 77, "en"));
+      const jobs = await h.store.list();
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]).toEqual(expect.objectContaining({
+        chatId: CHAT_ID,
+        chatType: "supergroup",
+        messageThreadId: 77,
+      }));
     });
 
     it("rejects invalid cron expression and does not write", async () => {

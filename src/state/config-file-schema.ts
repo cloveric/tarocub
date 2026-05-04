@@ -9,6 +9,12 @@ export const ResumeStateFileSchema = z.object({
   symlinkPath: z.string().optional(),
 }).passthrough();
 
+export const GroupModeFileSchema = z.object({
+  enabled: z.boolean().optional(),
+  allowedChatIds: z.array(z.number()).optional(),
+  listenAllChatIds: z.array(z.number()).optional(),
+}).passthrough();
+
 export const ConfigFileSchema = z.object({
   engine: z.enum(["codex", "claude"]).optional(),
   approvalMode: z.enum(["normal", "full-auto", "bypass"]).optional(),
@@ -21,6 +27,7 @@ export const ConfigFileSchema = z.object({
   codexServiceTier: z.literal("fast").optional(),
   timezone: z.string().optional(),
   resume: ResumeStateFileSchema.optional(),
+  groupMode: GroupModeFileSchema.optional(),
   bus: z.unknown().optional(),
 }).passthrough();
 

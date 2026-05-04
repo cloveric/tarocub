@@ -6,6 +6,7 @@ import {
 } from "./turn-bookkeeping.js";
 import { applyEngineSelection } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
+import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
 function isCompactCommand(text: string): boolean {
   return /^\/compact(?:@\w+)?(?:\s|$)/i.test(text.trim());
@@ -101,7 +102,17 @@ export interface EngineCommandContext extends TelegramTurnContext {
 
 export interface EngineCommandSessionStore {
   removeByChatId(chatId: number): Promise<boolean | void>;
+  removeByConversationKey?(conversationKey: string): Promise<boolean | void>;
   clearAll(): Promise<number>;
+}
+
+function removeSessionForConversation(
+  store: EngineCommandSessionStore,
+  normalized: NormalizedTelegramMessage,
+): Promise<boolean | void> {
+  return store.removeByConversationKey
+    ? store.removeByConversationKey(getNormalizedTelegramConversationKey(normalized))
+    : store.removeByChatId(normalized.chatId);
 }
 
 export async function handleLocalEngineTelegramCommand(input: {
@@ -216,7 +227,7 @@ export async function handleLocalEngineTelegramCommand(input: {
       if (classifyFailure(error) === "auth") {
         throw error;
       }
-      await sessionStore.removeByChatId(normalized.chatId);
+      await removeSessionForConversation(sessionStore, normalized);
       const fallbackMsg = locale === "zh"
         ? "引擎不支持 compact，已重置会话（效果相同）。"
         : "Engine does not support compact. Session reset instead (same effect).";

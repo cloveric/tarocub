@@ -12,6 +12,7 @@ import {
   pollTelegramUpdatesOnce,
   pollTelegramUpdates,
   processTelegramUpdates,
+  getLastHandledUpdateId,
   readInstanceBotTokenFromEnvFile,
   resolveServiceEnvForInstance,
   resolveEngineRuntime,
@@ -1002,6 +1003,42 @@ describe("polling helpers", () => {
     });
   });
 
+  it("marks failed updates handled so they are not replayed after an engine error", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockRejectedValue(new Error("send failed")),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockRejectedValue(new Error("boom")),
+    };
+    const update = {
+      update_id: 10,
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456 },
+        text: "first",
+      },
+    };
+
+    try {
+      await processTelegramUpdates([update], { api: api as never, bridge: bridge as never, inboxDir }, logger);
+
+      expect(await getLastHandledUpdateId(inboxDir)).toBe(10);
+      await processTelegramUpdates([update], { api: api as never, bridge: bridge as never, inboxDir }, logger);
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("continues processing later updates after a failed update", async () => {
     const logger = {
       error: vi.fn(),
@@ -1312,6 +1349,64 @@ describe("polling helpers", () => {
     expect(sleepCalls[0]).toBe(1000);
   });
 
+  it("recycles the Telegram API client after repeated fetch failures", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api1 = {
+      getUpdates: vi.fn().mockRejectedValue(new Error("fetch failed")),
+    };
+    const api2 = {
+      getUpdates: vi.fn().mockResolvedValue([]),
+    };
+    const recreateApi = vi.fn().mockReturnValue(api2);
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const originalSetTimeout = globalThis.setTimeout;
+
+    try {
+      const controller = new AbortController();
+      let timerCount = 0;
+      globalThis.setTimeout = (((handler: TimerHandler) => {
+        timerCount += 1;
+        if (timerCount >= 3) {
+          controller.abort();
+        }
+        if (typeof handler === "function") {
+          queueMicrotask(() => handler());
+        }
+        return {} as ReturnType<typeof setTimeout>;
+      }) as unknown) as typeof setTimeout;
+
+      await pollTelegramUpdates(api1 as never, bridge as never, inboxDir, logger, controller.signal, {
+        fetchErrorRecycleThreshold: 2,
+        recreateApi,
+      });
+
+      expect(api1.getUpdates).toHaveBeenCalledTimes(2);
+      expect(recreateApi).toHaveBeenCalledTimes(1);
+      expect(recreateApi).toHaveBeenCalledWith(api1);
+      expect(api2.getUpdates).toHaveBeenCalledTimes(1);
+      const events = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "poll.fetch",
+          outcome: "recovered",
+          detail: "Telegram API client recycled after 2 consecutive fetch errors",
+          metadata: expect.objectContaining({
+            consecutiveErrors: 2,
+            threshold: 2,
+          }),
+        }),
+      );
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+    }
+  });
+
   it("backs off while an update is still in flight instead of busy-looping duplicates", async () => {
     const logger = { error: vi.fn() };
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
@@ -1423,6 +1518,352 @@ describe("polling helpers", () => {
         }),
       }));
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves non-private chats when the bot is added by an unauthorized user", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      leaveChat: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkGroupJoin: vi.fn().mockResolvedValue({ kind: "reply", text: "unauthorized" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 16,
+            my_chat_member: {
+              chat: { id: -100456, type: "supergroup" },
+              from: { id: 999 },
+              old_chat_member: { status: "left" },
+              new_chat_member: { status: "member" },
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      expect(bridge.checkGroupJoin).toHaveBeenCalledWith({
+        chatId: -100456,
+        userId: 999,
+        chatType: "supergroup",
+      });
+      expect(api.leaveChat).toHaveBeenCalledWith(-100456);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not leave non-private chats when added by an authorized user before /group allow", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      leaveChat: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkGroupJoin: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 17,
+            my_chat_member: {
+              chat: { id: -100456, type: "supergroup" },
+              from: { id: 42 },
+              old_chat_member: { status: "left" },
+              new_chat_member: { status: "member" },
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      expect(bridge.checkGroupJoin).toHaveBeenCalledWith({
+        chatId: -100456,
+        userId: 42,
+        chatType: "supergroup",
+      });
+      expect(api.leaveChat).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        -100456,
+        expect.stringContaining("/group allow"),
+      );
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not repeat group setup prompts for in-place membership changes", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      leaveChat: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkGroupJoin: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [
+          {
+            update_id: 18,
+            my_chat_member: {
+              chat: { id: -100456, type: "supergroup" },
+              from: { id: 42 },
+              old_chat_member: { status: "member" },
+              new_chat_member: { status: "administrator" },
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      expect(bridge.checkGroupJoin).not.toHaveBeenCalled();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.leaveChat).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores ordinary group messages that do not mention or reply to the bot", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [{
+          update_id: 19,
+          message: {
+            chat: { id: -100456, type: "supergroup" },
+            from: { id: 42 },
+            text: "just chatting in the group",
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, botUsername: "cctb_bot" },
+        logger,
+      );
+
+      expect(bridge.checkAccess).not.toHaveBeenCalled();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.sendChatAction).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles ordinary group messages when group listen mode allows all messages", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({ groupMode: { enabled: true, allowedChatIds: [-100456], listenAllChatIds: [-100456] } }),
+        "utf8",
+      );
+      await processTelegramUpdates(
+        [{
+          update_id: 22,
+          message: {
+            chat: { id: -100456, type: "supergroup" },
+            from: { id: 42 },
+            text: "just chatting in the group",
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, botUsername: "cctb_bot" },
+        logger,
+      );
+
+      expect(bridge.checkAccess).toHaveBeenCalledOnce();
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(-100456, "done", expect.any(Object));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles group messages that mention the bot", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [{
+          update_id: 20,
+          message: {
+            chat: { id: -100456, type: "supergroup" },
+            from: { id: 42 },
+            text: "please help @cctb_bot",
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, botUsername: "cctb_bot" },
+        logger,
+      );
+
+      expect(bridge.checkAccess).toHaveBeenCalledOnce();
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(-100456, "done", expect.any(Object));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles group messages that reply to the bot", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [{
+          update_id: 21,
+          message: {
+            chat: { id: -100456, type: "supergroup" },
+            from: { id: 42 },
+            text: "continue this",
+            reply_to_message: {
+              message_id: 9,
+              from: { id: 1000, username: "cctb_bot", is_bot: true },
+              text: "previous bot response",
+            },
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, botUsername: "cctb_bot" },
+        logger,
+      );
+
+      expect(bridge.checkAccess).toHaveBeenCalledOnce();
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("silences unauthorized addressed group messages instead of replying to the group", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({
+        kind: "reply",
+        text: "This chat is not authorized for this instance.",
+      }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [{
+          update_id: 22,
+          message: {
+            chat: { id: -100456, type: "supergroup" },
+            from: { id: 999 },
+            text: "please help @cctb_bot",
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, botUsername: "cctb_bot" },
+        logger,
+      );
+
+      expect(bridge.checkAccess).toHaveBeenCalledOnce();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.sendChatAction).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1636,6 +2077,77 @@ describe("polling helpers", () => {
 
     expect(api.sendMessage).toHaveBeenCalledWith(123, "This chat is not authorized for this instance.");
     expect(api.sendMessage).not.toHaveBeenCalledWith(123, "No pending approval.");
+  });
+
+  it("silences topic-scoped approval denials in forum topics", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({
+        kind: "deny",
+        text: "This chat is not authorized for this instance.",
+      }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    await processTelegramUpdates(
+      [{
+        update_id: 33,
+        message: {
+          chat: { id: -100123, type: "supergroup" },
+          from: { id: 999 },
+          message_thread_id: 42,
+          text: "/approve",
+        },
+      }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("replies to /stop in the current forum topic", async () => {
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(os.tmpdir(), "ignored");
+
+    await processTelegramUpdates(
+      [{
+        update_id: 34,
+        message: {
+          chat: { id: -100123, type: "supergroup" },
+          from: { id: 456 },
+          message_thread_id: 42,
+          text: "/stop",
+        },
+      }],
+      { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+      logger,
+    );
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      -100123,
+      "No task is currently running.",
+      { messageThreadId: 42 },
+    );
   });
 
   it("acknowledges unauthorized approval callback queries", async () => {

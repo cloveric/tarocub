@@ -184,6 +184,28 @@ function appendHeadTailDiagnostic(existing: string, chunk: string, maxBytes: num
   return `${head}\n[... ${omittedBytes} bytes elided ...]\n${tail}`;
 }
 
+function isNonBlockingCodexDiagnostic(stderr: string): boolean {
+  const trimmed = stderr.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const hasKnownNonBlockingDiagnostic =
+    trimmed.includes("failed to warm featured plugin ids cache") ||
+    trimmed.includes("codex_core_plugins::manifest: ignoring") ||
+    trimmed.includes("codex_core_skills::loader: ignoring") ||
+    trimmed.includes("after_agent hook failed; continuing");
+  if (!hasKnownNonBlockingDiagnostic) {
+    return false;
+  }
+
+  if (/\b(?:ERROR|FATAL)\b|panicked at|thread '.+' panicked/.test(trimmed)) {
+    return false;
+  }
+
+  return !/unexpected status 401|Unauthorized/i.test(trimmed);
+}
+
 function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
 }
@@ -495,6 +517,14 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
     if (result.exitCode !== 0) {
       const stderrMessage = result.stderrTail.trim();
+      const text = result.state.lastAgentMessage?.trim();
+      if (text && !result.state.lastErrorMessage && isNonBlockingCodexDiagnostic(stderrMessage)) {
+        return {
+          text,
+          sessionId: result.state.threadId ?? undefined,
+          usage: result.state.usage ?? undefined,
+        };
+      }
       throw new Error(
         result.state.lastErrorMessage ??
           (stderrMessage || `codex exited with code ${result.exitCode}`),

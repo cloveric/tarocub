@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
@@ -47,6 +48,7 @@ import {
 } from "./tool-tags.js";
 import { processLegacyDeliveryTagsAsTools } from "./legacy-delivery-tool-tags.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
+import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
 export interface WorkflowAwareTurnState {
   workflowRecordId?: string;
@@ -72,6 +74,8 @@ export interface WorkflowAwareTurnContext {
       chatId: number;
       userId: number;
       chatType: string;
+      messageThreadId?: number;
+      conversationKey?: string;
       locale: Locale;
       text: string;
       replyContext?: NormalizedTelegramMessage["replyContext"];
@@ -315,6 +319,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       }
     },
   } = input;
+  const conversationKey = getNormalizedTelegramConversationKey(normalized);
 
   const workflowResult: FileWorkflowResult | null =
     downloadedAttachments.length > 0
@@ -348,7 +353,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     });
   }
 
-  const requestId = `${Date.now()}-${normalized.chatId}`;
+  const requestId = `${Date.now()}-${normalized.chatId}-${normalized.messageThreadId ?? "main"}-${randomUUID().slice(0, 8)}`;
   if (cfg.engine === "codex") {
     state.telegramOutDirPath = (await createTelegramOutDir(stateDir, requestId, cfg.resume?.workspacePath, {
       onAliasWarning: async ({ aliasPath, error }) => {
@@ -568,6 +573,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         chatId: normalized.chatId,
         userId: normalized.userId,
         chatType: normalized.chatType,
+        messageThreadId: normalized.messageThreadId,
+        conversationKey,
         locale,
         instanceName: context.instanceName,
         updateId: context.updateId,
@@ -677,6 +684,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       chatId: normalized.chatId,
       userId: normalized.userId,
       chatType: normalized.chatType,
+      messageThreadId: normalized.messageThreadId,
+      conversationKey,
       locale,
       text: input.text,
       replyContext: input.replyContext,
@@ -715,6 +724,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         chatId: normalized.chatId,
         userId: normalized.userId,
         chatType: normalized.chatType,
+        messageThreadId: normalized.messageThreadId,
+        conversationKey,
         locale,
         instanceName: context.instanceName,
         updateId: context.updateId,
@@ -742,6 +753,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       chatId: normalized.chatId,
       userId: normalized.userId,
       chatType: normalized.chatType,
+      messageThreadId: normalized.messageThreadId,
+      conversationKey,
       locale,
       instanceName: context.instanceName,
       updateId: context.updateId,
@@ -756,6 +769,8 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         chatId: normalized.chatId,
         userId: normalized.userId,
         chatType: normalized.chatType,
+        messageThreadId: normalized.messageThreadId,
+        conversationKey,
         locale,
         instanceName: context.instanceName,
         updateId: context.updateId,

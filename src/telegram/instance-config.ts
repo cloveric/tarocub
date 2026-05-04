@@ -8,6 +8,7 @@ import {
   type ConfigFile,
 } from "../state/config-file-schema.js";
 import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron-timezone.js";
+import { withFileMutex } from "../state/file-mutex.js";
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -32,6 +33,13 @@ export interface InstanceConfig {
   codexServiceTier: "fast" | undefined;
   timezone: string;
   resume: ResumeState | undefined;
+  groupMode: GroupModeConfig;
+}
+
+export interface GroupModeConfig {
+  enabled: boolean;
+  allowedChatIds: number[];
+  listenAllChatIds: number[];
 }
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
@@ -60,7 +68,30 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   codexServiceTier: undefined,
   timezone: resolveDefaultCronTimezone(),
   resume: undefined,
+  groupMode: {
+    enabled: true,
+    allowedChatIds: [],
+    listenAllChatIds: [],
+  },
 };
+
+function parseGroupMode(raw: unknown): GroupModeConfig {
+  if (typeof raw !== "object" || raw === null) {
+    return DEFAULT_INSTANCE_CONFIG.groupMode;
+  }
+  const r = raw as Record<string, unknown>;
+  const allowedChatIds = Array.isArray(r.allowedChatIds)
+    ? [...new Set(r.allowedChatIds.filter((value): value is number => Number.isInteger(value)))]
+    : [];
+  const listenAllChatIds = Array.isArray(r.listenAllChatIds)
+    ? [...new Set(r.listenAllChatIds.filter((value): value is number => Number.isInteger(value)))]
+    : [];
+  return {
+    enabled: r.enabled === false ? false : true,
+    allowedChatIds,
+    listenAllChatIds,
+  };
+}
 
 export function applyEngineSelection(
   config: Record<string, unknown>,
@@ -136,6 +167,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     codexServiceTier: config.codexServiceTier === "fast" ? "fast" : undefined,
     timezone: normalizeCronTimezone(config.timezone) ?? DEFAULT_INSTANCE_CONFIG.timezone,
     resume: parseResumeState(config.resume),
+    groupMode: parseGroupMode(config.groupMode),
   };
 }
 
@@ -144,23 +176,25 @@ export async function updateInstanceConfig(
   updater: (config: Record<string, unknown>) => void,
 ): Promise<void> {
   const configPath = path.join(stateDir, "config.json");
-  let config: Record<string, unknown> = {};
-  try {
-    const existing = await readFile(configPath, "utf8");
-    config = JSON.parse(existing) as Record<string, unknown>;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
+  await withFileMutex(configPath, async () => {
+    let config: Record<string, unknown> = {};
+    try {
+      const existing = await readFile(configPath, "utf8");
+      config = JSON.parse(existing) as Record<string, unknown>;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+    }
+    updater(config);
+    const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+    try {
+      await rename(tempPath, configPath);
+    } catch (error) {
+      await unlink(tempPath).catch(() => {});
       throw error;
     }
-  }
-  updater(config);
-  const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", "utf8");
-  try {
-    await rename(tempPath, configPath);
-  } catch (error) {
-    await unlink(tempPath).catch(() => {});
-    throw error;
-  }
+  });
 }

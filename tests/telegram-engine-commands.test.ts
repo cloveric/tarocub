@@ -304,6 +304,50 @@ describe("handleLocalEngineTelegramCommand", () => {
     }
   });
 
+  it("resets the current topic session when /compact fails in a forum topic", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const normalized = createNormalizedMessage("/compact");
+    normalized.chatId = -100123;
+    normalized.chatType = "supergroup";
+    normalized.messageThreadId = 88;
+    normalized.conversationKey = "chat:-100123:topic:88";
+    const sessionStore = {
+      removeByChatId: vi.fn().mockResolvedValue(true),
+      removeByConversationKey: vi.fn().mockResolvedValue(true),
+      clearAll: vi.fn(),
+    };
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized,
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 79,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn().mockRejectedValue(new Error("unsupported")),
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.removeByConversationKey).toHaveBeenCalledWith("chat:-100123:topic:88");
+      expect(sessionStore.removeByChatId).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+
   it("rethrows auth failures during /compact so outer retry can handle them", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
     const api = {

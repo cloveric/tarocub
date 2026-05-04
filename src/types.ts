@@ -44,6 +44,8 @@ export interface SuspendedConversationState {
 
 export interface SessionRecord {
   telegramChatId: number;
+  telegramThreadId?: number;
+  conversationKey?: string;
   codexSessionId: string;
   status: "idle" | "running" | "queued" | "blocked";
   updatedAt: string;

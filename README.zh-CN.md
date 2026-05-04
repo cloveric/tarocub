@@ -22,11 +22,11 @@
 </h3>
 
 <p align="center">
-  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、Telegram 投递的定时任务、多 bot Agent Bus、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
+  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、Telegram 群聊/topic、Telegram 投递的定时任务、多 bot Agent Bus、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
 </p>
 
 <p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#定时任务--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-群聊和-topic">群聊</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#定时任务--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
@@ -35,7 +35,7 @@
 
 ### 最近这波变化
 
-- **v4.5.10** — 新增 Codex Fast Mode 控制：`/fast on|off|status` 会把 `fast_mode` 和 `service_tier="fast"` 透传到 Codex process / app-server runtime，Claude 实例会明确拒绝。
+- **v4.5.10** — 新增 Codex Fast Mode 控制：`/fast on|off|status` 会把 `fast_mode` 和 `service_tier="fast"` 透传到 Codex process / app-server runtime，Claude 实例会明确拒绝。Fast Mode 在无人值守 bridge 场景里按实验选项对待：如果 Codex 开始返回引擎运行时失败，先用 `/fast off` 关闭；如果实例运行态已经坏掉，等当前 turn 空闲后重启该实例一次。
 - **v4.5.9** — 加强 schema-backed tool 投递 receipt：`[tool:{...}]` JSON 写坏或 send tool 被拒绝时，不再保留模型口头说的“已发出”；批量/长文本投递优先使用 fenced `tool-call` block，并且 generated `agent.md` 升级会清理重复 scheduler 残留。
 - **v4.5.8** — 文档明确 `[tool:{...}]` 是 generated 实例指令唯一使用的投递 tag；旧 `[send-file:]` / `[send-image:]` 仅作为兼容层保留；补充文件投递信任边界说明。
 - **v4.5.7** — 文件投递和 Telegram 定时任务统一到注册过的 `[tool:{...}]` layer；新增更安全的 `tool-call` fenced block；加强 stream/post-turn 去重；cron 增加时区、过期 runOnce 处理、文件锁、任务上限和失败 receipt。
@@ -61,6 +61,7 @@ telegram service restart --all
 
 - **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex 和 Claude Code CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
 - **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。
+- **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。
 - **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex 或 Claude、process 或 stream runtime，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
 - **Telegram 能力放在 bridge，而不是模型记忆里。** 发文件、cron 持久化、receipt、权限检查和失败重试由 bridge 代码负责，所以换模型、重启实例、续接会话后仍然有稳定语义。
 - **Prompt 短，规则稳定。** transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。
@@ -909,6 +910,7 @@ Telegram 用户也可以使用：
 - `/engine [claude|codex]` — 切换当前实例引擎（桥会自动清掉陈旧绑定）
 - `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`max` 仅 Claude 可用；Codex 会改用 `xhigh`）
 - `/model [名称|off]` — 切换模型
+- `/fast [on|off|status]` — 切换 Codex Fast Mode。bridge 实例里把它当实验选项使用；如果出现 Codex runtime 失败，先 `/fast off`，不要反复重试；下一条简单消息仍失败时，再重启该实例一次。
 - `/btw <问题>` — 旁问（不影响当前会话）
 - `/ask <实例> <提示>` — 委托给指定 peer bot
 - `/fan <提示>` — 查询当前 bot 和并行 specialist bot
@@ -992,6 +994,24 @@ npm run dev -- telegram status [--instance work]
 ```
 
 只有在你真的想让一个实例服务多个聊天时，才使用 `telegram access multi on --instance <name>`。新实例和旧实例在没有显式修改前，默认都保持 `off`。
+
+### Telegram 群聊和 Topic
+
+群聊有第二层允许机制：Telegram user 必须已经授权，并且当前群也必须在群里显式允许：
+
+```text
+/group status
+/group allow
+/group deny
+/group on
+/group off
+/group all
+/group at
+```
+
+在群里，普通消息默认会被忽略，除非消息 @ 了 bot 用户名，或者是在回复 bot 的某条消息。斜杠命令仍然可用。如果你希望当前这个已允许的群像一个常驻共享聊天一样工作，在群里发送 `/group all`；想回到更安全的默认行为，在同一个群里发送 `/group at`。要让 `/group all` 听见普通消息，需要把 bot 设为这个群的管理员，让 Telegram 真正把普通群消息投递给它；BotFather privacy mode 也可能影响投递，但群管理员是实际推荐路径。未授权用户在群里触发 bot 时默认静默，只写 audit，不向群里刷"未授权"提示。
+
+Telegram forum topic 会作为独立对话：每个 topic 有自己的 engine session 和 cron 范围。同一个 topic 内，已授权用户共享这个 topic 的上下文；如果想开临时对话或避免上下文混在一起，用新的 topic。
 
 ---
 
@@ -1088,6 +1108,18 @@ docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram service start
 3. 确认引擎已安装：`codex --version` 或 `claude --version`
 4. 如果是 Claude 实例，运行 `npm run smoke:claude-auth`
 5. 如果 `service doctor` 报 `legacy-launchd`，运行 `bash scripts/cleanup-legacy-launchd.sh --all`
+
+</details>
+
+<details>
+<summary><strong>Codex Fast Mode 导致引擎运行时失败</strong></summary>
+
+Fast Mode 是 Codex CLI 自己的功能，但在无人值守 bridge 实例里，可能暴露上游 Codex 诊断问题，例如插件 warm-cache 失败或 Cloudflare challenge。bridge 会在 Codex 已经产出完整回复、且 stderr 只是非阻塞插件诊断时保留回复；真实 Codex 错误仍会让 turn 失败。
+
+1. 在出问题的 bot 里发送 `/fast off`。
+2. 先发一条简单消息，例如 `hi`。
+3. 如果仍失败，等当前 turn 空闲后重启这个 bot 实例一次。
+4. 避免在 bot 正在生成回复时 force 重启它自己；这会杀掉活跃 Codex 子进程，表现为 `codex exited with code null`。
 
 </details>
 

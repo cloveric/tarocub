@@ -175,6 +175,50 @@ describe("telegram approval requests", () => {
     await expect(otherUserPending).resolves.toEqual({ behavior: "deny" });
   });
 
+  it("resolves /approve against the current forum topic only", async () => {
+    const api = createApi();
+    const topic10Pending = requestTelegramApproval({
+      api,
+      chatId: -100123,
+      messageThreadId: 10,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "topic-10" },
+      },
+    });
+    const topic20Pending = requestTelegramApproval({
+      api,
+      chatId: -100123,
+      messageThreadId: 20,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "topic-20" },
+      },
+    });
+
+    await expect(handleTelegramApprovalCommand({
+      normalized: {
+        chatId: -100123,
+        userId: 456,
+        chatType: "supergroup",
+        messageThreadId: 20,
+        conversationKey: "chat:-100123:topic:20",
+        text: "/approve session",
+        attachments: [],
+      },
+      api,
+    })).resolves.toBe(true);
+
+    await expect(withTimeout(topic20Pending)).resolves.toEqual({ behavior: "allow", scope: "session" });
+    await expect(withTimeout(topic10Pending, 20)).rejects.toThrow("timed out waiting for approval");
+  });
+
   it("does not treat /approve argument substrings as session approvals", async () => {
     const api = createApi();
     const pending = requestTelegramApproval({

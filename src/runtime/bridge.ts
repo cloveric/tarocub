@@ -3,10 +3,10 @@ import { findConflictingLockedChatId } from "../state/access-store.js";
 import {
   type Locale,
   renderPairingMessage,
-  renderPrivateChatRequiredMessage,
   renderSingleChatLockedMessage,
   renderUnauthorizedMessage,
 } from "../telegram/message-renderer.js";
+import type { GroupModeConfig } from "../telegram/instance-config.js";
 
 export interface AccessStoreLike {
   load(): Promise<{
@@ -29,11 +29,26 @@ export interface AccessStoreLike {
 }
 
 export interface SessionManagerLike {
-  getOrCreateSession(chatId: number): Promise<{ sessionId: string }>;
-  bindSession(chatId: number, sessionId: string): Promise<void>;
+  getOrCreateSession(scope: number | BridgeConversationScope): Promise<{ sessionId: string }>;
+  bindSession(scope: number | BridgeConversationScope, sessionId: string): Promise<void>;
+}
+
+export interface BridgeConversationScope {
+  chatId: number;
+  messageThreadId?: number;
+  conversationKey?: string;
 }
 
 export interface BridgeAccessInput {
+  chatId: number;
+  userId: number;
+  chatType: string;
+  messageThreadId?: number;
+  conversationKey?: string;
+  locale?: Locale;
+}
+
+export interface BridgeGroupJoinInput {
   chatId: number;
   userId: number;
   chatType: string;
@@ -58,6 +73,16 @@ function shouldDisableRuntimeTimeout(text: string): boolean {
   ].some((keyword) => normalized.includes(keyword));
 }
 
+function isAuthorizedGroupUser(
+  accessState: Awaited<ReturnType<AccessStoreLike["load"]>>,
+  input: BridgeAccessInput,
+): boolean {
+  if (accessState.policy === "allowlist") {
+    return accessState.allowlist.includes(input.userId);
+  }
+  return accessState.pairedUsers.some((user) => user.telegramUserId === input.userId);
+}
+
 export class Bridge {
   readonly supportsTurnScopedEnv: boolean;
 
@@ -65,6 +90,9 @@ export class Bridge {
     private readonly accessStore: AccessStoreLike,
     private readonly sessionManager: SessionManagerLike,
     private readonly adapter: CodexAdapter,
+    private readonly options: {
+      loadGroupMode?: () => Promise<GroupModeConfig>;
+    } = {},
   ) {
     this.supportsTurnScopedEnv = adapter.supportsTurnScopedEnv !== false;
   }
@@ -94,9 +122,17 @@ export class Bridge {
     }
 
     if (input.chatType !== "private") {
+      const groupMode = await this.loadGroupMode();
+      if (
+        groupMode.enabled &&
+        groupMode.allowedChatIds.includes(input.chatId) &&
+        isAuthorizedGroupUser(accessState, input)
+      ) {
+        return { kind: "allow" };
+      }
       return {
         kind: "reply",
-        text: renderPrivateChatRequiredMessage(input.locale),
+        text: renderUnauthorizedMessage(input.locale),
       };
     }
 
@@ -140,6 +176,48 @@ export class Bridge {
     return { kind: "allow" };
   }
 
+  async checkUserAuthorization(input: BridgeAccessInput): Promise<BridgeAccessDecision> {
+    let accessState: Awaited<ReturnType<AccessStoreLike["load"]>>;
+    try {
+      accessState = await this.accessStore.load();
+    } catch (error) {
+      console.error(
+        "Failed to load access state; denying access:",
+        error instanceof Error ? error.message : error,
+      );
+      return { kind: "deny", text: renderUnauthorizedMessage(input.locale) };
+    }
+
+    if (isAuthorizedGroupUser(accessState, input)) {
+      return { kind: "allow" };
+    }
+    return { kind: "reply", text: renderUnauthorizedMessage(input.locale) };
+  }
+
+  async checkGroupJoin(input: BridgeGroupJoinInput): Promise<BridgeAccessDecision> {
+    if (input.chatType === "private") {
+      return { kind: "allow" };
+    }
+
+    const groupMode = await this.loadGroupMode();
+    if (!groupMode.enabled) {
+      return { kind: "reply", text: renderUnauthorizedMessage(input.locale) };
+    }
+
+    return this.checkUserAuthorization({
+      chatId: input.chatId,
+      userId: input.userId,
+      chatType: input.chatType,
+      locale: input.locale,
+    });
+  }
+
+  private async loadGroupMode(): Promise<GroupModeConfig> {
+    return this.options.loadGroupMode
+      ? await this.options.loadGroupMode()
+      : { enabled: true, allowedChatIds: [], listenAllChatIds: [] };
+  }
+
   async handleAuthorizedMessage(input: {
     chatId: number;
     userId: number;
@@ -150,6 +228,8 @@ export class Bridge {
       messageId: number;
       text: string;
     };
+    messageThreadId?: number;
+    conversationKey?: string;
     files: string[];
     onProgress?: (partialText: string) => void;
     onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
@@ -171,9 +251,15 @@ export class Bridge {
       };
     }
 
+    const sessionScope: BridgeConversationScope = {
+      chatId: input.chatId,
+      messageThreadId: input.messageThreadId,
+      conversationKey: input.conversationKey,
+    };
+    const useConversationScope = input.conversationKey !== undefined || input.messageThreadId !== undefined;
     const session = input.sessionIdOverride
       ? { sessionId: input.sessionIdOverride }
-      : await this.sessionManager.getOrCreateSession(input.chatId);
+      : await this.sessionManager.getOrCreateSession(useConversationScope ? sessionScope : input.chatId);
     const baseText = input.replyContext
       ? `${input.text}\n\n[Quoted message #${input.replyContext.messageId}]\n${input.replyContext.text || "(no text content)"}`
       : input.text;
@@ -195,7 +281,7 @@ export class Bridge {
     });
 
     if (!input.sessionIdOverride && response.sessionId && response.sessionId !== session.sessionId) {
-      await this.sessionManager.bindSession(input.chatId, response.sessionId);
+      await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, response.sessionId);
     }
 
     return response;

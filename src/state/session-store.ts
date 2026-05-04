@@ -1,11 +1,26 @@
 import { SessionStateSchema } from "./session-state-schema.js";
 import { JsonStore } from "./json-store.js";
 import type { SessionRecord, SessionState } from "../types.js";
+import { getTelegramConversationKey } from "../telegram/conversation-key.js";
 
 export const SESSION_STATE_UNREADABLE_WARNING = "session state unreadable";
 
 export function createDefaultSessionState(): SessionState {
   return { chats: [] };
+}
+
+function recordConversationKey(record: Pick<SessionRecord, "telegramChatId" | "telegramThreadId" | "conversationKey">): string {
+  return record.conversationKey ?? getTelegramConversationKey(record.telegramChatId, record.telegramThreadId);
+}
+
+function normalizeRecord(record: SessionRecord): SessionRecord {
+  if (record.conversationKey === undefined && record.telegramThreadId === undefined) {
+    return record;
+  }
+  return {
+    ...record,
+    conversationKey: recordConversationKey(record),
+  };
 }
 
 export class SessionStore {
@@ -46,12 +61,14 @@ export class SessionStore {
   async upsert(record: SessionRecord): Promise<void> {
     await this.enqueueWrite(async () => {
       const state = await this.load();
-      const index = state.chats.findIndex((entry) => entry.telegramChatId === record.telegramChatId);
+      const normalized = normalizeRecord(record);
+      const key = recordConversationKey(normalized);
+      const index = state.chats.findIndex((entry) => recordConversationKey(entry) === key);
 
       if (index === -1) {
-        state.chats.push(record);
+        state.chats.push(normalized);
       } else {
-        state.chats[index] = record;
+        state.chats[index] = normalized;
       }
 
       await this.store.write(state);
@@ -59,8 +76,12 @@ export class SessionStore {
   }
 
   async findByChatId(telegramChatId: number): Promise<SessionRecord | null> {
+    return this.findByConversationKey(getTelegramConversationKey(telegramChatId));
+  }
+
+  async findByConversationKey(conversationKey: string): Promise<SessionRecord | null> {
     const state = await this.load();
-    return state.chats.find((record) => record.telegramChatId === telegramChatId) ?? null;
+    return state.chats.find((record) => recordConversationKey(record) === conversationKey) ?? null;
   }
 
   async findByChatIdSafe(
@@ -68,19 +89,34 @@ export class SessionStore {
   ): Promise<{ record: SessionRecord | null; warning?: string; repairable?: boolean }> {
     const { state, warning, repairable } = await this.inspect();
     return {
-      record: state.chats.find((entry) => entry.telegramChatId === telegramChatId) ?? null,
+      record: state.chats.find((entry) => recordConversationKey(entry) === getTelegramConversationKey(telegramChatId)) ?? null,
+      warning,
+      repairable,
+    };
+  }
+
+  async findByConversationKeySafe(
+    conversationKey: string,
+  ): Promise<{ record: SessionRecord | null; warning?: string; repairable?: boolean }> {
+    const { state, warning, repairable } = await this.inspect();
+    return {
+      record: state.chats.find((entry) => recordConversationKey(entry) === conversationKey) ?? null,
       warning,
       repairable,
     };
   }
 
   async removeByChatId(telegramChatId: number): Promise<boolean> {
+    return this.removeByConversationKey(getTelegramConversationKey(telegramChatId));
+  }
+
+  async removeByConversationKey(conversationKey: string): Promise<boolean> {
     let removed = false;
 
     await this.enqueueWrite(async () => {
       const state = await this.load();
       const nextChats = state.chats.filter((record) => {
-        if (record.telegramChatId === telegramChatId) {
+        if (recordConversationKey(record) === conversationKey) {
           removed = true;
           return false;
         }
@@ -117,9 +153,13 @@ export class SessionStore {
   }
 
   async removeByChatIdRecovering(telegramChatId: number): Promise<{ removed: boolean; repaired: boolean }> {
+    return this.removeByConversationKeyRecovering(getTelegramConversationKey(telegramChatId));
+  }
+
+  async removeByConversationKeyRecovering(conversationKey: string): Promise<{ removed: boolean; repaired: boolean }> {
     try {
       return {
-        removed: await this.removeByChatId(telegramChatId),
+        removed: await this.removeByConversationKey(conversationKey),
         repaired: false,
       };
     } catch (error) {

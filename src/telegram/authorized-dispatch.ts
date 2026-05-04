@@ -18,6 +18,7 @@ import type { TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
+import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
 export interface AuthorizedTelegramDispatchConfig {
   engine: "codex" | "claude";
@@ -37,6 +38,8 @@ export interface AuthorizedTelegramDispatchContext {
       chatId: number;
       userId: number;
       chatType: string;
+      messageThreadId?: number;
+      conversationKey?: string;
       locale: Locale;
       text: string;
       replyContext?: NormalizedTelegramMessage["replyContext"];
@@ -69,7 +72,16 @@ export interface AuthorizedTelegramDispatchContext {
 }
 
 export interface AuthorizedTelegramDispatchDeps {
-  sessionStore: Pick<SessionStore, "findByChatIdSafe" | "inspect" | "removeByChatId" | "clearAll" | "upsert">;
+  sessionStore: Pick<
+    SessionStore,
+    "findByChatIdSafe" |
+    "findByConversationKeySafe" |
+    "inspect" |
+    "removeByChatId" |
+    "removeByConversationKey" |
+    "clearAll" |
+    "upsert"
+  >;
   turnState: WorkflowAwareTurnState;
   updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
   deliverTelegramResponse: (
@@ -154,6 +166,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
   } = handlers ?? {};
 
   const allowTelegramCommands = context.source !== "cron";
+  const conversationKey = getNormalizedTelegramConversationKey(normalized);
 
   if (allowTelegramCommands && isCronCommand(normalized.text)) {
     const cronRuntime = getActiveCronRuntime();
@@ -165,6 +178,8 @@ export async function dispatchAuthorizedTelegramMessage(input: {
         chatId: normalized.chatId,
         userId: normalized.userId,
         chatType: normalized.chatType,
+        messageThreadId: normalized.messageThreadId,
+        conversationKey,
         locale: locale === "zh" ? "zh" : "en",
       });
       if (result.handled) {
@@ -229,8 +244,10 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     normalized,
     context,
     updateInstanceConfig,
-    resolveStatus: async (chatId) => {
-      const sessionResult = await sessionStore.findByChatIdSafe(chatId);
+      resolveStatus: async (chatId) => {
+      const sessionResult = chatId === normalized.chatId
+        ? await sessionStore.findByConversationKeySafe(conversationKey)
+        : await sessionStore.findByChatIdSafe(chatId);
       const workflowResult = await workflowStore.inspect();
       const chatRecords = workflowResult.warning
         ? []

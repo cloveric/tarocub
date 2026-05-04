@@ -14,15 +14,16 @@ import { AccessStore } from "./state/access-store.js";
 import { appendAuditEvent } from "./state/audit-log.js";
 import { SessionStore } from "./state/session-store.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
-import { TelegramApi } from "./telegram/api.js";
+import { TelegramApi, withTelegramMessageThread } from "./telegram/api.js";
 import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
 import { handleTelegramApprovalCommand, isTelegramApprovalCommand } from "./telegram/approval-requests.js";
 import { normalizeUpdate, type NormalizedTelegramMessage } from "./telegram/update-normalizer.js";
+import { getNormalizedTelegramConversationKey } from "./telegram/conversation-key.js";
 import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
 import { ChatQueue } from "./runtime/chat-queue.js";
 import { classifyFailure } from "./runtime/error-classification.js";
-import { readValidatedConfigFile } from "./telegram/instance-config.js";
+import { loadInstanceConfig, readValidatedConfigFile } from "./telegram/instance-config.js";
 
 export interface ServiceDependencies {
   api: TelegramApi;
@@ -31,6 +32,13 @@ export interface ServiceDependencies {
 
 export interface TelegramServiceContext extends TelegramDeliveryContext {
   chatQueue?: ChatQueue;
+  botUsername?: string;
+}
+
+export interface PollTelegramUpdatesOptions {
+  botUsername?: string;
+  fetchErrorRecycleThreshold?: number;
+  recreateApi?: (api: TelegramApi) => TelegramApi;
 }
 
 export interface ResolvedInstanceEnv extends EnvSource {
@@ -650,7 +658,9 @@ export async function createServiceDependencies(env: EnvSource): Promise<{ confi
   const configPath = path.join(config.stateDir, "config.json");
   const adapter = await createAdapter(env, config, instructionsPath, configPath);
   const sessionManager = new SessionManager(sessionStore, adapter);
-  const bridge = new Bridge(accessStore, sessionManager, adapter);
+  const bridge = new Bridge(accessStore, sessionManager, adapter, {
+    loadGroupMode: async () => (await loadInstanceConfig(config.stateDir)).groupMode,
+  });
 
   return { config, api, bridge };
 }
@@ -672,6 +682,7 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "effort", description: "Set effort level (low/medium/high/xhigh/max/off)" },
   { command: "fast", description: "Toggle Codex Fast Mode (on/off/status)" },
   { command: "model", description: "Set model (opus/sonnet/o3/off; append [1m] for 1M context)" },
+  { command: "group", description: "Manage Telegram group access (status/allow/deny/on/off)" },
   { command: "btw", description: "Ask a side question without affecting session" },
   { command: "continue", description: "Continue a paused task" },
   { command: "ask", description: "Delegate to another bot instance" },
@@ -702,10 +713,10 @@ export async function lookupTelegramBotIdentity(api: TelegramApi): Promise<Resol
 }
 
 const defaultChatQueue = new ChatQueue();
-const activeTasks = new Map<number, AbortController>();
+const activeTasks = new Map<string | number, AbortController>();
 const enqueuedUpdateIds = new Set<number>();
 const completedOutOfOrderUpdateIds = new Set<number>();
-const stoppedTaskChats = new Set<number>();
+const stoppedTaskChats = new Set<string | number>();
 const STOPPED_TASK_BOUNDARY = [
   "[Previous task was explicitly stopped by the user.]",
   "Do not continue or resume that stopped task unless the user's new message explicitly asks you to resume it.",
@@ -723,7 +734,7 @@ export function _resetStoppedTaskChats(): void {
   stoppedTaskChats.clear();
 }
 
-export function abortChatTask(chatId: number, chatQueue: ChatQueue = defaultChatQueue): boolean {
+export function abortChatTask(chatId: number | string, chatQueue: ChatQueue = defaultChatQueue): boolean {
   const controller = activeTasks.get(chatId);
   const hadPending = chatQueue.clearPending(chatId);
   if (controller) {
@@ -734,13 +745,17 @@ export function abortChatTask(chatId: number, chatQueue: ChatQueue = defaultChat
   return hadPending;
 }
 
+function normalizedConversationKey(normalized: NormalizedTelegramMessage): string {
+  return getNormalizedTelegramConversationKey(normalized);
+}
+
 export async function runQueuedTelegramTurn(
   normalized: NormalizedTelegramMessage,
   context: TelegramDeliveryContext,
   chatQueue: ChatQueue = defaultChatQueue,
 ): Promise<void> {
   await chatQueue.enqueue(
-    normalized.chatId,
+    normalizedConversationKey(normalized),
     async () => {
       if (context.abortSignal?.aborted) {
         throw new Error("queued Telegram turn was aborted before execution");
@@ -749,7 +764,7 @@ export async function runQueuedTelegramTurn(
       const forwardAbort = () => taskController.abort();
       context.abortSignal?.addEventListener("abort", forwardAbort, { once: true });
 
-      activeTasks.set(normalized.chatId, taskController);
+      activeTasks.set(normalizedConversationKey(normalized), taskController);
       await getRuntimeStateStore(context.inboxDir).markTurnStarted();
       try {
         await handleNormalizedTelegramMessage(normalized, {
@@ -758,8 +773,8 @@ export async function runQueuedTelegramTurn(
         });
       } finally {
         context.abortSignal?.removeEventListener("abort", forwardAbort);
-        if (activeTasks.get(normalized.chatId) === taskController) {
-          activeTasks.delete(normalized.chatId);
+        if (activeTasks.get(normalizedConversationKey(normalized)) === taskController) {
+          activeTasks.delete(normalizedConversationKey(normalized));
         }
         await getRuntimeStateStore(context.inboxDir).markTurnCompleted();
       }
@@ -840,6 +855,7 @@ function isConflictError(error: unknown): boolean {
 function extractMembershipUpdate(update: unknown): {
   chatId?: number;
   userId?: number;
+  chatType?: string;
   oldStatus?: string;
   newStatus?: string;
 } | null {
@@ -849,6 +865,7 @@ function extractMembershipUpdate(update: unknown): {
   }
 
   const chatId = (membership as { chat?: { id?: unknown } }).chat?.id;
+  const chatType = (membership as { chat?: { type?: unknown } }).chat?.type;
   const userId = (membership as { from?: { id?: unknown } }).from?.id;
   const oldStatus = (membership as { old_chat_member?: { status?: unknown } }).old_chat_member?.status;
   const newStatus = (membership as { new_chat_member?: { status?: unknown } }).new_chat_member?.status;
@@ -856,9 +873,101 @@ function extractMembershipUpdate(update: unknown): {
   return {
     chatId: typeof chatId === "number" ? chatId : undefined,
     userId: typeof userId === "number" ? userId : undefined,
+    chatType: typeof chatType === "string" ? chatType : undefined,
     oldStatus: typeof oldStatus === "string" ? oldStatus : undefined,
     newStatus: typeof newStatus === "string" ? newStatus : undefined,
   };
+}
+
+function isJoinedMembershipStatus(status?: string): boolean {
+  return status === "member" || status === "administrator";
+}
+
+function normalizeBotUsername(username: string | undefined): string | undefined {
+  const normalized = username?.trim().replace(/^@/, "").toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function updateMessage(update: unknown): Record<string, unknown> | undefined {
+  const message = (update as { message?: unknown })?.message;
+  return typeof message === "object" && message !== null ? message as Record<string, unknown> : undefined;
+}
+
+function messageMentionsBot(message: Record<string, unknown> | undefined, botUsername: string | undefined): boolean {
+  const username = normalizeBotUsername(botUsername);
+  if (!message || !username) {
+    return false;
+  }
+  const text = typeof message.text === "string"
+    ? message.text
+    : typeof message.caption === "string"
+      ? message.caption
+      : "";
+  if (new RegExp(`(^|[^A-Za-z0-9_])@${escapeRegExp(username)}\\b`, "i").test(text)) {
+    return true;
+  }
+  const entities = [
+    ...(Array.isArray(message.entities) ? message.entities : []),
+    ...(Array.isArray(message.caption_entities) ? message.caption_entities : []),
+  ];
+  return entities.some((entity) => {
+    if (typeof entity !== "object" || entity === null) {
+      return false;
+    }
+    const e = entity as { type?: unknown; offset?: unknown; length?: unknown };
+    if (e.type !== "mention" || typeof e.offset !== "number" || typeof e.length !== "number") {
+      return false;
+    }
+    return text.slice(e.offset, e.offset + e.length).toLowerCase() === `@${username}`;
+  });
+}
+
+function messageRepliesToBot(message: Record<string, unknown> | undefined, botUsername: string | undefined): boolean {
+  const username = normalizeBotUsername(botUsername);
+  if (!message || !username) {
+    return false;
+  }
+  const reply = message.reply_to_message;
+  if (typeof reply !== "object" || reply === null) {
+    return false;
+  }
+  const from = (reply as { from?: unknown }).from;
+  if (typeof from !== "object" || from === null) {
+    return false;
+  }
+  const replyUsername = normalizeBotUsername((from as { username?: unknown }).username as string | undefined);
+  return replyUsername === username;
+}
+
+function shouldIgnoreUnaddressedGroupMessage(
+  update: unknown,
+  normalized: NormalizedTelegramMessage,
+  botUsername: string | undefined,
+  requireMention: boolean,
+): boolean {
+  if (!requireMention) {
+    return false;
+  }
+  if (normalized.chatType === "private" || normalized.chatType === "bus" || normalized.callbackQueryId) {
+    return false;
+  }
+  if (/^\/\S/.test(normalized.text.trim())) {
+    return false;
+  }
+  const username = normalizeBotUsername(botUsername);
+  if (!username) {
+    return false;
+  }
+  const message = updateMessage(update);
+  return !messageMentionsBot(message, username) && !messageRepliesToBot(message, username);
+}
+
+function shouldSilenceGroupAccessReply(normalized: NormalizedTelegramMessage): boolean {
+  return normalized.chatType !== "private" && normalized.chatType !== "bus";
 }
 
 async function appendPollFetchFailureAuditEvent(inboxDir: string, error: unknown, offset?: number): Promise<void> {
@@ -882,6 +991,28 @@ async function appendPollFetchFailureAuditEventBestEffort(
     await appendPollFetchFailureAuditEvent(inboxDir, error, offset);
   } catch {
     // Poll fetch failures must still back off or terminate cleanly even if audit persistence fails.
+  }
+}
+
+async function appendPollFetchRecoveredAuditEventBestEffort(
+  inboxDir: string,
+  consecutiveErrors: number,
+  threshold: number,
+  offset?: number,
+): Promise<void> {
+  try {
+    await appendAuditEvent(path.dirname(inboxDir), {
+      type: "poll.fetch",
+      updateId: offset,
+      outcome: "recovered",
+      detail: `Telegram API client recycled after ${consecutiveErrors} consecutive fetch errors`,
+      metadata: {
+        consecutiveErrors,
+        threshold,
+      },
+    });
+  } catch {
+    // Recovery itself should continue even if audit persistence is unavailable.
   }
 }
 
@@ -1005,6 +1136,35 @@ export async function processTelegramUpdates(
               newStatus: membershipUpdate.newStatus,
             },
           });
+          if (
+            membershipUpdate.chatId !== undefined &&
+            membershipUpdate.userId !== undefined &&
+            membershipUpdate.chatType !== undefined &&
+            membershipUpdate.chatType !== "private" &&
+            !isJoinedMembershipStatus(membershipUpdate.oldStatus) &&
+            isJoinedMembershipStatus(membershipUpdate.newStatus)
+          ) {
+            try {
+              const decision = await context.bridge.checkGroupJoin({
+                chatId: membershipUpdate.chatId,
+                userId: membershipUpdate.userId,
+                chatType: membershipUpdate.chatType,
+              });
+              if (decision.kind !== "allow") {
+                await context.api.leaveChat(membershipUpdate.chatId);
+              } else {
+                const locale = (await loadStopLocale(context.inboxDir)) === "zh" ? "zh" : "en";
+                await context.api.sendMessage(
+                  membershipUpdate.chatId,
+                  locale === "zh"
+                    ? "群聊已加入。发送 /group allow 启用当前群；未启用前不会处理普通消息。"
+                    : "Joined this group. Send /group allow to enable it; ordinary messages are ignored until then.",
+                ).catch(() => {});
+              }
+            } catch {
+              await context.api.leaveChat(membershipUpdate.chatId).catch(() => {});
+            }
+          }
         } else {
           await appendAuditEvent(path.dirname(context.inboxDir), {
             type: "update.skip",
@@ -1013,6 +1173,27 @@ export async function processTelegramUpdates(
             outcome: "invalid",
           });
         }
+        nextOffset = advanceOffset(nextOffset, completedOffset);
+        continue;
+      }
+
+      const groupMode = normalized.chatType !== "private" && normalized.chatType !== "bus" && !normalized.callbackQueryId
+        ? (await loadInstanceConfig(path.dirname(context.inboxDir))).groupMode
+        : undefined;
+      const requireMention = groupMode ? !groupMode.listenAllChatIds.includes(normalized.chatId) : true;
+      if (shouldIgnoreUnaddressedGroupMessage(update, normalized, context.botUsername, requireMention)) {
+        if (updateId !== undefined) {
+          await markUpdateCompleted(updateId);
+        }
+        await appendAuditEvent(path.dirname(context.inboxDir), {
+          type: "update.skip",
+          instanceName: context.instanceName,
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          updateId,
+          outcome: "ignored",
+          detail: "group message was not addressed to this bot",
+        });
         nextOffset = advanceOffset(nextOffset, completedOffset);
         continue;
       }
@@ -1034,29 +1215,34 @@ export async function processTelegramUpdates(
       }
 
       if (isTelegramApprovalCommand(normalized.text)) {
+        const scopedApi = withTelegramMessageThread(context.api, normalized.messageThreadId);
         const locale = (await loadStopLocale(context.inboxDir)) === "zh" ? "zh" : "en";
         const accessDecision = await context.bridge.checkAccess({
           chatId: normalized.chatId,
           userId: normalized.userId,
           chatType: normalized.chatType,
+          messageThreadId: normalized.messageThreadId,
+          conversationKey: normalized.conversationKey,
           locale,
         });
 
         if (accessDecision.kind === "allow") {
-          await handleTelegramApprovalCommand({ normalized, api: context.api });
+          await handleTelegramApprovalCommand({ normalized, api: scopedApi });
         } else {
           if (normalized.callbackQueryId) {
             try {
-              await context.api.answerCallbackQuery(normalized.callbackQueryId);
+              await scopedApi.answerCallbackQuery(normalized.callbackQueryId);
             } catch (error) {
               await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "approval.answerCallbackQuery", error);
             }
           }
           const msg = accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
-          try {
-            await context.api.sendMessage(normalized.chatId, msg);
-          } catch (error) {
-            await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "approval.sendMessage", error);
+          if (!shouldSilenceGroupAccessReply(normalized)) {
+            try {
+              await scopedApi.sendMessage(normalized.chatId, msg);
+            } catch (error) {
+              await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "approval.sendMessage", error);
+            }
           }
         }
         nextOffset = advanceOffset(nextOffset, completedOffset);
@@ -1067,6 +1253,7 @@ export async function processTelegramUpdates(
       }
 
       if (/^\/stop(?:@\w+)?(?:\s|$)/i.test(normalized.text.trim())) {
+        const scopedApi = withTelegramMessageThread(context.api, normalized.messageThreadId);
         if (updateId !== undefined) {
           enqueuedUpdateIds.add(updateId);
         }
@@ -1076,14 +1263,16 @@ export async function processTelegramUpdates(
             chatId: normalized.chatId,
             userId: normalized.userId,
             chatType: normalized.chatType,
+            messageThreadId: normalized.messageThreadId,
+            conversationKey: normalized.conversationKey,
             locale,
           });
 
           const stopped = accessDecision.kind === "allow"
-            ? abortChatTask(normalized.chatId, chatQueue)
+            ? abortChatTask(normalizedConversationKey(normalized), chatQueue)
             : false;
           if (stopped) {
-            stoppedTaskChats.add(normalized.chatId);
+            stoppedTaskChats.add(normalizedConversationKey(normalized));
           }
 
           const msg = accessDecision.kind === "allow"
@@ -1091,10 +1280,12 @@ export async function processTelegramUpdates(
               ? locale === "zh" ? "已停止当前任务。" : "Current task stopped."
               : locale === "zh" ? "当前没有运行中的任务。" : "No task is currently running."
             : accessDecision.text ?? (locale === "zh" ? "当前聊天未获授权。" : "This chat is not authorized for this instance.");
-          try {
-            await context.api.sendMessage(normalized.chatId, msg);
-          } catch (error) {
-            await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "stop.sendMessage", error);
+          if (accessDecision.kind === "allow" || !shouldSilenceGroupAccessReply(normalized)) {
+            try {
+              await scopedApi.sendMessage(normalized.chatId, msg);
+            } catch (error) {
+              await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "stop.sendMessage", error);
+            }
           }
           nextOffset = advanceOffset(nextOffset, completedOffset);
           if (updateId !== undefined) {
@@ -1109,11 +1300,11 @@ export async function processTelegramUpdates(
       }
 
       const shouldFenceStoppedTask =
-        stoppedTaskChats.has(normalized.chatId) &&
+        stoppedTaskChats.has(normalizedConversationKey(normalized)) &&
         !/^\/\S/.test(normalized.text.trim()) &&
         (normalized.text.trim().length > 0 || normalized.attachments.length > 0);
-      if (!shouldFenceStoppedTask && stoppedTaskChats.has(normalized.chatId) && /^\/\S/.test(normalized.text.trim())) {
-        stoppedTaskChats.delete(normalized.chatId);
+      if (!shouldFenceStoppedTask && stoppedTaskChats.has(normalizedConversationKey(normalized)) && /^\/\S/.test(normalized.text.trim())) {
+        stoppedTaskChats.delete(normalizedConversationKey(normalized));
       }
       const effectiveNormalized = shouldFenceStoppedTask
         ? {
@@ -1124,15 +1315,15 @@ export async function processTelegramUpdates(
           }
         : normalized;
       if (shouldFenceStoppedTask) {
-        stoppedTaskChats.delete(normalized.chatId);
+        stoppedTaskChats.delete(normalizedConversationKey(normalized));
       }
 
       if (updateId !== undefined) {
         enqueuedUpdateIds.add(updateId);
       }
-      const queuedRun = chatQueue.enqueue(normalized.chatId, async () => {
+      const queuedRun = chatQueue.enqueue(normalizedConversationKey(normalized), async () => {
         const taskController = new AbortController();
-        activeTasks.set(normalized.chatId, taskController);
+        activeTasks.set(normalizedConversationKey(normalized), taskController);
         await runtimeStateStore.markTurnStarted();
         try {
           await handleNormalizedTelegramMessage(effectiveNormalized, {
@@ -1147,7 +1338,7 @@ export async function processTelegramUpdates(
             },
           });
         } finally {
-          activeTasks.delete(normalized.chatId);
+          activeTasks.delete(normalizedConversationKey(normalized));
           await runtimeStateStore.markTurnCompleted();
         }
       });
@@ -1158,6 +1349,7 @@ export async function processTelegramUpdates(
       });
     } catch (error) {
       if (updateId !== undefined) {
+        await markUpdateCompleted(updateId);
         enqueuedUpdateIds.delete(updateId);
       }
       await appendUpdateHandleFailureAuditEventBestEffort(context.inboxDir, context.instanceName, error, updateId);
@@ -1177,6 +1369,7 @@ export async function processTelegramUpdates(
       nextOffset = advanceOffset(nextOffset, queued.completedOffset);
     } catch (error) {
       if (queued.updateId !== undefined) {
+        await markUpdateCompleted(queued.updateId);
         enqueuedUpdateIds.delete(queued.updateId);
       }
       await appendUpdateHandleFailureAuditEventBestEffort(
@@ -1206,6 +1399,7 @@ export async function pollTelegramUpdatesOnce(
   logger: Pick<Console, "error"> = console,
   offset?: number,
   signal?: AbortSignal,
+  options: PollTelegramUpdatesOptions = {},
 ): Promise<{ offset: number | undefined; hadFetchError: boolean; hadUpdates: boolean; conflict: boolean }> {
   try {
     const updates = await api.getUpdates(offset, signal);
@@ -1214,7 +1408,7 @@ export async function pollTelegramUpdatesOnce(
     // Offset is NOT advanced here — processTelegramUpdates marks handled
     // updates in the runtime state store, and we read back the last handled
     // ID for the next poll to avoid message loss on crash.
-    void processTelegramUpdates(updates, { api, bridge, inboxDir }, logger).catch((error) => {
+    void processTelegramUpdates(updates, { api, bridge, inboxDir, botUsername: options.botUsername }, logger).catch((error) => {
       logger.error(formatErrorMessage("Background update processing failed", error));
     });
     const lastHandled = await getLastHandledUpdateId(inboxDir);
@@ -1262,14 +1456,19 @@ export async function pollTelegramUpdates(
   inboxDir: string,
   logger: Pick<Console, "error"> = console,
   signal?: AbortSignal,
+  options: PollTelegramUpdatesOptions = {},
 ): Promise<void> {
+  let currentApi = api;
   let offset: number | undefined;
   let backoffMs = 1000;
   const maxBackoffMs = 60000;
+  const fetchErrorRecycleThreshold = Math.max(1, Math.floor(options.fetchErrorRecycleThreshold ?? 10));
+  const recreateApi = options.recreateApi ?? ((current: TelegramApi) => current.recreate());
+  let consecutiveFetchErrors = 0;
 
   while (!signal?.aborted) {
     const previousOffset = offset;
-    const result = await pollTelegramUpdatesOnce(api, bridge, inboxDir, logger, offset, signal);
+    const result = await pollTelegramUpdatesOnce(currentApi, bridge, inboxDir, logger, offset, signal, options);
     offset = result.offset;
 
     if (result.conflict) {
@@ -1277,17 +1476,35 @@ export async function pollTelegramUpdates(
     }
 
     if (result.hadFetchError) {
+      consecutiveFetchErrors += 1;
+      if (consecutiveFetchErrors >= fetchErrorRecycleThreshold) {
+        try {
+          currentApi = recreateApi(currentApi);
+          await appendPollFetchRecoveredAuditEventBestEffort(
+            inboxDir,
+            consecutiveFetchErrors,
+            fetchErrorRecycleThreshold,
+            offset,
+          );
+          consecutiveFetchErrors = 0;
+        } catch (error) {
+          logger.error(formatErrorMessage("Failed to recycle Telegram API client", error));
+        }
+      }
       backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
     } else if (result.hadUpdates && result.offset !== previousOffset) {
+      consecutiveFetchErrors = 0;
       // Got messages — poll again immediately for low latency
       backoffMs = 0;
     } else if (result.hadUpdates && result.offset === previousOffset) {
+      consecutiveFetchErrors = 0;
       // We saw updates but did not advance the handled offset yet. That means
       // at least one update is still in flight, was deferred, or failed before
       // bookkeeping completed. Back off to avoid a tight loop that keeps
       // re-fetching the same update IDs immediately.
       backoffMs = 1000;
     } else {
+      consecutiveFetchErrors = 0;
       // No updates — long polling already waited ~30s on Telegram's side,
       // just a tiny gap before the next long-poll request
       backoffMs = 100;

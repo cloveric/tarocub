@@ -16,6 +16,7 @@ export type { CronJobRecord, CronLocale, CronSessionMode } from "./cron-store-sc
 
 export interface CronJobInput {
   chatId: number;
+  messageThreadId?: number;
   userId: number;
   chatType?: string;
   locale?: CronLocale;
@@ -109,6 +110,11 @@ export class CronStore {
     return jobs.filter((job) => job.chatId === chatId);
   }
 
+  async listByConversation(chatId: number, messageThreadId?: number): Promise<CronJobRecord[]> {
+    const jobs = await this.list();
+    return jobs.filter((job) => job.chatId === chatId && job.messageThreadId === messageThreadId);
+  }
+
   async get(id: string): Promise<CronJobRecord | null> {
     const jobs = await this.list();
     return jobs.find((job) => job.id === id) ?? null;
@@ -118,12 +124,13 @@ export class CronStore {
     return this.enqueueWrite(async () => {
       const state = await this.store.read(createDefaultState());
       const enabled = input.enabled ?? true;
-      this.assertEnabledJobLimit(state.jobs, input.chatId, enabled);
+      this.assertEnabledJobLimit(state.jobs, input.chatId, enabled, undefined, input.messageThreadId);
       const id = generateCronJobId();
       const timestamp = nowIso();
       const record = CronJobRecordSchema.parse({
         id,
         chatId: input.chatId,
+        messageThreadId: input.messageThreadId,
         userId: input.userId,
         chatType: input.chatType ?? "private",
         locale: input.locale,
@@ -171,7 +178,7 @@ export class CronStore {
       const existing = state.jobs[index]!;
       const nextEnabled = patch.enabled ?? existing.enabled;
       if (!existing.enabled && nextEnabled) {
-        this.assertEnabledJobLimit(state.jobs, existing.chatId, true, existing.id);
+        this.assertEnabledJobLimit(state.jobs, existing.chatId, true, existing.id, existing.messageThreadId);
       }
       const merged: CronJobRecord = {
         ...existing,
@@ -258,12 +265,18 @@ export class CronStore {
     chatId: number,
     enabled: boolean,
     excludeId?: string,
+    messageThreadId?: number,
   ): void {
     if (!enabled) {
       return;
     }
 
-    const enabledCount = jobs.filter((job) => job.chatId === chatId && job.enabled && job.id !== excludeId).length;
+    const enabledCount = jobs.filter((job) =>
+      job.chatId === chatId &&
+      job.messageThreadId === messageThreadId &&
+      job.enabled &&
+      job.id !== excludeId
+    ).length;
     if (enabledCount >= MAX_ENABLED_CRON_JOBS_PER_CHAT) {
       throw new Error(`maximum enabled cron jobs per chat reached (${MAX_ENABLED_CRON_JOBS_PER_CHAT})`);
     }
