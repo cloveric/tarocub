@@ -126,9 +126,6 @@ function parseDotEnvEntry(rawLine: string): { key: string; value: string } | nul
   }
 
   const rawValue = trimmed.slice(separatorIndex + 1).trim();
-  if (!rawValue) {
-    return null;
-  }
 
   if (rawValue.startsWith("\"")) {
     return { key, value: JSON.parse(rawValue) as string };
@@ -143,7 +140,7 @@ function parseDotEnvEntry(rawLine: string): { key: string; value: string } | nul
 
 function parseDotEnvValue(rawLine: string): string | null {
   const entry = parseDotEnvEntry(rawLine);
-  if (entry === null || entry.key !== "TELEGRAM_BOT_TOKEN") {
+  if (entry === null || entry.key !== "TELEGRAM_BOT_TOKEN" || !entry.value) {
     return null;
   }
 

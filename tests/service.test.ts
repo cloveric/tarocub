@@ -14,6 +14,7 @@ import {
   processTelegramUpdates,
   getLastHandledUpdateId,
   readInstanceBotTokenFromEnvFile,
+  readInstanceServiceEnvFromEnvFile,
   resolveServiceEnvForInstance,
   resolveEngineRuntime,
   _resetEnqueuedUpdateIds,
@@ -133,6 +134,36 @@ describe("readInstanceBotTokenFromEnvFile", () => {
           CODEX_TELEGRAM_INSTANCE: "alpha",
         }),
       ).resolves.toBe("secret-token");
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+    }
+  });
+
+  it("preserves empty ASR service env values from the instance .env", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(
+        envPath,
+        [
+          'TELEGRAM_BOT_TOKEN="secret-token"',
+          "ASR_HTTP_URL=",
+          "ASR_RESTART_AFTER_FAILURES=2",
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      await expect(
+        readInstanceServiceEnvFromEnvFile({
+          USERPROFILE: root,
+          CODEX_TELEGRAM_INSTANCE: "alpha",
+        }),
+      ).resolves.toMatchObject({
+        ASR_HTTP_URL: "",
+        ASR_RESTART_AFTER_FAILURES: "2",
+      });
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     }
