@@ -35,6 +35,8 @@ export interface TimelineEvent {
   instanceName?: string;
   channel?: "telegram" | "bus";
   chatId?: number;
+  messageThreadId?: number;
+  conversationKey?: string;
   userId?: number;
   updateId?: number;
   outcome?: string;

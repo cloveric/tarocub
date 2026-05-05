@@ -12,6 +12,8 @@ export const AuditEventSchema = z.object({
   type: z.string(),
   instanceName: z.string().optional(),
   chatId: z.number().int().optional(),
+  messageThreadId: z.number().int().optional(),
+  conversationKey: z.string().optional(),
   userId: z.number().int().optional(),
   updateId: z.number().int().optional(),
   outcome: z.string().optional(),

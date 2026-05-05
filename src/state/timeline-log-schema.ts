@@ -40,6 +40,8 @@ export const TimelineEventSchema = z.object({
   instanceName: z.string().optional(),
   channel: z.enum(["telegram", "bus"]).optional(),
   chatId: z.number().int().optional(),
+  messageThreadId: z.number().int().optional(),
+  conversationKey: z.string().optional(),
   userId: z.number().int().optional(),
   updateId: z.number().int().optional(),
   outcome: z.string().optional(),

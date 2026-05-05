@@ -70,4 +70,23 @@ describe("ChatQueue", () => {
     await first;
     await expect(second).rejects.toThrow("skipped by stop");
   });
+
+  it("reports a key as busy while a job is running or queued", async () => {
+    const queue = new ChatQueue();
+    let release!: () => void;
+    const first = queue.enqueue("chat:1", async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const second = queue.enqueue("chat:1", async () => "done");
+
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    expect(queue.isBusy("chat:1")).toBe(true);
+    release();
+    await first;
+    expect(queue.isBusy("chat:1")).toBe(true);
+    await second;
+    await vi.waitFor(() => expect(queue.isBusy("chat:1")).toBe(false));
+  });
 });

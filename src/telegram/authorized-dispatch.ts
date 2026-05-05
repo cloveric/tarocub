@@ -1,8 +1,10 @@
 import type { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { handleCrewTelegramWorkflow as defaultHandleCrewTelegramWorkflow } from "./crew-workflow.js";
+import { handleBoardTelegramCommand as defaultHandleBoardTelegramCommand } from "./board-commands.js";
 import type { SessionStore } from "../state/session-store.js";
 import { handleDelegationTelegramCommand as defaultHandleDelegationTelegramCommand } from "./delegation-commands.js";
 import { handleLocalEngineTelegramCommand as defaultHandleLocalEngineTelegramCommand } from "./engine-commands.js";
+import { handleMiniBusTelegramCommand as defaultHandleMiniBusTelegramCommand } from "./mini-bus-commands.js";
 import type { ResumeState } from "./instance-config.js";
 import { prepareTelegramMessageInput as defaultPrepareTelegramMessageInput } from "./message-input.js";
 import {
@@ -65,6 +67,7 @@ export interface AuthorizedTelegramDispatchContext {
   inboxDir: string;
   source?: "telegram" | "cron";
   abortSignal?: AbortSignal;
+  runQueuedBridgeTurn?<T>(conversationKey: string, job: () => Promise<T>): Promise<T>;
   sessionIdOverride?: string;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   instanceName?: string;
@@ -115,6 +118,8 @@ export interface AuthorizedTelegramDispatchHandlers {
   handleSimpleLocalTelegramCommand?: typeof defaultHandleSimpleLocalTelegramCommand;
   handleCronCommand?: typeof defaultHandleCronCommand;
   handleDelegationTelegramCommand?: typeof defaultHandleDelegationTelegramCommand;
+  handleBoardTelegramCommand?: typeof defaultHandleBoardTelegramCommand;
+  handleMiniBusTelegramCommand?: typeof defaultHandleMiniBusTelegramCommand;
   handleCrewTelegramWorkflow?: typeof defaultHandleCrewTelegramWorkflow;
   prepareTelegramMessageInput?: typeof defaultPrepareTelegramMessageInput;
   executeWorkflowAwareTelegramTurn?: typeof defaultExecuteWorkflowAwareTelegramTurn;
@@ -159,6 +164,8 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     handleLocalEngineTelegramCommand = defaultHandleLocalEngineTelegramCommand,
     handleSimpleLocalTelegramCommand = defaultHandleSimpleLocalTelegramCommand,
     handleCronCommand = defaultHandleCronCommand,
+    handleMiniBusTelegramCommand = defaultHandleMiniBusTelegramCommand,
+    handleBoardTelegramCommand = defaultHandleBoardTelegramCommand,
     handleDelegationTelegramCommand = defaultHandleDelegationTelegramCommand,
     handleCrewTelegramWorkflow = defaultHandleCrewTelegramWorkflow,
     prepareTelegramMessageInput = defaultPrepareTelegramMessageInput,
@@ -276,6 +283,38 @@ export async function dispatchAuthorizedTelegramMessage(input: {
   }
 
   if (allowTelegramCommands && await handleDelegationTelegramCommand({
+    stateDir,
+    startedAt,
+    locale,
+    cfg: {
+      budgetUsd: cfg.budgetUsd,
+      resume: cfg.resume,
+    },
+    normalized,
+    context,
+    bridge: context.bridge,
+  })) {
+    return;
+  }
+
+  if (allowTelegramCommands && await handleBoardTelegramCommand({
+    stateDir,
+    startedAt,
+    locale,
+    normalized,
+    context: {
+      ...context,
+      cfg: {
+        budgetUsd: cfg.budgetUsd,
+        resume: cfg.resume,
+      },
+      bridge: context.bridge,
+    },
+  })) {
+    return;
+  }
+
+  if (allowTelegramCommands && await handleMiniBusTelegramCommand({
     stateDir,
     startedAt,
     locale,

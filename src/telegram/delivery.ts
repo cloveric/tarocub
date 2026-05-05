@@ -16,6 +16,7 @@ import {
 import { finalizeTelegramTurnError, maybeRetryTelegramTurnError } from "./turn-error.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { requestTelegramApproval } from "./approval-requests.js";
+import { getTelegramConversationLogScope } from "./conversation-key.js";
 
 async function updateWorkflowBestEffort(
   workflowStore: FileWorkflowStore,
@@ -74,6 +75,7 @@ async function releaseRetrySupersededWorkflowBestEffort(input: {
       instanceName: context.instanceName,
       channel: "telegram",
       chatId: normalized.chatId,
+      ...getTelegramConversationLogScope(normalized),
       userId: normalized.userId,
       updateId: context.updateId,
       detail,
@@ -105,6 +107,7 @@ export interface TelegramDeliveryContext {
   updateId?: number;
   source?: "telegram" | "cron";
   abortSignal?: AbortSignal;
+  runQueuedBridgeTurn?<T>(conversationKey: string, job: () => Promise<T>): Promise<T>;
   sessionIdOverride?: string;
   onAuthRetry?: () => Promise<void>;
   _authRetried?: boolean;
@@ -185,6 +188,7 @@ export async function handleNormalizedTelegramMessage(
       instanceName: context.instanceName,
       channel: "telegram",
       chatId: normalized.chatId,
+      ...getTelegramConversationLogScope(normalized),
       userId: normalized.userId,
       updateId: context.updateId,
       metadata: {

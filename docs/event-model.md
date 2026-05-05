@@ -29,6 +29,8 @@ Every event may contain:
 - `instanceName`
 - `channel`
 - `chatId`
+- `messageThreadId`
+- `conversationKey`
 - `userId`
 - `updateId`
 - `outcome`
@@ -60,6 +62,11 @@ Current event types:
 - `cron.completed`
 - `cron.skipped`
 - `cron.disabled_after_failures`
+- `crew.run.started`
+- `crew.stage.started`
+- `crew.stage.completed`
+- `crew.run.completed`
+- `crew.run.failed`
 
 ## Write Rules
 
@@ -99,6 +106,56 @@ Current event types:
   Written when a scheduled task fire is intentionally skipped, for example because the same job is already running.
 - `cron.disabled_after_failures`
   Written when a recurring scheduled task reaches its configured consecutive failure threshold and is disabled.
+- `crew.run.started`
+  Written when a coordinator-led crew workflow starts.
+- `crew.stage.started`
+  Written when a crew stage begins.
+- `crew.stage.completed`
+  Written when a crew stage completes, including partial research results.
+- `crew.run.completed`
+  Written when the final crew output is delivered.
+- `crew.run.failed`
+  Written when a crew workflow fails before final output.
+
+Topic-aware Telegram events may include:
+
+- `messageThreadId`
+- `conversationKey`
+
+Mini Bus command audit metadata commonly includes:
+
+- `command: "mini"`
+- `action`
+- `miniPeer`
+- `miniTarget`
+- `miniTargets`
+- `verifier`
+- `role`
+- `errorCount`
+- `stageCount`
+- `skippedCurrent`
+
+Mini crew reuses the same `crew.*` timeline event types as instance-level Agent Bus crew. Its audit records use `command: "mini"` and `action: "crew"`.
+
+Board command audit metadata commonly includes:
+
+- `command: "board"`
+- `action`
+- `boardTaskId`
+- `assignee`
+- `dependencies`
+- `unmetDependencies`
+- `promotedTaskIds`
+- `runId`
+- `targetKind`
+- `targetName`
+- `priority`
+- `labels`
+- `limits`
+- `review`
+- `checklistItemId`
+
+Board commands currently use the shared `command.handled` timeline event. The authoritative task state lives in `board.json`; audit/timeline entries are evidence, not the source of truth.
 
 ### Bus
 

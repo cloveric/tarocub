@@ -2,6 +2,7 @@ import { randomInt, randomUUID } from "node:crypto";
 
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig as defaultLoadBusConfig, type BusConfig, type BusCrewConfig } from "../bus/bus-config.js";
+import type { AdapterUsage, EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { CrewRunStore } from "../state/crew-run-store.js";
 import {
@@ -15,9 +16,20 @@ import type { TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 type CrewStageName = "decomposition" | "research" | "analysis" | "writing" | "review";
+export type CrewRoleName = keyof BusCrewConfig["roles"];
 type ResearchStageEntry =
   | { question: string; finding: string }
   | { question: string; error: string };
+
+export type CrewRoleDelegate = (input: {
+  role: CrewRoleName;
+  targetName: string;
+  prompt: string;
+  timeoutMs: number;
+}) => Promise<{
+  text: string;
+  usage?: AdapterUsage;
+}>;
 
 const activeCrewRunKeys = new Set<string>();
 const SYNTHETIC_COORDINATOR_CHAT_ID_BASE = Number.MAX_SAFE_INTEGER - 1_000_000_000;
@@ -38,6 +50,10 @@ export interface CrewWorkflowContext extends TelegramTurnContext {
       files: string[];
       workspaceOverride?: string;
       abortSignal?: AbortSignal;
+      messageThreadId?: number;
+      conversationKey?: string;
+      onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+      onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
     }): Promise<{
       text: string;
       usage?: {
@@ -49,6 +65,8 @@ export interface CrewWorkflowContext extends TelegramTurnContext {
     }>;
   };
   abortSignal?: AbortSignal;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   instanceName?: string;
   updateId?: number;
 }
@@ -373,6 +391,12 @@ export async function handleCrewTelegramWorkflow(input: {
   context: CrewWorkflowContext;
   loadBusConfig?: (stateDir: string) => Promise<BusConfig | null>;
   delegateToInstance?: typeof defaultDelegateToInstance;
+  crewConfig?: BusCrewConfig;
+  coordinatorName?: string;
+  activeRunKey?: string;
+  delegateRole?: CrewRoleDelegate;
+  auditCommand?: string;
+  auditMetadata?: Record<string, unknown>;
 }): Promise<boolean> {
   const {
     stateDir,
@@ -389,14 +413,14 @@ export async function handleCrewTelegramWorkflow(input: {
     return false;
   }
 
-  const busConfig = await loadBusConfig(stateDir);
-  const crew = busConfig?.crew;
-  const currentInstance = context.instanceName ?? "default";
+  const busConfig = input.crewConfig ? null : await loadBusConfig(stateDir);
+  const crew = input.crewConfig ?? busConfig?.crew;
+  const currentInstance = input.coordinatorName ?? context.instanceName ?? "default";
   if (!crew?.enabled || crew.workflow !== "research-report" || crew.coordinator !== currentInstance) {
     return false;
   }
 
-  const activeRunKey = `${stateDir}:${normalized.chatId}`;
+  const activeRunKey = input.activeRunKey ?? `${stateDir}:${normalized.conversationKey ?? normalized.chatId}`;
   if (activeCrewRunKeys.has(activeRunKey)) {
     await context.api.sendMessage(
       normalized.chatId,
@@ -418,6 +442,17 @@ export async function handleCrewTelegramWorkflow(input: {
   let activeStage: CrewStageName = "decomposition";
 
   const coordinatorChatId = createSyntheticCoordinatorChatId();
+  const delegateRole: CrewRoleDelegate = input.delegateRole ?? (async (delegateInput) => {
+    const result = await delegateToInstance({
+      fromInstance: currentInstance,
+      targetInstance: delegateInput.targetName,
+      prompt: delegateInput.prompt,
+      depth: 0,
+      stateDir,
+      timeoutMs: delegateInput.timeoutMs,
+    });
+    return { text: result.text };
+  });
   const runCoordinatorTurn = async (text: string) => {
     const result = await context.bridge.handleAuthorizedMessage({
       chatId: coordinatorChatId,
@@ -428,9 +463,16 @@ export async function handleCrewTelegramWorkflow(input: {
       files: [],
       workspaceOverride: cfg.resume?.workspacePath,
       abortSignal: context.abortSignal,
+      onApprovalRequest: context.onApprovalRequest,
+      onEngineEvent: context.onEngineEvent,
     });
     await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
     return result.text;
+  };
+  const recordDelegatedUsage = async (usage: AdapterUsage | undefined) => {
+    if (usage) {
+      await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, usage);
+    }
   };
 
   await crewRunStore.create({
@@ -537,18 +579,17 @@ export async function handleCrewTelegramWorkflow(input: {
     );
     const researchResults = await Promise.all(subQuestions.map(async (question): Promise<ResearchStageEntry> => {
       try {
-        const result = await delegateToInstance({
-          fromInstance: currentInstance,
-          targetInstance: crew.roles.researcher,
+        const result = await delegateRole({
+          role: "researcher",
+          targetName: crew.roles.researcher,
           prompt: buildResearchPrompt({
             locale,
             originalPrompt: normalized.text,
             subQuestion: question,
           }),
-          depth: 0,
-          stateDir,
           timeoutMs: CREW_RESEARCH_TIMEOUT_MS,
         });
+        await recordDelegatedUsage(result.usage);
         return { question, finding: result.text };
       } catch (error) {
         return {
@@ -622,18 +663,18 @@ export async function handleCrewTelegramWorkflow(input: {
       normalized.chatId,
       locale === "zh" ? "分析阶段..." : "Analysis stage...",
     );
-    const analysis = (await delegateToInstance({
-      fromInstance: currentInstance,
-      targetInstance: crew.roles.analyst,
+    const analysisResult = await delegateRole({
+      role: "analyst",
+      targetName: crew.roles.analyst,
       prompt: buildAnalystPrompt({
         locale,
         originalPrompt: normalized.text,
         researchPacket,
       }),
-      depth: 0,
-      stateDir,
       timeoutMs: CREW_ANALYSIS_TIMEOUT_MS,
-    })).text;
+    });
+    await recordDelegatedUsage(analysisResult.usage);
+    const analysis = analysisResult.text;
     await crewRunStore.update(runId, (record) => {
       record.stages.analysis = {
         status: "completed",
@@ -675,19 +716,19 @@ export async function handleCrewTelegramWorkflow(input: {
       normalized.chatId,
       locale === "zh" ? "写作阶段..." : "Writing stage...",
     );
-    let draft = (await delegateToInstance({
-      fromInstance: currentInstance,
-      targetInstance: crew.roles.writer,
+    const draftResult = await delegateRole({
+      role: "writer",
+      targetName: crew.roles.writer,
       prompt: buildWriterPrompt({
         locale,
         originalPrompt: normalized.text,
         researchPacket,
         analysis,
       }),
-      depth: 0,
-      stateDir,
       timeoutMs: CREW_WRITING_TIMEOUT_MS,
-    })).text;
+    });
+    await recordDelegatedUsage(draftResult.usage);
+    let draft = draftResult.text;
     await crewRunStore.update(runId, (record) => {
       record.stages.writing = {
         status: "completed",
@@ -729,19 +770,19 @@ export async function handleCrewTelegramWorkflow(input: {
       normalized.chatId,
       locale === "zh" ? "审查阶段..." : "Review stage...",
     );
-    const reviewerText = (await delegateToInstance({
-      fromInstance: currentInstance,
-      targetInstance: crew.roles.reviewer,
+    const reviewerResultText = await delegateRole({
+      role: "reviewer",
+      targetName: crew.roles.reviewer,
       prompt: buildReviewerPrompt({
         locale,
         originalPrompt: normalized.text,
         researchPacket,
         draft,
       }),
-      depth: 0,
-      stateDir,
       timeoutMs: CREW_REVIEW_TIMEOUT_MS,
-    })).text;
+    });
+    await recordDelegatedUsage(reviewerResultText.usage);
+    const reviewerText = reviewerResultText.text;
     const reviewerResult = parseReviewerVerdict(reviewerText);
     await crewRunStore.update(runId, (record) => {
       record.stages.review = {
@@ -791,9 +832,9 @@ export async function handleCrewTelegramWorkflow(input: {
         normalized.chatId,
         locale === "zh" ? "Reviewer 提出了问题，正在回写修订..." : "Reviewer flagged issues, sending back for revision...",
       );
-      draft = (await delegateToInstance({
-        fromInstance: currentInstance,
-        targetInstance: crew.roles.writer,
+      const revisionResult = await delegateRole({
+        role: "writer",
+        targetName: crew.roles.writer,
         prompt: buildWriterRevisionPrompt({
           locale,
           originalPrompt: normalized.text,
@@ -802,10 +843,10 @@ export async function handleCrewTelegramWorkflow(input: {
           draft,
           reviewIssues: reviewerResult.issues,
         }),
-        depth: 0,
-        stateDir,
         timeoutMs: CREW_WRITING_TIMEOUT_MS,
-      })).text;
+      });
+      await recordDelegatedUsage(revisionResult.usage);
+      draft = revisionResult.text;
       await crewRunStore.update(runId, (record) => {
         record.stages.writing = {
           status: "completed",
@@ -844,19 +885,19 @@ export async function handleCrewTelegramWorkflow(input: {
         outcome: "success",
         metadata: { revisionCount },
       });
-      const revisedReviewerText = (await delegateToInstance({
-        fromInstance: currentInstance,
-        targetInstance: crew.roles.reviewer,
+      const revisedReviewerResultText = await delegateRole({
+        role: "reviewer",
+        targetName: crew.roles.reviewer,
         prompt: buildReviewerPrompt({
           locale,
           originalPrompt: normalized.text,
           researchPacket,
           draft,
         }),
-        depth: 0,
-        stateDir,
         timeoutMs: CREW_REVIEW_TIMEOUT_MS,
-      })).text;
+      });
+      await recordDelegatedUsage(revisedReviewerResultText.usage);
+      const revisedReviewerText = revisedReviewerResultText.text;
       const revisedReviewerResult = parseReviewerVerdict(revisedReviewerText);
       reviewerResult.verdict = revisedReviewerResult.verdict;
       reviewerResult.issues = revisedReviewerResult.issues;
@@ -908,7 +949,8 @@ export async function handleCrewTelegramWorkflow(input: {
       outcome: "success",
       metadata: {
         durationMs: Date.now() - startedAt,
-        command: "crew",
+        command: input.auditCommand ?? "crew",
+        ...(input.auditMetadata ?? {}),
         workflow: crew.workflow,
         coordinator: currentInstance,
         researcher: crew.roles.researcher,
@@ -955,7 +997,8 @@ export async function handleCrewTelegramWorkflow(input: {
       detail,
       metadata: {
         durationMs: Date.now() - startedAt,
-        command: "crew",
+        command: input.auditCommand ?? "crew",
+        ...(input.auditMetadata ?? {}),
         workflow: crew.workflow,
         coordinator: currentInstance,
       },

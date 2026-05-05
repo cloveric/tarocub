@@ -51,6 +51,10 @@ The Telegram path is now intentionally layered.
   `/compact`, `/context`, `/ultrareview`
 - `src/telegram/delegation-commands.ts`
   `/btw`, `/ask`, `/fan`, `/verify`
+- `src/telegram/board-commands.ts`
+  `/board`, `/kanban`
+- `src/telegram/mini-bus-commands.ts`
+  `/mini`
 - `src/telegram/message-input.ts`
   Attachment download and voice transcription.
 - `src/telegram/message-turn.ts`
@@ -144,6 +148,8 @@ Run focused tests for the area you touched before wider validation.
   `tests/telegram-session-commands.test.ts`
   `tests/telegram-engine-commands.test.ts`
   `tests/telegram-delegation-commands.test.ts`
+  `tests/telegram-board-commands.test.ts`
+  `tests/telegram-mini-bus-commands.test.ts`
 - Normal message turn:
   `tests/telegram-message-input.test.ts`
   `tests/telegram-message-turn.test.ts`

@@ -35,6 +35,7 @@
 
 ### 最近这波变化
 
+- **v4.6.2** — 新增 Telegram Board + Mini Bus 协作：`/board` 会把 Kanban 任务、完整任务卡、依赖、WIP 限制、review gate、run history 持久化下来，并支持通过 Mini Bus topic 或 Agent Bus 实例执行单张任务；`/mini` 可以把同一个群里的 forum topic 当成 planner/writer/reviewer 这类轻量 peer，支持 fan-out、chain、verify 和 crew workflow。
 - **v4.5.10** — 新增 Codex Fast Mode 控制：`/fast on|off|status` 会把 `fast_mode` 和 `service_tier="fast"` 透传到 Codex process / app-server runtime，Claude 实例会明确拒绝。Fast Mode 在无人值守 bridge 场景里按实验选项对待：如果 Codex 开始返回引擎运行时失败，先用 `/fast off` 关闭；如果实例运行态已经坏掉，等当前 turn 空闲后重启该实例一次。
 - **v4.5.9** — 加强 schema-backed tool 投递 receipt：`[tool:{...}]` JSON 写坏或 send tool 被拒绝时，不再保留模型口头说的“已发出”；批量/长文本投递优先使用 fenced `tool-call` block，并且 generated `agent.md` 升级会清理重复 scheduler 残留。
 - **v4.5.8** — 文档明确 `[tool:{...}]` 是 generated 实例指令唯一使用的投递 tag；旧 `[send-file:]` / `[send-image:]` 仅作为兼容层保留；补充文件投递信任边界说明。
@@ -61,7 +62,7 @@ telegram service restart --all
 
 - **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex 和 Claude Code CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
 - **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。
-- **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。
+- **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。不同 topic 还可以组成 Mini Bus，用同一个群里的轻量 peer 跑 fan-out 或 chain workflow；`/board` 负责把 Kanban 任务状态持久化到模型记忆之外。
 - **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex 或 Claude、process 或 stream runtime，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
 - **Telegram 能力放在 bridge，而不是模型记忆里。** 发文件、cron 持久化、receipt、权限检查和失败重试由 bridge 代码负责，所以换模型、重启实例、续接会话后仍然有稳定语义。
 - **Prompt 短，规则稳定。** transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。
@@ -530,6 +531,121 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 - `/verify <提示>` — 在当前 bot 执行，然后自动发给 `verifier` 检查
 
 `/chain` 是轻量 pipeline；`crew` 是更重的中心协调模式。
+
+### Board：持久化 Kanban 任务板
+
+`/board` 是一个借鉴 Hermes Kanban 的轻量任务板。它优先解决"状态不能只放在对话里"的问题：任务、依赖、负责人、阻塞原因和完成总结都会写入 `board.json`，不会只靠模型记忆。这样它可以先服务 Mini Bus / Agent Bus 协作，后续再接自动执行。
+
+```
+/board add 写 launch plan
+/board desc B1 写 launch messaging 和 rollout 任务
+/board accept B1 README 已更新
+/board priority B1 high
+/board labels B1 docs launch
+/board check B1 add 更新 README
+/board list
+/board show B1
+/board assign B1 writer
+/board dep B2 B1
+/board limits global 3
+/board review B1 on reviewer
+/board ready B2
+/board run B2
+/board start B2
+/board fail B2 测试失败
+/board runs B2
+/board block B2 等 API 文档
+/board unblock B2
+/board approve B1
+/board reject B1 测试还不够
+/board done B1 设计已确认
+```
+
+- `/board add <任务>` — 创建持久任务，得到类似 `B1` 的稳定 ID
+- `/board desc <ID> <描述>` — 设置任务卡描述
+- `/board accept <ID> <完成标准>` — 追加完成标准
+- `/board priority <ID> <low|normal|high|urgent>` — 设置优先级
+- `/board labels <ID> <标签...>` — 替换任务标签
+- `/board check <ID> add <事项>` / `/board check <ID> done <C1>` — 管理 checklist
+- `/board list [todo|ready|running|blocked|done]` — 列出任务
+- `/board show <ID>` — 查看单个任务，包括来源 chat/topic
+- `/board assign <ID> <对象>` — 给任务标记 Mini Bus peer、bot 实例或任意负责人
+- `/board dep <ID> <依赖ID>` — 声明某任务依赖另一个任务完成
+- `/board limits [global|assignee|conversation] <n>` — 设置 WIP 限制；默认是 `global=3`、`assignee=1`、`conversation=1`
+- `/board review <ID> <on|off> [reviewer]` — 要求 done 前先进入 review
+- `/board approve <ID>` / `/board reject <ID> <原因>` — 处理 review 中的任务
+- `/board ready <ID>` — 依赖完成后把任务推进到 ready
+- `/board run <ID>` — 执行一个 ready 任务；优先路由到当前群里的 Mini Bus peer，否则把负责人当作 Agent Bus 实例名委托
+- `/board start <ID>` — 标记 running，并创建轻量 run 记录
+- `/board fail <ID> <原因>` — 把当前 active run 记为失败，并用原因阻塞任务
+- `/board runs <ID>` — 查看一个任务的 run 尝试历史
+- `/board block <ID> <原因>` / `/board unblock <ID>` — 管理阻塞状态
+- `/board done <ID> [总结]` — 完成任务；依赖它的任务如果条件满足会自动推进到 `ready`
+
+当前版本不是自动调度器。它先把任务状态模型打稳：更完整的任务卡、WIP 限制、run history、依赖推进、review gate，以及 `/board run <ID>` 这种一次只跑一张卡的显式执行。后续自动 dispatch 应该基于这个原语，而不是绕过任务模型。
+
+### Mini Bus：topic 到 topic 的工作流
+
+在已允许的 Telegram 群聊或 forum 里，`/mini` 可以让同一个 bot 把不同 topic 当成轻量 peer。每个 peer 保留自己的 topic session，复用同一个实例配置和 `agent.md`，可以单点询问、并行查询，也可以按顺序串联。适合临时 planning/review 线程，不需要再新建 bot 实例。
+
+适合用 Mini Bus 的场景：
+
+- 一个 `intake` topic 做 coordinator，把 `planner`、`writer`、`reviewer`、`research` 等 topic 注册成 peer
+- 用 `/mini fan` 让多个 topic 并行回答同一个问题，快速对比方案
+- 用 `/mini chain` 让多个 topic 按顺序接力，后一跳拿到前一跳输出
+- 用 `/mini verify` 做轻量复核
+- 用 `/mini crew research-report` 跑固定 specialist workflow
+
+前置条件：
+
+- bot 已经加入并允许当前 Telegram 群或 forum
+- 如果 BotFather 开了群隐私模式，建议把 bot 设成群管理员，这样它才能看到普通群消息；否则用命令、@bot 或回复 bot 触发
+- 每个 topic 都要在那个 topic 里执行 `/mini here <名称>` 注册
+
+典型配置：
+
+```
+/mini here planner
+/mini here writer
+/mini status
+/mini ask planner 把这个任务拆成步骤
+/mini fan 对比这些方案
+/mini chain 把这个粗略想法整理成最终回答
+/mini verifier reviewer
+/mini verify 写最终答案
+/mini role researcher research
+/mini role analyst analyst
+/mini role writer writer
+/mini role reviewer reviewer
+/mini crew research-report 分析这个市场
+```
+
+配置好以后，在 coordinator topic 里调用：
+
+```
+/mini ask planner 把这个拆成 tickets
+/mini fan 找出这个方案的风险
+/mini chain 把这个方案整理成最终文案
+/mini verify reviewer 这个可以 ship 吗？
+```
+
+- `/mini here <名称>` — 把当前 topic 注册成当前群里的具名 peer
+- `/mini order <名称...>` — 设置默认 `/mini chain` 顺序
+- `/mini parallel <名称...>` — 设置默认 `/mini fan` 目标列表
+- `/mini verifier <名称|off>` — 设置 `/mini verify` 使用的 verifier
+- `/mini role <researcher|analyst|writer|reviewer> <名称>` — 把 crew 角色绑定到某个 topic peer
+- `/mini crew research-report <提示>` — 用 topic peer 作为 specialist 跑完整 `research-report` workflow
+- `/mini ask <名称> <提示>` — 向某个具名 topic peer 发一次任务
+- `/mini fan <提示>` — 并行调用当前群里所有已注册 peer topic（不包含当前 topic）
+- `/mini chain <提示>` — 按注册顺序串联 peer topic，每一跳拿到上一跳输出
+- `/mini verify [名称] <提示>` — 先在当前 topic 执行，再让已配置或指定的 verifier topic 复核
+- `/mini rm <名称>` — 移除某个 topic peer
+
+它的实际好处是：用很低成本换到上下文隔离。每个 topic 有自己的 session 和 cron 范围，但仍然共用同一个 bot token、workspace、engine 设置、预算统计、审批、timeline 和 audit。适合临时多 agent 工作，比如规划、写作、复核、研究，或者把 cron/job 放到旁路 topic 里。
+
+Mini Bus 只作用于当前 Telegram 群，不会打开新的 bot token，也不会创建新的 workspace；如果多个 topic 同时改同一批文件，仍然要按本地并发 agent 的方式处理工作区冲突。
+
+Mini crew 是 Agent Bus crew 的 topic 版本：coordinator 在当前 topic 里启动，先拆分任务，再把 research 子问题并行发给 `researcher` topic，随后把 analysis、writing、review 和修订循环交给配置好的角色 topic。它复用同一套 `crew-runs/*.json`、timeline、audit、budget、approval 和 topic session 隔离机制。
 
 ### 拓扑模式
 

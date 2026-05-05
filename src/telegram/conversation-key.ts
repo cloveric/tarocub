@@ -12,6 +12,17 @@ export function getNormalizedTelegramConversationKey(input: {
   return input.conversationKey ?? getTelegramConversationKey(input.chatId, input.messageThreadId);
 }
 
+export function getTelegramConversationLogScope(input: {
+  chatId: number;
+  messageThreadId?: number;
+  conversationKey?: string;
+}): { messageThreadId?: number; conversationKey: string } {
+  return {
+    ...(typeof input.messageThreadId === "number" ? { messageThreadId: input.messageThreadId } : {}),
+    conversationKey: getNormalizedTelegramConversationKey(input),
+  };
+}
+
 export function isSameTelegramConversation(
   left: { chatId: number; messageThreadId?: number },
   right: { chatId: number; messageThreadId?: number },

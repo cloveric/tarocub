@@ -324,4 +324,61 @@ describe("dispatchAuthorizedTelegramMessage", () => {
     expect(prepareTelegramMessageInput).not.toHaveBeenCalled();
     expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
   });
+
+  it("runs board commands before mini bus and ordinary message preparation", async () => {
+    const normalized = createNormalizedMessage("/board list");
+    const handleBoardTelegramCommand = vi.fn().mockResolvedValue(true);
+    const handleMiniBusTelegramCommand = vi.fn();
+    const prepareTelegramMessageInput = vi.fn();
+    const executeWorkflowAwareTelegramTurn = vi.fn();
+
+    await dispatchAuthorizedTelegramMessage({
+      stateDir: "/tmp/state",
+      startedAt: Date.now(),
+      locale: "en",
+      cfg: { engine: "claude" },
+      normalized,
+      context: {
+        api: {
+          sendMessage: vi.fn(),
+          getFile: vi.fn(),
+          downloadFile: vi.fn(),
+        },
+        bridge: {},
+        inboxDir: "/tmp/inbox",
+      } as never,
+      workflowStore: {
+        inspect: vi.fn(),
+        update: vi.fn(),
+      } as never,
+      deps: {
+        sessionStore: {
+          inspect: vi.fn(),
+          removeByChatId: vi.fn(),
+          upsert: vi.fn(),
+          findByChatIdSafe: vi.fn(),
+        } as never,
+        turnState: createTurnState(),
+        updateInstanceConfig: vi.fn(),
+        deliverTelegramResponse: vi.fn(),
+        sendTelegramOutFile: vi.fn(),
+        updateWorkflowBestEffort: vi.fn(),
+      },
+      handlers: {
+        handleLocalSessionTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleLocalEngineTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleSimpleLocalTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleDelegationTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleBoardTelegramCommand,
+        handleMiniBusTelegramCommand,
+        prepareTelegramMessageInput,
+        executeWorkflowAwareTelegramTurn,
+      } as never,
+    });
+
+    expect(handleBoardTelegramCommand).toHaveBeenCalledTimes(1);
+    expect(handleMiniBusTelegramCommand).not.toHaveBeenCalled();
+    expect(prepareTelegramMessageInput).not.toHaveBeenCalled();
+    expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
+  });
 });

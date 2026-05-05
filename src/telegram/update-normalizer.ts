@@ -43,13 +43,17 @@ function normalizeCallbackCommand(data: string): string | null {
   return null;
 }
 
+function isExternalTelegramChatType(value: unknown): value is string {
+  return value === "private" || value === "group" || value === "supergroup" || value === "channel";
+}
+
 function normalizeCallbackQuery(callbackQuery: any, text: string): NormalizedTelegramMessage | null {
   const message = callbackQuery.message;
   const chatId = message?.chat?.id;
   const userId = callbackQuery?.from?.id;
   const chatType = message?.chat?.type;
 
-  if (typeof chatId !== "number" || typeof userId !== "number" || typeof chatType !== "string") {
+  if (typeof chatId !== "number" || typeof userId !== "number" || !isExternalTelegramChatType(chatType)) {
     return null;
   }
 
@@ -165,7 +169,7 @@ export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
   const userId = message?.from?.id;
   const chatType = message?.chat?.type;
 
-  if (typeof chatId !== "number" || typeof userId !== "number" || typeof chatType !== "string") {
+  if (typeof chatId !== "number" || typeof userId !== "number" || !isExternalTelegramChatType(chatType)) {
     return null;
   }
 

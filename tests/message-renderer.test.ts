@@ -185,6 +185,8 @@ describe("message rendering", () => {
     const help = renderTelegramHelpMessage();
     expect(help).toContain("/status");
     expect(help).toContain("/ask <instance> <prompt>");
+    expect(help).toContain("/board [list|add|desc|accept|priority|labels|check|assign|dep|limits|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]");
+    expect(help).toContain("/mini [status|here|order|parallel|verifier|role|crew|ask|fan|chain|verify]");
     expect(help).toContain("/reset");
     expect(help).toContain("/help");
   });
@@ -368,6 +370,30 @@ describe("normalizeUpdate", () => {
 
   it("returns null when required fields are missing", () => {
     expect(normalizeUpdate({})).toBeNull();
+  });
+
+  it("rejects internal bus chat types from external Telegram updates", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "bus" },
+          from: { id: 456 },
+          text: "hello",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      normalizeUpdate({
+        callback_query: {
+          id: "callback-1",
+          data: "approval:req_1:once",
+          from: { id: 456 },
+          message: {
+            chat: { id: 123, type: "bus" },
+          },
+        },
+      }),
+    ).toBeNull();
   });
 });
 

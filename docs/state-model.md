@@ -34,6 +34,8 @@ runtime-state.json
 usage.json
 file-workflow.json
 cron-jobs.json
+board.json
+mini-bus.json
 audit.log.jsonl
 instance.lock.json
 workspace/
@@ -67,6 +69,8 @@ These files define how the instance should run.
 - `usage.json`
 - `file-workflow.json`
 - `cron-jobs.json`
+- `board.json`
+- `mini-bus.json`
 
 These files represent the durable control state of the instance.
 
@@ -502,6 +506,164 @@ This file is authoritative for which scheduled jobs exist and whether they are e
 High sensitivity.
 
 It can contain durable prompts, chat IDs, user IDs, schedule intent, and last error details.
+
+## `board.json`
+
+### Path
+
+`<stateDir>/board.json`
+
+### Owner
+
+[src/state/board-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/board-store.ts:1)
+
+### Purpose
+
+Stores durable Kanban task state for `/board` commands. It is intentionally separate from Mini Bus and Agent Bus topology: the board tracks work, while bus layers decide who can execute work.
+
+Schema:
+
+- `nextTaskId`
+- `nextRunId`
+- `tasks[]`
+  - `id`
+  - `title`
+  - `status`: `todo`, `ready`, `running`, `review`, `blocked`, `done`, or `archived`
+  - `description?`
+  - `acceptanceCriteria[]`
+  - `priority`: `low`, `normal`, `high`, or `urgent`
+  - `labels[]`
+  - `checklist[]`
+    - `id`
+    - `text`
+    - `done`
+    - `createdAt`
+    - `completedAt?`
+  - `artifacts[]`
+    - `kind`
+    - `value`
+    - `createdAt?`
+  - `review`
+    - `required`
+    - `reviewer?`
+  - `assignee?`
+  - `dependencies[]`
+  - `blockedReason?`
+  - `summary?`
+  - `createdAt`
+  - `updatedAt`
+  - `completedAt?`
+  - `createdBy`
+    - `chatId`
+    - `userId`
+    - `messageThreadId?`
+    - `conversationKey`
+  - `runs[]`
+    - `id`
+    - `status`
+    - `startedAt`
+    - `completedAt?`
+    - `summary?`
+    - `error?`
+
+### Authoritative data
+
+This file is authoritative for Board task ids, task status, dependencies, assignees, blocked reasons, completion summaries, and lightweight run history.
+
+It is also authoritative for card metadata used by planner/dispatcher flows: description, acceptance criteria, priority, labels, checklist, artifacts, review requirement, and WIP limits.
+
+It is not authoritative for access control, Mini Bus peers, or Agent Bus peer configuration.
+
+### Write rules
+
+- built on `JsonStore`
+- writes are serialized with a file mutex so concurrent command handlers and processes do not lose tasks
+- task ids are normalized as `B<number>`
+- dependency completion promotes waiting `todo` tasks to `ready` when all dependencies are done
+- WIP limits are enforced before a task can start a new run
+- default WIP limits are `global=3`, `perAssignee=1`, and `perConversation=1`
+- starting a task is rejected while dependencies are incomplete
+- dependency cycles are rejected when adding a dependency
+- each `start` creates one run attempt; duplicate concurrent running attempts are rejected
+- `/board run <id>` starts one ready task, sends the task card to its assignee, then closes the run as done or failed
+- `/board run <id>` resolves assignees by preferring Mini Bus peers in the current group, then falling back to Agent Bus instance names
+- `fail` closes the active run as failed and moves the task to `blocked`
+- tasks with `review.required` move to `review` after completion; dependents are promoted only after approval
+- completed tasks retain their original source chat/topic metadata for auditability
+
+### Recovery rules
+
+- missing file -> empty board
+- invalid file throws and prevents `/board` command handling from using stale or partial task state
+- old/missing counters are normalized from the maximum stored task/run ids
+
+### Sensitivity
+
+High sensitivity.
+
+It can contain durable task titles, operator intent, summaries, chat IDs, user IDs, topic IDs, and workflow topology hints.
+
+## `mini-bus.json`
+
+### Path
+
+`<stateDir>/mini-bus.json`
+
+### Owner
+
+[src/state/mini-bus-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/mini-bus-store.ts:1)
+
+### Purpose
+
+Stores Telegram group-local Mini Bus configuration. A Mini Bus lets one bot treat different topics in the same allowed group as named peers.
+
+Schema:
+
+- `groups`
+  - `<chatId>`
+    - `peers[]`
+      - `name`
+      - `chatId`
+      - `messageThreadId?`
+      - `conversationKey`
+      - `createdAt`
+      - `updatedAt`
+    - `parallel[]`
+    - `chain[]`
+    - `verifier?`
+    - `roles`
+      - `researcher?`
+      - `analyst?`
+      - `writer?`
+      - `reviewer?`
+    - `crew`
+      - `maxResearchQuestions`
+      - `maxRevisionRounds`
+
+### Authoritative data
+
+This file is authoritative for Mini Bus peer names, default fan/chain order, verifier selection, and Mini crew role mapping inside each Telegram group.
+
+It is not authoritative for Telegram access. Group access still comes from `access.json` and `config.json` group mode settings.
+
+### Write rules
+
+- built on `JsonStore`
+- writes are serialized with a file mutex so concurrent topic registrations do not clobber each other
+- peer names and role names are normalized before persistence
+- removing a peer also removes references from `parallel`, `chain`, `verifier`, and `roles`
+
+### Recovery rules
+
+- missing file -> no Mini Bus peers configured
+- invalid file throws and prevents Mini Bus command handling from using stale or partial state
+- old records without `roles` or `crew` are normalized with default empty roles and default crew limits
+
+### Sensitivity
+
+Moderate sensitivity.
+
+It reveals group chat IDs, topic IDs, peer topology, and operator workflow intent. It does not contain bot tokens or engine credentials.
 
 ## `file-workflow.json`
 

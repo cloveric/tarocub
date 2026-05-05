@@ -35,6 +35,7 @@
 
 ### What Changed Recently
 
+- **v4.6.2** — adds Telegram Board + Mini Bus coordination: `/board` stores durable Kanban tasks with richer cards, dependencies, WIP limits, review gates, run history, and one-task execution via Mini Bus topics or Agent Bus instances; `/mini` lets forum topics in the same group act as planner/writer/reviewer-style peers for fan-out, chain, verify, and crew workflows.
 - **v4.5.10** — adds Codex Fast Mode control with `/fast on|off|status`, forwarding `fast_mode` and `service_tier="fast"` to both Codex process and app-server runtimes while keeping Claude instances rejected cleanly. Fast Mode is experimental in unattended bridge use: if Codex starts returning engine-runtime failures, turn it off with `/fast off`; if the instance is already unhealthy, restart the instance once after the current turn is idle.
 - **v4.5.9** — hardens schema-backed tool delivery receipts: malformed `[tool:{...}]` JSON or rejected send tools no longer preserve misleading “already sent” model text; batch/long delivery now prefers fenced `tool-call` blocks, and generated `agent.md` upgrades clean up duplicate scheduler residue.
 - **v4.5.8** — documents `[tool:{...}]` as the only generated delivery tag format, keeps legacy `[send-file:]` / `[send-image:]` tags as compatibility-only, and clarifies the file-delivery trust boundary.
@@ -61,7 +62,7 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 - **Native CLI first.** The bridge runs the real Codex and Claude Code CLIs, so local auth, project files, sessions, approvals, and engine-specific behavior remain the same as on your desktop.
 - **Resume desktop work from anywhere.** Pick up an existing local Codex or Claude Code session from Telegram, send files or instructions while away, then continue the same project back on the desktop.
-- **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation.
+- **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation. Topic peers can also be composed into a Mini Bus for quick same-group fan-out or chain workflows, while `/board` keeps durable Kanban task state outside model memory.
 - **Multi-engine without separate playbooks.** Each bot can choose Codex or Claude, process or stream runtime, while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
 - **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
 - **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
@@ -546,6 +547,121 @@ In any bot's Telegram chat:
 - `/verify <prompt>` — execute on current bot, then auto-send to `verifier` for review
 
 `/chain` is the lightweight pipeline. `crew` is the heavier hub-and-spoke mode.
+
+### Board: durable Kanban tasks
+
+`/board` adds a small Hermes-inspired Kanban layer on top of Telegram. It is intentionally state-first: tasks, dependencies, assignees, blocked reasons, and completion summaries are stored in `board.json`, not only in the model conversation. This makes it useful for coordinating Mini Bus or Agent Bus work without relying on "remember what we were doing".
+
+```
+/board add Draft launch plan
+/board desc B1 Write launch messaging and rollout tasks
+/board accept B1 README updated
+/board priority B1 high
+/board labels B1 docs launch
+/board check B1 add Update README
+/board list
+/board show B1
+/board assign B1 writer
+/board dep B2 B1
+/board limits global 3
+/board review B1 on reviewer
+/board ready B2
+/board run B2
+/board start B2
+/board fail B2 tests failed
+/board runs B2
+/board block B2 waiting on API docs
+/board unblock B2
+/board approve B1
+/board reject B1 needs more tests
+/board done B1 design accepted
+```
+
+- `/board add <task>` — create a durable task with a stable id like `B1`
+- `/board desc <id> <description>` — set task card description
+- `/board accept <id> <criterion>` — append an acceptance criterion
+- `/board priority <id> <low|normal|high|urgent>` — set priority
+- `/board labels <id> <labels...>` — replace task labels
+- `/board check <id> add <item>` / `/board check <id> done <C1>` — manage checklist items
+- `/board list [todo|ready|running|blocked|done]` — list board tasks
+- `/board show <id>` — show one task with source chat/topic metadata
+- `/board assign <id> <assignee>` — label the task with a Mini Bus peer, bot instance, or free-form owner
+- `/board dep <id> <depends-on-id>` — declare that one task waits for another
+- `/board limits [global|assignee|conversation] <n>` — set WIP limits; defaults are `global=3`, `assignee=1`, `conversation=1`
+- `/board review <id> <on|off> [reviewer]` — require review before `done`
+- `/board approve <id>` / `/board reject <id> <reason>` — resolve tasks waiting in review
+- `/board ready <id>` — move a task to ready if dependencies are complete
+- `/board run <id>` — execute a ready task through its assignee; Mini Bus peers in the current group are preferred, otherwise the assignee is treated as an Agent Bus instance
+- `/board start <id>` — mark a task running and create a lightweight run record
+- `/board fail <id> <reason>` — close the active run as failed and block the task with the reason
+- `/board runs <id>` — show run attempt history for one task
+- `/board block <id> <reason>` / `/board unblock <id>` — manage blocked work
+- `/board done <id> [summary]` — complete a task; dependents whose dependencies are all done are promoted to `ready`
+
+This is not an autonomous dispatcher yet. It gives the bridge durable planning state first: richer task cards, WIP limits, run history, dependency promotion, review gates, and explicit one-task execution with `/board run <id>`. Automatic dispatch should build on this primitive rather than bypassing the task model.
+
+### Mini Bus: topic-to-topic workflows
+
+Inside an allowed Telegram group or forum, `/mini` lets one bot treat different topics as lightweight peers. Each peer keeps its own topic session, uses the same instance config and `agent.md`, and can be asked directly, queried in parallel, or chained sequentially. This is useful for temporary planning/review threads without creating new bot instances.
+
+Use Mini Bus when you want separate working memory without separate bots:
+
+- keep an `intake` topic for the coordinator and register `planner`, `writer`, `reviewer`, or `research` topics as peers
+- run quick comparisons with `/mini fan`, where each peer answers the same prompt in parallel
+- run staged work with `/mini chain`, where each topic receives the previous topic's output
+- run a lightweight review loop with `/mini verify`
+- run a fixed specialist workflow with `/mini crew research-report`
+
+Prerequisites:
+
+- the bot must be in an allowed Telegram group or forum topic
+- if the group uses BotFather privacy mode, make the bot an admin so it can see ordinary group messages; otherwise mention/reply-to the bot or use commands
+- register each topic from inside that topic with `/mini here <name>`
+
+Typical setup:
+
+```
+/mini here planner
+/mini here writer
+/mini status
+/mini ask planner Break this task into steps
+/mini fan Compare these options
+/mini chain Turn this rough idea into a final answer
+/mini verifier reviewer
+/mini verify Write the final answer
+/mini role researcher research
+/mini role analyst analyst
+/mini role writer writer
+/mini role reviewer reviewer
+/mini crew research-report Analyze this market
+```
+
+After setup, use the coordinator topic to call the peers:
+
+```
+/mini ask planner Break this into tickets
+/mini fan Find risks in this plan
+/mini chain Turn this plan into final copy
+/mini verify reviewer Is this ready to ship?
+```
+
+- `/mini here <name>` — register the current topic as a named peer for the current group
+- `/mini order <names...>` — set the default `/mini chain` order
+- `/mini parallel <names...>` — set the default `/mini fan` target list
+- `/mini verifier <name|off>` — set the verifier used by `/mini verify`
+- `/mini role <researcher|analyst|writer|reviewer> <name>` — bind a crew role to a named topic peer
+- `/mini crew research-report <prompt>` — run the full coordinator-led `research-report` workflow using topic peers as specialists
+- `/mini ask <name> <prompt>` — send one prompt to a named topic peer
+- `/mini fan <prompt>` — run all registered peer topics except the current topic in parallel
+- `/mini chain <prompt>` — run registered peer topics in registration order, passing each output to the next stage
+- `/mini verify [name] <prompt>` — execute in the current topic, then ask the configured or named verifier topic to review it
+- `/mini rm <name>` — remove a topic peer
+
+The practical benefit is isolation with low overhead: every topic has its own session and cron scope, but all topics share the same bot token, workspace, engine settings, budget tracking, approvals, timeline, and audit logs. That makes Mini Bus good for short-lived multi-agent work such as planning, drafting, review, research, or temporary cron/job conversations.
+
+Mini Bus is intentionally scoped to the current Telegram group. It does not open another bot token or another workspace; if multiple topics edit the same files concurrently, the same workspace-conflict rules apply as any concurrent local agents.
+
+Mini crew is the topic-scoped version of Agent Bus crew: the coordinator runs in the current topic context, decomposes the task, sends research sub-questions to the `researcher` topic in parallel, then routes analysis, writing, review, and any revision loop through the configured role topics. It uses the same `crew-runs/*.json`, timeline, audit, budget, approval, and topic-session boundaries as the instance-level workflow.
 
 ### Topology Patterns
 

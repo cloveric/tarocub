@@ -82,6 +82,7 @@ Telegram is an untrusted remote input source until access control passes.
 - ordinary group messages are ignored unless they mention the bot or reply to the bot
 - unauthorized group inputs are silent and audited; private unauthorized inputs are answered before engine execution
 - Telegram messages are normalized before command handling
+- external Telegram updates are allowed only for Telegram chat types (`private`, `group`, `supergroup`, `channel`); the internal `bus` chat type is rejected at normalization
 
 ### Residual risk
 
@@ -120,6 +121,7 @@ The Agent Bus is a privileged local control plane, not a public API.
 - bus auth uses a bearer secret when configured
 - [src/bus/bus-registry.ts](/Users/cloveric/projects/cc-telegram-bridge/src/bus/bus-registry.ts:67) probes `/api/health` and validates the bridge fingerprint before treating a registry entry as alive
 - [src/runtime/bridge.ts](/Users/cloveric/projects/cc-telegram-bridge/src/runtime/bridge.ts:114) auto-allows `chatType === "bus"` only because bus auth is supposed to have already happened at the server boundary
+- [src/telegram/update-normalizer.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/update-normalizer.ts:1) rejects external Telegram updates claiming `chat.type === "bus"`; `bus` is an internal synthetic chat type, not a Telegram API value
 
 ### Residual risk
 
@@ -194,6 +196,7 @@ Each instance has a private state root under `~/.cctb/<instance>/`.
 
 - some operational files remain best-effort rather than transactional
 - malformed optional config may still trigger fallback behavior instead of hard failure
+- durable planning state such as `board.json` may contain task intent, summaries, chat IDs, user IDs, and topic IDs even though it does not contain credentials
 - state consistency bugs are more likely to be logic regressions than raw permission bugs now
 
 ### Design rule

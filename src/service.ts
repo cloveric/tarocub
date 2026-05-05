@@ -18,7 +18,7 @@ import { TelegramApi, withTelegramMessageThread } from "./telegram/api.js";
 import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
 import { handleTelegramApprovalCommand, isTelegramApprovalCommand } from "./telegram/approval-requests.js";
 import { normalizeUpdate, type NormalizedTelegramMessage } from "./telegram/update-normalizer.js";
-import { getNormalizedTelegramConversationKey } from "./telegram/conversation-key.js";
+import { getNormalizedTelegramConversationKey, getTelegramConversationLogScope } from "./telegram/conversation-key.js";
 import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
 import { ChatQueue } from "./runtime/chat-queue.js";
@@ -65,6 +65,7 @@ async function appendTelegramDeliveryFailureAuditBestEffort(
       type: "telegram.delivery",
       instanceName: context.instanceName,
       chatId: normalized.chatId,
+      ...getTelegramConversationLogScope(normalized),
       userId: normalized.userId,
       updateId,
       outcome: "error",
@@ -726,6 +727,8 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "btw", description: "Ask a side question without affecting session" },
   { command: "continue", description: "Continue a paused task" },
   { command: "ask", description: "Delegate to another bot instance" },
+  { command: "board", description: "Manage the durable Kanban task board" },
+  { command: "mini", description: "Compose group topics into a Mini Bus" },
   { command: "fan", description: "Query multiple bots in parallel" },
   { command: "chain", description: "Run a configured sequential bot chain" },
   { command: "verify", description: "Execute then auto-verify with reviewer" },
@@ -810,6 +813,12 @@ export async function runQueuedTelegramTurn(
         await handleNormalizedTelegramMessage(normalized, {
           ...context,
           abortSignal: taskController.signal,
+          runQueuedBridgeTurn: context.runQueuedBridgeTurn ?? (async (conversationKey, job) => {
+            if (chatQueue.isBusy(conversationKey)) {
+              throw new Error(`target conversation is busy: ${conversationKey}`);
+            }
+            return await chatQueue.enqueue(conversationKey, job);
+          }),
         });
       } finally {
         context.abortSignal?.removeEventListener("abort", forwardAbort);
@@ -1229,6 +1238,7 @@ export async function processTelegramUpdates(
           type: "update.skip",
           instanceName: context.instanceName,
           chatId: normalized.chatId,
+          ...getTelegramConversationLogScope(normalized),
           userId: normalized.userId,
           updateId,
           outcome: "ignored",
@@ -1246,6 +1256,7 @@ export async function processTelegramUpdates(
           type: "update.skip",
           instanceName: context.instanceName,
           chatId: normalized.chatId,
+          ...getTelegramConversationLogScope(normalized),
           userId: normalized.userId,
           updateId,
           outcome: "empty",
@@ -1370,6 +1381,12 @@ export async function processTelegramUpdates(
             ...context,
             updateId,
             abortSignal: taskController.signal,
+            runQueuedBridgeTurn: context.runQueuedBridgeTurn ?? (async (conversationKey, job) => {
+              if (chatQueue.isBusy(conversationKey)) {
+                throw new Error(`target conversation is busy: ${conversationKey}`);
+              }
+              return await chatQueue.enqueue(conversationKey, job);
+            }),
             onAuthRetry: async () => {
               // Both Claude and Codex now read the user's ~/.claude/ or
               // ~/.codex/ directly, so there is no per-bot credential copy

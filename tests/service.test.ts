@@ -1976,6 +1976,68 @@ describe("polling helpers", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it("records topic conversation scope in audit and timeline logs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const logger = { error: vi.fn() };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }),
+    };
+
+    try {
+      await processTelegramUpdates(
+        [{
+          update_id: 100,
+          message: {
+            chat: { id: -100123, type: "supergroup" },
+            message_thread_id: 42,
+            from: { id: 456 },
+            text: "hello",
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, chatQueue: new ChatQueue() },
+        logger,
+      );
+
+      const auditEvents = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      const timelineEvents = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+
+      expect(auditEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "update.handle",
+          messageThreadId: 42,
+          conversationKey: "chat:-100123:topic:42",
+        }),
+      ]));
+      expect(timelineEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "input.received",
+          messageThreadId: 42,
+          conversationKey: "chat:-100123:topic:42",
+        }),
+        expect.objectContaining({
+          type: "turn.started",
+          messageThreadId: 42,
+          conversationKey: "chat:-100123:topic:42",
+        }),
+        expect.objectContaining({
+          type: "turn.completed",
+          messageThreadId: 42,
+          conversationKey: "chat:-100123:topic:42",
+        }),
+      ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("enqueues later updates from the same poll batch without waiting for the first chat to finish", async () => {
     const logger = {
       error: vi.fn(),

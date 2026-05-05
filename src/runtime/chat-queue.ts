@@ -46,4 +46,8 @@ export class ChatQueue {
     this.generations.set(chatId, (this.generations.get(chatId) ?? 0) + 1);
     return hadPending;
   }
+
+  isBusy(chatId: string | number): boolean {
+    return this.queues.has(chatId);
+  }
 }

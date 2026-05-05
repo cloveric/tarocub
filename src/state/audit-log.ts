@@ -9,6 +9,8 @@ export interface AuditEvent {
   type: string;
   instanceName?: string;
   chatId?: number;
+  messageThreadId?: number;
+  conversationKey?: string;
   userId?: number;
   updateId?: number;
   outcome?: string;

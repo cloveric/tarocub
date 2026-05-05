@@ -48,7 +48,7 @@ import {
 } from "./tool-tags.js";
 import { processLegacyDeliveryTagsAsTools } from "./legacy-delivery-tool-tags.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
-import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
+import { getNormalizedTelegramConversationKey, getTelegramConversationLogScope } from "./conversation-key.js";
 
 export interface WorkflowAwareTurnState {
   workflowRecordId?: string;
@@ -320,6 +320,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     },
   } = input;
   const conversationKey = getNormalizedTelegramConversationKey(normalized);
+  const logScope = getTelegramConversationLogScope(normalized);
 
   const workflowResult: FileWorkflowResult | null =
     downloadedAttachments.length > 0
@@ -343,6 +344,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       instanceName: context.instanceName,
       channel: "telegram",
       chatId: normalized.chatId,
+      ...logScope,
       userId: normalized.userId,
       updateId: context.updateId,
       detail: downloadedAttachments.length > 0 ? "attachment workflow prepared" : "workflow prepared",
@@ -362,6 +364,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
           instanceName: context.instanceName,
           channel: "telegram",
           chatId: normalized.chatId,
+          ...logScope,
           userId: normalized.userId,
           updateId: context.updateId,
           outcome: "warning",
@@ -420,6 +423,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     instanceName: context.instanceName,
     channel: "telegram",
     chatId: normalized.chatId,
+    ...logScope,
     userId: normalized.userId,
     updateId: context.updateId,
     metadata: {
@@ -492,6 +496,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       instanceName: context.instanceName,
       channel: "telegram",
       chatId: normalized.chatId,
+      ...logScope,
       userId: normalized.userId,
       updateId: context.updateId,
       outcome: "error",
@@ -517,6 +522,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       instanceName: context.instanceName,
       channel: "telegram",
       chatId: normalized.chatId,
+      ...logScope,
       userId: normalized.userId,
       updateId: context.updateId,
       detail: event.type,
@@ -631,6 +637,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         instanceName: context.instanceName,
         channel: "telegram",
         chatId: normalized.chatId,
+        ...logScope,
         userId: normalized.userId,
         updateId: context.updateId,
         outcome: "error",
@@ -871,6 +878,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         instanceName: context.instanceName,
         channel: "telegram",
         chatId: normalized.chatId,
+        ...logScope,
         userId: normalized.userId,
         updateId: context.updateId,
         outcome: "accepted",
@@ -894,6 +902,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       instanceName: context.instanceName,
       channel: "telegram",
       chatId: normalized.chatId,
+      ...logScope,
       userId: normalized.userId,
       updateId: context.updateId,
       detail: "workflow marked completed",

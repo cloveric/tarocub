@@ -5,6 +5,7 @@ import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridg
 import { classifyFailure } from "../runtime/error-classification.js";
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { TelegramApi } from "./api.js";
+import { getTelegramConversationLogScope } from "./conversation-key.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 export interface TelegramTurnContext {
@@ -34,6 +35,7 @@ export async function appendUpdateHandleAuditEventBestEffort(
     type: "update.handle",
     instanceName: context.instanceName,
     chatId: normalized.chatId,
+    ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,
     updateId: context.updateId,
     outcome: input.outcome,
@@ -46,6 +48,7 @@ export async function appendUpdateHandleAuditEventBestEffort(
     instanceName: context.instanceName,
     channel: "telegram",
     chatId: normalized.chatId,
+    ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,
     updateId: context.updateId,
     outcome: input.outcome,
@@ -67,6 +70,7 @@ export async function appendUpdateReplyAuditEventBestEffort(
     type: "update.reply",
     instanceName: context.instanceName,
     chatId: normalized.chatId,
+    ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,
     updateId: context.updateId,
     outcome: "reply",
@@ -120,6 +124,7 @@ export async function maybeReplyWithBudgetExhausted(
     instanceName: context.instanceName,
     channel: "telegram",
     chatId: normalized.chatId,
+    ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,
     updateId: context.updateId,
     detail: "budget exhausted",
@@ -151,6 +156,7 @@ export async function recordTurnUsageAndBudgetAudit(
     instanceName: context.instanceName,
     channel: "telegram",
     chatId: normalized.chatId,
+    ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,
     updateId: context.updateId,
     detail: `budget threshold reached: $${recorded.usage.totalCostUsd.toFixed(4)} / $${budgetUsd.toFixed(2)}`,
