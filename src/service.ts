@@ -615,6 +615,7 @@ function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
     ["USERPROFILE", "USERPROFILE"],
     ["CODEX_HOME", "CODEX_HOME"],
     ["CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"],
+    ["CODEX_TELEGRAM_INSTANCE", "CODEX_TELEGRAM_INSTANCE"],
   ];
   for (const [srcKey, dstKey] of overlay) {
     const injected = env[srcKey];

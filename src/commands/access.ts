@@ -9,6 +9,7 @@ import { defaultTelegramToolRegistry } from "../tools/telegram-tool-registry.js"
 export interface InstanceTokenEnv {
   HOME?: string;
   USERPROFILE?: string;
+  CODEX_TELEGRAM_INSTANCE?: string;
   CODEX_TELEGRAM_STATE_DIR?: string;
 }
 

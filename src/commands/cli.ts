@@ -61,7 +61,7 @@ export interface CliLogger {
 export interface CliOptions {
   env?: Pick<
     EnvSource,
-    "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
+    "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
   > & {
     CCTB_SEND_URL?: string;
     CCTB_SEND_TOKEN?: string;
@@ -747,11 +747,66 @@ async function runServiceCommand(
   }
 
   const subcommand = argv[1];
-  const { instanceName, args: rawArgs } = extractInstanceOption(argv.slice(2));
-  const { enabled: force, args } = extractBooleanFlag(rawArgs, "--force");
+  const serviceArgs = argv.slice(2);
+  const hasInstanceOption = serviceArgs.some((argument) => argument === "--instance" || argument.startsWith("--instance="));
+  const { instanceName, args: rawArgs } = extractInstanceOption(serviceArgs);
+  const { enabled: all, args: afterAll } = extractBooleanFlag(rawArgs, "--all");
+  const { enabled: force, args } = extractBooleanFlag(afterAll, "--force");
 
   if (subcommand !== "logs" && args.length !== 0) {
-    throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> [--instance <name>] [--force]");
+    throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> [--instance <name>] [--all] [--force]");
+  }
+
+  if (all) {
+    if (hasInstanceOption) {
+      throw new Error("Use either --instance <name> or --all, not both.");
+    }
+    if (subcommand === "logs") {
+      throw new Error("Usage: telegram service logs [--instance <name>] [tail-count]");
+    }
+
+    const instanceNames = await listConfiguredInstanceNames(env);
+    if (instanceNames.length === 0) {
+      logger.log("No instances found.");
+      return true;
+    }
+
+    const currentServiceInstanceName = env.CODEX_TELEGRAM_INSTANCE
+      ? normalizeInstanceName(env.CODEX_TELEGRAM_INSTANCE)
+      : null;
+    const shouldSkipCurrentInstance = currentServiceInstanceName !== null && (subcommand === "restart" || subcommand === "stop");
+
+    for (const currentInstanceName of instanceNames) {
+      if (shouldSkipCurrentInstance && currentInstanceName === currentServiceInstanceName) {
+        logger.log(
+          `Skipped current instance "${currentInstanceName}"; run ${subcommand} --instance ${currentInstanceName} from a terminal if you need to ${subcommand} it too.`,
+        );
+        continue;
+      }
+      if (subcommand === "start") {
+        logger.log(await startServiceInstance(env, currentInstanceName, serviceDeps));
+        continue;
+      }
+      if (subcommand === "stop") {
+        logger.log(await stopServiceInstance(env, currentInstanceName, serviceDeps, { force }));
+        continue;
+      }
+      if (subcommand === "restart") {
+        await stopServiceInstance(env, currentInstanceName, serviceDeps, { force });
+        logger.log(await startServiceInstance(env, currentInstanceName, serviceDeps));
+        continue;
+      }
+      if (subcommand === "status") {
+        logger.log(formatServiceStatus(await getServiceStatus(env, currentInstanceName, serviceDeps)));
+        continue;
+      }
+      if (subcommand === "doctor") {
+        logger.log(formatServiceDoctor(await runServiceDoctor(env, currentInstanceName, serviceDeps)));
+        continue;
+      }
+      throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> ...");
+    }
+    return true;
   }
 
   if (subcommand === "start") {
@@ -1170,7 +1225,7 @@ const HELP_TEXT = `Usage: telegram <command> [options]
 
 Commands:
   configure <token> [--instance <name>]       Configure bot token for an instance
-  service <start|stop|restart|status|logs|doctor> [--instance <name>]
+  service <start|stop|restart|status|logs|doctor> [--instance <name>|--all]
                                               Manage the service lifecycle
   access <pair|policy|allow|revoke|multi> [--instance <name>]
                                               Manage access control
@@ -1215,6 +1270,20 @@ function resolveChannelsDirFromEnv(env: InstanceTokenEnv): string {
   const home = env.HOME ?? env.USERPROFILE;
   if (!home) throw new Error("HOME or USERPROFILE is required");
   return path.join(home, ".cctb");
+}
+
+async function listConfiguredInstanceNames(env: InstanceTokenEnv): Promise<string[]> {
+  const fs = await import("node:fs/promises");
+  const channelsDir = resolveChannelsDirFromEnv(env);
+  try {
+    const dirents = await fs.readdir(channelsDir, { withFileTypes: true });
+    return dirents
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => entry.name)
+      .sort();
+  } catch {
+    return [];
+  }
 }
 
 async function runLogsCommand(

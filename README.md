@@ -95,6 +95,7 @@ npm run dev -- telegram engine --instance review-bot
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` |
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage |
 | Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) |
+| Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable |
 
 ### Claude Engine: CLAUDE.md Support
 
@@ -1021,9 +1022,12 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 | `telegram service stop` | Graceful shutdown (SIGTERM/SIGINT) |
 | `telegram service status` | Running state, PID, engine, bot identity, timeline summary, latest crew run |
 | `telegram service restart` | Stop + start with clean consumer reset |
+| `telegram service restart --all` | Restart every configured instance; `start`, `stop`, `status`, and `doctor` also accept `--all` |
 | `telegram service logs` | Tail stdout/stderr logs |
 | `telegram service doctor` | Health check across all subsystems, including timeline, crew state, shared engine env, and stale launchd leftovers |
 | `telegram engine [codex\|claude]` | Switch AI engine per instance |
+
+When `telegram service stop --all` or `telegram service restart --all` is run from inside an active bot turn, the current instance is skipped so the command cannot kill its own execution chain. Restart that instance separately from a terminal if needed.
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
 | `telegram usage` | Show token usage and estimated cost |
 | `telegram verbosity [0\|1\|2]` | Store the legacy verbosity setting; current process runtimes use typing actions plus timeline/audit events |

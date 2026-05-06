@@ -114,6 +114,7 @@ type ClaudeWorker = {
   currentSessionId: string | null;
   workspacePath: string | undefined;
   pendingTurn: PendingTurn | null;
+  lastActivityAt: number;
   instructions: string | null;
   approvalMode: ApprovalMode;
   engineOptionsKey: string;
@@ -123,6 +124,8 @@ type ClaudeWorker = {
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_STDERR_TAIL_CHARS = 20_000;
+const DEFAULT_IDLE_WORKER_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 // No timeout — complex tasks (image generation, large projects) can run indefinitely
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
@@ -295,6 +298,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly instructionsPath: string | undefined;
   private readonly configPath: string | undefined;
   private readonly workspacePath: string | undefined;
+  private readonly idleWorkerTtlMs: number;
+  private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
 
   constructor(
@@ -306,6 +311,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       configPath?: string;
       workspacePath?: string;
       engineHomePath?: string;
+      idleWorkerTtlMs?: number;
+      idleSweepIntervalMs?: number;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -321,6 +328,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     this.instructionsPath = options?.instructionsPath;
     this.configPath = options?.configPath;
     this.workspacePath = options?.workspacePath;
+    this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
+
+    const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
+    if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
+      this.idleSweepTimer = setInterval(() => {
+        this.reapIdleWorkers();
+      }, sweepIntervalMs);
+      this.idleSweepTimer.unref?.();
+    }
   }
 
   async createSession(chatId: number): Promise<CodexSessionHandle> {
@@ -480,6 +496,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       currentSessionId: isLogicalTelegramSessionId(sessionId) ? null : sessionId,
       workspacePath,
       pendingTurn: null,
+      lastActivityAt: Date.now(),
       instructions: combinedKey,
       approvalMode,
       engineOptionsKey: optionsKey,
@@ -487,10 +504,12 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     };
 
     child.stdout?.on("data", (chunk) => {
+      this.markWorkerActivity(worker);
       this.handleStdout(worker, chunk.toString());
     });
 
     child.stderr?.on("data", (chunk) => {
+      this.markWorkerActivity(worker);
       // Claude stream-json emits structured events on stdout; stderr is only used on hard failure.
       worker.stderrTail = `${worker.stderrTail}${chunk.toString()}`.slice(-MAX_STDERR_TAIL_CHARS);
     });
@@ -600,6 +619,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       const pending = worker.pendingTurn;
       if (parsed.is_error) {
         worker.pendingTurn = null;
+        this.markWorkerActivity(worker);
         this.clearPendingTurnTimeout(pending);
         const detail = parsed.result?.trim() || pending.assistantText.trim() || renderClaudeStreamError(parsed, worker.stderrTail);
         pending.reject(new Error(detail));
@@ -614,6 +634,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         sessionId: worker.currentSessionId ?? undefined,
       });
       worker.pendingTurn = null;
+      this.markWorkerActivity(worker);
       this.clearPendingTurnTimeout(pending);
       pending.resolve({
         text: text.trim() || "Claude completed the request.",
@@ -686,6 +707,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     return await new Promise<CodexAdapterResponse>((resolve, reject) => {
+      this.markWorkerActivity(worker);
       const pendingTurn: PendingTurn = {
         assistantText: "",
         intermediateDeliveryText: "",
@@ -737,6 +759,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private writeJson(worker: ClaudeWorker, payload: unknown): void {
+    this.markWorkerActivity(worker);
     worker.child.stdin?.write(JSON.stringify(payload) + "\n", (error) => {
       if (error) {
         this.failWorker(worker, error);
@@ -759,6 +782,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   destroy(): void {
+    if (this.idleSweepTimer) {
+      clearInterval(this.idleSweepTimer);
+    }
     for (const worker of this.workers.values()) {
       killProcessTree(worker.child.pid);
       if (worker.pendingTurn) {
@@ -768,6 +794,29 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }
     }
     this.workers.clear();
+  }
+
+  private markWorkerActivity(worker: ClaudeWorker): void {
+    worker.lastActivityAt = Date.now();
+  }
+
+  private reapIdleWorkers(): void {
+    const now = Date.now();
+    const seen = new Set<ClaudeWorker>();
+    for (const worker of this.workers.values()) {
+      if (seen.has(worker)) {
+        continue;
+      }
+      seen.add(worker);
+      if (worker.pendingTurn) {
+        continue;
+      }
+      if (now - worker.lastActivityAt < this.idleWorkerTtlMs) {
+        continue;
+      }
+      killProcessTree(worker.child.pid);
+      this.removeWorker(worker);
+    }
   }
 
   private failWorker(worker: ClaudeWorker, error: Error): void {

@@ -143,6 +143,95 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("reaps an idle Claude worker after the configured TTL and resumes on the next turn", async () => {
+    vi.useFakeTimers();
+    const { children, calls, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      idleWorkerTtlMs: 10,
+      idleSweepIntervalMs: 5,
+    });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "First",
+        files: [],
+      });
+
+      expect(children).toHaveLength(1);
+      expect(children[0].stdin.lines).toHaveLength(1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');
+      await expect(first).resolves.toEqual({
+        text: "ONE",
+        sessionId: "session-123",
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Second",
+        files: [],
+      });
+
+      expect(children).toHaveLength(2);
+      expect(calls[1]?.args).toContain("-r");
+      expect(calls[1]?.args).toContain("session-123");
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"TWO","session_id":"session-123"}\n');
+      await expect(second).resolves.toEqual({
+        text: "TWO",
+      });
+    } finally {
+      adapter.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reap a Claude worker while a turn is in flight", async () => {
+    vi.useFakeTimers();
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      idleWorkerTtlMs: 10,
+      idleSweepIntervalMs: 5,
+    });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Long task",
+        files: [],
+      });
+
+      expect(children).toHaveLength(1);
+      expect(children[0].stdin.lines).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(100);
+
+      const second = adapter.sendUserMessage("telegram-67890", {
+        text: "Another session",
+        files: [],
+      });
+      expect(children).toHaveLength(2);
+
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-456"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"TWO","session_id":"session-456"}\n');
+
+      await expect(first).resolves.toEqual({
+        text: "ONE",
+        sessionId: "session-123",
+      });
+      await expect(second).resolves.toEqual({
+        text: "TWO",
+        sessionId: "session-456",
+      });
+    } finally {
+      adapter.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("resumes an existing Claude session when there is no live worker", async () => {
     const { children, calls, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {

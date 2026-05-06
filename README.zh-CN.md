@@ -95,6 +95,7 @@ npm run dev -- telegram engine --instance review-bot
 | YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` |
 | `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 |
 | 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） |
+| 空闲 worker | 每轮结束后进程退出 | stream worker 空闲 30 分钟后回收；session 仍可恢复 |
 
 ### Claude 引擎：CLAUDE.md 支持
 
@@ -1005,9 +1006,12 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `telegram service stop` | 优雅关闭（SIGTERM/SIGINT） |
 | `telegram service status` | 运行状态、PID、引擎、bot 身份、timeline 摘要、最近 crew run |
 | `telegram service restart` | 停止 + 启动，干净重置 |
+| `telegram service restart --all` | 重启所有已配置实例；`start`、`stop`、`status`、`doctor` 也支持 `--all` |
 | `telegram service logs` | 查看 stdout/stderr 日志 |
 | `telegram service doctor` | 全子系统健康检查，包括 timeline、crew、共享引擎环境和残留 launchd 项 |
 | `telegram engine [codex\|claude]` | 按实例切换 AI 引擎 |
+
+如果在一个活跃 bot turn 里运行 `telegram service stop --all` 或 `telegram service restart --all`，当前实例会被自动跳过，避免命令杀掉自己的执行链。需要重启当前实例时，从终端单独执行对应 `--instance` 命令。
 | `telegram yolo [on\|off\|unsafe]` | 切换自动审批模式 |
 | `telegram usage` | 查看 token 用量和费用估算 |
 | `telegram verbosity [0\|1\|2]` | 保留的兼容配置；当前 process runtime 使用 typing action + timeline/audit 事件 |

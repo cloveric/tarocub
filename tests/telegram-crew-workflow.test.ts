@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,6 +8,7 @@ import { parseAuditEvents } from "../src/state/audit-log.js";
 import { CrewRunStore } from "../src/state/crew-run-store.js";
 import { handleCrewTelegramWorkflow } from "../src/telegram/crew-workflow.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -191,7 +192,7 @@ describe("handleCrewTelegramWorkflow", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -263,7 +264,7 @@ describe("handleCrewTelegramWorkflow", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -331,7 +332,7 @@ describe("handleCrewTelegramWorkflow", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -386,7 +387,7 @@ describe("handleCrewTelegramWorkflow", () => {
       });
       await firstRun;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -438,10 +439,9 @@ describe("handleCrewTelegramWorkflow", () => {
         delegateToInstance: delegateToInstance as never,
       });
 
-      for (let attempt = 0; attempt < 100 && researchCalls.length < 2; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-
+      await vi.waitFor(() => {
+        expect(researchCalls).toHaveLength(2);
+      });
       expect(researchCalls).toHaveLength(2);
 
       firstResearch.resolve({ text: "Research findings A" });
@@ -460,7 +460,7 @@ describe("handleCrewTelegramWorkflow", () => {
       }));
     } finally {
       await new Promise((resolve) => setTimeout(resolve, 0));
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -526,7 +526,7 @@ describe("handleCrewTelegramWorkflow", () => {
       }));
     } finally {
       updateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });
