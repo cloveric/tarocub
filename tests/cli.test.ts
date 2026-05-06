@@ -1364,9 +1364,9 @@ describe("runCli", () => {
       expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
       const upgraded = await readFile(agentPath, "utf8");
       expect(upgraded.match(/## Scheduled Tasks/g)).toHaveLength(1);
-      expect(upgraded).toContain("For reminders or recurring tasks");
+      expect(upgraded).toContain("For Telegram reminders emit");
       expect(upgraded).toContain('[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]');
-      expect(upgraded).toContain("Use native/session-local schedulers only if the user explicitly asks");
+      expect(upgraded).toContain("Use native/session-local schedulers only if explicitly asked");
       expect(upgraded).not.toContain("cctb cron add");
       expect(upgraded).not.toContain("CronCreate");
     } finally {

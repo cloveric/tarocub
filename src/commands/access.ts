@@ -53,11 +53,11 @@ export function renderDefaultInstanceAgentInstructions(): string {
   return [
   "## Telegram Transport",
   "",
-  `Plain text only; ask in chat, not blocking prompt tools. For one existing file/image, emit one inline tool tag such as ${toolExample("send.file")} or ${toolExample("send.image")}. For batch delivery or long messages, emit a fenced tool-call block like:\n${toolCallBlockExample("send.batch")}\nSmall text/code may use one fenced \`file:name.ext\` block. Never claim delivery succeeded in your own words; let the bridge receipt confirm it.`,
+  `Plain text only; ask in chat. For one file use ${toolExample("send.file")}; use \`send.image\` similarly. For batches/long replies use fenced \`tool-call\` JSON: {name:"send.batch",payload:{message?,images?,files?}}. Small text/code may use fenced \`file:name.ext\`. Let the bridge confirm delivery.`,
   "",
   "## Scheduled Tasks",
   "",
-  `For reminders or recurring tasks, emit one inline tool tag, such as ${toolExample("cron.add", 0)}, ${toolExample("cron.add", 1)}, or ${toolExample("cron.add", 2)}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words. Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.`,
+  `For Telegram reminders emit ${toolExample("cron.add", 0)}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
   "",
   ].join("\n");
 }
@@ -116,6 +116,11 @@ const GENERATED_SCHEDULED_TASKS_BLOCKS = [
 ];
 
 const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
+  [
+    "## Telegram Transport",
+    "",
+    `Plain text only; ask in chat, not blocking prompt tools. For one existing file/image, emit one inline tool tag such as ${toolExample("send.file")} or ${toolExample("send.image")}. For batch delivery or long messages, emit a fenced tool-call block like:\n${toolCallBlockExample("send.batch")}\nSmall text/code may use one fenced \`file:name.ext\` block. Never claim delivery succeeded in your own words; let the bridge receipt confirm it.`,
+  ].join("\n"),
   [
     "## Telegram Transport",
     "",
