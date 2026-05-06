@@ -23,12 +23,74 @@ async function waitForSpawn(calls: Array<unknown>): Promise<void> {
   throw new Error("Codex process was not spawned in time");
 }
 
+async function waitForLength(items: Array<unknown>, length: number): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (items.length >= length) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  throw new Error(`Expected at least ${length} items`);
+}
+
 describe("ProcessCodexAdapter", () => {
   it("creates a logical telegram session placeholder", async () => {
     const adapter = new ProcessCodexAdapter("codex");
     await expect(adapter.createSession(12345)).resolves.toEqual({
       sessionId: "telegram-12345",
     });
+  });
+
+  it("sets Codex thread goals through a short-lived app-server helper", async () => {
+    const { spawnCodex, child, calls } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex, undefined, undefined, undefined, undefined, "/tmp/workspace");
+
+    const promise = adapter.setThreadGoal("telegram-12345", {
+      objective: "ship the release",
+      tokenBudget: null,
+      workspaceOverride: "/tmp/project",
+    });
+
+    await waitForSpawn(calls);
+    expect(calls[0]?.args).toEqual(["app-server"]);
+
+    const initialize = JSON.parse(child.stdin.writes[0]?.trim() ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+
+    await waitForLength(child.stdin.writes, 2);
+    const threadStart = JSON.parse(child.stdin.writes[1]?.trim() ?? "{}");
+    expect(threadStart.method).toBe("thread/start");
+    expect(threadStart.params.cwd).toBe("/tmp/project");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+
+    await waitForLength(child.stdin.writes, 3);
+    const goalSet = JSON.parse(child.stdin.writes[2]?.trim() ?? "{}");
+    expect(goalSet).toMatchObject({
+      method: "thread/goal/set",
+      params: {
+        threadId: "thread-123",
+        objective: "ship the release",
+        tokenBudget: null,
+      },
+    });
+    child.stdout.emitData(`{"id":${goalSet.id},"result":{"goal":{"threadId":"thread-123","objective":"ship the release","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1,"updatedAt":1}}}\n`);
+
+    await expect(promise).resolves.toEqual({
+      goal: {
+        threadId: "thread-123",
+        objective: "ship the release",
+        status: "active",
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      sessionId: "thread-123",
+    });
+    expect(child.killedSignals).toEqual(["SIGTERM"]);
   });
 
   afterEach(() => {

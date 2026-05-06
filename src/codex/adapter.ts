@@ -15,6 +15,22 @@ export interface CodexAdapterResponse {
   usage?: AdapterUsage;
 }
 
+export interface CodexThreadGoal {
+  threadId: string;
+  objective: string;
+  status: "active" | "paused" | "budgetLimited" | "complete";
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CodexThreadGoalResponse {
+  goal: CodexThreadGoal | null;
+  sessionId?: string;
+}
+
 export interface EngineApprovalRequest {
   engine: "claude" | "codex";
   toolName: string;
@@ -87,5 +103,12 @@ export interface CodexAdapter {
   createSession(chatId: number): Promise<CodexSessionHandle>;
   sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse>;
   validateExternalSession?(sessionId: string): Promise<void>;
+  getThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<CodexThreadGoalResponse>;
+  setThreadGoal?(sessionId: string, input: {
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+  }): Promise<CodexThreadGoalResponse>;
+  clearThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<{ cleared: boolean; sessionId?: string }>;
   destroy?(): void;
 }

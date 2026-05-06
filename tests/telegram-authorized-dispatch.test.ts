@@ -381,4 +381,72 @@ describe("dispatchAuthorizedTelegramMessage", () => {
     expect(prepareTelegramMessageInput).not.toHaveBeenCalled();
     expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
   });
+
+  it("handles /goal before ordinary message preparation", async () => {
+    const normalized = createNormalizedMessage("/goal ship this");
+    const sendMessage = vi.fn();
+    const setThreadGoal = vi.fn().mockResolvedValue({
+      goal: {
+        threadId: "thread-1",
+        objective: "ship this",
+        status: "active",
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+    const prepareTelegramMessageInput = vi.fn();
+    const executeWorkflowAwareTelegramTurn = vi.fn();
+
+    await dispatchAuthorizedTelegramMessage({
+      stateDir: "/tmp/state",
+      startedAt: Date.now(),
+      locale: "en",
+      cfg: { engine: "codex" },
+      normalized,
+      context: {
+        api: {
+          sendMessage,
+          getFile: vi.fn(),
+          downloadFile: vi.fn(),
+        },
+        bridge: { setThreadGoal },
+        inboxDir: "/tmp/inbox",
+      } as never,
+      workflowStore: {
+        inspect: vi.fn(),
+        update: vi.fn(),
+      } as never,
+      deps: {
+        sessionStore: {
+          inspect: vi.fn(),
+          removeByChatId: vi.fn(),
+          upsert: vi.fn(),
+          findByChatIdSafe: vi.fn(),
+        } as never,
+        turnState: createTurnState(),
+        updateInstanceConfig: vi.fn(),
+        deliverTelegramResponse: vi.fn(),
+        sendTelegramOutFile: vi.fn(),
+        updateWorkflowBestEffort: vi.fn(),
+      },
+      handlers: {
+        handleLocalSessionTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleLocalEngineTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleSimpleLocalTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleDelegationTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleBoardTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleMiniBusTelegramCommand: vi.fn().mockResolvedValue(false),
+        prepareTelegramMessageInput,
+        executeWorkflowAwareTelegramTurn,
+      } as never,
+    });
+
+    expect(setThreadGoal).toHaveBeenCalledWith(expect.objectContaining({ objective: "ship this" }));
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Goal set"));
+    expect(prepareTelegramMessageInput).not.toHaveBeenCalled();
+    expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
+  });
 });

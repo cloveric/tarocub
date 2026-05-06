@@ -7,9 +7,11 @@ import type {
   CodexAdapter,
   CodexAdapterResponse,
   CodexSessionHandle,
+  CodexThreadGoalResponse,
   CodexUserMessageInput,
   EngineStreamEvent,
 } from "./adapter.js";
+import { CodexAppServerAdapter, type AppServerSpawnCodex } from "./app-server-adapter.js";
 import { killProcessTree } from "./process-tree.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
 
@@ -309,6 +311,52 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
   async createSession(chatId: number): Promise<CodexSessionHandle> {
     return { sessionId: `telegram-${chatId}` };
+  }
+
+  private createGoalAppServerAdapter(workspaceOverride?: string): CodexAppServerAdapter {
+    const spawnForAppServer: AppServerSpawnCodex = (command, args, options) => (
+      this.spawnCodex(command, args, options) as unknown as ReturnType<AppServerSpawnCodex>
+    );
+    return new CodexAppServerAdapter(
+      this.codexExecutable,
+      workspaceOverride ?? this.workspacePath ?? process.cwd(),
+      this.childEnv,
+      spawnForAppServer,
+      this.instructionsPath,
+      undefined,
+      this.configPath,
+    );
+  }
+
+  async getThreadGoal(sessionId: string, input: { workspaceOverride?: string } = {}): Promise<CodexThreadGoalResponse> {
+    const appServer = this.createGoalAppServerAdapter(input.workspaceOverride);
+    try {
+      return await appServer.getThreadGoal(sessionId, input);
+    } finally {
+      appServer.destroy();
+    }
+  }
+
+  async setThreadGoal(sessionId: string, input: {
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+  }): Promise<CodexThreadGoalResponse> {
+    const appServer = this.createGoalAppServerAdapter(input.workspaceOverride);
+    try {
+      return await appServer.setThreadGoal(sessionId, input);
+    } finally {
+      appServer.destroy();
+    }
+  }
+
+  async clearThreadGoal(sessionId: string, input: { workspaceOverride?: string } = {}): Promise<{ cleared: boolean; sessionId?: string }> {
+    const appServer = this.createGoalAppServerAdapter(input.workspaceOverride);
+    try {
+      return await appServer.clearThreadGoal(sessionId, input);
+    } finally {
+      appServer.destroy();
+    }
   }
 
   async validateExternalSession(sessionId: string): Promise<void> {

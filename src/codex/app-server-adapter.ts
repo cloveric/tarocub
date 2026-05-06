@@ -5,6 +5,8 @@ import type {
   CodexAdapter,
   CodexAdapterResponse,
   CodexSessionHandle,
+  CodexThreadGoal,
+  CodexThreadGoalResponse,
   CodexUserMessageInput,
 } from "./adapter.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
@@ -35,7 +37,7 @@ type AppServerChildProcess = {
   once(event: "close", listener: (code: number | null) => void): void;
 };
 
-type SpawnCodex = (command: string, args: string[], options: SpawnOptions) => AppServerChildProcess;
+export type AppServerSpawnCodex = (command: string, args: string[], options: SpawnOptions) => AppServerChildProcess;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_PROTOCOL_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -98,6 +100,57 @@ function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
 }
 
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function readThreadGoal(value: unknown): CodexThreadGoal | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const goal = value as {
+    threadId?: unknown;
+    objective?: unknown;
+    status?: unknown;
+    tokenBudget?: unknown;
+    tokensUsed?: unknown;
+    timeUsedSeconds?: unknown;
+    createdAt?: unknown;
+    updatedAt?: unknown;
+  };
+  if (
+    typeof goal.threadId !== "string" ||
+    typeof goal.objective !== "string" ||
+    (goal.status !== "active" && goal.status !== "paused" && goal.status !== "budgetLimited" && goal.status !== "complete")
+  ) {
+    return null;
+  }
+  return {
+    threadId: goal.threadId,
+    objective: goal.objective,
+    status: goal.status,
+    tokenBudget: numberOrNull(goal.tokenBudget),
+    tokensUsed: typeof goal.tokensUsed === "number" ? goal.tokensUsed : 0,
+    timeUsedSeconds: typeof goal.timeUsedSeconds === "number" ? goal.timeUsedSeconds : 0,
+    createdAt: typeof goal.createdAt === "number" ? goal.createdAt : 0,
+    updatedAt: typeof goal.updatedAt === "number" ? goal.updatedAt : 0,
+  };
+}
+
+function readGoalResponse(value: unknown): CodexThreadGoalResponse {
+  const goal = typeof value === "object" && value !== null && "goal" in value
+    ? readThreadGoal((value as { goal?: unknown }).goal)
+    : null;
+  return { goal };
+}
+
+function readClearedResponse(value: unknown): boolean {
+  return typeof value === "object" &&
+    value !== null &&
+    "cleared" in value &&
+    (value as { cleared?: unknown }).cleared === true;
+}
+
 function normalizeExecutableCommand(command: string): string {
   const trimmed = command.trim();
 
@@ -137,7 +190,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "telegram-out-only" as const;
   readonly supportsTurnScopedEnv = false;
   private readonly childEnv: NodeJS.ProcessEnv;
-  private readonly spawnCodex: SpawnCodex;
+  private readonly spawnCodex: AppServerSpawnCodex;
   private readonly instructionsPath: string | undefined;
   private readonly configPath: string | undefined;
   private child: AppServerChildProcess | null = null;
@@ -158,8 +211,8 @@ export class CodexAppServerAdapter implements CodexAdapter {
   constructor(
     private readonly codexExecutable: string,
     private readonly cwd: string,
-    childEnvOrSpawn?: NodeJS.ProcessEnv | SpawnCodex,
-    spawnCodexArg?: SpawnCodex,
+    childEnvOrSpawn?: NodeJS.ProcessEnv | AppServerSpawnCodex,
+    spawnCodexArg?: AppServerSpawnCodex,
     instructionsPath?: string,
     engineHomePath?: string,
     configPath?: string,
@@ -186,7 +239,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     this.spawnCodex =
       typeof childEnvOrSpawn === "function"
         ? childEnvOrSpawn
-        : spawnCodexArg ?? (spawn as unknown as SpawnCodex);
+        : spawnCodexArg ?? (spawn as unknown as AppServerSpawnCodex);
     this.instructionsPath = instructionsPath;
     this.configPath = configPath;
   }
@@ -215,6 +268,47 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     return {
       text: text.trim() || `Session ${threadId} completed.`,
+      sessionId: threadId !== sessionId ? threadId : undefined,
+    };
+  }
+
+  async getThreadGoal(sessionId: string, input: { workspaceOverride?: string } = {}): Promise<CodexThreadGoalResponse> {
+    const runtimeOptions = await this.loadRuntimeOptions();
+    await this.ensureInitialized(runtimeOptions);
+    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
+    const result = await this.request("thread/goal/get", { threadId });
+    return {
+      ...readGoalResponse(result),
+      sessionId: threadId !== sessionId ? threadId : undefined,
+    };
+  }
+
+  async setThreadGoal(sessionId: string, input: {
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+  }): Promise<CodexThreadGoalResponse> {
+    const runtimeOptions = await this.loadRuntimeOptions();
+    await this.ensureInitialized(runtimeOptions);
+    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
+    const result = await this.request("thread/goal/set", {
+      threadId,
+      objective: input.objective,
+      tokenBudget: input.tokenBudget ?? null,
+    });
+    return {
+      ...readGoalResponse(result),
+      sessionId: threadId !== sessionId ? threadId : undefined,
+    };
+  }
+
+  async clearThreadGoal(sessionId: string, input: { workspaceOverride?: string } = {}): Promise<{ cleared: boolean; sessionId?: string }> {
+    const runtimeOptions = await this.loadRuntimeOptions();
+    await this.ensureInitialized(runtimeOptions);
+    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
+    const result = await this.request("thread/goal/clear", { threadId });
+    return {
+      cleared: readClearedResponse(result),
       sessionId: threadId !== sessionId ? threadId : undefined,
     };
   }
@@ -668,11 +762,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
     });
   }
 
-  private async startThread(): Promise<string> {
+  private async startThread(cwd: string = this.cwd): Promise<string> {
     const result = (await this.request(
       "thread/start",
       {
-        cwd: this.cwd,
+        cwd,
         approvalPolicy: "never",
         experimentalRawEvents: false,
         persistExtendedHistory: true,
@@ -735,10 +829,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private async resolveThreadForMessageWithRetry(
     sessionId: string,
     runtimeOptions: Awaited<ReturnType<CodexAppServerAdapter["loadRuntimeOptions"]>>,
+    cwd: string = this.cwd,
   ): Promise<string> {
     return this.retryThreadReadAfterTimeout(
       () => isLogicalTelegramSessionId(sessionId)
-        ? this.startThread()
+        ? this.startThread(cwd)
         : this.resolveThreadForMessage(sessionId),
       runtimeOptions,
     );

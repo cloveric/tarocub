@@ -4,6 +4,7 @@ import { handleBoardTelegramCommand as defaultHandleBoardTelegramCommand } from 
 import type { SessionStore } from "../state/session-store.js";
 import { handleDelegationTelegramCommand as defaultHandleDelegationTelegramCommand } from "./delegation-commands.js";
 import { handleLocalEngineTelegramCommand as defaultHandleLocalEngineTelegramCommand } from "./engine-commands.js";
+import { handleGoalTelegramCommand as defaultHandleGoalTelegramCommand } from "./goal-commands.js";
 import { handleMiniBusTelegramCommand as defaultHandleMiniBusTelegramCommand } from "./mini-bus-commands.js";
 import type { ResumeState } from "./instance-config.js";
 import { prepareTelegramMessageInput as defaultPrepareTelegramMessageInput } from "./message-input.js";
@@ -18,7 +19,7 @@ import { handleCronCommand as defaultHandleCronCommand, isCronCommand } from "./
 import { getActiveCronRuntime } from "../runtime/cron-runtime.js";
 import type { TelegramApi } from "./api.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
-import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
+import type { CodexThreadGoal, EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
 import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
@@ -36,6 +37,32 @@ export interface AuthorizedTelegramDispatchContext {
   bridge: {
     supportsTurnScopedEnv?: boolean;
     validateCodexThread?(threadId: string): Promise<void>;
+    getThreadGoal?(input: {
+      chatId: number;
+      userId: number;
+      chatType: string;
+      messageThreadId?: number;
+      conversationKey?: string;
+      workspaceOverride?: string;
+    }): Promise<{ goal: CodexThreadGoal | null }>;
+    setThreadGoal?(input: {
+      chatId: number;
+      userId: number;
+      chatType: string;
+      messageThreadId?: number;
+      conversationKey?: string;
+      objective: string;
+      tokenBudget?: number | null;
+      workspaceOverride?: string;
+    }): Promise<{ goal: CodexThreadGoal | null }>;
+    clearThreadGoal?(input: {
+      chatId: number;
+      userId: number;
+      chatType: string;
+      messageThreadId?: number;
+      conversationKey?: string;
+      workspaceOverride?: string;
+    }): Promise<{ cleared: boolean }>;
     handleAuthorizedMessage(input: {
       chatId: number;
       userId: number;
@@ -113,9 +140,10 @@ export interface AuthorizedTelegramDispatchDeps {
 }
 
 export interface AuthorizedTelegramDispatchHandlers {
-  handleLocalSessionTelegramCommand?: typeof defaultHandleLocalSessionTelegramCommand;
-  handleLocalEngineTelegramCommand?: typeof defaultHandleLocalEngineTelegramCommand;
-  handleSimpleLocalTelegramCommand?: typeof defaultHandleSimpleLocalTelegramCommand;
+    handleLocalSessionTelegramCommand?: typeof defaultHandleLocalSessionTelegramCommand;
+    handleLocalEngineTelegramCommand?: typeof defaultHandleLocalEngineTelegramCommand;
+    handleGoalTelegramCommand?: typeof defaultHandleGoalTelegramCommand;
+    handleSimpleLocalTelegramCommand?: typeof defaultHandleSimpleLocalTelegramCommand;
   handleCronCommand?: typeof defaultHandleCronCommand;
   handleDelegationTelegramCommand?: typeof defaultHandleDelegationTelegramCommand;
   handleBoardTelegramCommand?: typeof defaultHandleBoardTelegramCommand;
@@ -162,6 +190,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
   const {
     handleLocalSessionTelegramCommand = defaultHandleLocalSessionTelegramCommand,
     handleLocalEngineTelegramCommand = defaultHandleLocalEngineTelegramCommand,
+    handleGoalTelegramCommand = defaultHandleGoalTelegramCommand,
     handleSimpleLocalTelegramCommand = defaultHandleSimpleLocalTelegramCommand,
     handleCronCommand = defaultHandleCronCommand,
     handleMiniBusTelegramCommand = defaultHandleMiniBusTelegramCommand,
@@ -234,6 +263,18 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     bridge: context.bridge,
     sessionStore,
     updateInstanceConfig,
+  })) {
+    return;
+  }
+
+  if (allowTelegramCommands && await handleGoalTelegramCommand({
+    locale,
+    cfg: {
+      engine: cfg.engine,
+      resume: cfg.resume,
+    },
+    normalized,
+    context,
   })) {
     return;
   }

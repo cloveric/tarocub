@@ -45,6 +45,22 @@ export class SessionManager {
     return { sessionId: messageThreadId === undefined ? `telegram-${chatId}` : `telegram-${chatId}-topic-${messageThreadId}` };
   }
 
+  async getExistingSession(scope: number | { chatId: number; messageThreadId?: number; conversationKey?: string }): Promise<{ sessionId: string } | null> {
+    const conversationKey = typeof scope === "number"
+      ? getTelegramConversationKey(scope)
+      : scope.conversationKey ?? getTelegramConversationKey(scope.chatId, scope.messageThreadId);
+    const existing = await this.sessionStore.findByConversationKeySafe(conversationKey);
+
+    if (existing.warning) {
+      throw new SessionStateError(
+        existing.repairable ? REPAIRABLE_SESSION_STATE_ERROR : NON_REPAIRABLE_SESSION_STATE_ERROR,
+        existing.repairable ?? false,
+      );
+    }
+
+    return existing.record ? { sessionId: existing.record.codexSessionId } : null;
+  }
+
   async bindSession(scope: number | { chatId: number; messageThreadId?: number; conversationKey?: string }, sessionId: string): Promise<void> {
     const chatId = typeof scope === "number" ? scope : scope.chatId;
     const messageThreadId = typeof scope === "number" ? undefined : scope.messageThreadId;

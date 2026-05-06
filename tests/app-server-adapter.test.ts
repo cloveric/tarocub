@@ -104,6 +104,53 @@ describe("CodexAppServerAdapter", () => {
     expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(15 * 60_000);
   });
 
+  it("sets a Codex thread goal through the app-server protocol", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", "/tmp/default-workspace", spawnFn);
+
+    const promise = adapter.setThreadGoal("telegram-12345", {
+      objective: "ship the release",
+      tokenBudget: null,
+      workspaceOverride: "/tmp/project",
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    expect(threadStart.method).toBe("thread/start");
+    expect(threadStart.params.cwd).toBe("/tmp/project");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const goalSet = JSON.parse(child.stdin.lines[2] ?? "{}");
+    expect(goalSet).toMatchObject({
+      method: "thread/goal/set",
+      params: {
+        threadId: "thread-123",
+        objective: "ship the release",
+        tokenBudget: null,
+      },
+    });
+    child.stdout.emitData(`{"id":${goalSet.id},"result":{"goal":{"threadId":"thread-123","objective":"ship the release","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1,"updatedAt":1}}}\n`);
+
+    await expect(promise).resolves.toEqual({
+      goal: {
+        threadId: "thread-123",
+        objective: "ship the release",
+        status: "active",
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      sessionId: "thread-123",
+    });
+  });
+
   it("times out and destroys app-server when initialize never replies", async () => {
     vi.useFakeTimers();
     try {

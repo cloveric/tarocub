@@ -1,4 +1,10 @@
-import type { CodexAdapter, EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
+import type {
+  CodexAdapter,
+  CodexThreadGoal,
+  EngineApprovalDecision,
+  EngineApprovalRequest,
+  EngineStreamEvent,
+} from "../codex/adapter.js";
 import { findConflictingLockedChatId } from "../state/access-store.js";
 import {
   type Locale,
@@ -30,6 +36,7 @@ export interface AccessStoreLike {
 
 export interface SessionManagerLike {
   getOrCreateSession(scope: number | BridgeConversationScope): Promise<{ sessionId: string }>;
+  getExistingSession?(scope: number | BridgeConversationScope): Promise<{ sessionId: string } | null>;
   bindSession(scope: number | BridgeConversationScope, sessionId: string): Promise<void>;
 }
 
@@ -285,5 +292,97 @@ export class Bridge {
     }
 
     return response;
+  }
+
+  private conversationScope(input: {
+    chatId: number;
+    messageThreadId?: number;
+    conversationKey?: string;
+  }): BridgeConversationScope {
+    return {
+      chatId: input.chatId,
+      messageThreadId: input.messageThreadId,
+      conversationKey: input.conversationKey,
+    };
+  }
+
+  async getThreadGoal(input: {
+    chatId: number;
+    userId?: number;
+    chatType?: string;
+    messageThreadId?: number;
+    conversationKey?: string;
+    workspaceOverride?: string;
+  }): Promise<{ goal: CodexThreadGoal | null }> {
+    if (!this.adapter.getThreadGoal) {
+      throw new Error("Codex goal API is not available for this runtime");
+    }
+    const scope = this.conversationScope(input);
+    const session = this.sessionManager.getExistingSession
+      ? await this.sessionManager.getExistingSession(scope)
+      : await this.sessionManager.getOrCreateSession(scope);
+    if (!session) {
+      return { goal: null };
+    }
+    const response = await this.adapter.getThreadGoal(session.sessionId, {
+      workspaceOverride: input.workspaceOverride,
+    });
+    if (response.sessionId && response.sessionId !== session.sessionId) {
+      await this.sessionManager.bindSession(scope, response.sessionId);
+    }
+    return { goal: response.goal };
+  }
+
+  async setThreadGoal(input: {
+    chatId: number;
+    userId?: number;
+    chatType?: string;
+    messageThreadId?: number;
+    conversationKey?: string;
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+  }): Promise<{ goal: CodexThreadGoal | null }> {
+    if (!this.adapter.setThreadGoal) {
+      throw new Error("Codex goal API is not available for this runtime");
+    }
+    const scope = this.conversationScope(input);
+    const session = await this.sessionManager.getOrCreateSession(scope);
+    const response = await this.adapter.setThreadGoal(session.sessionId, {
+      objective: input.objective,
+      tokenBudget: input.tokenBudget,
+      workspaceOverride: input.workspaceOverride,
+    });
+    if (response.sessionId && response.sessionId !== session.sessionId) {
+      await this.sessionManager.bindSession(scope, response.sessionId);
+    }
+    return { goal: response.goal };
+  }
+
+  async clearThreadGoal(input: {
+    chatId: number;
+    userId?: number;
+    chatType?: string;
+    messageThreadId?: number;
+    conversationKey?: string;
+    workspaceOverride?: string;
+  }): Promise<{ cleared: boolean }> {
+    if (!this.adapter.clearThreadGoal) {
+      throw new Error("Codex goal API is not available for this runtime");
+    }
+    const scope = this.conversationScope(input);
+    const session = this.sessionManager.getExistingSession
+      ? await this.sessionManager.getExistingSession(scope)
+      : await this.sessionManager.getOrCreateSession(scope);
+    if (!session) {
+      return { cleared: false };
+    }
+    const response = await this.adapter.clearThreadGoal(session.sessionId, {
+      workspaceOverride: input.workspaceOverride,
+    });
+    if (response.sessionId && response.sessionId !== session.sessionId) {
+      await this.sessionManager.bindSession(scope, response.sessionId);
+    }
+    return { cleared: response.cleared };
   }
 }
