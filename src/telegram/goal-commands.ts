@@ -7,7 +7,41 @@ import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 type GoalAction =
   | { kind: "status" }
   | { kind: "clear" }
-  | { kind: "set"; objective: string };
+  | { kind: "set"; objective: string; tokenBudget: number | null }
+  | { kind: "invalid"; reason: "invalid_budget" | "missing_objective" };
+
+function parseTokenBudget(value: string): number | null {
+  const normalized = value.trim().replace(/[,_]/g, "").toLowerCase();
+  const match = normalized.match(/^(\d+(?:\.\d+)?)([km])?$/);
+  if (!match) {
+    return null;
+  }
+
+  const amount = Number(match[1]);
+  const scale = match[2] === "m" ? 1_000_000 : match[2] === "k" ? 1_000 : 1;
+  const budget = amount * scale;
+  if (!Number.isSafeInteger(budget) || budget < 1) {
+    return null;
+  }
+  return budget;
+}
+
+function parseSetGoal(rest: string): Extract<GoalAction, { kind: "set" | "invalid" }> {
+  const budgetMatch = rest.match(/^(?:--budget|-b)(?:=|\s+)(\S+)(?:\s+([\s\S]+))?$/i);
+  if (/^(?:--budget|-b)(?:$|=|\s+)/i.test(rest)) {
+    const tokenBudget = budgetMatch ? parseTokenBudget(budgetMatch[1] ?? "") : null;
+    if (!budgetMatch || tokenBudget === null) {
+      return { kind: "invalid", reason: "invalid_budget" };
+    }
+    const objective = budgetMatch[2]?.trim() ?? "";
+    if (!objective) {
+      return { kind: "invalid", reason: "missing_objective" };
+    }
+    return { kind: "set", objective, tokenBudget };
+  }
+
+  return { kind: "set", objective: rest, tokenBudget: null };
+}
 
 function parseGoalCommand(text: string): GoalAction | null {
   const match = text.trim().match(/^\/goal(?:@\w+)?(?:\s+([\s\S]+))?$/i);
@@ -22,7 +56,18 @@ function parseGoalCommand(text: string): GoalAction | null {
   if (/^(clear|off|reset)$/i.test(rest)) {
     return { kind: "clear" };
   }
-  return { kind: "set", objective: rest };
+  return parseSetGoal(rest);
+}
+
+function renderInvalidGoalCommand(reason: "invalid_budget" | "missing_objective", locale: Locale): string {
+  if (reason === "missing_objective") {
+    return locale === "zh"
+      ? "请在 token 预算后写目标，例如：/goal --budget 50000 写发布说明。"
+      : "Add a goal after the token budget, for example: /goal --budget 50000 write release notes.";
+  }
+  return locale === "zh"
+    ? "无效的 /goal token 预算。用法：--budget 50000 或 -b 50k。"
+    : "Invalid /goal token budget. Use --budget 50000 or -b 50k.";
 }
 
 function renderGoal(goal: CodexThreadGoal, locale: Locale): string {
@@ -90,6 +135,11 @@ export async function handleGoalTelegramCommand(input: {
     return true;
   }
 
+  if (action.kind === "invalid") {
+    await input.context.api.sendMessage(normalized.chatId, renderInvalidGoalCommand(action.reason, locale));
+    return true;
+  }
+
   const baseGoalInput = {
     chatId: normalized.chatId,
     userId: normalized.userId,
@@ -145,7 +195,7 @@ export async function handleGoalTelegramCommand(input: {
   const { goal } = await input.context.bridge.setThreadGoal({
     ...baseGoalInput,
     objective: action.objective,
-    tokenBudget: null,
+    tokenBudget: action.tokenBudget,
   });
   await input.context.api.sendMessage(
     normalized.chatId,

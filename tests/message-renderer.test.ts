@@ -187,7 +187,7 @@ describe("message rendering", () => {
     expect(help).toContain("/ask <instance> <prompt>");
     expect(help).toContain("/board [list|add|desc|accept|priority|labels|check|assign|dep|limits|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]");
     expect(help).toContain("/mini [status|here|order|parallel|verifier|role|crew|ask|fan|chain|verify]");
-    expect(help).toContain("/goal [goal|status|clear]");
+    expect(help).toContain("/goal [--budget 50000] <goal>|status|clear");
     expect(help).toContain("/reset");
     expect(help).toContain("/help");
   });

@@ -61,6 +61,58 @@ describe("handleGoalTelegramCommand", () => {
     expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("ship the release"));
   });
 
+  it("sets a Codex thread goal with an explicit token budget", async () => {
+    const sendMessage = vi.fn();
+    const setThreadGoal = vi.fn().mockResolvedValue({
+      goal: {
+        threadId: "thread-123",
+        objective: "ship the release",
+        status: "active",
+        tokenBudget: 50_000,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "codex" },
+      normalized: createNormalizedMessage("/goal -b 50k ship the release"),
+      context: {
+        api: { sendMessage },
+        bridge: { setThreadGoal },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(setThreadGoal).toHaveBeenCalledWith(expect.objectContaining({
+      objective: "ship the release",
+      tokenBudget: 50_000,
+    }));
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("50000 token budget"));
+  });
+
+  it("rejects invalid goal token budgets instead of treating them as objective text", async () => {
+    const sendMessage = vi.fn();
+    const setThreadGoal = vi.fn();
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "codex" },
+      normalized: createNormalizedMessage("/goal --budget nope ship the release"),
+      context: {
+        api: { sendMessage },
+        bridge: { setThreadGoal },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(setThreadGoal).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(123, "Invalid /goal token budget. Use --budget 50000 or -b 50k.");
+  });
+
   it("keeps /goal status read-only when no goal exists", async () => {
     const sendMessage = vi.fn();
     const getThreadGoal = vi.fn().mockResolvedValue({ goal: null });
