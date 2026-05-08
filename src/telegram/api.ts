@@ -406,7 +406,34 @@ export class TelegramApi {
       body.offset = offset;
     }
 
-    return this.postJson("getUpdates", body, isTelegramUpdateArray, signal);
+    if (signal?.aborted) {
+      throw new Error("Telegram API request aborted");
+    }
+
+    const requestTimeoutMs = Math.max(1, Math.floor(timeoutSeconds + 15)) * 1000;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, requestTimeoutMs);
+    const onAbort = () => {
+      controller.abort();
+    };
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      return await this.postJson("getUpdates", body, isTelegramUpdateArray, controller.signal);
+    } catch (error) {
+      if (timedOut && !signal?.aborted) {
+        throw new Error(`Telegram API getUpdates timed out after ${Math.ceil(requestTimeoutMs / 1000)} seconds`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    }
   }
 
   async getMe(): Promise<TelegramBotIdentity> {

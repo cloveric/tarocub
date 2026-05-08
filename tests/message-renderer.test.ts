@@ -543,6 +543,34 @@ describe("TelegramApi", () => {
     fetchMock.mockRestore();
   });
 
+  it("times out stalled getUpdates requests on the client side", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((_url, options) => {
+      const requestSignal = (options as RequestInit).signal;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => {
+          reject(Object.assign(new Error("request aborted"), { name: "AbortError" }));
+        }, { once: true });
+      });
+    });
+
+    try {
+      const api = new TelegramApi("token");
+      const pending = api.getUpdates(undefined, undefined, 1);
+      const expectedRejection = expect(pending).rejects.toThrow("Telegram API getUpdates timed out after 16 seconds");
+
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      await expectedRejection;
+      expect(fetchMock).toHaveBeenCalledWith("https://api.telegram.org/bottoken/getUpdates", expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }));
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects malformed getUpdates results at the API boundary", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
