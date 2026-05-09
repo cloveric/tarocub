@@ -53,11 +53,7 @@ export function renderDefaultInstanceAgentInstructions(): string {
   return [
   "## Telegram Transport",
   "",
-  `Plain text only; ask in chat. For one file use ${toolExample("send.file")}; use \`send.image\` similarly. For batches/long replies use fenced \`tool-call\` JSON: {name:"send.batch",payload:{message?,images?,files?}}. Small text/code may use fenced \`file:name.ext\`. Let the bridge confirm delivery.`,
-  "",
-  "## Scheduled Tasks",
-  "",
-  `For Telegram reminders emit ${toolExample("cron.add", 0)}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
+  `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
   "",
   ].join("\n");
 }
@@ -68,6 +64,11 @@ const NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE =
   "Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.";
 
 const GENERATED_SCHEDULED_TASKS_BLOCKS = [
+  [
+    "## Scheduled Tasks",
+    "",
+    `For Telegram reminders emit ${toolExample("cron.add", 0)}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
+  ].join("\n"),
   [
     "## Scheduled Tasks",
     "",
@@ -116,6 +117,11 @@ const GENERATED_SCHEDULED_TASKS_BLOCKS = [
 ];
 
 const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
+  [
+    "## Telegram Transport",
+    "",
+    `Plain text only; ask in chat. For one file use ${toolExample("send.file")}; use \`send.image\` similarly. For batches/long replies use fenced \`tool-call\` JSON: {name:"send.batch",payload:{message?,images?,files?}}. Small text/code may use fenced \`file:name.ext\`. Let the bridge confirm delivery.`,
+  ].join("\n"),
   [
     "## Telegram Transport",
     "",

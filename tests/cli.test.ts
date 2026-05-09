@@ -33,7 +33,7 @@ describe("runCli", () => {
       const agentPath = path.join(tempDir, ".cctb", "default", "agent.md");
       await expect(readFile(agentPath, "utf8")).resolves.toContain("## Telegram Transport");
       await expect(readFile(agentPath, "utf8")).resolves.toContain('"name":"send.file"');
-      await expect(readFile(agentPath, "utf8")).resolves.toContain("Plain text only");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("Tags when needed");
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain("cctb send --file PATH");
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain("[send-file:<absolute path>]");
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain(".telegram-out/current");
@@ -64,7 +64,7 @@ describe("runCli", () => {
       await expect(readFile(envPath, "utf8")).resolves.toBe('TELEGRAM_BOT_TOKEN="bot-token-456"\n');
       const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
       await expect(readFile(agentPath, "utf8")).resolves.toContain("## Telegram Transport");
-      await expect(readFile(agentPath, "utf8")).resolves.toContain("Plain text only");
+      await expect(readFile(agentPath, "utf8")).resolves.toContain("Tags when needed");
     } finally {
       await removeTempRoot(tempDir);
     }
@@ -1328,7 +1328,7 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
       const upgraded = await readFile(agentPath, "utf8");
-      expect(upgraded.match(/## Scheduled Tasks/g)).toHaveLength(1);
+      expect(upgraded).not.toContain("## Scheduled Tasks");
       expect(upgraded).toContain('[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]');
       expect(upgraded).not.toContain("cctb cron add");
       expect(upgraded).not.toContain("PATH already has `cctb`");
@@ -1364,10 +1364,10 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
       const upgraded = await readFile(agentPath, "utf8");
-      expect(upgraded.match(/## Scheduled Tasks/g)).toHaveLength(1);
-      expect(upgraded).toContain("For Telegram reminders emit");
+      expect(upgraded).not.toContain("## Scheduled Tasks");
+      expect(upgraded).toContain("Tags when needed");
       expect(upgraded).toContain('[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]');
-      expect(upgraded).toContain("Use native/session-local schedulers only if explicitly asked");
+      expect(upgraded).toContain("native schedulers only if explicitly asked");
       expect(upgraded).not.toContain("cctb cron add");
       expect(upgraded).not.toContain("CronCreate");
     } finally {
@@ -1396,7 +1396,7 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain('Upgraded instructions for instance "alpha"');
       const upgraded = await readFile(agentPath, "utf8");
-      expect(upgraded.match(new RegExp(residue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
+      expect(upgraded).not.toContain(residue);
       expect(upgraded).toContain("## Local Notes\n\nKeep this note.");
     } finally {
       await removeTempRoot(tempDir);

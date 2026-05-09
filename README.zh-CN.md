@@ -47,7 +47,7 @@
 - **v4.5.0** — 文件投递改为围绕显式 send receipt，移除旧的 manifest / contract / 数量 repair / wakeup delivery 状态。
 - 更早的 4.x 版本加入了 Codex/Claude 双 process runtime、Agent Bus、crew workflow、timeline/audit、service doctor、dashboard 和 Delivery Protocol v2。
 
-**升级已有 generated 实例指令：** 更新代码后请刷新已生成的 `agent.md` block，让旧 bot 拿到新的短 Telegram Transport 和 Scheduled Tasks 段：
+**升级已有 generated 实例指令：** 更新代码后请刷新已生成的 `agent.md` block，让旧 bot 拿到新的短 Telegram Transport block：
 
 ```bash
 telegram instructions upgrade --all --dry-run

@@ -47,7 +47,7 @@
 - **v4.5.0** — simplifies file delivery around explicit send receipts and removes the old manifest/contract/count-repair/wakeup delivery state.
 - Earlier 4.x releases added the dual Codex/Claude process runtimes, Agent Bus, crew workflows, timeline/audit logs, service doctor, dashboard, and Delivery Protocol v2.
 
-**Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the short Telegram Transport and Scheduled Tasks sections:
+**Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the short Telegram Transport block:
 
 ```bash
 telegram instructions upgrade --all --dry-run
