@@ -26,6 +26,7 @@ import { loadInstanceConfig } from "./telegram/instance-config.js";
 import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-executor.js";
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
 import { upgradeInstanceAgentInstructions } from "./commands/access.js";
+import { runSearchMcpServer } from "./search/search-mcp-server.js";
 
 function renderLifecycleError(error: unknown): string {
   if (error instanceof Error) {
@@ -40,6 +41,11 @@ async function main(): Promise<void> {
 
   try {
     const argv = process.argv.slice(2);
+
+    if (argv[0] === "search-mcp") {
+      await runSearchMcpServer();
+      return;
+    }
 
     if (await runCli(argv)) {
       return;

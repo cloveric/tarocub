@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,6 +11,7 @@ import {
 } from "../src/telegram/cron-commands.js";
 import { CronStore } from "../src/state/cron-store.js";
 import { CronScheduler } from "../src/runtime/cron-scheduler.js";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 const CHAT_ID = 1001;
 const USER_ID = 9001;
@@ -46,7 +47,7 @@ async function makeHarness(): Promise<Harness> {
     executor,
     cleanup: async () => {
       await scheduler.stop();
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     },
   };
 }

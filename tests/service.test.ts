@@ -42,6 +42,7 @@ import { FileWorkflowStore } from "../src/state/file-workflow-store.js";
 import { JsonStore } from "../src/state/json-store.js";
 import { SessionManager } from "../src/runtime/session-manager.js";
 import { SessionStore } from "../src/state/session-store.js";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -135,7 +136,7 @@ describe("readInstanceBotTokenFromEnvFile", () => {
         }),
       ).resolves.toBe("secret-token");
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+      await removeTempRoot(root);
     }
   });
 
@@ -165,7 +166,7 @@ describe("readInstanceBotTokenFromEnvFile", () => {
         ASR_RESTART_AFTER_FAILURES: "2",
       });
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+      await removeTempRoot(root);
     }
   });
 });
@@ -210,7 +211,7 @@ describe("createServiceDependenciesForInstance", () => {
         process.env.TELEGRAM_BOT_TOKEN = originalToken;
       }
 
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -234,7 +235,7 @@ describe("createServiceDependenciesForInstance", () => {
       // Codex bots now share ~/.codex/ directly — same reasoning as Claude.
       expect((result.bridge as any).adapter.childEnv.CODEX_HOME).toBeUndefined();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -257,7 +258,7 @@ describe("createServiceDependenciesForInstance", () => {
 
       expect((result.bridge as any).adapter.childEnv.CODEX_HOME).toBe("/tmp/custom-main-codex-home");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -280,7 +281,7 @@ describe("createServiceDependenciesForInstance", () => {
 
       expect((result.bridge as any).adapter.childEnv.APPDATA).toBe("/tmp/custom-appdata");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -306,7 +307,7 @@ describe("createServiceDependenciesForInstance", () => {
 
       expect((result.bridge as any).adapter.childEnv.CLAUDE_CONFIG_DIR).toBe("/tmp/custom-main-claude-config");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -334,7 +335,7 @@ describe("createServiceDependenciesForInstance", () => {
 
       await expect(readFile(path.join(stateDir, "engine-home", "auth.json"), "utf8")).rejects.toThrow();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -359,7 +360,7 @@ describe("createServiceDependenciesForInstance", () => {
 
       expect((result.bridge as any).adapter).toBeInstanceOf(CodexAppServerAdapter);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -384,7 +385,7 @@ describe("createServiceDependenciesForInstance", () => {
 
       expect((result.bridge as any).adapter).toBeInstanceOf(ProcessCodexAdapter);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -414,7 +415,7 @@ describe("createServiceDependenciesForInstance", () => {
       );
     } finally {
       consoleErrorSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -442,7 +443,7 @@ describe("createServiceDependenciesForInstance", () => {
       // user's ~/.claude/ so OAuth refresh tokens don't race across instances.
       expect((result.bridge as any).adapter.childEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -474,7 +475,7 @@ describe("createServiceDependenciesForInstance", () => {
       // engine-home should not exist — nothing to seed anymore
       await expect(readFile(path.join(stateDir, "engine-home", ".credentials.json"), "utf8")).rejects.toThrow();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -511,7 +512,7 @@ describe("createServiceDependenciesForInstance", () => {
       await expect(readFile(path.join(stateDir, "engine-home", "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
         .rejects.toThrow();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -545,7 +546,7 @@ describe("createServiceDependenciesForInstance", () => {
       await expect(readFile(path.join(root, ".claude", "projects", "-tmp-alpha-workspace", "abc.jsonl"), "utf8"))
         .rejects.toThrow();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -602,7 +603,7 @@ describe("createServiceDependenciesForInstance", () => {
       else process.env.USERPROFILE = originalUserProfile;
       if (originalClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
       else process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -631,7 +632,7 @@ describe("createServiceDependenciesForInstance", () => {
       await expect(readFile(path.join(targetWorkspaceDir, "abc.jsonl"), "utf8"))
         .resolves.toBe('{"existing":"value"}\n');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });
@@ -688,7 +689,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
       expect(logger.error).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -760,7 +761,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
       expect(logger.error).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -839,7 +840,7 @@ describe("polling helpers", () => {
     } finally {
       appendSpy.mockRestore();
       release.resolve();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -912,7 +913,7 @@ describe("polling helpers", () => {
       });
     } finally {
       release.resolve();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -984,7 +985,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(3);
       expect(logger.error).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1066,7 +1067,7 @@ describe("polling helpers", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
       expect(logger.error).toHaveBeenCalledTimes(1);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1175,7 +1176,7 @@ describe("polling helpers", () => {
         }),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1268,7 +1269,7 @@ describe("polling helpers", () => {
         }),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1434,7 +1435,7 @@ describe("polling helpers", () => {
       );
     } finally {
       globalThis.setTimeout = originalSetTimeout;
-      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+      await removeTempRoot(root);
     }
   });
 
@@ -1494,7 +1495,7 @@ describe("polling helpers", () => {
       globalThis.setTimeout = originalSetTimeout;
       release.resolve();
       await waitForCondition(() => api.sendMessage.mock.calls.length > 0);
-      await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+      await removeTempRoot(root);
     }
   });
 
@@ -1550,7 +1551,7 @@ describe("polling helpers", () => {
       }));
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1599,7 +1600,7 @@ describe("polling helpers", () => {
       expect(api.leaveChat).toHaveBeenCalledWith(-100456);
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1652,7 +1653,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1697,7 +1698,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).not.toHaveBeenCalled();
       expect(api.leaveChat).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1735,7 +1736,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).not.toHaveBeenCalled();
       expect(api.sendChatAction).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1777,7 +1778,7 @@ describe("polling helpers", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(-100456, "done", expect.any(Object));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1814,7 +1815,7 @@ describe("polling helpers", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(-100456, "done", expect.any(Object));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1855,7 +1856,7 @@ describe("polling helpers", () => {
       expect(bridge.checkAccess).toHaveBeenCalledOnce();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledOnce();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1896,7 +1897,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).not.toHaveBeenCalled();
       expect(api.sendChatAction).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2034,7 +2035,7 @@ describe("polling helpers", () => {
         }),
       ]));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2325,7 +2326,7 @@ describe("polling helpers", () => {
         }),
       ]));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2425,7 +2426,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "No task is currently running.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2615,7 +2616,7 @@ describe("polling helpers", () => {
       await expect(readFile(path.join(inboxDir, "doc-1-report.pdf"), "utf8")).resolves.toBe("x");
       await expect(readFile(path.join(inboxDir, "photo-1.jpg"), "utf8")).resolves.toBe("x");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2674,7 +2675,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2752,7 +2753,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2822,7 +2823,7 @@ describe("polling helpers", () => {
         }),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2876,7 +2877,7 @@ describe("polling helpers", () => {
         }),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2941,7 +2942,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3004,7 +3005,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3083,7 +3084,7 @@ describe("polling helpers", () => {
       };
       expect(workflowState.records[0]?.status).toBe("completed");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3176,7 +3177,7 @@ describe("polling helpers", () => {
         ]),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3274,7 +3275,7 @@ describe("polling helpers", () => {
       expect(workflowState.records).toHaveLength(3);
       expect(workflowState.records.every((record) => record.status === "awaiting_continue")).toBe(true);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3354,7 +3355,7 @@ describe("polling helpers", () => {
       expect(finalState.records[0]?.status).toBe("failed");
     } finally {
       allowFailure.resolve();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3437,7 +3438,7 @@ describe("polling helpers", () => {
         "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3508,7 +3509,7 @@ describe("polling helpers", () => {
       );
     } finally {
       updateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3631,7 +3632,7 @@ describe("polling helpers", () => {
         expect.objectContaining({ text: "/continue" }),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3702,7 +3703,7 @@ describe("polling helpers", () => {
         }),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3790,7 +3791,7 @@ describe("polling helpers", () => {
         }),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3872,7 +3873,7 @@ describe("polling helpers", () => {
         undefined,
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3937,7 +3938,7 @@ describe("polling helpers", () => {
         undefined,
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4006,7 +4007,7 @@ describe("polling helpers", () => {
         ].join("\n"),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4072,7 +4073,7 @@ describe("polling helpers", () => {
         undefined,
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4160,7 +4161,7 @@ describe("polling helpers", () => {
       };
       expect(finalState.records[0]?.status).toBe("completed");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4213,7 +4214,7 @@ describe("polling helpers", () => {
       expect(updateSpy.mock.invocationCallOrder[0]).toBeLessThan(api.sendMessage.mock.invocationCallOrder.at(-1)!);
     } finally {
       updateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4275,7 +4276,7 @@ describe("polling helpers", () => {
       expect(workflowState.records[0]?.summaryMessageId).toBe(11);
     } finally {
       appendSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4347,7 +4348,7 @@ describe("polling helpers", () => {
       expect(workflowState.records[0]?.status).toBe("processing");
     } finally {
       updateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4407,7 +4408,7 @@ describe("polling helpers", () => {
         }),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4462,7 +4463,7 @@ describe("polling helpers", () => {
       };
       expect(workflowState.records[0]?.summaryMessageId).toBe(11);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4518,7 +4519,7 @@ describe("polling helpers", () => {
       );
     } finally {
       updateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4570,7 +4571,7 @@ describe("polling helpers", () => {
       expect(appendSpy).not.toHaveBeenCalledWith(expect.objectContaining({ status: "processing" }));
     } finally {
       appendSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4618,7 +4619,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4663,7 +4664,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4712,7 +4713,7 @@ describe("polling helpers", () => {
         "# Heading\nBody text",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4761,7 +4762,7 @@ describe("polling helpers", () => {
         "看看这张图",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4845,7 +4846,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4886,7 +4887,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(123, "final response", expect.anything());
       expect(api.editMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -4956,7 +4957,7 @@ describe("polling helpers", () => {
       }));
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5019,7 +5020,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5151,7 +5152,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5200,7 +5201,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5250,7 +5251,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5304,7 +5305,7 @@ describe("polling helpers", () => {
       );
       expect(adapter.sendUserMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5361,7 +5362,7 @@ describe("polling helpers", () => {
       expect(adapter.sendUserMessage).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5406,7 +5407,7 @@ describe("polling helpers", () => {
       );
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5455,7 +5456,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5495,7 +5496,7 @@ describe("polling helpers", () => {
       );
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Context: 42k / 200k");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5541,7 +5542,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5582,7 +5583,7 @@ describe("polling helpers", () => {
         expect.stringContaining("Claude"),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5628,7 +5629,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5670,7 +5671,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Running code review"));
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Review findings...");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5710,7 +5711,7 @@ describe("polling helpers", () => {
         expect.stringContaining("Claude"),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5750,7 +5751,7 @@ describe("polling helpers", () => {
         expect.stringMatching(/No usage data yet|暂无用量数据/),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5795,7 +5796,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5841,7 +5842,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5905,7 +5906,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -5990,7 +5991,7 @@ describe("polling helpers", () => {
       await expect(sessionStore.findByChatId(123)).resolves.toBeNull();
       await expect(sessionStore.findByChatId(456)).resolves.toBeNull();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6045,7 +6046,7 @@ describe("polling helpers", () => {
       expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "preferred_layout");
     } finally {
       vi.unstubAllGlobals();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6091,7 +6092,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6162,7 +6163,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6213,7 +6214,7 @@ describe("polling helpers", () => {
         totalCostUsd: 0.42,
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6258,7 +6259,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6315,7 +6316,7 @@ describe("polling helpers", () => {
         expect.stringMatching(/Budget exhausted|预算已用尽/),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6377,7 +6378,7 @@ describe("polling helpers", () => {
       });
     } finally {
       delegateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6439,7 +6440,7 @@ describe("polling helpers", () => {
       });
     } finally {
       delegateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6496,7 +6497,7 @@ describe("polling helpers", () => {
       }));
     } finally {
       delegateSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6547,7 +6548,7 @@ describe("polling helpers", () => {
       expect(text).toContain("567");
       expect(text).toContain("$0.1230");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6644,7 +6645,7 @@ describe("polling helpers", () => {
       );
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6705,7 +6706,7 @@ describe("polling helpers", () => {
       expect(JSON.parse(await readFile(path.join(stateDir, "session.json"), "utf8"))).toEqual(expect.objectContaining({ chats: [] }));
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6769,7 +6770,7 @@ describe("polling helpers", () => {
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6815,7 +6816,7 @@ describe("polling helpers", () => {
       await expect(readFile(path.join(root, "session.json"), "utf8")).resolves.toBe("{not valid json");
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6862,7 +6863,7 @@ describe("polling helpers", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6916,7 +6917,7 @@ describe("polling helpers", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
       inspectSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -6980,7 +6981,7 @@ describe("polling helpers", () => {
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -7029,7 +7030,7 @@ describe("polling helpers", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -7184,7 +7185,7 @@ describe("polling helpers", () => {
       const audit = await readFile(path.join(root, "audit.log.jsonl"), "utf8");
       expect(audit).toContain('"failureCategory":"auth"');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -7463,7 +7464,7 @@ describe("polling helpers", () => {
         expect.any(Uint8Array),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -7517,7 +7518,7 @@ describe("polling helpers", () => {
       expect(api.sendDocument).toHaveBeenCalledTimes(1);
       expect(api.sendDocument).toHaveBeenCalledWith(123, "chart.txt", expect.any(Uint8Array));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -7563,7 +7564,7 @@ describe("polling helpers", () => {
       );
       expect(api.sendDocument).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });
