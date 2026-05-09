@@ -64,6 +64,14 @@ function extractErrorDetail(error: unknown): string {
   return String(error);
 }
 
+function domainFromUrl(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
 export function truncateSearchText(text: string, maxChars = DEFAULT_RAW_CONTENT_CHAR_LIMIT): string {
   const boundedMaxChars = Math.max(MIN_TRUNCATION_LIMIT, Math.trunc(maxChars));
   if (text.length <= boundedMaxChars) {
@@ -123,6 +131,7 @@ export function createBraveSearchProvider(input: {
         signal: timeoutSignal(input.fetchTimeoutMs),
       });
       const payload = await readJsonResponse(response, "Brave") as BraveResponse;
+      const accessedAt = new Date().toISOString();
 
       return {
         provider: "brave",
@@ -134,10 +143,14 @@ export function createBraveSearchProvider(input: {
             typeof result.url === "string" &&
             result.url.trim().length > 0,
           )
-          .map((result) => ({
+          .map((result, index) => ({
             title: result.title.trim(),
             url: result.url.trim(),
             snippet: typeof result.description === "string" ? result.description.trim() : undefined,
+            rank: index + 1,
+            domain: domainFromUrl(result.url.trim()),
+            provider: "brave",
+            accessedAt,
             publishedAt: typeof result.age === "string" ? result.age : undefined,
             source: result.profile?.name ?? "brave",
           })),
@@ -178,6 +191,7 @@ export function createTavilySearchProvider(input: {
         }),
       });
       const payload = await readJsonResponse(response, "Tavily") as TavilySearchResponse;
+      const accessedAt = new Date().toISOString();
 
       return {
         provider: "tavily",
@@ -190,10 +204,14 @@ export function createTavilySearchProvider(input: {
             typeof result.url === "string" &&
             result.url.trim().length > 0,
           )
-          .map((result) => ({
+          .map((result, index) => ({
             title: result.title.trim(),
             url: result.url.trim(),
             snippet: typeof result.content === "string" ? result.content.trim() : undefined,
+            rank: index + 1,
+            domain: domainFromUrl(result.url.trim()),
+            provider: "tavily",
+            accessedAt,
             score: typeof result.score === "number" ? result.score : undefined,
             publishedAt: typeof result.published_date === "string" ? result.published_date : undefined,
             rawContent: typeof result.raw_content === "string"

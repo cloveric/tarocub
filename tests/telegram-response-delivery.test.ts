@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, realpath, writeFile, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -62,7 +63,7 @@ describe("deliverTelegramResponse", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -98,7 +99,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendDocument).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(123, text, { parseMode: "Markdown" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -137,7 +138,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
       expect(api.sendMessage).toHaveBeenCalledWith(123, text, { parseMode: "Markdown" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -167,7 +168,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendDocument).toHaveBeenCalledWith(123, "example.txt", "hello\n");
       expect(api.sendMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -198,7 +199,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendDocument).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(123, text, { parseMode: "Markdown" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -238,7 +239,7 @@ describe("deliverTelegramResponse", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -283,7 +284,7 @@ describe("deliverTelegramResponse", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -313,7 +314,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "我会发给你。", { parseMode: "Markdown" });
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -343,7 +344,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendDocument).not.toHaveBeenCalled();
       expect(api.sendMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -373,7 +374,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendDocument).not.toHaveBeenCalled();
       expect(api.sendMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -405,7 +406,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Example only.", { parseMode: "Markdown" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -436,7 +437,7 @@ describe("deliverTelegramResponse", () => {
       expect(filesSent).toBe(1);
       expect(api.sendDocument).toHaveBeenCalledWith(123, "example.png", expect.any(Uint8Array));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -468,7 +469,7 @@ describe("deliverTelegramResponse", () => {
         parseMode: "Markdown",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -518,7 +519,7 @@ describe("deliverTelegramResponse", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -552,7 +553,7 @@ describe("deliverTelegramResponse", () => {
       expect(filesSent).toBe(1);
       expect(api.sendDocument).toHaveBeenCalledWith(123, "final-report.docx", expect.any(Uint8Array));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -587,7 +588,7 @@ describe("deliverTelegramResponse", () => {
       expect(api.sendDocument).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(123, `[download me](${filePath})`, { parseMode: "Markdown" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -625,7 +626,7 @@ describe("deliverTelegramResponse", () => {
         expect.stringContaining("not delivered"),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 

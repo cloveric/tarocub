@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -62,7 +63,7 @@ describe("handleDelegationTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -94,7 +95,7 @@ describe("handleDelegationTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Cannot delegate to yourself.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -129,7 +130,7 @@ describe("handleDelegationTelegramCommand", () => {
         "No parallel bots configured. Add instance names to bus.parallel in config.json.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -164,7 +165,7 @@ describe("handleDelegationTelegramCommand", () => {
         "No chain bots configured. Add instance names to bus.chain in config.json.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -196,7 +197,7 @@ describe("handleDelegationTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Verifier cannot be the same instance.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -254,7 +255,7 @@ describe("handleDelegationTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -289,7 +290,7 @@ describe("handleDelegationTelegramCommand", () => {
         "Chain config cannot include the current instance. Remove self-targets from bus.chain.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

@@ -19,6 +19,7 @@ describe("search router", () => {
           title: "Telegram Bot API",
           url: "https://core.telegram.org/bots/api",
           snippet: "Official Telegram Bot API docs.",
+          provider: "brave",
         },
       ],
     });
@@ -56,6 +57,7 @@ describe("search router", () => {
             title: "Fallback result",
             url: "https://example.test/fallback",
             snippet: "Recovered by Tavily.",
+            provider: "tavily",
           },
         ],
       })),
@@ -86,6 +88,7 @@ describe("search router", () => {
           {
             title: "Useful result",
             url: "https://example.test/useful",
+            provider: "tavily",
           },
         ],
       })),
@@ -111,6 +114,7 @@ describe("search router", () => {
           title: "MCP",
           url: "https://modelcontextprotocol.io/",
           snippet: "Protocol docs.",
+          provider: "brave",
         },
       ],
     });
@@ -157,6 +161,7 @@ describe("search router", () => {
           title: "Tavily result",
           url: "https://example.test/tavily",
           snippet: "Tavily found it.",
+          provider: "tavily",
         },
       ],
     });
@@ -178,6 +183,7 @@ describe("search router", () => {
           title: "Brave result",
           url: "https://example.test/brave",
           snippet: "Brave found it.",
+          provider: "brave",
         },
       ],
     });
@@ -202,6 +208,7 @@ describe("search router", () => {
           {
             title: "Surviving result",
             url: "https://example.test/survives",
+            provider: "tavily",
           },
         ],
       })),
@@ -233,6 +240,7 @@ describe("search router", () => {
           {
             title: "Only useful source",
             url: "https://example.test/source",
+            provider: "tavily",
           },
         ],
       })),

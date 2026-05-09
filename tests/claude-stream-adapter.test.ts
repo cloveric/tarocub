@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -296,7 +297,7 @@ describe("ClaudeStreamAdapter", () => {
         text: "READY",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -349,7 +350,7 @@ describe("ClaudeStreamAdapter", () => {
       children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"TWO","session_id":"session-123"}\n');
       await expect(second).resolves.toEqual({ text: "TWO" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -383,7 +384,7 @@ describe("ClaudeStreamAdapter", () => {
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"OK","session_id":"session-123"}\n');
       await promise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 

@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,7 +45,7 @@ async function withContext<T>(fn: (ctx: {
     return await fn({ stateDir, store, scheduler, workspaceDir, inboxDir, api });
   } finally {
     await scheduler.stop();
-    await rm(root, { recursive: true, force: true });
+    await removeTempRoot(root);
   }
 }
 

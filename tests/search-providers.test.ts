@@ -40,6 +40,52 @@ describe("search providers", () => {
     expect(result.results[0]?.rawContent).toContain("[truncated");
   });
 
+  it("adds source metadata to Brave and Tavily search results", async () => {
+    const brave = createBraveSearchProvider({
+      apiKey: "brave-key",
+      fetchImpl: async () => new Response(JSON.stringify({
+        web: {
+          results: [
+            {
+              title: "Brave result",
+              url: "https://docs.example.com/path",
+              description: "Brave snippet",
+            },
+          ],
+        },
+      })),
+    });
+    const tavily = createTavilySearchProvider({
+      apiKey: "tavily-key",
+      fetchImpl: async () => new Response(JSON.stringify({
+        query: "docs",
+        results: [
+          {
+            title: "Tavily result",
+            url: "https://blog.example.com/post",
+            content: "Tavily snippet",
+          },
+        ],
+      })),
+    });
+
+    const braveResult = await brave.search({ query: "docs", mode: "quick", maxResults: 1 });
+    const tavilyResult = await tavily.search({ query: "docs", mode: "deep", maxResults: 1 });
+
+    expect(braveResult.results[0]).toMatchObject({
+      rank: 1,
+      domain: "docs.example.com",
+      provider: "brave",
+    });
+    expect(tavilyResult.results[0]).toMatchObject({
+      rank: 1,
+      domain: "blog.example.com",
+      provider: "tavily",
+    });
+    expect(braveResult.results[0]?.accessedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(tavilyResult.results[0]?.accessedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
   it("passes timeout signals to Brave, Tavily search, and Tavily extract fetches", async () => {
     const braveFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       web: { results: [] },

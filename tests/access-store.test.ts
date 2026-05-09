@@ -1,10 +1,11 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { randomInt } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 vi.mock("node:crypto", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:crypto")>();
@@ -73,7 +74,7 @@ describe("AccessStore", () => {
         pendingPairs: [],
       });
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -99,7 +100,7 @@ describe("AccessStore", () => {
         pendingPairs: [],
       });
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -123,7 +124,7 @@ describe("AccessStore", () => {
       const state = await store.load();
       expect(state.pairedUsers).toHaveLength(1);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -143,7 +144,7 @@ describe("AccessStore", () => {
       await expect(store.redeemPairingCode(issued.code, new Date("2026-04-08T00:01:00Z"))).resolves.toBeNull();
       expect((await store.load()).pendingPairs).toHaveLength(0);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -163,7 +164,7 @@ describe("AccessStore", () => {
       expect(pairedUser).toBeNull();
       expect((await store.load()).pendingPairs).toHaveLength(0);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -191,7 +192,7 @@ describe("AccessStore", () => {
       expect(state.pendingPairs).toHaveLength(1);
       expect(state.pendingPairs[0]?.code).toBe("AAAAAAAA");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -208,7 +209,7 @@ describe("AccessStore", () => {
 
       await expect(store.redeemPairingCode("ZZZZZZ", new Date("2026-04-08T00:01:00Z"))).resolves.toBeNull();
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -228,7 +229,7 @@ describe("AccessStore", () => {
         allowlist: [101, 202, 303],
       }));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -264,7 +265,7 @@ describe("AccessStore", () => {
         allowlist: [111, 222],
       }));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -314,7 +315,7 @@ describe("AccessStore", () => {
         ],
       }));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -362,7 +363,7 @@ describe("AccessStore", () => {
       expect(state.pairedUsers[0]?.profile).toBe("legacy");
       expect(state.pendingPairs[0]?.source).toBe("legacy");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -396,7 +397,7 @@ describe("AccessStore", () => {
         ],
       }));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -418,7 +419,7 @@ describe("AccessStore", () => {
         "cannot disable multi-chat while multiple chats are authorized or pending pairing",
       );
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -447,7 +448,7 @@ describe("AccessStore", () => {
         allowlist: expect.arrayContaining([111, 222]),
       }));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -473,7 +474,7 @@ describe("AccessStore", () => {
       const store = new AccessStore(filePath);
       await expect(store.load()).rejects.toThrow("invalid access state");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -505,7 +506,7 @@ describe("AccessStore", () => {
       const store = new AccessStore(filePath);
       await expect(store.load()).rejects.toThrow("invalid access state");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -538,7 +539,7 @@ describe("AccessStore", () => {
       const store = new AccessStore(filePath);
       await expect(store.load()).rejects.toThrow("invalid access state");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -570,7 +571,7 @@ describe("AccessStore", () => {
       const store = new AccessStore(filePath);
       await expect(store.load()).rejects.toThrow("invalid access state");
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 
@@ -611,7 +612,7 @@ describe("AccessStore", () => {
         pendingPairs: [],
       }));
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await removeTempRoot(dir);
     }
   });
 });

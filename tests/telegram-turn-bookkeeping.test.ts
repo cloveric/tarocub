@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -79,7 +80,7 @@ describe("telegram turn bookkeeping", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -104,7 +105,7 @@ describe("telegram turn bookkeeping", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -135,7 +136,7 @@ describe("telegram turn bookkeeping", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -179,7 +180,7 @@ describe("telegram turn bookkeeping", () => {
         detail: "budget exhausted",
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -209,7 +210,7 @@ describe("telegram turn bookkeeping", () => {
         detail: "budget threshold reached: $0.7500 / $0.50",
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

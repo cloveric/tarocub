@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -61,7 +62,7 @@ describe("handleMiniBusTelegramCommand", () => {
         }),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -120,7 +121,7 @@ describe("handleMiniBusTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Asking mini topic writer...");
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "[writer]\n\nwriter answer");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -180,7 +181,7 @@ describe("handleMiniBusTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -236,7 +237,7 @@ describe("handleMiniBusTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("[Mini chain stage 1: planner]"));
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("[Mini chain stage 2: writer]"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -296,7 +297,7 @@ describe("handleMiniBusTelegramCommand", () => {
         text: expect.stringContaining("draft"),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -358,7 +359,7 @@ describe("handleMiniBusTelegramCommand", () => {
         conversationKey: "chat:-100123:topic:31",
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -415,7 +416,7 @@ describe("handleMiniBusTelegramCommand", () => {
       }));
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("[Mini verifier: reviewer]"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -469,7 +470,7 @@ describe("handleMiniBusTelegramCommand", () => {
       });
       expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("crew roles: researcher=research"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -591,7 +592,7 @@ describe("handleMiniBusTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -713,7 +714,7 @@ describe("handleMiniBusTelegramCommand", () => {
         text: expect.stringContaining("RESEARCH FAILED: target conversation is busy"),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -785,7 +786,7 @@ describe("handleMiniBusTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("duplicate role peers"));
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -824,7 +825,7 @@ describe("handleMiniBusTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -858,7 +859,7 @@ describe("handleMiniBusTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("inside a Telegram group"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

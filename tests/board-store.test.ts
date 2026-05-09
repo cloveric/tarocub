@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -31,7 +32,7 @@ describe("BoardStore", () => {
         expect.objectContaining({ id: "B2", title: "Review launch plan", status: "todo" }),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -68,7 +69,7 @@ describe("BoardStore", () => {
         dependencies: ["B1"],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -85,7 +86,7 @@ describe("BoardStore", () => {
       expect(new Set([first.id, second.id])).toEqual(new Set(["B1", "B2"]));
       await expect(new BoardStore(root).listTasks()).resolves.toHaveLength(2);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -102,7 +103,7 @@ describe("BoardStore", () => {
       await expect(store.startTask("B2")).rejects.toThrow("unmet dependencies");
       await expect(store.getTask("B2")).resolves.toMatchObject({ status: "todo" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -122,7 +123,7 @@ describe("BoardStore", () => {
       await expect(store.addDependency("B3", "B1")).rejects.toThrow("dependency cycle");
       await expect(store.getTask("B3")).resolves.toMatchObject({ dependencies: [] });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -143,7 +144,7 @@ describe("BoardStore", () => {
 
       await expect(store.listTasks()).resolves.toEqual([]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -182,7 +183,7 @@ describe("BoardStore", () => {
         ],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -218,7 +219,7 @@ describe("BoardStore", () => {
       const checked = await store.setChecklistItemDone("B1", "C1", true);
       expect(checked.checklist[0]).toMatchObject({ id: "C1", done: true });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -238,7 +239,7 @@ describe("BoardStore", () => {
 
       await expect(store.startTask("B2")).rejects.toThrow("assignee WIP limit");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -259,7 +260,7 @@ describe("BoardStore", () => {
         runs: [expect.objectContaining({ id: "R1", status: "running" })],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -286,7 +287,7 @@ describe("BoardStore", () => {
       await expect(store.markReady("B2")).rejects.toThrow("cannot be marked ready from review");
       await expect(store.getTask("B2")).resolves.toMatchObject({ status: "review" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -317,7 +318,7 @@ describe("BoardStore", () => {
         runs: [expect.objectContaining({ id: "R1", status: "done" })],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -347,7 +348,7 @@ describe("BoardStore", () => {
       await expect(store.getTask("B1")).resolves.toMatchObject({ status: "done" });
       await expect(store.getTask("B2")).resolves.toMatchObject({ status: "ready" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -367,7 +368,7 @@ describe("BoardStore", () => {
       expect(task?.summary?.endsWith("...")).toBe(true);
       expect(task?.runs[0]?.summary).toBe(task?.summary);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -404,7 +405,7 @@ describe("BoardStore", () => {
         labels: ["implementation"],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -115,7 +116,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       ]));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -182,7 +183,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(new Set(requestIds).size).toBe(2);
     } finally {
       nowSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -255,7 +256,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       clearActiveCronRuntimeForTest();
       await scheduler.stop();
       vi.useRealTimers();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -351,7 +352,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(finalText).not.toContain("[send-file:");
       expect(close).toHaveBeenCalledTimes(1);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -400,7 +401,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(createStableCctbCommandHelper).toHaveBeenNthCalledWith(1, path.join(root, "workspace", ".cctb-bin"));
       expect(createStableCctbCommandHelper).toHaveBeenNthCalledWith(2, path.join(root, "workspace", ".cctb-bin"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -461,7 +462,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(helperRoot).toContain(path.join(resumeWorkspace, ".cctb-send"));
       expect(createSideChannelSendHelper).toHaveBeenCalledWith(helperRoot, undefined, expect.any(Object));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -583,7 +584,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       ]));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -671,7 +672,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       const finalText = deliverTelegramResponse.mock.calls.at(-1)![2] as string;
       expect(finalText).toBe("");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -759,7 +760,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(finalText).toContain("File delivered");
       expect(finalText).not.toContain("[send-file:");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -841,7 +842,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(finalText).toContain("File delivered");
       expect(finalText).not.toContain("[send-file:");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -930,7 +931,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       clearActiveCronRuntimeForTest();
       await scheduler.stop();
       vi.useRealTimers();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -987,7 +988,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
       expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining(missingPath), expect.any(Object));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1103,7 +1104,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "en",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1225,7 +1226,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(finalText).not.toContain("[send-file:");
       expect(finalText).not.toContain("Generated chart.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1321,7 +1322,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(finalText).not.toContain("Generated chart.");
       expect(finalText).toContain("File delivered");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1389,7 +1390,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         type: "turn.retried",
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1453,7 +1454,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1519,7 +1520,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1590,7 +1591,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1649,7 +1650,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         code: "ENOENT",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1719,7 +1720,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         code: "ENOENT",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1793,7 +1794,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1858,7 +1859,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1921,7 +1922,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -1985,7 +1986,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2049,7 +2050,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2108,7 +2109,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2167,7 +2168,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2226,7 +2227,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "en",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2290,7 +2291,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2345,7 +2346,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
 
       expect(sendTelegramOutFile).toHaveBeenCalledTimes(9);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2400,7 +2401,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(sendTelegramOutFile).toHaveBeenCalledTimes(1);
       expect(sendTelegramOutFile).toHaveBeenCalledWith(123, "01.png", expect.any(Uint8Array));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2459,7 +2460,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "en",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2537,7 +2538,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "en",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2605,7 +2606,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2683,7 +2684,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "en",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2752,7 +2753,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(finalText).toContain("File delivered");
       expect(finalText).not.toContain("[send-file:");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2822,7 +2823,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       expect(finalText).toContain("File delivered");
       expect(finalText).not.toContain("[send-file:");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2886,7 +2887,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -2949,7 +2950,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3012,7 +3013,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3071,7 +3072,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3142,7 +3143,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3217,7 +3218,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3288,7 +3289,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3351,7 +3352,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3415,7 +3416,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3483,7 +3484,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         "zh",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3565,7 +3566,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       await expect(turn).rejects.toThrow("engine failed");
     } finally {
       resolveDelivery();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3621,7 +3622,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         deliveredFilesBeforeError: [deliveredPath],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3684,7 +3685,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
 
       expect(sendTelegramOutFile).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3750,7 +3751,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       }));
       expect(close).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -3823,7 +3824,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

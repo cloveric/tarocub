@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -60,7 +61,7 @@ describe("telegram service commands", () => {
         },
       );
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -118,7 +119,7 @@ describe("telegram service commands", () => {
       });
       expect(spawnDetached.mock.calls[0]?.[2].env?.TELEGRAM_BOT_TOKEN).toBeUndefined();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -170,7 +171,7 @@ describe("telegram service commands", () => {
       expect(messages).toEqual(['Started instance "alpha" with pid 22222.']);
       expect(sleepCalls).toBeGreaterThan(0);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -229,7 +230,7 @@ describe("telegram service commands", () => {
       expect(state.activeTurnStartedAt).toBeUndefined();
       expect(state.activeTurnUpdatedAt).toBeUndefined();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -278,7 +279,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Bot token configured: no");
       expect(messages[0]).not.toContain("Bot identity:");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -306,7 +307,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Engine: codex");
       expect(messages[0]).toContain("Bot identity: Channel Bot (@channel_bot)");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -337,7 +338,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Bot identity lookup failed: temporary Telegram failure");
       expect(messages[0]).toContain("State dir:");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -367,7 +368,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("err-2");
       expect(messages[0]).toContain("err-3");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -460,7 +461,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Incident counts: retries=1, budget blocks=1, file rejections=1, workflow failures=0, crew runs started=1, crew runs completed=1, crew runs failed=0");
       expect(messages[0]).toContain("Latest crew run: run-1 (research-report, completed/completed, updated 2026-04-08T10:02:10.000Z).");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -502,7 +503,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("run \"telegram instructions upgrade --instance alpha\"");
       expect(messages[0]).toContain("Healthy: no");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -607,7 +608,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("awaiting continue: 1");
       expect(messages[0]).toContain("- fail tasks:");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -650,7 +651,7 @@ describe("telegram service commands", () => {
         "running service exports CLAUDE_CONFIG_DIR=/tmp/legacy-claude-config while the current shell does not",
       );
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -695,7 +696,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("- fail legacy-launchd:");
       expect(messages[0]).toContain("bash scripts/cleanup-legacy-launchd.sh alpha");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -771,7 +772,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Crew runs failed: 1");
       expect(messages[0]).toContain("Latest crew run: run-2 (research-report, failed/review, updated 2026-04-08T11:05:00.000Z)");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -807,7 +808,7 @@ describe("telegram service commands", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain("Timeline events: unknown (timeline log unreadable)");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -844,7 +845,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("- fail timeline: Timeline events: unknown (timeline log unreadable).");
       expect(messages[0]).toContain("Healthy: no");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -886,7 +887,7 @@ describe("telegram service commands", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain("latest failure category: telegram-conflict");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -947,7 +948,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("awaiting continue: 1");
       expect(messages[0]).toContain("- ok tasks:");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -990,7 +991,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("file workflow state unreadable");
       expect(messages[0]).toContain("- fail tasks: unresolved tasks: unknown (file workflow state unreadable).");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1025,7 +1026,7 @@ describe("telegram service commands", () => {
       ).rejects.toThrow("workflow summary exploded");
     } finally {
       inspectSpy.mockRestore();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1064,7 +1065,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Blocking tasks: unknown (file workflow state unreadable)");
       expect(messages[0]).toContain("Awaiting continue tasks: unknown (file workflow state unreadable)");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1157,7 +1158,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Blocking tasks: 2");
       expect(messages[0]).toContain("Awaiting continue tasks: 1");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1194,7 +1195,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Instance: alpha");
       expect(messages[0]).toContain("Session bindings: unknown (session state unreadable)");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1231,7 +1232,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("- fail sessions: Session bindings: unknown (session state unreadable).");
       expect(messages[0]).toContain("Healthy: no");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1278,7 +1279,7 @@ describe("telegram service commands", () => {
       expect(messages).toEqual(['Stopped instance "default".']);
       expect(killProcessTree).toHaveBeenCalledWith(54321);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1335,7 +1336,7 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("legacy launchd plist still exists");
       expect(messages[0]).toContain("bash scripts/cleanup-legacy-launchd.sh alpha");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1397,7 +1398,7 @@ describe("telegram service commands", () => {
       expect(spawnDetached).toHaveBeenCalledTimes(1);
       expect(messages).toEqual(['Started instance "default" with pid 12345.']);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1470,7 +1471,7 @@ describe("telegram service commands", () => {
         'Started instance "beta" with pid 12346.',
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1543,7 +1544,7 @@ describe("telegram service commands", () => {
         'Started instance "beta" with pid 12346.',
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1639,7 +1640,7 @@ describe("telegram service commands", () => {
         activeTurnCount: 0,
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

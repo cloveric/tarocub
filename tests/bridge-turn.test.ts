@@ -1,6 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -21,7 +22,7 @@ describe("loadBudgetUsd", () => {
       await expect(loadBudgetUsd(root)).resolves.toBeUndefined();
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -35,7 +36,7 @@ describe("loadBudgetUsd", () => {
       await expect(loadBudgetUsd(root)).resolves.toBeUndefined();
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

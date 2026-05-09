@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { tryDecodeWorkspacePath, scanRecentClaudeSessions } from "../src/runtime/session-scanner.js";
 
@@ -20,7 +21,7 @@ describe("tryDecodeWorkspacePath", () => {
       const encoded = root.replace(/[/.]/g, "-") + "-aaa-bbb";
       expect(tryDecodeWorkspacePath(encoded)).toBe(target);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -44,7 +45,7 @@ describe("tryDecodeWorkspacePath", () => {
       const encoded = root.replace(/[/.]/g, "-") + "-cc-telegram-bridge";
       expect(tryDecodeWorkspacePath(encoded)).toBe(target);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -58,7 +59,7 @@ describe("tryDecodeWorkspacePath", () => {
       // Should prefer foo-bar (longest match), not foo/bar
       expect(tryDecodeWorkspacePath(encoded)).toBe(path.join(root, "foo-bar"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -71,7 +72,7 @@ describe("tryDecodeWorkspacePath", () => {
       const encoded = root.replace(/[/.]/g, "-") + "--hidden-sub";
       expect(tryDecodeWorkspacePath(encoded)).toBe(target);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -84,7 +85,7 @@ describe("tryDecodeWorkspacePath", () => {
       const encoded = root.replace(/[/.]/g, "-") + "--foo-bar";
       expect(tryDecodeWorkspacePath(encoded)).toBe(target);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -117,7 +118,7 @@ describe("scanRecentClaudeSessions", () => {
       } else {
         delete process.env.USERPROFILE;
       }
-      await rm(fakeHome, { recursive: true, force: true });
+      await removeTempRoot(fakeHome);
     }
   });
 
@@ -158,7 +159,7 @@ describe("scanRecentClaudeSessions", () => {
       } else {
         delete process.env.CLAUDE_CONFIG_DIR;
       }
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

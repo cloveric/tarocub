@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -112,7 +113,7 @@ describe("collectInstanceSnapshots", () => {
         crewLatestRunStage: "completed",
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -148,7 +149,7 @@ describe("collectInstanceSnapshots", () => {
         pid: null,
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -201,7 +202,7 @@ describe("collectInstanceSnapshots", () => {
         maxFailures: 3,
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -260,7 +261,7 @@ describe("collectInstanceSnapshots", () => {
         detail: "fileName=out.png",
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -299,7 +300,7 @@ describe("collectInstanceSnapshots", () => {
         filesRejected: 0,
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -480,7 +481,7 @@ describe("collectInstanceSnapshots", () => {
       expect(second).not.toContain('log-detail">first');
     } finally {
       await server?.close();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

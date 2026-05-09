@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -68,7 +69,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -130,7 +131,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -172,7 +173,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         "Could not switch to codex because this instance's session bindings could not be reset first. Engine remains claude.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -207,7 +208,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /engine [claude|codex]");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -254,7 +255,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -300,7 +301,7 @@ describe("handleLocalEngineTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -343,7 +344,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(sessionStore.removeByConversationKey).toHaveBeenCalledWith("chat:-100123:topic:88");
       expect(sessionStore.removeByChatId).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -382,7 +383,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Compacting session context...");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -425,7 +426,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Running code review...");
       expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "review output");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -456,7 +457,7 @@ describe("handleLocalEngineTelegramCommand", () => {
 
       expect(handled).toBe(false);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

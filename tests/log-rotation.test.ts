@@ -1,6 +1,7 @@
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -21,7 +22,7 @@ describe("rotateInstanceLogs", () => {
       expect(rotated).toContain(path.join(stateDir, "timeline.log.jsonl"));
       expect(rotated).toContain(path.join(stateDir, "service.lifecycle.log.jsonl"));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -41,7 +42,7 @@ describe("rotateInstanceLogs", () => {
       await expect(stat(path.join(stateDir, "service.stdout.log.1"))).rejects.toMatchObject({ code: "ENOENT" });
       await expect(stat(path.join(stateDir, "service.stderr.log.1"))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 });

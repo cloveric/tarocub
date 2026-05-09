@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -445,7 +446,7 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"id":4,"result":{"thread":{"turns":[{"id":"turn-1","items":[{"type":"agentMessage","text":"READY isolated"}]}]}}}\n');
       await promise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -481,7 +482,7 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
       await promise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -517,7 +518,7 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
       await promise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -563,7 +564,7 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
       await promise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -643,7 +644,7 @@ describe("CodexAppServerAdapter", () => {
         sessionId: "thread-b",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -682,7 +683,7 @@ describe("CodexAppServerAdapter", () => {
       await promise;
     } finally {
       consoleErrorSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -721,7 +722,7 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
       await promise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -782,7 +783,7 @@ describe("CodexAppServerAdapter", () => {
       secondHarness.child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-456","turn":{"id":"turn-2","items":[],"status":"completed","error":null}}}\n');
       await secondPromise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 

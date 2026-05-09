@@ -1,6 +1,7 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -42,7 +43,7 @@ describe("FileWorkflowStore", () => {
       await store.remove("one");
       expect((await store.list({ chatId: 100 })).map((record) => record.uploadId)).toEqual(["two"]);
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -53,7 +54,7 @@ describe("FileWorkflowStore", () => {
     try {
       await expect(store.remove("missing")).resolves.toBe(false);
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -93,7 +94,7 @@ describe("FileWorkflowStore", () => {
       expect((await store.list({ status: "failed" })).map((record) => record.uploadId)).toEqual(["two"]);
       expect((await store.list({ chatId: 100, status: "awaiting_continue" })).map((record) => record.uploadId)).toEqual(["one"]);
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -147,7 +148,7 @@ describe("FileWorkflowStore", () => {
       await expect(store.find("old-preparing")).resolves.toEqual(expect.objectContaining({ status: "failed" }));
       await expect(store.find("waiting")).resolves.toEqual(expect.objectContaining({ status: "awaiting_continue" }));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -202,7 +203,7 @@ describe("FileWorkflowStore", () => {
       await expect(store.find("recent-preparing")).resolves.toEqual(expect.objectContaining({ status: "failed" }));
       await expect(store.find("waiting")).resolves.toEqual(expect.objectContaining({ status: "awaiting_continue" }));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -243,7 +244,7 @@ describe("FileWorkflowStore", () => {
       );
       await expect(store.getAwaitingArchiveBySummaryMessageId(100, 99)).resolves.toBeNull();
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -287,7 +288,7 @@ describe("FileWorkflowStore", () => {
       await expect(store.find("one")).resolves.toEqual(expect.objectContaining({ status: "processing" }));
       await expect(store.find("two")).resolves.toEqual(expect.objectContaining({ status: "awaiting_continue" }));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -329,7 +330,7 @@ describe("FileWorkflowStore", () => {
       await expect(store.find("one")).resolves.toEqual(expect.objectContaining({ status: "awaiting_continue" }));
       await expect(store.find("two")).resolves.toEqual(expect.objectContaining({ status: "awaiting_continue" }));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -375,7 +376,7 @@ describe("FileWorkflowStore", () => {
         expect.objectContaining({ uploadId: "two", status: "awaiting_continue" }),
       );
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -408,7 +409,7 @@ describe("FileWorkflowStore", () => {
 
       await expect(store.load()).rejects.toThrow("invalid file workflow state");
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -442,7 +443,7 @@ describe("FileWorkflowStore", () => {
 
       await expect(store.load()).rejects.toThrow("invalid file workflow state");
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -491,7 +492,7 @@ describe("FileWorkflowStore", () => {
         ],
       });
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -522,7 +523,7 @@ describe("FileWorkflowStore", () => {
 
       expect(sortUploadIds(uploadIds)).toEqual(sortUploadIds(Array.from({ length: 12 }, (_, index) => `upload-${index}`)));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -572,7 +573,7 @@ describe("FileWorkflowStore", () => {
       await expect(store.find("two")).resolves.toBeNull();
       expect((await store.list({ chatId: 100 })).map((record) => record.uploadId)).toEqual(["one"]);
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -611,7 +612,7 @@ describe("FileWorkflowStore", () => {
       expect(results.filter(Boolean)).toHaveLength(1);
       expect(await store.list({ chatId: 100 })).toHaveLength(1);
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -630,7 +631,7 @@ describe("FileWorkflowStore", () => {
       });
     } finally {
       readSpy.mockRestore();
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -654,7 +655,7 @@ describe("FileWorkflowStore", () => {
       expect(backups).toHaveLength(1);
       await expect(readFile(path.join(stateDir, backups[0]!), "utf8")).resolves.toBe(unreadableContents);
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -672,7 +673,7 @@ describe("FileWorkflowStore", () => {
       });
     } finally {
       readSpy.mockRestore();
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 });

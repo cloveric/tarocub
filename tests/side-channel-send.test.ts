@@ -1,6 +1,7 @@
-import { chmod, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -118,7 +119,7 @@ describe("side-channel send command", () => {
       expect(helper).toContain("token");
       expect(helper).toContain("exec '/usr/bin/node' '/tmp/cctb.js' 'send' \"$@\"");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -144,7 +145,7 @@ describe("side-channel send command", () => {
       expect((await stat(helperRoot)).mode & 0o777).toBe(0o700);
       expect((await stat(helperPath)).mode & 0o777).toBe(0o700);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -159,7 +160,7 @@ describe("side-channel send command", () => {
       expect(helper).toContain("exec '/usr/bin/node' '/tmp/cctb.js' \"$@\"");
       expect(helper).not.toContain("'send' \"$@\"");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -176,7 +177,7 @@ describe("side-channel send command", () => {
       const metadata = await stat(helperPath);
       expect(Math.abs(metadata.mtimeMs - oldTime.getTime())).toBeLessThan(1000);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -234,7 +235,7 @@ describe("side-channel send command", () => {
       }));
     } finally {
       await server.close();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -273,7 +274,7 @@ describe("side-channel send command", () => {
       expect(api.sendDocument).not.toHaveBeenCalled();
     } finally {
       await server.close();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -328,7 +329,7 @@ describe("side-channel send command", () => {
       }));
     } finally {
       await server.close();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -382,7 +383,7 @@ describe("side-channel send command", () => {
       ]);
     } finally {
       await server.close();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -415,7 +416,7 @@ describe("side-channel send command", () => {
         }),
       })).rejects.toThrow();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -450,7 +451,7 @@ describe("side-channel send command", () => {
       expect(api.sendMessage).not.toHaveBeenCalled();
     } finally {
       await server.close();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

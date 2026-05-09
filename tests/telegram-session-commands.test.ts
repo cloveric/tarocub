@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -67,7 +68,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -104,7 +105,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "For Codex, use /resume thread <thread-id>. Plain /resume scan is Claude-only.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -172,7 +173,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Invalid selection. Send /resume first to scan.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -227,7 +228,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Attached Codex thread: thread-abc\n\nSend a message to continue. Use /detach when done.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -267,7 +268,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Codex thread not found: thread-missing\n\nCheck the thread ID and try again.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -307,7 +308,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "This Codex runtime cannot validate external thread IDs for /resume thread.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -341,7 +342,7 @@ describe("handleLocalSessionTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "No resumed session active.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -380,7 +381,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Detached from the current Codex thread. Next message will start a fresh thread.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -433,7 +434,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Detached from the current Codex thread and restored the previous conversation.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -501,7 +502,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Detached from the current Codex thread. Next message will start a fresh thread.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -574,7 +575,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Detached from resumed session and restored the previous conversation.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -659,7 +660,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         "Detached from resumed session. Back to default workspace.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

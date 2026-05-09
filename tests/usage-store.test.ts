@@ -1,8 +1,9 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -38,7 +39,7 @@ describe("UsageStore", () => {
         lastUpdatedAt: "",
       });
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -50,7 +51,7 @@ describe("UsageStore", () => {
       await writeFile(path.join(stateDir, "usage.json"), "null\n", "utf8");
       await expect(store.load()).rejects.toThrow("invalid usage state");
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -74,7 +75,7 @@ describe("UsageStore", () => {
 
       await expect(store.load()).rejects.toThrow("invalid usage state");
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -97,7 +98,7 @@ describe("UsageStore", () => {
         totalCostUsd: 0.6,
       }));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -151,7 +152,7 @@ describe("UsageStore", () => {
         },
       });
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 
@@ -180,7 +181,7 @@ describe("UsageStore", () => {
         totalCostUsd: 0.3,
       }));
     } finally {
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     }
   });
 });

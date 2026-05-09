@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -35,10 +36,51 @@ const ExtractToolInputSchema = z.object({
   urls: z.array(z.string().url()).min(1).max(10).optional(),
   depth: z.enum(["basic", "advanced"]).optional(),
   format: z.enum(["markdown", "text"]).optional(),
-  maxChars: z.number().int().min(1_000).max(60_000).optional(),
+  maxChars: z.number().int().min(1).max(60_000).optional(),
 }).passthrough().refine((value) => value.url || value.urls, {
   message: "url or urls is required",
 });
+
+type ProviderStatus = {
+  checkedAt: string;
+  providers: {
+    brave: {
+      configured: boolean;
+      healthy: "unknown" | false;
+    };
+    tavily: {
+      configured: boolean;
+      healthy: "unknown" | false;
+    };
+  };
+};
+type TavilyExtractPayload = Awaited<ReturnType<typeof extractWithTavily>>;
+type TavilyExtractEntry = NonNullable<TavilyExtractPayload["results"]>[number];
+type SourceLogEntry = {
+  sourceId: string;
+  query?: string;
+  provider?: string;
+  url?: string;
+  domain?: string;
+  title?: string;
+  snippet?: string;
+  rank?: number;
+  accessedAt?: string;
+  extractedAt?: string;
+  contentHash?: string;
+  status: "success" | "failed";
+};
+type EnrichedExtractEntry = TavilyExtractEntry & {
+  domain?: string;
+  provider: "tavily";
+  status: "success";
+  extractedAt: string;
+  contentHash: string;
+};
+type EnrichedExtractPayload = Omit<TavilyExtractPayload, "results"> & {
+  results?: EnrichedExtractEntry[];
+  sourceLog: SourceLogEntry[];
+};
 
 function sendResponse(id: string | number | undefined, result: Record<string, unknown>): void {
   if (id === undefined) {
@@ -95,6 +137,18 @@ function createRouterFromEnv() {
   });
 }
 
+function domainFromUrl(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function contentHash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
 function truncateTextToExactBudget(text: string, maxChars: number): string {
   if (maxChars <= 0) {
     return "";
@@ -138,6 +192,73 @@ export function addSearchFallbackNotice(result: SearchRouterResult): SearchRoute
   };
 }
 
+export function addSearchSourceLog(result: SearchRouterResult): SearchRouterResult & { sourceLog: SourceLogEntry[] } {
+  return {
+    ...result,
+    sourceLog: result.results.map((entry, index) => ({
+      sourceId: `src_${String(index + 1).padStart(3, "0")}`,
+      query: result.query,
+      provider: entry.provider,
+      url: entry.url,
+      domain: entry.domain ?? domainFromUrl(entry.url),
+      title: entry.title,
+      snippet: entry.snippet,
+      rank: entry.rank ?? index + 1,
+      accessedAt: entry.accessedAt,
+      status: "success",
+    })),
+  };
+}
+
+export function addExtractSourceMetadata(
+  payload: TavilyExtractPayload,
+  extractedAt = new Date().toISOString(),
+): EnrichedExtractPayload {
+  const results = payload.results?.map((entry): EnrichedExtractEntry => {
+    const rawContent = entry.raw_content ?? "";
+    return {
+      ...entry,
+      domain: entry.url ? domainFromUrl(entry.url) : undefined,
+      provider: "tavily",
+      status: "success",
+      extractedAt,
+      contentHash: contentHash(rawContent),
+    };
+  });
+
+  return {
+    ...payload,
+    results,
+    sourceLog: (results ?? []).map((entry, index): SourceLogEntry => ({
+      sourceId: `src_${String(index + 1).padStart(3, "0")}`,
+      provider: "tavily",
+      url: entry.url,
+      domain: entry.domain,
+      status: entry.status,
+      extractedAt: entry.extractedAt,
+      contentHash: entry.contentHash,
+    })),
+  };
+}
+
+export function getProviderStatusFromEnv(env: NodeJS.ProcessEnv = process.env, checkedAt = new Date().toISOString()): ProviderStatus {
+  const braveConfigured = Boolean(env.BRAVE_API_KEY?.trim() || env.BRAVE_SEARCH_API_KEY?.trim());
+  const tavilyConfigured = Boolean(env.TAVILY_API_KEY?.trim());
+  return {
+    checkedAt,
+    providers: {
+      brave: {
+        configured: braveConfigured,
+        healthy: braveConfigured ? "unknown" : false,
+      },
+      tavily: {
+        configured: tavilyConfigured,
+        healthy: tavilyConfigured ? "unknown" : false,
+      },
+    },
+  };
+}
+
 async function callWebSearch(args: Record<string, unknown>): Promise<Record<string, unknown>> {
   const parsed = SearchToolInputSchema.safeParse(args);
   if (!parsed.success) {
@@ -150,7 +271,7 @@ async function callWebSearch(args: Record<string, unknown>): Promise<Record<stri
       mode: parsed.data.mode as SearchMode | undefined,
       maxResults: parsed.data.maxResults,
     });
-    return jsonContent(addSearchFallbackNotice(result));
+    return jsonContent(addSearchSourceLog(addSearchFallbackNotice(result)));
   } catch (error) {
     return renderToolError(error);
   }
@@ -170,10 +291,14 @@ async function callWebExtract(args: Record<string, unknown>): Promise<Record<str
       depth: parsed.data.depth,
       format: parsed.data.format,
     });
-    return jsonContent(truncateExtractResult(result, parsed.data.maxChars ?? 20_000));
+    return jsonContent(addExtractSourceMetadata(truncateExtractResult(result, parsed.data.maxChars ?? 20_000)));
   } catch (error) {
     return renderToolError(error);
   }
+}
+
+async function callProviderStatus(): Promise<Record<string, unknown>> {
+  return jsonContent(getProviderStatusFromEnv());
 }
 
 async function handleRequest(message: JsonRpcRequest): Promise<void> {
@@ -230,11 +355,20 @@ async function handleRequest(message: JsonRpcRequest): Promise<void> {
               format: { type: "string", enum: ["markdown", "text"] },
               maxChars: {
                 type: "number",
-                minimum: 1000,
+                minimum: 1,
                 maximum: 60000,
                 description: "Maximum total extracted content characters to return.",
               },
             },
+            additionalProperties: false,
+          },
+        },
+        {
+          name: "provider_status",
+          description: "Report whether Brave and Tavily API keys are configured without exposing secret values. This does not perform paid live health checks.",
+          inputSchema: {
+            type: "object",
+            properties: {},
             additionalProperties: false,
           },
         },
@@ -252,6 +386,10 @@ async function handleRequest(message: JsonRpcRequest): Promise<void> {
     }
     if (toolName === "web_extract") {
       sendResponse(message.id, await callWebExtract(args));
+      return;
+    }
+    if (toolName === "provider_status") {
+      sendResponse(message.id, await callProviderStatus());
       return;
     }
     sendError(message.id, -32601, "Unknown tool");

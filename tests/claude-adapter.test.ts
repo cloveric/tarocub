@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -138,7 +139,7 @@ describe("ProcessClaudeAdapter", () => {
       expect(calls[0]?.options.windowsHide).toBe(true);
       expect(child.stdin.written).toBe("Review this\nAttachment: a.ts");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -172,7 +173,7 @@ describe("ProcessClaudeAdapter", () => {
       const appendPrompt = calls[0]?.args[calls[0].args.indexOf("--append-system-prompt") + 1];
       expect(appendPrompt).toContain("[Telegram Bridge Capabilities]");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 

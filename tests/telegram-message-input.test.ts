@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -57,7 +58,7 @@ describe("prepareTelegramMessageInput", () => {
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
       expect(downloadFile).toHaveBeenCalledTimes(2);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -84,7 +85,7 @@ describe("prepareTelegramMessageInput", () => {
         text: "语音转写失败，请发送文字消息。",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

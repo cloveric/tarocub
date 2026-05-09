@@ -1,6 +1,7 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,7 +26,7 @@ describe("task commands", () => {
         warning: FILE_WORKFLOW_STATE_UNREADABLE_WARNING,
       });
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeTempRoot(homeDir);
     }
   });
 
@@ -65,7 +66,7 @@ describe("task commands", () => {
       await expect(access(sentinelPath)).resolves.toBeUndefined();
       await expect(readFile(path.join(stateDir, "file-workflow.json"), "utf8")).resolves.toContain('"records": []');
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeTempRoot(homeDir);
     }
   });
 
@@ -104,7 +105,7 @@ describe("task commands", () => {
       await expect(readFile(sentinelPath, "utf8")).resolves.toBe("keep me");
       await expect(readFile(path.join(stateDir, "file-workflow.json"), "utf8")).resolves.toContain('"records": []');
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeTempRoot(homeDir);
     }
   });
 
@@ -142,7 +143,7 @@ describe("task commands", () => {
       await expect(readFile(victimSentinelPath, "utf8")).resolves.toBe("keep me");
       await expect(readFile(path.join(stateDir, "file-workflow.json"), "utf8")).resolves.toContain('"records": []');
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeTempRoot(homeDir);
     }
   });
 
@@ -194,7 +195,7 @@ describe("task commands", () => {
       await expect(readFile(workflowPath, "utf8")).resolves.toContain('"uploadId":"upload-123"');
       expect(removeWorkspaceDir).not.toHaveBeenCalled();
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeTempRoot(homeDir);
     }
   });
 
@@ -241,7 +242,7 @@ describe("task commands", () => {
 
       expect(JSON.parse(await readFile(workflowPath, "utf8"))).toEqual(expect.objectContaining({ records: [] }));
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeTempRoot(homeDir);
     }
   });
 
@@ -290,7 +291,7 @@ describe("task commands", () => {
       await expect(access(workflowPath)).resolves.toBeUndefined();
       expect(removeWorkspaceDir).not.toHaveBeenCalled();
     } finally {
-      await rm(homeDir, { recursive: true, force: true });
+      await removeTempRoot(homeDir);
     }
   });
 });

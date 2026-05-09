@@ -1,7 +1,8 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { JsonStore } from "../src/state/json-store.js";
 import { SESSION_STATE_UNREADABLE_WARNING, SessionStore } from "../src/state/session-store.js";
@@ -46,7 +47,7 @@ describe("JsonStore", () => {
       const readBack = await store.read({ chats: [] });
       expect(readBack.chats).toEqual(value.chats);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -89,7 +90,7 @@ describe("JsonStore", () => {
       const onDisk = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion?: number };
       expect(onDisk.schemaVersion).toBe(1);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -117,7 +118,7 @@ describe("SessionStore", () => {
 
       await expect(store.findByChatId(123)).resolves.toEqual(record);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -132,7 +133,7 @@ describe("SessionStore", () => {
 
       await expect(store.findByChatId(123)).resolves.toEqual(createRecord({ codexSessionId: "session-2", status: "queued" }));
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -163,7 +164,7 @@ describe("SessionStore", () => {
       }));
       await expect(store.findByChatId(-100123)).resolves.toBeNull();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -191,7 +192,7 @@ describe("SessionStore", () => {
         createRecord({ telegramChatId: 103, codexSessionId: "session-103" }),
       );
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -221,7 +222,7 @@ describe("SessionStore", () => {
         expect.objectContaining({ telegramChatId: 200, codexSessionId: "thread-b" }),
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -236,7 +237,7 @@ describe("SessionStore", () => {
       await expect(store.removeByChatId(100)).resolves.toBe(true);
       await expect(store.findByChatId(100)).resolves.toBeNull();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -248,7 +249,7 @@ describe("SessionStore", () => {
     try {
       await expect(store.removeByChatId(999)).resolves.toBe(false);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -264,7 +265,7 @@ describe("SessionStore", () => {
       await expect(store.clearAll()).resolves.toBe(2);
       await expect(store.load()).resolves.toEqual(expect.objectContaining({ chats: [] }));
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -281,7 +282,7 @@ describe("SessionStore", () => {
       expect(second.chats).toEqual([]);
       expect(second).not.toBe(first);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -308,7 +309,7 @@ describe("SessionStore", () => {
 
       await expect(store.load()).rejects.toThrow("invalid session state");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -345,7 +346,7 @@ describe("SessionStore", () => {
         ],
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -372,7 +373,7 @@ describe("SessionStore", () => {
 
       await expect(store.load()).rejects.toThrow("invalid session state");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -393,7 +394,7 @@ describe("SessionStore", () => {
       });
     } finally {
       readSpy.mockRestore();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -411,7 +412,7 @@ describe("SessionStore", () => {
         repairable: true,
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -435,7 +436,7 @@ describe("SessionStore", () => {
       expect(backups).toHaveLength(1);
       await expect(readFile(path.join(tempDir, backups[0]!), "utf8")).resolves.toBe(unreadableContents);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -454,7 +455,7 @@ describe("SessionStore", () => {
       });
     } finally {
       readSpy.mockRestore();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

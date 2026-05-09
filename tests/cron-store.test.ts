@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -12,7 +13,7 @@ async function withStateDir<T>(fn: (stateDir: string, store: CronStore) => Promi
     const store = new CronStore(tempDir);
     return await fn(tempDir, store);
   } finally {
-    await rm(tempDir, { recursive: true, force: true });
+    await removeTempRoot(tempDir);
   }
 }
 

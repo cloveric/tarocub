@@ -3,7 +3,10 @@ import { spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import {
+  addExtractSourceMetadata,
   addSearchFallbackNotice,
+  addSearchSourceLog,
+  getProviderStatusFromEnv,
   resolveSearchMcpServerInvocation,
   truncateExtractResult,
 } from "../src/search/search-mcp-server.js";
@@ -52,7 +55,15 @@ describe("search MCP server", () => {
         result: {
           tools: expect.arrayContaining([
             expect.objectContaining({ name: "web_search" }),
-            expect.objectContaining({ name: "web_extract" }),
+            expect.objectContaining({
+              name: "web_extract",
+              inputSchema: expect.objectContaining({
+                properties: expect.objectContaining({
+                  maxChars: expect.objectContaining({ minimum: 1 }),
+                }),
+              }),
+            }),
+            expect.objectContaining({ name: "provider_status" }),
           ]),
         },
       });
@@ -119,6 +130,7 @@ describe("search MCP server", () => {
         {
           title: "Recovered result",
           url: "https://example.test/recovered",
+          provider: "tavily",
         },
       ],
       fallbacks: [
@@ -131,6 +143,40 @@ describe("search MCP server", () => {
 
     expect(result.notice).toContain("Search provider fallback used");
     expect(result.notice).toContain("brave: rate limited");
+  });
+
+  it("adds a source log to search responses", () => {
+    const result = addSearchSourceLog({
+      provider: "brave",
+      query: "docs",
+      results: [
+        {
+          title: "Docs",
+          url: "https://docs.example.com/page",
+          snippet: "Snippet",
+          rank: 1,
+          domain: "docs.example.com",
+          provider: "brave",
+          accessedAt: "2026-05-09T10:00:00.000Z",
+        },
+      ],
+      fallbacks: [],
+    });
+
+    expect(result.sourceLog).toEqual([
+      {
+        sourceId: "src_001",
+        query: "docs",
+        provider: "brave",
+        url: "https://docs.example.com/page",
+        domain: "docs.example.com",
+        title: "Docs",
+        snippet: "Snippet",
+        rank: 1,
+        accessedAt: "2026-05-09T10:00:00.000Z",
+        status: "success",
+      },
+    ]);
   });
 
   it("keeps extracted content within the requested total character budget", () => {
@@ -148,5 +194,55 @@ describe("search MCP server", () => {
 
     expect(total).toBeLessThanOrEqual(100);
     expect(result.results?.[2]?.raw_content).toBe("");
+  });
+
+  it("adds source metadata and content hashes to extract responses", () => {
+    const result = addExtractSourceMetadata({
+      results: [
+        {
+          url: "https://docs.example.com/page",
+          raw_content: "hello world",
+        },
+      ],
+    }, "2026-05-09T10:00:00.000Z");
+
+    expect(result.results?.[0]).toMatchObject({
+      url: "https://docs.example.com/page",
+      domain: "docs.example.com",
+      provider: "tavily",
+      status: "success",
+      extractedAt: "2026-05-09T10:00:00.000Z",
+    });
+    expect(result.results?.[0]?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.sourceLog?.[0]).toMatchObject({
+      sourceId: "src_001",
+      provider: "tavily",
+      url: "https://docs.example.com/page",
+      domain: "docs.example.com",
+      status: "success",
+      extractedAt: "2026-05-09T10:00:00.000Z",
+    });
+  });
+
+  it("reports provider configuration without exposing API keys", () => {
+    const status = getProviderStatusFromEnv({
+      BRAVE_API_KEY: "brave-secret",
+      TAVILY_API_KEY: "",
+    }, "2026-05-09T10:00:00.000Z");
+
+    expect(status).toEqual({
+      checkedAt: "2026-05-09T10:00:00.000Z",
+      providers: {
+        brave: {
+          configured: true,
+          healthy: "unknown",
+        },
+        tavily: {
+          configured: false,
+          healthy: false,
+        },
+      },
+    });
+    expect(JSON.stringify(status)).not.toContain("brave-secret");
   });
 });

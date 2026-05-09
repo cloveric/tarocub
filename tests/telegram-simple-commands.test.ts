@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -52,7 +53,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -86,7 +87,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Effort set to high.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -130,7 +131,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -164,7 +165,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Effort set to max.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -211,7 +212,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -241,7 +242,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
       expect(updateInstanceConfig).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Fast Mode is Codex-only.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -275,7 +276,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Codex Fast Mode disabled.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -305,7 +306,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
       expect(updateInstanceConfig).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Codex Fast Mode: on");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -345,7 +346,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -384,7 +385,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         ].join("\n"),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -422,7 +423,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         ].join("\n"),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -446,7 +447,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
 
       expect(handled).toBe(false);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -501,7 +502,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -546,7 +547,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         ].join("\n"),
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -583,7 +584,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

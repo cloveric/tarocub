@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, mkdir } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
@@ -6,6 +6,7 @@ import { createServer as createTcpServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 /**
  * Stand-in for a real cc-telegram-bridge bus server — responds to
@@ -259,7 +260,7 @@ describe("parseBusConfig", () => {
       await writeFile(path.join(tempDir, "config.json"), "null\n", "utf8");
       await expect(loadBusConfig(tempDir)).resolves.toBeNull();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });
@@ -307,7 +308,7 @@ describe("bus registry", () => {
     } finally {
       await workServer.close();
       await reviewerServer.close();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -319,7 +320,7 @@ describe("bus registry", () => {
       await registerInstance(tempDir, "ghost", 9102, "secret-ghost");
       expect(await lookupInstance(tempDir, "ghost")).toBeNull();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -334,7 +335,7 @@ describe("bus registry", () => {
       expect(await lookupInstance(tempDir, "hijacked")).toBeNull();
     } finally {
       await impostor.close();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -348,7 +349,7 @@ describe("bus registry", () => {
       expect(await lookupInstance(tempDir, "alpha")).toBeNull();
     } finally {
       await wrongNameServer.close();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -358,7 +359,7 @@ describe("bus registry", () => {
       const registry = await readRegistry(tempDir);
       expect(registry.instances).toEqual({});
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -396,7 +397,7 @@ describe("bus registry", () => {
         },
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -414,7 +415,7 @@ describe("bus registry", () => {
         beta: expect.objectContaining({ port: 9202, secret: "secret-b" }),
       }));
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -441,7 +442,7 @@ describe("bus registry", () => {
         beta: expect.objectContaining({ port: 9202, secret: "secret-b" }),
       }));
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });
@@ -498,7 +499,7 @@ describe("bus server", () => {
         await stopBusServer(server);
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -532,7 +533,7 @@ describe("bus server", () => {
         await stopBusServer(server);
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -573,7 +574,7 @@ describe("bus server", () => {
         await stopBusServer(server);
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -610,7 +611,7 @@ describe("bus server", () => {
         await stopBusServer(server);
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -646,7 +647,7 @@ describe("bus server", () => {
         await stopBusServer(server);
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -710,7 +711,7 @@ describe("bus server", () => {
         await stopBusServer(server);
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -750,7 +751,7 @@ describe("bus server", () => {
         await stopBusServer(server);
       }
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });
@@ -797,7 +798,7 @@ describe("delegateToInstance", () => {
       })).rejects.toThrow(/Invalid bus response/i);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(channelRoot, { recursive: true, force: true });
+      await removeTempRoot(channelRoot);
     }
   });
 
@@ -847,7 +848,7 @@ describe("delegateToInstance", () => {
       } satisfies Partial<BusProtocolError>);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(channelRoot, { recursive: true, force: true });
+      await removeTempRoot(channelRoot);
     }
   });
 
@@ -907,7 +908,7 @@ describe("delegateToInstance", () => {
       } satisfies Partial<BusProtocolError>);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(channelRoot, { recursive: true, force: true });
+      await removeTempRoot(channelRoot);
     }
   });
 
@@ -957,7 +958,7 @@ describe("delegateToInstance", () => {
         fromInstance: "reviewer",
       } satisfies Partial<BusProtocolError>);
     } finally {
-      await rm(channelRoot, { recursive: true, force: true });
+      await removeTempRoot(channelRoot);
     }
   });
 
@@ -1013,7 +1014,7 @@ describe("delegateToInstance", () => {
         socket.destroy();
       }
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(channelRoot, { recursive: true, force: true });
+      await removeTempRoot(channelRoot);
     }
   }, 10_000);
 });

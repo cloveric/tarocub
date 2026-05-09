@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -375,6 +375,10 @@ describe("handleCronCommand", () => {
         await expect(h.store.get(job.id)).resolves.toEqual(expect.objectContaining({
           runHistory: expect.arrayContaining([expect.objectContaining({ success: true })]),
         }));
+      });
+      await vi.waitFor(async () => {
+        const raw = await readFile(path.join(h.stateDir, "timeline.log.jsonl"), "utf8");
+        expect(raw).toContain('"type":"cron.completed"');
       });
       const messages = h.api.sendMessage.mock.calls.map((c) => c[1] as string);
       expect(messages.some((m) => m.includes("Running task"))).toBe(true);

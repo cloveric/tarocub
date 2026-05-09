@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -63,7 +64,7 @@ describe("handleGroupCommand", () => {
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("Allowed this group"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -106,7 +107,7 @@ describe("handleGroupCommand", () => {
       expect(updateInstanceConfig).not.toHaveBeenCalled();
       expect(api.sendMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -147,7 +148,7 @@ describe("handleGroupCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(123, "This chat is not authorized for this instance.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -179,7 +180,7 @@ describe("handleGroupCommand", () => {
       expect(updateInstanceConfig).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("inside the group"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -226,7 +227,7 @@ describe("handleGroupCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("Removed this group"));
       expect(api.leaveChat).toHaveBeenCalledWith(-100123);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -264,7 +265,7 @@ describe("handleGroupCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Group mode enabled.");
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Usage: /group [status|allow|deny|on|off|all|at]");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -304,7 +305,7 @@ describe("handleGroupCommand", () => {
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Current group listen mode: all messages.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -346,7 +347,7 @@ describe("handleGroupCommand", () => {
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Current group listen mode: mentions/replies only.");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -375,7 +376,7 @@ describe("handleGroupCommand", () => {
 
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("Current group listen mode: all messages"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

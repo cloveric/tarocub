@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -54,7 +55,7 @@ printf '%s\\n' "$*" >> "${launchctlLog}"
       expect(stdout).toContain('Removed legacy launchd plist for instance "alpha".');
       expect(stdout).toContain('Removed legacy launchd plist for instance "default".');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

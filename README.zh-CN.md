@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-群聊和-topic">群聊</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#定时任务--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-群聊和-topic">群聊</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#定时任务--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 > **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
@@ -35,6 +35,7 @@
 
 ### 最近这波变化
 
+- **v4.6.10** — 将可选的 Brave/Tavily Search MCP 打磨成面向 Codex 和 Claude Code 的正式研究插件：`web_search`、`web_extract` 和 `provider_status` 会返回来源元数据（`sourceLog`、`provider`、`domain`、`rank`、时间戳、抽取正文的 `contentHash`），fallback 会明确提示，小 `maxChars` 抽取预算也能使用，并且测试里的临时目录清理改为带重试，降低 macOS `ENOTEMPTY` 偶发失败。
 - **v4.6.2** — 新增 Telegram Board + Mini Bus 协作：`/board` 会把 Kanban 任务、完整任务卡、依赖、WIP 限制、review gate、run history 持久化下来，并支持通过 Mini Bus topic 或 Agent Bus 实例执行单张任务；`/mini` 可以把同一个群里的 forum topic 当成 planner/writer/reviewer 这类轻量 peer，支持 fan-out、chain、verify 和 crew workflow。
 - **v4.5.10** — 新增 Codex Fast Mode 控制：`/fast on|off|status` 会把 `fast_mode` 和 `service_tier="fast"` 透传到 Codex process / app-server runtime，Claude 实例会明确拒绝。Fast Mode 在无人值守 bridge 场景里按实验选项对待：如果 Codex 开始返回引擎运行时失败，先用 `/fast off` 关闭；如果实例运行态已经坏掉，等当前 turn 空闲后重启该实例一次。
 - **v4.5.9** — 加强 schema-backed tool 投递 receipt：`[tool:{...}]` JSON 写坏或 send tool 被拒绝时，不再保留模型口头说的“已发出”；批量/长文本投递优先使用 fenced `tool-call` block，并且 generated `agent.md` 升级会清理重复 scheduler 残留。
@@ -96,6 +97,42 @@ npm run dev -- telegram engine --instance review-bot
 | `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 |
 | 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） |
 | 空闲 worker | 每轮结束后进程退出 | stream worker 空闲 30 分钟后回收；session 仍可恢复 |
+
+## 实时网页搜索 MCP：Brave + Tavily
+
+bridge 内置一个可选的本地 MCP server，让 Codex 和 Claude Code 共用同一套可追溯的网页研究工具：
+
+- `web_search`：通过 Brave 和/或 Tavily 做实时搜索。
+- `web_extract`：用 Tavily Extract 清理并抽取指定 URL 正文。
+- `provider_status`：检查 Brave/Tavily 是否已配置，不暴露 API key。
+
+它的好处不是“又多一个搜索按钮”，而是让来源链更清楚：
+
+- Brave 适合找 URL、当前文档、价格页、新闻和普通网页结果。
+- Tavily 适合偏研究的补充搜索和正文抽取。
+- `verify` 模式会同时用 Brave + Tavily 交叉检查重要结论。
+- 返回结果带 `sourceLog`、`provider`、`domain`、`rank`、`accessedAt`、`extractedAt`，抽取正文还带 `contentHash`。
+- 如果 Brave/Tavily 其中一个失败并走 fallback，结果会带 `fallbacks` 和 `notice`，agent 应该在答案里简单说明 fallback。
+
+配置方式：
+
+```bash
+export BRAVE_API_KEY="..."
+export TAVILY_API_KEY="..."
+npm run build
+
+codex mcp add web-search \
+  --env BRAVE_API_KEY="$BRAVE_API_KEY" \
+  --env TAVILY_API_KEY="$TAVILY_API_KEY" \
+  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+
+claude mcp add web-search \
+  -e BRAVE_API_KEY="$BRAVE_API_KEY" \
+  -e TAVILY_API_KEY="$TAVILY_API_KEY" \
+  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+```
+
+配置后重启相关 bot 实例，让新的 Codex/Claude turn 继承 MCP 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
 
 ### Claude 引擎：CLAUDE.md 支持
 

@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -31,7 +32,7 @@ async function withDeliveryContext<T>(
     await mkdir(workspaceDir, { recursive: true });
     return await fn({ root, inboxDir, workspaceDir, api });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTempRoot(root);
   }
 }
 

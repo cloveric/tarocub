@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -405,7 +406,7 @@ describe("ProcessCodexAdapter", () => {
         "codex process could not resume thread thread-missing",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -431,7 +432,7 @@ describe("ProcessCodexAdapter", () => {
         "codex process could not resume thread thread-missing",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -449,7 +450,7 @@ describe("ProcessCodexAdapter", () => {
 
       await expect(adapter.validateExternalSession("thread-archived")).resolves.toBeUndefined();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -469,7 +470,7 @@ describe("ProcessCodexAdapter", () => {
         "codex process could not resume thread thread-too-deep",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -586,7 +587,7 @@ describe("ProcessCodexAdapter", () => {
       expect(calls[0]?.args[3]).toBe("-");
       expect(child.stdin.writes.join("")).toContain("You are bot alpha.\n---\nHello");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -615,7 +616,7 @@ describe("ProcessCodexAdapter", () => {
       expect(child.stdin.writes.join("")).toContain("You are bot alpha.");
       expect(child.stdin.writes.join("")).toContain("[Telegram Bridge Capabilities]");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -659,7 +660,7 @@ describe("ProcessCodexAdapter", () => {
       expect(secondCalls[0]?.args[3]).toBe("-");
       expect(secondChild.stdin.writes.join("")).toBe("Hello again");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -756,7 +757,7 @@ describe("ProcessCodexAdapter", () => {
       child.close(0);
       await promise;
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 

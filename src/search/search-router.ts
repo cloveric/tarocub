@@ -17,6 +17,10 @@ export interface SearchResultItem {
   title: string;
   url: string;
   snippet?: string;
+  rank?: number;
+  domain?: string;
+  provider: Exclude<SearchProviderName, "mixed">;
+  accessedAt?: string;
   score?: number;
   publishedAt?: string;
   source?: string;

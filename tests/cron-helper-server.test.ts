@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -57,7 +58,7 @@ async function buildHarness(): Promise<Harness> {
         }
       }
       await scheduler.stop();
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     },
   };
   return harness;
@@ -92,7 +93,7 @@ async function buildRestrictedHarness(): Promise<Harness> {
       refreshSpy.mockRestore();
       await harness.server.close().catch(() => undefined);
       await scheduler.stop();
-      await rm(stateDir, { recursive: true, force: true });
+      await removeTempRoot(stateDir);
     },
   };
   return harness;

@@ -1,6 +1,7 @@
-import { lstat, mkdtemp, mkdir, readlink, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readlink, readdir, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -24,7 +25,7 @@ describe("telegram-out", () => {
       expect(result.dirPath).toBe(path.join(root, "workspace", ".telegram-out", "req-123"));
       await expect(stat(result.dirPath)).resolves.toBeTruthy();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -41,7 +42,7 @@ describe("telegram-out", () => {
       expect((await lstat(aliasPath)).isSymbolicLink()).toBe(true);
       await expect(readlink(aliasPath)).resolves.toBe(result.dirPath);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -68,7 +69,7 @@ describe("telegram-out", () => {
         }),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -83,7 +84,7 @@ describe("telegram-out", () => {
       expect((await lstat(aliasPath)).isSymbolicLink()).toBe(true);
       await expect(readlink(aliasPath)).resolves.toBe(result.dirPath);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -101,7 +102,7 @@ describe("telegram-out", () => {
         path.join(request.dirPath, "b.txt"),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -113,13 +114,13 @@ describe("telegram-out", () => {
     try {
       await mkdir(outsideDir, { recursive: true });
       await writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
-      await rm(request.dirPath, { recursive: true, force: true });
+      await removeTempRoot(request.dirPath);
       await symlink(outsideDir, request.dirPath, process.platform === "win32" ? "junction" : "dir");
 
       await expect(listTelegramOutFiles(request.dirPath)).resolves.toEqual([]);
       await expect(describeTelegramOutFiles(request.dirPath)).resolves.toEqual([]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -137,7 +138,7 @@ describe("telegram-out", () => {
         path.join(request.dirPath, "safe.txt"),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -156,7 +157,7 @@ describe("telegram-out", () => {
         },
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -202,7 +203,7 @@ describe("telegram-out", () => {
       expect(created.dirPath).toBe(path.join(telegramOutRoot, "req-new"));
       await expect(readdir(telegramOutRoot)).resolves.toEqual(["current", "req-fresh", "req-new"]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -225,7 +226,7 @@ describe("telegram-out", () => {
 
       await expect(readdir(telegramOutRoot)).resolves.toEqual(["req-23h"]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -248,7 +249,7 @@ describe("telegram-out", () => {
 
       await expect(readdir(helperRoot)).resolves.toEqual(["req-fresh"]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -272,8 +273,8 @@ describe("telegram-out", () => {
 
       await expect(readdir(helperRoot)).resolves.toEqual(["req-fresh"]);
     } finally {
-      await rm(root, { recursive: true, force: true });
-      await rm(resumeWorkspace, { recursive: true, force: true });
+      await removeTempRoot(root);
+      await removeTempRoot(resumeWorkspace);
     }
   });
 
@@ -312,8 +313,8 @@ describe("telegram-out", () => {
       await expect(readdir(path.dirname(staleSend))).resolves.toEqual(["req-fresh"]);
       await expect(readdir(path.dirname(staleResumeSend))).resolves.toEqual(["req-fresh"]);
     } finally {
-      await rm(root, { recursive: true, force: true });
-      await rm(resumeWorkspace, { recursive: true, force: true });
+      await removeTempRoot(root);
+      await removeTempRoot(resumeWorkspace);
     }
   });
 
@@ -326,7 +327,7 @@ describe("telegram-out", () => {
 
       await expect(pruneStaleTelegramRuntimeDirs(root)).resolves.toBeUndefined();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

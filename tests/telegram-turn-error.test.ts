@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -58,7 +59,7 @@ describe("maybeRetryTelegramTurnError", () => {
         detail: "auth refresh",
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -98,7 +99,7 @@ describe("maybeRetryTelegramTurnError", () => {
         detail: "stale session",
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -136,7 +137,7 @@ describe("maybeRetryTelegramTurnError", () => {
       expect(removeByConversationKey).toHaveBeenCalledWith("chat:-100123:topic:77");
       expect(removeByChatId).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });
@@ -195,7 +196,7 @@ describe("finalizeTelegramTurnError", () => {
         }),
       }));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -230,7 +231,7 @@ describe("finalizeTelegramTurnError", () => {
 
       expect(sendMessage).not.toHaveBeenCalled();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -268,7 +269,7 @@ describe("finalizeTelegramTurnError", () => {
         "File delivery completed, but the engine disconnected while generating the final text reply. 1 file was already sent: moon-ultraclear-4x.png. If the file is usable, you do not need to rerun this turn.",
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

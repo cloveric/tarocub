@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -715,7 +716,7 @@ describe("TelegramApi", () => {
       expect(fetchMock).toHaveBeenCalledWith("https://api.telegram.org/file/bottoken/documents/file.bin", expect.objectContaining({ signal: expect.any(AbortSignal) }));
     } finally {
       fetchMock.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 

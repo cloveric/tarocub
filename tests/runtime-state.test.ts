@@ -1,6 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -17,7 +18,7 @@ describe("RuntimeStateStore", () => {
         activeTurnCount: 0,
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -37,7 +38,7 @@ describe("RuntimeStateStore", () => {
 
       await expect(store.load()).rejects.toThrow("invalid runtime state");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -67,7 +68,7 @@ describe("RuntimeStateStore", () => {
         activeTurnCount: 0,
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -88,7 +89,7 @@ describe("RuntimeStateStore", () => {
       expect(state.activeTurnStartedAt).toBeUndefined();
       expect(state.activeTurnUpdatedAt).toBeUndefined();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

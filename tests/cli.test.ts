@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, readdir, rm, mkdir, truncate, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, mkdir, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -40,7 +41,7 @@ describe("runCli", () => {
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain(".cctb-send/");
       await expect(readFile(agentPath, "utf8")).resolves.not.toContain("- Telegram is plain text");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -65,7 +66,7 @@ describe("runCli", () => {
       await expect(readFile(agentPath, "utf8")).resolves.toContain("## Telegram Transport");
       await expect(readFile(agentPath, "utf8")).resolves.toContain("Plain text only");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -79,7 +80,7 @@ describe("runCli", () => {
         }),
       ).rejects.toThrow("Invalid instance name");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -118,7 +119,7 @@ describe("runCli", () => {
       await expect(readFile(envPath, "utf8")).resolves.toBe("EXTRA=1\nKEEP=2\nTELEGRAM_BOT_TOKEN=\"new-token\"\n");
       await expect(readFile(agentPath, "utf8")).resolves.toBe("custom instructions");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -177,7 +178,7 @@ describe("runCli", () => {
       );
       expect(messages).toEqual(["Sent to Telegram chat 84 (1 file)."]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -210,7 +211,7 @@ describe("runCli", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(84, expect.stringContaining(missingPath));
       expect(api.sendDocument).not.toHaveBeenCalled();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -246,7 +247,7 @@ describe("runCli", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(84, expect.stringContaining("too large"));
       expect(api.sendDocument).not.toHaveBeenCalled();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -301,7 +302,7 @@ describe("runCli", () => {
       expect(messages).toEqual(["Sent via active Telegram turn."]);
     } finally {
       vi.unstubAllGlobals();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -313,7 +314,7 @@ describe("runCli", () => {
         env: { USERPROFILE: tempDir },
       })).rejects.toThrow("Usage: send [--message <text>] [--image <path>] [--file <path>] [text]");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -348,7 +349,7 @@ describe("runCli", () => {
         },
       })).rejects.toThrow("Multiple Telegram sessions found; pass --chat <id>.");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -385,7 +386,7 @@ describe("runCli", () => {
         }),
       ).rejects.toThrow('Pairing code "ZZZZZZ" is invalid or expired.');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -447,7 +448,7 @@ describe("runCli", () => {
         /^Instance: alpha\nPolicy: allowlist\nMulti-chat: off\nPaired users: 0\nAllowlist: 123\nPending pairs: [A-Z2-9]{8} chat 84 expires 2026-04-08T00:05:00\.000Z$/,
       );
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -475,7 +476,7 @@ describe("runCli", () => {
         "Instance: alpha\nPolicy: pairing\nMulti-chat: on\nPaired users: 0\nAllowlist: none\nPending pairs: none",
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -508,7 +509,7 @@ describe("runCli", () => {
       expect(messages[1]).toContain("Thread: thread-abc");
       expect(messages[1]).toContain("Status: idle");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -535,7 +536,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain("Chat: 84");
       expect(messages[0]).toContain("Thread: thread-123");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -562,7 +563,7 @@ describe("runCli", () => {
         }),
       ).rejects.toThrow('Stop instance "alpha" before renaming it.');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -597,7 +598,7 @@ describe("runCli", () => {
         "  - alpha [claude] stopped",
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -624,7 +625,7 @@ describe("runCli", () => {
         }),
       ).rejects.toThrow('Stop instance "alpha" before deleting it.');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -647,7 +648,7 @@ describe("runCli", () => {
 
       await expect(readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep-me");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -677,7 +678,7 @@ describe("runCli", () => {
       await expect(readFile(path.join(targetDir, "stale.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
       expect(messages[0]).toContain('Restored instance "alpha"');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -700,7 +701,7 @@ describe("runCli", () => {
         'Session state unreadable for instance "alpha".',
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -749,7 +750,7 @@ describe("runCli", () => {
         code: "ENOENT",
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -766,7 +767,7 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain('No task found for "missing-upload"');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -791,7 +792,7 @@ describe("runCli", () => {
         expect.arrayContaining([expect.stringMatching(/^session\.json\.corrupt\..+\.bak$/)]),
       );
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -810,7 +811,7 @@ describe("runCli", () => {
       });
     } finally {
       removeSpy.mockRestore();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -837,7 +838,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain('Reset session for chat 84');
       await expect(store.findByChatId(84)).resolves.toBeNull();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -891,7 +892,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain("Recent file workflow records: 2");
       expect(messages[0].indexOf("upload-123")).toBeLessThan(messages[0].indexOf("upload-456"));
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -915,7 +916,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain("Warning: file workflow state unreadable");
       expect(messages[0]).not.toContain("Tasks: none");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -938,7 +939,7 @@ describe("runCli", () => {
         'Task state unreadable for instance "alpha".',
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -959,7 +960,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain("task inspect [--instance <name>] <upload-id>");
       expect(messages[0]).toContain("task clear [--instance <name>] <upload-id>");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -993,7 +994,7 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain("Thread: thread-abc");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1041,7 +1042,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain("Extracted directory: workspace/.telegram-files/upload-123/extracted");
       expect(messages[0]).toContain("Detail: Extraction failed: archive is corrupt");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1066,7 +1067,7 @@ describe("runCli", () => {
         expect.arrayContaining([expect.stringMatching(/^file-workflow\.json\.corrupt\..+\.bak$/)]),
       );
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1085,7 +1086,7 @@ describe("runCli", () => {
       });
     } finally {
       findSpy.mockRestore();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1110,7 +1111,7 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages).toEqual(['{"type":"b"}\n{"type":"c"}']);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1141,7 +1142,7 @@ describe("runCli", () => {
         '{"timestamp":"2026-04-08T00:01:00.000Z","type":"update.handle","chatId":2,"outcome":"error"}',
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1172,7 +1173,7 @@ describe("runCli", () => {
         '{"timestamp":"2026-04-08T00:00:01.000Z","type":"turn.completed","channel":"telegram","outcome":"success"}\n{"timestamp":"2026-04-08T00:00:02.000Z","type":"budget.blocked","channel":"telegram"}',
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1203,7 +1204,7 @@ describe("runCli", () => {
         '{"timestamp":"2026-04-08T00:00:00.000Z","type":"turn.completed","channel":"telegram","outcome":"success","chatId":1}',
       ]);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1235,7 +1236,7 @@ describe("runCli", () => {
       expect(messages[2]).toContain('Instance "alpha" instructions:');
       expect(messages[2]).toContain("You are bot alpha.");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1265,7 +1266,7 @@ describe("runCli", () => {
       expect(upgraded).toContain('"name":"send.file"');
       expect(upgraded).not.toContain(", or one fenced");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1296,7 +1297,7 @@ describe("runCli", () => {
       expect(upgraded).not.toContain("cctb send --file PATH");
       expect(upgraded).not.toContain(".telegram-out/current");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1332,7 +1333,7 @@ describe("runCli", () => {
       expect(upgraded).not.toContain("cctb cron add");
       expect(upgraded).not.toContain("PATH already has `cctb`");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1370,7 +1371,7 @@ describe("runCli", () => {
       expect(upgraded).not.toContain("cctb cron add");
       expect(upgraded).not.toContain("CronCreate");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1398,7 +1399,7 @@ describe("runCli", () => {
       expect(upgraded.match(new RegExp(residue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
       expect(upgraded).toContain("## Local Notes\n\nKeep this note.");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1421,7 +1422,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain("manual review required");
       await expect(readFile(agentPath, "utf8")).resolves.toBe(custom);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1451,7 +1452,7 @@ describe("runCli", () => {
       expect(backupName).toBeDefined();
       await expect(readFile(path.join(path.dirname(agentPath), backupName ?? ""), "utf8")).resolves.toContain("Use my private relay");
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1474,7 +1475,7 @@ describe("runCli", () => {
       expect(messages[0]).toContain('Would upgrade instructions for instance "alpha"');
       await expect(readFile(agentPath, "utf8")).resolves.toBe(legacy);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1504,7 +1505,7 @@ describe("runCli", () => {
       await expect(readFile(path.join(tempDir, ".cctb", "beta", "agent.md"), "utf8")).resolves.toContain('"name":"send.file"');
       await expect(readFile(path.join(tempDir, ".cctb", ".restore-backup-alpha", "agent.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1534,7 +1535,7 @@ describe("runCli", () => {
       ]));
       await expect(readFile(path.join(tempDir, ".cctb", "alpha", "agent.md"), "utf8")).resolves.toContain('"name":"send.file"');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1552,7 +1553,7 @@ describe("runCli", () => {
       expect(messages[0]).toBe('Instance "alpha": no instructions configured (agent.md not found).');
       expect(messages[1]).toContain(path.join(tempDir, ".cctb", "alpha", "agent.md"));
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1578,7 +1579,7 @@ describe("runCli", () => {
       const configPath = path.join(tempDir, ".cctb", "alpha", "config.json");
       await expect(readFile(configPath, "utf8")).resolves.toContain('"engine": "claude"');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1606,7 +1607,7 @@ describe("runCli", () => {
       );
       await expect(readFile(configPath, "utf8")).resolves.not.toContain('"model"');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1635,7 +1636,7 @@ describe("runCli", () => {
       );
       await expect(sessionStore.findByChatId(123)).resolves.toBeNull();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -1662,7 +1663,7 @@ describe("runCli", () => {
       expect(messages).toEqual([]);
     } finally {
       clearAllSpy.mockRestore();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

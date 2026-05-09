@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,7 +19,7 @@ describe("instance lock", () => {
 
       await lock.release();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -48,7 +49,7 @@ describe("instance lock", () => {
 
       await lock.release();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -73,7 +74,7 @@ describe("instance lock", () => {
 
       await expect(acquireInstanceLock(root)).rejects.toThrow(`Instance lock already held by pid ${process.pid}`);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -101,7 +102,7 @@ describe("instance lock", () => {
       expect(onDisk.pid).toBe(process.pid);
       await lock.release();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -126,7 +127,7 @@ describe("instance lock", () => {
 
       await expect(acquireInstanceLock(root)).rejects.toThrow(`Instance lock already held by pid ${process.pid}`);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -142,7 +143,7 @@ describe("instance lock", () => {
       expect(onDisk.pid).toBe(process.pid);
       await lock.release();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -159,7 +160,7 @@ describe("instance lock", () => {
       expect(errorSpy).toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

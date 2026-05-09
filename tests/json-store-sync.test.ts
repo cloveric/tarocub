@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 describe("JsonStore fsync behavior", () => {
   afterEach(() => {
@@ -40,7 +41,7 @@ describe("JsonStore fsync behavior", () => {
       expect(syncTargets[0]).toMatch(/session\.json\..+\.tmp$/);
       expect(syncTargets[1]).toBe(tempDir);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -73,7 +74,7 @@ describe("JsonStore fsync behavior", () => {
       await expect(store.write({ chats: [] })).resolves.toBeUndefined();
       await expect(readFile(filePath, "utf8")).resolves.toContain('"chats": []');
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

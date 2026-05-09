@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -26,7 +27,7 @@ describe("runtime state recovery", () => {
       await expect(recoverLastHandledUpdateIdFromAudit(tempDir, store)).resolves.toBe(875);
       await expect(store.load()).resolves.toMatchObject({ lastHandledUpdateId: 875 });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -45,7 +46,7 @@ describe("runtime state recovery", () => {
       await expect(recoverLastHandledUpdateIdFromAudit(tempDir, store)).resolves.toBe(42);
       await expect(store.load()).resolves.toMatchObject({ lastHandledUpdateId: 42 });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -70,7 +71,7 @@ describe("runtime state recovery", () => {
       await expect(recoverLastHandledUpdateIdFromAudit(tempDir, store)).resolves.toBe(160_000);
       await expect(store.load()).resolves.toMatchObject({ lastHandledUpdateId: 160_000 });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -89,7 +90,7 @@ describe("runtime state recovery", () => {
       await expect(recoverLastHandledUpdateIdFromAudit(tempDir, store)).resolves.toBeNull();
       await expect(store.load()).resolves.toMatchObject({ lastHandledUpdateId: null });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });

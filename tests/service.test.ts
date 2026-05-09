@@ -55,13 +55,14 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function waitForCondition(condition: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt++) {
+async function waitForCondition(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
     if (condition()) {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
   throw new Error("Condition was not met in time");
@@ -102,7 +103,7 @@ function replaceBufferContents(buffer: Buffer, search: string, replace: string):
 afterEach(async () => {
   _resetEnqueuedUpdateIds();
   _resetStoppedTaskChats();
-  await rm(path.join(os.tmpdir(), "ignored"), { recursive: true, force: true });
+  await removeTempRoot(path.join(os.tmpdir(), "ignored"));
   await rm(path.join(os.tmpdir(), "runtime-state.json"), { force: true });
 });
 

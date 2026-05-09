@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -73,7 +74,7 @@ describe("handleBoardTelegramCommand", () => {
         }),
       ]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -110,7 +111,7 @@ describe("handleBoardTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("Promoted: B2"));
       await expect(store.getTask("B2")).resolves.toMatchObject({ status: "ready" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -155,7 +156,7 @@ describe("handleBoardTelegramCommand", () => {
 
       expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("[failed] R1 tests failed"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -198,7 +199,7 @@ describe("handleBoardTelegramCommand", () => {
         checklist: [expect.objectContaining({ id: "C1", text: "Update README", done: false })],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -223,7 +224,7 @@ describe("handleBoardTelegramCommand", () => {
       await expect(new BoardStore(root).getLimits()).resolves.toMatchObject({ global: 2 });
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("global=2"));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -276,7 +277,7 @@ describe("handleBoardTelegramCommand", () => {
 
       await expect(store.getTask("B1")).resolves.toMatchObject({ status: "done" });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -352,7 +353,7 @@ describe("handleBoardTelegramCommand", () => {
         runs: [expect.objectContaining({ id: "R1", status: "done", summary: "Draft is complete." })],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -412,7 +413,7 @@ describe("handleBoardTelegramCommand", () => {
         summary: "Agent Bus result.",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -451,7 +452,7 @@ describe("handleBoardTelegramCommand", () => {
         runs: [],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -498,7 +499,7 @@ describe("handleBoardTelegramCommand", () => {
         runs: [expect.objectContaining({ id: "R1", status: "failed", error: "engine failed" })],
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

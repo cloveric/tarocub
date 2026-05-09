@@ -1,6 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -33,7 +34,7 @@ describe("loadInstanceConfig", () => {
         },
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -62,7 +63,7 @@ describe("loadInstanceConfig", () => {
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -91,7 +92,7 @@ describe("loadInstanceConfig", () => {
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -146,7 +147,7 @@ describe("loadInstanceConfig", () => {
         },
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -175,7 +176,7 @@ describe("loadInstanceConfig", () => {
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });
@@ -200,7 +201,7 @@ describe("updateInstanceConfig", () => {
         model: "claude-opus",
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 
@@ -219,7 +220,7 @@ describe("updateInstanceConfig", () => {
         expect(persisted[`field${index}`]).toBe(index);
       }
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
   });
 });

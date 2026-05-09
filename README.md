@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-groups-and-topics">Groups</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">Files</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#scheduled-tasks--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#live-web-search-mcp-brave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-groups-and-topics">Groups</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">Files</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#scheduled-tasks--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 > **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
@@ -35,6 +35,7 @@
 
 ### What Changed Recently
 
+- **v4.6.10** — promotes the optional Brave/Tavily Search MCP into a release-ready research add-on for Codex and Claude Code: `web_search`, `web_extract`, and `provider_status` now return source metadata (`sourceLog`, `provider`, `domain`, `rank`, timestamps, and extract `contentHash`), fallback notices are explicit, small `maxChars` extract budgets are accepted, and macOS test cleanup uses retrying temp-directory removal to reduce `ENOTEMPTY` flakes.
 - **v4.6.2** — adds Telegram Board + Mini Bus coordination: `/board` stores durable Kanban tasks with richer cards, dependencies, WIP limits, review gates, run history, and one-task execution via Mini Bus topics or Agent Bus instances; `/mini` lets forum topics in the same group act as planner/writer/reviewer-style peers for fan-out, chain, verify, and crew workflows.
 - **v4.5.10** — adds Codex Fast Mode control with `/fast on|off|status`, forwarding `fast_mode` and `service_tier="fast"` to both Codex process and app-server runtimes while keeping Claude instances rejected cleanly. Fast Mode is experimental in unattended bridge use: if Codex starts returning engine-runtime failures, turn it off with `/fast off`; if the instance is already unhealthy, restart the instance once after the current turn is idle.
 - **v4.5.9** — hardens schema-backed tool delivery receipts: malformed `[tool:{...}]` JSON or rejected send tools no longer preserve misleading “already sent” model text; batch/long delivery now prefers fenced `tool-call` blocks, and generated `agent.md` upgrades clean up duplicate scheduler residue.
@@ -96,6 +97,42 @@ npm run dev -- telegram engine --instance review-bot
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage |
 | Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) |
 | Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable |
+
+## Live Web Search MCP: Brave + Tavily
+
+The bridge ships an optional local MCP server that gives both Codex and Claude Code the same source-traceable web research tools:
+
+- `web_search` routes live search through Brave and/or Tavily.
+- `web_extract` uses Tavily Extract to read known URLs cleanly.
+- `provider_status` reports whether Brave/Tavily keys are configured without exposing the keys.
+
+Why use it instead of only native model search:
+
+- Brave is good for URL discovery, current docs, pricing pages, news, and broad search.
+- Tavily is good for extraction-oriented research and clean page text.
+- `verify` mode cross-checks both providers when a claim matters.
+- Results include source metadata: `sourceLog`, `provider`, `domain`, `rank`, `accessedAt`, `extractedAt`, and `contentHash` for extracted pages.
+- If Brave or Tavily fails and the other provider is used, the result includes `fallbacks` plus a `notice` so the agent can disclose the fallback.
+
+Register it after setting local API keys:
+
+```bash
+export BRAVE_API_KEY="..."
+export TAVILY_API_KEY="..."
+npm run build
+
+codex mcp add web-search \
+  --env BRAVE_API_KEY="$BRAVE_API_KEY" \
+  --env TAVILY_API_KEY="$TAVILY_API_KEY" \
+  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+
+claude mcp add web-search \
+  -e BRAVE_API_KEY="$BRAVE_API_KEY" \
+  -e TAVILY_API_KEY="$TAVILY_API_KEY" \
+  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+```
+
+Then restart affected bot instances so their Codex/Claude turns see the new MCP configuration. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./docs/search-mcp.md).
 
 ### Claude Engine: CLAUDE.md Support
 

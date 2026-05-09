@@ -1,6 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,7 +26,7 @@ describe("SessionManager", () => {
       });
       expect(adapter.createSession).not.toHaveBeenCalled();
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -45,7 +46,7 @@ describe("SessionManager", () => {
         sessionId: "thread-123",
       });
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -71,7 +72,7 @@ describe("SessionManager", () => {
       });
       await expect(sessionPromise).rejects.toBeInstanceOf(SessionStateError);
     } finally {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 
@@ -98,7 +99,7 @@ describe("SessionManager", () => {
       await expect(sessionPromise).rejects.toBeInstanceOf(SessionStateError);
     } finally {
       readSpy.mockRestore();
-      await rm(tempDir, { recursive: true, force: true });
+      await removeTempRoot(tempDir);
     }
   });
 });
