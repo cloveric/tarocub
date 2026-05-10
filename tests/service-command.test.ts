@@ -1283,6 +1283,49 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("stops stale duplicate service processes for the same instance", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+    const killed = new Set<number>();
+    const killProcessTree = vi.fn((pid: number) => {
+      killed.add(pid);
+    });
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 54321,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+
+      const handled = await runCli(["telegram", "service", "stop", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => (pid === 54321 || pid === 54322) && !killed.has(pid),
+          isExpectedServiceProcess: (pid) => pid === 54321 || pid === 54322,
+          findServiceProcessIds: async () => [54321, 54322],
+          sleep: async () => {},
+          killProcessTree,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual(['Stopped instance "alpha".']);
+      expect(killProcessTree).toHaveBeenCalledWith(54321);
+      expect(killProcessTree).toHaveBeenCalledWith(54322);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("warns when stopping an instance that still has a legacy launchd plist", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

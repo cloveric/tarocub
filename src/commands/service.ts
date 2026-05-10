@@ -55,6 +55,7 @@ export interface ServiceCommandDeps {
   ) => void;
   sleep?: (ms: number) => Promise<void>;
   killProcessTree?: (pid: number) => void;
+  findServiceProcessIds?: (entryPath: string, instanceName: string) => Promise<number[]> | number[];
   readTextFile?: (filePath: string) => Promise<string>;
   readConfiguredBotToken?: (env: ServiceCommandEnv, instanceName: string) => Promise<string | null>;
   fetchTelegramBotIdentity?: (botToken: string) => Promise<{ firstName: string; username?: string }>;
@@ -191,7 +192,6 @@ function defaultIsProcessAlive(pid: number): boolean {
 
 function defaultIsExpectedServiceProcess(pid: number, entryPath: string, instanceName: string): boolean {
   if (process.platform === "win32") {
-    const relativeEntryPath = path.relative(process.cwd(), entryPath).replace(/\\/g, "/");
     const encoded = Buffer.from(
       `
         $proc = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}";
@@ -210,13 +210,7 @@ function defaultIsExpectedServiceProcess(pid: number, entryPath: string, instanc
       return false;
     }
 
-    const commandLine = result.stdout.trim().toLowerCase();
-    return (
-      (commandLine.includes(entryPath.toLowerCase()) ||
-        commandLine.includes(relativeEntryPath.toLowerCase()) ||
-        commandLine.includes("dist/src/index.js")) &&
-      commandLine.includes(`--instance ${instanceName.toLowerCase()}`)
-    );
+    return isServiceCommandLine(result.stdout.trim(), entryPath, instanceName);
   }
 
   // macOS / Linux: read /proc or use ps
@@ -228,12 +222,27 @@ function defaultIsExpectedServiceProcess(pid: number, entryPath: string, instanc
     return false;
   }
 
-  const commandLine = result.stdout.trim().toLowerCase();
-  const instancePattern = new RegExp(`(?:^|\\s)--instance(?:=|\\s+)${instanceName.toLowerCase()}(?:\\s|$)`);
-  return (
-    commandLine.includes("dist/src/index.js") &&
-    instancePattern.test(commandLine)
+  return isServiceCommandLine(result.stdout.trim(), entryPath, instanceName);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isServiceCommandLine(commandLine: string, entryPath: string, instanceName: string): boolean {
+  const normalizedCommandLine = commandLine.replace(/\\/g, "/").toLowerCase();
+  const normalizedEntryPath = entryPath.replace(/\\/g, "/").toLowerCase();
+  const relativeEntryPath = path.relative(process.cwd(), entryPath).replace(/\\/g, "/").toLowerCase();
+  const entryAlternatives = [...new Set([
+    normalizedEntryPath,
+    relativeEntryPath,
+    "dist/src/index.js",
+  ].filter((entry) => entry.length > 0))].map(escapeRegExp);
+  const instance = escapeRegExp(instanceName.toLowerCase());
+  const pattern = new RegExp(
+    `(?:^|\\s)(?:${entryAlternatives.join("|")})\\s+--instance(?:=|\\s+)${instance}(?:\\s|$)`,
   );
+  return pattern.test(normalizedCommandLine);
 }
 
 function defaultSpawnDetached(
@@ -284,6 +293,35 @@ function defaultKillProcessTree(pid: number): void {
       throw new Error(`Failed to stop pid ${pid}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+function defaultFindServiceProcessIds(entryPath: string, instanceName: string): number[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const result = spawnSync("ps", ["-axo", "pid=,args="], {
+    encoding: "utf8",
+  });
+
+  if (result.status !== 0 || !result.stdout) {
+    return [];
+  }
+
+  const pids: number[] = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+(.+)$/);
+    if (!match?.[1] || !match[2]) {
+      continue;
+    }
+
+    const pid = Number.parseInt(match[1], 10);
+    if (pid !== process.pid && Number.isInteger(pid) && isServiceCommandLine(match[2], entryPath, instanceName)) {
+      pids.push(pid);
+    }
+  }
+
+  return pids;
 }
 
 async function defaultReadProcessEnvironment(pid: number): Promise<Record<string, string> | null> {
@@ -614,6 +652,7 @@ export async function stopServiceInstance(
   const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
   const isExpectedServiceProcess = deps.isExpectedServiceProcess ?? defaultIsExpectedServiceProcess;
   const killProcessTree = deps.killProcessTree ?? defaultKillProcessTree;
+  const findServiceProcessIds = deps.findServiceProcessIds ?? defaultFindServiceProcessIds;
   const sleep = deps.sleep ?? defaultSleep;
   const legacyLaunchAgentPath = resolveLegacyLaunchAgentPlistPath(env, instanceName);
   const legacyLaunchdWarning = existsSync(legacyLaunchAgentPath)
@@ -621,11 +660,22 @@ export async function stopServiceInstance(
     : "";
 
   const existingLock = await readLockRecord(paths.lockPath);
+  const pidsToStop = new Set<number>();
   if (
-    existingLock === null ||
-    !isProcessAlive(existingLock.pid) ||
-    !isExpectedServiceProcess(existingLock.pid, paths.entryPath, paths.instanceName)
+    existingLock !== null &&
+    isProcessAlive(existingLock.pid) &&
+    isExpectedServiceProcess(existingLock.pid, paths.entryPath, paths.instanceName)
   ) {
+    pidsToStop.add(existingLock.pid);
+  }
+
+  for (const pid of await findServiceProcessIds(paths.entryPath, paths.instanceName)) {
+    if (isProcessAlive(pid) && isExpectedServiceProcess(pid, paths.entryPath, paths.instanceName)) {
+      pidsToStop.add(pid);
+    }
+  }
+
+  if (pidsToStop.size === 0) {
     removeLockIfMatches(paths.lockPath, existingLock?.pid ?? null);
     return `Instance "${paths.instanceName}" is not running.${legacyLaunchdWarning}`;
   }
@@ -634,10 +684,12 @@ export async function stopServiceInstance(
     await assertNoActiveTurnsBeforeStop(paths.stateDir, paths.instanceName, deps);
   }
 
-  killProcessTree(existingLock.pid);
+  for (const pid of pidsToStop) {
+    killProcessTree(pid);
+  }
 
   for (let attempt = 0; attempt < 20; attempt++) {
-    if (!isProcessAlive(existingLock.pid)) {
+    if ([...pidsToStop].every((pid) => !isProcessAlive(pid))) {
       return `Stopped instance "${paths.instanceName}".${legacyLaunchdWarning}`;
     }
 

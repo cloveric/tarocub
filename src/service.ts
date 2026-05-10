@@ -759,8 +759,10 @@ export async function lookupTelegramBotIdentity(api: TelegramApi): Promise<Resol
 
 const defaultChatQueue = new ChatQueue();
 const activeTasks = new Map<string | number, AbortController>();
-const enqueuedUpdateIds = new Set<number>();
-const completedOutOfOrderUpdateIds = new Set<number>();
+const updateDedupStates = new Map<string, {
+  enqueuedUpdateIds: Set<number>;
+  completedOutOfOrderUpdateIds: Set<number>;
+}>();
 const stoppedTaskChats = new Set<string | number>();
 const STOPPED_TASK_BOUNDARY = [
   "[Previous task was explicitly stopped by the user.]",
@@ -770,8 +772,7 @@ const STOPPED_TASK_BOUNDARY = [
 
 /** @internal — test-only reset for module-level dedup state */
 export function _resetEnqueuedUpdateIds(): void {
-  enqueuedUpdateIds.clear();
-  completedOutOfOrderUpdateIds.clear();
+  updateDedupStates.clear();
 }
 
 /** @internal — test-only reset for module-level stopped-task state */
@@ -792,6 +793,22 @@ export function abortChatTask(chatId: number | string, chatQueue: ChatQueue = de
 
 function normalizedConversationKey(normalized: NormalizedTelegramMessage): string {
   return getNormalizedTelegramConversationKey(normalized);
+}
+
+function getUpdateDedupState(inboxDir: string): {
+  enqueuedUpdateIds: Set<number>;
+  completedOutOfOrderUpdateIds: Set<number>;
+} {
+  const stateKey = path.resolve(inboxDir);
+  let state = updateDedupStates.get(stateKey);
+  if (!state) {
+    state = {
+      enqueuedUpdateIds: new Set<number>(),
+      completedOutOfOrderUpdateIds: new Set<number>(),
+    };
+    updateDedupStates.set(stateKey, state);
+  }
+  return state;
 }
 
 export async function runQueuedTelegramTurn(
@@ -1112,33 +1129,55 @@ export async function processTelegramUpdates(
   let nextOffset: number | undefined;
   const chatQueue = context.chatQueue ?? defaultChatQueue;
   const runtimeStateStore = getRuntimeStateStore(context.inboxDir);
+  const { enqueuedUpdateIds, completedOutOfOrderUpdateIds } = getUpdateDedupState(context.inboxDir);
   const runtimeState = await runtimeStateStore.load();
   let lastHandledUpdateId = runtimeState.lastHandledUpdateId;
 
+  const flushCompletedUpdateIds = async (): Promise<void> => {
+    const latestState = await runtimeStateStore.load();
+    lastHandledUpdateId = latestState.lastHandledUpdateId;
+
+    while (true) {
+      const candidates = [...completedOutOfOrderUpdateIds]
+        .filter((candidate) => lastHandledUpdateId === null || candidate > lastHandledUpdateId)
+        .sort((a, b) => a - b);
+      const nextCompletedUpdateId = candidates.find((candidate) => {
+        for (const pendingUpdateId of enqueuedUpdateIds) {
+          if (
+            !completedOutOfOrderUpdateIds.has(pendingUpdateId) &&
+            (lastHandledUpdateId === null || pendingUpdateId > lastHandledUpdateId) &&
+            pendingUpdateId <= candidate
+          ) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      if (nextCompletedUpdateId === undefined) {
+        break;
+      }
+
+      await runtimeStateStore.markHandledUpdateId(nextCompletedUpdateId);
+      lastHandledUpdateId = nextCompletedUpdateId;
+      for (const completedUpdateId of [...completedOutOfOrderUpdateIds]) {
+        if (completedUpdateId <= nextCompletedUpdateId) {
+          completedOutOfOrderUpdateIds.delete(completedUpdateId);
+        }
+      }
+    }
+  };
+
   const markUpdateCompleted = async (updateId: number): Promise<void> => {
+    const latestState = await runtimeStateStore.load();
+    lastHandledUpdateId = latestState.lastHandledUpdateId;
     if (lastHandledUpdateId !== null && updateId <= lastHandledUpdateId) {
       completedOutOfOrderUpdateIds.delete(updateId);
       return;
     }
 
-    const expectedNext = lastHandledUpdateId === null ? updateId : lastHandledUpdateId + 1;
-    if (updateId !== expectedNext) {
-      completedOutOfOrderUpdateIds.add(updateId);
-      return;
-    }
-
-    let nextCompletedUpdateId = updateId;
-    while (true) {
-      await runtimeStateStore.markHandledUpdateId(nextCompletedUpdateId);
-      lastHandledUpdateId = nextCompletedUpdateId;
-      completedOutOfOrderUpdateIds.delete(nextCompletedUpdateId);
-
-      const followingUpdateId = nextCompletedUpdateId + 1;
-      if (!completedOutOfOrderUpdateIds.has(followingUpdateId)) {
-        break;
-      }
-      nextCompletedUpdateId = followingUpdateId;
-    }
+    completedOutOfOrderUpdateIds.add(updateId);
+    await flushCompletedUpdateIds();
   };
 
   for (const update of updates) {
@@ -1339,6 +1378,24 @@ export async function processTelegramUpdates(
             } catch (error) {
               await appendTelegramDeliveryFailureAuditBestEffort(context, normalized, updateId, "stop.sendMessage", error);
             }
+          }
+          try {
+            await appendAuditEvent(path.dirname(context.inboxDir), {
+              type: "update.handle",
+              instanceName: context.instanceName,
+              chatId: normalized.chatId,
+              ...getTelegramConversationLogScope(normalized),
+              userId: normalized.userId,
+              updateId,
+              outcome: "success",
+              metadata: {
+                command: "stop",
+                stopped,
+              },
+            });
+          } catch {
+            // Stopping a task is control-plane behavior; a late audit write failure
+            // must not keep the Telegram update unacknowledged.
           }
           nextOffset = advanceOffset(nextOffset, completedOffset);
           if (updateId !== undefined) {

@@ -918,6 +918,105 @@ describe("polling helpers", () => {
     }
   });
 
+  it("advances the handled update watermark when a later update completes after an earlier update", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const runtimeStatePath = path.join(root, "runtime-state.json");
+    const firstStarted = createDeferred<void>();
+    const firstRelease = createDeferred<void>();
+    const secondStarted = createDeferred<void>();
+    const secondRelease = createDeferred<void>();
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (normalized: { text: string }) => {
+        if (normalized.text === "first") {
+          firstStarted.resolve();
+          await firstRelease.promise;
+          return { text: "first done" };
+        }
+        if (normalized.text === "second") {
+          secondStarted.resolve();
+          await secondRelease.promise;
+          return { text: "second done" };
+        }
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      await mkdir(root, { recursive: true });
+      await writeFile(runtimeStatePath, JSON.stringify({
+        schemaVersion: 1,
+        lastHandledUpdateId: 9,
+        activeTurnCount: 0,
+      }), "utf8");
+
+      const firstRun = processTelegramUpdates(
+        [
+          {
+            update_id: 10,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              text: "first",
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      await firstStarted.promise;
+
+      const secondRun = processTelegramUpdates(
+        [
+          {
+            update_id: 11,
+            message: {
+              chat: { id: 456, type: "private" },
+              from: { id: 789 },
+              text: "second",
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      await secondStarted.promise;
+      firstRelease.resolve();
+      await firstRun;
+      await expect(readFile(runtimeStatePath, "utf8").then(JSON.parse)).resolves.toMatchObject({
+        lastHandledUpdateId: 10,
+      });
+
+      secondRelease.resolve();
+      await secondRun;
+      await expect(readFile(runtimeStatePath, "utf8").then(JSON.parse)).resolves.toMatchObject({
+        lastHandledUpdateId: 11,
+      });
+    } finally {
+      firstRelease.resolve();
+      secondRelease.resolve();
+      await removeTempRoot(root);
+    }
+  });
+
   it("keeps processing increasing update ids", async () => {
     const logger = {
       error: vi.fn(),
@@ -2243,6 +2342,50 @@ describe("polling helpers", () => {
       "No task is currently running.",
       { messageThreadId: 42 },
     );
+  });
+
+  it("audits /stop as a handled update", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn(),
+    };
+    const chatQueue = new ChatQueue();
+    const inboxDir = path.join(root, "inbox");
+
+    try {
+      await processTelegramUpdates(
+        [{
+          update_id: 35,
+          message: {
+            chat: { id: 123, type: "private" },
+            from: { id: 456 },
+            text: "/stop",
+          },
+        }],
+        { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+        logger,
+      );
+
+      const events = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "update.handle",
+          updateId: 35,
+          outcome: "success",
+          metadata: expect.objectContaining({ command: "stop" }),
+        }),
+      ]));
+    } finally {
+      await removeTempRoot(root);
+    }
   });
 
   it("acknowledges unauthorized approval callback queries", async () => {
