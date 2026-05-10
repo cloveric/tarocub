@@ -54,6 +54,7 @@ export function renderDefaultInstanceAgentInstructions(): string {
   "## Telegram Transport",
   "",
   `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
+  "Web/current facts: prefer `web_search` MCP; use native search only if unavailable/fails, and disclose fallback.",
   "",
   ].join("\n");
 }
@@ -117,6 +118,11 @@ const GENERATED_SCHEDULED_TASKS_BLOCKS = [
 ];
 
 const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
+  [
+    "## Telegram Transport",
+    "",
+    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
+  ].join("\n"),
   [
     "## Telegram Transport",
     "",

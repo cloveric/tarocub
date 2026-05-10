@@ -9,6 +9,8 @@ import { createSearchRouter, type SearchMode } from "./search-router.js";
 import { createBraveSearchProvider, createTavilySearchProvider, extractWithTavily } from "./search-providers.js";
 import type { SearchRouterResult } from "./search-router.js";
 
+type FetchLike = typeof fetch;
+
 type JsonRpcRequest = {
   jsonrpc?: string;
   id?: string | number;
@@ -41,6 +43,11 @@ const ExtractToolInputSchema = z.object({
   message: "url or urls is required",
 });
 
+const HealthCheckInputSchema = z.object({
+  provider: z.enum(["all", "brave", "tavily"]).optional(),
+  query: z.string().trim().min(1).max(100).optional(),
+}).passthrough();
+
 type ProviderStatus = {
   checkedAt: string;
   providers: {
@@ -53,6 +60,23 @@ type ProviderStatus = {
       healthy: "unknown" | false;
     };
   };
+};
+type LiveProviderHealth = {
+  configured: boolean;
+  checked: boolean;
+  healthy: boolean;
+  status: "ok" | "not_configured" | "auth_error" | "rate_limited" | "timeout" | "error";
+  detail?: string;
+};
+type LiveHealthCheckStatus = {
+  checkedAt: string;
+  live: true;
+  query: string;
+  providers: {
+    brave?: LiveProviderHealth;
+    tavily?: LiveProviderHealth;
+  };
+  note: string;
 };
 type TavilyExtractPayload = Awaited<ReturnType<typeof extractWithTavily>>;
 type TavilyExtractEntry = NonNullable<TavilyExtractPayload["results"]>[number];
@@ -135,6 +159,133 @@ function createRouterFromEnv() {
     brave: braveApiKey ? createBraveSearchProvider({ apiKey: braveApiKey }) : undefined,
     tavily: tavilyApiKey ? createTavilySearchProvider({ apiKey: tavilyApiKey }) : undefined,
   });
+}
+
+function providerKeysFromEnv(env: NodeJS.ProcessEnv): { braveApiKey: string; tavilyApiKey: string } {
+  return {
+    braveApiKey: env.BRAVE_API_KEY?.trim() || env.BRAVE_SEARCH_API_KEY?.trim() || "",
+    tavilyApiKey: env.TAVILY_API_KEY?.trim() ?? "",
+  };
+}
+
+function classifyHealthError(error: unknown): LiveProviderHealth["status"] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\b(401|403)\b|unauthori[sz]ed|invalid.*key|forbidden/i.test(message)) {
+    return "auth_error";
+  }
+  if (/\b429\b|rate.?limit|quota|too many requests/i.test(message)) {
+    return "rate_limited";
+  }
+  if (/abort|timeout|timed out/i.test(message)) {
+    return "timeout";
+  }
+  return "error";
+}
+
+function healthErrorDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/(Authorization:\s*Bearer\s+)[^\s,;]+/gi, "$1[redacted]")
+    .replace(/(\bBearer\s+)[^\s,;]+/gi, "$1[redacted]")
+    .replace(/(X-Subscription-Token:?\s*)[^\s,;]+/gi, "$1[redacted]")
+    .replace(/((?:BRAVE|BRAVE_SEARCH|TAVILY)_API_KEY=)[^\s,;]+/gi, "$1[redacted]");
+}
+
+async function checkConfiguredProvider(
+  providerName: "brave" | "tavily",
+  provider: ReturnType<typeof createBraveSearchProvider> | ReturnType<typeof createTavilySearchProvider>,
+  query: string,
+): Promise<LiveProviderHealth> {
+  try {
+    await provider.search({
+      query,
+      mode: "quick",
+      maxResults: 1,
+    });
+    return {
+      configured: true,
+      checked: true,
+      healthy: true,
+      status: "ok",
+    };
+  } catch (error) {
+    return {
+      configured: true,
+      checked: true,
+      healthy: false,
+      status: classifyHealthError(error),
+      detail: `${providerName}: ${healthErrorDetail(error)}`,
+    };
+  }
+}
+
+export async function runSearchProviderHealthCheck(input: {
+  env?: NodeJS.ProcessEnv;
+  provider?: "all" | "brave" | "tavily";
+  checkedAt?: string;
+  fetchImpl?: FetchLike;
+  fetchTimeoutMs?: number;
+  query?: string;
+} = {}): Promise<LiveHealthCheckStatus> {
+  const env = input.env ?? process.env;
+  const selectedProvider = input.provider ?? "all";
+  const checkedAt = input.checkedAt ?? new Date().toISOString();
+  const query = input.query ?? "OpenAI";
+  const { braveApiKey, tavilyApiKey } = providerKeysFromEnv(env);
+  const providers: LiveHealthCheckStatus["providers"] = {};
+  const shouldCheckBrave = selectedProvider === "all" || selectedProvider === "brave";
+  const shouldCheckTavily = selectedProvider === "all" || selectedProvider === "tavily";
+  const checks: Array<Promise<void>> = [];
+
+  if (shouldCheckBrave) {
+    if (braveApiKey) {
+      const provider = createBraveSearchProvider({
+        apiKey: braveApiKey,
+        fetchImpl: input.fetchImpl,
+        fetchTimeoutMs: input.fetchTimeoutMs ?? 10_000,
+      });
+      checks.push(checkConfiguredProvider("brave", provider, query).then((result) => {
+        providers.brave = result;
+      }));
+    } else {
+      providers.brave = {
+        configured: false,
+        checked: false,
+        healthy: false,
+        status: "not_configured",
+      };
+    }
+  }
+
+  if (shouldCheckTavily) {
+    if (tavilyApiKey) {
+      const provider = createTavilySearchProvider({
+        apiKey: tavilyApiKey,
+        fetchImpl: input.fetchImpl,
+        fetchTimeoutMs: input.fetchTimeoutMs ?? 10_000,
+      });
+      checks.push(checkConfiguredProvider("tavily", provider, query).then((result) => {
+        providers.tavily = result;
+      }));
+    } else {
+      providers.tavily = {
+        configured: false,
+        checked: false,
+        healthy: false,
+        status: "not_configured",
+      };
+    }
+  }
+
+  await Promise.all(checks);
+
+  return {
+    checkedAt,
+    live: true,
+    query,
+    providers,
+    note: "health_check performs live provider requests only when explicitly called; it may consume provider quota.",
+  };
 }
 
 function domainFromUrl(url: string): string | undefined {
@@ -301,6 +452,22 @@ async function callProviderStatus(): Promise<Record<string, unknown>> {
   return jsonContent(getProviderStatusFromEnv());
 }
 
+async function callHealthCheck(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const parsed = HealthCheckInputSchema.safeParse(args);
+  if (!parsed.success) {
+    return jsonContent(`Invalid health_check input: ${parsed.error.message}`, true);
+  }
+
+  try {
+    return jsonContent(await runSearchProviderHealthCheck({
+      provider: parsed.data.provider,
+      query: parsed.data.query,
+    }));
+  } catch (error) {
+    return renderToolError(error);
+  }
+}
+
 async function handleRequest(message: JsonRpcRequest): Promise<void> {
   if (message.method === "initialize") {
     sendResponse(message.id, {
@@ -372,6 +539,27 @@ async function handleRequest(message: JsonRpcRequest): Promise<void> {
             additionalProperties: false,
           },
         },
+        {
+          name: "health_check",
+          description: "Explicitly perform live Brave/Tavily health checks. Use sparingly because it calls provider APIs and may consume quota.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              provider: {
+                type: "string",
+                enum: ["all", "brave", "tavily"],
+                description: "Provider to check. Defaults to all configured providers.",
+              },
+              query: {
+                type: "string",
+                minLength: 1,
+                maxLength: 100,
+                description: "Optional harmless query for the live probe. Defaults to OpenAI.",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
       ],
     });
     return;
@@ -390,6 +578,10 @@ async function handleRequest(message: JsonRpcRequest): Promise<void> {
     }
     if (toolName === "provider_status") {
       sendResponse(message.id, await callProviderStatus());
+      return;
+    }
+    if (toolName === "health_check") {
+      sendResponse(message.id, await callHealthCheck(args));
       return;
     }
     sendError(message.id, -32601, "Unknown tool");

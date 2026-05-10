@@ -7,6 +7,7 @@ import {
   addSearchFallbackNotice,
   addSearchSourceLog,
   getProviderStatusFromEnv,
+  runSearchProviderHealthCheck,
   resolveSearchMcpServerInvocation,
   truncateExtractResult,
 } from "../src/search/search-mcp-server.js";
@@ -64,6 +65,7 @@ describe("search MCP server", () => {
               }),
             }),
             expect.objectContaining({ name: "provider_status" }),
+            expect.objectContaining({ name: "health_check" }),
           ]),
         },
       });
@@ -244,5 +246,99 @@ describe("search MCP server", () => {
       },
     });
     expect(JSON.stringify(status)).not.toContain("brave-secret");
+  });
+
+  it("runs an explicit live health check without exposing API keys", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes("api.search.brave.com")) {
+        return new Response(JSON.stringify({ web: { results: [] } }), { status: 200 });
+      }
+      if (url.includes("api.tavily.com")) {
+        return new Response(JSON.stringify({ error: "quota exceeded" }), { status: 429, statusText: "Too Many Requests" });
+      }
+      throw new Error(`unexpected health check URL: ${url}`);
+    };
+
+    const status = await runSearchProviderHealthCheck({
+      env: {
+        BRAVE_API_KEY: "brave-secret",
+        TAVILY_API_KEY: "tavily-secret",
+      },
+      checkedAt: "2026-05-10T10:00:00.000Z",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    expect(calls.find((call) => call.url.includes("api.tavily.com"))?.init?.headers).toMatchObject({
+      Authorization: "Bearer tavily-secret",
+    });
+    expect(status).toMatchObject({
+      checkedAt: "2026-05-10T10:00:00.000Z",
+      live: true,
+      providers: {
+        brave: {
+          configured: true,
+          checked: true,
+          healthy: true,
+          status: "ok",
+        },
+        tavily: {
+          configured: true,
+          checked: true,
+          healthy: false,
+          status: "rate_limited",
+        },
+      },
+    });
+    expect(JSON.stringify(status)).not.toContain("brave-secret");
+    expect(JSON.stringify(status)).not.toContain("tavily-secret");
+  });
+
+  it("passes a custom health check query to the selected provider", async () => {
+    const calls: string[] = [];
+    const fetchImpl = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      return new Response(JSON.stringify({ web: { results: [] } }), { status: 200 });
+    };
+
+    const status = await runSearchProviderHealthCheck({
+      env: {
+        BRAVE_API_KEY: "brave-secret",
+        TAVILY_API_KEY: "tavily-secret",
+      },
+      provider: "brave",
+      query: "custom health probe",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    expect(status.query).toBe("custom health probe");
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0]!).searchParams.get("q")).toBe("custom health probe");
+    expect(status.providers.tavily).toBeUndefined();
+  });
+
+  it("redacts leaked provider secrets from live health check errors", async () => {
+    const fetchImpl = async () => {
+      throw new Error("network failed Authorization: Bearer tavily-secret X-Subscription-Token: brave-secret BRAVE_API_KEY=brave-env TAVILY_API_KEY=tavily-env");
+    };
+
+    const status = await runSearchProviderHealthCheck({
+      env: {
+        BRAVE_API_KEY: "brave-secret",
+        TAVILY_API_KEY: "tavily-secret",
+      },
+      provider: "tavily",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    const detail = status.providers.tavily?.detail ?? "";
+    expect(detail).toContain("[redacted]");
+    expect(detail).not.toContain("tavily-secret");
+    expect(detail).not.toContain("brave-secret");
+    expect(detail).not.toContain("brave-env");
+    expect(detail).not.toContain("tavily-env");
   });
 });

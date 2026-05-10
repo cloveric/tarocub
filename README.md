@@ -105,6 +105,7 @@ The bridge ships an optional local MCP server that gives both Codex and Claude C
 - `web_search` routes live search through Brave and/or Tavily.
 - `web_extract` uses Tavily Extract to read known URLs cleanly.
 - `provider_status` reports whether Brave/Tavily keys are configured without exposing the keys.
+- `health_check` optionally performs live Brave/Tavily probes when you explicitly want to diagnose auth, quota, rate limit, or timeout issues; pass `query` if you want a non-default probe term.
 
 Why use it instead of only native model search:
 

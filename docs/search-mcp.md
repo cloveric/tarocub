@@ -6,11 +6,12 @@
 node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
 ```
 
-It exposes three tools:
+It exposes four tools:
 
 - `web_search` - routed live search through Brave and/or Tavily.
 - `web_extract` - Tavily-powered clean URL extraction.
 - `provider_status` - local configuration status for Brave/Tavily without exposing API keys.
+- `health_check` - optional live provider probes for auth, quota, rate limit, and timeout diagnostics.
 
 ## Provider Routing
 
@@ -120,6 +121,7 @@ Recommended usage policy:
 - Use `web_search` with `mode: "verify"` for important or uncertain claims.
 - Use `web_extract` after search when a specific URL should be read cleanly.
 - Use `provider_status` when diagnosing whether Brave/Tavily is configured before a research task.
+- Use `health_check` only when explicitly diagnosing provider health; it performs live API requests, may consume quota, and accepts an optional `query` probe term.
 - `web_extract` accepts `maxChars` to bound returned source text; default is 20,000 characters and small budgets are valid.
 - Prefer `sourceLog`, `domain`, `provider`, and `contentHash` fields when writing structured research outputs.
 - If a `web_search` result includes `notice` or non-empty `fallbacks`, mention the fallback briefly in the answer.

@@ -69,6 +69,7 @@ describe("executeTelegramTool", () => {
 
   it("keeps generated agent instructions concise", () => {
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("payload:{message?,images?,files?}");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("prefer `web_search` MCP");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("```tool-call");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("2026-05-01T09:00:00Z");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain('"cron":"0 9 * * 1"');
