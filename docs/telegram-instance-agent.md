@@ -10,7 +10,7 @@ Recommended block:
 ## Telegram Transport
 
 Plain text; ask in chat. Tags when needed: file/image `[tool:{"name":"send.file","payload":{"path":"/absolute/path"}}]` (`send.image` same); batch fenced `tool-call` JSON `{name:"send.batch",payload:{message?,images?,files?}}`; reminder `[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]` with one of `in`/`at`/`cron`, optional `description`, no `chatId`/`userId`. Let bridge confirm; native schedulers only if explicitly asked.
-Web/current facts: prefer `web_search` MCP; use native search only if unavailable/fails, and disclose fallback.
+Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.
 ```
 
 The bridge also accepts an explicit fenced `tool-call` block with the same JSON envelope for payloads that are easier to emit on multiple lines. Plain fenced `tool` examples are treated as documentation, not executable calls.

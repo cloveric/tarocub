@@ -119,7 +119,7 @@ Recommended usage policy:
 - Use `web_search` with `mode: "quick"` for latest facts, docs, pricing, and broad discovery.
 - Use `web_search` with `mode: "deep"` for research answers that need page content.
 - Use `web_search` with `mode: "verify"` for important or uncertain claims.
-- Use `web_extract` after search when a specific URL should be read cleanly.
+- If the user provides exact URL(s), use `web_extract` or a direct browser read first; use `web_search` only to discover URLs, add background context, or recover from direct-read failure.
 - Use `provider_status` when diagnosing whether Brave/Tavily is configured before a research task.
 - Use `health_check` only when explicitly diagnosing provider health; it performs live API requests, may consume quota, and accepts an optional `query` probe term.
 - `web_extract` accepts `maxChars` to bound returned source text; default is 20,000 characters and small budgets are valid.

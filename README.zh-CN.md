@@ -106,6 +106,7 @@ bridge 内置一个可选的本地 MCP server，让 Codex 和 Claude Code 共用
 - `web_extract`：用 Tavily Extract 清理并抽取指定 URL 正文。
 - `provider_status`：检查 Brave/Tavily 是否已配置，不暴露 API key。
 - `health_check`：需要排查 auth、quota、rate limit 或 timeout 时，手动发起 Brave/Tavily 真实探活；可以传 `query` 换掉默认探活词。
+- 如果用户已经给了明确 URL，agent 应该先直接读取这些 URL，再用搜索做链接发现或背景补充。
 
 它的好处不是“又多一个搜索按钮”，而是让来源链更清楚：
 
