@@ -3,7 +3,7 @@ import { getTelegramConversationKey } from "./conversation-key.js";
 export interface NormalizedTelegramAttachment {
   fileId: string;
   fileName?: string;
-  kind: "document" | "photo" | "voice";
+  kind: "audio" | "document" | "photo" | "voice";
 }
 
 export interface NormalizedTelegramMessage {
@@ -20,6 +20,7 @@ export interface NormalizedTelegramMessage {
     photoFileId?: string;
     documentFileId?: string;
     documentFileName?: string;
+    audioAttachment?: NormalizedTelegramAttachment;
   };
   attachments: NormalizedTelegramAttachment[];
 }
@@ -92,9 +93,11 @@ function normalizeReplyContext(message: any): NormalizedTelegramMessage["replyCo
     }
   }
 
+  const audioAttachment = normalizeAudioAttachment(reply)[0] ?? normalizeVoiceAttachment(reply)[0];
+
   let documentFileId: string | undefined;
   let documentFileName: string | undefined;
-  if (typeof reply?.document?.file_id === "string") {
+  if (!audioAttachment && typeof reply?.document?.file_id === "string") {
     documentFileId = reply.document.file_id;
     documentFileName = typeof reply.document.file_name === "string" ? reply.document.file_name : undefined;
   }
@@ -102,10 +105,19 @@ function normalizeReplyContext(message: any): NormalizedTelegramMessage["replyCo
   return {
     messageId,
     text: replyText,
-    photoFileId,
-    documentFileId,
-    documentFileName,
+    ...(photoFileId !== undefined ? { photoFileId } : {}),
+    ...(documentFileId !== undefined ? { documentFileId } : {}),
+    ...(documentFileName !== undefined ? { documentFileName } : {}),
+    ...(audioAttachment !== undefined ? { audioAttachment } : {}),
   };
+}
+
+const AUDIO_FILE_NAME_PATTERN = /\.(aac|aiff?|flac|m4a|m4b|mp3|oga|ogg|opus|wav|webm)$/i;
+
+function isAudioDocument(message: any): boolean {
+  const mimeType = typeof message?.document?.mime_type === "string" ? message.document.mime_type : "";
+  const fileName = typeof message?.document?.file_name === "string" ? message.document.file_name : "";
+  return mimeType.toLowerCase().startsWith("audio/") || AUDIO_FILE_NAME_PATTERN.test(fileName);
 }
 
 function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment[] {
@@ -113,12 +125,36 @@ function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment
   if (typeof fileId !== "string" || fileId.length === 0) {
     return [];
   }
+  if (isAudioDocument(message)) {
+    return [
+      {
+        fileId,
+        fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
+        kind: "audio",
+      },
+    ];
+  }
 
   return [
     {
       fileId,
       fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
       kind: "document",
+    },
+  ];
+}
+
+function normalizeAudioAttachment(message: any): NormalizedTelegramAttachment[] {
+  const fileId = message?.audio?.file_id;
+  if (typeof fileId !== "string" || fileId.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      fileId,
+      fileName: typeof message.audio.file_name === "string" ? message.audio.file_name : undefined,
+      kind: "audio",
     },
   ];
 }
@@ -187,6 +223,11 @@ export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
           ? message.caption
           : "",
     replyContext: normalizeReplyContext(message),
-    attachments: [...normalizeDocumentAttachment(message), ...normalizePhotoAttachment(message), ...normalizeVoiceAttachment(message)],
+    attachments: [
+      ...normalizeAudioAttachment(message),
+      ...normalizeDocumentAttachment(message),
+      ...normalizePhotoAttachment(message),
+      ...normalizeVoiceAttachment(message),
+    ],
   };
 }

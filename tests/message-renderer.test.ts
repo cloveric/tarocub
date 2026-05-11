@@ -342,6 +342,100 @@ describe("normalizeUpdate", () => {
     });
   });
 
+  it("extracts an audio attachment", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          audio: {
+            file_id: "audio-file",
+            file_name: "request.m4a",
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "",
+      replyContext: undefined,
+      attachments: [
+        {
+          fileId: "audio-file",
+          fileName: "request.m4a",
+          kind: "audio",
+        },
+      ],
+    });
+  });
+
+  it("treats audio document attachments as transcribable audio", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          document: {
+            file_id: "audio-doc",
+            file_name: "voice-note.m4a",
+            mime_type: "audio/mp4",
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "",
+      replyContext: undefined,
+      attachments: [
+        {
+          fileId: "audio-doc",
+          fileName: "voice-note.m4a",
+          kind: "audio",
+        },
+      ],
+    });
+  });
+
+  it("extracts quoted audio reply context", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          text: "draft from this",
+          reply_to_message: {
+            message_id: 99,
+            audio: {
+              file_id: "quoted-audio-file",
+              file_name: "brief.m4a",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "draft from this",
+      replyContext: {
+        messageId: 99,
+        text: "",
+        audioAttachment: {
+          fileId: "quoted-audio-file",
+          fileName: "brief.m4a",
+          kind: "audio",
+        },
+      },
+      attachments: [],
+    });
+  });
+
   it("extracts the highest-resolution photo attachment", () => {
     expect(
       normalizeUpdate({

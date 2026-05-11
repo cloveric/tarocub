@@ -38,6 +38,10 @@ function inferExtension(attachment: NormalizedTelegramAttachment, telegramFilePa
     return ".ogg";
   }
 
+  if (attachment.kind === "audio") {
+    return ".m4a";
+  }
+
   return "";
 }
 
@@ -170,6 +174,18 @@ async function defaultDownloadAttachments(
   return downloadedFiles;
 }
 
+function isAudioLikeAttachment(attachment: NormalizedTelegramAttachment): boolean {
+  return attachment.kind === "voice" || attachment.kind === "audio";
+}
+
+function appendQuotedAudioTranscript(
+  replyContext: NonNullable<NormalizedTelegramMessage["replyContext"]>,
+  transcript: string,
+): void {
+  const block = `[Quoted audio transcript]\n${transcript}`;
+  replyContext.text = replyContext.text.trim() ? `${replyContext.text.trim()}\n\n${block}` : block;
+}
+
 export async function prepareTelegramMessageInput(input: {
   locale: Locale;
   inboxDir: string;
@@ -188,8 +204,11 @@ export async function prepareTelegramMessageInput(input: {
   } = input;
 
   const allDownloaded = await downloadAttachments(api, inboxDir, normalized.attachments);
-  const voiceDownloads = allDownloaded.filter((downloaded) => downloaded.attachment.kind === "voice");
-  const downloadedAttachments = allDownloaded.filter((downloaded) => downloaded.attachment.kind !== "voice");
+  const voiceDownloads = allDownloaded.filter((downloaded) => isAudioLikeAttachment(downloaded.attachment));
+  const downloadedAttachments = allDownloaded.filter((downloaded) => !isAudioLikeAttachment(downloaded.attachment));
+  const quotedAudioDownloads = normalized.replyContext?.audioAttachment
+    ? await downloadAttachments(api, inboxDir, [normalized.replyContext.audioAttachment])
+    : [];
 
   let text = normalized.text;
   if (voiceDownloads.length > 0) {
@@ -203,6 +222,21 @@ export async function prepareTelegramMessageInput(input: {
         return {
           kind: "reply",
           text: locale === "zh" ? "语音转写失败，请发送文字消息。" : "Voice transcription failed. Please send a text message.",
+        };
+      }
+    }
+  }
+  if (quotedAudioDownloads.length > 0 && normalized.replyContext) {
+    for (const quotedAudio of quotedAudioDownloads) {
+      try {
+        const transcript = await transcribeVoice(quotedAudio.localPath);
+        if (transcript) {
+          appendQuotedAudioTranscript(normalized.replyContext, transcript);
+        }
+      } catch {
+        return {
+          kind: "reply",
+          text: locale === "zh" ? "音频转写失败，请发送文字消息。" : "Audio transcription failed. Please send a text message.",
         };
       }
     }

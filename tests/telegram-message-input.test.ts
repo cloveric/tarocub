@@ -62,6 +62,73 @@ describe("prepareTelegramMessageInput", () => {
     }
   });
 
+  it("downloads audio attachments and appends their transcripts to the turn text", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("please use this", [
+      { fileId: "audio-1", fileName: "brief.m4a", kind: "audio" },
+    ]);
+    const transcribeVoice = vi.fn().mockResolvedValue("audio transcript");
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "audio/brief.m4a" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice,
+      });
+
+      expect(result).toEqual({
+        kind: "ready",
+        text: "please use this\naudio transcript",
+        downloadedAttachments: [],
+      });
+      expect(transcribeVoice).toHaveBeenCalledTimes(1);
+      expect(transcribeVoice).toHaveBeenCalledWith(expect.stringMatching(/brief\.m4a$/));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("transcribes quoted audio into the reply context", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized: NormalizedTelegramMessage = {
+      ...createNormalizedMessage("draft from this", []),
+      replyContext: {
+        messageId: 99,
+        text: "",
+        audioAttachment: {
+          fileId: "quoted-audio-1",
+          fileName: "request.m4a",
+          kind: "audio",
+        },
+      },
+    };
+    const transcribeVoice = vi.fn().mockResolvedValue("quoted audio transcript");
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "audio/request.m4a" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice,
+      });
+
+      expect(result.kind).toBe("ready");
+      expect(normalized.replyContext?.text).toBe("[Quoted audio transcript]\nquoted audio transcript");
+      expect(transcribeVoice).toHaveBeenCalledTimes(1);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("returns a localized reply when voice transcription fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
     const normalized = createNormalizedMessage("", [
