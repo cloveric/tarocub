@@ -322,7 +322,7 @@ describe("deliverTelegramResponse", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
     const inboxDir = path.join(realRoot, "instance", "inbox");
-    const placeholderPath = "/Users/cloveric/.cctb/example/workspace/output.png";
+    const placeholderPath = "/Users/example-user/.cctb/example/workspace/output.png";
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
@@ -445,7 +445,7 @@ describe("deliverTelegramResponse", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);
     const inboxDir = path.join(realRoot, "instance", "inbox");
-    const placeholderPath = "/Users/cloveric/.cctb/example/workspace/output.png";
+    const placeholderPath = "/Users/example-user/.cctb/example/workspace/output.png";
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),

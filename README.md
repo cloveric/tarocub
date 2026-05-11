@@ -139,12 +139,12 @@ npm run build
 codex mcp add web-search \
   --env BRAVE_API_KEY="$BRAVE_API_KEY" \
   --env TAVILY_API_KEY="$TAVILY_API_KEY" \
-  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+  -- node "$PWD/dist/src/index.js" search-mcp
 
 claude mcp add web-search \
   -e BRAVE_API_KEY="$BRAVE_API_KEY" \
   -e TAVILY_API_KEY="$TAVILY_API_KEY" \
-  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+  -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
 Then restart affected bot instances so their Codex/Claude turns see the new MCP configuration. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./docs/search-mcp.md).

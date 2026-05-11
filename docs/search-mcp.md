@@ -3,7 +3,7 @@
 `cc-telegram-bridge` includes a local stdio MCP server for live web search:
 
 ```bash
-node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+node ./dist/src/index.js search-mcp
 ```
 
 It exposes four tools:
@@ -69,7 +69,7 @@ export TAVILY_API_KEY="..."
 Build first:
 
 ```bash
-cd /Users/cloveric/projects/cc-telegram-bridge
+cd /path/to/cc-telegram-bridge
 npm run build
 ```
 
@@ -79,7 +79,7 @@ Then register the stdio MCP server:
 codex mcp add web-search \
   --env BRAVE_API_KEY="$BRAVE_API_KEY" \
   --env TAVILY_API_KEY="$TAVILY_API_KEY" \
-  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+  -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
 Check:
@@ -94,7 +94,7 @@ codex mcp list
 claude mcp add web-search \
   -e BRAVE_API_KEY="$BRAVE_API_KEY" \
   -e TAVILY_API_KEY="$TAVILY_API_KEY" \
-  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+  -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
 Check:

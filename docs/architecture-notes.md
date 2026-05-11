@@ -57,7 +57,7 @@ That is the main seam we should preserve and strengthen.
 
 ### 1. Boot and Process Lifecycle
 
-The runtime entrypoint is [src/index.ts](/Users/cloveric/projects/cc-telegram-bridge/src/index.ts).
+The runtime entrypoint is [src/index.ts](../src/index.ts).
 
 It is responsible for:
 
@@ -80,7 +80,7 @@ It is responsible for:
 
 ### 2. Delivery Layer
 
-[src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts) is the orchestration layer for user-visible behavior.
+[src/telegram/delivery.ts](../src/telegram/delivery.ts) is the orchestration layer for user-visible behavior.
 
 It handles:
 
@@ -97,7 +97,7 @@ This file is the product layer of the system. It knows the most about user inten
 
 ### 3. Bridge Layer
 
-[src/runtime/bridge.ts](/Users/cloveric/projects/cc-telegram-bridge/src/runtime/bridge.ts) is the narrow execution core.
+[src/runtime/bridge.ts](../src/runtime/bridge.ts) is the narrow execution core.
 
 It is responsible for:
 
@@ -111,7 +111,7 @@ This layer should stay small. When behavior must be shared across Telegram, bus,
 
 ### 4. Adapter Layer
 
-Engine-specific behavior lives under [src/codex](/Users/cloveric/projects/cc-telegram-bridge/src/codex).
+Engine-specific behavior lives under [src/codex](../src/codex).
 
 Current adapters:
 
@@ -130,7 +130,7 @@ This is a good boundary. It keeps Telegram and state logic from directly dependi
 
 ### 5. State Layer
 
-Persistent state lives under [src/state](/Users/cloveric/projects/cc-telegram-bridge/src/state).
+Persistent state lives under [src/state](../src/state).
 
 Important stores:
 

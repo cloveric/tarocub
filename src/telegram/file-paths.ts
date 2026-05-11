@@ -14,7 +14,7 @@ export function isStaticPlaceholderFilePath(value: string): boolean {
     /^\/(?:absolute|abs|example|path)(?:\/|$|\.)/.test(normalized) ||
     normalized === "/path/to" ||
     normalized.startsWith("/path/to/") ||
-    normalized.startsWith("/users/cloveric/.cctb/example/")
+    /^\/users\/[^/]+\/\.cctb\/example(?:\/|$)/.test(normalized)
   );
 }
 

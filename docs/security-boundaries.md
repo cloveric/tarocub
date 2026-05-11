@@ -6,8 +6,8 @@ The goal is not to claim the system is "secure" in the abstract. The goal is to 
 
 This document should be read together with:
 
-- [Architecture Notes](/Users/cloveric/projects/cc-telegram-bridge/docs/architecture-notes.md)
-- [State Model](/Users/cloveric/projects/cc-telegram-bridge/docs/state-model.md)
+- [Architecture Notes](./architecture-notes.md)
+- [State Model](./state-model.md)
 
 ## Threat Model
 
@@ -77,7 +77,7 @@ Telegram is an untrusted remote input source until access control passes.
 
 ### Current enforcement
 
-- [src/runtime/bridge.ts](/Users/cloveric/projects/cc-telegram-bridge/src/runtime/bridge.ts:114) rejects or challenges normal chats according to `pairing` or `allowlist`
+- [src/runtime/bridge.ts](../src/runtime/bridge.ts:114) rejects or challenges normal chats according to `pairing` or `allowlist`
 - non-private chats require both an authorized Telegram user and an explicitly allowed group chat
 - ordinary group messages are ignored unless they mention the bot or reply to the bot
 - unauthorized group inputs are silent and audited; private unauthorized inputs are answered before engine execution
@@ -116,12 +116,12 @@ The Agent Bus is a privileged local control plane, not a public API.
 
 ### Current enforcement
 
-- [src/bus/bus-server.ts](/Users/cloveric/projects/cc-telegram-bridge/src/bus/bus-server.ts:43) serves only on `127.0.0.1`
+- [src/bus/bus-server.ts](../src/bus/bus-server.ts:43) serves only on `127.0.0.1`
 - `/api/talk` enforces JSON shape, body size, peer allowlist, and max delegation depth
 - bus auth uses a bearer secret when configured
-- [src/bus/bus-registry.ts](/Users/cloveric/projects/cc-telegram-bridge/src/bus/bus-registry.ts:67) probes `/api/health` and validates the bridge fingerprint before treating a registry entry as alive
-- [src/runtime/bridge.ts](/Users/cloveric/projects/cc-telegram-bridge/src/runtime/bridge.ts:114) auto-allows `chatType === "bus"` only because bus auth is supposed to have already happened at the server boundary
-- [src/telegram/update-normalizer.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/update-normalizer.ts:1) rejects external Telegram updates claiming `chat.type === "bus"`; `bus` is an internal synthetic chat type, not a Telegram API value
+- [src/bus/bus-registry.ts](../src/bus/bus-registry.ts:67) probes `/api/health` and validates the bridge fingerprint before treating a registry entry as alive
+- [src/runtime/bridge.ts](../src/runtime/bridge.ts:114) auto-allows `chatType === "bus"` only because bus auth is supposed to have already happened at the server boundary
+- [src/telegram/update-normalizer.ts](../src/telegram/update-normalizer.ts:1) rejects external Telegram updates claiming `chat.type === "bus"`; `bus` is an internal synthetic chat type, not a Telegram API value
 
 ### Residual risk
 
@@ -153,9 +153,9 @@ File delivery is the highest-risk boundary in the product because it turns model
 ### Current enforcement
 
 - Instance `agent.md` teaches the engine to use registered `[tool:{"name":"send.file",...}]` / `[tool:{"name":"send.image",...}]` delivery tags for binary delivery
-- [src/telegram/tool-tags.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/tool-tags.ts) parses generic tool tags, and [src/telegram/legacy-delivery-tool-tags.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/legacy-delivery-tool-tags.ts) normalizes legacy `[send-file:]` / `[send-image:]` tags into the same tool layer
-- [src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts:539) extracts legacy `[send-file:]`, Markdown image, and Markdown local-link references
-- [src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts:581) resolves `realpath()` before policy checks
+- [src/telegram/tool-tags.ts](../src/telegram/tool-tags.ts) parses generic tool tags, and [src/telegram/legacy-delivery-tool-tags.ts](../src/telegram/legacy-delivery-tool-tags.ts) normalizes legacy `[send-file:]` / `[send-image:]` tags into the same tool layer
+- [src/telegram/delivery.ts](../src/telegram/delivery.ts:539) extracts legacy `[send-file:]`, Markdown image, and Markdown local-link references
+- [src/telegram/delivery.ts](../src/telegram/delivery.ts:581) resolves `realpath()` before policy checks
 - delivery only permits canonical paths under the bot workspace or the active `/resume` workspace override
 - non-files, oversized files, missing files, and permission failures are rejected and surfaced back to the user
 
@@ -225,7 +225,7 @@ The bot no longer has a fully isolated engine-global home.
 
 ### Current enforcement
 
-- [src/service.ts](/Users/cloveric/projects/cc-telegram-bridge/src/service.ts:563) intentionally inherits the real Claude/Codex config home instead of forcing a per-instance engine home
+- [src/service.ts](../src/service.ts:563) intentionally inherits the real Claude/Codex config home instead of forcing a per-instance engine home
 - workspace paths remain per-instance, so normal conversation history stays split by workspace in practice
 - legacy Claude project files are migrated into the shared config home so upgrades do not silently drop prior history
 

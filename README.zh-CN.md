@@ -139,12 +139,12 @@ npm run build
 codex mcp add web-search \
   --env BRAVE_API_KEY="$BRAVE_API_KEY" \
   --env TAVILY_API_KEY="$TAVILY_API_KEY" \
-  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+  -- node "$PWD/dist/src/index.js" search-mcp
 
 claude mcp add web-search \
   -e BRAVE_API_KEY="$BRAVE_API_KEY" \
   -e TAVILY_API_KEY="$TAVILY_API_KEY" \
-  -- node /Users/cloveric/projects/cc-telegram-bridge/dist/src/index.js search-mcp
+  -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
 配置后重启相关 bot 实例，让新的 Codex/Claude turn 继承 MCP 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。

@@ -99,7 +99,7 @@ These rules apply across most state files.
 
 ### JSON storage primitive
 
-[src/state/json-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/json-store.ts:1) is the shared primitive for most structured state.
+[src/state/json-store.ts](../src/state/json-store.ts:1) is the shared primitive for most structured state.
 
 It provides:
 
@@ -153,7 +153,7 @@ That includes:
 
 ### Owner
 
-- read path: [src/service.ts](/Users/cloveric/projects/cc-telegram-bridge/src/service.ts:84)
+- read path: [src/service.ts](../src/service.ts:84)
 - CLI config commands also write and maintain it
 
 ### Purpose
@@ -197,14 +197,14 @@ This file has multiple readers and writers.
 
 Primary readers:
 
-- [src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts:78)
-- [src/service.ts](/Users/cloveric/projects/cc-telegram-bridge/src/service.ts:364)
-- adapter modules in [src/codex](/Users/cloveric/projects/cc-telegram-bridge/src/codex)
+- [src/telegram/delivery.ts](../src/telegram/delivery.ts:78)
+- [src/service.ts](../src/service.ts:364)
+- adapter modules in [src/codex](../src/codex)
 
 Primary writers:
 
-- CLI commands in [src/commands/cli.ts](/Users/cloveric/projects/cc-telegram-bridge/src/commands/cli.ts:721)
-- runtime updates in [src/telegram/delivery.ts](/Users/cloveric/projects/cc-telegram-bridge/src/telegram/delivery.ts:132)
+- CLI commands in [src/commands/cli.ts](../src/commands/cli.ts:721)
+- runtime updates in [src/telegram/delivery.ts](../src/telegram/delivery.ts:132)
 
 ### Purpose
 
@@ -263,7 +263,7 @@ Usually not credential-bearing, but it can reveal instance topology, bus peers, 
 
 ### Owner
 
-[src/state/access-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/access-store.ts:1)
+[src/state/access-store.ts](../src/state/access-store.ts:1)
 
 ### Purpose
 
@@ -315,7 +315,7 @@ Leaking this file exposes pairing codes, authorized chats, and chat/user linkage
 
 ### Owner
 
-[src/state/session-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/session-store.ts:1)
+[src/state/session-store.ts](../src/state/session-store.ts:1)
 
 ### Purpose
 
@@ -366,7 +366,7 @@ It exposes chat IDs and engine session identifiers, which are operationally sens
 
 ### Owner
 
-[src/state/runtime-state.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/runtime-state.ts:1)
+[src/state/runtime-state.ts](../src/state/runtime-state.ts:1)
 
 ### Purpose
 
@@ -404,7 +404,7 @@ Low sensitivity, but high correctness importance.
 
 ### Owner
 
-[src/state/usage-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/usage-store.ts:1)
+[src/state/usage-store.ts](../src/state/usage-store.ts:1)
 
 ### Purpose
 
@@ -453,7 +453,7 @@ It reveals usage volume, cost, and activity timing.
 
 ### Owner
 
-[src/state/cron-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/cron-store.ts:1)
+[src/state/cron-store.ts](../src/state/cron-store.ts:1)
 
 ### Purpose
 
@@ -515,7 +515,7 @@ It can contain durable prompts, chat IDs, user IDs, schedule intent, and last er
 
 ### Owner
 
-[src/state/board-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/board-store.ts:1)
+[src/state/board-store.ts](../src/state/board-store.ts:1)
 
 ### Purpose
 
@@ -611,7 +611,7 @@ It can contain durable task titles, operator intent, summaries, chat IDs, user I
 
 ### Owner
 
-[src/state/mini-bus-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/mini-bus-store.ts:1)
+[src/state/mini-bus-store.ts](../src/state/mini-bus-store.ts:1)
 
 ### Purpose
 
@@ -673,7 +673,7 @@ It reveals group chat IDs, topic IDs, peer topology, and operator workflow inten
 
 ### Owner
 
-[src/state/file-workflow-store.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/file-workflow-store.ts:1)
+[src/state/file-workflow-store.ts](../src/state/file-workflow-store.ts:1)
 
 ### Purpose
 
@@ -730,7 +730,7 @@ It contains local file paths, chat IDs, and summaries of processed content.
 
 ### Owner
 
-[src/state/audit-log.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/audit-log.ts:1)
+[src/state/audit-log.ts](../src/state/audit-log.ts:1)
 
 ### Purpose
 
@@ -781,7 +781,7 @@ It may contain prompts, error details, chat IDs, workflow metadata, and operatio
 
 ### Owner
 
-[src/state/instance-lock.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/instance-lock.ts:1)
+[src/state/instance-lock.ts](../src/state/instance-lock.ts:1)
 
 ### Purpose
 
@@ -822,7 +822,7 @@ Low confidentiality sensitivity, high coordination importance.
 
 ### Owner
 
-Service management commands under [src/commands/service.ts](/Users/cloveric/projects/cc-telegram-bridge/src/commands/service.ts:365)
+Service management commands under [src/commands/service.ts](../src/commands/service.ts:365)
 
 ### Purpose
 
@@ -837,7 +837,7 @@ Useful for diagnosis only.
 ### Write rules
 
 - append as process output streams
-- subject to rotation via [src/state/log-rotation.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/log-rotation.ts:1)
+- subject to rotation via [src/state/log-rotation.ts](../src/state/log-rotation.ts:1)
 
 ### Recovery rules
 
@@ -924,7 +924,7 @@ User-chosen output path, not a fixed in-place state file.
 
 ### Owner
 
-[src/state/archive.ts](/Users/cloveric/projects/cc-telegram-bridge/src/state/archive.ts:1)
+[src/state/archive.ts](../src/state/archive.ts:1)
 
 ### Purpose
 
@@ -962,7 +962,7 @@ Where `channelRoot = dirname(stateDir)`, usually `~/.cctb/`.
 
 ### Owner
 
-[src/bus/bus-registry.ts](/Users/cloveric/projects/cc-telegram-bridge/src/bus/bus-registry.ts:1)
+[src/bus/bus-registry.ts](../src/bus/bus-registry.ts:1)
 
 ### Purpose
 
