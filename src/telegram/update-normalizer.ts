@@ -93,7 +93,9 @@ function normalizeReplyContext(message: any): NormalizedTelegramMessage["replyCo
     }
   }
 
-  const audioAttachment = normalizeAudioAttachment(reply)[0] ?? normalizeVoiceAttachment(reply)[0];
+  const audioAttachment = normalizeAudioAttachment(reply)[0]
+    ?? normalizeVoiceAttachment(reply)[0]
+    ?? (isAudioDocument(reply) ? normalizeDocumentAttachment(reply)[0] : undefined);
 
   let documentFileId: string | undefined;
   let documentFileName: string | undefined;

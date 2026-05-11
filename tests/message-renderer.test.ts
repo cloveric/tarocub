@@ -436,6 +436,42 @@ describe("normalizeUpdate", () => {
     });
   });
 
+  it("treats quoted audio documents as quoted audio reply context", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          text: "draft from this",
+          reply_to_message: {
+            message_id: 99,
+            document: {
+              file_id: "quoted-audio-doc",
+              file_name: "brief.m4a",
+              mime_type: "audio/mp4",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "draft from this",
+      replyContext: {
+        messageId: 99,
+        text: "",
+        audioAttachment: {
+          fileId: "quoted-audio-doc",
+          fileName: "brief.m4a",
+          kind: "audio",
+        },
+      },
+      attachments: [],
+    });
+  });
+
   it("extracts the highest-resolution photo attachment", () => {
     expect(
       normalizeUpdate({
