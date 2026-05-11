@@ -131,10 +131,10 @@ describe("handleGoalTelegramCommand", () => {
     expect(handled).toBe(true);
     expect(getThreadGoal).toHaveBeenCalledTimes(1);
     expect(setThreadGoal).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledWith(123, "No active Codex goal for this chat.");
+    expect(sendMessage).toHaveBeenCalledWith(123, "No active goal for this chat.");
   });
 
-  it("rejects /goal on non-Codex engines instead of forwarding it as ordinary text", async () => {
+  it("lets Claude /goal pass through to the native Claude Code slash command", async () => {
     const sendMessage = vi.fn();
     const setThreadGoal = vi.fn();
 
@@ -148,8 +148,8 @@ describe("handleGoalTelegramCommand", () => {
       },
     });
 
-    expect(handled).toBe(true);
+    expect(handled).toBe(false);
     expect(setThreadGoal).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledWith(123, "只有 Codex 引擎支持 /goal。");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });

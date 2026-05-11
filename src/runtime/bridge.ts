@@ -315,7 +315,7 @@ export class Bridge {
     workspaceOverride?: string;
   }): Promise<{ goal: CodexThreadGoal | null }> {
     if (!this.adapter.getThreadGoal) {
-      throw new Error("Codex goal API is not available for this runtime");
+      throw new Error("Structured goal API is not available for this runtime");
     }
     const scope = this.conversationScope(input);
     const session = this.sessionManager.getExistingSession
@@ -344,7 +344,7 @@ export class Bridge {
     workspaceOverride?: string;
   }): Promise<{ goal: CodexThreadGoal | null }> {
     if (!this.adapter.setThreadGoal) {
-      throw new Error("Codex goal API is not available for this runtime");
+      throw new Error("Structured goal API is not available for this runtime");
     }
     const scope = this.conversationScope(input);
     const session = await this.sessionManager.getOrCreateSession(scope);
@@ -368,7 +368,7 @@ export class Bridge {
     workspaceOverride?: string;
   }): Promise<{ cleared: boolean }> {
     if (!this.adapter.clearThreadGoal) {
-      throw new Error("Codex goal API is not available for this runtime");
+      throw new Error("Structured goal API is not available for this runtime");
     }
     const scope = this.conversationScope(input);
     const session = this.sessionManager.getExistingSession

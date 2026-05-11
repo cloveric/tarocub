@@ -128,11 +128,10 @@ export async function handleGoalTelegramCommand(input: {
 
   const { locale, normalized } = input;
   if (input.cfg.engine !== "codex") {
-    await input.context.api.sendMessage(
-      normalized.chatId,
-      locale === "zh" ? "只有 Codex 引擎支持 /goal。" : "Only the Codex engine supports /goal.",
-    );
-    return true;
+    // Claude Code implements /goal as a native slash command in both -p and
+    // stream-json modes. Let it pass through the ordinary engine path instead
+    // of trying to emulate Codex's structured goal API here.
+    return false;
   }
 
   if (action.kind === "invalid") {
@@ -153,7 +152,7 @@ export async function handleGoalTelegramCommand(input: {
     if (!input.context.bridge.getThreadGoal) {
       await input.context.api.sendMessage(
         normalized.chatId,
-        locale === "zh" ? "当前 Codex runtime 不支持 /goal status。" : "This Codex runtime does not support /goal status.",
+        locale === "zh" ? "当前 runtime 不支持结构化 /goal status。" : "This runtime does not support structured /goal status.",
       );
       return true;
     }
@@ -162,7 +161,7 @@ export async function handleGoalTelegramCommand(input: {
       normalized.chatId,
       goal
         ? renderGoal(goal, locale)
-        : locale === "zh" ? "当前聊天没有活跃 Codex goal。" : "No active Codex goal for this chat.",
+        : locale === "zh" ? "当前聊天没有活跃 goal。" : "No active goal for this chat.",
     );
     return true;
   }
@@ -171,7 +170,7 @@ export async function handleGoalTelegramCommand(input: {
     if (!input.context.bridge.clearThreadGoal) {
       await input.context.api.sendMessage(
         normalized.chatId,
-        locale === "zh" ? "当前 Codex runtime 不支持 /goal clear。" : "This Codex runtime does not support /goal clear.",
+        locale === "zh" ? "当前 runtime 不支持结构化 /goal clear。" : "This runtime does not support structured /goal clear.",
       );
       return true;
     }
@@ -179,8 +178,8 @@ export async function handleGoalTelegramCommand(input: {
     await input.context.api.sendMessage(
       normalized.chatId,
       cleared
-        ? locale === "zh" ? "已清除当前 Codex goal。" : "Codex goal cleared."
-        : locale === "zh" ? "当前聊天没有可清除的 Codex goal。" : "No Codex goal to clear for this chat.",
+        ? locale === "zh" ? "已清除当前 goal。" : "Goal cleared."
+        : locale === "zh" ? "当前聊天没有可清除的 goal。" : "No goal to clear for this chat.",
     );
     return true;
   }
@@ -188,7 +187,7 @@ export async function handleGoalTelegramCommand(input: {
   if (!input.context.bridge.setThreadGoal) {
     await input.context.api.sendMessage(
       normalized.chatId,
-      locale === "zh" ? "当前 Codex runtime 不支持 /goal。" : "This Codex runtime does not support /goal.",
+      locale === "zh" ? "当前 runtime 不支持结构化 /goal。" : "This runtime does not support structured /goal.",
     );
     return true;
   }

@@ -449,4 +449,64 @@ describe("dispatchAuthorizedTelegramMessage", () => {
     expect(prepareTelegramMessageInput).not.toHaveBeenCalled();
     expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
   });
+
+  it("passes Claude /goal through to the ordinary engine turn", async () => {
+    const normalized = createNormalizedMessage("/goal reply exactly OK when the task is done");
+    const prepareTelegramMessageInput = vi.fn().mockResolvedValue({
+      kind: "ready",
+      text: normalized.text,
+      downloadedAttachments: [],
+    });
+    const executeWorkflowAwareTelegramTurn = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchAuthorizedTelegramMessage({
+      stateDir: "/tmp/state",
+      startedAt: Date.now(),
+      locale: "en",
+      cfg: { engine: "claude" },
+      normalized,
+      context: {
+        api: {
+          sendMessage: vi.fn(),
+          getFile: vi.fn(),
+          downloadFile: vi.fn(),
+        },
+        bridge: {},
+        inboxDir: "/tmp/inbox",
+      } as never,
+      workflowStore: {
+        inspect: vi.fn(),
+        update: vi.fn(),
+      } as never,
+      deps: {
+        sessionStore: {
+          inspect: vi.fn(),
+          removeByChatId: vi.fn(),
+          upsert: vi.fn(),
+          findByChatIdSafe: vi.fn(),
+        } as never,
+        turnState: createTurnState(),
+        updateInstanceConfig: vi.fn(),
+        deliverTelegramResponse: vi.fn(),
+        sendTelegramOutFile: vi.fn(),
+        updateWorkflowBestEffort: vi.fn(),
+      },
+      handlers: {
+        handleLocalSessionTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleLocalEngineTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleSimpleLocalTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleDelegationTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleBoardTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleMiniBusTelegramCommand: vi.fn().mockResolvedValue(false),
+        prepareTelegramMessageInput,
+        executeWorkflowAwareTelegramTurn,
+      } as never,
+    });
+
+    expect(prepareTelegramMessageInput).toHaveBeenCalledTimes(1);
+    expect(executeWorkflowAwareTelegramTurn).toHaveBeenCalledWith(expect.objectContaining({
+      cfg: expect.objectContaining({ engine: "claude" }),
+      normalized: expect.objectContaining({ text: "/goal reply exactly OK when the task is done" }),
+    }));
+  });
 });

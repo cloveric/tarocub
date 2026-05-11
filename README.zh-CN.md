@@ -1095,6 +1095,7 @@ Telegram 用户也可以使用：
 - `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`max` 仅 Claude 可用；Codex 会改用 `xhigh`）
 - `/model [名称|off]` — 切换模型
 - `/fast [on|off|status]` — 切换 Codex Fast Mode。bridge 实例里把它当实验选项使用；如果出现 Codex runtime 失败，先 `/fast off`，不要反复重试；下一条简单消息仍失败时，再重启该实例一次。
+- `/goal <完成条件>` — 设置引擎 goal。Codex 还支持 `/goal status`、`/goal clear` 和 `--budget`；Claude Code 会直接透传给原生 `/goal` slash command。
 - `/btw <问题>` — 旁问（不影响当前会话）
 - `/ask <实例> <提示>` — 委托给指定 peer bot
 - `/fan <提示>` — 查询当前 bot 和并行 specialist bot

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { registerBotCommands } from "../src/service.js";
 
 describe("registerBotCommands", () => {
-  it("exposes implemented Codex Goals in the Telegram command menu", async () => {
+  it("exposes engine goals in the Telegram command menu", async () => {
     const setMyCommands = vi.fn().mockResolvedValue(undefined);
 
     await registerBotCommands({ setMyCommands } as never);
@@ -12,7 +12,7 @@ describe("registerBotCommands", () => {
       expect.arrayContaining([
         expect.objectContaining({
           command: "goal",
-          description: expect.stringContaining("Codex"),
+          description: expect.stringContaining("engine goal"),
         }),
       ]),
     );

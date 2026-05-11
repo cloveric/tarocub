@@ -1111,6 +1111,7 @@ Telegram users can also use:
 - `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
 - `/model [name|off]` — switch model
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
+- `/goal <completion condition>` — set an engine goal. Codex also supports `/goal status`, `/goal clear`, and `--budget`; Claude Code is passed through to its native `/goal` slash command.
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
 - `/fan <prompt>` — query current bot plus configured parallel bots
