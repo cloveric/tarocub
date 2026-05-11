@@ -451,12 +451,12 @@ describe("dispatchAuthorizedTelegramMessage", () => {
   });
 
   it("passes Claude /goal through to the ordinary engine turn", async () => {
-    const normalized = createNormalizedMessage("/goal reply exactly OK when the task is done");
-    const prepareTelegramMessageInput = vi.fn().mockResolvedValue({
+    const normalized = createNormalizedMessage("/goal@cloveric17bot reply exactly OK when the task is done");
+    const prepareTelegramMessageInput = vi.fn().mockImplementation(async (input: { normalized: NormalizedTelegramMessage }) => ({
       kind: "ready",
-      text: normalized.text,
+      text: input.normalized.text,
       downloadedAttachments: [],
-    });
+    }));
     const executeWorkflowAwareTelegramTurn = vi.fn().mockResolvedValue(undefined);
 
     await dispatchAuthorizedTelegramMessage({

@@ -59,6 +59,14 @@ function parseGoalCommand(text: string): GoalAction | null {
   return parseSetGoal(rest);
 }
 
+function toNativeGoalCommandText(text: string): string | null {
+  const match = text.trim().match(/^\/goal(?:@\w+)?(\s+[\s\S]+)?$/i);
+  if (!match) {
+    return null;
+  }
+  return `/goal${match[1] ?? ""}`;
+}
+
 function renderInvalidGoalCommand(reason: "invalid_budget" | "missing_objective", locale: Locale): string {
   if (reason === "missing_objective") {
     return locale === "zh"
@@ -130,7 +138,12 @@ export async function handleGoalTelegramCommand(input: {
   if (input.cfg.engine !== "codex") {
     // Claude Code implements /goal as a native slash command in both -p and
     // stream-json modes. Let it pass through the ordinary engine path instead
-    // of trying to emulate Codex's structured goal API here.
+    // of trying to emulate Codex's structured goal API here. Strip Telegram's
+    // optional /goal@bot suffix because Claude only sees native slash commands.
+    const nativeGoalText = toNativeGoalCommandText(input.normalized.text);
+    if (nativeGoalText) {
+      input.normalized.text = nativeGoalText;
+    }
     return false;
   }
 

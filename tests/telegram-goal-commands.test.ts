@@ -152,4 +152,23 @@ describe("handleGoalTelegramCommand", () => {
     expect(setThreadGoal).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it("strips Telegram bot usernames before passing Claude /goal through", async () => {
+    const sendMessage = vi.fn();
+    const normalized = createNormalizedMessage("/goal@cloveric17bot 写发布说明");
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "zh",
+      cfg: { engine: "claude" },
+      normalized,
+      context: {
+        api: { sendMessage },
+        bridge: {},
+      },
+    });
+
+    expect(handled).toBe(false);
+    expect(normalized.text).toBe("/goal 写发布说明");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
 });
