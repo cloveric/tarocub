@@ -16,38 +16,51 @@
 </p>
 
 <h3 align="center">
-  Put the real Codex and Claude Code CLI on Telegram.<br>
-  Not an API wrapper — the actual CLI, with native sessions, local files, and real tool use.<br>
-  Resume desktop sessions from Telegram, or run isolated multi-bot teams through Agent Bus.
+  Run the real Codex and Claude Code CLIs from Telegram.<br>
+  Native sessions, local files, tool use, voice input, scheduled tasks, and multi-agent workflows — without rebuilding either engine.
 </h3>
 
 <p align="center">
-  <em>Runs the native CLI harness directly — Codex or Claude per instance, hot-reloaded instructions, voice/file input, local session resume, Telegram groups/topics, Telegram-delivered scheduled tasks, multi-bot Agent Bus, structured timeline/audit logs, service doctor, and dashboard included.<br>No reimplemented API wrappers, no fake chat layer.</em>
+  <a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#why-this-bridge">Why</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#dual-engine-codex--claude-code">Engines</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#live-web-search-mcp-brave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#board-durable-kanban-tasks">Board</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#mini-bus-topic-to-topic-workflows">Mini Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
-<p align="center">
-  <a href="#dual-engine-codex--claude-code">Dual Engine</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#live-web-search-mcp-brave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#multi-bot-setup">Multi-Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-groups-and-topics">Groups</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#file-delivery-from-agent-tasks">Files</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#scheduled-tasks--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#voice-input-asr">Voice</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#session-resume">Resume</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#budget-control">Budget</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
-</p>
+## Start Here
 
-> **RULE 1:** Let your Claude Code or Codex CLI set this up for you. Clone the repo, open it in your terminal, and tell your AI agent: *"read the README and configure a Telegram bot for me"*. It will handle the rest.
+> **Best setup path:** clone this repo, open it in Codex or Claude Code, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed by the same CLI agent it exposes on Telegram.
+
+```bash
+npm install
+npm run build
+npm run dev -- telegram configure <telegram-bot-token>
+npm run dev -- telegram yolo on
+npm run dev -- telegram service start
+```
+
+Then send a message to the bot, run the pairing command it gives you, and continue from Telegram. See [Quick Start](#quick-start) for the full walkthrough.
 
 > **Recommended runtime:** enable YOLO mode for hands-free Telegram instances you control: `telegram yolo on --instance <name>`. With YOLO off, the bridge can ask for approval in Telegram instead: Claude approvals are per tool request; Codex approvals are per turn because `codex exec` does not support mid-turn approval callbacks. Use `unsafe` only on a trusted machine and workspace.
 
-### What Changed Recently
+## Capability Map
 
-- **v4.6.10** — promotes the optional Brave/Tavily Search MCP into a release-ready research add-on for Codex and Claude Code: `web_search`, `web_extract`, and `provider_status` now return source metadata (`sourceLog`, `provider`, `domain`, `rank`, timestamps, and extract `contentHash`), fallback notices are explicit, small `maxChars` extract budgets are accepted, and macOS test cleanup uses retrying temp-directory removal to reduce `ENOTEMPTY` flakes.
-- **v4.6.2** — adds Telegram Board + Mini Bus coordination: `/board` stores durable Kanban tasks with richer cards, dependencies, WIP limits, review gates, run history, and one-task execution via Mini Bus topics or Agent Bus instances; `/mini` lets forum topics in the same group act as planner/writer/reviewer-style peers for fan-out, chain, verify, and crew workflows.
-- **v4.5.10** — adds Codex Fast Mode control with `/fast on|off|status`, forwarding `fast_mode` and `service_tier="fast"` to both Codex process and app-server runtimes while keeping Claude instances rejected cleanly. Fast Mode is experimental in unattended bridge use: if Codex starts returning engine-runtime failures, turn it off with `/fast off`; if the instance is already unhealthy, restart the instance once after the current turn is idle.
-- **v4.5.9** — hardens schema-backed tool delivery receipts: malformed `[tool:{...}]` JSON or rejected send tools no longer preserve misleading “already sent” model text; batch/long delivery now prefers fenced `tool-call` blocks, and generated `agent.md` upgrades clean up duplicate scheduler residue.
-- **v4.5.8** — documents `[tool:{...}]` as the only generated delivery tag format, keeps legacy `[send-file:]` / `[send-image:]` tags as compatibility-only, and clarifies the file-delivery trust boundary.
-- **v4.5.7** — unifies file delivery and Telegram scheduled tasks around the registered `[tool:{...}]` layer, adds safer `tool-call` fenced blocks, hardens stream/post-turn dedupe, and improves cron reliability with timezones, stale-run handling, file locks, job caps, and failure receipts.
-- **v4.5.3** — recovers a stale Telegram update watermark from audit history on service startup, preventing old completed tasks from replaying after restart.
-- **v4.5.2** — fixes Telegram update watermark ordering, so rapid follow-up messages cannot be skipped while an earlier turn is still finishing.
-- **v4.5.1+** — moves Telegram transport rules into each instance's `agent.md`, leaving only a short static Telegram reminder in the per-turn prompt. File delivery now uses the registered `[tool:...]` layer, with `cctb send` kept for CLI workflows.
-- **v4.5.0** — simplifies file delivery around explicit send receipts and removes the old manifest/contract/count-repair/wakeup delivery state.
-- Earlier 4.x releases added the dual Codex/Claude process runtimes, Agent Bus, crew workflows, timeline/audit logs, service doctor, dashboard, and Delivery Protocol v2.
+| Need | Use |
+|---|---|
+| Put Codex or Claude Code on Telegram | [Dual Engine](#dual-engine-codex--claude-code), [Multi-Bot Setup](#multi-bot-setup) |
+| Continue real local CLI sessions remotely | [Session Resume](#session-resume--codex-thread-attach), [Agent Instructions](#agent-instructions) |
+| Send files, images, audio, and generated artifacts | [File Delivery](#file-delivery-from-agent-tasks), [Voice Input](#voice-input-asr) |
+| Use groups and forum topics without context pollution | [Telegram Groups And Topics](#telegram-groups-and-topics), [Mini Bus](#mini-bus-topic-to-topic-workflows) |
+| Run multi-agent work | [Agent Bus](#agent-bus), [Crew Workflows](#crew-workflows-hub-and-spoke), [Board](#board-durable-kanban-tasks) |
+| Add source-traceable web research | [Search MCP](#live-web-search-mcp-brave--tavily), [`docs/search-mcp.md`](./docs/search-mcp.md) |
+| Operate and debug long-running bots | [Service Operations](#service-operations), [Audit Trail](#audit-trail), [Timeline](#timeline) |
 
-**Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the short Telegram Transport block:
+## Release Highlights
+
+- **v4.6.16** — completes Telegram audio handling: direct `voice`, direct `audio/.m4a`, audio-like documents, and quoted audio documents all go through the same ASR transcription path.
+- **v4.6.14** — hardens `/stop` and service restart cleanup so stale duplicate processes cannot keep typing or sending files after a restart.
+- **v4.6.10** — promotes the optional Brave/Tavily Search MCP into a release-ready research add-on with `sourceLog`, provider metadata, fallback notices, `web_extract`, `provider_status`, and `health_check`.
+- **v4.6.2** — adds `/board` durable Kanban tasks and `/mini` topic-to-topic workflows for same-group planner/writer/reviewer style coordination.
+- **v4.5.x** — stabilizes generated `agent.md` transport instructions, schema-backed `[tool:{...}]` file delivery, Telegram cron, update watermarks, and Delivery Protocol v2.
+
+**Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the latest compact Telegram Transport block:
 
 ```bash
 telegram instructions upgrade --all --dry-run

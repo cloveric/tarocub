@@ -16,38 +16,51 @@
 </p>
 
 <h3 align="center">
-  把真正的 Codex 和 Claude Code CLI 搬到 Telegram。<br>
-  不是 API 封装 — 是原生 CLI，带原生会话、本地文件和真实工具调用。<br>
-  既能从 Telegram 续接电脑会话，也能用 Agent Bus 跑隔离的多 bot 团队。
+  从 Telegram 运行真正的 Codex 和 Claude Code CLI。<br>
+  原生会话、本地文件、真实工具调用、语音输入、定时任务和多 Agent 工作流，不重写引擎。
 </h3>
 
 <p align="center">
-  <em>直接运行原生 CLI harness —— 每实例可选 Codex 或 Claude，支持热更新指令、语音/文件输入、本地会话续接、Telegram 群聊/topic、Telegram 投递的定时任务、多 bot Agent Bus、timeline/audit、service doctor 和 dashboard。<br>没有重写一套假的聊天层。</em>
+  <a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#为什么是这套架构">为什么</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#board持久化-kanban-任务板">Board</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#mini-bustopic-到-topic-的工作流">Mini Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
-<p align="center">
-  <a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#多-bot-部署">多 Bot</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#telegram-群聊和-topic">群聊</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#crew-workflow">Crew</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-任务里的文件投递">文件</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#定时任务--cron">Cron</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#语音输入asr">语音</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#会话续接">续接</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#预算控制">预算</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
-</p>
+## 先从这里开始
 
-> **RULE 1：** 让你的 Claude Code 或 Codex CLI 来帮你配置这个项目。克隆仓库，在终端里打开，然后告诉你的 AI agent：*"读一下 README，帮我配置一个 Telegram bot"*。剩下的它会搞定。
+> **推荐安装方式：** 克隆仓库，用 Codex 或 Claude Code 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
+
+```bash
+npm install
+npm run build
+npm run dev -- telegram configure <telegram-bot-token>
+npm run dev -- telegram yolo on
+npm run dev -- telegram service start
+```
+
+然后给 bot 发一条消息，按它给出的配对命令完成授权，就可以从 Telegram 继续用本机的 Codex/Claude 了。完整流程见 [快速开始](#快速开始)。
 
 > **推荐运行方式：** 对你自己控制、希望完全免打断运行的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。如果关闭 YOLO，bridge 也会尽量在 Telegram 里弹审批按钮：Claude 是按工具请求审批；Codex 因为 `codex exec` 不支持 turn 中途审批回调，所以是按整轮 turn 预审批。`unsafe` 只建议在可信机器和可信工作区使用。
 
-### 最近这波变化
+## 能力地图
 
-- **v4.6.10** — 将可选的 Brave/Tavily Search MCP 打磨成面向 Codex 和 Claude Code 的正式研究插件：`web_search`、`web_extract` 和 `provider_status` 会返回来源元数据（`sourceLog`、`provider`、`domain`、`rank`、时间戳、抽取正文的 `contentHash`），fallback 会明确提示，小 `maxChars` 抽取预算也能使用，并且测试里的临时目录清理改为带重试，降低 macOS `ENOTEMPTY` 偶发失败。
-- **v4.6.2** — 新增 Telegram Board + Mini Bus 协作：`/board` 会把 Kanban 任务、完整任务卡、依赖、WIP 限制、review gate、run history 持久化下来，并支持通过 Mini Bus topic 或 Agent Bus 实例执行单张任务；`/mini` 可以把同一个群里的 forum topic 当成 planner/writer/reviewer 这类轻量 peer，支持 fan-out、chain、verify 和 crew workflow。
-- **v4.5.10** — 新增 Codex Fast Mode 控制：`/fast on|off|status` 会把 `fast_mode` 和 `service_tier="fast"` 透传到 Codex process / app-server runtime，Claude 实例会明确拒绝。Fast Mode 在无人值守 bridge 场景里按实验选项对待：如果 Codex 开始返回引擎运行时失败，先用 `/fast off` 关闭；如果实例运行态已经坏掉，等当前 turn 空闲后重启该实例一次。
-- **v4.5.9** — 加强 schema-backed tool 投递 receipt：`[tool:{...}]` JSON 写坏或 send tool 被拒绝时，不再保留模型口头说的“已发出”；批量/长文本投递优先使用 fenced `tool-call` block，并且 generated `agent.md` 升级会清理重复 scheduler 残留。
-- **v4.5.8** — 文档明确 `[tool:{...}]` 是 generated 实例指令唯一使用的投递 tag；旧 `[send-file:]` / `[send-image:]` 仅作为兼容层保留；补充文件投递信任边界说明。
-- **v4.5.7** — 文件投递和 Telegram 定时任务统一到注册过的 `[tool:{...}]` layer；新增更安全的 `tool-call` fenced block；加强 stream/post-turn 去重；cron 增加时区、过期 runOnce 处理、文件锁、任务上限和失败 receipt。
-- **v4.5.3** — 服务启动时会从 audit 历史恢复 stale 的 Telegram update watermark，避免重启后重复执行已经完成的旧任务。
-- **v4.5.2** — 修复 Telegram update watermark 顺序推进，早期 turn 还在收尾时，后续快速消息不会再被错误当成 duplicate 跳过。
-- **v4.5.1+** — 将 Telegram transport 规则移到每个实例自己的 `agent.md`，每轮 prompt 只保留很短的静态提醒。文件投递现在统一走注册过的 `[tool:...]` layer，`cctb send` 保留给 CLI 工作流。
-- **v4.5.0** — 文件投递改为围绕显式 send receipt，移除旧的 manifest / contract / 数量 repair / wakeup delivery 状态。
-- 更早的 4.x 版本加入了 Codex/Claude 双 process runtime、Agent Bus、crew workflow、timeline/audit、service doctor、dashboard 和 Delivery Protocol v2。
+| 你想做什么 | 看这里 |
+|---|---|
+| 把 Codex 或 Claude Code 接到 Telegram | [双引擎](#双引擎codex--claude-code)、[多 Bot 部署](#多-bot-部署) |
+| 在手机上续接本地 CLI 会话 | [会话续接](#会话续接与-codex-thread-绑定)、[Agent 指令](#agent-指令) |
+| 发文件、图片、音频和生成产物 | [文件投递](#agent-任务里的文件投递)、[语音输入](#语音输入asr) |
+| 群聊/topic 互相隔离，不污染上下文 | [Telegram 群聊和 Topic](#telegram-群聊和-topic)、[Mini Bus](#mini-bustopic-到-topic-的工作流) |
+| 跑多 Agent 协作任务 | [Agent Bus](#agent-bus)、[Crew Workflow](#crew-workflow中心协调)、[Board](#board持久化-kanban-任务板) |
+| 强化网页搜索和来源追踪 | [Search MCP](#实时网页搜索-mcpbrave--tavily)、[`docs/search-mcp.md`](./docs/search-mcp.md) |
+| 运维、排障、审计长任务 | [服务运维](#服务运维)、[审计日志](#审计日志)、[Timeline](#timeline) |
 
-**升级已有 generated 实例指令：** 更新代码后请刷新已生成的 `agent.md` block，让旧 bot 拿到新的短 Telegram Transport block：
+## 近期亮点
+
+- **v4.6.16** — 补齐 Telegram 音频处理：直接 `voice`、直接 `audio/.m4a`、音频类 document、被引用的音频 document 都会走同一套 ASR 转写路径。
+- **v4.6.14** — 加强 `/stop` 和服务重启清理，避免旧的重复进程在重启后继续 typing 或继续发文件。
+- **v4.6.10** — 将可选 Brave/Tavily Search MCP 打磨成正式研究插件，带 `sourceLog`、provider 元数据、fallback 提示、`web_extract`、`provider_status` 和 `health_check`。
+- **v4.6.2** — 新增 `/board` 持久化 Kanban 任务和 `/mini` topic-to-topic workflow，适合在同群里组织 planner/writer/reviewer 式协作。
+- **v4.5.x** — 稳定 generated `agent.md` transport 指令、schema-backed `[tool:{...}]` 文件投递、Telegram cron、update watermark 和 Delivery Protocol v2。
+
+**升级已有 generated 实例指令：** 更新代码后请刷新已生成的 `agent.md` block，让旧 bot 拿到最新短 Telegram Transport block：
 
 ```bash
 telegram instructions upgrade --all --dry-run
