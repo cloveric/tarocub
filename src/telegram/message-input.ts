@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type { DownloadedAttachment } from "../runtime/file-workflow.js";
@@ -64,6 +65,8 @@ async function ensureInboxDirExists(inboxDir: string): Promise<void> {
 // Voice transcription configuration. Override via env vars:
 //   ASR_HTTP_URL — warm ASR HTTP server (fast path)
 //   ASR_CLI_PYTHON + ASR_CLI_SCRIPT — CLI fallback (cold start)
+//   ASR_HTTP_TIMEOUT_MS — per-file/chunk ASR HTTP timeout
+//   ASR_CHUNK_AFTER_SECONDS + ASR_CHUNK_SECONDS — split long audio before ASR
 // An empty ASR_HTTP_URL disables the HTTP path; missing CLI paths disable
 // the CLI path. If both are unavailable, voice messages fail cleanly
 // with an "ASR not configured" error instead of spawning against
@@ -73,7 +76,130 @@ const ASR_CLI_PYTHON = process.env.ASR_CLI_PYTHON
   ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/venv/bin/python3") : undefined);
 const ASR_CLI_SCRIPT = process.env.ASR_CLI_SCRIPT
   ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/transcribe.py") : undefined);
+const ASR_HTTP_TIMEOUT_MS = parsePositiveNumber(process.env.ASR_HTTP_TIMEOUT_MS, 180_000);
+const ASR_CHUNK_AFTER_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_AFTER_SECONDS, 300);
+const ASR_CHUNK_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_SECONDS, 60);
+const MAX_ASR_CHUNK_SECONDS = 600;
 const asrWatchdog = createAsrWatchdogFromEnv();
+
+type ExecFileCallback = (error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void;
+type ExecFileImpl = (
+  file: string,
+  args: readonly string[],
+  options: { timeout?: number },
+  callback: ExecFileCallback,
+) => void;
+
+function parsePositiveNumber(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function summarizeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 180 ? `${message.slice(0, 177)}...` : message;
+}
+
+function execFileText(
+  execFileImpl: ExecFileImpl,
+  file: string,
+  args: readonly string[],
+  options: { timeout?: number } = {},
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFileImpl(file, args, options, (error, stdout, stderr) => {
+      const stderrText = Buffer.isBuffer(stderr) ? stderr.toString("utf8") : stderr;
+      if (error) {
+        reject(new Error(stderrText.trim() || error.message));
+        return;
+      }
+      resolve({
+        stdout: Buffer.isBuffer(stdout) ? stdout.toString("utf8") : stdout,
+        stderr: stderrText,
+      });
+    });
+  });
+}
+
+async function probeAudioDurationSeconds(
+  audioPath: string,
+  execFileImpl: ExecFileImpl,
+  ffprobePath: string,
+): Promise<number | null> {
+  try {
+    const { stdout } = await execFileText(execFileImpl, ffprobePath, [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      audioPath,
+    ], { timeout: 10_000 });
+    const duration = Number.parseFloat(stdout.trim());
+    return Number.isFinite(duration) && duration > 0 ? duration : null;
+  } catch (error) {
+    try {
+      await access(audioPath);
+    } catch {
+      return null;
+    }
+    console.warn(`ASR ffprobe failed for ${path.basename(audioPath)}; long audio cannot be pre-chunked: ${summarizeError(error)}`);
+    return null;
+  }
+}
+
+async function splitAudioIntoChunks(inputPath: string, options: {
+  chunkSeconds: number;
+  execFileImpl: ExecFileImpl;
+  ffmpegPath: string;
+}): Promise<{ chunks: string[]; cleanup: () => Promise<void> }> {
+  const chunkDir = await mkdtemp(path.join(os.tmpdir(), "cctb-asr-chunks-"));
+  const pattern = path.join(chunkDir, "chunk-%03d.wav");
+
+  try {
+    await execFileText(options.execFileImpl, options.ffmpegPath, [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      inputPath,
+      "-vn",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-f",
+      "segment",
+      "-segment_time",
+      String(options.chunkSeconds),
+      "-reset_timestamps",
+      "1",
+      pattern,
+    ], { timeout: 300_000 });
+
+    const chunks = (await readdir(chunkDir))
+      .filter((entry) => /^chunk-\d+\.wav$/.test(entry))
+      .sort()
+      .map((entry) => path.join(chunkDir, entry));
+
+    if (chunks.length === 0) {
+      throw new Error("ffmpeg did not produce ASR audio chunks");
+    }
+
+    return {
+      chunks,
+      cleanup: () => rm(chunkDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
+    };
+  } catch (error) {
+    await rm(chunkDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    throw error;
+  }
+}
 
 export function createDefaultTranscribeVoice(options: {
   httpUrl?: string;
@@ -81,12 +207,24 @@ export function createDefaultTranscribeVoice(options: {
   cliScript?: string;
   fetchImpl?: typeof fetch;
   watchdog?: AsrWatchdog;
+  execFileImpl?: ExecFileImpl;
+  ffprobePath?: string;
+  ffmpegPath?: string;
+  httpTimeoutMs?: number;
+  chunkAfterSeconds?: number;
+  chunkSeconds?: number;
 } = {}): (audioPath: string) => Promise<string> {
   const httpUrl = options.httpUrl ?? ASR_HTTP_URL;
   const cliPython = options.cliPython ?? ASR_CLI_PYTHON;
   const cliScript = options.cliScript ?? ASR_CLI_SCRIPT;
   const fetchImpl = options.fetchImpl ?? fetch;
   const watchdog = options.watchdog ?? asrWatchdog;
+  const execFileImpl = options.execFileImpl ?? (execFile as ExecFileImpl);
+  const ffprobePath = options.ffprobePath ?? "ffprobe";
+  const ffmpegPath = options.ffmpegPath ?? "ffmpeg";
+  const httpTimeoutMs = options.httpTimeoutMs ?? ASR_HTTP_TIMEOUT_MS;
+  const chunkAfterSeconds = options.chunkAfterSeconds ?? ASR_CHUNK_AFTER_SECONDS;
+  const chunkSeconds = Math.min(options.chunkSeconds ?? ASR_CHUNK_SECONDS, MAX_ASR_CHUNK_SECONDS);
 
   async function recordHttpSuccess(): Promise<void> {
     try {
@@ -104,14 +242,14 @@ export function createDefaultTranscribeVoice(options: {
     }
   }
 
-  return async function defaultTranscribeVoice(audioPath: string): Promise<string> {
+  async function transcribeSingleFile(audioPath: string): Promise<string> {
     if (httpUrl) {
       try {
         const response = await fetchImpl(httpUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: audioPath }),
-          signal: AbortSignal.timeout(30_000),
+          signal: AbortSignal.timeout(httpTimeoutMs),
         });
         if (response.ok) {
           const text = await response.text();
@@ -136,14 +274,53 @@ export function createDefaultTranscribeVoice(options: {
     }
 
     return new Promise<string>((resolve, reject) => {
-      execFile(cliPython, [cliScript, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
+      execFileImpl(cliPython, [cliScript, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(stderr?.trim() || error.message));
+          const stderrText = Buffer.isBuffer(stderr) ? stderr.toString("utf8") : stderr;
+          reject(new Error(stderrText.trim() || error.message));
           return;
         }
-        resolve(stdout.trim());
+        resolve((Buffer.isBuffer(stdout) ? stdout.toString("utf8") : stdout).trim());
       });
     });
+  }
+
+  return async function defaultTranscribeVoice(audioPath: string): Promise<string> {
+    const duration = await probeAudioDurationSeconds(audioPath, execFileImpl, ffprobePath);
+    if (duration !== null && duration > chunkAfterSeconds) {
+      const { chunks, cleanup } = await splitAudioIntoChunks(audioPath, {
+        chunkSeconds,
+        execFileImpl,
+        ffmpegPath,
+      });
+      try {
+        const transcripts: string[] = [];
+        let successfulChunks = 0;
+        for (const [index, chunk] of chunks.entries()) {
+          try {
+            const transcript = await transcribeSingleFile(chunk);
+            if (transcript.trim()) {
+              successfulChunks += 1;
+              transcripts.push(transcript.trim());
+            }
+          } catch (error) {
+            transcripts.push(`[chunk ${index + 1}/${chunks.length} transcription failed: ${summarizeError(error)}]`);
+          }
+        }
+        const mergedTranscript = transcripts.join("\n").trim();
+        if (successfulChunks === 0) {
+          throw new Error("ASR chunk transcription failed for all chunks");
+        }
+        if (!mergedTranscript) {
+          throw new Error("ASR chunk transcription returned an empty transcript");
+        }
+        return mergedTranscript;
+      } finally {
+        await cleanup();
+      }
+    }
+
+    return transcribeSingleFile(audioPath);
   };
 }
 

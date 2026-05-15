@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -158,6 +158,244 @@ describe("prepareTelegramMessageInput", () => {
 });
 
 describe("createDefaultTranscribeVoice", () => {
+  it("splits long audio before transcription to keep ASR memory bounded", async () => {
+    const watchdog = {
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string };
+      const chunkName = path.basename(body.path ?? "", path.extname(body.path ?? ""));
+      return {
+        ok: true,
+        text: async () => `${chunkName} transcript`,
+      };
+    });
+    const execFileImpl = vi.fn((
+      file: string,
+      args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "1069.261333\n", "");
+        return;
+      }
+
+      if (file === "ffmpeg") {
+        const pattern = String(args.at(-1));
+        void Promise.all([
+          writeFile(pattern.replace("%03d", "000"), "chunk-000"),
+          writeFile(pattern.replace("%03d", "001"), "chunk-001"),
+        ]).then(
+          () => callback(null, "", ""),
+          (error) => callback(error, "", String(error)),
+        );
+        return;
+      }
+
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl: fetchImpl as never,
+      watchdog,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      ffmpegPath: "ffmpeg",
+      chunkAfterSeconds: 300,
+      chunkSeconds: 120,
+    } as never);
+
+    await expect(transcribeVoice("/tmp/long-meeting.m4a")).resolves.toBe("chunk-000 transcript\nchunk-001 transcript");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body ?? "{}")) as { path?: string };
+    const secondBody = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body ?? "{}")) as { path?: string };
+    expect(firstBody.path).toMatch(/chunk-000\.wav$/);
+    expect(secondBody.path).toMatch(/chunk-001\.wav$/);
+  });
+
+  it("keeps partial long-audio transcripts when a chunk fails", async () => {
+    const watchdog = {
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string };
+      const chunkName = path.basename(body.path ?? "", path.extname(body.path ?? ""));
+      if (chunkName === "chunk-001") {
+        return {
+          ok: false,
+          status: 500,
+          text: async () => "",
+        };
+      }
+      return {
+        ok: true,
+        text: async () => `${chunkName} transcript`,
+      };
+    });
+    const execFileImpl = vi.fn((
+      file: string,
+      args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "1069.261333\n", "");
+        return;
+      }
+
+      if (file === "ffmpeg") {
+        const pattern = String(args.at(-1));
+        void Promise.all([
+          writeFile(pattern.replace("%03d", "000"), "chunk-000"),
+          writeFile(pattern.replace("%03d", "001"), "chunk-001"),
+          writeFile(pattern.replace("%03d", "002"), "chunk-002"),
+        ]).then(
+          () => callback(null, "", ""),
+          (error) => callback(error, "", String(error)),
+        );
+        return;
+      }
+
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl: fetchImpl as never,
+      watchdog,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      ffmpegPath: "ffmpeg",
+      chunkAfterSeconds: 300,
+      chunkSeconds: 120,
+    } as never);
+
+    const transcript = await transcribeVoice("/tmp/long-meeting.m4a");
+
+    expect(transcript).toContain("chunk-000 transcript");
+    expect(transcript).toContain("[chunk 2/3 transcription failed:");
+    expect(transcript).toContain("chunk-002 transcript");
+  });
+
+  it("warns and falls back to single-file transcription when ffprobe fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const audioPath = path.join(root, "meeting.m4a");
+    await writeFile(audioPath, "audio");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "single transcript",
+    });
+    const execFileImpl = vi.fn((
+      file: string,
+      _args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(new Error("ffprobe missing"), "", "ffprobe missing");
+        return;
+      }
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl: fetchImpl as never,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+    } as never);
+
+    try {
+      await expect(transcribeVoice(audioPath)).resolves.toBe("single transcript");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ffprobe failed"));
+    } finally {
+      warnSpy.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
+
+  it("caps configured ASR chunk size to ten minutes", async () => {
+    let segmentTimeArg = "";
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "chunk transcript",
+    });
+    const execFileImpl = vi.fn((
+      file: string,
+      args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "1200\n", "");
+        return;
+      }
+
+      if (file === "ffmpeg") {
+        segmentTimeArg = String(args[args.indexOf("-segment_time") + 1]);
+        const pattern = String(args.at(-1));
+        void writeFile(pattern.replace("%03d", "000"), "chunk-000").then(
+          () => callback(null, "", ""),
+          (error) => callback(error, "", String(error)),
+        );
+        return;
+      }
+
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl: fetchImpl as never,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      ffmpegPath: "ffmpeg",
+      chunkSeconds: 99_999,
+    } as never);
+
+    await expect(transcribeVoice("/tmp/meeting.m4a")).resolves.toBe("chunk transcript");
+
+    expect(segmentTimeArg).toBe("600");
+  });
+
+  it("uses a configurable ASR HTTP timeout", async () => {
+    const watchdog = {
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn().mockResolvedValue(undefined),
+    };
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener("abort", () => reject(new Error("aborted by test timeout")), { once: true });
+        setTimeout(() => reject(new Error(`not aborted: ${String(signal?.aborted)}`)), 20);
+      })
+    );
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl: fetchImpl as never,
+      watchdog,
+      httpTimeoutMs: 1,
+    } as never);
+
+    await expect(transcribeVoice("/tmp/voice.ogg")).rejects.toThrow("ASR not configured");
+
+    expect(watchdog.recordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      message: "aborted by test timeout",
+    }));
+  });
+
   it("records ASR HTTP failures with the watchdog before falling back", async () => {
     const watchdog = {
       recordSuccess: vi.fn(),
