@@ -16,17 +16,19 @@
 </p>
 
 <h3 align="center">
-  从 Telegram 运行真正的 Codex 和 Claude Code CLI。<br>
-  原生会话、本地文件、真实工具调用、语音输入、定时任务和多 Agent 工作流，不重写引擎。
+  给本地 Codex 和 Claude Code CLI 接一个 Telegram 控制台。<br>
+  在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，不替换你已经在用的引擎。
 </h3>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#为什么是这套架构">为什么</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#双引擎codex--claude-code">双引擎</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#board持久化-kanban-任务板">Board</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#mini-bustopic-到-topic-的工作流">Mini Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#先从这里开始">先从这里开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#它能给你什么">能做什么</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#产品边界">产品边界</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#核心工作流">核心工作流</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 ## 先从这里开始
 
-> **推荐安装方式：** 克隆仓库，用 Codex 或 Claude Code 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
+**cc-telegram-bridge 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex 和 Claude Code CLI，然后给它们补上 Telegram 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
+
+最简单的安装方式：克隆仓库，用 Codex 或 Claude Code 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
 
 ```bash
 npm install
@@ -38,27 +40,46 @@ npm run dev -- telegram service start
 
 然后给 bot 发一条消息，按它给出的配对命令完成授权，就可以从 Telegram 继续用本机的 Codex/Claude 了。完整流程见 [快速开始](#快速开始)。
 
-> **推荐运行方式：** 对你自己控制、希望完全免打断运行的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。如果关闭 YOLO，bridge 也会尽量在 Telegram 里弹审批按钮：Claude 是按工具请求审批；Codex 因为 `codex exec` 不支持 turn 中途审批回调，所以是按整轮 turn 预审批。`unsafe` 只建议在可信机器和可信工作区使用。
+> **推荐运行方式：** 对你自己控制、希望免打断运行的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。如果关闭 YOLO，bridge 也会尽量在 Telegram 里弹审批按钮：Claude 是按工具请求审批；Codex 因为 `codex exec` 不支持 turn 中途审批回调，所以是按整轮 turn 预审批。unsafe 模式只建议在可信机器和可信工作区使用。
 
-## 能力地图
+## 它能给你什么
 
-| 你想做什么 | 看这里 |
+| 能力 | 实际意义 |
 |---|---|
-| 把 Codex 或 Claude Code 接到 Telegram | [双引擎](#双引擎codex--claude-code)、[多 Bot 部署](#多-bot-部署) |
-| 在手机上续接本地 CLI 会话 | [会话续接](#会话续接与-codex-thread-绑定)、[Agent 指令](#agent-指令) |
-| 发文件、图片、音频和生成产物 | [文件投递](#agent-任务里的文件投递)、[语音输入](#语音输入asr) |
-| 群聊/topic 互相隔离，不污染上下文 | [Telegram 群聊和 Topic](#telegram-群聊和-topic)、[Mini Bus](#mini-bustopic-到-topic-的工作流) |
-| 跑多 Agent 协作任务 | [Agent Bus](#agent-bus)、[Crew Workflow](#crew-workflow中心协调)、[Board](#board持久化-kanban-任务板) |
-| 强化网页搜索和来源追踪 | [Search MCP](#实时网页搜索-mcpbrave--tavily)、[`docs/search-mcp.md`](./docs/search-mcp.md) |
-| 运维、排障、审计长任务 | [服务运维](#服务运维)、[审计日志](#审计日志)、[Timeline](#timeline) |
+| **真实 CLI 的远程控制** | 把 Codex 或 Claude Code 接到 Telegram，不把它们改造成一个假的聊天后端。 |
+| **会话连续性** | 在手机上续接 Claude 本地 session、绑定 Codex thread，回到电脑后还能继续同一件事。 |
+| **Telegram 多模态输入输出** | 文件、图片、生成产物、语音消息、音频 document 都走同一套 bridge 协议。 |
+| **稳定的长任务运维** | cron、audit、timeline、usage tracking、访问控制和服务重启都由 bridge 管，不塞进模型记忆。 |
+| **可追溯网页研究** | 可选 Brave/Tavily MCP 提供 `web_search`、`web_extract`、provider status、fallback notice 和 source log。 |
+| **多 agent 编排** | Agent Bus 做实例间 delegation，Mini Bus 做 topic 间协作，Board 做持久化 Kanban 任务。 |
+
+## 产品边界
+
+| 它是 | 它不是 |
+|---|---|
+| 一个把现有 Codex / Claude Code 暴露到 Telegram 的本地 bridge。 | 一个托管 SaaS agent 平台，或 Codex/Claude Code 的替代品。 |
+| 一个管理会话、文件、审批、定时任务和多 agent 路由的控制层。 | 一个模型供应商、推理服务或独立 LLM runtime。 |
+| 一个给重度 CLI agent 用户使用的实用运维层。 | 一个面向所有 IM 平台的通用聊天机器人框架。 |
+| 一个把 delivery receipt、审计日志和任务状态移出脆弱 prompt 的地方。 | 一个保证模型永远自动正确完成任务的魔法盒。 |
+
+## 核心工作流
+
+| 工作流 | 入口 |
+|---|---|
+| **个人手机 copilot** — 人在外面，也能操作电脑上的 Codex/Claude。 | [快速开始](#快速开始)、[会话续接](#会话续接与-codex-thread-绑定) |
+| **研究助手** — 搜索、直接读取 URL、保留 source log，再把文件发回 Telegram。 | [Search MCP](#实时网页搜索-mcpbrave--tavily)、[文件投递](#agent-任务里的文件投递) |
+| **Topic mini crew** — 把一个 Telegram 群里的 forum topics 当 planner/writer/reviewer peers。 | [Mini Bus](#mini-bustopic-到-topic-的工作流)、[Telegram 群聊和 Topic](#telegram-群聊和-topic) |
+| **持久化任务板** — 把 task、依赖、run、WIP limit 和 review gate 放到模型上下文之外。 | [Board](#board持久化-kanban-任务板) |
+| **多 Bot agent bus** — 在隔离 bot 实例之间 delegation，带 health check 和版本化本地协议。 | [Agent Bus](#agent-bus)、[Crew Workflow](#crew-workflow中心协调) |
 
 ## 近期亮点
 
+- **v4.6.18** — 规范化 Telegram 群里的 `/goal@botname`，让 Claude Code 收到原生 `/goal`，同时 Codex 继续使用结构化 goal 处理。
+- **v4.6.17** — 让 Claude Code 的 `/goal` 可以从 Telegram 透传，不再把 goal 当成 Codex-only 功能。
 - **v4.6.16** — 补齐 Telegram 音频处理：直接 `voice`、直接 `audio/.m4a`、音频类 document、被引用的音频 document 都会走同一套 ASR 转写路径。
 - **v4.6.14** — 加强 `/stop` 和服务重启清理，避免旧的重复进程在重启后继续 typing 或继续发文件。
 - **v4.6.10** — 将可选 Brave/Tavily Search MCP 打磨成正式研究插件，带 `sourceLog`、provider 元数据、fallback 提示、`web_extract`、`provider_status` 和 `health_check`。
 - **v4.6.2** — 新增 `/board` 持久化 Kanban 任务和 `/mini` topic-to-topic workflow，适合在同群里组织 planner/writer/reviewer 式协作。
-- **v4.5.x** — 稳定 generated `agent.md` transport 指令、schema-backed `[tool:{...}]` 文件投递、Telegram cron、update watermark 和 Delivery Protocol v2。
 
 **升级已有 generated 实例指令：** 更新代码后请刷新已生成的 `agent.md` block，让旧 bot 拿到最新短 Telegram Transport block：
 
@@ -76,7 +97,7 @@ telegram service restart --all
 
 - **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex 和 Claude Code CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
 - **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。
-- **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。不同 topic 还可以组成 Mini Bus，用同一个群里的轻量 peer 跑 fan-out 或 chain workflow；`/board` 负责把 Kanban 任务状态持久化到模型记忆之外。
+- **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。不同 topic 还可以组成 Mini Bus，用同一个群里的轻量 peer 跑 fan-out、chain、verify 或 crew workflow；`/board` 负责把 Kanban 任务状态持久化到模型记忆之外。
 - **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex 或 Claude、process 或 stream runtime，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
 - **Telegram 能力放在 bridge，而不是模型记忆里。** 发文件、cron 持久化、receipt、权限检查和失败重试由 bridge 代码负责，所以换模型、重启实例、续接会话后仍然有稳定语义。
 - **Prompt 短，规则稳定。** transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。

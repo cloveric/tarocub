@@ -16,17 +16,19 @@
 </p>
 
 <h3 align="center">
-  Run the real Codex and Claude Code CLIs from Telegram.<br>
-  Native sessions, local files, tool use, voice input, scheduled tasks, and multi-agent workflows — without rebuilding either engine.
+  A Telegram control plane for your local Codex and Claude Code CLIs.<br>
+  Resume desktop sessions from your phone, move files both ways, run scheduled work, and coordinate multiple agent workers without replacing the engines you already use.
 </h3>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#why-this-bridge">Why</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#dual-engine-codex--claude-code">Engines</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#live-web-search-mcp-brave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#board-durable-kanban-tasks">Board</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#mini-bus-topic-to-topic-workflows">Mini Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
+  <a href="#start-here">Start Here</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#what-it-gives-you">What You Get</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#product-boundary">Boundary</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#core-workflows">Workflows</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#live-web-search-mcp-brave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#service-operations">Ops</a>
 </p>
 
 ## Start Here
 
-> **Best setup path:** clone this repo, open it in Codex or Claude Code, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed by the same CLI agent it exposes on Telegram.
+**cc-telegram-bridge is not another hosted agent UI.** It runs the real Codex and Claude Code CLIs on your machine, then gives them a durable Telegram interface: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
+
+The easiest setup path is to clone this repo, open it in Codex or Claude Code, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
 
 ```bash
 npm install
@@ -38,27 +40,46 @@ npm run dev -- telegram service start
 
 Then send a message to the bot, run the pairing command it gives you, and continue from Telegram. See [Quick Start](#quick-start) for the full walkthrough.
 
-> **Recommended runtime:** enable YOLO mode for hands-free Telegram instances you control: `telegram yolo on --instance <name>`. With YOLO off, the bridge can ask for approval in Telegram instead: Claude approvals are per tool request; Codex approvals are per turn because `codex exec` does not support mid-turn approval callbacks. Use `unsafe` only on a trusted machine and workspace.
+> **Recommended runtime:** enable YOLO mode for hands-free Telegram instances you control: `telegram yolo on --instance <name>`. With YOLO off, the bridge can ask for approval in Telegram instead: Claude approvals are per tool request; Codex approvals are per turn because `codex exec` does not support mid-turn approval callbacks. Use unsafe modes only on a trusted machine and workspace.
 
-## Capability Map
+## What It Gives You
 
-| Need | Use |
+| Capability | What it means in practice |
 |---|---|
-| Put Codex or Claude Code on Telegram | [Dual Engine](#dual-engine-codex--claude-code), [Multi-Bot Setup](#multi-bot-setup) |
-| Continue real local CLI sessions remotely | [Session Resume](#session-resume--codex-thread-attach), [Agent Instructions](#agent-instructions) |
-| Send files, images, audio, and generated artifacts | [File Delivery](#file-delivery-from-agent-tasks), [Voice Input](#voice-input-asr) |
-| Use groups and forum topics without context pollution | [Telegram Groups And Topics](#telegram-groups-and-topics), [Mini Bus](#mini-bus-topic-to-topic-workflows) |
-| Run multi-agent work | [Agent Bus](#agent-bus), [Crew Workflows](#crew-workflows-hub-and-spoke), [Board](#board-durable-kanban-tasks) |
-| Add source-traceable web research | [Search MCP](#live-web-search-mcp-brave--tavily), [`docs/search-mcp.md`](./docs/search-mcp.md) |
-| Operate and debug long-running bots | [Service Operations](#service-operations), [Audit Trail](#audit-trail), [Timeline](#timeline) |
+| **Remote control for real CLIs** | Put Codex or Claude Code on Telegram without wrapping them in a fake chat backend. |
+| **Session continuity** | Resume local Claude sessions and attach Codex threads from your phone, then continue on desktop later. |
+| **Multimodal Telegram I/O** | Send files, images, generated artifacts, voice messages, and audio documents through one bridge protocol. |
+| **Durable operations** | Keep cron jobs, audit logs, timeline logs, usage tracking, access checks, and service restart tooling outside model memory. |
+| **Source-traceable research** | Use the optional Brave/Tavily MCP for `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
+| **Multi-agent coordination** | Use Agent Bus for instance-to-instance delegation, Mini Bus for topic-to-topic workflows, and Board for durable Kanban tasks. |
+
+## Product Boundary
+
+| This project is | This project is not |
+|---|---|
+| A local bridge that exposes existing Codex and Claude Code installations through Telegram. | A hosted SaaS agent platform or a replacement for Codex/Claude Code. |
+| A control plane for sessions, files, approvals, scheduled tasks, and multi-agent routing. | A model provider, inference server, or standalone LLM runtime. |
+| A practical ops layer for people who already use CLI agents heavily. | A generic chatbot framework for every messaging platform. |
+| A place to keep delivery receipts, audit trails, and task state out of fragile prompts. | A promise that models will always finish tasks correctly without review. |
+
+## Core Workflows
+
+| Workflow | Entry point |
+|---|---|
+| **Personal mobile copilot** — talk to your local Codex/Claude while away from the computer. | [Quick Start](#quick-start), [Session Resume](#session-resume--codex-thread-attach) |
+| **Research assistant** — search, extract exact URLs, preserve source logs, and return files to Telegram. | [Search MCP](#live-web-search-mcp-brave--tavily), [File Delivery](#file-delivery-from-agent-tasks) |
+| **Topic-based mini crew** — use Telegram forum topics as planner/writer/reviewer peers in one group. | [Mini Bus](#mini-bus-topic-to-topic-workflows), [Telegram Groups And Topics](#telegram-groups-and-topics) |
+| **Durable project board** — keep tasks, dependencies, runs, WIP limits, and review gates outside model context. | [Board](#board-durable-kanban-tasks) |
+| **Multi-bot agent bus** — delegate work across isolated bot instances with health checks and versioned local protocol. | [Agent Bus](#agent-bus), [Crew Workflows](#crew-workflows-hub-and-spoke) |
 
 ## Release Highlights
 
+- **v4.6.18** — normalizes `/goal@botname` in Telegram groups so Claude Code receives a native `/goal` command while Codex keeps structured goal handling.
+- **v4.6.17** — passes Claude Code `/goal` through from Telegram instead of treating goals as Codex-only.
 - **v4.6.16** — completes Telegram audio handling: direct `voice`, direct `audio/.m4a`, audio-like documents, and quoted audio documents all go through the same ASR transcription path.
 - **v4.6.14** — hardens `/stop` and service restart cleanup so stale duplicate processes cannot keep typing or sending files after a restart.
 - **v4.6.10** — promotes the optional Brave/Tavily Search MCP into a release-ready research add-on with `sourceLog`, provider metadata, fallback notices, `web_extract`, `provider_status`, and `health_check`.
 - **v4.6.2** — adds `/board` durable Kanban tasks and `/mini` topic-to-topic workflows for same-group planner/writer/reviewer style coordination.
-- **v4.5.x** — stabilizes generated `agent.md` transport instructions, schema-backed `[tool:{...}]` file delivery, Telegram cron, update watermarks, and Delivery Protocol v2.
 
 **Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the latest compact Telegram Transport block:
 
@@ -76,7 +97,7 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 - **Native CLI first.** The bridge runs the real Codex and Claude Code CLIs, so local auth, project files, sessions, approvals, and engine-specific behavior remain the same as on your desktop.
 - **Resume desktop work from anywhere.** Pick up an existing local Codex or Claude Code session from Telegram, send files or instructions while away, then continue the same project back on the desktop.
-- **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation. Topic peers can also be composed into a Mini Bus for quick same-group fan-out or chain workflows, while `/board` keeps durable Kanban task state outside model memory.
+- **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation. Topic peers can also be composed into a Mini Bus for same-group fan-out, chain, verify, or crew workflows, while `/board` keeps durable Kanban task state outside model memory.
 - **Multi-engine without separate playbooks.** Each bot can choose Codex or Claude, process or stream runtime, while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
 - **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
 - **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
