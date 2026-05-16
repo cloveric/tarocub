@@ -77,6 +77,7 @@ describe("cron-add fallback tags", () => {
           chatId: 123,
           userId: 456,
           prompt: "check",
+          sessionMode: "new_per_run",
           targetAt: "2026-04-29T05:10:00.000Z",
         }));
       });
@@ -129,6 +130,24 @@ describe("cron-add fallback tags", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("preserves explicit reuse session mode when requested", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const text = await processCronAddTags({
+        text: '[cron-add:{"cron":"0 9 * * *","prompt":"continue this thread","sessionMode":"reuse"}]',
+        cronRuntime: { store, scheduler },
+        stateDir,
+        chatId: 123,
+        userId: 456,
+        locale: "en",
+      });
+
+      const jobs = await store.list();
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]!.sessionMode).toBe("reuse");
+      expect(text).not.toContain("[cron-add:");
+    });
   });
 
   it("rejects missing prompts without creating a job", async () => {

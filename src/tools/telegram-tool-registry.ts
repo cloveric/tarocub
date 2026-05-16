@@ -251,6 +251,11 @@ export function createDefaultTelegramToolRegistry(): TelegramToolRegistry {
         cron: { type: "string", maxLength: 120 },
         timezone: { type: "string", description: "Optional IANA timezone, for example Asia/Shanghai. Defaults to the bot instance timezone." },
         description: { type: "string", maxLength: 200 },
+        sessionMode: {
+          type: "string",
+          enum: ["new_per_run", "reuse"],
+          description: "Defaults to new_per_run so scheduled tasks run in a clean context. Use reuse only for explicit continuation jobs.",
+        },
         maxFailures: { type: "number" },
         chatId: { type: "number", description: "Deprecated compatibility field; ignored in favor of the current Telegram chat context." },
         userId: { type: "number", description: "Deprecated compatibility field; ignored in favor of the current Telegram user context." },

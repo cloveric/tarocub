@@ -113,6 +113,7 @@ describe("runCronCli", () => {
       cronExpr: "0 9 * * *",
       prompt: "morning summary",
       description: "daily",
+      sessionMode: "new_per_run",
     });
     expect(io.stdout.join("\n")).toContain("added abcd1234");
   });
@@ -150,6 +151,7 @@ describe("runCronCli", () => {
     const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
     expect(body.prompt).toBe("drink water");
     expect(body.cronExpr).toBeUndefined();
+    expect(body.sessionMode).toBe("new_per_run");
     expect(typeof body.runAt).toBe("string");
     const runAt = new Date(body.runAt).getTime();
     const after = Date.now();
@@ -186,6 +188,38 @@ describe("runCronCli", () => {
     const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
     expect(body.cronExpr).toBe("0 9 * * *");
     expect(body.prompt).toBe("good morning");
+    expect(body.sessionMode).toBe("new_per_run");
+  });
+
+  it("allows explicit reuse session mode for continuation-style jobs", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        job: {
+          id: "33334444",
+          chatId: 1,
+          userId: 2,
+          cronExpr: "0 9 * * *",
+          prompt: "continue thread",
+          enabled: true,
+          sessionMode: "reuse",
+          mute: false,
+          silent: false,
+          timeoutMins: 30,
+          createdAt: "2026-04-29T00:00:00.000Z",
+          updatedAt: "2026-04-29T00:00:00.000Z",
+        },
+      }),
+    );
+    const io = makeIo();
+    const result = await runCronCli(
+      ["add", "--cron", "0 9 * * *", "--prompt", "continue thread", "--session-mode", "reuse"],
+      { env: ENV, fetchFn, io },
+    );
+
+    expect(result.exitCode).toBe(0);
+    const body = JSON.parse(fetchFn.mock.calls[0]![1].body);
+    expect(body.sessionMode).toBe("reuse");
   });
 
   it("returns non-zero on validation errors before posting", async () => {

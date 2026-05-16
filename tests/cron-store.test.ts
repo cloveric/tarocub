@@ -35,7 +35,7 @@ describe("CronStore", () => {
       expect(record.id).toMatch(/^[a-f0-9]{8}$/);
       expect(record.enabled).toBe(true);
       expect(record.timezone).toBeDefined();
-      expect(record.sessionMode).toBe("reuse");
+      expect(record.sessionMode).toBe("new_per_run");
       expect(record.mute).toBe(false);
       expect(record.silent).toBe(false);
       expect(record.timeoutMins).toBe(30);
@@ -49,6 +49,20 @@ describe("CronStore", () => {
       const persisted = JSON.parse(await readFile(filePath, "utf8")) as { jobs: unknown[]; schemaVersion: number };
       expect(persisted.jobs).toHaveLength(1);
       expect(persisted.schemaVersion).toBeGreaterThan(0);
+    });
+  });
+
+  it("preserves explicit reuse session mode for continuation-style jobs", async () => {
+    await withStateDir(async (_stateDir, store) => {
+      const record = await store.add({
+        chatId: 100,
+        userId: 200,
+        cronExpr: "0 9 * * *",
+        prompt: "continue current discussion",
+        sessionMode: "reuse",
+      });
+
+      expect(record.sessionMode).toBe("reuse");
     });
   });
 

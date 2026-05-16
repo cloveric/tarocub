@@ -472,7 +472,7 @@ Schema:
   - `enabled`
   - `runOnce`
   - `targetAt?`
-  - `sessionMode`
+  - `sessionMode` (`new_per_run` by default; `reuse` only for explicit continuation jobs)
   - `mute`
   - `silent`
   - `timeoutMins`

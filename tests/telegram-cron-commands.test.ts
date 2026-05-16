@@ -202,6 +202,7 @@ describe("handleCronCommand", () => {
       expect(jobs).toHaveLength(1);
       expect(jobs[0]!.cronExpr).toBe("0 9 * * *");
       expect(jobs[0]!.prompt).toBe("morning summary");
+      expect(jobs[0]!.sessionMode).toBe("new_per_run");
       expect(h.api.sendMessage).toHaveBeenCalledWith(
         CHAT_ID,
         expect.stringMatching(/Added task/),

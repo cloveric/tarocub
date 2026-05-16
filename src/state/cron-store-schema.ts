@@ -35,7 +35,7 @@ export const CronJobRecordSchema = z.object({
   enabled: z.boolean().default(true),
   runOnce: z.boolean().default(false),
   targetAt: IsoTimestampSchema.optional(),
-  sessionMode: CronSessionModeSchema.default("reuse"),
+  sessionMode: CronSessionModeSchema.default("new_per_run"),
   mute: z.boolean().default(false),
   silent: z.boolean().default(false),
   timeoutMins: z.number().int().min(0).max(24 * 60).default(30),

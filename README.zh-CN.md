@@ -351,6 +351,7 @@ Agent 可以通过和文件投递同一套 tool layer 创建 Telegram 投递的�
 - 每个任务会保存 timezone；默认跟随运行 bot 的服务器/实例环境。
 - 停机太久后，过期的一次性提醒会标记为 missed，不会在启动时暴雨式补发。
 - 周期任务会记录失败次数和有上限的 run history，连续失败后可以自动停用。
+- 定时任务默认使用 `sessionMode: "new_per_run"`，每次触发都开干净上下文，不继承创建任务时的聊天上下文；只有明确要“接着当前会话继续”的任务才使用 `sessionMode: "reuse"`。
 - 每个 chat 有任务数量上限，防止任务递归创建导致无限增长。
 
 人类运维仍然可以用 CLI 检查和调试；但 generated `agent.md` 会要求 agent 使用 `[tool:{...}]` layer，这样 Claude/Codex 的 process 和 stream runtime 行为一致。

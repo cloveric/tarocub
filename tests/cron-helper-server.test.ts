@@ -162,10 +162,24 @@ describe("cron helper server", () => {
     expect(response.body.job.chatId).toBe(CHAT_ID);
     expect(response.body.job.userId).toBe(USER_ID);
     expect(response.body.job.chatType).toBe("private");
+    expect(response.body.job.sessionMode).toBe("new_per_run");
 
     const stored = await harness.store.list();
     expect(stored).toHaveLength(1);
     expect(harness.refreshSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves explicit reuse session mode for continuation-style jobs", async () => {
+    harness = await buildHarness();
+    const response = await postJson(harness.server.url, "add", {
+      token: harness.server.token,
+      body: { cronExpr: "0 9 * * *", prompt: "continue thread", sessionMode: "reuse" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.job.sessionMode).toBe("reuse");
+    const stored = await harness.store.list();
+    expect(stored[0]!.sessionMode).toBe("reuse");
   });
 
   it("adds a one-shot job from runAt and calls scheduler.refresh()", async () => {

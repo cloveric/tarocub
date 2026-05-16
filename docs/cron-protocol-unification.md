@@ -63,6 +63,7 @@
 | `at` | 三选一 | ISO 时间戳，例 `"2026-05-01T09:00:00Z"`（必须将来）|
 | `in` | 三选一 | 相对延时，正则 `^\d{1,6}(s|m|h|d)$`，例 `"10m"`、`"2h"`、`"1d"`，最长 366d |
 | `description` | 可选 | 字符串，最长 200，用于 `/cron list` 显示 |
+| `sessionMode` | 可选 | 默认 `new_per_run`，每次触发开干净上下文；只有明确要接着当前会话继续时才传 `reuse` |
 | `maxFailures` | 可选 | recurring job 的连续失败阈值，默认 3 |
 
 **`cron` / `at` / `in` 必须恰好出现一个**，否则报 "use exactly one of in, at, or cron"。

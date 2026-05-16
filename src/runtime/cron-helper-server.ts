@@ -194,7 +194,7 @@ function buildAddInput(body: AddRequestBody, chatId: number, userId: number): Cr
     description: asOptionalString(body.description, "description", 200),
     runOnce,
     targetAt: runAt,
-    sessionMode: asOptionalSessionMode(body.sessionMode),
+    sessionMode: asOptionalSessionMode(body.sessionMode) ?? "new_per_run",
     mute: asOptionalBoolean(body.mute, "mute"),
     silent: asOptionalBoolean(body.silent, "silent"),
     timeoutMins: asOptionalTimeoutMins(body.timeoutMins),

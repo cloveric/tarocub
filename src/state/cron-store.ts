@@ -141,7 +141,7 @@ export class CronStore {
         enabled,
         runOnce: input.runOnce ?? false,
         targetAt: input.targetAt,
-        sessionMode: input.sessionMode ?? "reuse",
+        sessionMode: input.sessionMode ?? "new_per_run",
         mute: input.mute ?? false,
         silent: input.silent ?? false,
         timeoutMins: input.timeoutMins ?? 30,

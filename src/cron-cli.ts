@@ -1,4 +1,4 @@
-import type { CronJobRecord } from "./state/cron-store-schema.js";
+import type { CronJobRecord, CronSessionMode } from "./state/cron-store-schema.js";
 
 export interface CronCliEnv {
   [key: string]: string | undefined;
@@ -26,7 +26,7 @@ const USAGE = [
   "",
   "Commands:",
   "  add (--cron <expr> | --in <duration> | --at <iso-time>) --prompt <text>",
-  "      [--description <text>]",
+  "      [--description <text>] [--session-mode new_per_run|reuse]",
   "  add <cron-expr> <prompt...>",
   "      Positional form: 5-field cron expression followed by prompt text.",
   "  list",
@@ -57,6 +57,7 @@ interface AddArgs {
   runAt?: string;
   prompt: string;
   description?: string;
+  sessionMode?: CronSessionMode;
 }
 
 const CRON_FIELD_REGEX = /^[A-Za-z0-9*\-/,?#L]+$/;
@@ -109,11 +110,19 @@ function parseRunAt(value: string): string {
   return date.toISOString();
 }
 
+function parseSessionMode(value: string): CronSessionMode {
+  if (value !== "new_per_run" && value !== "reuse") {
+    throw new Error('--session-mode must be "new_per_run" or "reuse"');
+  }
+  return value;
+}
+
 function parseAddArgs(argv: string[]): AddArgs {
   let cronExpr: string | undefined;
   let runAt: string | undefined;
   let prompt: string | undefined;
   let description: string | undefined;
+  let sessionMode: CronSessionMode | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < argv.length; i++) {
@@ -148,6 +157,12 @@ function parseAddArgs(argv: string[]): AddArgs {
       description = value;
       continue;
     }
+    if (arg === "--session-mode") {
+      const value = argv[++i];
+      if (!value) throw new Error("--session-mode requires a value");
+      sessionMode = parseSessionMode(value);
+      continue;
+    }
     if (arg.startsWith("--")) {
       throw new Error(`unknown option: ${arg}`);
     }
@@ -178,6 +193,7 @@ function parseAddArgs(argv: string[]): AddArgs {
   if (cronExpr !== undefined) result.cronExpr = cronExpr;
   if (runAt !== undefined) result.runAt = runAt;
   if (description !== undefined) result.description = description;
+  result.sessionMode = sessionMode ?? "new_per_run";
   return result;
 }
 

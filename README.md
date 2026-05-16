@@ -352,6 +352,7 @@ Cron behavior is designed for Telegram delivery, not session-local reminders:
 - Each job stores timezone information; by default it follows the server/instance environment where the bot runs.
 - Missed one-shot reminders older than the grace window are marked missed instead of firing as a burst after long downtime.
 - Recurring jobs track failures, keep capped run history, and can be disabled after repeated failures.
+- Scheduled jobs default to `sessionMode: "new_per_run"` so each run starts from a clean context instead of inheriting the chat that created it. Use `sessionMode: "reuse"` only for explicit continuation-style jobs.
 - Per-chat job caps prevent accidental recursive job creation from growing without bound.
 
 For human operators, the CLI remains available for inspection and debugging, but generated `agent.md` instructions tell agents to use the `[tool:{...}]` layer so Claude/Codex process and stream runtimes behave consistently.

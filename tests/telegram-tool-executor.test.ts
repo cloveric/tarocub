@@ -103,6 +103,7 @@ describe("executeTelegramTool", () => {
           userId: 456,
           locale: "en",
           prompt: "check email",
+          sessionMode: "new_per_run",
           targetAt: "2026-04-29T05:10:00.000Z",
         }));
       });
