@@ -340,6 +340,7 @@ Agent 可以通过和文件投递同一套 tool layer 创建 Telegram 投递的�
 /cron add 0 9 * * 1 weekly summary
 /cron rm <job-id>
 /cron toggle <job-id>
+/cron mode <job-id> new_per_run
 /cron run <job-id>
 ```
 
@@ -352,6 +353,7 @@ Agent 可以通过和文件投递同一套 tool layer 创建 Telegram 投递的�
 - 停机太久后，过期的一次性提醒会标记为 missed，不会在启动时暴雨式补发。
 - 周期任务会记录失败次数和有上限的 run history，连续失败后可以自动停用。
 - 定时任务默认使用 `sessionMode: "new_per_run"`，每次触发都开干净上下文，不继承创建任务时的聊天上下文；只有明确要“接着当前会话继续”的任务才使用 `sessionMode: "reuse"`。
+- 这个默认值上线前创建的旧任务会保留已存储的模式；可用 `/cron mode <job-id> new_per_run` 原地升级旧周期任务，不必删除重建。
 - 每个 chat 有任务数量上限，防止任务递归创建导致无限增长。
 
 人类运维仍然可以用 CLI 检查和调试；但 generated `agent.md` 会要求 agent 使用 `[tool:{...}]` layer，这样 Claude/Codex 的 process 和 stream runtime 行为一致。

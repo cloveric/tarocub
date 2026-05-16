@@ -70,6 +70,8 @@
 
 `chatId` / `userId` / `chatType` **永远不能出现在 payload 里**——如果出现，忽略不报错（向前兼容）。bridge 在解析时从 dispatch context 注入。
 
+升级注意：默认值切换到 `new_per_run` 后，新建任务会隔离上下文；已经写盘的旧任务保留自己的 `sessionMode`。如需修正旧 recurring job，可在 Telegram 里执行 `/cron mode <job-id> new_per_run`。
+
 合法示例：
 
 ```

@@ -341,6 +341,7 @@ Users can also manage tasks directly in Telegram:
 /cron add 0 9 * * 1 weekly summary
 /cron rm <job-id>
 /cron toggle <job-id>
+/cron mode <job-id> new_per_run
 /cron run <job-id>
 ```
 
@@ -353,6 +354,7 @@ Cron behavior is designed for Telegram delivery, not session-local reminders:
 - Missed one-shot reminders older than the grace window are marked missed instead of firing as a burst after long downtime.
 - Recurring jobs track failures, keep capped run history, and can be disabled after repeated failures.
 - Scheduled jobs default to `sessionMode: "new_per_run"` so each run starts from a clean context instead of inheriting the chat that created it. Use `sessionMode: "reuse"` only for explicit continuation-style jobs.
+- Jobs created before this default was introduced keep their stored mode; use `/cron mode <job-id> new_per_run` to upgrade an older recurring task without deleting it.
 - Per-chat job caps prevent accidental recursive job creation from growing without bound.
 
 For human operators, the CLI remains available for inspection and debugging, but generated `agent.md` instructions tell agents to use the `[tool:{...}]` layer so Claude/Codex process and stream runtimes behave consistently.

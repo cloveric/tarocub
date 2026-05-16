@@ -294,8 +294,10 @@ describe("runCronCli", () => {
     expect(io.stdout).toHaveLength(2);
     expect(io.stdout[0]).toContain("aaaa1111");
     expect(io.stdout[0]).toContain("on");
+    expect(io.stdout[0]).toContain("session=reuse");
     expect(io.stdout[1]).toContain("bbbb2222");
     expect(io.stdout[1]).toContain("off");
+    expect(io.stdout[1]).toContain("session=new_per_run");
     expect(io.stdout[1]).toContain("once=2026-04-29T00:05:00.000Z");
   });
 

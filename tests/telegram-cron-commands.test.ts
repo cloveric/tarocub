@@ -136,6 +136,7 @@ describe("handleCronCommand", () => {
       expect(msg).toContain("morning summary");
       expect(msg).toContain("every five");
       expect(msg).toContain("daily 09:00");
+      expect(msg).toContain("session=new_per_run");
     });
 
     it("renders one-shot jobs with the target time instead of cron internals", async () => {
@@ -336,6 +337,47 @@ describe("handleCronCommand", () => {
       expect(h.api.sendMessage).toHaveBeenCalledWith(
         CHAT_ID,
         expect.stringContaining("Task not found"),
+      );
+    });
+  });
+
+  describe("mode", () => {
+    it("updates an existing job session mode", async () => {
+      const job = await h.store.add({
+        chatId: CHAT_ID,
+        userId: USER_ID,
+        cronExpr: "0 9 * * *",
+        prompt: "daily report",
+        sessionMode: "reuse",
+      });
+
+      await handleCronCommand(`/cron mode ${job.id} new_per_run`, makeContext(h, "en"));
+
+      await expect(h.store.get(job.id)).resolves.toEqual(expect.objectContaining({
+        sessionMode: "new_per_run",
+      }));
+      expect(h.api.sendMessage).toHaveBeenCalledWith(
+        CHAT_ID,
+        expect.stringContaining("new_per_run"),
+      );
+    });
+
+    it("rejects invalid session mode", async () => {
+      const job = await h.store.add({
+        chatId: CHAT_ID,
+        userId: USER_ID,
+        cronExpr: "0 9 * * *",
+        prompt: "daily report",
+      });
+
+      await handleCronCommand(`/cron mode ${job.id} shared`, makeContext(h, "en"));
+
+      await expect(h.store.get(job.id)).resolves.toEqual(expect.objectContaining({
+        sessionMode: "new_per_run",
+      }));
+      expect(h.api.sendMessage).toHaveBeenCalledWith(
+        CHAT_ID,
+        expect.stringContaining("Usage: /cron mode"),
       );
     });
   });

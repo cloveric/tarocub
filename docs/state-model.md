@@ -472,7 +472,7 @@ Schema:
   - `enabled`
   - `runOnce`
   - `targetAt?`
-  - `sessionMode` (`new_per_run` by default; `reuse` only for explicit continuation jobs)
+  - `sessionMode` (`new_per_run` by default for new jobs; `reuse` only for explicit continuation jobs; older persisted jobs keep their stored value until updated)
   - `mute`
   - `silent`
   - `timeoutMins`
@@ -487,7 +487,7 @@ Schema:
 
 ### Authoritative data
 
-This file is authoritative for which scheduled jobs exist and whether they are enabled. `runOnce` jobs are disabled after their first execution attempt. Recurring jobs track consecutive `failureCount`, keep the latest 10 `runHistory` entries, and are disabled when `failureCount >= maxFailures`.
+This file is authoritative for which scheduled jobs exist and whether they are enabled. `runOnce` jobs are disabled after their first execution attempt. Recurring jobs track consecutive `failureCount`, keep the latest 10 `runHistory` entries, and are disabled when `failureCount >= maxFailures`. Use `/cron mode <job-id> new_per_run` to update older recurring jobs that were persisted with `sessionMode: "reuse"` before isolated cron runs became the default.
 
 ### Write rules
 

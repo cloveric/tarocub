@@ -1,5 +1,5 @@
 import type { TelegramApi } from "./api.js";
-import type { CronJobRecord } from "../state/cron-store-schema.js";
+import type { CronJobRecord, CronSessionMode } from "../state/cron-store-schema.js";
 import type { CronStore } from "../state/cron-store.js";
 import type { CronScheduler } from "../runtime/cron-scheduler.js";
 import { validateCronExpression } from "../runtime/cron-scheduler.js";
@@ -144,6 +144,7 @@ function renderJob(job: CronJobRecord, index: number, locale: CronLocale): strin
     : human ? `${job.cronExpr}  (${human})` : job.cronExpr;
   const timezone = job.timezone && !job.runOnce ? `  TZ ${job.timezone}` : "";
   lines.push(`   ⏰ ${exprLine}${timezone}`);
+  lines.push(`   🧵 session=${job.sessionMode}`);
   lines.push(`   📝 ${job.prompt}`);
   if (job.lastRunAt) {
     const rel = humanizeRelative(job.lastRunAt, locale);
@@ -167,6 +168,7 @@ function renderHelp(locale: CronLocale): string {
       "                   例：/cron add 0 9 * * * 早安总结",
       "/cron rm <id>      删除任务（别名 delete / del）",
       "/cron toggle <id>  启用/停用任务",
+      "/cron mode <id> new_per_run|reuse  修改上下文模式",
       "/cron run <id>     立即运行一次",
       "/cron help         显示本帮助",
     ].join("\n");
@@ -180,6 +182,7 @@ function renderHelp(locale: CronLocale): string {
     "                   e.g. /cron add 0 9 * * * morning summary",
     "/cron rm <id>      remove task (alias delete / del)",
     "/cron toggle <id>  enable / disable task",
+    "/cron mode <id> new_per_run|reuse  change context mode",
     "/cron run <id>     run once now",
     "/cron help         show this help",
   ].join("\n");
@@ -338,6 +341,38 @@ async function handleToggle(rest: string, context: CronCommandContext): Promise<
   await context.api.sendMessage(context.chatId, msg);
 }
 
+function parseSessionMode(value: string): CronSessionMode | null {
+  return value === "new_per_run" || value === "reuse" ? value : null;
+}
+
+async function handleMode(rest: string, context: CronCommandContext): Promise<void> {
+  const [id = "", modeToken = ""] = rest.split(/\s+/).filter(Boolean);
+  const mode = parseSessionMode(modeToken);
+  if (!id || !mode) {
+    const msg = context.locale === "zh"
+      ? "用法：/cron mode <id> new_per_run|reuse"
+      : "Usage: /cron mode <id> new_per_run|reuse";
+    await context.api.sendMessage(context.chatId, msg);
+    return;
+  }
+  const job = await ensureChatJob(id, context);
+  if (!job) return;
+
+  const updated = await context.store.update(id, { sessionMode: mode });
+  if (!updated) {
+    const msg = context.locale === "zh"
+      ? `未找到任务：${id}`
+      : `Task not found: ${id}`;
+    await context.api.sendMessage(context.chatId, msg);
+    return;
+  }
+  await context.scheduler.refresh();
+  const msg = context.locale === "zh"
+    ? `✓ 任务 ${id} 上下文模式已改为 ${updated.sessionMode}`
+    : `✓ Task ${id} context mode changed to ${updated.sessionMode}`;
+  await context.api.sendMessage(context.chatId, msg);
+}
+
 async function handleRun(rest: string, context: CronCommandContext): Promise<void> {
   const id = rest.split(/\s+/)[0] ?? "";
   if (!id) {
@@ -394,6 +429,11 @@ export async function handleCronCommand(
     case "toggle":
       await handleToggle(rest, context);
       return { handled: true, subcommand: "toggle" };
+    case "mode":
+    case "session":
+    case "session-mode":
+      await handleMode(rest, context);
+      return { handled: true, subcommand: "mode" };
     case "run":
       await handleRun(rest, context);
       return { handled: true, subcommand: "run" };

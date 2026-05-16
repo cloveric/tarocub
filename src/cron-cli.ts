@@ -241,7 +241,7 @@ function formatJobLine(job: CronJobRecord): string {
   const desc = job.description ? ` desc=${JSON.stringify(job.description)}` : "";
   const lastRun = job.lastRunAt ? ` lastRun=${job.lastRunAt}` : "";
   const lastError = job.lastError ? ` lastError=${JSON.stringify(job.lastError)}` : "";
-  return `${job.id}\t${status}\t${schedule}\tprompt=${JSON.stringify(job.prompt)}${desc}${lastRun}${lastError}`;
+  return `${job.id}\t${status}\t${schedule}\tsession=${job.sessionMode}\tprompt=${JSON.stringify(job.prompt)}${desc}${lastRun}${lastError}`;
 }
 
 function extractError(body: Record<string, unknown>, fallback: string): string {
