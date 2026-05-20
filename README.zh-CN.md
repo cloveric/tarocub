@@ -136,7 +136,7 @@ npm run dev -- telegram engine --instance review-bot
 | YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | `/goal` | bridge 原生 goal API，支持 token budget | 透传给 Claude Code 原生 `/goal`；`--budget` 会变成原生 goal hint | 透传给 Antigravity 原生 `/goal`；`--budget` 会变成原生 goal hint |
 | `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 | 暂不支持 |
-| Skills / plugins | 使用已配置的 Codex home；隔离 home 会把 `skills/` 软链回共享 Codex skills 目录 | 使用共享 Claude 配置，同时支持 workspace `CLAUDE.md`、`skills/`、`plugins/` | 使用 Antigravity 自己的原生 CLI/plugin 配置。bridge 层共享的 skills 通过 `agent.md`、workspace 文件和 MCP/tool 使用规则传递；除非明确需要，不要把 Claude/Codex 原生插件导入 Antigravity。 |
+| Skills / plugins | 使用已配置的 Codex home；隔离 home 会把 `skills/` 软链回共享 Codex skills 目录 | 使用共享 Claude 配置，同时支持 workspace `CLAUDE.md`、`skills/`、`plugins/` | 使用 Antigravity 自己的原生 CLI/plugin 配置。可复用的 bridge skills 应作为独立 skill 文件/文档共享，再按引擎引用或复制；每个实例的 `agent.md` 仍然是自己的私有指令文件。除非明确需要，不要把 Claude/Codex 原生插件导入 Antigravity。 |
 | 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） | 实例目录下的 `workspace/` |
 | 空闲 worker | 每轮结束后进程退出 | stream worker 空闲 30 分钟后回收；session 仍可恢复 | 每轮结束后进程退出 |
 
@@ -176,7 +176,7 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-Antigravity 侧如需原生 MCP/plugin，请使用 Antigravity 自己的配置方式。默认 bridge 配置不应该导入 Claude 或 Codex 的原生插件；bridge 共享的是 `agent.md` / workspace / MCP 使用规则这一层，三套原生插件系统仍然各自独立。
+Antigravity 侧如需原生 MCP/plugin，请使用 Antigravity 自己的配置方式。默认 bridge 配置不应该导入 Claude 或 Codex 的原生插件。bridge 可以跨引擎复用同一批 skill 文档和工具使用规则，但每个实例的 `agent.md`、以及三套原生插件系统仍然各自独立。
 
 配置后重启相关 bot 实例，让新的 Codex/Claude/Antigravity turn 继承各自原生 MCP/plugin 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
 

@@ -136,7 +136,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | `/goal` | Bridge-native goal API with optional token budget | Passed through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Passed through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Not supported by the bridge yet |
-| Skills / plugins | Uses the configured Codex home; isolated homes symlink `skills/` back to the shared Codex skills dir | Uses the shared Claude config plus workspace `CLAUDE.md`, `skills/`, and `plugins/` | Uses Antigravity's own native CLI/plugin config. Bridge-level skills are shared through `agent.md`, workspace files, and MCP/tool guidance; do not import Claude/Codex native plugins into Antigravity unless you explicitly choose to. |
+| Skills / plugins | Uses the configured Codex home; isolated homes symlink `skills/` back to the shared Codex skills dir | Uses the shared Claude config plus workspace `CLAUDE.md`, `skills/`, and `plugins/` | Uses Antigravity's own native CLI/plugin config. Reusable bridge skills should be shared as separate skill files/docs and referenced or copied per engine; each instance `agent.md` remains its own private instruction file. Do not import Claude/Codex native plugins into Antigravity unless you explicitly choose to. |
 | Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) | `workspace/` under instance dir |
 | Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable | Process exits after each turn |
 
@@ -176,7 +176,7 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-For Antigravity, use Antigravity's own native MCP/plugin configuration when needed. Do not import Claude or Codex native plugins as part of the default bridge setup; the bridge shares skills and tool guidance at the `agent.md`/workspace/MCP-instruction layer, while each engine's native plugin system remains separate.
+For Antigravity, use Antigravity's own native MCP/plugin configuration when needed. Do not import Claude or Codex native plugins as part of the default bridge setup. The bridge can reuse the same skill documents and tool guidance across engines, but each instance `agent.md` and each engine's native plugin system remain separate.
 
 Then restart affected bot instances so their Codex/Claude/Antigravity turns see the updated native MCP/plugin configuration. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./docs/search-mcp.md).
 
