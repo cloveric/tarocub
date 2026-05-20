@@ -1,7 +1,7 @@
 import type { FailureCategory } from "../runtime/error-classification.js";
 
 export type Locale = "en" | "zh";
-export type EngineName = "codex" | "claude";
+export type EngineName = "codex" | "claude" | "antigravity";
 
 function utf16Length(text: string): number {
   return text.length;
@@ -177,10 +177,10 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     return [
       "Telegram 命令：",
       "/status - 显示引擎、会话和文件任务状态",
-      "/engine [claude|codex] - 切换引擎（切换后需重启实例）",
+      "/engine [claude|codex|antigravity] - 切换引擎（切换后需重启实例）",
       "/effort [low|medium|high|xhigh|max|off] - 设置推理强度（max 仅 Claude；Codex 会改用 xhigh）",
       "/fast [on|off|status] - 开关 Codex Fast Mode（更快但消耗更多 credits）",
-      "/goal <目标> - 设置 goal；Codex 支持 --budget/status/clear，Claude 透传给原生 /goal",
+      "/goal <目标> - 设置 goal；Codex 支持 --budget/status/clear，Claude/Antigravity 透传给原生 /goal",
       "/model [名称|off] - 切换模型（加 [1m] 后缀启用 1M 上下文，如 opus[1m]）",
       "/group [status|allow|deny|on|off|all|at] - 管理群聊访问和监听模式；/group allow 启用当前群，/group all 监听普通消息，/group at 只响应 @/回复",
       "/btw <问题> - 旁问（不影响当前会话）",
@@ -193,8 +193,8 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
       "直接发送文件进行分析。支持语音消息（本地 ASR 转写）。",
       "压缩包在摘要后会暂停；回复\"继续分析\"或点击 Continue Analysis 按钮继续。裸 /continue 恢复最近一个等待中的压缩包。",
       "/continue - 恢复最近等待的压缩包",
-      "/resume - Claude 扫描本地 session；Codex 用 /resume thread <thread-id>",
-      "/detach - 优先恢复到 /resume 前的对话；否则断开恢复的 session 或当前 Codex thread",
+      "/resume - Claude 扫描本地 session；Antigravity 扫描 recent conversation；Codex 用 /resume thread <thread-id>",
+      "/detach - 优先恢复到 /resume 前的对话；否则断开恢复的 session、Codex thread 或 Antigravity conversation",
       "/stop - 立即停止当前任务",
       "/context - 显示 Claude 上下文用量（仅 Claude；用来决定何时 /compact）",
       "/usage - 显示本实例累计 token 和费用",
@@ -207,10 +207,10 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
   return [
     "Telegram commands:",
     "/status - show engine, session, and file task state",
-    "/engine [claude|codex] - switch engine (restart required after changing)",
+    "/engine [claude|codex|antigravity] - switch engine (restart required after changing)",
     "/effort [low|medium|high|xhigh|max|off] - set reasoning effort level (max is Claude-only; Codex uses xhigh)",
     "/fast [on|off|status] - toggle Codex Fast Mode (faster, higher credit use)",
-    "/goal <goal> - set a goal; Codex supports --budget/status/clear, Claude passes through to native /goal",
+    "/goal <goal> - set a goal; Codex supports --budget/status/clear, Claude and Antigravity pass through to native /goal",
     "/model [name|off] - switch model (append [1m] for 1M context, e.g. opus[1m])",
     "/group [status|allow|deny|on|off|all|at] - manage group access and listen mode; /group allow enables the current group, /group all listens to ordinary messages, /group at requires mentions/replies",
     "/btw <question> - side question without affecting session",
@@ -223,8 +223,8 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     "Send files directly to analyze them. Voice messages supported (local ASR).",
     "Archives pause after summary; reply \"继续分析\" or press Continue Analysis to continue this archive. Bare /continue resumes the latest waiting archive.",
     "/continue - resume the latest waiting archive",
-    "/resume - Claude scan; use /resume thread <thread-id> for Codex",
-    "/detach - restore the pre-/resume conversation when available; otherwise detach the resumed session or current Codex thread",
+    "/resume - Claude scan; Antigravity recent conversation scan; use /resume thread <thread-id> for Codex",
+    "/detach - restore the pre-/resume conversation when available; otherwise detach the resumed session, Codex thread, or Antigravity conversation",
     "/stop - immediately stop the current task",
     "/context - show Claude context fill level (Claude only; helps decide when to /compact)",
     "/usage - show cumulative token & cost usage for this instance",
@@ -236,7 +236,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
 }
 
 export function renderTelegramStatusMessage(input: {
-  engine: "codex" | "claude";
+  engine: EngineName;
   sessionBound: boolean | null;
   threadId?: string | null;
   blockingTasks: number | null;
@@ -256,6 +256,7 @@ export function renderTelegramStatusMessage(input: {
         ? `会话绑定：未知（${input.sessionWarning}）`
         : `会话绑定：${input.sessionBound ? "是" : "否"}`,
       ...(input.engine === "codex" && input.threadId ? [`当前 thread：${input.threadId}`] : []),
+      ...(input.engine === "antigravity" && input.threadId ? [`当前 conversation：${input.threadId}`] : []),
       input.taskStateWarning
         ? `阻塞文件任务：未知（${input.taskStateWarning}）`
         : `阻塞文件任务：${blockingTasks}`,
@@ -271,6 +272,7 @@ export function renderTelegramStatusMessage(input: {
       ? `Session bound: unknown (${input.sessionWarning})`
       : `Session bound: ${input.sessionBound ? "yes" : "no"}`,
     ...(input.engine === "codex" && input.threadId ? [`Current thread: ${input.threadId}`] : []),
+    ...(input.engine === "antigravity" && input.threadId ? [`Current conversation: ${input.threadId}`] : []),
     input.taskStateWarning
       ? `Blocking file tasks: unknown (${input.taskStateWarning})`
       : `Blocking file tasks: ${blockingTasks}`,
@@ -341,17 +343,20 @@ function extractDiagnosticHttpTarget(detail: string): string | undefined {
   }
 }
 
-function renderEngineName(engine: EngineName | undefined): "Codex" | "Claude" | undefined {
+function renderEngineName(engine: EngineName | undefined): "Codex" | "Claude" | "Antigravity" | undefined {
   if (engine === "codex") {
     return "Codex";
   }
   if (engine === "claude") {
     return "Claude";
   }
+  if (engine === "antigravity") {
+    return "Antigravity";
+  }
   return undefined;
 }
 
-function inferEngineName(detail: string, target: string | undefined, engine?: EngineName): "Codex" | "Claude" | "Engine" {
+function inferEngineName(detail: string, target: string | undefined, engine?: EngineName): "Codex" | "Claude" | "Antigravity" | "Engine" {
   const explicitEngineName = renderEngineName(engine);
   if (explicitEngineName) {
     return explicitEngineName;
@@ -363,6 +368,9 @@ function inferEngineName(detail: string, target: string | undefined, engine?: En
   }
   if (normalized.includes("claude")) {
     return "Claude";
+  }
+  if (normalized.includes("antigravity") || normalized.includes("agy")) {
+    return "Antigravity";
   }
   return "Engine";
 }
@@ -399,6 +407,16 @@ export function renderCategorizedErrorMessage(
   engine?: EngineName,
 ): string {
   const normalizedDetail = detail.toLowerCase();
+  const isAntigravity = engine === "antigravity";
+  const isUnsupportedAntigravityFlag =
+    isAntigravity &&
+    category === "engine-cli" &&
+    (
+      normalizedDetail.includes("flags provided but not defined") ||
+      normalizedDetail.includes("unknown flag") ||
+      normalizedDetail.includes("unknown shorthand flag") ||
+      normalizedDetail.includes("flag provided but not defined")
+    );
   const isTelegramFormattingError =
     category === "telegram-delivery" &&
     (
@@ -412,6 +430,9 @@ export function renderCategorizedErrorMessage(
       return "错误：当前写入策略禁止创建文件，请在允许写入的模式下重试。";
     }
     if (category === "auth") {
+      if (isAntigravity) {
+        return "错误：Antigravity 认证缺失或过期。请先在本机打开 Antigravity CLI 重新登录，然后重试这轮 Telegram 请求。";
+      }
       return "错误：引擎认证缺失或过期，请重新登录此实例后重试。";
     }
     if (category === "telegram-conflict") {
@@ -423,6 +444,9 @@ export function renderCategorizedErrorMessage(
         : "错误：Telegram 投递暂时不可用，请稍后重试。";
     }
     if (category === "engine-cli") {
+      if (isUnsupportedAntigravityFlag) {
+        return "错误：Antigravity 拒绝了 CLI 启动参数。请更新 agy 或移除不支持的 bridge 设置后重试。";
+      }
       return [
         "错误：引擎运行时失败，请重启实例后重试。",
         renderEngineDiagnosticDetail(detail, locale, engine),
@@ -447,6 +471,9 @@ export function renderCategorizedErrorMessage(
     return "Error: File creation is blocked by the current write policy. Retry in a writable mode.";
   }
   if (category === "auth") {
+    if (isAntigravity) {
+      return "Error: Antigravity authentication is missing or expired. Open Antigravity CLI locally, sign in again, then retry this Telegram turn.";
+    }
     return "Error: Engine authentication is missing or expired. Re-login for this instance and retry.";
   }
   if (category === "telegram-conflict") {
@@ -458,6 +485,9 @@ export function renderCategorizedErrorMessage(
       : "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.";
   }
   if (category === "engine-cli") {
+    if (isUnsupportedAntigravityFlag) {
+      return "Error: Antigravity rejected a CLI startup flag. Update agy or remove the unsupported bridge setting, then retry.";
+    }
     return [
       "Error: The engine runtime failed. Restart the instance and retry.",
       renderEngineDiagnosticDetail(detail, locale, engine),

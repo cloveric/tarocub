@@ -1,4 +1,4 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 
@@ -7,6 +7,10 @@ function resolveHomeDir(): string {
     return process.env.USERPROFILE ?? process.env.HOME ?? "/";
   }
   return process.env.HOME ?? process.env.USERPROFILE ?? "/";
+}
+
+function resolveAntigravityLogDir(): string {
+  return path.join(resolveHomeDir(), ".gemini", "antigravity-cli", "log");
 }
 
 function resolveClaudeProjectsDir(): string {
@@ -27,6 +31,8 @@ export interface ScannedSession {
 }
 
 type ExistingDirPredicate = (p: string) => boolean;
+
+export const MAX_FORMATTED_ANTIGRAVITY_CONVERSATIONS = 20;
 
 function isExistingDir(p: string): boolean {
   try {
@@ -161,6 +167,31 @@ export function formatSessionList(sessions: ScannedSession[], locale: "en" | "zh
   return [header, ...lines, footer].join("\n");
 }
 
+export function formatAntigravityConversationList(sessions: ScannedSession[], locale: "en" | "zh"): string {
+  if (sessions.length === 0) {
+    return locale === "zh"
+      ? "最近 24 小时内没有找到 Antigravity conversation。"
+      : "No Antigravity conversations found in the last 24 hours.";
+  }
+
+  const header = locale === "zh" ? "最近的 Antigravity conversation：" : "Recent Antigravity conversations:";
+  const visibleSessions = sessions.slice(0, MAX_FORMATTED_ANTIGRAVITY_CONVERSATIONS);
+  const lines = visibleSessions.map((s, i) => {
+    const ago = formatTimeAgo(Date.now() - s.modifiedAt.getTime());
+    return `${i + 1}. [${s.displayName}] ${s.sessionId.slice(0, 8)}… (${ago})`;
+  });
+  if (sessions.length > visibleSessions.length) {
+    lines.push(locale === "zh"
+      ? `…仅显示最近 ${visibleSessions.length} / ${sessions.length} 个。`
+      : `…showing ${visibleSessions.length} of ${sessions.length} most recent.`);
+  }
+  const footer = locale === "zh"
+    ? "\n回复 /resume <编号> 绑定该 conversation。"
+    : "\nReply /resume <number> to attach that conversation.";
+
+  return [header, ...lines, footer].join("\n");
+}
+
 /**
  * Scan ~/.claude/projects/ for .jsonl session files modified within the given
  * time window.  Returns results sorted by modification time (newest first).
@@ -220,4 +251,71 @@ export async function scanRecentClaudeSessions(hoursAgo: number = 1): Promise<Sc
 
   results.sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime());
   return results;
+}
+
+function extractAntigravityConversationIds(content: string): string[] {
+  const ids: string[] = [];
+  const matches = content.matchAll(/\bconversation=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b/g);
+  for (const match of matches) {
+    const id = match[1]?.toLowerCase();
+    if (id) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Scan Antigravity CLI logs for recent conversation IDs. Antigravity does not
+ * expose a structured conversation index yet, so the bridge uses the same
+ * conversation=... log line it already relies on for automatic binding.
+ */
+export async function scanRecentAntigravityConversations(hoursAgo: number = 24): Promise<ScannedSession[]> {
+  const logDir = resolveAntigravityLogDir();
+  if (!existsSync(logDir)) {
+    return [];
+  }
+
+  const cutoff = Date.now() - hoursAgo * 60 * 60 * 1000;
+  const byId = new Map<string, ScannedSession>();
+
+  let files: string[];
+  try {
+    files = await readdir(logDir);
+  } catch {
+    return [];
+  }
+
+  for (const file of files) {
+    if (!file.startsWith("cli-") || !file.endsWith(".log")) {
+      continue;
+    }
+
+    const filePath = path.join(logDir, file);
+    try {
+      const fileStat = await stat(filePath);
+      if (!fileStat.isFile() || fileStat.mtimeMs < cutoff) {
+        continue;
+      }
+
+      const ids = extractAntigravityConversationIds(await readFile(filePath, "utf8"));
+      for (const sessionId of ids) {
+        const existing = byId.get(sessionId);
+        if (existing && existing.modifiedAt.getTime() >= fileStat.mtime.getTime()) {
+          continue;
+        }
+        byId.set(sessionId, {
+          sessionId,
+          dirName: "antigravity",
+          workspacePath: null,
+          modifiedAt: fileStat.mtime,
+          displayName: `conversation ${sessionId.slice(0, 8)}`,
+        });
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return [...byId.values()].sort((a, b) => b.modifiedAt.getTime() - a.modifiedAt.getTime());
 }

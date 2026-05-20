@@ -8,6 +8,7 @@ import { resolveConfig, resolveInstanceStateDir, type EnvSource } from "./config
 import { Bridge } from "./runtime/bridge.js";
 import { ProcessCodexAdapter } from "./codex/process-adapter.js";
 import { ClaudeStreamAdapter } from "./codex/claude-stream-adapter.js";
+import { ProcessAntigravityAdapter } from "./codex/antigravity-adapter.js";
 import { CodexAppServerAdapter } from "./codex/app-server-adapter.js";
 import type { CodexAdapter } from "./codex/adapter.js";
 import { AccessStore } from "./state/access-store.js";
@@ -223,6 +224,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_TELEGRAM_STATE_DIR?: string;
     CODEX_EXECUTABLE?: string;
     CLAUDE_EXECUTABLE?: string;
+    ANTIGRAVITY_EXECUTABLE?: string;
   } = {
     HOME: env.HOME,
     APPDATA: env.APPDATA,
@@ -233,6 +235,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
     CLAUDE_EXECUTABLE: env.CLAUDE_EXECUTABLE,
+    ANTIGRAVITY_EXECUTABLE: env.ANTIGRAVITY_EXECUTABLE,
   };
 
   const telegramBotToken = await readConfiguredBotToken(
@@ -435,7 +438,7 @@ async function seedIsolatedClaudeConfig(
   ]);
 }
 
-export type EngineType = "codex" | "claude";
+export type EngineType = "codex" | "claude" | "antigravity";
 type ApprovalMode = "normal" | "full-auto" | "bypass";
 type CodexRuntime = "app-server" | "process";
 
@@ -445,12 +448,16 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
   codexRuntime: CodexRuntime | undefined;
 }> {
   const parsed = await readValidatedConfigFile(configPath);
+  const engine = parsed.engine === "claude" || parsed.engine === "antigravity" ? parsed.engine : "codex";
+  const approvalMode =
+    parsed.approvalMode === "normal" ||
+    parsed.approvalMode === "full-auto" ||
+    parsed.approvalMode === "bypass"
+      ? parsed.approvalMode
+      : engine === "antigravity" ? "full-auto" : "normal";
   return {
-    engine: parsed.engine === "claude" ? "claude" : "codex",
-    approvalMode:
-      parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass"
-        ? parsed.approvalMode
-        : "normal",
+    engine,
+    approvalMode,
     codexRuntime:
       parsed.codexRuntime === "process" || parsed.codexRuntime === "app-server"
         ? parsed.codexRuntime
@@ -473,6 +480,9 @@ export function resolveEngineRuntime(
 ): "app-server" | "process" | "stream" {
   if (engine === "claude") {
     return "stream";
+  }
+  if (engine === "antigravity") {
+    return "process";
   }
 
   return codexRuntime ?? "app-server";
@@ -502,6 +512,13 @@ function resolveClaudeExecutable(env: EnvSource): string {
   }
 
   return "claude";
+}
+
+function resolveAntigravityExecutable(env: EnvSource, configuredExecutable: string): string {
+  if (env.ANTIGRAVITY_EXECUTABLE) {
+    return env.ANTIGRAVITY_EXECUTABLE;
+  }
+  return configuredExecutable;
 }
 
 /**
@@ -616,6 +633,7 @@ function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
     ["CODEX_HOME", "CODEX_HOME"],
     ["CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"],
     ["CODEX_TELEGRAM_INSTANCE", "CODEX_TELEGRAM_INSTANCE"],
+    ["ANTIGRAVITY_EXECUTABLE", "ANTIGRAVITY_EXECUTABLE"],
   ];
   for (const [srcKey, dstKey] of overlay) {
     const injected = env[srcKey];
@@ -668,6 +686,18 @@ async function createAdapter(
       configPath,
       workspacePath,
     });
+  }
+
+  if (engine === "antigravity") {
+    await mkdir(workspacePath, { recursive: true });
+    return new ProcessAntigravityAdapter(
+      resolveAntigravityExecutable(env, config.antigravityExecutable),
+      childEnv,
+      undefined,
+      instructionsPath,
+      configPath,
+      workspacePath,
+    );
   }
 
   // Same rationale and trade-offs as the Claude branch above: bots inherit
@@ -734,8 +764,8 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "fan", description: "Query multiple bots in parallel" },
   { command: "chain", description: "Run a configured sequential bot chain" },
   { command: "verify", description: "Execute then auto-verify with reviewer" },
-  { command: "resume", description: "Resume Claude local session or attach Codex thread" },
-  { command: "detach", description: "Detach resumed session or current Codex thread" },
+  { command: "resume", description: "Resume Claude session, Codex thread, or Antigravity conversation" },
+  { command: "detach", description: "Detach resumed session, Codex thread, or Antigravity conversation" },
   { command: "stop", description: "Stop the current running task" },
   { command: "cron", description: "List or manage scheduled tasks (e.g. /cron add 0 9 * * * morning summary)" },
   { command: "help", description: "Show available commands" },

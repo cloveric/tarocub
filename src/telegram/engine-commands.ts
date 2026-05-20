@@ -7,6 +7,11 @@ import {
 import { applyEngineSelection } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
+import type { InstanceEngine } from "./instance-config.js";
+
+const ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "antigravity"];
+const ENGINE_USAGE_EN = "Usage: /engine [claude|codex|antigravity]";
+const ENGINE_USAGE_ZH = "用法: /engine [claude|codex|antigravity]";
 
 function isCompactCommand(text: string): boolean {
   return /^\/compact(?:@\w+)?(?:\s|$)/i.test(text.trim());
@@ -36,47 +41,64 @@ function parseEngineCommand(text: string): { engine: string; invalid: boolean } 
 
 function renderEngineSwitchMessage(input: {
   locale: Locale;
-  previousEngine?: "claude" | "codex";
-  engine: "claude" | "codex";
+  previousEngine?: InstanceEngine;
+  engine: InstanceEngine;
   clearedModel: boolean;
+  enabledFullAuto: boolean;
   resetSessionBindings: boolean;
   resetSessionBindingFailed: boolean;
 }): string {
-  const { locale, previousEngine, engine, clearedModel, resetSessionBindings, resetSessionBindingFailed } = input;
+  const {
+    locale,
+    previousEngine,
+    engine,
+    clearedModel,
+    enabledFullAuto,
+    resetSessionBindings,
+    resetSessionBindingFailed,
+  } = input;
+  const appendAntigravityYolo = (message: string) => {
+    if (!enabledFullAuto) {
+      return message;
+    }
+    return locale === "zh"
+      ? `${message} Antigravity 已自动开启 YOLO/full-auto。`
+      : `${message} Antigravity YOLO/full-auto enabled.`;
+  };
 
   if (locale === "zh") {
     if (resetSessionBindingFailed) {
       return `未能切换到 ${engine}：该实例的会话绑定未能先清除。当前引擎仍是 ${previousEngine ?? engine}。`;
     }
     if (clearedModel && resetSessionBindings) {
-      return `引擎已设为 ${engine}。已清除先前的模型覆盖，并重置该实例的会话绑定。重启此实例后生效。`;
+      return appendAntigravityYolo(`引擎已设为 ${engine}。已清除先前的模型覆盖，并重置该实例的会话绑定。重启此实例后生效。`);
     }
     if (clearedModel) {
-      return `引擎已设为 ${engine}。已清除先前的模型覆盖。重启此实例后生效。`;
+      return appendAntigravityYolo(`引擎已设为 ${engine}。已清除先前的模型覆盖。重启此实例后生效。`);
     }
     if (resetSessionBindings) {
-      return `引擎已设为 ${engine}。已重置该实例的会话绑定。重启此实例后生效。`;
+      return appendAntigravityYolo(`引擎已设为 ${engine}。已重置该实例的会话绑定。重启此实例后生效。`);
     }
-    return `引擎已设为 ${engine}。重启此实例后生效。`;
+    return appendAntigravityYolo(`引擎已设为 ${engine}。重启此实例后生效。`);
   }
 
   if (resetSessionBindingFailed) {
     return `Could not switch to ${engine} because this instance's session bindings could not be reset first. Engine remains ${previousEngine ?? engine}.`;
   }
   if (clearedModel && resetSessionBindings) {
-    return `Engine set to ${engine}. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.`;
+    return appendAntigravityYolo(`Engine set to ${engine}. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.`);
   }
   if (clearedModel) {
-    return `Engine set to ${engine}. Cleared the previous model override. Restart this instance to apply.`;
+    return appendAntigravityYolo(`Engine set to ${engine}. Cleared the previous model override. Restart this instance to apply.`);
   }
   if (resetSessionBindings) {
-    return `Engine set to ${engine}. Reset this instance's session bindings. Restart this instance to apply.`;
+    return appendAntigravityYolo(`Engine set to ${engine}. Reset this instance's session bindings. Restart this instance to apply.`);
   }
-  return `Engine set to ${engine}. Restart this instance to apply.`;
+  return appendAntigravityYolo(`Engine set to ${engine}. Restart this instance to apply.`);
 }
 
 export interface EngineCommandConfig {
-  engine: "codex" | "claude";
+  engine: InstanceEngine;
   model?: string;
   resume?: {
     workspacePath: string;
@@ -136,26 +158,24 @@ export async function handleLocalEngineTelegramCommand(input: {
         ? [
             `当前引擎：${cfg.engine}`,
             "用 /engine <名称> 选择引擎：",
-            "/engine claude",
-            "/engine codex",
+            ...ENGINE_CHOICES.map((engine) => `/engine ${engine}`),
             "切换后重启此实例以生效。",
           ].join("\n")
         : [
             `Current engine: ${cfg.engine}`,
             "Choose an engine with /engine <name>:",
-            "/engine claude",
-            "/engine codex",
+            ...ENGINE_CHOICES.map((engine) => `/engine ${engine}`),
             "Restart this instance after switching to apply the change.",
           ].join("\n");
       await context.api.sendMessage(normalized.chatId, engineMessage);
-    } else if (engineCmd.invalid || (engineCmd.engine !== "claude" && engineCmd.engine !== "codex")) {
-      engineMessage = locale === "zh"
-        ? "用法: /engine [claude|codex]"
-        : "Usage: /engine [claude|codex]";
+    } else if (engineCmd.invalid || !ENGINE_CHOICES.includes(engineCmd.engine as InstanceEngine)) {
+      engineMessage = locale === "zh" ? ENGINE_USAGE_ZH : ENGINE_USAGE_EN;
       await context.api.sendMessage(normalized.chatId, engineMessage);
     } else {
-      const engineChanged = cfg.engine !== engineCmd.engine;
+      const selectedEngine = engineCmd.engine as InstanceEngine;
+      const engineChanged = cfg.engine !== selectedEngine;
       let clearedModel = false;
+      let enabledFullAuto = false;
       let resetSessionBindings = false;
       let resetSessionBindingFailed = false;
       if (engineChanged) {
@@ -165,22 +185,24 @@ export async function handleLocalEngineTelegramCommand(input: {
         } catch (error) {
           resetSessionBindingFailed = true;
           console.error(
-            `Failed to clear instance session bindings after switching engine to ${engineCmd.engine}:`,
+            `Failed to clear instance session bindings after switching engine to ${selectedEngine}:`,
             error instanceof Error ? error.message : error,
           );
         }
       }
       if (!resetSessionBindingFailed) {
         await updateInstanceConfig((config) => {
-          const result = applyEngineSelection(config, engineCmd.engine as "claude" | "codex");
+          const result = applyEngineSelection(config, selectedEngine);
           clearedModel = result.clearedModel;
+          enabledFullAuto = result.enabledFullAuto;
         });
       }
       engineMessage = renderEngineSwitchMessage({
         locale,
         previousEngine: cfg.engine,
-        engine: engineCmd.engine,
+        engine: selectedEngine,
         clearedModel,
+        enabledFullAuto,
         resetSessionBindings,
         resetSessionBindingFailed,
       });
@@ -291,8 +313,8 @@ export async function handleLocalEngineTelegramCommand(input: {
   if (isContextCommand(normalized.text)) {
     if (cfg.engine !== "claude") {
       const msg = locale === "zh"
-        ? "/context 仅支持 Claude 引擎。Codex 的上下文由服务端自管，无法本地查询。"
-        : "/context is only supported with the Claude engine. Codex manages context server-side and does not expose this.";
+        ? "/context 仅支持 Claude 引擎。当前引擎不暴露本地上下文查询。"
+        : "/context is only supported with the Claude engine. The current engine does not expose local context.";
       await context.api.sendMessage(normalized.chatId, msg);
       await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
         startedAt,

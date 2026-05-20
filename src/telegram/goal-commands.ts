@@ -1,6 +1,6 @@
 import type { CodexThreadGoal } from "../codex/adapter.js";
 import type { TelegramApi } from "./api.js";
-import type { ResumeState } from "./instance-config.js";
+import type { InstanceEngine, ResumeState } from "./instance-config.js";
 import type { Locale } from "./message-renderer.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
@@ -67,6 +67,27 @@ function toNativeGoalCommandText(text: string): string | null {
   return `/goal${match[1] ?? ""}`;
 }
 
+function toNativeGoalCommandTextForAction(
+  action: GoalAction,
+  text: string,
+  locale: Locale,
+  engine: "claude" | "antigravity",
+): string | null {
+  if (action.kind !== "set") {
+    return toNativeGoalCommandText(text);
+  }
+
+  if (action.tokenBudget === null) {
+    return `/goal ${action.objective}`;
+  }
+
+  const engineName = engine === "antigravity" ? "Antigravity" : "Claude";
+  const budgetHint = locale === "zh"
+    ? `[Bridge note: 用户请求 token 预算：${action.tokenBudget} tokens。原生 ${engineName} goal 可能只会把它当作指导，而不是强制预算。]`
+    : `[Bridge note: requested token budget: ${action.tokenBudget} tokens. Native ${engineName} goals may treat this as guidance rather than an enforced budget.]`;
+  return `/goal ${action.objective}\n\n${budgetHint}`;
+}
+
 function renderInvalidGoalCommand(reason: "invalid_budget" | "missing_objective", locale: Locale): string {
   if (reason === "missing_objective") {
     return locale === "zh"
@@ -93,7 +114,7 @@ function renderGoal(goal: CodexThreadGoal, locale: Locale): string {
 export async function handleGoalTelegramCommand(input: {
   locale: Locale;
   cfg: {
-    engine: "codex" | "claude";
+    engine: InstanceEngine;
     resume?: ResumeState;
   };
   normalized: NormalizedTelegramMessage;
@@ -135,16 +156,30 @@ export async function handleGoalTelegramCommand(input: {
   }
 
   const { locale, normalized } = input;
-  if (input.cfg.engine !== "codex") {
-    // Claude Code implements /goal as a native slash command in both -p and
-    // stream-json modes. Let it pass through the ordinary engine path instead
-    // of trying to emulate Codex's structured goal API here. Strip Telegram's
-    // optional /goal@bot suffix because Claude only sees native slash commands.
-    const nativeGoalText = toNativeGoalCommandText(input.normalized.text);
+  if (input.cfg.engine === "claude" || input.cfg.engine === "antigravity") {
+    if (action.kind === "invalid") {
+      await input.context.api.sendMessage(normalized.chatId, renderInvalidGoalCommand(action.reason, locale));
+      return true;
+    }
+    // Claude Code and Antigravity implement /goal as native slash commands.
+    // Let them pass through the ordinary engine path instead of trying to
+    // emulate Codex's structured goal API here. Strip Telegram's optional
+    // /goal@bot suffix because native CLIs only see plain slash commands.
+    const nativeGoalText = toNativeGoalCommandTextForAction(action, input.normalized.text, locale, input.cfg.engine);
     if (nativeGoalText) {
       input.normalized.text = nativeGoalText;
     }
     return false;
+  }
+
+  if (input.cfg.engine !== "codex") {
+    await input.context.api.sendMessage(
+      normalized.chatId,
+      locale === "zh"
+        ? "当前引擎暂不支持 /goal。请切换到 Codex 或 Claude。"
+        : "The current engine does not support /goal yet. Switch to Codex or Claude.",
+    );
+    return true;
   }
 
   if (action.kind === "invalid") {

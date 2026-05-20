@@ -62,6 +62,7 @@ async function main(): Promise<void> {
         CODEX_TELEGRAM_STATE_DIR: process.env.CODEX_TELEGRAM_STATE_DIR,
         CODEX_EXECUTABLE: process.env.CODEX_EXECUTABLE,
         CLAUDE_EXECUTABLE: process.env.CLAUDE_EXECUTABLE,
+        ANTIGRAVITY_EXECUTABLE: process.env.ANTIGRAVITY_EXECUTABLE,
         TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
       },
       instanceName,

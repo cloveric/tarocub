@@ -12,7 +12,7 @@ Each running instance is a small service process with:
 
 - one Telegram bot token
 - one instance state directory
-- one configured engine (`codex` or `claude`)
+- one configured engine (`codex`, `claude`, or `antigravity`)
 - one access policy
 - one local session map
 - optional participation in a local Agent Bus mesh
@@ -32,7 +32,7 @@ Telegram Update
   -> src/runtime/bridge.ts
   -> src/runtime/session-manager.ts
   -> src/codex/* adapter
-  -> Codex / Claude CLI
+  -> Codex / Claude / Antigravity CLI
   -> result + files
   -> Telegram reply + state updates
 ```

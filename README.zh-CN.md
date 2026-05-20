@@ -11,12 +11,12 @@
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square&logo=node.js&logoColor=white" alt="Windows | macOS | Linux">
-  <img src="https://img.shields.io/badge/%E5%BC%95%E6%93%8E-Codex%20%7C%20Claude-F97316?style=flat-square" alt="Codex | Claude">
+  <img src="https://img.shields.io/badge/%E5%BC%95%E6%93%8E-Codex%20%7C%20Claude%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude | Antigravity">
   <img src="https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest">
 </p>
 
 <h3 align="center">
-  给本地 Codex 和 Claude Code CLI 接一个 Telegram 控制台。<br>
+  给本地 Codex、Claude Code 和 Antigravity CLI 接一个 Telegram 控制台。<br>
   在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，不替换你已经在用的引擎。
 </h3>
 
@@ -26,7 +26,7 @@
 
 ## 先从这里开始
 
-**cc-telegram-bridge 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex 和 Claude Code CLI，然后给它们补上 Telegram 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
+**cc-telegram-bridge 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code 和 Antigravity CLI，然后给它们补上 Telegram 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
 
 最简单的安装方式：克隆仓库，用 Codex 或 Claude Code 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
 
@@ -38,16 +38,16 @@ npm run dev -- telegram yolo on
 npm run dev -- telegram service start
 ```
 
-然后给 bot 发一条消息，按它给出的配对命令完成授权，就可以从 Telegram 继续用本机的 Codex/Claude 了。完整流程见 [快速开始](#快速开始)。
+然后给 bot 发一条消息，按它给出的配对命令完成授权，就可以从 Telegram 继续用本机的 Codex/Claude/Antigravity 了。完整流程见 [快速开始](#快速开始)。
 
-> **推荐运行方式：** 对你自己控制、希望免打断运行的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。如果关闭 YOLO，bridge 也会尽量在 Telegram 里弹审批按钮：Claude 是按工具请求审批；Codex 因为 `codex exec` 不支持 turn 中途审批回调，所以是按整轮 turn 预审批。unsafe 模式只建议在可信机器和可信工作区使用。
+> **推荐运行方式：** 对你自己控制、希望免打断运行的 Telegram 实例，建议开启 YOLO 模式：`telegram yolo on --instance <name>`。如果关闭 YOLO，bridge 也会尽量在 Telegram 里弹审批按钮：Claude 是按工具请求审批；Codex 因为 `codex exec` 不支持 turn 中途审批回调，所以是按整轮 turn 预审批；Antigravity 也是按整轮 turn 预审批。unsafe 模式只建议在可信机器和可信工作区使用。
 
 ## 它能给你什么
 
 | 能力 | 实际意义 |
 |---|---|
-| **真实 CLI 的远程控制** | 把 Codex 或 Claude Code 接到 Telegram，不把它们改造成一个假的聊天后端。 |
-| **会话连续性** | 在手机上续接 Claude 本地 session、绑定 Codex thread，回到电脑后还能继续同一件事。 |
+| **真实 CLI 的远程控制** | 把 Codex、Claude Code 或 Antigravity 接到 Telegram，不把它们改造成一个假的聊天后端。 |
+| **会话连续性** | 在手机上续接 Claude 本地 session、绑定 Codex thread、接上 Antigravity conversation，回到电脑后还能继续同一件事。 |
 | **Telegram 多模态输入输出** | 文件、图片、生成产物、语音消息、音频 document 都走同一套 bridge 协议。 |
 | **稳定的长任务运维** | cron、audit、timeline、usage tracking、访问控制和服务重启都由 bridge 管，不塞进模型记忆。 |
 | **可追溯网页研究** | 可选 Brave/Tavily MCP 提供 `web_search`、`web_extract`、provider status、fallback notice 和 source log。 |
@@ -57,7 +57,7 @@ npm run dev -- telegram service start
 
 | 它是 | 它不是 |
 |---|---|
-| 一个把现有 Codex / Claude Code 暴露到 Telegram 的本地 bridge。 | 一个托管 SaaS agent 平台，或 Codex/Claude Code 的替代品。 |
+| 一个把现有 Codex / Claude Code / Antigravity 暴露到 Telegram 的本地 bridge。 | 一个托管 SaaS agent 平台，或 Codex/Claude Code/Antigravity 的替代品。 |
 | 一个管理会话、文件、审批、定时任务和多 agent 路由的控制层。 | 一个模型供应商、推理服务或独立 LLM runtime。 |
 | 一个给重度 CLI agent 用户使用的实用运维层。 | 一个面向所有 IM 平台的通用聊天机器人框架。 |
 | 一个把 delivery receipt、审计日志和任务状态移出脆弱 prompt 的地方。 | 一个保证模型永远自动正确完成任务的魔法盒。 |
@@ -66,7 +66,7 @@ npm run dev -- telegram service start
 
 | 工作流 | 入口 |
 |---|---|
-| **个人手机 copilot** — 人在外面，也能操作电脑上的 Codex/Claude。 | [快速开始](#快速开始)、[会话续接](#会话续接与-codex-thread-绑定) |
+| **个人手机 copilot** — 人在外面，也能操作电脑上的 Codex/Claude/Antigravity。 | [快速开始](#快速开始)、[会话续接](#会话续接codex-thread-与-antigravity-conversation) |
 | **研究助手** — 搜索、直接读取 URL、保留 source log，再把文件发回 Telegram。 | [Search MCP](#实时网页搜索-mcpbrave--tavily)、[文件投递](#agent-任务里的文件投递) |
 | **Topic mini crew** — 把一个 Telegram 群里的 forum topics 当 planner/writer/reviewer peers。 | [Mini Bus](#mini-bustopic-到-topic-的工作流)、[Telegram 群聊和 Topic](#telegram-群聊和-topic) |
 | **持久化任务板** — 把 task、依赖、run、WIP limit 和 review gate 放到模型上下文之外。 | [Board](#board持久化-kanban-任务板) |
@@ -74,7 +74,7 @@ npm run dev -- telegram service start
 
 ## 近期亮点
 
-- **v4.6.18** — 规范化 Telegram 群里的 `/goal@botname`，让 Claude Code 收到原生 `/goal`，同时 Codex 继续使用结构化 goal 处理。
+- **v4.6.18** — 规范化 Telegram 群里的 `/goal@botname`，让原生引擎收到普通 `/goal`，同时 Codex 继续使用结构化 goal 处理。
 - **v4.6.17** — 让 Claude Code 的 `/goal` 可以从 Telegram 透传，不再把 goal 当成 Codex-only 功能。
 - **v4.6.16** — 补齐 Telegram 音频处理：直接 `voice`、直接 `audio/.m4a`、音频类 document、被引用的音频 document 都会走同一套 ASR 转写路径。
 - **v4.6.14** — 加强 `/stop` 和服务重启清理，避免旧的重复进程在重启后继续 typing 或继续发文件。
@@ -95,10 +95,10 @@ telegram service restart --all
 
 ## 为什么是这套架构
 
-- **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex 和 Claude Code CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
-- **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。
+- **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex、Claude Code 和 Antigravity CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
+- **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。Antigravity 成功运行后会自动绑定 conversation，也可以用 `/resume conversation <id>` 手动接上。
 - **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。不同 topic 还可以组成 Mini Bus，用同一个群里的轻量 peer 跑 fan-out、chain、verify 或 crew workflow；`/board` 负责把 Kanban 任务状态持久化到模型记忆之外。
-- **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex 或 Claude、process 或 stream runtime，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
+- **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex、Claude 或 Antigravity，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
 - **Telegram 能力放在 bridge，而不是模型记忆里。** 发文件、cron 持久化、receipt、权限检查和失败重试由 bridge 代码负责，所以换模型、重启实例、续接会话后仍然有稳定语义。
 - **Prompt 短，规则稳定。** transport 规则放在实例级 `agent.md`，每轮 prompt 不再需要塞 request id、临时目录或 side-channel token。
 - **看 receipt，不信口头声明。** 文件投递和定时任务创建都有结构化 accepted/rejected receipt；只有 bridge 真正发出文件或写入任务，才算完成。
@@ -106,9 +106,9 @@ telegram service restart --all
 
 ---
 
-## 双引擎：Codex + Claude Code
+## 多引擎：Codex + Claude Code + Antigravity
 
-每个 bot 实例可以独立选择 **OpenAI Codex** 或 **Claude Code** 作为后端引擎，一条命令即可切换：
+每个 bot 实例可以独立选择 **OpenAI Codex**、**Claude Code** 或 **Antigravity CLI** 作为后端引擎，一条命令即可切换：
 
 ```bash
 # 将某个实例设为 Claude Code
@@ -117,24 +117,32 @@ npm run dev -- telegram engine claude --instance review-bot
 # 将另一个设为 Codex
 npm run dev -- telegram engine codex --instance helper-bot
 
+# 将另一个设为 Antigravity
+npm run dev -- telegram engine antigravity --instance agy-bot
+
 # 查看当前引擎
 npm run dev -- telegram engine --instance review-bot
 ```
 
-| 特性 | Codex 引擎 | Claude 引擎 |
-|---|---|---|
-| CLI 命令 | `codex exec --json` | `claude -p --output-format json` |
-| 会话恢复 | `codex exec resume --json <id>` | `claude -p -r <session-id>` |
-| 项目指令 | `agent.md`（注入到 prompt） | `agent.md`（`--system-prompt`）+ `CLAUDE.md`（工作目录自动加载） |
-| YOLO 关闭时的 Telegram 审批 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--full-auto` | Claude 权限请求会变成 Telegram 内联按钮 |
-| YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` |
-| `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 |
-| 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） |
-| 空闲 worker | 每轮结束后进程退出 | stream worker 空闲 30 分钟后回收；session 仍可恢复 |
+切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。原因是 Telegram 里的 `agy --print` 是非交互运行，默认就应该免打断。Antigravity 的模型选择仍由原生 CLI 管：Telegram 里的 `/model` 会透传给 `agy`，设置会跨 session 持久化。当前 `agy` 没有公开启动参数 `--model`，所以 bridge 不会伪造一个其实无效的参数。
+
+| 特性 | Codex 引擎 | Claude 引擎 | Antigravity 引擎 |
+|---|---|---|---|
+| CLI 命令 | `codex exec --json` | `claude -p --output-format json` | `agy --print` |
+| 会话恢复 | `codex exec resume --json <id>` | `claude -p -r <session-id>` | 自动绑定首个日志里的 conversation；`/resume` 扫描最近 agy 日志；`/resume conversation <id>` 使用 `agy --conversation` |
+| 项目指令 | `agent.md`（注入到 prompt） | `agent.md`（`--system-prompt`）+ `CLAUDE.md`（工作目录自动加载） | `agent.md`（注入到 prompt） |
+| 流式反馈 / 提前投递 | JSON stream event 进入 timeline，并支持提前文件投递 | Claude stream event 进入 timeline，并支持提前文件投递 | 如果 `agy --print` 流式吐 stdout，stdout chunk 会进入 timeline，并支持提前文件投递 |
+| YOLO 关闭时的 Telegram 审批 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--full-auto` | Claude 权限请求会变成 Telegram 内联按钮 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--dangerously-skip-permissions` |
+| YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
+| `/goal` | bridge 原生 goal API，支持 token budget | 透传给 Claude Code 原生 `/goal`；`--budget` 会变成原生 goal hint | 透传给 Antigravity 原生 `/goal`；`--budget` 会变成原生 goal hint |
+| `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 | 暂不支持 |
+| Skills / plugins | 使用已配置的 Codex home；隔离 home 会把 `skills/` 软链回共享 Codex skills 目录 | 使用共享 Claude 配置，同时支持 workspace `CLAUDE.md`、`skills/`、`plugins/` | 使用 Antigravity 原生 CLI/plugin 配置；如果要复用 Claude 插件，可运行 `agy plugin import claude` |
+| 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） | 实例目录下的 `workspace/` |
+| 空闲 worker | 每轮结束后进程退出 | stream worker 空闲 30 分钟后回收；session 仍可恢复 | 每轮结束后进程退出 |
 
 ## 实时网页搜索 MCP：Brave + Tavily
 
-bridge 内置一个可选的本地 MCP server，让 Codex 和 Claude Code 共用同一套可追溯的网页研究工具：
+bridge 内置一个可选的本地 MCP server；当各引擎自己的 MCP/plugin 层配置好后，Codex、Claude Code 和 Antigravity 可以共用同一套可追溯的网页研究工具：
 
 - `web_search`：通过 Brave 和/或 Tavily 做实时搜索。
 - `web_extract`：用 Tavily Extract 清理并抽取指定 URL 正文。
@@ -168,7 +176,9 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-配置后重启相关 bot 实例，让新的 Codex/Claude turn 继承 MCP 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
+Antigravity 侧使用它自己的 plugin import/config 流程；例如 Claude MCP 注册完成后，可运行 `agy plugin import claude`，再用 `agy plugin list` 验证。
+
+配置后重启相关 bot 实例，让新的 Codex/Claude/Antigravity turn 继承 MCP/plugin 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
 
 ### Claude 引擎：CLAUDE.md 支持
 
@@ -356,13 +366,13 @@ Agent 可以通过和文件投递同一套 tool layer 创建 Telegram 投递的�
 - 这个默认值上线前创建的旧任务会保留已存储的模式；可用 `/cron mode <job-id> new_per_run` 原地升级旧周期任务，不必删除重建。
 - 每个 chat 有任务数量上限，防止任务递归创建导致无限增长。
 
-人类运维仍然可以用 CLI 检查和调试；但 generated `agent.md` 会要求 agent 使用 `[tool:{...}]` layer，这样 Claude/Codex 的 process 和 stream runtime 行为一致。
+人类运维仍然可以用 CLI 检查和调试；但 generated `agent.md` 会要求 agent 使用 `[tool:{...}]` layer，这样 Claude/Codex/Antigravity 的 process 和 stream runtime 行为一致。
 
 ---
 
 ## YOLO 模式
 
-如果你希望 Telegram bot 免打断运行，推荐开启 `telegram yolo on`。如果保持 YOLO 关闭，bridge 会用 Telegram 审批按钮接住无头审批：Claude 可以按单个权限请求审批；Codex app-server 模式会把 YOLO 设置映射到 app-server sandbox mode。`unsafe` 只适合完全可信的本地环境。
+如果你希望 Telegram bot 免打断运行，推荐开启 `telegram yolo on`。如果保持 YOLO 关闭，bridge 会用 Telegram 审批按钮接住无头审批：Claude 可以按单个权限请求审批；Codex app-server 模式会把 YOLO 设置映射到 app-server sandbox mode；Antigravity process 模式会做整轮 turn 预审批。`unsafe` 只适合完全可信的本地环境。
 
 Claude 审批按钮会启动一个短生命周期的 localhost MCP bridge，并带随机 URL token。它能挡住盲扫本地端口的进程，但同一用户下能查看进程命令行的本地进程仍可能看到 token。所以 YOLO 关闭时的审批适合单用户工作站便利操作，不等于多用户隔离边界。
 
@@ -417,7 +427,7 @@ npm run dev -- telegram dashboard --instance work
 npm run dev -- telegram service status --instance work
 ```
 
-`telegram verbosity` 仍作为兼容配置保留，但当前 Codex/Claude process runtime 使用的是 typing action + timeline/audit 事件，不会把模型的中间输出实时改写到 Telegram 消息里。
+`telegram verbosity` 仍作为兼容配置保留，但当前 Codex/Claude/Antigravity runtime 使用的是 typing action + timeline/audit 事件，不会把模型的中间输出实时改写到 Telegram 消息里。
 
 ---
 
@@ -478,9 +488,9 @@ ASR_RESTART_COOLDOWN_MS=60000
 
 ---
 
-## 会话续接与 Codex Thread 绑定
+## 会话续接、Codex Thread 与 Antigravity Conversation
 
-在电脑上用 Claude Code 开了个头？发 `/resume` 就能在 Telegram 上接着干 — 不用重复解释上下文。用的是 Codex？那就直接用 thread id 绑定现有 thread，再从 Telegram 继续。
+在电脑上用 Claude Code 开了个头？发 `/resume` 就能在 Telegram 上接着干 — 不用重复解释上下文。用的是 Codex 或 Antigravity？那就直接用 thread / conversation id 绑定现有会话，再从 Telegram 继续。
 
 ### Claude 本地 session 续接
 
@@ -536,6 +546,30 @@ Codex 没有和 Claude 一样的本地 session 扫描入口。如果你已经知
 这是一种“绑定已有 thread”的流程，不是导入本地 session：thread 仍然在服务端，bridge 只是在当前 chat 上绑定一个已知 thread id。
 
 注意：默认的 Codex app-server runtime 会通过本机 Codex runtime 验证 `/resume thread <thread-id>`。如果这个 thread id 不在本机索引里，仍然会 fail closed，而不是猜测绑定成功。
+
+### Antigravity conversation 绑定
+
+Antigravity print mode 会把当前 conversation ID 写进 CLI 日志。bridge 会读取这些日志，在成功运行后自动绑定到当前 Telegram chat，后续 turn 用：
+
+```text
+agy --conversation <conversation-id>
+```
+
+如果你已经知道 Antigravity conversation ID，也可以手动绑定：
+
+```text
+/resume conversation fdfc8ab1-7936-4599-98b0-d8ba2593c250
+```
+
+如果不知道 ID，直接发 `/resume`。bridge 会扫描最近的 Antigravity CLI 日志并返回编号列表；再发 `/resume 1` 即可绑定。
+
+绑定后：
+
+- Telegram 里的后续消息会继续这个 Antigravity conversation
+- `/status` 会显示当前 conversation ID
+- `/detach` 会解绑该 conversation；如果存在绑定前的旧对话，就恢复它
+
+这仍然使用 Antigravity 的原生会话模型。bridge 不会伪造 model / effort 启动参数；模型选择请继续用 Antigravity 原生 `/model` 设置。
 
 ---
 
@@ -912,7 +946,7 @@ npm run dev -- telegram service start
 npm run dev -- telegram access pair 38J63T
 ```
 
-**搞定！** 现在可以在 Telegram 上和 Codex 或 Claude 对话了。支持文字、语音消息和文件。
+**搞定！** 现在可以在 Telegram 上和 Codex、Claude 或 Antigravity 对话了。支持文字、语音消息和文件。
 
 ### 多 Bot
 
@@ -972,8 +1006,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 <table>
   <tr>
     <td width="50%">
-      <h3>双引擎</h3>
-      <p>每个实例可切换 Codex 和 Claude Code。混合搭配 — 一个 bot 跑 Codex，另一个跑 Claude，统一 CLI 管理。</p>
+      <h3>多引擎</h3>
+      <p>每个实例可切换 Codex、Claude Code 或 Antigravity。混合搭配 — 一个 bot 跑 Codex，另一个跑 Claude，统一 CLI 管理。</p>
     </td>
     <td width="50%">
       <h3>独立人格</h3>
@@ -993,7 +1027,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   <tr>
     <td>
       <h3>会话续接</h3>
-      <p><code>/resume</code> 可以接上电脑里的 Claude Code 本地 session；<code>/resume thread &lt;thread-id&gt;</code> 可以绑定已有 Codex thread。手机上继续之前的工作，不丢上下文。</p>
+      <p><code>/resume</code> 可以接上电脑里的 Claude Code 本地 session；<code>/resume thread &lt;thread-id&gt;</code> 可以绑定已有 Codex thread；<code>/resume conversation &lt;id&gt;</code> 可以绑定 Antigravity conversation。手机上继续之前的工作，不丢上下文。</p>
     </td>
     <td>
       <h3>运行可见性</h3>
@@ -1003,17 +1037,17 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   <tr>
     <td>
       <h3>YOLO 模式</h3>
-      <p>一条命令让 AI 自动审批一切 — 双引擎通用，按实例配置，热加载生效。</p>
+      <p>一条命令让 AI 自动审批一切 — 多引擎通用，按实例配置，热加载生效。</p>
     </td>
     <td>
       <h3>安全脱离</h3>
-      <p><code>/detach</code> 会在可能时回到 /resume 前的旧对话。bridge 指令是每 turn 注入的，不会写回你的本地 Claude 或 Codex session 文件。</p>
+      <p><code>/detach</code> 会在可能时回到 /resume 前的旧对话。bridge 指令是每 turn 注入的，不会写回你的本地 Claude、Codex 或 Antigravity session 文件。</p>
     </td>
   </tr>
   <tr>
     <td>
       <h3>按 Bot 隔离</h3>
-      <p>每个实例有独立的人格、工作区、会话、访问规则、收件箱、审计日志，以及按工作区路径隔离的自动记忆。引擎配置目录（<code>~/.claude/</code> / <code>~/.codex/</code>）与你主 CLI <em>共享</em>，避免 OAuth refresh token 被多实例抢用——代价是 settings、plugins、MCP 状态都落在你真实 home 里，full-auto / bypass 模式下 bot 也能动到这些。</p>
+      <p>每个实例有独立的人格、工作区、会话、访问规则、收件箱、审计日志，以及按工作区路径隔离的自动记忆。引擎配置目录（<code>~/.claude/</code> / <code>~/.codex/</code> / Antigravity CLI 配置）与你主 CLI <em>共享</em>，避免 OAuth refresh token 被多实例抢用——代价是 settings、plugins、MCP 状态都落在你真实 home 里，full-auto / bypass 模式下 bot 也能动到这些。</p>
     </td>
     <td>
       <h3>生产级可靠性</h3>
@@ -1085,7 +1119,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `telegram service restart --all` | 重启所有已配置实例；`start`、`stop`、`status`、`doctor` 也支持 `--all` |
 | `telegram service logs` | 查看 stdout/stderr 日志 |
 | `telegram service doctor` | 全子系统健康检查，包括 timeline、crew、共享引擎环境和残留 launchd 项 |
-| `telegram engine [codex\|claude]` | 按实例切换 AI 引擎 |
+| `telegram engine [codex\|claude\|antigravity]` | 按实例切换 AI 引擎 |
 
 如果在一个活跃 bot turn 里运行 `telegram service stop --all` 或 `telegram service restart --all`，当前实例会被自动跳过，避免命令杀掉自己的执行链。需要重启当前实例时，从终端单独执行对应 `--instance` 命令。
 | `telegram yolo [on\|off\|unsafe]` | 切换自动审批模式 |
@@ -1115,18 +1149,18 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 Telegram 用户也可以使用：
 
 - `/status`
-- `/engine [claude|codex]` — 切换当前实例引擎（桥会自动清掉陈旧绑定）
+- `/engine [claude|codex|antigravity]` — 切换当前实例引擎（桥会自动清掉陈旧绑定）
 - `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`max` 仅 Claude 可用；Codex 会改用 `xhigh`）
 - `/model [名称|off]` — 切换模型
 - `/fast [on|off|status]` — 切换 Codex Fast Mode。bridge 实例里把它当实验选项使用；如果出现 Codex runtime 失败，先 `/fast off`，不要反复重试；下一条简单消息仍失败时，再重启该实例一次。
-- `/goal <完成条件>` — 设置引擎 goal。Codex 还支持 `/goal status`、`/goal clear` 和 `--budget`；Claude Code 会直接透传给原生 `/goal` slash command。
+- `/goal <完成条件>` — 设置引擎 goal。Codex 还支持 `/goal status`、`/goal clear` 和 `--budget`；Claude Code 和 Antigravity 会直接透传给原生 `/goal` slash command。
 - `/btw <问题>` — 旁问（不影响当前会话）
 - `/ask <实例> <提示>` — 委托给指定 peer bot
 - `/fan <提示>` — 查询当前 bot 和并行 specialist bot
 - `/chain <提示>` — 跑配置好的顺序 bot 链
 - `/verify <提示>` — 本地执行后交给 verifier bot 自动复核
-- `/resume` — Claude：扫描并恢复本地 session；Codex：使用 `/resume thread <thread-id>` 绑定已有 thread
-- `/detach` — 断开恢复的 Claude session 或当前 Codex thread；如果存在旧对话，则恢复到 /resume 之前
+- `/resume` — Claude：扫描并恢复本地 session；Codex：使用 `/resume thread <thread-id>`；Antigravity：使用 `/resume conversation <conversation-id>`
+- `/detach` — 断开恢复的 Claude session、当前 Codex thread 或当前 Antigravity conversation；如果存在旧对话，则恢复到 /resume 之前
 - `/stop` — 立即停止当前运行中的任务
 - `/continue` — 恢复最近一个等待中的压缩包摘要
 - `/compact`（仅 Claude — 压缩上下文；Codex 回退为 reset）

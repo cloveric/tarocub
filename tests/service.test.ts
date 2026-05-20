@@ -15,6 +15,7 @@ import {
   getLastHandledUpdateId,
   readInstanceBotTokenFromEnvFile,
   readInstanceServiceEnvFromEnvFile,
+  readInstanceRuntimeConfig,
   resolveServiceEnvForInstance,
   resolveEngineRuntime,
   _resetEnqueuedUpdateIds,
@@ -33,6 +34,7 @@ import {
 import { ClaudeStreamAdapter } from "../src/codex/claude-stream-adapter.js";
 import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
 import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
+import { ProcessAntigravityAdapter } from "../src/codex/antigravity-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import * as auditLog from "../src/state/audit-log.js";
@@ -183,6 +185,22 @@ describe("createServiceDependenciesForInstance", () => {
 
   it("honors the Codex runtime override", () => {
     expect(resolveEngineRuntime("codex", "normal", "process")).toBe("process");
+  });
+
+  it("defaults Antigravity runtime configs without approval mode to full-auto", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, JSON.stringify({ engine: "antigravity" }) + "\n", "utf8");
+
+      await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
+        engine: "antigravity",
+        approvalMode: "full-auto",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
   });
 
   it("does not mutate process.env.TELEGRAM_BOT_TOKEN directly", async () => {
@@ -443,6 +461,33 @@ describe("createServiceDependenciesForInstance", () => {
       // Claude bots no longer isolate CLAUDE_CONFIG_DIR — they share the
       // user's ~/.claude/ so OAuth refresh tokens don't race across instances.
       expect((result.bridge as any).adapter.childEnv.CLAUDE_CONFIG_DIR).toBeUndefined();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("uses the Antigravity process adapter when the instance engine is antigravity", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const envPath = path.join(stateDir, ".env");
+    const configPath = path.join(stateDir, "config.json");
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(configPath, JSON.stringify({ engine: "antigravity" }) + "\n", "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          ANTIGRAVITY_EXECUTABLE: "agy-test",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).adapter).toBeInstanceOf(ProcessAntigravityAdapter);
+      expect((result.bridge as any).adapter.antigravityExecutable).toBe("agy-test");
+      expect((result.bridge as any).adapter.childEnv.TELEGRAM_BOT_TOKEN).toBeUndefined();
     } finally {
       await removeTempRoot(root);
     }
@@ -6109,6 +6154,7 @@ describe("polling helpers", () => {
           "Choose an engine with /engine <name>:",
           "/engine claude",
           "/engine codex",
+          "/engine antigravity",
           "Restart this instance after switching to apply the change.",
         ].join("\n"),
       );

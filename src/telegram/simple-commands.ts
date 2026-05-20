@@ -9,11 +9,18 @@ import {
   appendCommandSuccessAuditEventBestEffort,
   type TelegramTurnContext,
 } from "./turn-bookkeeping.js";
+import type { InstanceEngine } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+
+function renderAntigravityNativeEffortMessage(locale: Locale): string {
+  return locale === "zh"
+    ? "Antigravity 的 effort 由 agy CLI 原生控制；bridge 目前还没有可用的 effort 启动参数。模型选择请使用 Antigravity 原生 /model picker。"
+    : "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. Use Antigravity's native /model picker for model selection.";
+}
 
 function isHelpCommand(text: string): boolean {
   return /^\/help(?:@\w+)?(?:\s|$)/i.test(text.trim());
@@ -34,9 +41,21 @@ function parseEffortCommand(text: string): { level: string } | null {
 }
 
 function parseModelCommand(text: string): { model: string } | null {
-  const match = text.trim().match(/^\/model(?:@\w+)?(?:\s+(\S+))?$/i);
+  const match = text.trim().match(/^\/model(?:@\w+)?(?:\s+([\s\S]+))?$/i);
   if (!match) return null;
-  return { model: match[1] ?? "" };
+  return { model: match[1]?.trim() ?? "" };
+}
+
+function toNativeModelCommandText(text: string): string | null {
+  const match = text.trim().match(/^\/model(?:@\w+)?(\s+[\s\S]+)?$/i);
+  if (!match) {
+    return null;
+  }
+  return `/model${match[1]?.trim() ? ` ${match[1].trim()}` : ""}`;
+}
+
+function isSingleTokenModelName(model: string): boolean {
+  return !/\s/.test(model);
 }
 
 function parseFastCommand(text: string): { action: string } | null {
@@ -51,7 +70,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
   startedAt: number;
   locale: Locale;
   cfg: {
-    engine?: "codex" | "claude";
+    engine?: InstanceEngine;
     effort?: string;
     model?: string;
     codexServiceTier?: "fast";
@@ -60,7 +79,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
   context: TelegramTurnContext;
   updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
   resolveStatus?: (chatId: number) => Promise<{
-    engine: "codex" | "claude";
+    engine: InstanceEngine;
     sessionBound: boolean | null;
     threadId?: string | null;
     blockingTasks: number | null;
@@ -183,7 +202,11 @@ export async function handleSimpleLocalTelegramCommand(input: {
   if (effortCmd) {
     let effortMessage: string;
     let auditValue = effortCmd.level || "query";
-    if (!effortCmd.level) {
+    if (cfg.engine === "antigravity") {
+      effortMessage = renderAntigravityNativeEffortMessage(locale);
+      auditValue = "unsupported-engine";
+      await context.api.sendMessage(normalized.chatId, effortMessage);
+    } else if (!effortCmd.level) {
       const current = cfg.effort ?? "default";
       effortMessage = locale === "zh" ? `当前 effort: ${current}` : `Current effort: ${current}`;
       await context.api.sendMessage(normalized.chatId, effortMessage);
@@ -192,9 +215,13 @@ export async function handleSimpleLocalTelegramCommand(input: {
       auditValue = effectiveLevel;
       await updateInstanceConfig((c) => { c.effort = effectiveLevel; });
       effortMessage = cfg.engine !== "claude" && effortCmd.level === "max"
-        ? locale === "zh"
-          ? "Codex 不支持 max，已改用 xhigh。"
-          : "Codex does not support max effort; using xhigh instead."
+        ? cfg.engine === "codex"
+          ? locale === "zh"
+            ? "Codex 不支持 max，已改用 xhigh。"
+            : "Codex does not support max effort; using xhigh instead."
+          : locale === "zh"
+            ? "当前引擎不支持 max，已改用 xhigh。"
+            : "The current engine does not support max effort; using xhigh instead."
         : locale === "zh" ? `Effort 已设为 ${effortCmd.level}。` : `Effort set to ${effortCmd.level}.`;
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (effortCmd.level === "off" || effortCmd.level === "default") {
@@ -220,8 +247,21 @@ export async function handleSimpleLocalTelegramCommand(input: {
   const modelCmd = parseModelCommand(normalized.text);
   if (modelCmd) {
     let modelMessage: string;
-    if (!modelCmd.model) {
+    let auditValue = modelCmd.model || "query";
+    if (cfg.engine === "antigravity") {
+      const nativeModelText = toNativeModelCommandText(normalized.text);
+      if (nativeModelText) {
+        normalized.text = nativeModelText;
+      }
+      return false;
+    } else if (!modelCmd.model) {
       modelMessage = renderModelSelectionMessage();
+      await context.api.sendMessage(normalized.chatId, modelMessage);
+    } else if (!isSingleTokenModelName(modelCmd.model)) {
+      auditValue = "invalid";
+      modelMessage = locale === "zh"
+        ? "用法: /model <单个模型名|off>"
+        : "Usage: /model <single-token-name|off>";
       await context.api.sendMessage(normalized.chatId, modelMessage);
     } else if (modelCmd.model === "off" || modelCmd.model === "default") {
       await updateInstanceConfig((c) => { delete c.model; });
@@ -237,7 +277,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
       startedAt,
       command: "model",
       responseText: modelMessage,
-      metadata: { value: modelCmd.model || "query" },
+      metadata: { value: auditValue },
     });
     return true;
   }
@@ -246,10 +286,10 @@ export async function handleSimpleLocalTelegramCommand(input: {
   if (fastCmd) {
     let fastMessage: string;
     let auditValue = fastCmd.action || "status";
-    if (cfg.engine === "claude") {
+    if (cfg.engine !== "codex") {
       fastMessage = locale === "zh" ? "Fast Mode 仅 Codex 支持。" : "Fast Mode is Codex-only.";
       await context.api.sendMessage(normalized.chatId, fastMessage);
-      auditValue = "rejected-claude";
+      auditValue = "rejected-engine";
     } else if (fastCmd.action === "on" || fastCmd.action === "enable" || fastCmd.action === "fast") {
       await updateInstanceConfig((c) => { c.codexServiceTier = "fast"; });
       fastMessage = locale === "zh"

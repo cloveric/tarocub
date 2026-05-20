@@ -1,8 +1,15 @@
 import { lstat, unlink } from "node:fs/promises";
 
 import { SessionStateError } from "../runtime/session-manager.js";
-import { formatSessionList, scanRecentClaudeSessions, type ScannedSession } from "../runtime/session-scanner.js";
-import type { ResumeState } from "./instance-config.js";
+import {
+  formatAntigravityConversationList,
+  formatSessionList,
+  MAX_FORMATTED_ANTIGRAVITY_CONVERSATIONS,
+  scanRecentAntigravityConversations,
+  scanRecentClaudeSessions,
+  type ScannedSession,
+} from "../runtime/session-scanner.js";
+import type { InstanceEngine, ResumeState } from "./instance-config.js";
 import { renderSessionResetMessage, type Locale } from "./message-renderer.js";
 import {
   appendCommandSuccessAuditEventBestEffort,
@@ -13,7 +20,7 @@ import { isResetCommand } from "./command-detection.js";
 import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
 export interface SessionCommandConfig {
-  engine: "codex" | "claude";
+  engine: InstanceEngine;
   resume?: ResumeState;
 }
 
@@ -58,8 +65,13 @@ export interface SessionCommandStore {
 }
 
 const RESUME_SCAN_TTL_MS = 10 * 60 * 1000;
+const ANTIGRAVITY_CONVERSATION_ID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+type PendingResumeScanKind = "claude" | "antigravity";
 
 const pendingResumeScans = new Map<string, {
+  kind: PendingResumeScanKind;
   scannedAt: number;
   sessions: ScannedSession[];
 }>();
@@ -68,6 +80,7 @@ type ResumeCommand =
   | { kind: "scan" }
   | { kind: "pick"; pick: number }
   | { kind: "thread"; threadId: string }
+  | { kind: "conversation"; conversationId: string }
   | { kind: "invalid" };
 
 function parseResumeCommand(text: string): ResumeCommand | null {
@@ -79,6 +92,11 @@ function parseResumeCommand(text: string): ResumeCommand | null {
   const threadMatch = arg.match(/^thread\s+(\S+)$/i);
   if (threadMatch?.[1]?.trim()) {
     return { kind: "thread", threadId: threadMatch[1].trim() };
+  }
+
+  const conversationMatch = arg.match(/^(?:conversation|conv)\s+(\S+)$/i);
+  if (conversationMatch?.[1]?.trim()) {
+    return { kind: "conversation", conversationId: conversationMatch[1].trim() };
   }
 
   const num = Number(arg);
@@ -94,18 +112,22 @@ export function resetPendingResumeScans(): void {
   pendingResumeScans.clear();
 }
 
-function getPendingResumeScan(conversationKey: string): ScannedSession[] | null {
+function getPendingResumeScan(conversationKey: string, kind: PendingResumeScanKind): ScannedSession[] | null {
   const entry = pendingResumeScans.get(conversationKey);
   if (!entry) {
     return null;
   }
 
-  if (Date.now() - entry.scannedAt > RESUME_SCAN_TTL_MS) {
+  if (entry.kind !== kind || Date.now() - entry.scannedAt > RESUME_SCAN_TTL_MS) {
     pendingResumeScans.delete(conversationKey);
     return null;
   }
 
   return entry.sessions;
+}
+
+function isAntigravityConversationId(value: string): boolean {
+  return ANTIGRAVITY_CONVERSATION_ID_PATTERN.test(value);
 }
 
 function buildSuspendedPreviousSnapshot(input: {
@@ -176,7 +198,9 @@ export async function handleLocalSessionTelegramCommand(input: {
   updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
   validateCodexThread?: (threadId: string) => Promise<void>;
   scanRecentSessions?: (hours: number) => Promise<ScannedSession[]>;
+  scanRecentAntigravitySessions?: (hours: number) => Promise<ScannedSession[]>;
   formatSessionListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
+  formatAntigravityConversationListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
 }): Promise<boolean> {
   const {
     stateDir,
@@ -189,7 +213,9 @@ export async function handleLocalSessionTelegramCommand(input: {
     updateInstanceConfig,
     validateCodexThread,
     scanRecentSessions = scanRecentClaudeSessions,
+    scanRecentAntigravitySessions = scanRecentAntigravityConversations,
     formatSessionListMessage = formatSessionList,
+    formatAntigravityConversationListMessage = formatAntigravityConversationList,
   } = input;
   const conversationKey = getNormalizedTelegramConversationKey(normalized);
 
@@ -230,6 +256,108 @@ export async function handleLocalSessionTelegramCommand(input: {
 
   const resumeCmd = parseResumeCommand(normalized.text);
   if (resumeCmd) {
+    if (cfg.engine === "antigravity") {
+      if (resumeCmd.kind === "scan") {
+        const sessions = await scanRecentAntigravitySessions(24);
+        const selectableSessions = sessions.slice(0, MAX_FORMATTED_ANTIGRAVITY_CONVERSATIONS);
+        const msg = formatAntigravityConversationListMessage(sessions, locale);
+        if (selectableSessions.length > 0) {
+          pendingResumeScans.set(conversationKey, {
+            kind: "antigravity",
+            scannedAt: Date.now(),
+            sessions: selectableSessions,
+          });
+        } else {
+          pendingResumeScans.delete(conversationKey);
+        }
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: { engine: "antigravity", scanned: sessions.length },
+        });
+        return true;
+      }
+
+      let pickedConversationId: string | null = null;
+      if (resumeCmd.kind === "pick") {
+        const cached = getPendingResumeScan(conversationKey, "antigravity");
+        if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
+          const msg = locale === "zh"
+            ? "无效选择，请先发 /resume 扫描 Antigravity conversation。"
+            : "Invalid selection. Send /resume first to scan Antigravity conversations.";
+          await context.api.sendMessage(normalized.chatId, msg);
+          await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+            startedAt,
+            command: "resume",
+            responseText: msg,
+            metadata: { engine: "antigravity", rejected: "invalid-pick" },
+          });
+          return true;
+        }
+        pickedConversationId = cached[resumeCmd.pick - 1]!.sessionId;
+        pendingResumeScans.delete(conversationKey);
+      }
+
+      if (resumeCmd.kind !== "conversation" && resumeCmd.kind !== "pick") {
+        const msg = locale === "zh"
+          ? "用法: /resume、/resume <编号> 或 /resume conversation <conversation-id>。"
+          : "Usage: /resume, /resume <number>, or /resume conversation <conversation-id>.";
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: { rejected: "invalid-antigravity-arg" },
+        });
+        return true;
+      }
+
+      const conversationId = pickedConversationId ?? (resumeCmd.kind === "conversation" ? resumeCmd.conversationId : null);
+      if (!conversationId) {
+        return true;
+      }
+      if (!isAntigravityConversationId(conversationId)) {
+        const msg = locale === "zh"
+          ? "Antigravity conversation id 无效。请使用 /resume 扫描最近 conversation，或发送 /resume conversation <uuid>。"
+          : "Invalid Antigravity conversation id. Use /resume to scan recent conversations or /resume conversation <uuid>.";
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: { engine: "antigravity", rejected: "invalid-conversation-id" },
+        });
+        return true;
+      }
+      const existing = await findSessionForConversation(sessionStore, normalized);
+      await sessionStore.upsert({
+        telegramChatId: normalized.chatId,
+        ...sessionScopeRecordFields(normalized),
+        codexSessionId: conversationId,
+        status: "idle",
+        updatedAt: new Date().toISOString(),
+        suspendedPrevious: buildSuspendedPreviousSnapshot({
+          existingRecord: existing.record,
+          currentResume: cfg.resume,
+        }),
+      });
+      await updateInstanceConfig((c) => { delete c.resume; });
+
+      const msg = locale === "zh"
+        ? `已绑定 Antigravity conversation：${conversationId}\n\n发送消息继续对话，完成后发 /detach 断开。`
+        : `Attached Antigravity conversation: ${conversationId}\n\nSend a message to continue. Use /detach when done.`;
+      await context.api.sendMessage(normalized.chatId, msg);
+      await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+        startedAt,
+        command: "resume",
+        responseText: msg,
+        metadata: { conversationId },
+      });
+      return true;
+    }
+
     if (cfg.engine === "codex") {
       if (resumeCmd.kind !== "thread") {
         const msg = locale === "zh"
@@ -302,7 +430,7 @@ export async function handleLocalSessionTelegramCommand(input: {
       return true;
     }
 
-    if (resumeCmd.kind === "invalid" || resumeCmd.kind === "thread") {
+    if (resumeCmd.kind === "invalid" || resumeCmd.kind === "thread" || resumeCmd.kind === "conversation") {
       const msg = locale === "zh"
         ? "用法: /resume [编号]\n先发 /resume 扫描，再发 /resume <编号> 选择。"
         : "Usage: /resume [number]\nSend /resume to scan, then /resume <number> to pick.";
@@ -320,6 +448,7 @@ export async function handleLocalSessionTelegramCommand(input: {
     if (resumeCmd.kind === "scan") {
       const sessions = await scanRecentSessions(1);
       if (sessions.length === 0) {
+        pendingResumeScans.delete(conversationKey);
         resumeAuditText = locale === "zh"
           ? "最近 1 小时内没有找到本地 session。"
           : "No local sessions found in the last hour.";
@@ -327,13 +456,14 @@ export async function handleLocalSessionTelegramCommand(input: {
       } else {
         resumeAuditText = formatSessionListMessage(sessions, locale);
         pendingResumeScans.set(conversationKey, {
+          kind: "claude",
           scannedAt: Date.now(),
           sessions,
         });
         await context.api.sendMessage(normalized.chatId, resumeAuditText);
       }
     } else {
-      const cached = getPendingResumeScan(conversationKey);
+      const cached = getPendingResumeScan(conversationKey, "claude");
       if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
         resumeAuditText = locale === "zh"
           ? "无效选择，请先发 /resume 扫描。"
@@ -415,6 +545,10 @@ export async function handleLocalSessionTelegramCommand(input: {
         ? (locale === "zh"
           ? "已断开当前 Codex thread，并恢复到 /resume 之前的对话。"
           : "Detached from the current Codex thread and restored the previous conversation.")
+        : cfg.engine === "antigravity"
+          ? (locale === "zh"
+            ? "已断开当前 Antigravity conversation，并恢复到 /resume 之前的对话。"
+            : "Detached from the current Antigravity conversation and restored the previous conversation.")
         : (locale === "zh"
           ? "已断开恢复的 session，并恢复到 /resume 之前的对话。"
           : "Detached from resumed session and restored the previous conversation.");
@@ -436,15 +570,25 @@ export async function handleLocalSessionTelegramCommand(input: {
         ? "已断开恢复的 session，回到 bot 默认工作区。"
         : "Detached from resumed session. Back to default workspace.";
       await context.api.sendMessage(normalized.chatId, detachMessage);
-    } else if (cfg.engine === "codex") {
+    } else if (cfg.engine === "codex" || cfg.engine === "antigravity") {
       const removed = await removeSessionForConversation(sessionStore, normalized);
-      detachMessage = removed
-        ? (locale === "zh"
-          ? "已断开当前 Codex thread。下一条消息会新建 thread。"
-          : "Detached from the current Codex thread. Next message will start a fresh thread.")
-        : (locale === "zh"
-          ? "当前没有绑定的 Codex thread。"
-          : "No active Codex thread.");
+      if (cfg.engine === "codex") {
+        detachMessage = removed
+          ? (locale === "zh"
+            ? "已断开当前 Codex thread。下一条消息会新建 thread。"
+            : "Detached from the current Codex thread. Next message will start a fresh thread.")
+          : (locale === "zh"
+            ? "当前没有绑定的 Codex thread。"
+            : "No active Codex thread.");
+      } else {
+        detachMessage = removed
+          ? (locale === "zh"
+            ? "已断开当前 Antigravity conversation。下一条消息会新建 conversation。"
+            : "Detached from the current Antigravity conversation. Next message will start a fresh conversation.")
+          : (locale === "zh"
+            ? "当前没有绑定的 Antigravity conversation。"
+            : "No active Antigravity conversation.");
+      }
       await context.api.sendMessage(normalized.chatId, detachMessage);
     } else {
       detachMessage = locale === "zh"

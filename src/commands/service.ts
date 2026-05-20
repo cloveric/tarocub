@@ -904,14 +904,27 @@ export async function runServiceDoctor(
         ? `Bot identity resolved as ${status.botIdentity.firstName}${status.botIdentity.username ? ` (@${status.botIdentity.username})` : ""}.`
         : "Bot identity not available."),
   });
-  const sharedEnvKey = status.engine === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+  const sharedEnvKey = status.engine === "claude"
+    ? "CLAUDE_CONFIG_DIR"
+    : status.engine === "codex"
+      ? "CODEX_HOME"
+      : null;
   const shellSharedEnvValue =
-    sharedEnvKey === "CLAUDE_CONFIG_DIR" ? env.CLAUDE_CONFIG_DIR?.trim() || null : env.CODEX_HOME?.trim() || null;
+    sharedEnvKey === "CLAUDE_CONFIG_DIR"
+      ? env.CLAUDE_CONFIG_DIR?.trim() || null
+      : sharedEnvKey === "CODEX_HOME"
+        ? env.CODEX_HOME?.trim() || null
+        : null;
   let environmentCheck = {
     ok: true,
     detail: "Shared engine env matches the current shell.",
   };
-  if (status.running && status.pid !== null) {
+  if (sharedEnvKey === null) {
+    environmentCheck = {
+      ok: true,
+      detail: "No shared engine config env check is needed for this engine.",
+    };
+  } else if (status.running && status.pid !== null) {
     const processEnvironment = await readProcessEnvironment(status.pid);
     if (processEnvironment !== null) {
       const processSharedEnvValue = processEnvironment[sharedEnvKey]?.trim() || null;

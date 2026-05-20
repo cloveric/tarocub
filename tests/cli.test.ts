@@ -1583,6 +1583,30 @@ describe("runCli", () => {
     }
   });
 
+  it("sets Antigravity as an instance engine via CLI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      const handled = await runCli(["telegram", "engine", "antigravity", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toBe('Instance "alpha": engine set to "antigravity". Restart the service to apply. Antigravity YOLO/full-auto enabled.');
+
+      const configPath = path.join(tempDir, ".cctb", "alpha", "config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+      expect(config).toMatchObject({
+        engine: "antigravity",
+        approvalMode: "full-auto",
+      });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("clears incompatible model overrides when switching engines", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

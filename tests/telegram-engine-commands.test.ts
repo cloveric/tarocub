@@ -56,6 +56,7 @@ describe("handleLocalEngineTelegramCommand", () => {
           "Choose an engine with /engine <name>:",
           "/engine claude",
           "/engine codex",
+          "/engine antigravity",
           "Restart this instance after switching to apply the change.",
         ].join("\n"),
       );
@@ -135,6 +136,55 @@ describe("handleLocalEngineTelegramCommand", () => {
     }
   });
 
+  it("switches to Antigravity locally and clears incompatible model overrides", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      removeByChatId: vi.fn().mockResolvedValue(true),
+      clearAll: vi.fn().mockResolvedValue(1),
+    };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
+      const cfg: Record<string, unknown> = { engine: "codex", model: "gpt-5.4", codexServiceTier: "fast" };
+      mutate(cfg);
+      expect(cfg.engine).toBe("antigravity");
+      expect(cfg.approvalMode).toBe("full-auto");
+      expect(cfg.model).toBeUndefined();
+      expect(cfg.codexServiceTier).toBeUndefined();
+    });
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex", model: "gpt-5.4" },
+        normalized: createNormalizedMessage("/engine antigravity"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 76,
+        },
+        bridge: {
+          handleAuthorizedMessage: vi.fn(),
+        },
+        sessionStore,
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(sessionStore.clearAll).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Engine set to antigravity. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply. Antigravity YOLO/full-auto enabled.",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("keeps the old engine when session bindings cannot be reset first", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
     const api = {
@@ -206,7 +256,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /engine [claude|codex]");
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /engine [claude|codex|antigravity]");
     } finally {
       await removeTempRoot(root);
     }
@@ -243,7 +293,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "/context is only supported with the Claude engine. Codex manages context server-side and does not expose this.",
+        "/context is only supported with the Claude engine. The current engine does not expose local context.",
       );
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({

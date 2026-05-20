@@ -171,4 +171,82 @@ describe("handleGoalTelegramCommand", () => {
     expect(normalized.text).toBe("/goal 写发布说明");
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it("lets Antigravity /goal pass through to the native agy slash command", async () => {
+    const sendMessage = vi.fn();
+    const setThreadGoal = vi.fn();
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "antigravity" },
+      normalized: createNormalizedMessage("/goal run a long investigation"),
+      context: {
+        api: { sendMessage },
+        bridge: { setThreadGoal },
+      },
+    });
+
+    expect(handled).toBe(false);
+    expect(setThreadGoal).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("strips Telegram bot usernames before passing Antigravity /goal through", async () => {
+    const sendMessage = vi.fn();
+    const normalized = createNormalizedMessage("/goal@cloveric17bot run a long investigation");
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "antigravity" },
+      normalized,
+      context: {
+        api: { sendMessage },
+        bridge: {},
+      },
+    });
+
+    expect(handled).toBe(false);
+    expect(normalized.text).toBe("/goal run a long investigation");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("normalizes Antigravity /goal budgets into native goal guidance", async () => {
+    const sendMessage = vi.fn();
+    const normalized = createNormalizedMessage("/goal@cloveric17bot -b 50k run a long investigation");
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "antigravity" },
+      normalized,
+      context: {
+        api: { sendMessage },
+        bridge: {},
+      },
+    });
+
+    expect(handled).toBe(false);
+    expect(normalized.text).toBe(
+      "/goal run a long investigation\n\n[Bridge note: requested token budget: 50000 tokens. Native Antigravity goals may treat this as guidance rather than an enforced budget.]",
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid Antigravity /goal budgets before native pass-through", async () => {
+    const sendMessage = vi.fn();
+    const normalized = createNormalizedMessage("/goal --budget nope run a long investigation");
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "antigravity" },
+      normalized,
+      context: {
+        api: { sendMessage },
+        bridge: {},
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(normalized.text).toBe("/goal --budget nope run a long investigation");
+    expect(sendMessage).toHaveBeenCalledWith(123, "Invalid /goal token budget. Use --budget 50000 or -b 50k.");
+  });
 });

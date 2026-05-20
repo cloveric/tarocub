@@ -103,6 +103,16 @@ describe("message rendering", () => {
     expect(renderCategorizedErrorMessage("auth", "missing auth")).toBe(
       "Error: Engine authentication is missing or expired. Re-login for this instance and retry.",
     );
+    expect(
+      renderCategorizedErrorMessage(
+        "auth",
+        "error getting token source: You are not logged into Antigravity.",
+        "en",
+        "antigravity",
+      ),
+    ).toBe(
+      "Error: Antigravity authentication is missing or expired. Open Antigravity CLI locally, sign in again, then retry this Telegram turn.",
+    );
     expect(renderCategorizedErrorMessage("telegram-conflict", "409 conflict")).toBe(
       "Error: Another Telegram poller is using this bot token. Stop the duplicate service and retry.",
     );
@@ -119,6 +129,16 @@ describe("message rendering", () => {
     );
     expect(renderCategorizedErrorMessage("engine-cli", "engine failed to start")).toBe(
       "Error: The engine runtime failed. Restart the instance and retry.",
+    );
+    expect(
+      renderCategorizedErrorMessage(
+        "engine-cli",
+        "flags provided but not defined: -model",
+        "en",
+        "antigravity",
+      ),
+    ).toBe(
+      "Error: Antigravity rejected a CLI startup flag. Update agy or remove the unsupported bridge setting, then retry.",
     );
     expect(
       renderCategorizedErrorMessage(
@@ -189,7 +209,7 @@ describe("message rendering", () => {
     expect(help).toContain("/board [list|add|desc|accept|priority|labels|check|assign|dep|limits|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]");
     expect(help).toContain("/mini [status|here|order|parallel|verifier|role|crew|ask|fan|chain|verify]");
     expect(help).toContain("/goal <goal> - set a goal");
-    expect(help).toContain("Claude passes through to native /goal");
+    expect(help).toContain("Claude and Antigravity pass through to native /goal");
     expect(help).toContain("/reset");
     expect(help).toContain("/help");
   });
@@ -240,6 +260,15 @@ describe("message rendering", () => {
         waitingTasks: 1,
       }),
     ).toContain("Waiting file tasks: 1");
+    expect(
+      renderTelegramStatusMessage({
+        engine: "antigravity",
+        sessionBound: true,
+        threadId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        blockingTasks: 0,
+        waitingTasks: 0,
+      }),
+    ).toContain("Current conversation: fdfc8ab1-7936-4599-98b0-d8ba2593c250");
   });
 });
 

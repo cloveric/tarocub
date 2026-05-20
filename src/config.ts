@@ -15,6 +15,7 @@ export interface EnvSource {
   CODEX_TELEGRAM_STATE_DIR?: string;
   CODEX_EXECUTABLE?: string;
   CLAUDE_EXECUTABLE?: string;
+  ANTIGRAVITY_EXECUTABLE?: string;
 }
 
 function resolveHomeDir(env: Pick<EnvSource, "HOME" | "USERPROFILE">): string | undefined {
@@ -63,6 +64,32 @@ function resolveDefaultCodexExecutable(env: EnvSource): string {
   return "codex";
 }
 
+function resolveDefaultAntigravityExecutable(env: EnvSource): string {
+  if (env.ANTIGRAVITY_EXECUTABLE) {
+    return normalizeExecutablePath(env.ANTIGRAVITY_EXECUTABLE);
+  }
+
+  if (isWindows) {
+    const appData =
+      env.APPDATA ??
+      (env.USERPROFILE ? path.join(env.USERPROFILE, "AppData", "Roaming") : undefined);
+
+    if (appData) {
+      const windowsAntigravityCmd = path.join(appData, "npm", "agy.cmd");
+      if (existsSync(windowsAntigravityCmd)) {
+        return windowsAntigravityCmd;
+      }
+
+      const windowsAntigravityShim = path.join(appData, "npm", "agy.ps1");
+      if (existsSync(windowsAntigravityShim)) {
+        return windowsAntigravityShim;
+      }
+    }
+  }
+
+  return "agy";
+}
+
 export function joinStatePath(base: string, segment: string): string {
   return path.join(base, segment);
 }
@@ -102,5 +129,6 @@ export function resolveConfig(env: EnvSource = process.env): AppConfig {
     sessionStatePath: joinStatePath(stateDir, "session.json"),
     runtimeLogPath: joinStatePath(stateDir, "runtime.log"),
     codexExecutable: resolveDefaultCodexExecutable(env),
+    antigravityExecutable: resolveDefaultAntigravityExecutable(env),
   };
 }

@@ -48,6 +48,7 @@ describe("resolveConfig", () => {
       TELEGRAM_BOT_TOKEN: "abc123",
       CODEX_TELEGRAM_STATE_DIR: "C:/custom/state",
       CODEX_EXECUTABLE: "codex.exe",
+      ANTIGRAVITY_EXECUTABLE: '"C:\\Tools\\agy.exe"',
     });
 
     expect(config.instanceName).toBe("default");
@@ -57,6 +58,7 @@ describe("resolveConfig", () => {
     expect(path.posix.normalize(config.sessionStatePath.replace(/\\/g, "/"))).toBe("C:/custom/state/session.json");
     expect(path.posix.normalize(config.runtimeLogPath.replace(/\\/g, "/"))).toBe("C:/custom/state/runtime.log");
     expect(config.codexExecutable).toBe("codex.exe");
+    expect(config.antigravityExecutable).toBe("C:\\Tools\\agy.exe");
   });
 
   it("strips wrapping quotes from executable overrides", () => {

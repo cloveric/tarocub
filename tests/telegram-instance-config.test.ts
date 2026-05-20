@@ -5,7 +5,11 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadInstanceConfig, updateInstanceConfig } from "../src/telegram/instance-config.js";
+import {
+  applyEngineSelection,
+  loadInstanceConfig,
+  updateInstanceConfig,
+} from "../src/telegram/instance-config.js";
 import { resolveDefaultCronTimezone } from "../src/state/cron-timezone.js";
 
 afterEach(() => {
@@ -222,5 +226,37 @@ describe("updateInstanceConfig", () => {
     } finally {
       await removeTempRoot(root);
     }
+  });
+});
+
+describe("applyEngineSelection", () => {
+  it("enables full-auto approval by default when selecting Antigravity", () => {
+    const config: Record<string, unknown> = {
+      engine: "codex",
+      model: "gpt-5.4",
+      codexServiceTier: "fast",
+    };
+
+    const result = applyEngineSelection(config, "antigravity");
+
+    expect(result).toEqual({ clearedModel: true, enabledFullAuto: true });
+    expect(config).toMatchObject({
+      engine: "antigravity",
+      approvalMode: "full-auto",
+    });
+    expect(config.model).toBeUndefined();
+    expect(config.codexServiceTier).toBeUndefined();
+  });
+
+  it("does not downgrade Antigravity bypass mode when preserving an unsafe YOLO choice", () => {
+    const config: Record<string, unknown> = {
+      engine: "codex",
+      approvalMode: "bypass",
+    };
+
+    const result = applyEngineSelection(config, "antigravity");
+
+    expect(result).toEqual({ clearedModel: false, enabledFullAuto: false });
+    expect(config.approvalMode).toBe("bypass");
   });
 });

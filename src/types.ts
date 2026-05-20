@@ -30,6 +30,7 @@ export interface AppConfig {
   sessionStatePath: string;
   runtimeLogPath: string;
   codexExecutable: string;
+  antigravityExecutable: string;
 }
 
 export interface SuspendedConversationState {

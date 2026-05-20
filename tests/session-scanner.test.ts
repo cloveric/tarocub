@@ -4,7 +4,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { removeTempRoot } from "./helpers/temp-files.js";
 
-import { tryDecodeWorkspacePath, scanRecentClaudeSessions } from "../src/runtime/session-scanner.js";
+import {
+  formatAntigravityConversationList,
+  scanRecentAntigravityConversations,
+  tryDecodeWorkspacePath,
+  scanRecentClaudeSessions,
+} from "../src/runtime/session-scanner.js";
 
 describe("tryDecodeWorkspacePath", () => {
   it("returns null for dirnames that don't start with dash", () => {
@@ -161,5 +166,84 @@ describe("scanRecentClaudeSessions", () => {
       }
       await removeTempRoot(root);
     }
+  });
+});
+
+describe("scanRecentAntigravityConversations", () => {
+  it("finds recent Antigravity conversations from CLI logs", async () => {
+    const fakeHome = await mkdtemp(path.join(os.tmpdir(), "cctb-antigravity-home-"));
+    const logDir = path.join(fakeHome, ".gemini", "antigravity-cli", "log");
+    await mkdir(logDir, { recursive: true });
+    await writeFile(
+      path.join(logDir, "cli-20260520_095913.log"),
+      [
+        "I0520 09:59:13 printmode.go:130] Print mode: conversation=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee, sending message",
+        "I0520 10:00:13 printmode.go:130] Print mode: conversation=ffffffff-1111-2222-3333-444444444444, sending message",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const origHome = process.env.HOME;
+    const origUserProfile = process.env.USERPROFILE;
+    try {
+      process.env.HOME = fakeHome;
+      delete process.env.USERPROFILE;
+
+      const sessions = await scanRecentAntigravityConversations(24);
+      expect(sessions.map((session) => session.sessionId)).toEqual([
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "ffffffff-1111-2222-3333-444444444444",
+      ]);
+      expect(sessions[0]).toMatchObject({
+        dirName: "antigravity",
+        workspacePath: null,
+        displayName: "conversation aaaaaaaa",
+      });
+    } finally {
+      if (origHome !== undefined) {
+        process.env.HOME = origHome;
+      } else {
+        delete process.env.HOME;
+      }
+      if (origUserProfile !== undefined) {
+        process.env.USERPROFILE = origUserProfile;
+      } else {
+        delete process.env.USERPROFILE;
+      }
+      await removeTempRoot(fakeHome);
+    }
+  });
+
+  it("formats Antigravity conversation picks separately from Claude sessions", () => {
+    const now = Date.now();
+    const message = formatAntigravityConversationList([
+      {
+        sessionId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        dirName: "antigravity",
+        workspacePath: null,
+        modifiedAt: new Date(now - 60_000),
+        displayName: "conversation aaaaaaaa",
+      },
+    ], "en");
+
+    expect(message).toContain("Recent Antigravity conversations:");
+    expect(message).toContain("Reply /resume <number> to attach that conversation.");
+  });
+
+  it("caps formatted Antigravity conversation picks to keep Telegram replies short", () => {
+    const now = Date.now();
+    const sessions = Array.from({ length: 25 }, (_, index) => ({
+      sessionId: `${String(index).padStart(8, "0")}-bbbb-cccc-dddd-eeeeeeeeeeee`,
+      dirName: "antigravity",
+      workspacePath: null,
+      modifiedAt: new Date(now - index * 60_000),
+      displayName: `conversation ${String(index).padStart(8, "0")}`,
+    }));
+
+    const message = formatAntigravityConversationList(sessions, "en");
+
+    expect(message).toContain("…showing 20 of 25 most recent.");
+    expect(message).toContain("20. [conversation 00000019]");
+    expect(message).not.toContain("21. [conversation 00000020]");
   });
 });

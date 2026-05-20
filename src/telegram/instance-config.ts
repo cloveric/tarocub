@@ -11,6 +11,7 @@ import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron
 import { withFileMutex } from "../state/file-mutex.js";
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type InstanceEngine = "codex" | "claude" | "antigravity";
 
 export interface ResumeState {
   sessionId: string;
@@ -24,7 +25,7 @@ export interface ResumeState {
 }
 
 export interface InstanceConfig {
-  engine: "codex" | "claude";
+  engine: InstanceEngine;
   locale: "en" | "zh";
   verbosity: 0 | 1 | 2;
   budgetUsd: number | undefined;
@@ -95,10 +96,10 @@ function parseGroupMode(raw: unknown): GroupModeConfig {
 
 export function applyEngineSelection(
   config: Record<string, unknown>,
-  engine: "codex" | "claude",
-): { clearedModel: boolean } {
+  engine: InstanceEngine,
+): { clearedModel: boolean; enabledFullAuto: boolean } {
   const previousEngine =
-    config.engine === "claude" || config.engine === "codex"
+    config.engine === "claude" || config.engine === "codex" || config.engine === "antigravity"
       ? config.engine
       : undefined;
   const hadModelOverride = typeof config.model === "string" && config.model.trim().length > 0;
@@ -109,11 +110,16 @@ export function applyEngineSelection(
   if (clearedModel) {
     delete config.model;
   }
-  if (engine === "claude") {
+  if (engine !== "codex") {
     delete config.codexServiceTier;
   }
+  let enabledFullAuto = false;
+  if (engine === "antigravity" && config.approvalMode !== "bypass") {
+    enabledFullAuto = config.approvalMode !== "full-auto";
+    config.approvalMode = "full-auto";
+  }
 
-  return { clearedModel };
+  return { clearedModel, enabledFullAuto };
 }
 
 export async function readValidatedConfigFile(configPath: string): Promise<ConfigFile> {
@@ -158,7 +164,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
 
   const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
   return {
-    engine: config.engine === "claude" ? "claude" : "codex",
+    engine: config.engine === "claude" || config.engine === "antigravity" ? config.engine : "codex",
     locale: config.locale === "zh" ? "zh" : "en",
     verbosity: config.verbosity === 0 ? 0 : config.verbosity === 2 ? 2 : 1,
     budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,

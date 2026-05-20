@@ -11,12 +11,12 @@
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square&logo=node.js&logoColor=white" alt="Windows | macOS | Linux">
-  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude-F97316?style=flat-square" alt="Codex | Claude">
+  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude | Antigravity">
   <img src="https://img.shields.io/badge/tests-Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest">
 </p>
 
 <h3 align="center">
-  A Telegram control plane for your local Codex and Claude Code CLIs.<br>
+  A Telegram control plane for your local Codex, Claude Code, and Antigravity CLIs.<br>
   Resume desktop sessions from your phone, move files both ways, run scheduled work, and coordinate multiple agent workers without replacing the engines you already use.
 </h3>
 
@@ -26,7 +26,7 @@
 
 ## Start Here
 
-**cc-telegram-bridge is not another hosted agent UI.** It runs the real Codex and Claude Code CLIs on your machine, then gives them a durable Telegram interface: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
+**cc-telegram-bridge is not another hosted agent UI.** It runs the real Codex, Claude Code, and Antigravity CLIs on your machine, then gives them a durable Telegram interface: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
 
 The easiest setup path is to clone this repo, open it in Codex or Claude Code, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
 
@@ -46,8 +46,8 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 | Capability | What it means in practice |
 |---|---|
-| **Remote control for real CLIs** | Put Codex or Claude Code on Telegram without wrapping them in a fake chat backend. |
-| **Session continuity** | Resume local Claude sessions and attach Codex threads from your phone, then continue on desktop later. |
+| **Remote control for real CLIs** | Put Codex, Claude Code, or Antigravity on Telegram without wrapping them in a fake chat backend. |
+| **Session continuity** | Resume local Claude sessions, attach Codex threads, and bind Antigravity conversations from your phone, then continue on desktop later. |
 | **Multimodal Telegram I/O** | Send files, images, generated artifacts, voice messages, and audio documents through one bridge protocol. |
 | **Durable operations** | Keep cron jobs, audit logs, timeline logs, usage tracking, access checks, and service restart tooling outside model memory. |
 | **Source-traceable research** | Use the optional Brave/Tavily MCP for `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
@@ -57,7 +57,7 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 | This project is | This project is not |
 |---|---|
-| A local bridge that exposes existing Codex and Claude Code installations through Telegram. | A hosted SaaS agent platform or a replacement for Codex/Claude Code. |
+| A local bridge that exposes existing Codex, Claude Code, and Antigravity installations through Telegram. | A hosted SaaS agent platform or a replacement for Codex/Claude Code/Antigravity. |
 | A control plane for sessions, files, approvals, scheduled tasks, and multi-agent routing. | A model provider, inference server, or standalone LLM runtime. |
 | A practical ops layer for people who already use CLI agents heavily. | A generic chatbot framework for every messaging platform. |
 | A place to keep delivery receipts, audit trails, and task state out of fragile prompts. | A promise that models will always finish tasks correctly without review. |
@@ -66,7 +66,7 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 | Workflow | Entry point |
 |---|---|
-| **Personal mobile copilot** — talk to your local Codex/Claude while away from the computer. | [Quick Start](#quick-start), [Session Resume](#session-resume--codex-thread-attach) |
+| **Personal mobile copilot** — talk to your local Codex/Claude/Antigravity while away from the computer. | [Quick Start](#quick-start), [Session Resume](#session-resume-codex-threads-and-antigravity-conversations) |
 | **Research assistant** — search, extract exact URLs, preserve source logs, and return files to Telegram. | [Search MCP](#live-web-search-mcp-brave--tavily), [File Delivery](#file-delivery-from-agent-tasks) |
 | **Topic-based mini crew** — use Telegram forum topics as planner/writer/reviewer peers in one group. | [Mini Bus](#mini-bus-topic-to-topic-workflows), [Telegram Groups And Topics](#telegram-groups-and-topics) |
 | **Durable project board** — keep tasks, dependencies, runs, WIP limits, and review gates outside model context. | [Board](#board-durable-kanban-tasks) |
@@ -74,7 +74,7 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 ## Release Highlights
 
-- **v4.6.18** — normalizes `/goal@botname` in Telegram groups so Claude Code receives a native `/goal` command while Codex keeps structured goal handling.
+- **v4.6.18** — normalizes `/goal@botname` in Telegram groups so native engines receive a plain `/goal` command while Codex keeps structured goal handling.
 - **v4.6.17** — passes Claude Code `/goal` through from Telegram instead of treating goals as Codex-only.
 - **v4.6.16** — completes Telegram audio handling: direct `voice`, direct `audio/.m4a`, audio-like documents, and quoted audio documents all go through the same ASR transcription path.
 - **v4.6.14** — hardens `/stop` and service restart cleanup so stale duplicate processes cannot keep typing or sending files after a restart.
@@ -95,10 +95,10 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 ## Why This Bridge
 
-- **Native CLI first.** The bridge runs the real Codex and Claude Code CLIs, so local auth, project files, sessions, approvals, and engine-specific behavior remain the same as on your desktop.
-- **Resume desktop work from anywhere.** Pick up an existing local Codex or Claude Code session from Telegram, send files or instructions while away, then continue the same project back on the desktop.
+- **Native CLI first.** The bridge runs the real Codex, Claude Code, and Antigravity CLIs, so local auth, project files, approvals, and engine-specific behavior remain the same as on your desktop.
+- **Resume desktop work from anywhere.** Pick up an existing local Codex or Claude Code session from Telegram, send files or instructions while away, then continue the same project back on the desktop. Antigravity conversations are auto-bound after a successful turn and can also be attached with `/resume conversation <id>`.
 - **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation. Topic peers can also be composed into a Mini Bus for same-group fan-out, chain, verify, or crew workflows, while `/board` keeps durable Kanban task state outside model memory.
-- **Multi-engine without separate playbooks.** Each bot can choose Codex or Claude, process or stream runtime, while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
+- **Multi-engine without separate playbooks.** Each bot can choose Codex, Claude, or Antigravity while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
 - **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
 - **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
 - **Receipts over claims.** File delivery and scheduled-task creation produce structured accepted/rejected receipts, so "done" only counts when the bridge actually delivered or scheduled something.
@@ -106,9 +106,9 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 ---
 
-## Dual Engine: Codex + Claude Code
+## Multi Engine: Codex + Claude Code + Antigravity
 
-Each bot instance can run either **OpenAI Codex** or **Claude Code** as its backend. Switch engines per-instance with one command:
+Each bot instance can run **OpenAI Codex**, **Claude Code**, or **Antigravity CLI** as its backend. Switch engines per-instance with one command:
 
 ```powershell
 # Set an instance to use Claude Code
@@ -117,24 +117,32 @@ npm run dev -- telegram engine claude --instance review-bot
 # Set another to use Codex
 npm run dev -- telegram engine codex --instance helper-bot
 
+# Set another to use Antigravity
+npm run dev -- telegram engine antigravity --instance agy-bot
+
 # Check current engine
 npm run dev -- telegram engine --instance review-bot
 ```
 
-| Feature | Codex Engine | Claude Engine |
-|---|---|---|
-| CLI command | `codex exec --json` | `claude -p --output-format json` |
-| Session resume | `codex exec resume --json <id>` | `claude -p -r <session-id>` |
-| Project instructions | `agent.md` (prepended to prompt) | `agent.md` (via `--system-prompt`) + `CLAUDE.md` (auto-loaded from workspace) |
-| Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts |
-| YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` |
-| `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage |
-| Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) |
-| Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable |
+Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in the explicit `bypass` mode, because `agy --print` is non-interactive in Telegram. Antigravity model selection is still owned by the native CLI: `/model` is passed through to `agy`, and the setting persists across sessions. The current CLI does not expose a startup `--model` flag, so the bridge deliberately does not invent one.
+
+| Feature | Codex Engine | Claude Engine | Antigravity Engine |
+|---|---|---|---|
+| CLI command | `codex exec --json` | `claude -p --output-format json` | `agy --print` |
+| Session resume | `codex exec resume --json <id>` | `claude -p -r <session-id>` | Auto-binds the first logged conversation; `/resume` scans recent agy logs; `/resume conversation <id>` uses `agy --conversation` |
+| Project instructions | `agent.md` (prepended to prompt) | `agent.md` (via `--system-prompt`) + `CLAUDE.md` (auto-loaded from workspace) | `agent.md` (prepended to prompt) |
+| Streaming / early delivery | JSON stream events feed timeline and early file delivery | Claude stream events feed timeline and early file delivery | stdout chunks feed timeline and early file delivery when `agy --print` streams output |
+| Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
+| YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
+| `/goal` | Bridge-native goal API with optional token budget | Passed through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Passed through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
+| `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Not supported by the bridge yet |
+| Skills / plugins | Uses the configured Codex home; isolated homes symlink `skills/` back to the shared Codex skills dir | Uses the shared Claude config plus workspace `CLAUDE.md`, `skills/`, and `plugins/` | Uses Antigravity's native CLI/plugin config; run `agy plugin import claude` if you want Antigravity to mirror Claude plugins |
+| Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) | `workspace/` under instance dir |
+| Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable | Process exits after each turn |
 
 ## Live Web Search MCP: Brave + Tavily
 
-The bridge ships an optional local MCP server that gives both Codex and Claude Code the same source-traceable web research tools:
+The bridge ships an optional local MCP server that gives Codex, Claude Code, and Antigravity the same source-traceable web research tools once each engine's native MCP/plugin layer is configured:
 
 - `web_search` routes live search through Brave and/or Tavily.
 - `web_extract` uses Tavily Extract to read known URLs cleanly.
@@ -168,7 +176,9 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-Then restart affected bot instances so their Codex/Claude turns see the new MCP configuration. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./docs/search-mcp.md).
+For Antigravity, use its native plugin import/config flow, for example `agy plugin import claude` after the Claude MCP has been registered, then verify with `agy plugin list`.
+
+Then restart affected bot instances so their Codex/Claude/Antigravity turns see the new MCP/plugin configuration. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./docs/search-mcp.md).
 
 ### Claude Engine: CLAUDE.md Support
 
@@ -357,13 +367,13 @@ Cron behavior is designed for Telegram delivery, not session-local reminders:
 - Jobs created before this default was introduced keep their stored mode; use `/cron mode <job-id> new_per_run` to upgrade an older recurring task without deleting it.
 - Per-chat job caps prevent accidental recursive job creation from growing without bound.
 
-For human operators, the CLI remains available for inspection and debugging, but generated `agent.md` instructions tell agents to use the `[tool:{...}]` layer so Claude/Codex process and stream runtimes behave consistently.
+For human operators, the CLI remains available for inspection and debugging, but generated `agent.md` instructions tell agents to use the `[tool:{...}]` layer so Claude/Codex/Antigravity process and stream runtimes behave consistently.
 
 ---
 
 ## YOLO Mode
 
-For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the engine supports a headless path: Claude can approve individual permission prompts; Codex app-server mode maps YOLO settings to the app-server sandbox mode. Keep `unsafe` for fully trusted local environments only.
+For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude/Antigravity moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the engine supports a headless path: Claude can approve individual permission prompts; Codex app-server mode maps YOLO settings to the app-server sandbox mode; Antigravity process mode gets a turn-level pre-approval. Keep `unsafe` for fully trusted local environments only.
 
 Claude approval buttons use a short-lived localhost MCP bridge with a random URL token. This protects against blind local port scans, but the token is still visible to same-user local processes that can inspect process command lines. Treat YOLO-off approval as a single-user workstation convenience, not a multi-user isolation boundary.
 
@@ -416,7 +426,7 @@ npm run dev -- telegram dashboard --instance work
 npm run dev -- telegram service status --instance work
 ```
 
-`telegram verbosity` is kept as a compatibility config knob, but the current Codex/Claude process runtimes use typing actions plus timeline/audit events rather than live-editing partial model output into Telegram.
+`telegram verbosity` is kept as a compatibility config knob, but the current Codex/Claude/Antigravity runtimes use typing actions plus timeline/audit events rather than live-editing partial model output into Telegram.
 
 ---
 
@@ -492,9 +502,9 @@ To use a different ASR engine, modify the `createDefaultTranscribeVoice()` funct
 
 ---
 
-## Session Resume & Codex Thread Attach
+## Session Resume, Codex Threads, and Antigravity Conversations
 
-Started a task locally with Claude Code? Continue it on Telegram — no copy-paste, no re-explaining context. Using Codex instead? Attach an existing thread by ID and keep going from Telegram.
+Started a task locally with Claude Code? Continue it on Telegram — no copy-paste, no re-explaining context. Using Codex or Antigravity instead? Attach an existing thread or conversation by ID and keep going from Telegram.
 
 ### Claude local session resume
 
@@ -550,6 +560,30 @@ That binds the current Telegram chat to the existing Codex thread. From then on:
 This is an attach flow, not a local session import: the thread stays server-side and the bridge only binds the known thread ID to the current chat.
 
 Note: the default Codex app-server runtime validates `/resume thread <thread-id>` through the local Codex runtime. Thread IDs unknown to the local machine still fail closed instead of being guessed.
+
+### Antigravity conversation attach
+
+Antigravity print mode writes the active conversation ID to its CLI log. The bridge reads those logs, binds the current conversation to the Telegram chat after a successful turn, and resumes later turns with:
+
+```text
+agy --conversation <conversation-id>
+```
+
+If you already know an Antigravity conversation ID, attach it explicitly:
+
+```text
+/resume conversation fdfc8ab1-7936-4599-98b0-d8ba2593c250
+```
+
+If you do not know the ID, send plain `/resume`. The bridge scans recent Antigravity CLI logs and returns a numbered list; reply `/resume 1` to attach one.
+
+From then on:
+
+- new Telegram messages continue that Antigravity conversation
+- `/status` shows the current conversation ID
+- `/detach` unbinds the conversation and restores the pre-attach conversation when one exists
+
+This still uses Antigravity's native session model. The bridge does not invent model or effort flags; use Antigravity's native `/model` setting for that.
 
 ---
 
@@ -928,7 +962,7 @@ npm run dev -- telegram service start
 npm run dev -- telegram access pair 38J63T
 ```
 
-**Done!** You can now chat with Codex or Claude from Telegram. Send text, voice messages, or files — the bot handles everything.
+**Done!** You can now chat with Codex, Claude, or Antigravity from Telegram. Send text, voice messages, or files — the bot handles everything.
 
 ### Multiple Bots
 
@@ -1013,13 +1047,13 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>Per-Bot Isolation</h3>
-      <p>Every instance has its own personality, workspace, sessions, access rules, inbox, audit trail, and workspace-keyed auto-memory. The engine config dir (<code>~/.claude/</code> / <code>~/.codex/</code>) is <em>shared</em> with your main CLI so OAuth refresh tokens don't race across instances — the trade-off is that settings, plugins, and MCP state live in your real home, and full-auto / bypass mode can touch it.</p>
+      <p>Every instance has its own personality, workspace, sessions, access rules, inbox, audit trail, and workspace-keyed auto-memory. The engine config dir (<code>~/.claude/</code> / <code>~/.codex/</code> / Antigravity's CLI config) is <em>shared</em> with your main CLI so OAuth refresh tokens don't race across instances — the trade-off is that settings, plugins, and MCP state live in your real home, and full-auto / bypass mode can touch it.</p>
     </td>
   </tr>
   <tr>
     <td>
       <h3>Session Resume</h3>
-      <p><code>/resume</code> picks up existing Claude Code local sessions, and <code>/resume thread &lt;thread-id&gt;</code> attaches Codex threads, so you can continue desktop work from Telegram without losing context.</p>
+      <p><code>/resume</code> picks up existing Claude Code local sessions, <code>/resume thread &lt;thread-id&gt;</code> attaches Codex threads, and <code>/resume conversation &lt;id&gt;</code> attaches Antigravity conversations, so you can continue desktop work from Telegram without losing context.</p>
     </td>
     <td>
       <h3>Runtime Visibility</h3>
@@ -1101,7 +1135,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 | `telegram service restart --all` | Restart every configured instance; `start`, `stop`, `status`, and `doctor` also accept `--all` |
 | `telegram service logs` | Tail stdout/stderr logs |
 | `telegram service doctor` | Health check across all subsystems, including timeline, crew state, shared engine env, and stale launchd leftovers |
-| `telegram engine [codex\|claude]` | Switch AI engine per instance |
+| `telegram engine [codex\|claude\|antigravity]` | Switch AI engine per instance |
 
 When `telegram service stop --all` or `telegram service restart --all` is run from inside an active bot turn, the current instance is skipped so the command cannot kill its own execution chain. Restart that instance separately from a terminal if needed.
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
@@ -1131,18 +1165,18 @@ All commands accept `--instance <name>` to target a specific bot.
 Telegram users can also use:
 
 - `/status`
-- `/engine [claude|codex]` — switch engine for the current instance (the bridge resets stale bindings automatically)
+- `/engine [claude|codex|antigravity]` — switch engine for the current instance (the bridge resets stale bindings automatically)
 - `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
 - `/model [name|off]` — switch model
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
-- `/goal <completion condition>` — set an engine goal. Codex also supports `/goal status`, `/goal clear`, and `--budget`; Claude Code is passed through to its native `/goal` slash command.
+- `/goal <completion condition>` — set an engine goal. Codex also supports `/goal status`, `/goal clear`, and `--budget`; Claude Code and Antigravity pass through to their native `/goal` slash commands.
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
 - `/fan <prompt>` — query current bot plus configured parallel bots
 - `/chain <prompt>` — run the configured sequential bot chain
 - `/verify <prompt>` — execute locally, then auto-review with the verifier bot
-- `/resume` — Claude: scan local sessions; Codex: use `/resume thread <thread-id>` to attach an existing thread
-- `/detach` — detach from resumed Claude session or current Codex thread; restore the pre-resume conversation when one exists
+- `/resume` — Claude: scan local sessions; Codex: use `/resume thread <thread-id>`; Antigravity: use `/resume conversation <conversation-id>`
+- `/detach` — detach from resumed Claude session, current Codex thread, or current Antigravity conversation; restore the pre-resume conversation when one exists
 - `/stop` — immediately stop the current running task
 - `/continue` — resume the latest waiting archive summary
 - `/compact` (Claude only — compresses context; Codex falls back to reset)
@@ -1330,7 +1364,7 @@ Mount `~/.cctb` to persist state across container restarts.
 
 1. Run `telegram service doctor --instance <name>` to diagnose
 2. Check `telegram service logs` for errors
-3. Verify the engine is installed: `codex --version` or `claude --version`
+3. Verify the engine is installed: `codex --version`, `claude --version`, or `agy --help`
 4. If the instance uses Claude, run `npm run smoke:claude-auth`
 5. If `service doctor` reports `legacy-launchd`, clean it with `bash scripts/cleanup-legacy-launchd.sh --all`
 

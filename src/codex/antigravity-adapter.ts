@@ -1,0 +1,461 @@
+import { spawn } from "node:child_process";
+import { readdir, readFile, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import type {
+  CodexAdapter,
+  CodexAdapterResponse,
+  CodexSessionHandle,
+  CodexUserMessageInput,
+} from "./adapter.js";
+import { killProcessTree } from "./process-tree.js";
+import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
+
+type SpawnOptions = {
+  stdio: ["pipe", "pipe", "pipe"];
+  shell?: boolean;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  windowsHide?: boolean;
+};
+
+type ProcessStreamLike = {
+  on(event: "data", listener: (chunk: { toString(): string } | string) => void): void;
+};
+
+type ProcessChildLike = {
+  pid?: number;
+  stdin?: {
+    end(chunk?: string): void;
+  };
+  stdout?: ProcessStreamLike;
+  stderr?: ProcessStreamLike;
+  once(event: "error", listener: (error: Error) => void): void;
+  once(event: "close", listener: (code: number | null) => void): void;
+};
+
+type SpawnAntigravity = (command: string, args: string[], options: SpawnOptions) => ProcessChildLike;
+
+const MAX_INSTRUCTIONS_CHARS = 16_000;
+const MAX_OUTPUT_BUFFER_BYTES = 4 * 1024 * 1024;
+const MAX_STDERR_DIAGNOSTIC_BYTES = 4 * 1024;
+export const ANTIGRAVITY_PROCESS_TURN_TIMEOUT_MS = 60 * 60_000;
+export const ANTIGRAVITY_PROCESS_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
+
+type ApprovalMode = "normal" | "full-auto" | "bypass";
+
+function normalizeExecutableCommand(command: string): string {
+  const trimmed = command.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function buildCommandInvocation(command: string, args: string[]): { command: string; args: string[]; shell?: boolean } {
+  const normalizedCommand = normalizeExecutableCommand(command);
+
+  if (/\.(cmd|bat)$/i.test(normalizedCommand)) {
+    return {
+      command: process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", normalizedCommand, ...args],
+    };
+  }
+
+  if (/\.ps1$/i.test(normalizedCommand)) {
+    return {
+      command: "pwsh",
+      args: ["-NoProfile", "-File", normalizedCommand, ...args],
+    };
+  }
+
+  return { command: normalizedCommand, args, shell: false };
+}
+
+function appendHeadTailDiagnostic(existing: string, chunk: string, maxBytes: number): string {
+  const combined = existing + chunk;
+  if (Buffer.byteLength(combined, "utf8") <= maxBytes) {
+    return combined;
+  }
+
+  const half = Math.max(1, Math.floor(maxBytes / 2));
+  return `${combined.slice(0, half)}\n[... output elided ...]\n${combined.slice(-half)}`;
+}
+
+function combineInstructions(primary: string | null, secondary: string | null): string | null {
+  const parts = [primary?.trim(), secondary?.trim()].filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function isLogicalTelegramSessionId(sessionId: string): boolean {
+  return sessionId.startsWith("telegram-");
+}
+
+const ANTIGRAVITY_CONVERSATION_ID_PATTERN =
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
+function extractAntigravityConversationId(logContent: string): string | null {
+  const match = logContent.match(new RegExp(`\\bconversation=(${ANTIGRAVITY_CONVERSATION_ID_PATTERN})\\b`));
+  return match?.[1]?.trim() || null;
+}
+
+function resolveAntigravityLogDir(env: NodeJS.ProcessEnv): string {
+  const home = env.HOME || os.homedir();
+  return path.join(home, ".gemini", "antigravity-cli", "log");
+}
+
+async function extractAntigravityConversationIdFromLogs(input: {
+  logDir: string;
+  pid?: number;
+  startedAt: number;
+}): Promise<string | null> {
+  const entries = await readdir(input.logDir, { withFileTypes: true }).catch(() => []);
+  const candidates = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && /^cli-.*\.log$/.test(entry.name))
+      .map(async (entry) => {
+        const filePath = path.join(input.logDir, entry.name);
+        const fileStat = await stat(filePath).catch(() => null);
+        return fileStat ? { filePath, mtimeMs: fileStat.mtimeMs } : null;
+      }),
+  );
+
+  const recentFiles = candidates
+    .filter((entry): entry is { filePath: string; mtimeMs: number } => Boolean(entry))
+    .filter((entry) => entry.mtimeMs >= input.startedAt - 60_000)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+    .slice(0, 5);
+
+  const pidPattern = input.pid
+    ? new RegExp(`\\s${input.pid}\\s.*\\bconversation=(${ANTIGRAVITY_CONVERSATION_ID_PATTERN})\\b`)
+    : null;
+  for (const entry of recentFiles) {
+    const content = await readFile(entry.filePath, "utf8").catch(() => "");
+    if (pidPattern) {
+      const lines = content.split(/\r?\n/).reverse();
+      for (const line of lines) {
+        const match = line.match(pidPattern);
+        if (match?.[1]) {
+          return match[1].trim();
+        }
+      }
+    }
+
+    const fallback = extractAntigravityConversationId(content);
+    if (!input.pid && fallback) {
+      return fallback;
+    }
+  }
+
+  return null;
+}
+
+export class ProcessAntigravityAdapter implements CodexAdapter {
+  readonly bridgeInstructionMode = "telegram-out-only" as const;
+  readonly supportsTurnScopedEnv = true;
+  private readonly childEnv: NodeJS.ProcessEnv;
+  private readonly spawnAntigravity: SpawnAntigravity;
+
+  constructor(
+    private readonly antigravityExecutable: string,
+    childEnvOrSpawn?: NodeJS.ProcessEnv | SpawnAntigravity,
+    spawnAntigravityArg?: SpawnAntigravity,
+    private readonly instructionsPath?: string,
+    private readonly configPath?: string,
+    private readonly workspacePath?: string,
+    private readonly turnTimeoutMs: number = ANTIGRAVITY_PROCESS_TURN_TIMEOUT_MS,
+    private readonly inactivityTimeoutMs: number | null = ANTIGRAVITY_PROCESS_INACTIVITY_TIMEOUT_MS,
+  ) {
+    const buildChildEnv = () => {
+      const env = { ...process.env };
+      delete env.TELEGRAM_BOT_TOKEN;
+      return env;
+    };
+
+    this.childEnv =
+      typeof childEnvOrSpawn === "function"
+        ? buildChildEnv()
+        : { ...(childEnvOrSpawn ?? buildChildEnv()) };
+    delete this.childEnv.TELEGRAM_BOT_TOKEN;
+
+    this.spawnAntigravity =
+      typeof childEnvOrSpawn === "function"
+        ? childEnvOrSpawn
+        : spawnAntigravityArg ?? (spawn as unknown as SpawnAntigravity);
+  }
+
+  async createSession(chatId: number): Promise<CodexSessionHandle> {
+    return { sessionId: `telegram-${chatId}` };
+  }
+
+  private async loadApprovalMode(): Promise<ApprovalMode> {
+    if (!this.configPath) {
+      return "normal";
+    }
+
+    try {
+      const raw = await readFile(this.configPath, "utf8");
+      const parsed = JSON.parse(raw) as { approvalMode?: string; engine?: string };
+      if (
+        parsed.approvalMode === "normal" ||
+        parsed.approvalMode === "full-auto" ||
+        parsed.approvalMode === "bypass"
+      ) {
+        return parsed.approvalMode;
+      }
+      return parsed.engine === "antigravity" ? "full-auto" : "normal";
+    } catch {
+      return "normal";
+    }
+  }
+
+  private async loadInstructions(): Promise<string | null> {
+    if (!this.instructionsPath) {
+      return null;
+    }
+
+    try {
+      const content = await readFile(this.instructionsPath, "utf8");
+      const trimmed = content.trim();
+      if (!trimmed) {
+        return null;
+      }
+      return trimmed.length <= MAX_INSTRUCTIONS_CHARS
+        ? trimmed
+        : `${trimmed.slice(0, MAX_INSTRUCTIONS_CHARS)}\n\n[Instructions truncated at ${MAX_INSTRUCTIONS_CHARS} characters]`;
+    } catch {
+      return null;
+    }
+  }
+
+  async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
+    const instructions = combineInstructions(
+      this.instructionsPath ? await this.loadInstructions() : null,
+      input.instructions ?? null,
+    );
+    const parts: string[] = [];
+    if (instructions) {
+      parts.push(instructions, "---");
+    }
+    parts.push(input.text);
+    for (const file of input.files) {
+      parts.push(`Attachment: ${file}`);
+    }
+    const prompt = parts.join("\n");
+
+    const approvalMode = this.configPath ? await this.loadApprovalMode() : "normal";
+    let permissionFlags: string[] =
+      approvalMode === "full-auto" || approvalMode === "bypass"
+        ? ["--dangerously-skip-permissions"]
+        : [];
+    if (approvalMode === "normal" && input.onApprovalRequest) {
+      const decision = await input.onApprovalRequest({
+        engine: "antigravity",
+        toolName: "Antigravity full-auto turn",
+        toolInput: { prompt },
+        cwd: input.workspaceOverride ?? this.workspacePath,
+        abortSignal: input.abortSignal,
+      });
+      if (decision.behavior === "deny") {
+        throw new Error("Antigravity turn was denied from Telegram");
+      }
+      permissionFlags = ["--dangerously-skip-permissions"];
+    }
+
+    const workspace = input.workspaceOverride ?? this.workspacePath;
+    const logicalTelegramSession = isLogicalTelegramSessionId(sessionId);
+    const startedAt = Date.now();
+    const args = [
+      "--print",
+      "--print-timeout",
+      "1h",
+      ...permissionFlags,
+      ...(!logicalTelegramSession ? ["--conversation", sessionId] : []),
+      ...(workspace ? ["--add-dir", workspace] : []),
+      "-",
+    ];
+    const response = await this.runAntigravityCommand(
+      args,
+      prompt,
+      input.abortSignal,
+      workspace,
+      input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
+      input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
+      input.extraEnv,
+      input.onProgress,
+      input.onEngineEvent,
+    );
+
+    const conversationId = await extractAntigravityConversationIdFromLogs({
+      logDir: resolveAntigravityLogDir(this.childEnv),
+      pid: response.childPid,
+      startedAt,
+    }).catch(() => null);
+    const effectiveSessionId = conversationId ?? (!logicalTelegramSession ? sessionId : response.sessionId);
+    if (effectiveSessionId) {
+      await input.onEngineEvent?.({
+        type: "session",
+        sessionId: effectiveSessionId,
+      });
+    }
+    return {
+      text: response.text,
+      usage: response.usage,
+      sessionId: effectiveSessionId,
+    };
+  }
+
+  private async runAntigravityCommand(
+    args: string[],
+    prompt: string,
+    abortSignal?: AbortSignal,
+    cwdOverride?: string,
+    timeoutMs: number | null = this.turnTimeoutMs,
+    inactivityTimeoutMs: number | null = this.inactivityTimeoutMs,
+    extraEnv?: Record<string, string>,
+    onProgress?: CodexUserMessageInput["onProgress"],
+    onEngineEvent?: CodexUserMessageInput["onEngineEvent"],
+  ): Promise<CodexAdapterResponse & { childPid?: number }> {
+    const invocation = buildCommandInvocation(this.antigravityExecutable, args);
+    const child = this.spawnAntigravity(invocation.command, invocation.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: invocation.shell,
+      env: mergeAllowedTurnExtraEnv(this.childEnv, extraEnv),
+      cwd: cwdOverride ?? this.workspacePath,
+      windowsHide: true,
+    });
+
+    return await new Promise<CodexAdapterResponse & { childPid?: number }>((resolve, reject) => {
+      let stdout = "";
+      let stderrTail = "";
+      let settled = false;
+      let totalTimeout: ReturnType<typeof setTimeout> | undefined;
+      let inactivityTimeout: ReturnType<typeof setTimeout> | undefined;
+      let abortCleanup: (() => void) | undefined;
+
+      const clearTimers = () => {
+        totalTimeout && clearTimeout(totalTimeout);
+        inactivityTimeout && clearTimeout(inactivityTimeout);
+        totalTimeout = undefined;
+        inactivityTimeout = undefined;
+      };
+
+      const clearAbortListener = () => {
+        abortCleanup?.();
+        abortCleanup = undefined;
+      };
+
+      const emitEngineEvent: NonNullable<CodexUserMessageInput["onEngineEvent"]> = (event) => {
+        if (!onEngineEvent) {
+          return;
+        }
+        try {
+          Promise.resolve(onEngineEvent(event)).catch(() => undefined);
+        } catch {
+          // Stream observers are best-effort; they must not fail the engine turn.
+        }
+      };
+
+      const rejectAndKill = (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimers();
+        clearAbortListener();
+        killProcessTree(child.pid);
+        reject(error);
+      };
+
+      const resetInactivityTimeout = () => {
+        inactivityTimeout && clearTimeout(inactivityTimeout);
+        inactivityTimeout = undefined;
+        if (inactivityTimeoutMs === null) {
+          return;
+        }
+        inactivityTimeout = setTimeout(() => {
+          rejectAndKill(
+            new Error(
+              `Antigravity process turn became inactive after ${Math.max(1, Math.round(inactivityTimeoutMs / 60_000))} minutes`,
+            ),
+          );
+        }, inactivityTimeoutMs);
+      };
+
+      if (timeoutMs !== null) {
+        totalTimeout = setTimeout(() => {
+          rejectAndKill(
+            new Error(`Antigravity process turn timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`),
+          );
+        }, timeoutMs);
+      }
+
+      resetInactivityTimeout();
+
+      child.once("error", (error) => {
+        if (!settled) {
+          settled = true;
+          clearTimers();
+          clearAbortListener();
+          reject(error);
+        }
+      });
+      child.once("close", (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimers();
+        clearAbortListener();
+        const text = stdout.trim();
+        if (code !== 0) {
+          reject(new Error(stderrTail.trim() || `antigravity exited with code ${code}`));
+          return;
+        }
+        resolve({ text: text || "Antigravity completed.", childPid: child.pid });
+      });
+
+      child.stdout?.on("data", (chunk) => {
+        resetInactivityTimeout();
+        const text = chunk.toString();
+        stdout += text;
+        if (Buffer.byteLength(stdout, "utf8") > MAX_OUTPUT_BUFFER_BYTES) {
+          rejectAndKill(new Error("Engine output exceeded maximum buffer size"));
+          return;
+        }
+        try {
+          onProgress?.(stdout);
+        } catch {
+          // Progress observers are best-effort; they must not fail the engine turn.
+        }
+        emitEngineEvent({
+          type: "assistant_text",
+          text,
+        });
+      });
+      child.stderr?.on("data", (chunk) => {
+        resetInactivityTimeout();
+        stderrTail = appendHeadTailDiagnostic(stderrTail, chunk.toString(), MAX_STDERR_DIAGNOSTIC_BYTES);
+      });
+
+      if (abortSignal) {
+        const onAbort = () => {
+          rejectAndKill(new Error("Task was stopped by user"));
+        };
+        abortCleanup = () => abortSignal.removeEventListener("abort", onAbort);
+        abortSignal.addEventListener("abort", onAbort, { once: true });
+        if (abortSignal.aborted) {
+          onAbort();
+          return;
+        }
+      }
+
+      try {
+        child.stdin?.end(prompt);
+      } catch (error) {
+        rejectAndKill(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+}

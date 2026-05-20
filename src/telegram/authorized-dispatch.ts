@@ -6,7 +6,7 @@ import { handleDelegationTelegramCommand as defaultHandleDelegationTelegramComma
 import { handleLocalEngineTelegramCommand as defaultHandleLocalEngineTelegramCommand } from "./engine-commands.js";
 import { handleGoalTelegramCommand as defaultHandleGoalTelegramCommand } from "./goal-commands.js";
 import { handleMiniBusTelegramCommand as defaultHandleMiniBusTelegramCommand } from "./mini-bus-commands.js";
-import type { ResumeState } from "./instance-config.js";
+import type { InstanceEngine, ResumeState } from "./instance-config.js";
 import { prepareTelegramMessageInput as defaultPrepareTelegramMessageInput } from "./message-input.js";
 import {
   executeWorkflowAwareTelegramTurn as defaultExecuteWorkflowAwareTelegramTurn,
@@ -24,7 +24,7 @@ import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource }
 import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 
 export interface AuthorizedTelegramDispatchConfig {
-  engine: "codex" | "claude";
+  engine: InstanceEngine;
   budgetUsd?: number;
   effort?: string;
   model?: string;
@@ -310,7 +310,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
       return {
         engine: cfg.engine,
         sessionBound: sessionResult.warning ? null : sessionResult.record !== null,
-        threadId: sessionResult.warning || cfg.engine !== "codex"
+        threadId: sessionResult.warning || (cfg.engine !== "codex" && cfg.engine !== "antigravity")
           ? null
           : sessionResult.record?.codexSessionId ?? null,
         blockingTasks,

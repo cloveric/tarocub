@@ -75,8 +75,8 @@ export function classifyFailure(error: unknown): FailureCategory {
   if (
     text.includes("turn.failed") ||
     text.includes("engine cli") ||
-    (/(codex|claude|engine)/.test(text) && /(runtime|process|spawn|adapter|binary|cli|app-server|failed|error|startup|start)/.test(text)) ||
-    (/(runtime|process|spawn|adapter|binary|cli|app-server)/.test(text) && /(codex|claude|engine)/.test(text))
+    (/(codex|claude|antigravity|agy|engine)/.test(text) && /(runtime|process|spawn|adapter|binary|cli|app-server|failed|error|startup|start)/.test(text)) ||
+    (/(runtime|process|spawn|adapter|binary|cli|app-server)/.test(text) && /(codex|claude|antigravity|agy|engine)/.test(text))
   ) {
     return "engine-cli";
   }

@@ -49,6 +49,7 @@ import {
 import { processLegacyDeliveryTagsAsTools } from "./legacy-delivery-tool-tags.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 import { getNormalizedTelegramConversationKey, getTelegramConversationLogScope } from "./conversation-key.js";
+import type { InstanceEngine } from "./instance-config.js";
 
 export interface WorkflowAwareTurnState {
   workflowRecordId?: string;
@@ -59,7 +60,7 @@ export interface WorkflowAwareTurnState {
 }
 
 export interface WorkflowAwareTurnConfig {
-  engine: "codex" | "claude";
+  engine: InstanceEngine;
   budgetUsd?: number;
   resume?: {
     workspacePath: string;
@@ -356,7 +357,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   }
 
   const requestId = `${Date.now()}-${normalized.chatId}-${normalized.messageThreadId ?? "main"}-${randomUUID().slice(0, 8)}`;
-  if (cfg.engine === "codex") {
+  if (cfg.engine === "codex" || cfg.engine === "antigravity") {
     state.telegramOutDirPath = (await createTelegramOutDir(stateDir, requestId, cfg.resume?.workspacePath, {
       onAliasWarning: async ({ aliasPath, error }) => {
         await appendTimelineEventBestEffort(stateDir, {

@@ -105,9 +105,9 @@ claude mcp list
 
 ## Telegram Bot Runtime
 
-After registering MCP servers, restart the affected bot instances so new Codex/Claude turns inherit the tool configuration.
+After registering MCP servers, restart the affected bot instances so new Codex/Claude/Antigravity turns inherit the tool configuration.
 
-Codex-backed instances use the Codex MCP registration. Claude-backed instances use the Claude Code MCP registration.
+Codex-backed instances use the Codex MCP registration. Claude-backed instances use the Claude Code MCP registration. Antigravity-backed instances use whatever tool/MCP configuration the Antigravity CLI exposes to `agy --print`.
 
 For Codex process instances that will use MCP tools heavily from Telegram, prefer YOLO/full-auto/bypass approval mode. Plain non-interactive `codex exec` in read-only approval mode may cancel MCP tool calls before they run; the bridge's normal Telegram approval flow pre-approves the turn and then runs Codex with full-auto for that turn.
 

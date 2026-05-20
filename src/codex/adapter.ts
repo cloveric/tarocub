@@ -32,7 +32,7 @@ export interface CodexThreadGoalResponse {
 }
 
 export interface EngineApprovalRequest {
-  engine: "claude" | "codex";
+  engine: "claude" | "codex" | "antigravity";
   toolName: string;
   toolInput: unknown;
   cwd?: string;

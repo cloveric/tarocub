@@ -169,6 +169,39 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("does not pretend to set Antigravity effort through bridge config", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "antigravity" },
+        normalized: createNormalizedMessage("/effort high"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 80,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. Use Antigravity's native /model picker for model selection.",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("enables Codex fast mode through the config mutator", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {
@@ -427,6 +460,71 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("passes Antigravity /model through to the native agy slash command", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn();
+    const normalized = createNormalizedMessage("/model@cloveric17bot Gemini 3.5 Flash High");
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "antigravity" },
+        normalized,
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 79,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(false);
+      expect(normalized.text).toBe("/model Gemini 3.5 Flash High");
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("rejects multi-token /model values for Codex before they can break startup", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/model foo bar"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 80,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Usage: /model <single-token-name|off>",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("returns false for non-simple commands", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
 
@@ -542,6 +640,51 @@ describe("handleSimpleLocalTelegramCommand", () => {
           "Engine: codex",
           "Session bound: yes",
           "Current thread: thread-123",
+          "Blocking file tasks: 0",
+          "Waiting file tasks: 0",
+        ].join("\n"),
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("includes the current Antigravity conversation id in /status when available", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const resolveStatus = vi.fn().mockResolvedValue({
+      engine: "antigravity",
+      sessionBound: true,
+      threadId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+      blockingTasks: 0,
+      waitingTasks: 0,
+    });
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/status"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 82,
+        },
+        updateInstanceConfig: vi.fn(),
+        resolveStatus,
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Engine: antigravity",
+          "Session bound: yes",
+          "Current conversation: fdfc8ab1-7936-4599-98b0-d8ba2593c250",
           "Blocking file tasks: 0",
           "Waiting file tasks: 0",
         ].join("\n"),

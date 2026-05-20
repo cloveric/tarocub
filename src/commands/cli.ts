@@ -1111,13 +1111,13 @@ async function runEngineCommand(
   }
 
   const engine = args[0];
-  if (engine !== "codex" && engine !== "claude") {
-    throw new Error("Usage: telegram engine <codex|claude> [--instance <name>]");
+  if (engine !== "codex" && engine !== "claude" && engine !== "antigravity") {
+    throw new Error("Usage: telegram engine <codex|claude|antigravity> [--instance <name>]");
   }
 
   const config = await readInstanceConfig(configPath);
   const previousEngine =
-    config.engine === "claude" || config.engine === "codex"
+    config.engine === "claude" || config.engine === "codex" || config.engine === "antigravity"
       ? config.engine
       : "codex";
   let resetSessionBindings = false;
@@ -1134,7 +1134,7 @@ async function runEngineCommand(
     }
   }
 
-  const { clearedModel } = applyEngineSelection(config, engine);
+  const { clearedModel, enabledFullAuto } = applyEngineSelection(config, engine);
   await writeInstanceConfig(configPath, config);
 
   const auditStateDir = resolveAuditStateDir(env, instanceName);
@@ -1145,14 +1145,17 @@ async function runEngineCommand(
     metadata: { engine },
   });
 
-  logger.log(
-    clearedModel && resetSessionBindings
+  const engineMessage = clearedModel && resetSessionBindings
       ? `Instance "${instanceName}": engine set to "${engine}". Cleared the previous model override and reset this instance's session bindings. Restart the service to apply.`
       : clearedModel
         ? `Instance "${instanceName}": engine set to "${engine}". Cleared the previous model override. Restart the service to apply.`
         : resetSessionBindings
           ? `Instance "${instanceName}": engine set to "${engine}". Reset this instance's session bindings. Restart the service to apply.`
-          : `Instance "${instanceName}": engine set to "${engine}". Restart the service to apply.`,
+          : `Instance "${instanceName}": engine set to "${engine}". Restart the service to apply.`;
+  logger.log(
+    enabledFullAuto
+      ? `${engineMessage} Antigravity YOLO/full-auto enabled.`
+      : engineMessage,
   );
   return true;
 }
@@ -1243,7 +1246,8 @@ Commands:
   instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run]
                                               Manage per-instance agent.md
   yolo [on|off|unsafe] [--instance <name>]    Toggle YOLO auto-approval mode
-  engine [codex|claude] [--instance <name>]   Switch AI engine per instance
+  engine [codex|claude|antigravity] [--instance <name>]
+                                              Switch AI engine per instance
   usage [--instance <name>]                   Show token usage and cost
   verbosity [0|1|2] [--instance <name>]       Set progress output level
   budget [set <usd>|show] [--instance <name>] Manage cost budget and block-on-exceed
