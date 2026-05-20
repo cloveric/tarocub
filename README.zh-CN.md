@@ -28,7 +28,7 @@
 
 **cc-telegram-bridge 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code 和 Antigravity CLI，然后给它们补上 Telegram 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
 
-最简单的安装方式：克隆仓库，用 Codex 或 Claude Code 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
+最简单的安装方式：克隆仓库，用 Codex、Claude Code 或 Antigravity 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
 
 ```bash
 npm install
@@ -74,6 +74,7 @@ npm run dev -- telegram service start
 
 ## 近期亮点
 
+- **v4.6.22** — 新增 Antigravity CLI 作为第三个后端引擎，支持 Telegram `/engine antigravity`、YOLO/full-auto process 执行、`/goal` 透传、`/model` 透传、conversation 自动绑定和 `/resume conversation <id>`。
 - **v4.6.18** — 规范化 Telegram 群里的 `/goal@botname`，让原生引擎收到普通 `/goal`，同时 Codex 继续使用结构化 goal 处理。
 - **v4.6.17** — 让 Claude Code 的 `/goal` 可以从 Telegram 透传，不再把 goal 当成 Codex-only 功能。
 - **v4.6.16** — 补齐 Telegram 音频处理：直接 `voice`、直接 `audio/.m4a`、音频类 document、被引用的音频 document 都会走同一套 ASR 转写路径。
@@ -320,7 +321,7 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 - bridge 不再保留 manifest、pending contract 或基于数量的状态来推断普通聊天 turn 里的未来交付意图。
 - 纯文本任务不会误当成文件交付失败，例如图片分析、图片描述、内联报告；除非用户明确要求保存、导出、发送或交付文件。
 
-这对 Codex、Claude、process 和 stream runtime 都有效，因为标准路径只要求 agent 能输出文本。文件投递现在是显式动作：生成文件，输出 tool tag 或调用发送命令，然后依赖 receipt。
+这对 Codex、Claude、Antigravity、process 和 stream runtime 都有效，因为标准路径只要求 agent 能输出文本。文件投递现在是显式动作：生成文件，输出 tool tag 或调用发送命令，然后依赖 receipt。
 
 从 v4.5.0 或更早版本升级时，请刷新已生成的实例指令：
 
@@ -893,12 +894,12 @@ coordinator 实例上的配置示例：
 
 ## 快速开始
 
-> **简单来说** — 你只需要在手机上做两件事：从 BotFather 拿 token 和发送配对码。其余全部在电脑上通过 Claude Code 或 Codex 完成。
+> **简单来说** — 你只需要在手机上做两件事：从 BotFather 拿 token 和发送配对码。其余全部在电脑上通过 Codex、Claude Code 或 Antigravity CLI 完成。
 
 ### 环境要求
 
 - **Node.js** >= 20
-- **OpenAI Codex CLI** 和/或 **Claude Code CLI** 已安装并认证
+- **OpenAI Codex CLI**、**Claude Code CLI** 和/或 **Antigravity CLI** 已安装并认证
 - 一个 **Telegram 账号**（手机）
 
 ### 第一步：创建 Telegram Bot（手机操作）
@@ -911,7 +912,7 @@ coordinator 实例上的配置示例：
 
 ### 第二步：安装和配置（电脑操作）
 
-打开终端的 Claude Code 或 Codex，告诉它：
+打开终端的 Codex、Claude Code 或 Antigravity，告诉它：
 
 > *"克隆 https://github.com/cloveric/cc-telegram-bridge 并用这个 token 配置 Telegram bot：`<粘贴你的 token>`"*
 
@@ -926,8 +927,9 @@ npm run build
 # 用你的 bot token 配置
 npm run dev -- telegram configure <your-bot-token>
 
-# 可选：切换到 Claude 引擎（默认是 Codex）
+# 可选：切换引擎（默认是 Codex）
 npm run dev -- telegram engine claude
+npm run dev -- telegram engine antigravity
 
 # 推荐：开启 YOLO 模式（Telegram 无需回电脑确认）
 npm run dev -- telegram yolo on
@@ -957,6 +959,12 @@ npm run dev -- telegram engine claude --instance work
 npm run dev -- telegram yolo on --instance work
 npm run dev -- telegram service start --instance work
 # 配对方式相同：发消息，拿码，执行 telegram access pair <码> --instance work
+
+# 或者创建一个专用 Antigravity bot
+npm run dev -- telegram configure --instance agy-bot <第三个token>
+npm run dev -- telegram engine antigravity --instance agy-bot
+npm run dev -- telegram yolo on --instance agy-bot
+npm run dev -- telegram service start --instance agy-bot
 ```
 
 ---
@@ -975,9 +983,9 @@ npm run dev -- telegram service start --instance work
 │ update-     │ session-     │   .ts (Codex)    │ runtime-state.ts    │
 │ normalizer  │ manager.ts   │ claude-adapter   │ instance-lock.ts    │
 │   .ts       │              │   .ts (Claude)   │ json-store.ts       │
-│ message-    │              │                  │ audit-log.ts        │
-│ renderer.ts │              │ agent.md + config│ timeline-log.ts     │
-│             │              │                  │ usage-store.ts      │
+│ message-    │              │ antigravity-     │ audit-log.ts        │
+│ renderer.ts │              │   adapter.ts     │ timeline-log.ts     │
+│             │              │ agent.md + config│ usage-store.ts      │
 │             │              │                  │ crew-run-store.ts   │
 └─────────────┴──────────────┴──────────────────┴─────────────────────┘
 
@@ -995,7 +1003,7 @@ npm run dev -- telegram service start --instance work
 ```
 Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     → 加载 config.json（引擎） → 加载 agent.md → 会话查找
-    → Codex Exec 或 Claude -p（新建或恢复）
+    → Codex Exec、Claude -p 或 agy --print（新建或恢复）
     → typing action + timeline 事件 → 最终渲染 → 发送 → 审计
 ```
 
@@ -1007,7 +1015,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   <tr>
     <td width="50%">
       <h3>多引擎</h3>
-      <p>每个实例可切换 Codex、Claude Code 或 Antigravity。混合搭配 — 一个 bot 跑 Codex，另一个跑 Claude，统一 CLI 管理。</p>
+      <p>每个实例可切换 Codex、Claude Code 或 Antigravity。混合搭配 — 一个 bot 跑 Codex，另一个跑 Claude，另一个跑 Antigravity，统一 CLI 管理。</p>
     </td>
     <td width="50%">
       <h3>独立人格</h3>
@@ -1348,7 +1356,7 @@ docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram service start
 
 1. 运行 `telegram service doctor` 诊断
 2. 查看 `telegram service logs` 的错误
-3. 确认引擎已安装：`codex --version` 或 `claude --version`
+3. 确认引擎已安装：`codex --version`、`claude --version` 或 `agy --help`
 4. 如果是 Claude 实例，运行 `npm run smoke:claude-auth`
 5. 如果 `service doctor` 报 `legacy-launchd`，运行 `bash scripts/cleanup-legacy-launchd.sh --all`
 

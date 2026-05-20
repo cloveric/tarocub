@@ -28,7 +28,7 @@
 
 **cc-telegram-bridge is not another hosted agent UI.** It runs the real Codex, Claude Code, and Antigravity CLIs on your machine, then gives them a durable Telegram interface: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
 
-The easiest setup path is to clone this repo, open it in Codex or Claude Code, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
+The easiest setup path is to clone this repo, open it in Codex, Claude Code, or Antigravity, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
 
 ```bash
 npm install
@@ -74,6 +74,7 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 ## Release Highlights
 
+- **v4.6.22** — adds Antigravity CLI as a third backend engine, including Telegram `/engine antigravity`, YOLO/full-auto process execution, `/goal` passthrough, `/model` passthrough, conversation auto-binding, and `/resume conversation <id>`.
 - **v4.6.18** — normalizes `/goal@botname` in Telegram groups so native engines receive a plain `/goal` command while Codex keeps structured goal handling.
 - **v4.6.17** — passes Claude Code `/goal` through from Telegram instead of treating goals as Codex-only.
 - **v4.6.16** — completes Telegram audio handling: direct `voice`, direct `audio/.m4a`, audio-like documents, and quoted audio documents all go through the same ASR transcription path.
@@ -321,7 +322,7 @@ Current delivery rules:
 - The bridge no longer keeps manifest, pending-contract, or count-based state to infer future delivery intent across ordinary chat turns.
 - Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures.
 
-This works for Codex, Claude, process, and stream runtimes because the canonical path only requires the agent to emit text. File delivery is explicit: generate the file, emit the tool tag or call the send command, and rely on the resulting receipt.
+This works for Codex, Claude, Antigravity, process, and stream runtimes because the canonical path only requires the agent to emit text. File delivery is explicit: generate the file, emit the tool tag or call the send command, and rely on the resulting receipt.
 
 When upgrading from v4.5.0 or earlier, refresh generated instance instructions with:
 
@@ -909,12 +910,12 @@ All bots can talk to all bots. Simplest config, best for small teams (3-5 bots).
 
 ## Quick Start
 
-> **TL;DR** — You only need to do two things on your phone: get a bot token from BotFather and send the pairing code. Everything else happens on your computer via Claude Code or Codex CLI.
+> **TL;DR** — You only need to do two things on your phone: get a bot token from BotFather and send the pairing code. Everything else happens on your computer via Codex, Claude Code, or Antigravity CLI.
 
 ### Prerequisites
 
 - **Node.js** >= 20
-- **OpenAI Codex CLI** and/or **Claude Code CLI** installed and authenticated
+- **OpenAI Codex CLI**, **Claude Code CLI**, and/or **Antigravity CLI** installed and authenticated
 - A **Telegram account** (phone)
 
 ### Step 1: Create a Telegram Bot (on your phone)
@@ -927,7 +928,7 @@ All bots can talk to all bots. Simplest config, best for small teams (3-5 bots).
 
 ### Step 2: Install & Configure (on your computer)
 
-Open your terminal with Claude Code or Codex, and tell it:
+Open your terminal with Codex, Claude Code, or Antigravity, and tell it:
 
 > *"Clone https://github.com/cloveric/cc-telegram-bridge and set up a Telegram bot with this token: `<paste your token>`"*
 
@@ -942,8 +943,9 @@ npm run build
 # Configure with your bot token
 npm run dev -- telegram configure <your-bot-token>
 
-# Optional: switch to Claude engine (default is Codex)
+# Optional: switch engines (default is Codex)
 npm run dev -- telegram engine claude
+npm run dev -- telegram engine antigravity
 
 # Recommended: enable YOLO mode for hands-free Telegram operation
 npm run dev -- telegram yolo on
@@ -973,6 +975,12 @@ npm run dev -- telegram engine claude --instance work
 npm run dev -- telegram yolo on --instance work
 npm run dev -- telegram service start --instance work
 # Pair the same way: send a message, get the code, run `telegram access pair <code> --instance work`
+
+# Or create a dedicated Antigravity bot
+npm run dev -- telegram configure --instance agy-bot <third-token>
+npm run dev -- telegram engine antigravity --instance agy-bot
+npm run dev -- telegram yolo on --instance agy-bot
+npm run dev -- telegram service start --instance agy-bot
 ```
 
 ---
@@ -991,9 +999,9 @@ npm run dev -- telegram service start --instance work
 │ update-     │ session-     │   .ts (Codex)    │ runtime-state.ts    │
 │ normalizer  │ manager.ts   │ claude-adapter   │ instance-lock.ts    │
 │   .ts       │              │   .ts (Claude)   │ json-store.ts       │
-│ message-    │              │                  │ audit-log.ts        │
-│ renderer.ts │              │ agent.md + config│ timeline-log.ts     │
-│             │              │                  │ usage-store.ts      │
+│ message-    │              │ antigravity-     │ audit-log.ts        │
+│ renderer.ts │              │   adapter.ts     │ timeline-log.ts     │
+│             │              │ agent.md + config│ usage-store.ts      │
 │             │              │                  │ crew-run-store.ts   │
 └─────────────┴──────────────┴──────────────────┴─────────────────────┘
 
@@ -1011,7 +1019,7 @@ npm run dev -- telegram service start --instance work
 ```
 Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     → Load config.json (engine) → Load agent.md → Session Lookup
-    → Codex Exec or Claude -p (new or resume)
+    → Codex Exec, Claude -p, or agy --print (new or resume)
     → Typing action + timeline events → Final Render → Deliver → Audit
 ```
 
@@ -1022,8 +1030,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 <table>
   <tr>
     <td width="50%">
-      <h3>Dual Engine</h3>
-      <p>Switch between Codex and Claude Code per instance. Mix and match — one bot on Codex, another on Claude, managed from one CLI.</p>
+      <h3>Three Native Engines</h3>
+      <p>Switch between Codex, Claude Code, and Antigravity per instance. Mix and match — one bot on Codex, another on Claude, another on Antigravity, all managed from one CLI.</p>
     </td>
     <td width="50%">
       <h3>Per-Bot Personality</h3>
@@ -1043,7 +1051,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
   <tr>
     <td>
       <h3>YOLO Mode</h3>
-      <p>One command to auto-approve everything — works with both engines. Per-instance, hot-reloadable.</p>
+      <p>One command to auto-approve everything across supported engines. Per-instance, hot-reloadable.</p>
     </td>
     <td>
       <h3>Per-Bot Isolation</h3>
@@ -1067,7 +1075,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>Safe Detach</h3>
-      <p><code>/detach</code> returns to the pre-resume conversation when possible. Bridge instructions are injected per turn and are not written back into your local Claude or Codex session files.</p>
+      <p><code>/detach</code> returns to the pre-resume conversation when possible. Bridge instructions are injected per turn and are not written back into your local Claude, Codex, or Antigravity session files.</p>
     </td>
   </tr>
   <tr>
