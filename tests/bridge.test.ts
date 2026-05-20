@@ -113,6 +113,103 @@ describe("Bridge", () => {
     });
   });
 
+  it("deduplicates concurrent engine session binding events", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const bindResolvers: Array<() => void> = [];
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn().mockImplementation(() => new Promise<void>((resolve) => {
+        bindResolvers.push(resolve);
+      })),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockImplementation(async (_sessionId, input) => {
+        const first = input.onEngineEvent?.({
+          type: "session",
+          sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        });
+        const second = input.onEngineEvent?.({
+          type: "session",
+          sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        });
+        await vi.waitFor(() => {
+          expect(bindResolvers).toHaveLength(1);
+        });
+        bindResolvers[0]!();
+        await Promise.all([first, second]);
+        return {
+          text: "done",
+          sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        };
+      }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+    });
+
+    expect(sessionManager.bindSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries final response binding when an engine session event bind fails", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn()
+        .mockRejectedValueOnce(new Error("store unavailable"))
+        .mockResolvedValueOnce(undefined),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockImplementation(async (_sessionId, input) => {
+        await input.onEngineEvent?.({
+          type: "session",
+          sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        }).catch(() => undefined);
+        return {
+          text: "done",
+          sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        };
+      }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+    });
+
+    expect(sessionManager.bindSession).toHaveBeenCalledTimes(2);
+    expect(sessionManager.bindSession).toHaveBeenNthCalledWith(2, 84, "fdfc8ab1-7936-4599-98b0-d8ba2593c250");
+  });
+
   it("uses the Telegram topic conversation key when present", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

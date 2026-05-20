@@ -274,16 +274,36 @@ export class Bridge {
     const turnEnvSupported = this.adapter.supportsTurnScopedEnv !== false;
     const disableRuntimeTimeout = shouldDisableRuntimeTimeout(input.text);
     let boundSessionIdFromEvent: string | undefined;
+    const pendingSessionBinds = new Map<string, Promise<void>>();
+    const bindEngineSession = async (sessionId: string): Promise<void> => {
+      if (sessionId === boundSessionIdFromEvent) {
+        return;
+      }
+      const existing = pendingSessionBinds.get(sessionId);
+      if (existing) {
+        await existing;
+        return;
+      }
+
+      const bindPromise = this.sessionManager
+        .bindSession(useConversationScope ? sessionScope : input.chatId, sessionId)
+        .then(() => {
+          boundSessionIdFromEvent = sessionId;
+        })
+        .finally(() => {
+          pendingSessionBinds.delete(sessionId);
+        });
+      pendingSessionBinds.set(sessionId, bindPromise);
+      await bindPromise;
+    };
     const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
       if (
         event.type === "session" &&
         event.sessionId &&
         !input.sessionIdOverride &&
-        event.sessionId !== session.sessionId &&
-        event.sessionId !== boundSessionIdFromEvent
+        event.sessionId !== session.sessionId
       ) {
-        await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, event.sessionId);
-        boundSessionIdFromEvent = event.sessionId;
+        await bindEngineSession(event.sessionId);
       }
       await input.onEngineEvent?.(event);
     };
@@ -307,7 +327,13 @@ export class Bridge {
       response.sessionId !== session.sessionId &&
       response.sessionId !== boundSessionIdFromEvent
     ) {
-      await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, response.sessionId);
+      const pendingBind = pendingSessionBinds.get(response.sessionId);
+      if (pendingBind) {
+        await pendingBind.catch(() => undefined);
+      }
+      if (response.sessionId !== boundSessionIdFromEvent) {
+        await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, response.sessionId);
+      }
     }
 
     return response;
