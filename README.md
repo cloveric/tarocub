@@ -136,13 +136,13 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | `/goal` | Bridge-native goal API with optional token budget | Passed through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Passed through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Not supported by the bridge yet |
-| Skills / plugins | Uses the configured Codex home; isolated homes symlink `skills/` back to the shared Codex skills dir | Uses the shared Claude config plus workspace `CLAUDE.md`, `skills/`, and `plugins/` | Uses Antigravity's native CLI/plugin config; run `agy plugin import claude` if you want Antigravity to mirror Claude plugins |
+| Skills / plugins | Uses the configured Codex home; isolated homes symlink `skills/` back to the shared Codex skills dir | Uses the shared Claude config plus workspace `CLAUDE.md`, `skills/`, and `plugins/` | Uses Antigravity's own native CLI/plugin config. Bridge-level skills are shared through `agent.md`, workspace files, and MCP/tool guidance; do not import Claude/Codex native plugins into Antigravity unless you explicitly choose to. |
 | Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) | `workspace/` under instance dir |
 | Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable | Process exits after each turn |
 
 ## Live Web Search MCP: Brave + Tavily
 
-The bridge ships an optional local MCP server that gives Codex, Claude Code, and Antigravity the same source-traceable web research tools once each engine's native MCP/plugin layer is configured:
+The bridge ships an optional local MCP server that gives Codex, Claude Code, and Antigravity the same source-traceable web research tools once each engine's own native MCP/plugin layer is configured:
 
 - `web_search` routes live search through Brave and/or Tavily.
 - `web_extract` uses Tavily Extract to read known URLs cleanly.
@@ -176,9 +176,9 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-For Antigravity, use its native plugin import/config flow, for example `agy plugin import claude` after the Claude MCP has been registered, then verify with `agy plugin list`.
+For Antigravity, use Antigravity's own native MCP/plugin configuration when needed. Do not import Claude or Codex native plugins as part of the default bridge setup; the bridge shares skills and tool guidance at the `agent.md`/workspace/MCP-instruction layer, while each engine's native plugin system remains separate.
 
-Then restart affected bot instances so their Codex/Claude/Antigravity turns see the new MCP/plugin configuration. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./docs/search-mcp.md).
+Then restart affected bot instances so their Codex/Claude/Antigravity turns see the updated native MCP/plugin configuration. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./docs/search-mcp.md).
 
 ### Claude Engine: CLAUDE.md Support
 
@@ -1047,7 +1047,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>Per-Bot Isolation</h3>
-      <p>Every instance has its own personality, workspace, sessions, access rules, inbox, audit trail, and workspace-keyed auto-memory. The engine config dir (<code>~/.claude/</code> / <code>~/.codex/</code> / Antigravity's CLI config) is <em>shared</em> with your main CLI so OAuth refresh tokens don't race across instances — the trade-off is that settings, plugins, and MCP state live in your real home, and full-auto / bypass mode can touch it.</p>
+      <p>Every instance has its own personality, workspace, sessions, access rules, inbox, audit trail, and workspace-keyed auto-memory. Each engine's own config dir (<code>~/.claude/</code> / <code>~/.codex/</code> / Antigravity's CLI config) is <em>shared</em> with your main CLI so OAuth refresh tokens don't race across instances — the trade-off is that that engine's native settings, plugins, and MCP state live in your real home, and full-auto / bypass mode can touch them.</p>
     </td>
   </tr>
   <tr>

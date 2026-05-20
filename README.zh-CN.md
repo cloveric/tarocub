@@ -136,13 +136,13 @@ npm run dev -- telegram engine --instance review-bot
 | YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | `/goal` | bridge 原生 goal API，支持 token budget | 透传给 Claude Code 原生 `/goal`；`--budget` 会变成原生 goal hint | 透传给 Antigravity 原生 `/goal`；`--budget` 会变成原生 goal hint |
 | `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 | 暂不支持 |
-| Skills / plugins | 使用已配置的 Codex home；隔离 home 会把 `skills/` 软链回共享 Codex skills 目录 | 使用共享 Claude 配置，同时支持 workspace `CLAUDE.md`、`skills/`、`plugins/` | 使用 Antigravity 原生 CLI/plugin 配置；如果要复用 Claude 插件，可运行 `agy plugin import claude` |
+| Skills / plugins | 使用已配置的 Codex home；隔离 home 会把 `skills/` 软链回共享 Codex skills 目录 | 使用共享 Claude 配置，同时支持 workspace `CLAUDE.md`、`skills/`、`plugins/` | 使用 Antigravity 自己的原生 CLI/plugin 配置。bridge 层共享的 skills 通过 `agent.md`、workspace 文件和 MCP/tool 使用规则传递；除非明确需要，不要把 Claude/Codex 原生插件导入 Antigravity。 |
 | 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） | 实例目录下的 `workspace/` |
 | 空闲 worker | 每轮结束后进程退出 | stream worker 空闲 30 分钟后回收；session 仍可恢复 | 每轮结束后进程退出 |
 
 ## 实时网页搜索 MCP：Brave + Tavily
 
-bridge 内置一个可选的本地 MCP server；当各引擎自己的 MCP/plugin 层配置好后，Codex、Claude Code 和 Antigravity 可以共用同一套可追溯的网页研究工具：
+bridge 内置一个可选的本地 MCP server；当各引擎自己的原生 MCP/plugin 层配置好后，Codex、Claude Code 和 Antigravity 可以共用同一套可追溯的网页研究工具：
 
 - `web_search`：通过 Brave 和/或 Tavily 做实时搜索。
 - `web_extract`：用 Tavily Extract 清理并抽取指定 URL 正文。
@@ -176,9 +176,9 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-Antigravity 侧使用它自己的 plugin import/config 流程；例如 Claude MCP 注册完成后，可运行 `agy plugin import claude`，再用 `agy plugin list` 验证。
+Antigravity 侧如需原生 MCP/plugin，请使用 Antigravity 自己的配置方式。默认 bridge 配置不应该导入 Claude 或 Codex 的原生插件；bridge 共享的是 `agent.md` / workspace / MCP 使用规则这一层，三套原生插件系统仍然各自独立。
 
-配置后重启相关 bot 实例，让新的 Codex/Claude/Antigravity turn 继承 MCP/plugin 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
+配置后重启相关 bot 实例，让新的 Codex/Claude/Antigravity turn 继承各自原生 MCP/plugin 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
 
 ### Claude 引擎：CLAUDE.md 支持
 
@@ -1047,7 +1047,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   <tr>
     <td>
       <h3>按 Bot 隔离</h3>
-      <p>每个实例有独立的人格、工作区、会话、访问规则、收件箱、审计日志，以及按工作区路径隔离的自动记忆。引擎配置目录（<code>~/.claude/</code> / <code>~/.codex/</code> / Antigravity CLI 配置）与你主 CLI <em>共享</em>，避免 OAuth refresh token 被多实例抢用——代价是 settings、plugins、MCP 状态都落在你真实 home 里，full-auto / bypass 模式下 bot 也能动到这些。</p>
+      <p>每个实例有独立的人格、工作区、会话、访问规则、收件箱、审计日志，以及按工作区路径隔离的自动记忆。各引擎自己的配置目录（<code>~/.claude/</code> / <code>~/.codex/</code> / Antigravity CLI 配置）与你主 CLI <em>共享</em>，避免 OAuth refresh token 被多实例抢用——代价是该引擎自己的 settings、plugins、MCP 状态会落在真实 home 里，full-auto / bypass 模式下 bot 也能动到这些。</p>
     </td>
     <td>
       <h3>生产级可靠性</h3>

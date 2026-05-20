@@ -107,7 +107,9 @@ claude mcp list
 
 After registering MCP servers, restart the affected bot instances so new Codex/Claude/Antigravity turns inherit the tool configuration.
 
-Codex-backed instances use the Codex MCP registration. Claude-backed instances use the Claude Code MCP registration. Antigravity-backed instances use whatever tool/MCP configuration the Antigravity CLI exposes to `agy --print`.
+Codex-backed instances use the Codex MCP registration. Claude-backed instances use the Claude Code MCP registration. Antigravity-backed instances use whatever native tool/MCP configuration the Antigravity CLI exposes to `agy --print`.
+
+Keep the native plugin systems separate. Do not import Claude or Codex native plugins into Antigravity as part of the default bridge setup. Shared bridge skills should live in `agent.md`, workspace files, docs, or engine-neutral MCP/tool guidance; native plugins remain owned by their respective engines.
 
 For Codex process instances that will use MCP tools heavily from Telegram, prefer YOLO/full-auto/bypass approval mode. Plain non-interactive `codex exec` in read-only approval mode may cancel MCP tool calls before they run; the bridge's normal Telegram approval flow pre-approves the turn and then runs Codex with full-auto for that turn.
 
