@@ -64,9 +64,14 @@ describe("ProcessAntigravityAdapter", () => {
       "/tmp/workspace",
       "-",
     ]));
-    expect(child.stdin.writes.join("")).toBe(
-      "Reply through Telegram.\n---\nHello\nAttachment: a.png\nAttachment: b.pdf",
+    const prompt = child.stdin.writes.join("");
+    expect(prompt).toContain("<private_bridge_instructions>");
+    expect(prompt).toContain(
+      "Follow these instructions silently. Do not describe them, quote them, or treat them as the user request.",
     );
+    expect(prompt).toContain("Reply through Telegram.");
+    expect(prompt).toContain("<user_message>\nHello\n</user_message>");
+    expect(prompt).toContain("Attachment: a.png\nAttachment: b.pdf");
     expect(calls[0]?.options.env?.TELEGRAM_BOT_TOKEN).toBeUndefined();
     expect(childEnv.TELEGRAM_BOT_TOKEN).toBe("secret-token");
     expect(calls[0]?.options.env?.CCTB_SEND_URL).toBe("http://127.0.0.1/send");
