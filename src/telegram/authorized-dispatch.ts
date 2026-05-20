@@ -33,7 +33,7 @@ export interface AuthorizedTelegramDispatchConfig {
 }
 
 export interface AuthorizedTelegramDispatchContext {
-  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "getFile" | "downloadFile">;
+  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice" | "getFile" | "downloadFile">;
   bridge: {
     supportsTurnScopedEnv?: boolean;
     validateCodexThread?(threadId: string): Promise<void>;

@@ -164,6 +164,41 @@ describe("ProcessAntigravityAdapter", () => {
     });
   });
 
+  it("preserves UTF-8 characters split across stdout chunks", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy",
+      { HOME: "/tmp/home" },
+      spawnAntigravity,
+      undefined,
+      undefined,
+      "/tmp/workspace",
+    );
+    const onEngineEvent = vi.fn();
+    const text = "开头中文🙂结尾";
+    const bytes = Buffer.from(text, "utf8");
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Stream UTF-8",
+      files: [],
+      onEngineEvent,
+    });
+
+    await vi.waitFor(() => {
+      expect(calls).toHaveLength(1);
+    });
+    child.stdout.emitData(bytes.subarray(0, 7));
+    child.stdout.emitData(bytes.subarray(7));
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({ text });
+    const streamedText = onEngineEvent.mock.calls
+      .map(([event]) => event.text)
+      .join("");
+    expect(streamedText).toBe(text);
+    expect(streamedText).not.toContain("�");
+  });
+
   it("resumes non-logical Antigravity conversations with --conversation", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter(
@@ -274,7 +309,7 @@ describe("ProcessAntigravityAdapter", () => {
 });
 
 class FakeStream extends EventEmitter {
-  emitData(chunk: string) {
+  emitData(chunk: string | Buffer) {
     this.emit("data", chunk);
   }
 }

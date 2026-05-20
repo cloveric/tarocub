@@ -16,6 +16,7 @@ async function withDeliveryContext<T>(
       sendMessage: ReturnType<typeof vi.fn>;
       sendDocument: ReturnType<typeof vi.fn>;
       sendPhoto: ReturnType<typeof vi.fn>;
+      sendVoice: ReturnType<typeof vi.fn>;
     };
   }) => Promise<T>,
 ): Promise<T> {
@@ -27,6 +28,7 @@ async function withDeliveryContext<T>(
     sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
     sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
     sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    sendVoice: vi.fn().mockResolvedValue({ message_id: 4 }),
   };
   try {
     await mkdir(workspaceDir, { recursive: true });

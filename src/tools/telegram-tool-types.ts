@@ -15,7 +15,7 @@ export interface TelegramToolContext {
   instanceName?: string;
   updateId?: number;
   delivery?: {
-    api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">;
+    api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice">;
     inboxDir: string;
     workspaceOverride?: string;
     requestOutputDir?: string;
@@ -23,7 +23,7 @@ export interface TelegramToolContext {
     allowAnyAbsolutePath?: boolean;
     notifyRejected?: boolean;
     deliverTelegramResponse?: (
-      api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">,
+      api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice">,
       chatId: number,
       text: string,
       inboxDir: string,

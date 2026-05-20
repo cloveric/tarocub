@@ -60,6 +60,59 @@ describe("Bridge", () => {
     expect(sessionManager.bindSession).not.toHaveBeenCalled();
   });
 
+  it("binds engine session events without starting an extra turn", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockImplementation(async (_sessionId, input) => {
+        await input.onEngineEvent?.({
+          type: "session",
+          sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        });
+        return {
+          text: "done",
+          sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+        };
+      }),
+      createSession: vi.fn(),
+    };
+    const onEngineEvent = vi.fn();
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    const result = await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+      onEngineEvent,
+    });
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+    });
+    expect(adapter.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(sessionManager.bindSession).toHaveBeenCalledTimes(1);
+    expect(sessionManager.bindSession).toHaveBeenCalledWith(84, "fdfc8ab1-7936-4599-98b0-d8ba2593c250");
+    expect(onEngineEvent).toHaveBeenCalledWith({
+      type: "session",
+      sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+    });
+  });
+
   it("uses the Telegram topic conversation key when present", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

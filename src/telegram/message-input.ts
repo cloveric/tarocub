@@ -77,7 +77,7 @@ const ASR_CLI_PYTHON = process.env.ASR_CLI_PYTHON
 const ASR_CLI_SCRIPT = process.env.ASR_CLI_SCRIPT
   ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/transcribe.py") : undefined);
 const ASR_HTTP_TIMEOUT_MS = parsePositiveNumber(process.env.ASR_HTTP_TIMEOUT_MS, 180_000);
-const ASR_CHUNK_AFTER_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_AFTER_SECONDS, 300);
+const ASR_CHUNK_AFTER_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_AFTER_SECONDS, 120);
 const ASR_CHUNK_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_SECONDS, 60);
 const MAX_ASR_CHUNK_SECONDS = 600;
 const asrWatchdog = createAsrWatchdogFromEnv();

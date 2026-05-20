@@ -188,7 +188,8 @@ describe("side-channel send command", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendVoice: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
     };
     const server = await startSideChannelSendServer({
       api,
@@ -245,7 +246,8 @@ describe("side-channel send command", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendVoice: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
     };
     const server = await startSideChannelSendServer({
       api,
@@ -286,7 +288,8 @@ describe("side-channel send command", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendVoice: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
     };
     const server = await startSideChannelSendServer({
       api,
@@ -339,7 +342,8 @@ describe("side-channel send command", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockRejectedValue(new Error("Telegram API request failed for sendDocument: 500")),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendVoice: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
     };
     const server = await startSideChannelSendServer({
       api,
@@ -392,7 +396,8 @@ describe("side-channel send command", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendVoice: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
     };
     const server = await startSideChannelSendServer({
       api,
@@ -425,7 +430,8 @@ describe("side-channel send command", () => {
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendVoice: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
     };
     const server = await startSideChannelSendServer({
       api,

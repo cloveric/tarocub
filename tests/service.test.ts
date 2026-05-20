@@ -1186,6 +1186,7 @@ describe("polling helpers", () => {
     const inboxDir = path.join(root, "inbox");
     const api = {
       sendMessage: vi.fn().mockRejectedValue(new Error("send failed")),
+      sendVoice: vi.fn(),
       editMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
       sendMediaGroup: vi.fn().mockResolvedValue(undefined),
@@ -2472,6 +2473,7 @@ describe("polling helpers", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const api = {
       sendMessage: vi.fn().mockRejectedValue(new Error("telegram down")),
+      sendVoice: vi.fn(),
       editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
       answerCallbackQuery: vi.fn().mockRejectedValue(new Error("ack down")),
       sendChatAction: vi.fn().mockResolvedValue(undefined),

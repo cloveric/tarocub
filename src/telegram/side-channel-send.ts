@@ -38,7 +38,7 @@ interface RejectedDeliveryLike {
 }
 
 export interface SideChannelSendServerOptions {
-  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">;
+  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice">;
   chatId: number;
   inboxDir: string;
   workspaceOverride?: string;

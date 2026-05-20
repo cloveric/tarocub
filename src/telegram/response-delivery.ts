@@ -37,15 +37,20 @@ async function sendMessageWithMarkdown(api: TelegramApi, chatId: number, text: s
 }
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]);
+const VOICE_EXTENSIONS = new Set([".oga", ".ogg"]);
 
 function isImageFile(filename: string): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(filename).toLowerCase());
 }
 
+function isVoiceFile(filename: string): boolean {
+  return VOICE_EXTENSIONS.has(path.extname(filename).toLowerCase());
+}
+
 const IMAGE_SIZE_THRESHOLD = 2 * 1024 * 1024; // 2MB
 
 export async function sendFileOrPhoto(
-  api: Pick<TelegramApi, "sendPhoto" | "sendDocument">,
+  api: Pick<TelegramApi, "sendPhoto" | "sendDocument" | "sendVoice">,
   chatId: number,
   filename: string,
   contents: Uint8Array | string,
@@ -60,6 +65,16 @@ export async function sendFileOrPhoto(
       // Fall back to sendDocument if sendPhoto fails
     }
   }
+
+  if (isVoiceFile(filename)) {
+    try {
+      await api.sendVoice(chatId, filename, payload);
+      return;
+    } catch {
+      // Fall back to sendDocument if sendVoice fails
+    }
+  }
+
   await api.sendDocument(chatId, filename, contents);
 }
 
@@ -107,7 +122,7 @@ interface FileCandidate {
 }
 
 export async function deliverTelegramResponse(
-  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">,
+  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice">,
   chatId: number,
   text: string,
   inboxDir: string,

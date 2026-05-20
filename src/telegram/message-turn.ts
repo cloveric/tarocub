@@ -68,7 +68,7 @@ export interface WorkflowAwareTurnConfig {
 }
 
 export interface WorkflowAwareTurnContext {
-  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "getFile" | "downloadFile">;
+  api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice" | "getFile" | "downloadFile">;
   bridge: {
     supportsTurnScopedEnv?: boolean;
     handleAuthorizedMessage(input: {
@@ -267,7 +267,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   createStableCctbCommandHelper?: typeof defaultCreateStableCctbCommandHelper;
   buildContinueAnalysisKeyboard?: typeof defaultBuildContinueAnalysisKeyboard;
   deliverTelegramResponse: (
-    api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">,
+    api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice">,
     chatId: number,
     text: string,
     inboxDir: string,

@@ -131,6 +131,7 @@ describe("runCli", () => {
       sendMessage: vi.fn(),
       sendDocument: vi.fn(),
       sendPhoto: vi.fn(),
+      sendVoice: vi.fn(),
     };
     const deliverTelegramResponse = vi.fn().mockResolvedValue(1);
 
@@ -345,6 +346,7 @@ describe("runCli", () => {
             sendMessage: vi.fn(),
             sendDocument: vi.fn(),
             sendPhoto: vi.fn(),
+      sendVoice: vi.fn(),
           }),
         },
       })).rejects.toThrow("Multiple Telegram sessions found; pass --chat <id>.");

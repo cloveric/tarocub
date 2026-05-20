@@ -278,6 +278,57 @@ export class TelegramApi {
     return json.result;
   }
 
+  async sendVoice(
+    chatId: number,
+    filename: string,
+    contents: Uint8Array,
+    options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
+  ): Promise<TelegramMessage> {
+    const boundary = `----cc-telegram-bridge-${Math.random().toString(16).slice(2)}`;
+    const notificationPart = options?.disableNotification
+      ? `--${boundary}\r\nContent-Disposition: form-data; name="disable_notification"\r\n\r\ntrue\r\n`
+      : "";
+    const threadPart = typeof options?.messageThreadId === "number"
+      ? `--${boundary}\r\nContent-Disposition: form-data; name="message_thread_id"\r\n\r\n${options.messageThreadId}\r\n`
+      : "";
+    const head =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
+      notificationPart +
+      threadPart +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="voice"; filename="${filename}"\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`;
+    const tail = `\r\n--${boundary}--\r\n`;
+    const body = new Uint8Array(
+      Buffer.concat([
+        Buffer.from(head, "utf8"),
+        Buffer.from(contents),
+        Buffer.from(tail, "utf8"),
+      ]),
+    );
+
+    const response = await fetch(this.buildUrl("sendVoice"), {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    });
+
+    if (!response.ok) {
+      const detail = await extractTelegramErrorDetail<TelegramMessage>(response, `${response.status} ${response.statusText}`);
+      throw new Error(`Telegram API request failed for sendVoice: ${detail}`);
+    }
+
+    const json = await response.json();
+    if (!isTelegramApiResponse<TelegramMessage>(json) || !json.ok || !isTelegramMessage(json.result)) {
+      throw new Error("Telegram API response had an unexpected shape for sendVoice");
+    }
+
+    return json.result;
+  }
+
   async sendPhoto(
     chatId: number,
     filename: string,
@@ -540,6 +591,13 @@ export function withTelegramMessageThread<T extends TelegramApi>(api: T, message
             caption?: string,
             options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
           ) => target.sendPhoto(chatId, filename, contents, caption, { ...options, messageThreadId });
+        case "sendVoice":
+          return async (
+            chatId: number,
+            filename: string,
+            contents: Uint8Array,
+            options?: Pick<TelegramMessageOptions, "disableNotification" | "messageThreadId">,
+          ) => target.sendVoice(chatId, filename, contents, { ...options, messageThreadId });
         case "sendMediaGroup":
           return async (
             chatId: number,

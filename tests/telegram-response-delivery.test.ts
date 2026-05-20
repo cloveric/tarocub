@@ -633,6 +633,7 @@ describe("deliverTelegramResponse", () => {
   it("rethrows non-Markdown Telegram delivery errors instead of silently falling back", async () => {
     const api = {
       sendMessage: vi.fn().mockRejectedValue(new Error("Telegram API request failed for sendMessage: 403 Forbidden")),
+      sendVoice: vi.fn(),
       sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
       sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
     };

@@ -23,7 +23,7 @@ export interface SendCommandEnv extends Pick<
 export interface ConfiguredSendDeps {
   cwd?: string;
   readConfiguredBotToken?: typeof readConfiguredBotToken;
-  createTelegramApi?: (botToken: string) => Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto">;
+  createTelegramApi?: (botToken: string) => Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice">;
   deliverTelegramResponse?: typeof deliverTelegramResponse;
   readStdin?: () => Promise<string>;
 }

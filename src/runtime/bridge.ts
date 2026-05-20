@@ -273,13 +273,27 @@ export class Bridge {
     const text = baseText;
     const turnEnvSupported = this.adapter.supportsTurnScopedEnv !== false;
     const disableRuntimeTimeout = shouldDisableRuntimeTimeout(input.text);
+    let boundSessionIdFromEvent: string | undefined;
+    const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
+      if (
+        event.type === "session" &&
+        event.sessionId &&
+        !input.sessionIdOverride &&
+        event.sessionId !== session.sessionId &&
+        event.sessionId !== boundSessionIdFromEvent
+      ) {
+        await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, event.sessionId);
+        boundSessionIdFromEvent = event.sessionId;
+      }
+      await input.onEngineEvent?.(event);
+    };
     const response = await this.adapter.sendUserMessage(session.sessionId, {
       text,
       files: input.files,
       instructions: undefined,
       onProgress: input.onProgress,
       onApprovalRequest: input.onApprovalRequest,
-      onEngineEvent: input.onEngineEvent,
+      onEngineEvent: handleEngineEvent,
       requestOutputDir: input.requestOutputDir,
       workspaceOverride: input.workspaceOverride,
       extraEnv: turnEnvSupported ? input.extraEnv : undefined,
@@ -287,7 +301,12 @@ export class Bridge {
       disableRuntimeTimeout: disableRuntimeTimeout || undefined,
     });
 
-    if (!input.sessionIdOverride && response.sessionId && response.sessionId !== session.sessionId) {
+    if (
+      !input.sessionIdOverride &&
+      response.sessionId &&
+      response.sessionId !== session.sessionId &&
+      response.sessionId !== boundSessionIdFromEvent
+    ) {
       await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, response.sessionId);
     }
 

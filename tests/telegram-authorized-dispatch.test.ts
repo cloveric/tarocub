@@ -42,6 +42,7 @@ describe("dispatchAuthorizedTelegramMessage", () => {
       context: {
         api: {
           sendMessage: vi.fn(),
+            sendVoice: vi.fn(),
           getFile: vi.fn(),
           downloadFile: vi.fn(),
         },
@@ -107,6 +108,7 @@ describe("dispatchAuthorizedTelegramMessage", () => {
       context: {
         api: {
           sendMessage: vi.fn(),
+            sendVoice: vi.fn(),
           getFile: vi.fn(),
           downloadFile: vi.fn(),
         },
@@ -172,6 +174,7 @@ describe("dispatchAuthorizedTelegramMessage", () => {
       context: {
         api: {
           sendMessage: vi.fn(),
+            sendVoice: vi.fn(),
           getFile: vi.fn(),
           downloadFile: vi.fn(),
         },
@@ -286,6 +289,7 @@ describe("dispatchAuthorizedTelegramMessage", () => {
       context: {
         api: {
           sendMessage: vi.fn(),
+            sendVoice: vi.fn(),
           getFile: vi.fn(),
           downloadFile: vi.fn(),
         },
@@ -341,6 +345,7 @@ describe("dispatchAuthorizedTelegramMessage", () => {
       context: {
         api: {
           sendMessage: vi.fn(),
+            sendVoice: vi.fn(),
           getFile: vi.fn(),
           downloadFile: vi.fn(),
         },
@@ -468,6 +473,7 @@ describe("dispatchAuthorizedTelegramMessage", () => {
       context: {
         api: {
           sendMessage: vi.fn(),
+            sendVoice: vi.fn(),
           getFile: vi.fn(),
           downloadFile: vi.fn(),
         },

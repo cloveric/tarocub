@@ -19,6 +19,7 @@ async function withContext<T>(fn: (ctx: {
   api: {
     sendMessage: ReturnType<typeof vi.fn>;
     sendDocument: ReturnType<typeof vi.fn>;
+    sendVoice: ReturnType<typeof vi.fn>;
     sendPhoto: ReturnType<typeof vi.fn>;
   };
 }) => Promise<T>): Promise<T> {
@@ -37,7 +38,8 @@ async function withContext<T>(fn: (ctx: {
   const api = {
     sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
     sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-    sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    sendVoice: vi.fn().mockResolvedValue({ message_id: 3 }),
+    sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
   };
   await scheduler.start();
   try {

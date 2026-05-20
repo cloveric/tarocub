@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import type {
   CodexAdapter,
@@ -21,7 +22,7 @@ type SpawnOptions = {
 };
 
 type ProcessStreamLike = {
-  on(event: "data", listener: (chunk: { toString(): string } | string) => void): void;
+  on(event: "data", listener: (chunk: Buffer | string) => void): void;
 };
 
 type ProcessChildLike = {
@@ -81,6 +82,10 @@ function appendHeadTailDiagnostic(existing: string, chunk: string, maxBytes: num
 
   const half = Math.max(1, Math.floor(maxBytes / 2));
   return `${combined.slice(0, half)}\n[... output elided ...]\n${combined.slice(-half)}`;
+}
+
+function decodeStreamChunk(decoder: StringDecoder, chunk: Buffer | string): string {
+  return typeof chunk === "string" ? chunk : decoder.write(chunk);
 }
 
 function combineInstructions(primary: string | null, secondary: string | null): string | null {
@@ -162,14 +167,17 @@ async function extractAntigravityConversationIdFromLogs(input: {
       for (const line of lines) {
         const match = line.match(pidPattern);
         if (match?.[1]) {
-          return match[1].trim();
+          return match[1].trim().toLowerCase();
         }
       }
     }
 
-    const fallback = extractAntigravityConversationId(content);
-    if (!input.pid && fallback) {
-      return fallback;
+    const fallbackMatch = content.match(new RegExp(`\\bconversation=(${ANTIGRAVITY_CONVERSATION_ID_PATTERN})\\b`, "g"));
+    if (fallbackMatch) {
+      // Return the most recent one (last in file)
+      const last = fallbackMatch[fallbackMatch.length - 1];
+      const id = last.split("=")[1]?.trim().toLowerCase();
+      if (id) return id;
     }
   }
 
@@ -296,6 +304,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       ...(workspace ? ["--add-dir", workspace] : []),
       "-",
     ];
+
+    let effectiveSessionId: string | undefined;
+    let emittedSessionId: string | undefined;
     const response = await this.runAntigravityCommand(
       args,
       prompt,
@@ -305,25 +316,37 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
       input.extraEnv,
       input.onProgress,
-      input.onEngineEvent,
+      (event) => {
+        if (event.type === "session") {
+          effectiveSessionId = event.sessionId;
+          emittedSessionId = event.sessionId;
+        }
+        if (input.onEngineEvent) {
+          void input.onEngineEvent(event);
+        }
+      },
     );
 
-    const conversationId = await extractAntigravityConversationIdFromLogs({
-      logDir: resolveAntigravityLogDir(this.childEnv),
-      pid: response.childPid,
-      startedAt,
-    }).catch(() => null);
-    const effectiveSessionId = conversationId ?? (!logicalTelegramSession ? sessionId : response.sessionId);
-    if (effectiveSessionId) {
+    if (!effectiveSessionId) {
+      effectiveSessionId = await extractAntigravityConversationIdFromLogs({
+        logDir: resolveAntigravityLogDir(this.childEnv),
+        pid: response.childPid,
+        startedAt,
+      }).catch(() => null) ?? undefined;
+    }
+
+    const finalSessionId = effectiveSessionId ?? (!logicalTelegramSession ? sessionId : response.sessionId);
+    if (effectiveSessionId && effectiveSessionId !== emittedSessionId) {
       await input.onEngineEvent?.({
         type: "session",
         sessionId: effectiveSessionId,
       });
     }
+
     return {
       text: response.text,
       usage: response.usage,
-      sessionId: effectiveSessionId,
+      sessionId: finalSessionId,
     };
   }
 
@@ -350,6 +373,8 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     return await new Promise<CodexAdapterResponse & { childPid?: number }>((resolve, reject) => {
       let stdout = "";
       let stderrTail = "";
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
       let settled = false;
       let totalTimeout: ReturnType<typeof setTimeout> | undefined;
       let inactivityTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -429,6 +454,8 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         settled = true;
         clearTimers();
         clearAbortListener();
+        stdout += stdoutDecoder.end();
+        stderrTail = appendHeadTailDiagnostic(stderrTail, stderrDecoder.end(), MAX_STDERR_DIAGNOSTIC_BYTES);
         const text = stdout.trim();
         if (code !== 0) {
           reject(new Error(stderrTail.trim() || `antigravity exited with code ${code}`));
@@ -439,7 +466,10 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
 
       child.stdout?.on("data", (chunk) => {
         resetInactivityTimeout();
-        const text = chunk.toString();
+        const text = decodeStreamChunk(stdoutDecoder, chunk);
+        if (!text) {
+          return;
+        }
         stdout += text;
         if (Buffer.byteLength(stdout, "utf8") > MAX_OUTPUT_BUFFER_BYTES) {
           rejectAndKill(new Error("Engine output exceeded maximum buffer size"));
@@ -454,10 +484,25 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           type: "assistant_text",
           text,
         });
+
+        // Try to parse conversation ID from stdout as well
+        const idMatch = text.match(/\bconversation=([0-9a-fA-F-]{36})\b/);
+        if (idMatch?.[1]) {
+          emitEngineEvent({ type: "session", sessionId: idMatch[1].toLowerCase() });
+        }
       });
       child.stderr?.on("data", (chunk) => {
         resetInactivityTimeout();
-        stderrTail = appendHeadTailDiagnostic(stderrTail, chunk.toString(), MAX_STDERR_DIAGNOSTIC_BYTES);
+        const text = decodeStreamChunk(stderrDecoder, chunk);
+        if (text) {
+          stderrTail = appendHeadTailDiagnostic(stderrTail, text, MAX_STDERR_DIAGNOSTIC_BYTES);
+
+          // Many Antigravity versions print the conversation ID to stderr on startup
+          const idMatch = text.match(/\bconversation=([0-9a-fA-F-]{36})\b/);
+          if (idMatch?.[1]) {
+            emitEngineEvent({ type: "session", sessionId: idMatch[1].toLowerCase() });
+          }
+        }
       });
 
       if (abortSignal) {
