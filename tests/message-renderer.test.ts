@@ -461,6 +461,62 @@ describe("normalizeUpdate", () => {
     });
   });
 
+  it("treats round video notes as transcribable video", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          video_note: {
+            file_id: "video-note-file",
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "",
+      replyContext: undefined,
+      attachments: [
+        {
+          fileId: "video-note-file",
+          kind: "video",
+        },
+      ],
+    });
+  });
+
+  it("treats webm documents without MIME as video for robust ffmpeg extraction", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          document: {
+            file_id: "webm-doc",
+            file_name: "clip.webm",
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "",
+      replyContext: undefined,
+      attachments: [
+        {
+          fileId: "webm-doc",
+          fileName: "clip.webm",
+          kind: "video",
+        },
+      ],
+    });
+  });
+
   it("treats audio document attachments as transcribable audio", () => {
     expect(
       normalizeUpdate({

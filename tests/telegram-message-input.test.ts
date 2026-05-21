@@ -395,6 +395,66 @@ describe("createDefaultTranscribeVoice", () => {
     );
   });
 
+  it("still extracts video audio when ffprobe cannot read the duration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const videoPath = path.join(root, "short-clip.mp4");
+    await writeFile(videoPath, "video");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string };
+      return {
+        ok: true,
+        text: async () => `transcribed ${path.basename(body.path ?? "")}`,
+      };
+    });
+    const execFileImpl = vi.fn((
+      file: string,
+      args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(new Error("ffprobe failed"), "", "ffprobe failed");
+        return;
+      }
+
+      if (file === "ffmpeg") {
+        const pattern = String(args.at(-1));
+        void writeFile(pattern.replace("%03d", "000"), "chunk-000").then(
+          () => callback(null, "", ""),
+          (error) => callback(error, "", String(error)),
+        );
+        return;
+      }
+
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl: fetchImpl as never,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      ffmpegPath: "ffmpeg",
+      chunkAfterSeconds: 120,
+      chunkSeconds: 60,
+    } as never);
+
+    try {
+      await expect(transcribeVoice(videoPath)).resolves.toBe("transcribed chunk-000.wav");
+      expect(execFileImpl).toHaveBeenCalledWith(
+        "ffmpeg",
+        expect.arrayContaining(["-i", videoPath, "-vn"]),
+        expect.any(Object),
+        expect.any(Function),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
+
   it("warns and falls back to single-file transcription when ffprobe fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
     const audioPath = path.join(root, "meeting.m4a");

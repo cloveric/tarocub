@@ -296,7 +296,8 @@ export function createDefaultTranscribeVoice(options: {
 
   return async function defaultTranscribeVoice(audioPath: string): Promise<string> {
     const duration = await probeAudioDurationSeconds(audioPath, execFileImpl, ffprobePath);
-    if (duration !== null && (duration > chunkAfterSeconds || isLikelyVideoFile(audioPath))) {
+    const shouldExtractOrChunk = isLikelyVideoFile(audioPath) || (duration !== null && duration > chunkAfterSeconds);
+    if (shouldExtractOrChunk) {
       const { chunks, cleanup } = await splitAudioIntoChunks(audioPath, {
         chunkSeconds,
         execFileImpl,

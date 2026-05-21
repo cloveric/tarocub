@@ -140,21 +140,21 @@ function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment
   if (typeof fileId !== "string" || fileId.length === 0) {
     return [];
   }
-  if (isAudioDocument(message)) {
-    return [
-      {
-        fileId,
-        fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
-        kind: "audio",
-      },
-    ];
-  }
   if (isVideoDocument(message)) {
     return [
       {
         fileId,
         fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
         kind: "video",
+      },
+    ];
+  }
+  if (isAudioDocument(message)) {
+    return [
+      {
+        fileId,
+        fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
+        kind: "audio",
       },
     ];
   }
