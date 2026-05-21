@@ -74,7 +74,7 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 ## Release Highlights
 
-- **v4.6.22** — adds Antigravity CLI as a third backend engine, including Telegram `/engine antigravity`, YOLO/full-auto process execution, `/goal` passthrough, `/model` passthrough, conversation auto-binding, and `/resume conversation <id>`.
+- **v4.6.22** — adds Antigravity CLI as a third backend engine, including Telegram `/engine antigravity`, YOLO/full-auto process execution, `/goal` passthrough, safe `/model` guardrails for print mode, conversation auto-binding, and `/resume conversation <id>`.
 - **v4.6.18** — normalizes `/goal@botname` in Telegram groups so native engines receive a plain `/goal` command while Codex keeps structured goal handling.
 - **v4.6.17** — passes Claude Code `/goal` through from Telegram instead of treating goals as Codex-only.
 - **v4.6.16** — completes Telegram audio handling: direct `voice`, direct `audio/.m4a`, audio-like documents, and quoted audio documents all go through the same ASR transcription path.
@@ -125,7 +125,7 @@ npm run dev -- telegram engine antigravity --instance agy-bot
 npm run dev -- telegram engine --instance review-bot
 ```
 
-Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in the explicit `bypass` mode, because `agy --print` is non-interactive in Telegram. Antigravity model selection is still owned by the native CLI: `/model` is passed through to `agy`, and the setting persists across sessions. The current CLI does not expose a startup `--model` flag, so the bridge deliberately does not invent one.
+Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in the explicit `bypass` mode, because `agy --print` is non-interactive in Telegram. Antigravity model selection is still owned by the native interactive CLI. `agy --print` does not run the interactive `/model` parser, so Telegram `/model` is handled locally with an explanation instead of being forwarded as a chat prompt. Set the model in local interactive `agy` until the CLI exposes a non-interactive model API.
 
 | Feature | Codex Engine | Claude Engine | Antigravity Engine |
 |---|---|---|---|
@@ -136,6 +136,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | `/goal` | Bridge-native goal API with optional token budget | Passed through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Passed through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
+| `/model` | Bridge config passed to Codex startup | Bridge config passed to Claude startup | Not available from Telegram in `agy --print`; use local interactive `agy /model` |
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Not supported by the bridge yet |
 | Skills / plugins | Uses the configured Codex home; isolated homes symlink `skills/` back to the shared Codex skills dir | Uses the shared Claude config plus workspace `CLAUDE.md`, `skills/`, and `plugins/` | Uses Antigravity's own native CLI/plugin config. Reusable bridge skills should be shared as separate skill files/docs and referenced or copied per engine; each instance `agent.md` remains its own private instruction file. Do not import Claude/Codex native plugins into Antigravity unless you explicitly choose to. |
 | Working directory | `workspace/` under instance dir | `workspace/` under instance dir (with `CLAUDE.md`) | `workspace/` under instance dir |
@@ -584,7 +585,7 @@ From then on:
 - `/status` shows the current conversation ID
 - `/detach` unbinds the conversation and restores the pre-attach conversation when one exists
 
-This still uses Antigravity's native session model. The bridge does not invent model or effort flags; use Antigravity's native `/model` setting for that.
+This still uses Antigravity's native session model. The bridge does not invent model or effort flags. Because `agy --print` cannot run the interactive `/model` parser, set the model in local interactive `agy`; Telegram `/model` will explain the limitation instead of sending the command to the model as a normal prompt.
 
 ---
 
@@ -1175,7 +1176,7 @@ Telegram users can also use:
 - `/status`
 - `/engine [claude|codex|antigravity]` — switch engine for the current instance (the bridge resets stale bindings automatically)
 - `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
-- `/model [name|off]` — switch model
+- `/model [name|off]` — switch model for Codex/Claude; Antigravity explains the `agy --print` limitation and does not forward `/model` as chat
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
 - `/goal <completion condition>` — set an engine goal. Codex also supports `/goal status`, `/goal clear`, and `--budget`; Claude Code and Antigravity pass through to their native `/goal` slash commands.
 - `/btw <question>` — ask a side question without affecting the current session

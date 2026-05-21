@@ -195,7 +195,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
       expect(updateInstanceConfig).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. Use Antigravity's native /model picker for model selection.",
+        "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. For model selection, open agy locally and use /model there.",
       );
     } finally {
       await removeTempRoot(root);
@@ -460,7 +460,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
-  it("passes Antigravity /model through to the native agy slash command", async () => {
+  it("blocks Antigravity /model before it can be sent to agy --print as chat", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
@@ -483,10 +483,13 @@ describe("handleSimpleLocalTelegramCommand", () => {
         updateInstanceConfig,
       });
 
-      expect(handled).toBe(false);
-      expect(normalized.text).toBe("/model Gemini 3.5 Flash High");
+      expect(handled).toBe(true);
+      expect(normalized.text).toBe("/model@cloveric17bot Gemini 3.5 Flash High");
       expect(updateInstanceConfig).not.toHaveBeenCalled();
-      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Antigravity model switching is not available from Telegram because agy --print does not run the interactive /model parser. Open agy locally and use /model there; the bridge will not forward /model as a chat prompt.",
+      );
     } finally {
       await removeTempRoot(root);
     }

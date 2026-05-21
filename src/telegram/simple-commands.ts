@@ -18,8 +18,14 @@ const VALID_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "m
 
 function renderAntigravityNativeEffortMessage(locale: Locale): string {
   return locale === "zh"
-    ? "Antigravity 的 effort 由 agy CLI 原生控制；bridge 目前还没有可用的 effort 启动参数。模型选择请使用 Antigravity 原生 /model picker。"
-    : "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. Use Antigravity's native /model picker for model selection.";
+    ? "Antigravity 的 effort 由 agy CLI 原生控制；bridge 目前还没有可用的 effort 启动参数。模型选择请在本机交互式 agy 里使用 /model。"
+    : "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. For model selection, open agy locally and use /model there.";
+}
+
+function renderAntigravityNativeModelMessage(locale: Locale): string {
+  return locale === "zh"
+    ? "Telegram 里暂不支持切换 Antigravity 模型，因为 agy --print 不会运行交互式 /model 解析器。请在本机交互式 agy 里使用 /model；bridge 不会再把 /model 当普通聊天发给模型。"
+    : "Antigravity model switching is not available from Telegram because agy --print does not run the interactive /model parser. Open agy locally and use /model there; the bridge will not forward /model as a chat prompt.";
 }
 
 function isHelpCommand(text: string): boolean {
@@ -44,14 +50,6 @@ function parseModelCommand(text: string): { model: string } | null {
   const match = text.trim().match(/^\/model(?:@\w+)?(?:\s+([\s\S]+))?$/i);
   if (!match) return null;
   return { model: match[1]?.trim() ?? "" };
-}
-
-function toNativeModelCommandText(text: string): string | null {
-  const match = text.trim().match(/^\/model(?:@\w+)?(\s+[\s\S]+)?$/i);
-  if (!match) {
-    return null;
-  }
-  return `/model${match[1]?.trim() ? ` ${match[1].trim()}` : ""}`;
 }
 
 function isSingleTokenModelName(model: string): boolean {
@@ -249,11 +247,9 @@ export async function handleSimpleLocalTelegramCommand(input: {
     let modelMessage: string;
     let auditValue = modelCmd.model || "query";
     if (cfg.engine === "antigravity") {
-      const nativeModelText = toNativeModelCommandText(normalized.text);
-      if (nativeModelText) {
-        normalized.text = nativeModelText;
-      }
-      return false;
+      auditValue = "unsupported-print-mode";
+      modelMessage = renderAntigravityNativeModelMessage(locale);
+      await context.api.sendMessage(normalized.chatId, modelMessage);
     } else if (!modelCmd.model) {
       modelMessage = renderModelSelectionMessage();
       await context.api.sendMessage(normalized.chatId, modelMessage);

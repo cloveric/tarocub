@@ -74,7 +74,7 @@ npm run dev -- telegram service start
 
 ## 近期亮点
 
-- **v4.6.22** — 新增 Antigravity CLI 作为第三个后端引擎，支持 Telegram `/engine antigravity`、YOLO/full-auto process 执行、`/goal` 透传、`/model` 透传、conversation 自动绑定和 `/resume conversation <id>`。
+- **v4.6.22** — 新增 Antigravity CLI 作为第三个后端引擎，支持 Telegram `/engine antigravity`、YOLO/full-auto process 执行、`/goal` 透传、print mode 下安全拦截 `/model`、conversation 自动绑定和 `/resume conversation <id>`。
 - **v4.6.18** — 规范化 Telegram 群里的 `/goal@botname`，让原生引擎收到普通 `/goal`，同时 Codex 继续使用结构化 goal 处理。
 - **v4.6.17** — 让 Claude Code 的 `/goal` 可以从 Telegram 透传，不再把 goal 当成 Codex-only 功能。
 - **v4.6.16** — 补齐 Telegram 音频处理：直接 `voice`、直接 `audio/.m4a`、音频类 document、被引用的音频 document 都会走同一套 ASR 转写路径。
@@ -125,7 +125,7 @@ npm run dev -- telegram engine antigravity --instance agy-bot
 npm run dev -- telegram engine --instance review-bot
 ```
 
-切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。原因是 Telegram 里的 `agy --print` 是非交互运行，默认就应该免打断。Antigravity 的模型选择仍由原生 CLI 管：Telegram 里的 `/model` 会透传给 `agy`，设置会跨 session 持久化。当前 `agy` 没有公开启动参数 `--model`，所以 bridge 不会伪造一个其实无效的参数。
+切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。原因是 Telegram 里的 `agy --print` 是非交互运行，默认就应该免打断。Antigravity 的模型选择仍由本机交互式 CLI 管：`agy --print` 不会运行交互式 `/model` 解析器，所以 Telegram 里的 `/model` 会由 bridge 本地回复限制说明，不会再当普通聊天发给模型。请在本机交互式 `agy` 里设置模型，直到 agy 暴露非交互 model API。
 
 | 特性 | Codex 引擎 | Claude 引擎 | Antigravity 引擎 |
 |---|---|---|---|
@@ -136,6 +136,7 @@ npm run dev -- telegram engine --instance review-bot
 | YOLO 关闭时的 Telegram 审批 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--full-auto` | Claude 权限请求会变成 Telegram 内联按钮 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--dangerously-skip-permissions` |
 | YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
 | `/goal` | bridge 原生 goal API，支持 token budget | 透传给 Claude Code 原生 `/goal`；`--budget` 会变成原生 goal hint | 透传给 Antigravity 原生 `/goal`；`--budget` 会变成原生 goal hint |
+| `/model` | bridge 配置后传给 Codex 启动参数 | bridge 配置后传给 Claude 启动参数 | Telegram 的 `agy --print` 暂不支持；请用本机交互式 `agy /model` |
 | `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 | 暂不支持 |
 | Skills / plugins | 使用已配置的 Codex home；隔离 home 会把 `skills/` 软链回共享 Codex skills 目录 | 使用共享 Claude 配置，同时支持 workspace `CLAUDE.md`、`skills/`、`plugins/` | 使用 Antigravity 自己的原生 CLI/plugin 配置。可复用的 bridge skills 应作为独立 skill 文件/文档共享，再按引擎引用或复制；每个实例的 `agent.md` 仍然是自己的私有指令文件。除非明确需要，不要把 Claude/Codex 原生插件导入 Antigravity。 |
 | 工作目录 | 实例目录下的 `workspace/` | 实例目录下的 `workspace/`（放 `CLAUDE.md`） | 实例目录下的 `workspace/` |
@@ -570,7 +571,7 @@ agy --conversation <conversation-id>
 - `/status` 会显示当前 conversation ID
 - `/detach` 会解绑该 conversation；如果存在绑定前的旧对话，就恢复它
 
-这仍然使用 Antigravity 的原生会话模型。bridge 不会伪造 model / effort 启动参数；模型选择请继续用 Antigravity 原生 `/model` 设置。
+这仍然使用 Antigravity 的原生会话模型。bridge 不会伪造 model / effort 启动参数。因为 `agy --print` 不能运行交互式 `/model` 解析器，模型选择请在本机交互式 `agy` 里设置；Telegram `/model` 只会解释限制，不会把命令当普通 prompt 发给模型。
 
 ---
 
@@ -1159,7 +1160,7 @@ Telegram 用户也可以使用：
 - `/status`
 - `/engine [claude|codex|antigravity]` — 切换当前实例引擎（桥会自动清掉陈旧绑定）
 - `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`max` 仅 Claude 可用；Codex 会改用 `xhigh`）
-- `/model [名称|off]` — 切换模型
+- `/model [名称|off]` — 为 Codex/Claude 切换模型；Antigravity 会解释 `agy --print` 限制，不会把 `/model` 当聊天发进模型
 - `/fast [on|off|status]` — 切换 Codex Fast Mode。bridge 实例里把它当实验选项使用；如果出现 Codex runtime 失败，先 `/fast off`，不要反复重试；下一条简单消息仍失败时，再重启该实例一次。
 - `/goal <完成条件>` — 设置引擎 goal。Codex 还支持 `/goal status`、`/goal clear` 和 `--budget`；Claude Code 和 Antigravity 会直接透传给原生 `/goal` slash command。
 - `/btw <问题>` — 旁问（不影响当前会话）
