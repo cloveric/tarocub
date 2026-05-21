@@ -424,6 +424,12 @@ export function renderCategorizedErrorMessage(
       normalizedDetail.includes("cannot parse entities") ||
       normalizedDetail.includes("parse entities")
     );
+  const isTelegramAttachmentTooLargeError =
+    category === "file-workflow" &&
+    (
+      normalizedDetail.includes("telegram attachment is too large to download via bot api") ||
+      normalizedDetail.includes("getfile: bad request: file is too big")
+    );
 
   if (locale === "zh") {
     if (category === "write-permission") {
@@ -453,6 +459,9 @@ export function renderCategorizedErrorMessage(
       ].filter(Boolean).join("\n");
     }
     if (category === "file-workflow") {
+      if (isTelegramAttachmentTooLargeError) {
+        return "错误：这个附件太大，当前 Telegram Bot API 不能下载到 bot 端。请压缩到 20MB 以内，或发可访问链接/把文件放到 bot workspace 后再让我读取。";
+      }
       return "错误：准备请求时文件处理失败，请尝试更小或不同的文件。";
     }
     if (category === "workflow-state") {
@@ -494,6 +503,9 @@ export function renderCategorizedErrorMessage(
     ].filter(Boolean).join("\n");
   }
   if (category === "file-workflow") {
+    if (isTelegramAttachmentTooLargeError) {
+      return "Error: This attachment is too large for the current Telegram Bot API download path. Send a file under 20 MB, share a reachable link, or place the file in the bot workspace.";
+    }
     return "Error: File handling failed while preparing your request. Retry with a smaller or different file.";
   }
   if (category === "workflow-state") {

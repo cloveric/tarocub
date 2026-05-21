@@ -20,6 +20,8 @@ export type TelegramMessageInputPreparationResult =
     text: string;
   };
 
+export const TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024;
+
 function inferExtension(attachment: NormalizedTelegramAttachment, telegramFilePath: string): string {
   const explicitExtension = attachment.fileName ? path.extname(attachment.fileName) : "";
   if (explicitExtension) {
@@ -60,6 +62,36 @@ function buildInboxFileName(attachment: NormalizedTelegramAttachment, telegramFi
   }
 
   return `${attachment.fileId}${extension}`;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function describeAttachment(attachment: NormalizedTelegramAttachment): string {
+  return [attachment.kind, attachment.fileName].filter(Boolean).join(" ");
+}
+
+function assertTelegramAttachmentDownloadable(attachment: NormalizedTelegramAttachment): void {
+  if (
+    typeof attachment.fileSize === "number" &&
+    attachment.fileSize > TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES
+  ) {
+    throw new Error(
+      [
+        `Telegram attachment is too large to download via Bot API: ${describeAttachment(attachment)}`,
+        `is ${formatFileSize(attachment.fileSize)}`,
+        `current cloud getFile limit is ${formatFileSize(TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES)}.`,
+        "Send a smaller file, share a reachable link, or place the file in the bot workspace.",
+      ].join(" "),
+    );
+  }
 }
 
 async function ensureInboxDirExists(inboxDir: string): Promise<void> {
@@ -349,6 +381,7 @@ async function defaultDownloadAttachments(
   const downloadedFiles: DownloadedAttachment[] = [];
 
   for (const attachment of attachments) {
+    assertTelegramAttachmentDownloadable(attachment);
     const telegramFile = await api.getFile(attachment.fileId);
     const localPath = path.join(inboxDir, buildInboxFileName(attachment, telegramFile.file_path));
     await api.downloadFile(telegramFile.file_path, localPath);

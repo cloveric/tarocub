@@ -3,6 +3,7 @@ import { getTelegramConversationKey } from "./conversation-key.js";
 export interface NormalizedTelegramAttachment {
   fileId: string;
   fileName?: string;
+  fileSize?: number;
   kind: "audio" | "document" | "photo" | "video" | "voice";
 }
 
@@ -46,6 +47,17 @@ function normalizeCallbackCommand(data: string): string | null {
 
 function isExternalTelegramChatType(value: unknown): value is string {
   return value === "private" || value === "group" || value === "supergroup" || value === "channel";
+}
+
+function normalizeFileSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function normalizeAttachmentFileSize(source: any): { fileSize?: number } {
+  const fileSize = normalizeFileSize(source?.file_size);
+  return fileSize !== undefined ? { fileSize } : {};
 }
 
 function normalizeCallbackQuery(callbackQuery: any, text: string): NormalizedTelegramMessage | null {
@@ -140,11 +152,13 @@ function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment
   if (typeof fileId !== "string" || fileId.length === 0) {
     return [];
   }
+  const fileSize = normalizeFileSize(message.document?.file_size);
   if (isVideoDocument(message)) {
     return [
       {
         fileId,
         fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
+        ...(fileSize !== undefined ? { fileSize } : {}),
         kind: "video",
       },
     ];
@@ -154,6 +168,7 @@ function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment
       {
         fileId,
         fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
+        ...(fileSize !== undefined ? { fileSize } : {}),
         kind: "audio",
       },
     ];
@@ -163,6 +178,7 @@ function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment
     {
       fileId,
       fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
+      ...(fileSize !== undefined ? { fileSize } : {}),
       kind: "document",
     },
   ];
@@ -178,6 +194,7 @@ function normalizeAudioAttachment(message: any): NormalizedTelegramAttachment[] 
     {
       fileId,
       fileName: typeof message.audio.file_name === "string" ? message.audio.file_name : undefined,
+      ...normalizeAttachmentFileSize(message.audio),
       kind: "audio",
     },
   ];
@@ -196,6 +213,7 @@ function normalizePhotoAttachment(message: any): NormalizedTelegramAttachment[] 
   return [
     {
       fileId: candidate.file_id,
+      ...normalizeAttachmentFileSize(candidate),
       kind: "photo",
     },
   ];
@@ -211,6 +229,7 @@ function normalizeVideoAttachment(message: any): NormalizedTelegramAttachment[] 
     {
       fileId,
       fileName: typeof message.video.file_name === "string" ? message.video.file_name : undefined,
+      ...normalizeAttachmentFileSize(message.video),
       kind: "video",
     },
   ];
@@ -225,6 +244,7 @@ function normalizeVideoNoteAttachment(message: any): NormalizedTelegramAttachmen
   return [
     {
       fileId,
+      ...normalizeAttachmentFileSize(message.video_note),
       kind: "video",
     },
   ];
@@ -239,6 +259,7 @@ function normalizeVoiceAttachment(message: any): NormalizedTelegramAttachment[] 
   return [
     {
       fileId,
+      ...normalizeAttachmentFileSize(message.voice),
       kind: "voice",
     },
   ];

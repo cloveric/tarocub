@@ -73,6 +73,14 @@ export function classifyFailure(error: unknown): FailureCategory {
   }
 
   if (
+    text.includes("telegram attachment is too large to download via bot api") ||
+    text.includes("telegram api request failed for getfile") ||
+    text.includes("telegram api request failed for downloadfile")
+  ) {
+    return "file-workflow";
+  }
+
+  if (
     text.includes("turn.failed") ||
     text.includes("engine cli") ||
     (/(codex|claude|antigravity|agy|engine)/.test(text) && /(runtime|process|spawn|adapter|binary|cli|app-server|failed|error|startup|start)/.test(text)) ||

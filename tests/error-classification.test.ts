@@ -44,6 +44,15 @@ describe("classifyFailure specificity", () => {
     ).toBe("file-workflow");
   });
 
+  it("classifies Telegram input file download failures as file workflow errors", () => {
+    expect(
+      classifyFailure(new Error("Telegram API request failed for getFile: Bad Request: file is too big")),
+    ).toBe("file-workflow");
+    expect(
+      classifyFailure(new Error("Telegram API request failed for downloadFile: 500 Internal Server Error")),
+    ).toBe("file-workflow");
+  });
+
   it("does not treat generic zip mentions as file-workflow failures", () => {
     expect(classifyFailure(new Error("Remote peer mentioned export.zip in an unrelated error"))).toBe("unknown");
   });

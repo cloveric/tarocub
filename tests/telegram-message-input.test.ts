@@ -5,7 +5,11 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createDefaultTranscribeVoice, prepareTelegramMessageInput } from "../src/telegram/message-input.js";
+import {
+  createDefaultTranscribeVoice,
+  prepareTelegramMessageInput,
+  TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES,
+} from "../src/telegram/message-input.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
 function createNormalizedMessage(
@@ -119,6 +123,39 @@ describe("prepareTelegramMessageInput", () => {
       });
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
       expect(transcribeVoice).toHaveBeenCalledWith(expect.stringMatching(/lesson\.mp4$/));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("rejects oversized Telegram attachments before calling getFile", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const getFile = vi.fn();
+    const downloadFile = vi.fn();
+    const normalized = createNormalizedMessage("make subtitles", [
+      {
+        fileId: "video-1",
+        fileName: "lesson.mp4",
+        fileSize: TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES + 1,
+        kind: "video",
+      },
+    ]);
+
+    try {
+      await expect(
+        prepareTelegramMessageInput({
+          locale: "en",
+          inboxDir: path.join(root, "inbox"),
+          normalized,
+          api: {
+            getFile,
+            downloadFile,
+          } as never,
+          transcribeVoice: vi.fn(),
+        }),
+      ).rejects.toThrow("Telegram attachment is too large to download via Bot API");
+      expect(getFile).not.toHaveBeenCalled();
+      expect(downloadFile).not.toHaveBeenCalled();
     } finally {
       await removeTempRoot(root);
     }

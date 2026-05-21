@@ -191,6 +191,23 @@ describe("message rendering", () => {
     expect(renderCategorizedErrorMessage("file-workflow", "archive extraction failed")).toBe(
       "Error: File handling failed while preparing your request. Retry with a smaller or different file.",
     );
+    expect(
+      renderCategorizedErrorMessage(
+        "file-workflow",
+        "Telegram API request failed for getFile: Bad Request: file is too big",
+      ),
+    ).toBe(
+      "Error: This attachment is too large for the current Telegram Bot API download path. Send a file under 20 MB, share a reachable link, or place the file in the bot workspace.",
+    );
+    expect(
+      renderCategorizedErrorMessage(
+        "file-workflow",
+        "Telegram attachment is too large to download via Bot API: video lesson.mp4 is 27.5 MB",
+        "zh",
+      ),
+    ).toBe(
+      "错误：这个附件太大，当前 Telegram Bot API 不能下载到 bot 端。请压缩到 20MB 以内，或发可访问链接/把文件放到 bot workspace 后再让我读取。",
+    );
     expect(renderCategorizedErrorMessage("workflow-state", "invalid file workflow state")).toBe(
       "Error: Internal workflow state is unavailable right now. Retry the request later or ask the operator to inspect the service state.",
     );
@@ -411,6 +428,7 @@ describe("normalizeUpdate", () => {
           video: {
             file_id: "video-file",
             file_name: "lesson.mp4",
+            file_size: 27_500_000,
           },
         },
       }),
@@ -425,6 +443,7 @@ describe("normalizeUpdate", () => {
         {
           fileId: "video-file",
           fileName: "lesson.mp4",
+          fileSize: 27_500_000,
           kind: "video",
         },
       ],
