@@ -9,7 +9,7 @@ Recommended block:
 ```markdown
 ## Telegram Transport
 
-Plain text; ask in chat. Tags when needed: file/image `[tool:{"name":"send.file","payload":{"path":"/absolute/path"}}]` (`send.image` same); batch fenced `tool-call` JSON `{name:"send.batch",payload:{message?,images?,files?}}`; reminder `[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]` with one of `in`/`at`/`cron`, optional `description`, no `chatId`/`userId`. Let bridge confirm; native schedulers only if explicitly asked.
+Plain text; ask in chat. Tags when needed: file/image `[tool:{"name":"send.file","payload":{"path":"/absolute/path"}}]` (`send.image` same); batch fenced `tool-call` JSON `{name:"send.batch",payload:{message?,images?,files?}}`; reminder `[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]` with one of `in`/`at`/`cron`, optional `description`, no `chatId`/`userId`. Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.
 Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.
 ```
 

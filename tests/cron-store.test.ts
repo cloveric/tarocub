@@ -36,6 +36,7 @@ describe("CronStore", () => {
       expect(record.enabled).toBe(true);
       expect(record.timezone).toBeDefined();
       expect(record.sessionMode).toBe("new_per_run");
+      expect(record.deliveryMode).toBe("agent");
       expect(record.mute).toBe(false);
       expect(record.silent).toBe(false);
       expect(record.timeoutMins).toBe(30);
@@ -49,6 +50,43 @@ describe("CronStore", () => {
       const persisted = JSON.parse(await readFile(filePath, "utf8")) as { jobs: unknown[]; schemaVersion: number };
       expect(persisted.jobs).toHaveLength(1);
       expect(persisted.schemaVersion).toBeGreaterThan(0);
+    });
+  });
+
+  it("treats legacy one-shot jobs without deliveryMode as direct notifications", async () => {
+    await withStateDir(async (stateDir, store) => {
+      const now = new Date().toISOString();
+      await writeFile(
+        resolveCronStorePath(stateDir),
+        JSON.stringify({
+          schemaVersion: 1,
+          jobs: [{
+            id: "abcdef12",
+            chatId: 100,
+            userId: 200,
+            chatType: "private",
+            cronExpr: "0 9 22 5 *",
+            prompt: "提醒我：给玉姐带尿布。",
+            enabled: true,
+            runOnce: true,
+            targetAt: "2026-05-22T00:00:00.000Z",
+            sessionMode: "new_per_run",
+            mute: false,
+            silent: false,
+            timeoutMins: 30,
+            maxFailures: 3,
+            createdAt: now,
+            updatedAt: now,
+            failureCount: 0,
+            runHistory: [],
+          }],
+        }),
+        "utf8",
+      );
+
+      const jobs = await store.list();
+
+      expect(jobs[0]?.deliveryMode).toBe("notify");
     });
   });
 

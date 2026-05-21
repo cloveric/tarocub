@@ -346,6 +346,8 @@ Agents can schedule Telegram-delivered reminders and recurring tasks through the
 [tool:{"name":"cron.add","payload":{"cron":"0 9 * * 1","prompt":"weekly summary"}}]
 ```
 
+One-shot `in` / `at` reminders default to direct Telegram notifications, so prompts such as `提醒我：给玉姐带尿布` are not sent back through the AI model at fire time. Recurring `cron` jobs default to AI-run tasks; set `deliveryMode:"notify"` for recurring plain reminders, or `deliveryMode:"agent"` when a one-shot scheduled item should run the AI.
+
 Users can also manage tasks directly in Telegram:
 
 ```text

@@ -13,6 +13,7 @@ const TimezoneSchema = z.string().refine((value) => normalizeCronTimezone(value)
 export const CronJobIdSchema = z.string().regex(/^[a-f0-9]{8}$/, "cron id must be 8-char lowercase hex");
 
 export const CronSessionModeSchema = z.enum(["reuse", "new_per_run"]);
+export const CronDeliveryModeSchema = z.enum(["agent", "notify"]);
 export const CronLocaleSchema = z.enum(["zh", "en"]);
 
 export const CronRunHistoryEntrySchema = z.object({
@@ -36,6 +37,7 @@ export const CronJobRecordSchema = z.object({
   runOnce: z.boolean().default(false),
   targetAt: IsoTimestampSchema.optional(),
   sessionMode: CronSessionModeSchema.default("new_per_run"),
+  deliveryMode: CronDeliveryModeSchema.default("agent"),
   mute: z.boolean().default(false),
   silent: z.boolean().default(false),
   timeoutMins: z.number().int().min(0).max(24 * 60).default(30),
@@ -57,4 +59,5 @@ export const CronStoreStateSchema = z.object({
 export type CronJobRecordInput = z.input<typeof CronJobRecordSchema>;
 export type CronJobRecord = z.output<typeof CronJobRecordSchema>;
 export type CronSessionMode = z.output<typeof CronSessionModeSchema>;
+export type CronDeliveryMode = z.output<typeof CronDeliveryModeSchema>;
 export type CronLocale = z.output<typeof CronLocaleSchema>;

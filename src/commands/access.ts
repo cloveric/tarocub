@@ -53,7 +53,7 @@ export function renderDefaultInstanceAgentInstructions(): string {
   return [
   "## Telegram Transport",
   "",
-  `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
+  `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
   "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
   "",
   ].join("\n");

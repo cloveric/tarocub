@@ -251,6 +251,11 @@ export function createDefaultTelegramToolRegistry(): TelegramToolRegistry {
         cron: { type: "string", maxLength: 120 },
         timezone: { type: "string", description: "Optional IANA timezone, for example Asia/Shanghai. Defaults to the bot instance timezone." },
         description: { type: "string", maxLength: 200 },
+        deliveryMode: {
+          type: "string",
+          enum: ["notify", "agent"],
+          description: "Defaults to notify for one-shot in/at reminders and agent for cron jobs. Use agent when the scheduled item should run the AI instead of just sending the reminder text.",
+        },
         sessionMode: {
           type: "string",
           enum: ["new_per_run", "reuse"],

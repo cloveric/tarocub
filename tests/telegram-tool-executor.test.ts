@@ -104,6 +104,7 @@ describe("executeTelegramTool", () => {
           locale: "en",
           prompt: "check email",
           sessionMode: "new_per_run",
+          deliveryMode: "notify",
           targetAt: "2026-04-29T05:10:00.000Z",
         }));
       });

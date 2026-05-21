@@ -8,11 +8,12 @@ import {
   CronJobRecordSchema,
   CronStoreStateSchema,
   type CronJobRecord,
+  type CronDeliveryMode,
   type CronLocale,
   type CronSessionMode,
 } from "./cron-store-schema.js";
 
-export type { CronJobRecord, CronLocale, CronSessionMode } from "./cron-store-schema.js";
+export type { CronJobRecord, CronDeliveryMode, CronLocale, CronSessionMode } from "./cron-store-schema.js";
 
 export interface CronJobInput {
   chatId: number;
@@ -28,6 +29,7 @@ export interface CronJobInput {
   runOnce?: boolean;
   targetAt?: string;
   sessionMode?: CronSessionMode;
+  deliveryMode?: CronDeliveryMode;
   mute?: boolean;
   silent?: boolean;
   timeoutMins?: number;
@@ -43,6 +45,7 @@ export interface CronJobUpdate {
   runOnce?: boolean;
   targetAt?: string | null;
   sessionMode?: CronSessionMode;
+  deliveryMode?: CronDeliveryMode;
   mute?: boolean;
   silent?: boolean;
   timeoutMins?: number;
@@ -89,11 +92,23 @@ export class CronStore {
     this.store = new JsonStore<CronStoreState>(this.filePath, (value) => {
       const result = CronStoreStateSchema.safeParse(value);
       if (result.success) {
+        const rawJobs = typeof value === "object" &&
+          value !== null &&
+          Array.isArray((value as { jobs?: unknown }).jobs)
+          ? (value as { jobs: unknown[] }).jobs
+          : [];
         return {
-          jobs: result.data.jobs.map((job) => ({
-            ...job,
-            timezone: job.timezone ?? this.defaultTimezone,
-          })),
+          jobs: result.data.jobs.map((job, index) => {
+            const rawJob = rawJobs[index];
+            const hasStoredDeliveryMode = typeof rawJob === "object" &&
+              rawJob !== null &&
+              "deliveryMode" in rawJob;
+            return {
+              ...job,
+              timezone: job.timezone ?? this.defaultTimezone,
+              deliveryMode: hasStoredDeliveryMode ? job.deliveryMode : (job.runOnce ? "notify" : job.deliveryMode),
+            };
+          }),
         };
       }
       throw new Error(`invalid cron store state: ${result.error.message}`);
@@ -142,6 +157,7 @@ export class CronStore {
         runOnce: input.runOnce ?? false,
         targetAt: input.targetAt,
         sessionMode: input.sessionMode ?? "new_per_run",
+        deliveryMode: input.deliveryMode ?? (input.runOnce ? "notify" : "agent"),
         mute: input.mute ?? false,
         silent: input.silent ?? false,
         timeoutMins: input.timeoutMins ?? 30,
@@ -198,6 +214,7 @@ export class CronStore {
             ? undefined
             : patch.targetAt ?? existing.targetAt,
         sessionMode: patch.sessionMode ?? existing.sessionMode,
+        deliveryMode: patch.deliveryMode ?? existing.deliveryMode,
         mute: patch.mute ?? existing.mute,
         silent: patch.silent ?? existing.silent,
         timeoutMins: patch.timeoutMins ?? existing.timeoutMins,

@@ -2,7 +2,7 @@ import type { CronRuntime } from "../runtime/cron-runtime.js";
 import { validateCronExpression } from "../runtime/cron-scheduler.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { CronJobInput, CronJobRecord } from "../state/cron-store.js";
-import type { CronSessionMode } from "../state/cron-store-schema.js";
+import type { CronDeliveryMode, CronSessionMode } from "../state/cron-store-schema.js";
 import { normalizeCronTimezone } from "../state/cron-timezone.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import type { TelegramToolContext, TelegramToolResult } from "./telegram-tool-types.js";
@@ -98,6 +98,16 @@ function asOptionalSessionMode(value: unknown): CronSessionMode | undefined {
   return value;
 }
 
+function asOptionalDeliveryMode(value: unknown): CronDeliveryMode | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (value !== "agent" && value !== "notify") {
+    throw new Error("deliveryMode must be 'agent' or 'notify'");
+  }
+  return value;
+}
+
 function parsePayload(payload: unknown): unknown {
   return typeof payload === "string" ? JSON.parse(payload) : payload;
 }
@@ -114,6 +124,7 @@ function buildCronInput(
   const prompt = asPrompt(body.prompt);
   const timezone = normalizeCronTimezone(body.timezone);
   const sessionMode = asOptionalSessionMode(body.sessionMode) ?? "new_per_run";
+  const deliveryMode = asOptionalDeliveryMode(body.deliveryMode);
   if (body.timezone !== undefined && timezone === undefined) {
     throw new Error("timezone must be a valid IANA timezone like Asia/Shanghai");
   }
@@ -141,6 +152,7 @@ function buildCronInput(
       prompt,
       description: asOptionalString(body.description, "description", 200),
       sessionMode,
+      deliveryMode: deliveryMode ?? "agent",
       maxFailures: asOptionalInteger(body.maxFailures, "maxFailures", 1, 100),
     };
   }
@@ -175,6 +187,7 @@ function buildCronInput(
     prompt,
     description: asOptionalString(body.description, "description", 200),
     sessionMode,
+    deliveryMode: deliveryMode ?? "notify",
     maxFailures: asOptionalInteger(body.maxFailures, "maxFailures", 1, 100),
     runOnce: true,
     targetAt,

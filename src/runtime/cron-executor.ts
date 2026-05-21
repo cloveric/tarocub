@@ -85,6 +85,33 @@ function silentTelegramApi(api: TelegramApi): TelegramApi {
   });
 }
 
+function stripReminderPrefix(prompt: string): string {
+  const trimmed = prompt.trim();
+  const stripped = trimmed
+    .replace(/^(?:提醒我|提醒一下我|提醒一下|提醒)[\s:：,，。.]*/u, "")
+    .replace(/^remind me(?:\s+to)?[\s:：,，.]*/i, "")
+    .trim();
+  return stripped || trimmed;
+}
+
+function renderCronNotification(job: CronJobRecord): string {
+  const body = stripReminderPrefix(job.prompt);
+  return job.locale === "zh"
+    ? `⏰ 提醒\n${body}`
+    : `⏰ Reminder\n${body}`;
+}
+
+async function deliverCronNotification(api: TelegramApi, job: CronJobRecord): Promise<void> {
+  if (job.mute) {
+    return;
+  }
+  const options = {
+    ...(job.silent ? { disableNotification: true } : {}),
+    ...(typeof job.messageThreadId === "number" ? { messageThreadId: job.messageThreadId } : {}),
+  };
+  await api.sendMessage(job.chatId, renderCronNotification(job), Object.keys(options).length > 0 ? options : undefined);
+}
+
 /**
  * Build a synthetic NormalizedTelegramMessage that the rest of the pipeline
  * (handleNormalizedTelegramMessage → executeWorkflowAwareTelegramTurn) treats
@@ -137,6 +164,11 @@ export function buildCronExecutor(options: BuildCronExecutorOptions): (job: Cron
     });
     if (accessDecision.kind !== "allow") {
       throw new CronAccessDeniedError(accessDecision.text ? `cron access denied: ${accessDecision.text}` : undefined);
+    }
+
+    if (job.deliveryMode === "notify") {
+      await deliverCronNotification(options.api, job);
+      return;
     }
 
     const effectiveApi = job.mute

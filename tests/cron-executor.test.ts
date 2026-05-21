@@ -16,6 +16,7 @@ function makeJob(overrides: Partial<CronJobRecord> = {}): CronJobRecord {
     enabled: true,
     runOnce: false,
     sessionMode: "reuse",
+    deliveryMode: "agent",
     mute: false,
     silent: false,
     timeoutMins: 30,
@@ -59,6 +60,27 @@ describe("buildCronExecutor", () => {
       inboxDir: "/tmp/inbox",
       updateId: undefined,
     });
+  });
+
+  it("delivers notify-mode reminders directly without invoking the engine", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
+    const executor = buildCronExecutor({ api: api as never, bridge: makeBridge(), inboxDir: "/tmp/inbox", handler });
+
+    await executor(makeJob({
+      deliveryMode: "notify",
+      prompt: "提醒我：给玉姐带尿布。",
+      locale: "zh",
+      messageThreadId: 77,
+      silent: true,
+    }));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      100,
+      "⏰ 提醒\n给玉姐带尿布。",
+      { disableNotification: true, messageThreadId: 77 },
+    );
   });
 
   it("replays the persisted chatType instead of hardcoding private", async () => {
