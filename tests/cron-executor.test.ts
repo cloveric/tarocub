@@ -83,6 +83,79 @@ describe("buildCronExecutor", () => {
     );
   });
 
+  it("normalizes relative scheduling words out of direct reminder notifications", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
+    const executor = buildCronExecutor({ api: api as never, bridge: makeBridge(), inboxDir: "/tmp/inbox", handler });
+
+    await executor(makeJob({
+      deliveryMode: "notify",
+      prompt: "提醒我：明天早定课，7点上课，准备出发。",
+      locale: "zh",
+    }));
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      100,
+      "⏰ 提醒\n早定课，7点上课，准备出发。",
+      undefined,
+    );
+  });
+
+  it("keeps relative words inside the reminder body", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
+    const executor = buildCronExecutor({ api: api as never, bridge: makeBridge(), inboxDir: "/tmp/inbox", handler });
+
+    await executor(makeJob({
+      deliveryMode: "notify",
+      prompt: "提醒我：带上明天要用的文件。",
+      locale: "zh",
+    }));
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      100,
+      "⏰ 提醒\n带上明天要用的文件。",
+      undefined,
+    );
+  });
+
+  it("normalizes longer leading time anchors before shorter prefixes", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
+    const executor = buildCronExecutor({ api: api as never, bridge: makeBridge(), inboxDir: "/tmp/inbox", handler });
+
+    await executor(makeJob({
+      deliveryMode: "notify",
+      prompt: "提醒我：明晚上 8 点开会。",
+      locale: "zh",
+    }));
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      100,
+      "⏰ 提醒\n8 点开会。",
+      undefined,
+    );
+  });
+
+  it("normalizes leading week anchors in direct reminder notifications", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
+    const executor = buildCronExecutor({ api: api as never, bridge: makeBridge(), inboxDir: "/tmp/inbox", handler });
+
+    await executor(makeJob({
+      deliveryMode: "notify",
+      prompt: "提醒我：本周一晨会准备 deck。",
+      locale: "zh",
+    }));
+
+    expect(api.sendMessage).toHaveBeenCalledWith(
+      100,
+      "⏰ 提醒\n晨会准备 deck。",
+      undefined,
+    );
+  });
+
   it("replays the persisted chatType instead of hardcoding private", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const executor = buildCronExecutor({ api: {} as never, bridge: makeBridge(), inboxDir: "/tmp", handler });

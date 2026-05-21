@@ -94,8 +94,30 @@ function stripReminderPrefix(prompt: string): string {
   return stripped || trimmed;
 }
 
+function stripLeadingReminderTimeAnchors(prompt: string): string {
+  let body = prompt.trim();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stripped = body
+      .replace(
+        /^(?:(?:大后天|明上午|明下午|明晚上|今天|明天|后天|今晚|今早|明早|明晚|早上|上午|中午|下午|晚上|凌晨)(?:的)?|(?:下下|本|这|下)?周[一二三四五六日天](?:的)?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?(?:的)?)[\s:：,，。.]*/u,
+        "",
+      )
+      .replace(/^(?:today|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|next\s+\w+)(?:'s)?[\s:：,，.]*/i, "")
+      .trim();
+    if (stripped === body || stripped.length === 0) {
+      break;
+    }
+    body = stripped;
+  }
+  return body || prompt.trim();
+}
+
+function normalizeReminderNotificationBody(prompt: string): string {
+  return stripLeadingReminderTimeAnchors(stripReminderPrefix(prompt));
+}
+
 function renderCronNotification(job: CronJobRecord): string {
-  const body = stripReminderPrefix(job.prompt);
+  const body = normalizeReminderNotificationBody(job.prompt);
   return job.locale === "zh"
     ? `⏰ 提醒\n${body}`
     : `⏰ Reminder\n${body}`;
