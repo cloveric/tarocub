@@ -1142,11 +1142,10 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 | `telegram service status` | Running state, PID, engine, bot identity, timeline summary, latest crew run |
 | `telegram service restart` | Stop + start with clean consumer reset |
 | `telegram service restart --all` | Restart every configured instance; `start`, `stop`, `status`, and `doctor` also accept `--all` |
+| `telegram service restart --instance <name> --defer` | Schedule a one-shot detached restart after the current reply, useful when a bot needs to restart itself |
 | `telegram service logs` | Tail stdout/stderr logs |
 | `telegram service doctor` | Health check across all subsystems, including timeline, crew state, shared engine env, and stale launchd leftovers |
 | `telegram engine [codex\|claude\|antigravity]` | Switch AI engine per instance |
-
-When `telegram service stop --all` or `telegram service restart --all` is run from inside an active bot turn, the current instance is skipped so the command cannot kill its own execution chain. Restart that instance separately from a terminal if needed.
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
 | `telegram usage` | Show token usage and estimated cost |
 | `telegram verbosity [0\|1\|2]` | Store the legacy verbosity setting; current process runtimes use typing actions plus timeline/audit events |
@@ -1160,6 +1159,8 @@ When `telegram service stop --all` or `telegram service restart --all` is run fr
 | `telegram help` | Show all available commands |
 
 All commands accept `--instance <name>` to target a specific bot.
+
+When `telegram service restart --all` is run from inside an active bot turn, the current instance is restarted last through a one-shot detached helper so the reply can finish before the bot kills its own process. `telegram service stop --all` still skips the current instance; stop it from a terminal if needed.
 
 ## Stable Beta Commands
 

@@ -45,6 +45,7 @@ import {
   getServiceStatus,
   inspectInstanceServiceLiveness,
   runServiceDoctor,
+  scheduleDeferredServiceRestart,
   startServiceInstance,
   stopServiceInstance,
   type ServiceCommandDeps,
@@ -751,10 +752,14 @@ async function runServiceCommand(
   const hasInstanceOption = serviceArgs.some((argument) => argument === "--instance" || argument.startsWith("--instance="));
   const { instanceName, args: rawArgs } = extractInstanceOption(serviceArgs);
   const { enabled: all, args: afterAll } = extractBooleanFlag(rawArgs, "--all");
-  const { enabled: force, args } = extractBooleanFlag(afterAll, "--force");
+  const { enabled: force, args: afterForce } = extractBooleanFlag(afterAll, "--force");
+  const { enabled: defer, args } = extractBooleanFlag(afterForce, "--defer");
 
   if (subcommand !== "logs" && args.length !== 0) {
-    throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> [--instance <name>] [--all] [--force]");
+    throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> [--instance <name>] [--all] [--force] [--defer]");
+  }
+  if (defer && subcommand !== "restart") {
+    throw new Error("Usage: telegram service restart [--instance <name>] [--all] [--force] [--defer]");
   }
 
   if (all) {
@@ -774,13 +779,18 @@ async function runServiceCommand(
     const currentServiceInstanceName = env.CODEX_TELEGRAM_INSTANCE
       ? normalizeInstanceName(env.CODEX_TELEGRAM_INSTANCE)
       : null;
-    const shouldSkipCurrentInstance = currentServiceInstanceName !== null && (subcommand === "restart" || subcommand === "stop");
+    const shouldSkipCurrentStop = currentServiceInstanceName !== null && subcommand === "stop";
+    let deferredCurrentRestartInstance: string | null = null;
 
     for (const currentInstanceName of instanceNames) {
-      if (shouldSkipCurrentInstance && currentInstanceName === currentServiceInstanceName) {
+      if (shouldSkipCurrentStop && currentInstanceName === currentServiceInstanceName) {
         logger.log(
           `Skipped current instance "${currentInstanceName}"; run ${subcommand} --instance ${currentInstanceName} from a terminal if you need to ${subcommand} it too.`,
         );
+        continue;
+      }
+      if (subcommand === "restart" && currentInstanceName === currentServiceInstanceName) {
+        deferredCurrentRestartInstance = currentInstanceName;
         continue;
       }
       if (subcommand === "start") {
@@ -806,6 +816,9 @@ async function runServiceCommand(
       }
       throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> ...");
     }
+    if (deferredCurrentRestartInstance !== null) {
+      logger.log(await scheduleDeferredServiceRestart(env, deferredCurrentRestartInstance, serviceDeps, { current: true }));
+    }
     return true;
   }
 
@@ -820,6 +833,10 @@ async function runServiceCommand(
   }
 
   if (subcommand === "restart") {
+    if (defer) {
+      logger.log(await scheduleDeferredServiceRestart(env, instanceName, serviceDeps));
+      return true;
+    }
     await stopServiceInstance(env, instanceName, serviceDeps, { force });
     logger.log(await startServiceInstance(env, instanceName, serviceDeps));
     return true;

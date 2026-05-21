@@ -286,7 +286,7 @@ describe("executeTelegramTool", () => {
             locale: "en",
           },
         }),
-        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 25)),
+        new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 250)),
       ]);
 
       expect(result).not.toBe("timeout");

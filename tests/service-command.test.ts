@@ -1518,7 +1518,7 @@ describe("telegram service commands", () => {
     }
   });
 
-  it("skips the current instance when restarting all from inside an instance", async () => {
+  it("defers restarting the current instance when restarting all from inside an instance", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
     const killProcessTree = vi.fn();
@@ -1557,6 +1557,10 @@ describe("telegram service commands", () => {
           isExpectedServiceProcess: (pid) => instances.some((instance) => instance.oldPid === pid || instance.newPid === pid),
           killProcessTree,
           spawnDetached: (command, args, options) => {
+            if (args[0] === "-e") {
+              spawnDetached(command, args, options);
+              return;
+            }
             const instanceName = args.at(-1);
             const instance = instances.find((candidate) => candidate.name === instanceName);
             if (!instance) {
@@ -1581,11 +1585,62 @@ describe("telegram service commands", () => {
       expect(handled).toBe(true);
       expect(killProcessTree).not.toHaveBeenCalledWith(54321);
       expect(killProcessTree).toHaveBeenCalledWith(54322);
-      expect(spawnDetached).toHaveBeenCalledTimes(1);
-      expect(messages).toEqual([
-        'Skipped current instance "alpha"; run restart --instance alpha from a terminal if you need to restart it too.',
-        'Started instance "beta" with pid 12346.',
+      expect(spawnDetached).toHaveBeenCalledTimes(2);
+      expect(spawnDetached.mock.calls[1]?.[0]).toBe(process.execPath);
+      expect(spawnDetached.mock.calls[1]?.[1]).toEqual([
+        "-e",
+        expect.stringContaining("spawnSync(process.execPath, restartArgs"),
+        path.join(REPO_ROOT, "dist", "src", "index.js"),
+        "alpha",
+        "5000",
       ]);
+      expect(spawnDetached.mock.calls[1]?.[2]).toMatchObject({
+        cwd: REPO_ROOT,
+        stdoutPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
+        stderrPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
+      });
+      expect(messages).toEqual([
+        'Started instance "beta" with pid 12346.',
+        'Scheduled one-shot deferred restart for current instance "alpha" in 5s.',
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("supports explicitly deferring a service restart", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const spawnDetached = vi.fn();
+
+    try {
+      const handled = await runCli(["telegram", "service", "restart", "--instance", "alpha", "--defer"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          spawnDetached,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(spawnDetached).toHaveBeenCalledWith(
+        process.execPath,
+        [
+          "-e",
+          expect.stringContaining("spawnSync(process.execPath, restartArgs"),
+          path.join(REPO_ROOT, "dist", "src", "index.js"),
+          "alpha",
+          "5000",
+        ],
+        {
+          cwd: REPO_ROOT,
+          stdoutPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
+          stderrPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
+        },
+      );
+      expect(messages).toEqual(['Scheduled one-shot deferred restart for instance "alpha" in 5s.']);
     } finally {
       await removeTempRoot(tempDir);
     }

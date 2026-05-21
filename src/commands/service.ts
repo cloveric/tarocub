@@ -144,6 +144,35 @@ export interface ServiceDoctorResult {
 const BLOCKING_WORKFLOW_STATUSES = new Set(["preparing", "processing", "failed"]);
 const LEGACY_AUTOSTART_LABEL_PREFIX = "com.cloveric.cc-telegram-bridge.";
 const ACTIVE_TURN_STALE_MS = 6 * 60 * 60_000;
+const DEFAULT_DEFERRED_RESTART_DELAY_MS = 5_000;
+const DEFERRED_RESTART_HELPER_SCRIPT = `
+const { spawnSync } = require("node:child_process");
+
+const entryPath = process.argv[1];
+const instanceName = process.argv[2];
+const delayMs = Number.parseInt(process.argv[3] ?? "5000", 10);
+
+setTimeout(() => {
+  const env = { ...process.env };
+  delete env.CODEX_TELEGRAM_INSTANCE;
+
+  const restartArgs = [
+    entryPath,
+    "telegram",
+    "service",
+    "restart",
+    "--instance",
+    instanceName,
+    "--force",
+  ];
+  const result = spawnSync(process.execPath, restartArgs, {
+    env,
+    stdio: "inherit",
+  });
+
+  process.exit(result.status ?? 1);
+}, Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 5000);
+`;
 
 function resolveHomeDir(env: Pick<ServiceCommandEnv, "HOME" | "USERPROFILE">): string {
   const homeDir = env.HOME ?? env.USERPROFILE;
@@ -639,6 +668,40 @@ export async function startServiceInstance(
   }
 
   throw new Error(`Instance "${paths.instanceName}" did not reach a running state.`);
+}
+
+export async function scheduleDeferredServiceRestart(
+  env: ServiceCommandEnv,
+  instanceName: string,
+  deps: ServiceCommandDeps = {},
+  options: { current?: boolean; delayMs?: number } = {},
+): Promise<string> {
+  const cwd = deps.cwd ?? process.cwd();
+  const paths = resolveServicePaths(env, instanceName, cwd);
+  const spawnDetachedProcess = deps.spawnDetached ?? defaultSpawnDetached;
+  const delayMs = Math.max(1, Math.trunc(options.delayMs ?? DEFAULT_DEFERRED_RESTART_DELAY_MS));
+
+  if (!existsSync(paths.entryPath)) {
+    throw new Error(`Built entrypoint not found: ${paths.entryPath}`);
+  }
+
+  await mkdir(paths.stateDir, { recursive: true });
+
+  const logPath = path.join(paths.stateDir, "deferred-restart.log");
+  spawnDetachedProcess(process.execPath, [
+    "-e",
+    DEFERRED_RESTART_HELPER_SCRIPT,
+    paths.entryPath,
+    paths.instanceName,
+    String(delayMs),
+  ], {
+    cwd,
+    stdoutPath: logPath,
+    stderrPath: logPath,
+  });
+
+  const target = options.current ? "current instance" : "instance";
+  return `Scheduled one-shot deferred restart for ${target} "${paths.instanceName}" in ${Math.ceil(delayMs / 1000)}s.`;
 }
 
 export async function stopServiceInstance(
