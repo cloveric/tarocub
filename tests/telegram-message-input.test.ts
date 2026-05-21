@@ -93,6 +93,37 @@ describe("prepareTelegramMessageInput", () => {
     }
   });
 
+  it("downloads video attachments and appends their transcripts to the turn text", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("make subtitles", [
+      { fileId: "video-1", fileName: "lesson.mp4", kind: "video" },
+    ]);
+    const transcribeVoice = vi.fn().mockResolvedValue("video transcript");
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "videos/lesson.mp4" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice,
+      });
+
+      expect(result).toEqual({
+        kind: "ready",
+        text: "make subtitles\nvideo transcript",
+        downloadedAttachments: [],
+      });
+      expect(transcribeVoice).toHaveBeenCalledTimes(1);
+      expect(transcribeVoice).toHaveBeenCalledWith(expect.stringMatching(/lesson\.mp4$/));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("transcribes quoted audio into the reply context", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
     const normalized: NormalizedTelegramMessage = {
@@ -150,6 +181,33 @@ describe("prepareTelegramMessageInput", () => {
       expect(result).toEqual({
         kind: "reply",
         text: "语音转写失败，请发送文字消息。",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("returns a localized reply when video transcription fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("", [
+      { fileId: "video-1", fileName: "lesson.mp4", kind: "video" },
+    ]);
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "zh",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "videos/lesson.mp4" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice: vi.fn().mockRejectedValue(new Error("boom")),
+      });
+
+      expect(result).toEqual({
+        kind: "reply",
+        text: "视频转写失败，请发送文字消息或音频文件。",
       });
     } finally {
       await removeTempRoot(root);
@@ -282,6 +340,59 @@ describe("createDefaultTranscribeVoice", () => {
     expect(transcript).toContain("chunk-000 transcript");
     expect(transcript).toContain("[chunk 2/3 transcription failed:");
     expect(transcript).toContain("chunk-002 transcript");
+  });
+
+  it("extracts short video audio to wav before transcription", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string };
+      return {
+        ok: true,
+        text: async () => `transcribed ${path.basename(body.path ?? "")}`,
+      };
+    });
+    const execFileImpl = vi.fn((
+      file: string,
+      args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "37.5\n", "");
+        return;
+      }
+
+      if (file === "ffmpeg") {
+        expect(args).toContain("-vn");
+        const pattern = String(args.at(-1));
+        void writeFile(pattern.replace("%03d", "000"), "chunk-000").then(
+          () => callback(null, "", ""),
+          (error) => callback(error, "", String(error)),
+        );
+        return;
+      }
+
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "",
+      cliScript: "",
+      fetchImpl: fetchImpl as never,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      ffmpegPath: "ffmpeg",
+      chunkAfterSeconds: 120,
+      chunkSeconds: 60,
+    } as never);
+
+    await expect(transcribeVoice("/tmp/short-clip.mp4")).resolves.toBe("transcribed chunk-000.wav");
+
+    expect(execFileImpl).toHaveBeenCalledWith(
+      "ffmpeg",
+      expect.arrayContaining(["-i", "/tmp/short-clip.mp4", "-vn"]),
+      expect.any(Object),
+      expect.any(Function),
+    );
   });
 
   it("warns and falls back to single-file transcription when ffprobe fails", async () => {

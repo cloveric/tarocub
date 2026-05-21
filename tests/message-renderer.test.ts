@@ -401,6 +401,66 @@ describe("normalizeUpdate", () => {
     });
   });
 
+  it("extracts a video attachment for transcription", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          caption: "turn this into subtitles",
+          video: {
+            file_id: "video-file",
+            file_name: "lesson.mp4",
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "turn this into subtitles",
+      replyContext: undefined,
+      attachments: [
+        {
+          fileId: "video-file",
+          fileName: "lesson.mp4",
+          kind: "video",
+        },
+      ],
+    });
+  });
+
+  it("treats video document attachments as transcribable video", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          document: {
+            file_id: "video-doc",
+            file_name: "export.mp4",
+            mime_type: "video/mp4",
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "",
+      replyContext: undefined,
+      attachments: [
+        {
+          fileId: "video-doc",
+          fileName: "export.mp4",
+          kind: "video",
+        },
+      ],
+    });
+  });
+
   it("treats audio document attachments as transcribable audio", () => {
     expect(
       normalizeUpdate({
@@ -496,6 +556,41 @@ describe("normalizeUpdate", () => {
           fileId: "quoted-audio-doc",
           fileName: "brief.m4a",
           kind: "audio",
+        },
+      },
+      attachments: [],
+    });
+  });
+
+  it("extracts quoted video reply context for transcription", () => {
+    expect(
+      normalizeUpdate({
+        message: {
+          chat: { id: 123, type: "private" },
+          from: { id: 456 },
+          text: "draft subtitles from this",
+          reply_to_message: {
+            message_id: 99,
+            video: {
+              file_id: "quoted-video-file",
+              file_name: "clip.mp4",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      chatId: 123,
+      userId: 456,
+      chatType: "private",
+      conversationKey: "chat:123",
+      text: "draft subtitles from this",
+      replyContext: {
+        messageId: 99,
+        text: "",
+        audioAttachment: {
+          fileId: "quoted-video-file",
+          fileName: "clip.mp4",
+          kind: "video",
         },
       },
       attachments: [],

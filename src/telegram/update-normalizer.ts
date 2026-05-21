@@ -3,7 +3,7 @@ import { getTelegramConversationKey } from "./conversation-key.js";
 export interface NormalizedTelegramAttachment {
   fileId: string;
   fileName?: string;
-  kind: "audio" | "document" | "photo" | "voice";
+  kind: "audio" | "document" | "photo" | "video" | "voice";
 }
 
 export interface NormalizedTelegramMessage {
@@ -95,7 +95,9 @@ function normalizeReplyContext(message: any): NormalizedTelegramMessage["replyCo
 
   const audioAttachment = normalizeAudioAttachment(reply)[0]
     ?? normalizeVoiceAttachment(reply)[0]
-    ?? (isAudioDocument(reply) ? normalizeDocumentAttachment(reply)[0] : undefined);
+    ?? normalizeVideoAttachment(reply)[0]
+    ?? normalizeVideoNoteAttachment(reply)[0]
+    ?? (isAudioDocument(reply) || isVideoDocument(reply) ? normalizeDocumentAttachment(reply)[0] : undefined);
 
   let documentFileId: string | undefined;
   let documentFileName: string | undefined;
@@ -115,11 +117,22 @@ function normalizeReplyContext(message: any): NormalizedTelegramMessage["replyCo
 }
 
 const AUDIO_FILE_NAME_PATTERN = /\.(aac|aiff?|flac|m4a|m4b|mp3|oga|ogg|opus|wav|webm)$/i;
+const VIDEO_FILE_NAME_PATTERN = /\.(avi|m4v|mkv|mov|mp4|webm)$/i;
 
 function isAudioDocument(message: any): boolean {
   const mimeType = typeof message?.document?.mime_type === "string" ? message.document.mime_type : "";
+  const normalizedMimeType = mimeType.toLowerCase();
   const fileName = typeof message?.document?.file_name === "string" ? message.document.file_name : "";
-  return mimeType.toLowerCase().startsWith("audio/") || AUDIO_FILE_NAME_PATTERN.test(fileName);
+  return normalizedMimeType.startsWith("audio/")
+    || (!normalizedMimeType.startsWith("video/") && AUDIO_FILE_NAME_PATTERN.test(fileName));
+}
+
+function isVideoDocument(message: any): boolean {
+  const mimeType = typeof message?.document?.mime_type === "string" ? message.document.mime_type : "";
+  const normalizedMimeType = mimeType.toLowerCase();
+  const fileName = typeof message?.document?.file_name === "string" ? message.document.file_name : "";
+  return normalizedMimeType.startsWith("video/")
+    || (!normalizedMimeType.startsWith("audio/") && VIDEO_FILE_NAME_PATTERN.test(fileName));
 }
 
 function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment[] {
@@ -133,6 +146,15 @@ function normalizeDocumentAttachment(message: any): NormalizedTelegramAttachment
         fileId,
         fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
         kind: "audio",
+      },
+    ];
+  }
+  if (isVideoDocument(message)) {
+    return [
+      {
+        fileId,
+        fileName: typeof message.document.file_name === "string" ? message.document.file_name : undefined,
+        kind: "video",
       },
     ];
   }
@@ -175,6 +197,35 @@ function normalizePhotoAttachment(message: any): NormalizedTelegramAttachment[] 
     {
       fileId: candidate.file_id,
       kind: "photo",
+    },
+  ];
+}
+
+function normalizeVideoAttachment(message: any): NormalizedTelegramAttachment[] {
+  const fileId = message?.video?.file_id;
+  if (typeof fileId !== "string" || fileId.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      fileId,
+      fileName: typeof message.video.file_name === "string" ? message.video.file_name : undefined,
+      kind: "video",
+    },
+  ];
+}
+
+function normalizeVideoNoteAttachment(message: any): NormalizedTelegramAttachment[] {
+  const fileId = message?.video_note?.file_id;
+  if (typeof fileId !== "string" || fileId.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      fileId,
+      kind: "video",
     },
   ];
 }
@@ -229,6 +280,8 @@ export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
       ...normalizeAudioAttachment(message),
       ...normalizeDocumentAttachment(message),
       ...normalizePhotoAttachment(message),
+      ...normalizeVideoAttachment(message),
+      ...normalizeVideoNoteAttachment(message),
       ...normalizeVoiceAttachment(message),
     ],
   };

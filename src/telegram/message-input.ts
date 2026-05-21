@@ -43,6 +43,10 @@ function inferExtension(attachment: NormalizedTelegramAttachment, telegramFilePa
     return ".m4a";
   }
 
+  if (attachment.kind === "video") {
+    return ".mp4";
+  }
+
   return "";
 }
 
@@ -80,6 +84,7 @@ const ASR_HTTP_TIMEOUT_MS = parsePositiveNumber(process.env.ASR_HTTP_TIMEOUT_MS,
 const ASR_CHUNK_AFTER_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_AFTER_SECONDS, 120);
 const ASR_CHUNK_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_SECONDS, 60);
 const MAX_ASR_CHUNK_SECONDS = 600;
+const VIDEO_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
 const asrWatchdog = createAsrWatchdogFromEnv();
 
 type ExecFileCallback = (error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void;
@@ -102,6 +107,10 @@ function parsePositiveNumber(value: string | undefined, fallback: number): numbe
 function summarizeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.length > 180 ? `${message.slice(0, 177)}...` : message;
+}
+
+function isLikelyVideoFile(filePath: string): boolean {
+  return VIDEO_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
 function execFileText(
@@ -287,7 +296,7 @@ export function createDefaultTranscribeVoice(options: {
 
   return async function defaultTranscribeVoice(audioPath: string): Promise<string> {
     const duration = await probeAudioDurationSeconds(audioPath, execFileImpl, ffprobePath);
-    if (duration !== null && duration > chunkAfterSeconds) {
+    if (duration !== null && (duration > chunkAfterSeconds || isLikelyVideoFile(audioPath))) {
       const { chunks, cleanup } = await splitAudioIntoChunks(audioPath, {
         chunkSeconds,
         execFileImpl,
@@ -351,8 +360,31 @@ async function defaultDownloadAttachments(
   return downloadedFiles;
 }
 
-function isAudioLikeAttachment(attachment: NormalizedTelegramAttachment): boolean {
-  return attachment.kind === "voice" || attachment.kind === "audio";
+function isTranscribableAttachment(attachment: NormalizedTelegramAttachment): boolean {
+  return attachment.kind === "voice" || attachment.kind === "audio" || attachment.kind === "video";
+}
+
+function renderTranscriptionFailureMessage(
+  locale: Locale,
+  attachment: NormalizedTelegramAttachment,
+  quoted = false,
+): string {
+  if (attachment.kind === "video") {
+    if (locale === "zh") {
+      return quoted ? "引用视频转写失败，请发送文字消息或音频文件。" : "视频转写失败，请发送文字消息或音频文件。";
+    }
+    return quoted
+      ? "Quoted video transcription failed. Please send a text message or an audio file."
+      : "Video transcription failed. Please send a text message or an audio file.";
+  }
+
+  if (attachment.kind === "audio") {
+    return locale === "zh"
+      ? "音频转写失败，请发送文字消息。"
+      : "Audio transcription failed. Please send a text message.";
+  }
+
+  return locale === "zh" ? "语音转写失败，请发送文字消息。" : "Voice transcription failed. Please send a text message.";
 }
 
 function appendQuotedAudioTranscript(
@@ -381,24 +413,24 @@ export async function prepareTelegramMessageInput(input: {
   } = input;
 
   const allDownloaded = await downloadAttachments(api, inboxDir, normalized.attachments);
-  const voiceDownloads = allDownloaded.filter((downloaded) => isAudioLikeAttachment(downloaded.attachment));
-  const downloadedAttachments = allDownloaded.filter((downloaded) => !isAudioLikeAttachment(downloaded.attachment));
+  const transcribableDownloads = allDownloaded.filter((downloaded) => isTranscribableAttachment(downloaded.attachment));
+  const downloadedAttachments = allDownloaded.filter((downloaded) => !isTranscribableAttachment(downloaded.attachment));
   const quotedAudioDownloads = normalized.replyContext?.audioAttachment
     ? await downloadAttachments(api, inboxDir, [normalized.replyContext.audioAttachment])
     : [];
 
   let text = normalized.text;
-  if (voiceDownloads.length > 0) {
-    for (const voice of voiceDownloads) {
+  if (transcribableDownloads.length > 0) {
+    for (const media of transcribableDownloads) {
       try {
-        const transcript = await transcribeVoice(voice.localPath);
+        const transcript = await transcribeVoice(media.localPath);
         if (transcript) {
           text = text ? `${text}\n${transcript}` : transcript;
         }
       } catch {
         return {
           kind: "reply",
-          text: locale === "zh" ? "语音转写失败，请发送文字消息。" : "Voice transcription failed. Please send a text message.",
+          text: renderTranscriptionFailureMessage(locale, media.attachment),
         };
       }
     }
@@ -413,7 +445,7 @@ export async function prepareTelegramMessageInput(input: {
       } catch {
         return {
           kind: "reply",
-          text: locale === "zh" ? "音频转写失败，请发送文字消息。" : "Audio transcription failed. Please send a text message.",
+          text: renderTranscriptionFailureMessage(locale, quotedAudio.attachment, true),
         };
       }
     }
