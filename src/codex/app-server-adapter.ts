@@ -8,7 +8,9 @@ import type {
   CodexThreadGoal,
   CodexThreadGoalResponse,
   CodexUserMessageInput,
+  EngineStreamEvent,
 } from "./adapter.js";
+import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
 
 type SpawnOptions = {
@@ -85,9 +87,11 @@ function isThreadReadTimeoutError(error: unknown): error is ThreadReadTimeoutErr
 type PendingTurn = {
   chunks: string[];
   finalText?: string;
+  generatedImageTags: string[];
   errorMessage?: string;
   turnId?: string;
   onProgress?: (partialText: string) => void;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   timeout?: ReturnType<typeof setTimeout>;
   inactivityTimeout?: ReturnType<typeof setTimeout>;
   inactivityTimeoutDisabled?: boolean;
@@ -262,6 +266,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       threadId,
       prompt,
       input.onProgress,
+      input.onEngineEvent,
       input.abortSignal,
       input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
     );
@@ -566,6 +571,12 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
       const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
       const item = parsed.params?.item;
+      if (pending && threadId) {
+        const generatedImagePath = extractGeneratedImagePath(item);
+        if (generatedImagePath) {
+          this.addGeneratedImageTag(pending, threadId, generatedImagePath);
+        }
+      }
       if (
         pending &&
         typeof item === "object" &&
@@ -859,6 +870,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     threadId: string,
     prompt: string,
     onProgress?: (partialText: string) => void,
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>,
     abortSignal?: AbortSignal,
     timeoutMs: number | null = this.turnTimeoutMs,
   ): Promise<string> {
@@ -884,7 +896,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
       };
       const pendingTurn: PendingTurn = {
         chunks: [],
+        generatedImageTags: [],
         onProgress,
+        onEngineEvent,
         inactivityTimeoutDisabled: timeoutMs === null,
         resolve: resolveAndCleanup,
         reject: rejectAndCleanup,
@@ -1005,8 +1019,27 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }, timeoutMs);
   }
 
+  private addGeneratedImageTag(pending: PendingTurn, threadId: string, filePath: string): void {
+    const tag = sendImageTag(filePath);
+    if (pending.generatedImageTags.includes(tag)) {
+      return;
+    }
+    pending.generatedImageTags.push(tag);
+    pending.finalText = appendUniqueSendImageTag(pending.finalText ?? pending.chunks.join(""), filePath);
+    void Promise.resolve(pending.onEngineEvent?.({
+      type: "assistant_text",
+      text: tag,
+      sessionId: threadId,
+    })).catch(() => {});
+  }
+
   private async completeTurn(threadId: string, turnId: string | undefined, pending: PendingTurn): Promise<void> {
     let text = pending.finalText ?? pending.chunks.join("");
+    for (const tag of pending.generatedImageTags) {
+      if (!text.includes(tag)) {
+        text = [text.trim(), tag].filter(Boolean).join("\n");
+      }
+    }
 
     if (!text) {
       const turnResult = await this.readTurnResult(threadId, turnId);
@@ -1048,7 +1081,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           items?: Array<{
             type?: string;
             text?: string;
-          }>;
+          } & Record<string, unknown>>;
         }>;
       };
     };
@@ -1067,14 +1100,29 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     const items = targetTurn?.items ?? [];
+    const generatedImageTags: string[] = [];
+    let agentText = "";
     for (let index = items.length - 1; index >= 0; index--) {
       const item = items[index];
-      if (item?.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
-        return { text: item.text };
+      const generatedImagePath = extractGeneratedImagePath(item);
+      if (generatedImagePath) {
+        const tag = sendImageTag(generatedImagePath);
+        if (!generatedImageTags.includes(tag)) {
+          generatedImageTags.unshift(tag);
+        }
+      }
+      if (!agentText && item?.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
+        agentText = item.text;
       }
     }
 
-    return { text: "" };
+    let text = agentText.trim();
+    for (const tag of generatedImageTags) {
+      if (!text.includes(tag)) {
+        text = [text, tag].filter(Boolean).join("\n");
+      }
+    }
+    return { text };
   }
 
   destroy(expectedChildGeneration?: number): void {

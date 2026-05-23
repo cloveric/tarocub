@@ -881,6 +881,150 @@ describe("CodexAppServerAdapter", () => {
     });
   });
 
+  it("emits generated image items as send-image stream output", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const engineEvents: unknown[] = [];
+    const imagePath = "/tmp/codex-generated/photo.png";
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "make image fun",
+      files: [],
+      onEngineEvent: (event) => {
+        engineEvents.push(event);
+      },
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData(JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-123",
+        item: {
+          type: "imageGenerationCall",
+          result: {
+            saved_path: imagePath,
+          },
+        },
+      },
+    }) + "\n");
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(promise).resolves.toEqual({
+      text: `[send-image:${imagePath}]`,
+      sessionId: "thread-123",
+    });
+    expect(engineEvents).toEqual([
+      {
+        type: "assistant_text",
+        text: `[send-image:${imagePath}]`,
+        sessionId: "thread-123",
+      },
+    ]);
+  });
+
+  it("recovers generated image paths from thread/read without resending input attachments", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const sourcePath = "/tmp/telegram-input/original.jpg";
+    const generatedPath = "/tmp/codex-generated/fun.png";
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "make image fun",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const threadRead = JSON.parse(child.stdin.lines[3] ?? "{}");
+    expect(threadRead.method).toBe("thread/read");
+    child.stdout.emitData(JSON.stringify({
+      id: 4,
+      result: {
+        thread: {
+          turns: [
+            {
+              id: "turn-1",
+              items: [
+                {
+                  type: "userMessage",
+                  content: [{ type: "input_image", path: sourcePath }],
+                },
+                {
+                  type: "imageGenerationCall",
+                  result: { saved_path: generatedPath },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    }) + "\n");
+
+    await expect(promise).resolves.toEqual({
+      text: `[send-image:${generatedPath}]`,
+      sessionId: "thread-123",
+    });
+  });
+
+  it("does not duplicate generated image tags recovered from thread/read", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const generatedPath = "/tmp/codex-generated/fun.png";
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "make image fun",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 4);
+    child.stdout.emitData(JSON.stringify({
+      id: 4,
+      result: {
+        thread: {
+          turns: [
+            {
+              id: "turn-1",
+              items: [
+                {
+                  type: "agentMessage",
+                  text: `Done.\n[send-image:${generatedPath}]`,
+                },
+                {
+                  type: "imageGenerationCall",
+                  result: { saved_path: generatedPath },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    }) + "\n");
+
+    await expect(promise).resolves.toEqual({
+      text: `Done.\n[send-image:${generatedPath}]`,
+      sessionId: "thread-123",
+    });
+  });
+
   it("rejects with the turn error instead of resolving a fake completion message", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

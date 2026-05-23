@@ -1,6 +1,6 @@
 {
   "name": "cc-telegram-bridge",
-  "version": "4.6.36",
+  "version": "4.6.37",
   "private": true,
   "type": "module",
   "scripts": {

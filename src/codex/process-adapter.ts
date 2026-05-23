@@ -12,6 +12,7 @@ import type {
   EngineStreamEvent,
 } from "./adapter.js";
 import { CodexAppServerAdapter, type AppServerSpawnCodex } from "./app-server-adapter.js";
+import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { killProcessTree } from "./process-tree.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
 
@@ -82,6 +83,7 @@ type CodexJsonEvent =
 type CodexTurnState = {
   threadId: string | null;
   lastAgentMessage: string | null;
+  generatedImagePaths: string[];
   lastTurnFailureMessage: string | null;
   lastErrorMessage: string | null;
   usage: { inputTokens: number; outputTokens: number; cachedTokens: number } | null;
@@ -93,18 +95,42 @@ function createTurnState(): CodexTurnState {
   return {
     threadId: null,
     lastAgentMessage: null,
+    generatedImagePaths: [],
     lastTurnFailureMessage: null,
     lastErrorMessage: null,
     usage: null,
   };
 }
 
+function appendGeneratedImagePaths(text: string, imagePaths: string[]): string {
+  let next = text;
+  for (const imagePath of imagePaths) {
+    next = appendUniqueSendImageTag(next, imagePath);
+  }
+  return next;
+}
+
 function updateTurnStateFromLine(state: CodexTurnState, line: string, emitEngineEvent?: EmitEngineEvent): void {
+  let parsed: unknown;
   let event: CodexJsonEvent;
   try {
-    event = JSON.parse(line) as CodexJsonEvent;
+    parsed = JSON.parse(line);
+    event = parsed as CodexJsonEvent;
   } catch {
     return;
+  }
+
+  const generatedImagePath = extractGeneratedImagePath(parsed);
+  if (generatedImagePath) {
+    if (!state.generatedImagePaths.includes(generatedImagePath)) {
+      state.generatedImagePaths.push(generatedImagePath);
+      state.lastAgentMessage = appendGeneratedImagePaths(state.lastAgentMessage ?? "", state.generatedImagePaths);
+      emitEngineEvent?.({
+        type: "assistant_text",
+        text: sendImageTag(generatedImagePath),
+        sessionId: state.threadId ?? undefined,
+      });
+    }
   }
 
   if (event.type === "thread.started" && typeof event.thread_id === "string") {
@@ -118,7 +144,7 @@ function updateTurnStateFromLine(state: CodexTurnState, line: string, emitEngine
     event.item?.type === "agent_message" &&
     typeof event.item.text === "string"
   ) {
-    state.lastAgentMessage = event.item.text;
+    state.lastAgentMessage = appendGeneratedImagePaths(event.item.text, state.generatedImagePaths);
     emitEngineEvent?.({
       type: "assistant_text",
       text: event.item.text,

@@ -283,6 +283,68 @@ describe("ProcessCodexAdapter", () => {
     ]);
   });
 
+  it("turns Codex image generation events into send-image stream output", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const engineEvents: unknown[] = [];
+    const imagePath = "/tmp/codex-generated/photo.png";
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "make the image fun",
+      files: [],
+      onEngineEvent: (event) => {
+        engineEvents.push(event);
+      },
+    });
+
+    child.stdout.emitData('{"type":"thread.started","thread_id":"thread-456"}\n');
+    child.stdout.emitData(JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "image_generation_end",
+        saved_path: imagePath,
+      },
+    }) + "\n");
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: `[send-image:${imagePath}]`,
+      sessionId: "thread-456",
+    });
+    expect(engineEvents).toContainEqual({
+      type: "assistant_text",
+      text: `[send-image:${imagePath}]`,
+      sessionId: "thread-456",
+    });
+  });
+
+  it("keeps generated image tags when a later Codex agent message arrives", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const imagePath = "/tmp/codex-generated/photo.png";
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "make the image fun",
+      files: [],
+    });
+
+    child.stdout.emitData('{"type":"thread.started","thread_id":"thread-456"}\n');
+    child.stdout.emitData(JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "image_generation_end",
+        saved_path: imagePath,
+      },
+    }) + "\n");
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"做好了"}}\n');
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: `做好了\n[send-image:${imagePath}]`,
+      sessionId: "thread-456",
+    });
+  });
+
   it("only forwards side-channel extra env keys to the Codex child process", async () => {
     const { spawnCodex, child, calls } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);
