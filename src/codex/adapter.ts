@@ -81,6 +81,15 @@ export type EngineStreamEvent =
       type: "result";
       text: string;
       sessionId?: string;
+    }
+  | {
+      type: "task_notification";
+      text: string;
+      sessionId?: string;
+      taskId?: string;
+      status?: string;
+      summary?: string;
+      outputFile?: string;
     };
 
 export interface CodexUserMessageInput {

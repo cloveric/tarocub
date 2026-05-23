@@ -549,6 +549,382 @@ describe("ClaudeStreamAdapter", () => {
     ]));
   });
 
+  it("emits Claude background task notifications after the original turn has resolved", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: unknown[] = [];
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Run in background",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+    await expect(promise).resolves.toEqual({
+      text: "Started in the background.",
+      sessionId: "session-123",
+    });
+
+    children[0].stdout.emitData(JSON.stringify({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-1",
+      status: "completed",
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "The background command completed successfully.",
+      session_id: "session-123",
+      origin: { kind: "task-notification" },
+    }) + "\n");
+
+    await waitFor(() => events.some((event) =>
+      typeof event === "object" &&
+      event !== null &&
+      "type" in event &&
+      event.type === "task_notification"
+    ));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "task_notification",
+        text: "The background command completed successfully.",
+        sessionId: "session-123",
+      }),
+    ]));
+    expect(events.filter((event) =>
+      typeof event === "object" &&
+      event !== null &&
+      "type" in event &&
+      event.type === "task_notification"
+    )).toHaveLength(1);
+  });
+
+  it("does not resolve an active user turn with a Claude background task notification result", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: unknown[] = [];
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const first = adapter.sendUserMessage("telegram-12345", {
+      text: "Start background work",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+    await first;
+
+    const second = adapter.sendUserMessage("session-123", {
+      text: "Meanwhile, answer this",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await waitFor(() => children[0].stdin.lines.length === 2);
+    children[0].stdout.emitData(JSON.stringify({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-1",
+      status: "completed",
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "text", text: "The background command completed successfully." },
+        ],
+      },
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "The background command completed successfully.",
+      session_id: "session-123",
+      origin: { kind: "task-notification" },
+    }) + "\n");
+
+    let secondResolved = false;
+    void second.then(() => {
+      secondResolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(secondResolved).toBe(false);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "task_notification",
+        text: "The background command completed successfully.",
+        taskId: "task-1",
+        status: "completed",
+        sessionId: "session-123",
+      }),
+    ]));
+
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Current turn answer.","session_id":"session-123"}\n');
+    await expect(second).resolves.toEqual({
+      text: "Current turn answer.",
+    });
+  });
+
+  it("routes Claude background task notifications to the turn that started the task", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const firstEvents: unknown[] = [];
+    const secondEvents: unknown[] = [];
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const first = adapter.sendUserMessage("telegram-12345", {
+      text: "Start background work",
+      files: [],
+      onEngineEvent: (event) => {
+        firstEvents.push(event);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+    await first;
+
+    const second = adapter.sendUserMessage("session-123", {
+      text: "New chat context on the same session",
+      files: [],
+      onEngineEvent: (event) => {
+        secondEvents.push(event);
+      },
+    });
+
+    await waitFor(() => children[0].stdin.lines.length === 2);
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Current turn answer.","session_id":"session-123"}\n');
+    await second;
+
+    children[0].stdout.emitData(JSON.stringify({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-1",
+      status: "completed",
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "The background command completed successfully.",
+      session_id: "session-123",
+      origin: { kind: "task-notification" },
+    }) + "\n");
+
+    await waitFor(() => firstEvents.some((event) =>
+      typeof event === "object" &&
+      event !== null &&
+      "type" in event &&
+      event.type === "task_notification"
+    ));
+    expect(firstEvents).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "task_notification",
+        text: "The background command completed successfully.",
+        taskId: "task-1",
+        sessionId: "session-123",
+      }),
+    ]));
+    expect(secondEvents).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "task_notification",
+      }),
+    ]));
+  });
+
+  it("does not reap idle Claude workers while background tasks are active", async () => {
+    vi.useFakeTimers();
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      idleWorkerTtlMs: 10,
+      idleSweepIntervalMs: 5,
+    });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Start background work",
+        files: [],
+      });
+
+      expect(children).toHaveLength(1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+      await first;
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Still same worker",
+        files: [],
+      });
+
+      expect(children).toHaveLength(1);
+      children[0].stdout.emitData(JSON.stringify({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "completed",
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "The background command completed successfully.",
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Current turn answer.","session_id":"session-123"}\n');
+      await expect(second).resolves.toEqual({
+        text: "Current turn answer.",
+      });
+    } finally {
+      adapter.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reconfigure a Claude worker while background tasks are active", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const first = adapter.sendUserMessage("telegram-12345", {
+      text: "Start background work",
+      files: [],
+      instructions: "original instructions",
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+    await first;
+
+    await expect(adapter.sendUserMessage("session-123", {
+      text: "New instructions",
+      files: [],
+      instructions: "changed instructions",
+    })).rejects.toThrow("Cannot reconfigure Claude session while background tasks are active");
+    expect(children).toHaveLength(1);
+  });
+
+  it("clears background tasks when a foreground result arrives between task notification events", async () => {
+    vi.useFakeTimers();
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      idleWorkerTtlMs: 10,
+      idleSweepIntervalMs: 5,
+    });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Start background work",
+        files: [],
+      });
+
+      expect(children).toHaveLength(1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+      await first;
+
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Foreground turn",
+        files: [],
+      });
+
+      await waitFor(() => children[0].stdin.lines.length === 2);
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-1","status":"completed","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Foreground answer.","session_id":"session-123"}\n');
+      await second;
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Background done.","task_id":"task-1","session_id":"session-123","origin":{"kind":"task-notification"}}\n');
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      const third = adapter.sendUserMessage("session-123", {
+        text: "After cleanup",
+        files: [],
+      });
+
+      expect(children).toHaveLength(2);
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Fresh worker.","session_id":"session-123"}\n');
+      await third;
+    } finally {
+      adapter.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it("prunes stale Claude background tasks so never-complete tasks do not pin workers forever", async () => {
+    vi.useFakeTimers();
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      idleWorkerTtlMs: 10,
+      idleSweepIntervalMs: 5,
+      backgroundTaskMaxAgeMs: 15,
+    });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Start background work",
+        files: [],
+      });
+
+      expect(children).toHaveLength(1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+      await first;
+
+      await vi.advanceTimersByTimeAsync(30);
+
+      const second = adapter.sendUserMessage("session-123", {
+        text: "After stale task cleanup",
+        files: [],
+      });
+
+      expect(children).toHaveLength(2);
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Fresh worker.","session_id":"session-123"}\n');
+      await second;
+    } finally {
+      adapter.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps intermediate send-file tags when the final Claude result only summarizes delivery", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {

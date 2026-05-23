@@ -530,9 +530,50 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       metadata: {
         toolName: "toolName" in event ? event.toolName : undefined,
         textChars: "text" in event ? event.text.length : undefined,
+        status: "status" in event ? event.status : undefined,
         hasSendFileTag: event.type === "assistant_text" ? hasSendFileTag(event.text) : undefined,
       },
     });
+
+    if (event.type === "task_notification") {
+      const notificationText = [
+        locale === "zh" ? "后台任务完成" : "Background task completed",
+        event.text.trim(),
+      ].filter(Boolean).join("\n");
+      const delivery = deliverTelegramResponse(
+        context.api,
+        normalized.chatId,
+        notificationText,
+        context.inboxDir,
+        cfg.resume?.workspacePath,
+        state.telegramOutDirPath,
+        locale,
+        {
+          source: "stream-event",
+          notifyRejected: false,
+          onDeliveryAccepted: (receipt) => {
+            deliveryLedger.recordAccepted(receipt);
+          },
+          onDeliveryRejected: (receipt) => {
+            deliveryLedger.recordRejected(receipt);
+          },
+        },
+      ).then(() => undefined).catch((error) => {
+        void appendTimelineEventBestEffort(stateDir, {
+          type: "engine.event.delivery_failed",
+          instanceName: context.instanceName,
+          channel: "telegram",
+          chatId: normalized.chatId,
+          ...logScope,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          outcome: "error",
+          detail: error instanceof Error ? error.message : String(error),
+        });
+      });
+      streamDeliveryPromises.push(delivery);
+      return;
+    }
 
     if (event.type !== "assistant_text") {
       return;

@@ -592,6 +592,95 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("delivers Claude background task notifications from engine stream events", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
+        input.onEngineEvent?.({
+          type: "task_notification",
+          text: "The background command completed successfully.",
+          sessionId: "session-123",
+        });
+        return {
+          text: "Started in the background.",
+        };
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(1);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("run it in background"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            sendVoice: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 100,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(deliverTelegramResponse).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        123,
+        "Background task completed\nThe background command completed successfully.",
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+        expect.objectContaining({
+          source: "stream-event",
+        }),
+      );
+      expect(deliverTelegramResponse).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        123,
+        "Started in the background.",
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "engine.event",
+          detail: "task_notification",
+          metadata: expect.objectContaining({
+            textChars: 46,
+          }),
+        }),
+      ]));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("delivers stream send.file tool tags before final turn delivery and strips duplicate final tags", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {

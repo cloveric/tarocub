@@ -65,6 +65,13 @@ type ClaudeStreamEvent = {
   api_error_status?: string | number | null;
   terminal_reason?: string;
   request_id?: string;
+  task_id?: string;
+  status?: string;
+  summary?: string;
+  output_file?: string;
+  origin?: {
+    kind?: string;
+  } | null;
   request?: {
     subtype?: string;
     tool_name?: string;
@@ -107,6 +114,18 @@ type PendingTurn = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
+type ClaudeTaskNotificationMetadata = {
+  taskId?: string;
+  status?: string;
+  summary?: string;
+  outputFile?: string;
+};
+
+type ClaudeBackgroundTask = ClaudeTaskNotificationMetadata & {
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  lastSeenAt: number;
+};
+
 type ClaudeWorker = {
   child: ClaudeChildProcess;
   lineBuffer: string;
@@ -114,6 +133,10 @@ type ClaudeWorker = {
   currentSessionId: string | null;
   workspacePath: string | undefined;
   pendingTurn: PendingTurn | null;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  backgroundTasks: Map<string, ClaudeBackgroundTask>;
+  pendingTaskNotification: ClaudeBackgroundTask | null;
+  suppressNextTaskNotificationAssistant: boolean;
   lastActivityAt: number;
   instructions: string | null;
   approvalMode: ApprovalMode;
@@ -126,6 +149,7 @@ const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_STDERR_TAIL_CHARS = 20_000;
 const DEFAULT_IDLE_WORKER_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
+const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 // No timeout — complex tasks (image generation, large projects) can run indefinitely
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
@@ -181,6 +205,19 @@ function extractSendFileTags(text: string): string[] {
 
 function hasSendFileTag(text: string): boolean {
   return /\[send-file:[^\]]+\]/.test(text);
+}
+
+function isTaskNotificationResult(event: ClaudeStreamEvent): boolean {
+  return event.type === "result" && event.origin?.kind === "task-notification";
+}
+
+function toTaskNotificationMetadata(event: ClaudeStreamEvent): ClaudeTaskNotificationMetadata {
+  return {
+    taskId: typeof event.task_id === "string" ? event.task_id : undefined,
+    status: typeof event.status === "string" ? event.status : undefined,
+    summary: typeof event.summary === "string" ? event.summary : undefined,
+    outputFile: typeof event.output_file === "string" ? event.output_file : undefined,
+  };
 }
 
 function mergeIntermediateDeliveryText(finalResult: string, intermediateDeliveryText: string): string {
@@ -299,6 +336,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly configPath: string | undefined;
   private readonly workspacePath: string | undefined;
   private readonly idleWorkerTtlMs: number;
+  private readonly backgroundTaskMaxAgeMs: number;
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
 
@@ -313,6 +351,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       engineHomePath?: string;
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
+      backgroundTaskMaxAgeMs?: number;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -329,6 +368,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     this.configPath = options?.configPath;
     this.workspacePath = options?.workspacePath;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
+    this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -408,6 +448,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const prompt = this.buildPrompt(input);
     const effectiveWorkspace = input.workspaceOverride ?? this.workspacePath;
     const worker = this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, effectiveWorkspace, engineOptions);
+    worker.onEngineEvent = input.onEngineEvent;
 
     const response = await this.sendTurn(worker, prompt, input);
     const nextSessionId = response.sessionId;
@@ -447,6 +488,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
       if (existing.pendingTurn) {
         throw new Error("Cannot reconfigure Claude session while a turn is in flight");
+      }
+      if (existing.backgroundTasks.size > 0) {
+        throw new Error("Cannot reconfigure Claude session while background tasks are active");
       }
 
       const resumedSessionId = existing.currentSessionId ?? sessionId;
@@ -496,6 +540,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       currentSessionId: isLogicalTelegramSessionId(sessionId) ? null : sessionId,
       workspacePath,
       pendingTurn: null,
+      onEngineEvent: undefined,
+      backgroundTasks: new Map(),
+      pendingTaskNotification: null,
+      suppressNextTaskNotificationAssistant: false,
       lastActivityAt: Date.now(),
       instructions: combinedKey,
       approvalMode,
@@ -555,12 +603,79 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     if (parsed.session_id) {
       worker.currentSessionId = parsed.session_id;
     }
+    const eventSeenAt = Date.now();
+
+    if (parsed.type === "system" && parsed.subtype === "task_started") {
+      const metadata = toTaskNotificationMetadata(parsed);
+      if (metadata.taskId) {
+        worker.backgroundTasks.set(metadata.taskId, {
+          ...metadata,
+          onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+          lastSeenAt: eventSeenAt,
+        });
+      }
+      return;
+    }
+
+    if (parsed.type === "system" && parsed.subtype === "task_notification") {
+      const metadata = toTaskNotificationMetadata(parsed);
+      const task = metadata.taskId ? worker.backgroundTasks.get(metadata.taskId) : undefined;
+      worker.pendingTaskNotification = {
+        ...task,
+        ...metadata,
+        onEngineEvent: task?.onEngineEvent ?? worker.onEngineEvent,
+        lastSeenAt: eventSeenAt,
+      };
+      return;
+    }
+
+    if (isTaskNotificationResult(parsed)) {
+      const resultMetadata = toTaskNotificationMetadata(parsed);
+      const resultTask = resultMetadata.taskId ? worker.backgroundTasks.get(resultMetadata.taskId) : undefined;
+      const taskId = resultMetadata.taskId ?? worker.pendingTaskNotification?.taskId ?? resultTask?.taskId;
+      const metadata = {
+        taskId,
+        status: resultMetadata.status ?? worker.pendingTaskNotification?.status ?? resultTask?.status,
+        summary: resultMetadata.summary ?? worker.pendingTaskNotification?.summary ?? resultTask?.summary,
+        outputFile: resultMetadata.outputFile ?? worker.pendingTaskNotification?.outputFile ?? resultTask?.outputFile,
+        onEngineEvent: worker.pendingTaskNotification?.onEngineEvent ?? resultTask?.onEngineEvent ?? worker.onEngineEvent,
+        lastSeenAt: eventSeenAt,
+      };
+      worker.pendingTaskNotification = null;
+      worker.suppressNextTaskNotificationAssistant = false;
+      if (taskId) {
+        worker.backgroundTasks.delete(taskId);
+      }
+      const text = parsed.result?.trim();
+      if (text) {
+        this.emitEngineEvent(worker, {
+          type: "task_notification",
+          text,
+          sessionId: worker.currentSessionId ?? undefined,
+          taskId,
+          status: metadata.status,
+          summary: metadata.summary,
+          outputFile: metadata.outputFile,
+        }, metadata.onEngineEvent);
+      }
+      return;
+    }
+
+    if (parsed.type === "system" && parsed.subtype === "init" && worker.pendingTaskNotification) {
+      worker.suppressNextTaskNotificationAssistant = true;
+      return;
+    }
 
     if (parsed.type === "system" && parsed.subtype === "init" && worker.pendingTurn) {
       this.emitEngineEvent(worker, {
         type: "session",
         sessionId: worker.currentSessionId ?? undefined,
       });
+      return;
+    }
+
+    if (parsed.type === "assistant" && worker.suppressNextTaskNotificationAssistant) {
+      worker.suppressNextTaskNotificationAssistant = false;
       return;
     }
 
@@ -616,6 +731,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     if (parsed.type === "result" && worker.pendingTurn) {
+      worker.suppressNextTaskNotificationAssistant = false;
       const pending = worker.pendingTurn;
       if (parsed.is_error) {
         worker.pendingTurn = null;
@@ -648,6 +764,12 @@ export class ClaudeStreamAdapter implements CodexAdapter {
             }
           : undefined,
       });
+      return;
+    }
+
+    if (parsed.type === "result") {
+      worker.pendingTaskNotification = null;
+      worker.suppressNextTaskNotificationAssistant = false;
     }
   }
 
@@ -768,8 +890,12 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     });
   }
 
-  private emitEngineEvent(worker: ClaudeWorker, event: EngineStreamEvent): void {
-    const handler = worker.pendingTurn?.onEngineEvent;
+  private emitEngineEvent(
+    worker: ClaudeWorker,
+    event: EngineStreamEvent,
+    handlerOverride?: (event: EngineStreamEvent) => void | Promise<void>,
+  ): void {
+    const handler = handlerOverride ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
     if (!handler) {
       return;
     }
@@ -808,7 +934,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         continue;
       }
       seen.add(worker);
-      if (worker.pendingTurn) {
+      this.pruneExpiredBackgroundTasks(worker, now);
+      if (worker.pendingTurn || worker.backgroundTasks.size > 0) {
         continue;
       }
       if (now - worker.lastActivityAt < this.idleWorkerTtlMs) {
@@ -816,6 +943,26 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }
       killProcessTree(worker.child.pid);
       this.removeWorker(worker);
+    }
+  }
+
+  private pruneExpiredBackgroundTasks(worker: ClaudeWorker, now: number): void {
+    if (this.backgroundTaskMaxAgeMs <= 0) {
+      return;
+    }
+
+    for (const [taskId, task] of worker.backgroundTasks.entries()) {
+      if (now - task.lastSeenAt >= this.backgroundTaskMaxAgeMs) {
+        worker.backgroundTasks.delete(taskId);
+      }
+    }
+
+    if (
+      worker.pendingTaskNotification?.taskId &&
+      !worker.backgroundTasks.has(worker.pendingTaskNotification.taskId)
+    ) {
+      worker.pendingTaskNotification = null;
+      worker.suppressNextTaskNotificationAssistant = false;
     }
   }
 
