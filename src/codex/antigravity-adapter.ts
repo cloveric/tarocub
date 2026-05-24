@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -74,6 +74,26 @@ function buildCommandInvocation(command: string, args: string[]): { command: str
   return { command: normalizedCommand, args, shell: false };
 }
 
+function removeLogFileArgs(args: string[]): string[] {
+  const next: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === "--log-file") {
+      index += 1;
+      continue;
+    }
+    next.push(args[index]!);
+  }
+  return next;
+}
+
+function isUnsupportedLogFileFlagError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /(?:flag provided but not defined|unknown flag).*log-file/i.test(message) ||
+    /log-file.*(?:not defined|unknown flag)/i.test(message)
+  );
+}
+
 function appendHeadTailDiagnostic(existing: string, chunk: string, maxBytes: number): string {
   const combined = existing + chunk;
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) {
@@ -126,13 +146,21 @@ const ANTIGRAVITY_CONVERSATION_ID_PATTERN =
   "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 
 function extractAntigravityConversationId(logContent: string): string | null {
-  const match = logContent.match(new RegExp(`\\bconversation=(${ANTIGRAVITY_CONVERSATION_ID_PATTERN})\\b`));
-  return match?.[1]?.trim() || null;
+  const matches = Array.from(
+    logContent.matchAll(new RegExp(`\\bconversation=(${ANTIGRAVITY_CONVERSATION_ID_PATTERN})\\b`, "g")),
+  );
+  const last = matches.at(-1);
+  return last?.[1]?.trim().toLowerCase() || null;
 }
 
 function resolveAntigravityLogDir(env: NodeJS.ProcessEnv): string {
   const home = env.HOME || os.homedir();
   return path.join(home, ".gemini", "antigravity-cli", "log");
+}
+
+async function extractAntigravityConversationIdFromLogFile(filePath: string): Promise<string | null> {
+  const content = await readFile(filePath, "utf8").catch(() => "");
+  return extractAntigravityConversationId(content);
 }
 
 async function extractAntigravityConversationIdFromLogs(input: {
@@ -172,12 +200,9 @@ async function extractAntigravityConversationIdFromLogs(input: {
       }
     }
 
-    const fallbackMatch = content.match(new RegExp(`\\bconversation=(${ANTIGRAVITY_CONVERSATION_ID_PATTERN})\\b`, "g"));
-    if (fallbackMatch) {
-      // Return the most recent one (last in file)
-      const last = fallbackMatch[fallbackMatch.length - 1];
-      const id = last.split("=")[1]?.trim().toLowerCase();
-      if (id) return id;
+    const fallbackId = extractAntigravityConversationId(content);
+    if (fallbackId) {
+      return fallbackId;
     }
   }
 
@@ -211,6 +236,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         ? buildChildEnv()
         : { ...(childEnvOrSpawn ?? buildChildEnv()) };
     delete this.childEnv.TELEGRAM_BOT_TOKEN;
+    this.childEnv.AGY_CLI_HIDE_ACCOUNT_INFO ??= "1";
 
     this.spawnAntigravity =
       typeof childEnvOrSpawn === "function"
@@ -295,10 +321,14 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     const workspace = input.workspaceOverride ?? this.workspacePath;
     const logicalTelegramSession = isLogicalTelegramSessionId(sessionId);
     const startedAt = Date.now();
+    const turnLogDir = await mkdtemp(path.join(os.tmpdir(), "cctb-agy-log-"));
+    const turnLogFile = path.join(turnLogDir, "turn.log");
     const args = [
       "--print",
       "--print-timeout",
       "1h",
+      "--log-file",
+      turnLogFile,
       ...permissionFlags,
       ...(!logicalTelegramSession ? ["--conversation", sessionId] : []),
       ...(workspace ? ["--add-dir", workspace] : []),
@@ -307,47 +337,70 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
 
     let effectiveSessionId: string | undefined;
     let emittedSessionId: string | undefined;
-    const response = await this.runAntigravityCommand(
-      args,
-      prompt,
-      input.abortSignal,
-      workspace,
-      input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
-      input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
-      input.extraEnv,
-      input.onProgress,
-      (event) => {
-        if (event.type === "session") {
-          effectiveSessionId = event.sessionId;
-          emittedSessionId = event.sessionId;
+    try {
+      const run = async (runArgs: string[]) => await this.runAntigravityCommand(
+        runArgs,
+        prompt,
+        input.abortSignal,
+        workspace,
+        input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
+        input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
+        input.extraEnv,
+        input.onProgress,
+        (event) => {
+          if (event.type === "session") {
+            effectiveSessionId = event.sessionId;
+            emittedSessionId = event.sessionId;
+          }
+          if (input.onEngineEvent) {
+            void input.onEngineEvent(event);
+          }
+        },
+      );
+
+      let usedTurnLogFile = true;
+      let response: CodexAdapterResponse & { childPid?: number };
+      try {
+        response = await run(args);
+      } catch (error) {
+        if (!isUnsupportedLogFileFlagError(error)) {
+          throw error;
         }
-        if (input.onEngineEvent) {
-          void input.onEngineEvent(event);
-        }
-      },
-    );
+        usedTurnLogFile = false;
+        effectiveSessionId = undefined;
+        emittedSessionId = undefined;
+        response = await run(removeLogFileArgs(args));
+      }
 
-    if (!effectiveSessionId) {
-      effectiveSessionId = await extractAntigravityConversationIdFromLogs({
-        logDir: resolveAntigravityLogDir(this.childEnv),
-        pid: response.childPid,
-        startedAt,
-      }).catch(() => null) ?? undefined;
+      if (usedTurnLogFile && !effectiveSessionId) {
+        effectiveSessionId =
+          await extractAntigravityConversationIdFromLogFile(turnLogFile).catch(() => null) ?? undefined;
+      }
+
+      if (!effectiveSessionId) {
+        effectiveSessionId = await extractAntigravityConversationIdFromLogs({
+          logDir: resolveAntigravityLogDir(this.childEnv),
+          pid: response.childPid,
+          startedAt,
+        }).catch(() => null) ?? undefined;
+      }
+
+      const finalSessionId = effectiveSessionId ?? (!logicalTelegramSession ? sessionId : response.sessionId);
+      if (effectiveSessionId && effectiveSessionId !== emittedSessionId) {
+        await input.onEngineEvent?.({
+          type: "session",
+          sessionId: effectiveSessionId,
+        });
+      }
+
+      return {
+        text: response.text,
+        usage: response.usage,
+        sessionId: finalSessionId,
+      };
+    } finally {
+      await rm(turnLogDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }).catch(() => undefined);
     }
-
-    const finalSessionId = effectiveSessionId ?? (!logicalTelegramSession ? sessionId : response.sessionId);
-    if (effectiveSessionId && effectiveSessionId !== emittedSessionId) {
-      await input.onEngineEvent?.({
-        type: "session",
-        sessionId: effectiveSessionId,
-      });
-    }
-
-    return {
-      text: response.text,
-      usage: response.usage,
-      sessionId: finalSessionId,
-    };
   }
 
   private async runAntigravityCommand(

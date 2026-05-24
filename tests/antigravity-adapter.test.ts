@@ -73,9 +73,127 @@ describe("ProcessAntigravityAdapter", () => {
     expect(prompt).toContain("<user_message>\nHello\n</user_message>");
     expect(prompt).toContain("Attachment: a.png\nAttachment: b.pdf");
     expect(calls[0]?.options.env?.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(calls[0]?.options.env?.AGY_CLI_HIDE_ACCOUNT_INFO).toBe("1");
     expect(childEnv.TELEGRAM_BOT_TOKEN).toBe("secret-token");
     expect(calls[0]?.options.env?.CCTB_SEND_URL).toBe("http://127.0.0.1/send");
     expect(calls[0]?.options.env?.NODE_OPTIONS).toBeUndefined();
+  });
+
+  it("binds new Telegram chats to the Antigravity conversation reported in the per-turn log file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy",
+      { HOME: root },
+      spawnAntigravity,
+      undefined,
+      undefined,
+      "/tmp/workspace",
+    );
+
+    try {
+      const onEngineEvent = vi.fn();
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+        onEngineEvent,
+      });
+
+      await vi.waitFor(() => {
+        expect(calls).toHaveLength(1);
+      });
+      const logFileIndex = calls[0]?.args.indexOf("--log-file") ?? -1;
+      expect(logFileIndex).toBeGreaterThanOrEqual(0);
+      const logFile = calls[0]?.args[logFileIndex + 1];
+      expect(logFile).toBeTruthy();
+      await mkdir(path.dirname(logFile!), { recursive: true });
+      await writeFile(
+        logFile!,
+        'I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=11111111-2222-4333-8444-555555555555, sending message\n',
+        "utf8",
+      );
+      const globalLogDir = path.join(root, ".gemini", "antigravity-cli", "log");
+      await mkdir(globalLogDir, { recursive: true });
+      await writeFile(
+        path.join(globalLogDir, "cli-20260520_095913.log"),
+        'I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=fdfc8ab1-7936-4599-98b0-d8ba2593c250, sending message\n',
+        "utf8",
+      );
+      child.stdout.emitData("ok");
+      child.close(0);
+
+      await expect(promise).resolves.toEqual({
+        text: "ok",
+        sessionId: "11111111-2222-4333-8444-555555555555",
+      });
+      expect(onEngineEvent).toHaveBeenCalledWith({
+        type: "session",
+        sessionId: "11111111-2222-4333-8444-555555555555",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("falls back to shared log scanning when an older agy rejects --log-file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
+    const calls: Array<{
+      command: string;
+      args: string[];
+      options: { stdio: ["pipe", "pipe", "pipe"]; shell?: boolean; env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean };
+    }> = [];
+    const spawnAntigravity = (
+      command: string,
+      args: string[],
+      options: { stdio: ["pipe", "pipe", "pipe"]; shell?: boolean; env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean },
+    ) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter(
+      "agy",
+      { HOME: root },
+      spawnAntigravity,
+      undefined,
+      undefined,
+      "/tmp/workspace",
+    );
+
+    try {
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await vi.waitFor(() => {
+        expect(calls).toHaveLength(1);
+      });
+      expect(calls[0]?.args).toContain("--log-file");
+      children[0]!.stderr.emitData("flag provided but not defined: -log-file\n");
+      children[0]!.close(2);
+
+      await vi.waitFor(() => {
+        expect(calls).toHaveLength(2);
+      });
+      expect(calls[1]?.args).not.toContain("--log-file");
+      const logDir = path.join(root, ".gemini", "antigravity-cli", "log");
+      await mkdir(logDir, { recursive: true });
+      await writeFile(
+        path.join(logDir, "cli-20260520_095913.log"),
+        'I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=FDFC8AB1-7936-4599-98B0-D8BA2593C250, sending message\n',
+        "utf8",
+      );
+      children[1]!.stdout.emitData("ok");
+      children[1]!.close(0);
+
+      await expect(promise).resolves.toEqual({
+        text: "ok",
+        sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
   });
 
   it("binds new Telegram chats to the Antigravity conversation reported in the CLI log", async () => {
