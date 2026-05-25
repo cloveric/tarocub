@@ -44,6 +44,24 @@ describe("provisionLarkApp", () => {
     expect(result.patchedSubscriptions).toBe(true);
   });
 
+  it("trusts a successful subscription patch when app get omits event subscriptions", async () => {
+    const client = createProvisioningClientMock({
+      scopes: [...grantAllRequiredScopes(), { scope_name: "application:application", grant_status: 1 }],
+      apps: [
+        appProvisioning({ callbacks: [], events: [] }),
+        appProvisioningWithoutEvents({ callbacks: [...REQUIRED_LARK_CALLBACKS] }),
+      ],
+    });
+
+    const result = await provisionLarkApp({ appId: "cli_app", appSecret: "secret", client });
+
+    expect(client.application.application.patch).toHaveBeenCalledTimes(1);
+    expect(result.missingCallbacks).toEqual([]);
+    expect(result.missingEvents).toEqual([]);
+    expect(result.missingOptionalEvents).toEqual([]);
+    expect(result.subscribedEvents).toEqual(["drive.notice.comment_add_v1", "im.message.receive_v1"]);
+  });
+
   it("reports missing event subscriptions without patching when app management scope is unavailable", async () => {
     const client = createProvisioningClientMock({
       scopes: grantAllRequiredScopes(),
@@ -130,7 +148,7 @@ function createProvisioningClientMock(input: {
   scopes: Array<{ scope_name: string; grant_status: number }>;
   apps: Array<{
     callback_info: { callback_type: "websocket"; subscribed_callbacks: string[] };
-    event: { subscription_type: "websocket"; subscribed_events: string[] };
+    event?: { subscription_type: "websocket"; subscribed_events: string[] };
   }>;
 }): LarkProvisioningClient {
   const appResults = input.apps.map((app) => ({
@@ -176,6 +194,17 @@ function appProvisioning(input: { callbacks: string[]; events: string[] }): {
     event: {
       subscription_type: "websocket",
       subscribed_events: input.events,
+    },
+  };
+}
+
+function appProvisioningWithoutEvents(input: { callbacks: string[] }): {
+  callback_info: { callback_type: "websocket"; subscribed_callbacks: string[] };
+} {
+  return {
+    callback_info: {
+      callback_type: "websocket",
+      subscribed_callbacks: input.callbacks,
     },
   };
 }

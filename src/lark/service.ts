@@ -6,9 +6,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import {
+  Client,
   createLarkChannel,
   Domain,
   type CardActionEvent,
+  type CommentEvent,
   type LarkChannelOptions,
   type NormalizedMessage,
 } from "@larksuiteoapi/node-sdk";
@@ -86,11 +88,20 @@ export interface LarkRuntimeChannelLike extends LarkChannelLike {
   disconnect(): Promise<void>;
   on(name: "message", handler: (message: NormalizedMessage) => void | Promise<void>): () => void;
   on(name: "cardAction", handler: (event: CardActionEvent) => void | Promise<void>): () => void;
+  on(name: "comment", handler: (event: CommentEvent) => void | Promise<void>): () => void;
   on(name: "error", handler: (error: Error) => void): () => void;
 }
 
 export interface LarkBridgeLike {
   checkAccess?(input: {
+    chatId: number;
+    userId: number;
+    chatType: string;
+    messageThreadId?: number;
+    conversationKey?: string;
+    locale?: "en" | "zh";
+  }): Promise<BridgeAccessDecision>;
+  checkUserAuthorization?(input: {
     chatId: number;
     userId: number;
     chatType: string;
@@ -127,6 +138,34 @@ export interface LarkDocumentCreateResult {
   title?: string;
   url?: string;
   documentId?: string;
+}
+
+export type LarkCommentFileType = "doc" | "docx" | "sheet" | "file" | "slides" | "bitable";
+
+export interface LarkCommentReplyContext {
+  replyId?: string;
+  userId?: string;
+  text: string;
+  docsLinks: string[];
+}
+
+export interface LarkCommentContext {
+  quote?: string;
+  replies: LarkCommentReplyContext[];
+}
+
+export interface LarkCommentClientLike {
+  getCommentContext(input: {
+    fileToken: string;
+    fileType: LarkCommentFileType;
+    commentId: string;
+  }): Promise<LarkCommentContext>;
+  createReply(input: {
+    fileToken: string;
+    fileType: LarkCommentFileType;
+    commentId: string;
+    text: string;
+  }): Promise<void>;
 }
 
 export interface LarkRuntimeEnv {
@@ -181,16 +220,19 @@ export interface LarkServiceRuntime {
   activeRuns: Map<string, LarkActiveRun>;
   pendingApprovals: Map<string, PendingLarkApproval>;
   chatQueue: ChatQueue;
+  commentClient?: LarkCommentClientLike;
   createDocument: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
 }
 
 export function createLarkServiceRuntime(options: {
   createDocument?: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
+  commentClient?: LarkCommentClientLike;
 } = {}): LarkServiceRuntime {
   return {
     activeRuns: new Map(),
     pendingApprovals: new Map(),
     chatQueue: new ChatQueue(),
+    ...(options.commentClient ? { commentClient: options.commentClient } : {}),
     createDocument: options.createDocument ?? createLarkDocumentWithCli,
   };
 }
@@ -248,6 +290,7 @@ export async function runLarkService(
     ? await options.createBridge(bridgeEnv, config)
     : await createDefaultLarkBridge(bridgeEnv);
   const runtime = options.runtime ?? createLarkServiceRuntime();
+  runtime.commentClient ??= createLarkCommentClient(config);
   const serviceLock = await acquireLarkServiceLock(stateDir);
   let channel: LarkRuntimeChannelLike | undefined;
   let connected = false;
@@ -292,6 +335,21 @@ export async function runLarkService(
         logger.error("Lark card action handling failed:", error);
       }
     });
+    channel.on("comment", async (event) => {
+      try {
+        await handleLarkComment({ bridge, runtime, stateDir, event });
+      } catch (error) {
+        logger.error("Lark comment handling failed:", error);
+        if (event.mentionedBot && runtime.commentClient) {
+          await runtime.commentClient.createReply({
+            fileToken: event.fileToken,
+            fileType: normalizeLarkCommentFileType(event.fileType),
+            commentId: event.commentId,
+            text: renderLarkUserFacingError(error, "engine"),
+          }).catch(() => undefined);
+        }
+      }
+    });
     channel.on("error", (error) => {
       logger.error("Lark channel error:", error);
     });
@@ -328,6 +386,118 @@ async function acquireLarkServiceLock(stateDir: string): Promise<InstanceLockHan
     }
     throw error;
   }
+}
+
+export async function handleLarkComment(input: {
+  bridge: LarkBridgeLike;
+  runtime: LarkServiceRuntime;
+  stateDir: string;
+  event: CommentEvent;
+  workspaceOverride?: string;
+}): Promise<boolean> {
+  if (!input.event.mentionedBot) {
+    return false;
+  }
+  if (!input.runtime.commentClient) {
+    throw new Error("Lark comment client is not configured");
+  }
+
+  const fileType = normalizeLarkCommentFileType(input.event.fileType);
+  const operatorRawId = larkOperatorRawId(input.event.operator);
+  const conversationKey = `lark-comment:${input.event.fileToken}`;
+  const bridgeChatId = stableLarkNumericId(conversationKey);
+  const bridgeUserId = stableLarkNumericId(`user:${operatorRawId}`);
+  await assertStableLarkIdMappings(input.stateDir, [
+    ["chat", bridgeChatId, conversationKey],
+    ["user", bridgeUserId, operatorRawId],
+  ]);
+
+  const accessDecision = input.bridge.checkUserAuthorization
+    ? await input.bridge.checkUserAuthorization({
+      chatId: bridgeChatId,
+      userId: bridgeUserId,
+      chatType: "group",
+      conversationKey,
+      locale: "zh",
+    })
+    : { kind: "allow" as const };
+  if (accessDecision.kind !== "allow") {
+    await input.runtime.commentClient.createReply({
+      fileToken: input.event.fileToken,
+      fileType,
+      commentId: input.event.commentId,
+      text: accessDecision.text ?? "当前操作者未获授权。",
+    });
+    return true;
+  }
+
+  return await input.runtime.chatQueue.enqueue(conversationKey, async () => {
+    const context = await input.runtime.commentClient!.getCommentContext({
+      fileToken: input.event.fileToken,
+      fileType,
+      commentId: input.event.commentId,
+    });
+    const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.event.commentId));
+    await mkdir(requestOutputDir, { recursive: true });
+    try {
+      const result = await input.bridge.handleAuthorizedMessage({
+        chatId: bridgeChatId,
+        userId: bridgeUserId,
+        chatType: "group",
+        conversationKey,
+        text: buildLarkCommentPrompt(input.event, fileType, context),
+        files: [],
+        requestOutputDir,
+        workspaceOverride: input.workspaceOverride,
+        instructions: larkAgentInstructions(),
+      });
+      const cleaned = stripTelegramToolTags(stripDeliveryTags(result.text)).trim() || "（空回复）";
+      await input.runtime.commentClient!.createReply({
+        fileToken: input.event.fileToken,
+        fileType,
+        commentId: input.event.commentId,
+        text: cleaned,
+      });
+      await appendTimelineEventBestEffort(input.stateDir, {
+        type: "turn.completed",
+        channel: "lark",
+        chatId: bridgeChatId,
+        userId: bridgeUserId,
+        conversationKey,
+        outcome: "success",
+        metadata: {
+          larkSurface: "comment",
+          fileToken: input.event.fileToken,
+          fileType,
+          commentId: input.event.commentId,
+        },
+      }, "Lark comment timeline event");
+      return true;
+    } catch (error) {
+      await input.runtime.commentClient!.createReply({
+        fileToken: input.event.fileToken,
+        fileType,
+        commentId: input.event.commentId,
+        text: renderLarkUserFacingError(error, "engine"),
+      });
+      await appendTimelineEventBestEffort(input.stateDir, {
+        type: "turn.completed",
+        channel: "lark",
+        chatId: bridgeChatId,
+        userId: bridgeUserId,
+        conversationKey,
+        outcome: "error",
+        detail: error instanceof Error ? error.message : String(error),
+        metadata: {
+          larkSurface: "comment",
+          fileToken: input.event.fileToken,
+          fileType,
+          commentId: input.event.commentId,
+        },
+      }, "Lark comment timeline event");
+      return true;
+    }
+  });
 }
 
 export async function handleLarkMessage(input: {
@@ -1077,6 +1247,206 @@ function stripDeliveryTagsFromEvent(event: EngineStreamEvent): EngineStreamEvent
   return event;
 }
 
+type LarkCommentElement = {
+  type?: string;
+  text_run?: { text?: string };
+  docs_link?: { url?: string };
+  person?: { user_id?: string };
+};
+
+type LarkCommentReplyApiItem = {
+  reply_id?: string;
+  user_id?: string;
+  content?: {
+    elements?: LarkCommentElement[];
+  };
+};
+
+type LarkCommentApiItem = {
+  comment_id?: string;
+  quote?: string;
+  reply_list?: {
+    replies?: LarkCommentReplyApiItem[];
+  };
+};
+
+type LarkDriveCommentApiClient = {
+  drive: {
+    v1: {
+      fileComment: {
+        get(payload: {
+          params: {
+            file_type: LarkCommentFileType;
+            user_id_type: "open_id";
+            need_reaction: boolean;
+          };
+          path: {
+            file_token: string;
+            comment_id: string;
+          };
+        }): Promise<{ code?: number; msg?: string; data?: LarkCommentApiItem }>;
+        list(payload: {
+          params: {
+            file_type: LarkCommentFileType;
+            user_id_type: "open_id";
+            need_reaction: boolean;
+            page_size: number;
+          };
+          path: {
+            file_token: string;
+          };
+        }): Promise<{ code?: number; msg?: string; data?: { items?: LarkCommentApiItem[] } }>;
+      };
+      fileCommentReply: {
+        create(payload: {
+          data: {
+            content: {
+              elements: Array<{
+                type: "text_run";
+                text_run: { text: string };
+              }>;
+            };
+          };
+          params: {
+            file_type: LarkCommentFileType;
+            user_id_type: "open_id";
+          };
+          path: {
+            file_token: string;
+            comment_id: string;
+          };
+        }): Promise<{ code?: number; msg?: string }>;
+      };
+    };
+  };
+};
+
+const silentLarkSdkLogger = {
+  error: () => undefined,
+  warn: () => undefined,
+  info: () => undefined,
+  debug: () => undefined,
+  trace: () => undefined,
+};
+
+export function createLarkCommentClient(config: {
+  appId: string;
+  appSecret: string;
+  domain?: LarkChannelOptions["domain"];
+}): LarkCommentClientLike {
+  const client = new Client({
+    appId: config.appId,
+    appSecret: config.appSecret,
+    ...(config.domain !== undefined ? { domain: config.domain } : {}),
+    logger: silentLarkSdkLogger,
+  }) as unknown as LarkDriveCommentApiClient;
+
+  return {
+    async getCommentContext(input) {
+      const basePayload = {
+        params: {
+          file_type: input.fileType,
+          user_id_type: "open_id" as const,
+          need_reaction: false,
+        },
+        path: {
+          file_token: input.fileToken,
+          comment_id: input.commentId,
+        },
+      };
+
+      const getResult = await client.drive.v1.fileComment.get(basePayload).catch(() => null);
+      if (getResult?.code === 0 && getResult.data) {
+        return normalizeLarkCommentContext(getResult.data);
+      }
+
+      const listResult = await client.drive.v1.fileComment.list({
+        params: {
+          file_type: input.fileType,
+          user_id_type: "open_id",
+          need_reaction: false,
+          page_size: 50,
+        },
+        path: {
+          file_token: input.fileToken,
+        },
+      });
+      if (listResult.code !== 0) {
+        throw new Error(`Lark comment list failed: ${listResult.code ?? "unknown"} ${listResult.msg ?? ""}`.trim());
+      }
+      const comment = listResult.data?.items?.find((item) => item.comment_id === input.commentId);
+      if (!comment) {
+        throw new Error(`Lark comment not found: ${input.commentId}`);
+      }
+      return normalizeLarkCommentContext(comment);
+    },
+
+    async createReply(input) {
+      const result = await client.drive.v1.fileCommentReply.create({
+        data: {
+          content: {
+            elements: [{
+              type: "text_run",
+              text_run: {
+                text: input.text,
+              },
+            }],
+          },
+        },
+        params: {
+          file_type: input.fileType,
+          user_id_type: "open_id",
+        },
+        path: {
+          file_token: input.fileToken,
+          comment_id: input.commentId,
+        },
+      });
+      if (result.code !== 0) {
+        throw new Error(`Lark comment reply failed: ${result.code ?? "unknown"} ${result.msg ?? ""}`.trim());
+      }
+    },
+  };
+}
+
+function normalizeLarkCommentContext(comment: LarkCommentApiItem): LarkCommentContext {
+  return {
+    ...(comment.quote ? { quote: comment.quote } : {}),
+    replies: (comment.reply_list?.replies ?? []).map((reply) => {
+      const content = flattenLarkCommentElements(reply.content?.elements ?? []);
+      return {
+        ...(reply.reply_id ? { replyId: reply.reply_id } : {}),
+        ...(reply.user_id ? { userId: reply.user_id } : {}),
+        text: content.text,
+        docsLinks: content.docsLinks,
+      };
+    }),
+  };
+}
+
+function flattenLarkCommentElements(elements: LarkCommentElement[]): { text: string; docsLinks: string[] } {
+  const parts: string[] = [];
+  const docsLinks: string[] = [];
+  for (const element of elements) {
+    if (element.type === "text_run" && element.text_run?.text) {
+      parts.push(element.text_run.text);
+      continue;
+    }
+    if (element.type === "docs_link" && element.docs_link?.url) {
+      docsLinks.push(element.docs_link.url);
+      parts.push(element.docs_link.url);
+      continue;
+    }
+    if (element.type === "person" && element.person?.user_id) {
+      parts.push(`@${element.person.user_id}`);
+    }
+  }
+  return {
+    text: parts.join("").trim(),
+    docsLinks,
+  };
+}
+
 export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput): Promise<LarkDocumentCreateResult> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-doc-"));
   const contentFileName = "content.md";
@@ -1418,6 +1788,54 @@ function larkOperatorRawId(operator: { openId?: string; userId?: string } | unde
   return operator?.openId ?? operator?.userId ?? "unknown";
 }
 
+function normalizeLarkCommentFileType(value: string): LarkCommentFileType {
+  switch (value) {
+    case "doc":
+    case "docx":
+    case "sheet":
+    case "file":
+    case "slides":
+    case "bitable":
+      return value;
+    default:
+      return "file";
+  }
+}
+
+function buildLarkCommentPrompt(
+  event: CommentEvent,
+  fileType: LarkCommentFileType,
+  context: LarkCommentContext,
+): string {
+  const latestReply = context.replies.at(-1);
+  const replies = context.replies
+    .map((reply, index) => [
+      `reply_${index + 1}:`,
+      reply.replyId ? `  reply_id: ${reply.replyId}` : undefined,
+      reply.userId ? `  user_id: ${reply.userId}` : undefined,
+      `  text: ${reply.text || "(empty)"}`,
+      reply.docsLinks.length > 0 ? `  docs_links: ${reply.docsLinks.join(", ")}` : undefined,
+    ].filter((line): line is string => line !== undefined).join("\n"))
+    .join("\n");
+
+  return [
+    "<lark_comment_context>",
+    `file_token: ${event.fileToken}`,
+    `file_type: ${fileType}`,
+    `comment_id: ${event.commentId}`,
+    event.replyId ? `reply_id: ${event.replyId}` : undefined,
+    `operator_id: ${larkOperatorRawId(event.operator)}`,
+    `mentioned_bot: ${event.mentionedBot}`,
+    context.quote ? `selected_quote: ${context.quote}` : "selected_quote: (none)",
+    replies ? "comment_replies:" : "comment_replies: (none)",
+    replies || undefined,
+    "</lark_comment_context>",
+    "",
+    "你正在飞书云文档评论线程里回复用户。请直接回答评论里的请求，必要时可用 lark-cli 读取文档上下文。",
+    latestReply?.text ? `用户评论：${latestReply.text}` : "用户在云文档评论中 @ 了你，请根据上下文回复。",
+  ].filter((line): line is string => line !== undefined).join("\n");
+}
+
 function extractButtonLabel(button: Record<string, unknown>): string {
   const text = payloadObject(button.text);
   const content = text && typeof text.content === "string" ? text.content.trim() : "";
@@ -1541,6 +1959,7 @@ function larkAgentInstructions(): string {
   return [
     "You are replying through Feishu/Lark via cc-telegram-bridge.",
     "Use the <lark_context> block for chat/message/thread identity; do not reveal app secrets or tokens.",
+    "If the prompt contains <lark_comment_context>, answer as a Feishu Docs comment reply; use file_token/file_type/comment_id only as operational context, not as user-visible secrets.",
     "For Feishu Docs/IM/Calendar operations, prefer local `lark-cli` when available; ask in chat if authentication or permissions are missing.",
     "For rich replies, use [tool:{\"name\":\"lark.post\",\"payload\":{\"post\":{...}}}] or [tool:{\"name\":\"lark.card\",\"payload\":{\"title\":\"...\",\"body\":\"...\",\"actions\":[...]}}].",
     "For readable specs/docs, prefer [tool:{\"name\":\"lark.doc.create\",\"payload\":{\"title\":\"...\",\"content\":\"...\",\"docFormat\":\"markdown\"}}] instead of leaving long Markdown in chat.",

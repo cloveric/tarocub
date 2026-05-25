@@ -56,6 +56,7 @@ describe("runLarkService", () => {
       }));
       expect(channel.on).toHaveBeenCalledWith("message", expect.any(Function));
       expect(channel.on).toHaveBeenCalledWith("cardAction", expect.any(Function));
+      expect(channel.on).toHaveBeenCalledWith("comment", expect.any(Function));
       expect(channel.on).toHaveBeenCalledWith("error", expect.any(Function));
       expect(channel.connect).toHaveBeenCalledTimes(1);
       expect(channel.disconnect).toHaveBeenCalledTimes(1);

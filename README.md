@@ -67,7 +67,7 @@ node dist/src/index.js lark doctor
 node dist/src/index.js lark run
 ```
 
-`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes, and Feishu Docs scopes. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. Environment variables still win if you prefer manual credentials:
+`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes, Feishu Docs scopes, and cloud-doc comment read/write scopes. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. Environment variables still win if you prefer manual credentials:
 
 ```bash
 export LARK_APP_ID="cli_xxx"
@@ -94,6 +94,7 @@ The Lark channel currently supports:
 - rich Feishu posts through `lark.post` tool tags when plain Markdown is too limiting;
 - custom interactive cards through `lark.card` tool tags, with button clicks fed back into the same bridge session;
 - Feishu Docs creation through `lark.doc.create` for long specs and reviewable documents;
+- Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, runs the same engine, and replies in the comment thread;
 - merged forwarded Feishu messages preserved as `<forwarded_lark_messages>` task context for one-click handoff workflows;
 - a per-state-dir service lock, so accidental duplicate `lark run` processes do not double-consume the same Lark events;
 - timeline entries with `channel=lark`, so `telegram timeline --channel lark` and `lark status` diagnostics can separate Lark traffic from Telegram traffic.
@@ -133,6 +134,7 @@ For raw `lark.card` payloads, bridge decorates ordinary button elements with Car
 
 ## Release Highlights
 
+- **v4.6.46** — completes Feishu/Lark cloud-doc comment mentions: `drive.notice.comment_add_v1` events now route @bot comments through the bridge engine, fetch comment context, reply in-thread, enforce shared user access, and provision comment read/write scopes.
 - **v4.6.45** — adds `lark provision` so an existing Feishu/Lark app can re-run the wizard's permission/subscription checks after you grant app-management permissions, without creating another QR app.
 - **v4.6.44** — teaches `lark wizard` to provision-check the app after QR registration: it verifies required scopes, requests admin approval for configured-but-unauthorized scopes, patches websocket event/callback subscriptions when app-management permission is available, and otherwise reports the missing management scope.
 - **v4.6.43** — fixes Feishu/Lark wizard domain handling so saved `LARK_DOMAIN=feishu|lark` values map to the official SDK domains at runtime and to the correct account registration hosts during QR setup.

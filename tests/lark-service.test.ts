@@ -9,6 +9,7 @@ import {
   createLarkDocumentWithCli,
   createLarkServiceRuntime,
   handleLarkCardAction,
+  handleLarkComment,
   handleLarkMessage,
   type LarkStreamControllerLike,
   requestLarkApproval,
@@ -153,6 +154,116 @@ describe("lark service", () => {
     expect(handled).toBe(true);
     expect(abortController.signal.aborted).toBe(true);
     expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已停止。" }, { replyTo: "om_card" });
+  });
+
+  it("ignores Lark document comments that do not mention the bot", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-skip-"));
+    const commentClient = fakeCommentClient();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime: createLarkServiceRuntime({ commentClient }),
+        stateDir,
+        event: fakeCommentEvent({ mentionedBot: false }),
+      });
+
+      expect(handled).toBe(false);
+      expect(commentClient.getCommentContext).not.toHaveBeenCalled();
+      expect(commentClient.createReply).not.toHaveBeenCalled();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers mentioned Lark document comments by replying in the comment thread", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-run-"));
+    const commentClient = fakeCommentClient({
+      getCommentContext: vi.fn(async () => ({
+        quote: "被选中的原文",
+        replies: [{
+          replyId: "reply_1",
+          userId: "ou_user",
+          text: "@bot 帮我总结这里",
+          docsLinks: ["https://example.feishu.cn/docx/doc_token"],
+        }],
+      })),
+    });
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (_input: {
+        conversationKey?: string;
+        files: string[];
+        text: string;
+      }) => ({ text: "这是评论回复。[send-file:/tmp/ignored.txt]" })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime: createLarkServiceRuntime({ commentClient }),
+        stateDir,
+        event: fakeCommentEvent(),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.checkUserAuthorization).toHaveBeenCalledWith(expect.objectContaining({
+        conversationKey: "lark-comment:doc_token",
+        locale: "zh",
+      }));
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        conversationKey: "lark-comment:doc_token",
+        files: [],
+        text: expect.stringContaining("<lark_comment_context>"),
+      }));
+      const text = bridge.handleAuthorizedMessage.mock.calls[0]![0].text;
+      expect(text).toContain("file_token: doc_token");
+      expect(text).toContain("comment_id: comment_1");
+      expect(text).toContain("被选中的原文");
+      expect(text).toContain("@bot 帮我总结这里");
+      expect(commentClient.createReply).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        text: "这是评论回复。",
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("replies with an access denial for unauthorized Lark document comment operators", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-deny-"));
+    const commentClient = fakeCommentClient();
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "reply" as const, text: "使用配对码配对此用户" })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime: createLarkServiceRuntime({ commentClient }),
+        stateDir,
+        event: fakeCommentEvent(),
+      });
+
+      expect(handled).toBe(true);
+      expect(commentClient.getCommentContext).not.toHaveBeenCalled();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(commentClient.createReply).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        text: "使用配对码配对此用户",
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("delivers generated files from bridge delivery tags", async () => {
@@ -904,6 +1015,44 @@ describe("lark service", () => {
     }
   });
 });
+
+function fakeCommentEvent(overrides: Partial<{
+  fileToken: string;
+  fileType: string;
+  commentId: string;
+  replyId: string;
+  operator: { openId?: string; userId?: string; unionId?: string };
+  mentionedBot: boolean;
+  timestamp: number;
+}> = {}) {
+  const operator = overrides.operator ?? { openId: "ou_user" };
+  return {
+    fileToken: overrides.fileToken ?? "doc_token",
+    fileType: overrides.fileType ?? "docx",
+    commentId: overrides.commentId ?? "comment_1",
+    operator: {
+      openId: operator.openId ?? "ou_user",
+      ...(operator.userId ? { userId: operator.userId } : {}),
+      ...(operator.unionId ? { unionId: operator.unionId } : {}),
+    },
+    mentionedBot: overrides.mentionedBot ?? true,
+    timestamp: overrides.timestamp ?? Date.now(),
+    ...(overrides.replyId ? { replyId: overrides.replyId } : {}),
+  };
+}
+
+function fakeCommentClient(overrides: Partial<{
+  getCommentContext: ReturnType<typeof vi.fn>;
+  createReply: ReturnType<typeof vi.fn>;
+}> = {}) {
+  return {
+    getCommentContext: overrides.getCommentContext ?? vi.fn(async () => ({
+      quote: "",
+      replies: [],
+    })),
+    createReply: overrides.createReply ?? vi.fn(async () => undefined),
+  };
+}
 
 function fakeChannel(overrides: Partial<ReturnType<typeof baseFakeChannel>> = {}) {
   return {

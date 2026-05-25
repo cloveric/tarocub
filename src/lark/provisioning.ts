@@ -11,6 +11,8 @@ export const REQUIRED_LARK_SCOPES = [
   "docx:document:readonly",
   "docx:document:write_only",
   "drive:drive.metadata:readonly",
+  "docs:document.comment:read",
+  "docs:document.comment:create",
 ] as const;
 
 export const REQUIRED_LARK_CALLBACKS = [
@@ -80,8 +82,9 @@ export async function provisionLarkApp(input: {
     patchedSubscriptions = true;
   }
 
+  const after = await inspectLarkAppProvisioning(client, input.appId);
   return {
-    ...await inspectLarkAppProvisioning(client, input.appId),
+    ...(patchedSubscriptions ? assumePatchedSubscriptionsVisible(after, before) : after),
     applied,
     patchedSubscriptions,
   };
@@ -188,6 +191,26 @@ async function patchLarkAppSubscriptions(
   if (patchResult.code !== 0) {
     throw new Error(`Lark app subscription patch failed: ${patchResult.code ?? "unknown"} ${patchResult.msg ?? ""}`.trim());
   }
+}
+
+function assumePatchedSubscriptionsVisible(
+  inspected: Omit<LarkProvisioningResult, "applied">,
+  before: Omit<LarkProvisioningResult, "applied">,
+): Omit<LarkProvisioningResult, "applied"> {
+  const subscribedCallbacks = before.missingCallbacks.length > 0
+    ? uniqueSorted([...inspected.subscribedCallbacks, ...before.subscribedCallbacks, ...REQUIRED_LARK_CALLBACKS])
+    : inspected.subscribedCallbacks;
+  const subscribedEvents = before.missingEvents.length > 0 || before.missingOptionalEvents.length > 0
+    ? uniqueSorted([...inspected.subscribedEvents, ...before.subscribedEvents, ...REQUIRED_LARK_EVENTS, ...OPTIONAL_LARK_EVENTS])
+    : inspected.subscribedEvents;
+  return {
+    ...inspected,
+    subscribedCallbacks,
+    missingCallbacks: REQUIRED_LARK_CALLBACKS.filter((callback) => !subscribedCallbacks.includes(callback)),
+    subscribedEvents,
+    missingEvents: REQUIRED_LARK_EVENTS.filter((event) => !subscribedEvents.includes(event)),
+    missingOptionalEvents: OPTIONAL_LARK_EVENTS.filter((event) => !subscribedEvents.includes(event)),
+  };
 }
 
 function uniqueSorted(values: string[]): string[] {
