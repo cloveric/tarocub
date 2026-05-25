@@ -59,13 +59,18 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 Telegram remains the mature primary channel. Feishu/Lark support is a second entrypoint that reuses the same engine adapters, sessions, workspace, `agent.md`, approval model, and file-delivery tags.
 
 ```bash
-export LARK_APP_ID="cli_xxx"
-export LARK_APP_SECRET="..."
-
 npm run build
+node dist/src/index.js lark wizard   # scan to create/bind a PersonalAgent app
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
 node dist/src/index.js lark run
+```
+
+`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, and writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`). Environment variables still win if you prefer manual credentials:
+
+```bash
+export LARK_APP_ID="cli_xxx"
+export LARK_APP_SECRET="..."
 ```
 
 Optional environment:
@@ -127,6 +132,7 @@ For raw `lark.card` payloads, bridge decorates ordinary button elements with Car
 
 ## Release Highlights
 
+- **v4.6.42** — adds `lark wizard`, a QR-code PersonalAgent registration flow that saves Feishu/Lark app credentials to `lark.env` and lets `lark status/doctor/run` auto-load them.
 - **v4.6.41** — aligns Feishu/Lark interactive cards with Card 2.0 callback `behaviors`, access-checks card operators before stop/approval/choice actions, and splits Lark chat/user numeric ID maps to reduce collision blast radius.
 - **v4.6.40** — hardens the Feishu/Lark channel preview with a single-service lock, safer user-facing errors, Lark ID collision detection, raw card button routing, stronger `lark status` diagnostics, and more tolerant Feishu Docs CLI output parsing.
 - **v4.6.39** — adds the Feishu/Lark channel preview: official Lark Channel SDK long connection, bridge runtime reuse, streaming/approval/custom cards, rich posts, Feishu Docs creation, merged-forward context, inbound resources, timeline diagnostics, and outbound file/media tags.

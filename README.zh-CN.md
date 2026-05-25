@@ -59,13 +59,18 @@ npm run dev -- telegram service start
 Telegram 仍然是最成熟的主通道。飞书/Lark 是第二入口，复用同一套 engine adapter、session、workspace、`agent.md`、审批模型和文件投递标签。
 
 ```bash
-export LARK_APP_ID="cli_xxx"
-export LARK_APP_SECRET="..."
-
 npm run build
+node dist/src/index.js lark wizard   # 扫码创建/绑定 PersonalAgent app
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
 node dist/src/index.js lark run
+```
+
+`lark wizard` 会走官方 Lark SDK 的 PersonalAgent 注册流程，在终端打印二维码，并把凭据保存到 `~/.cctb/lark/lark.env`（或 `CCTB_LARK_STATE_DIR/lark.env`）。如果你更想手动填凭据，环境变量仍然优先：
+
+```bash
+export LARK_APP_ID="cli_xxx"
+export LARK_APP_SECRET="..."
 ```
 
 可选环境变量：
@@ -127,6 +132,7 @@ Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 
 ## 近期亮点
 
+- **v4.6.42** — 新增 `lark wizard`，通过二维码创建/绑定 Feishu/Lark PersonalAgent app，凭据保存到 `lark.env`，并让 `lark status/doctor/run` 自动读取。
 - **v4.6.41** — 将飞书/Lark 交互卡片对齐到 Card 2.0 callback `behaviors`，stop/approval/choice 点击前按操作者重新鉴权，并拆分 Lark chat/user numeric ID map 以收窄碰撞影响面。
 - **v4.6.40** — 加固飞书/Lark 通道预览：单服务锁、安全的用户可见错误、Lark ID 碰撞检测、raw card 按钮回调补全、更明确的 `lark status` 诊断，以及更兼容的飞书文档 CLI 输出解析。
 - **v4.6.39** — 新增飞书/Lark 通道预览：官方 Lark Channel SDK 长连接、复用 bridge runtime、streaming/审批/自定义卡片、富文本 post、飞书文档创建、合并转发上下文、入站资源下载、timeline 诊断和出站文件/媒体标签。

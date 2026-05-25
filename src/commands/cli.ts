@@ -56,7 +56,9 @@ import { applyEngineSelection } from "../telegram/instance-config.js";
 import { runSideChannelSendCommand } from "../telegram/side-channel-send.js";
 import { runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps } from "./send.js";
 import { runCronCli } from "../cron-cli.js";
+import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir } from "../lark/env-file.js";
 import { resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkRuntimeEnv } from "../lark/service.js";
+import { runLarkWizard } from "../lark/wizard.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -402,14 +404,11 @@ async function runStatusCommand(argv: string[], env: InstanceTokenEnv, logger: C
 }
 
 function resolveLarkStateDirForCli(env: LarkRuntimeEnv): string {
-  if (env.CCTB_LARK_STATE_DIR) {
-    return env.CCTB_LARK_STATE_DIR;
+  try {
+    return resolveLarkStateDir(env);
+  } catch {
+    return "(unknown: HOME or USERPROFILE is required)";
   }
-  if (env.CODEX_TELEGRAM_STATE_DIR) {
-    return env.CODEX_TELEGRAM_STATE_DIR;
-  }
-  const homeDir = env.HOME ?? env.USERPROFILE;
-  return homeDir ? path.join(homeDir, ".cctb", "lark") : "(unknown: HOME or USERPROFILE is required)";
 }
 
 async function formatLarkStatus(env: LarkRuntimeEnv): Promise<string> {
@@ -420,6 +419,7 @@ async function formatLarkStatus(env: LarkRuntimeEnv): Promise<string> {
     `App Secret: ${env.LARK_APP_SECRET ? "configured" : "missing"}`,
     `Domain: ${env.LARK_DOMAIN ?? "default"}`,
     `State dir: ${stateDir}`,
+    `Env file: ${stateDir.startsWith("(unknown:") ? "unknown" : resolveLarkEnvFilePath(env)}`,
     `Service: ${await describeLarkServiceLock(stateDir)}`,
     `Require mention in groups: ${parseLarkBooleanEnv(env.LARK_REQUIRE_MENTION_IN_GROUP, true) ? "yes" : "no"}`,
     "Run: node dist/src/index.js lark run",
@@ -527,7 +527,8 @@ async function runLarkCommand(argv: string[], env: LarkRuntimeEnv, logger: CliLo
     if (args.length !== 0) {
       throw new Error("Usage: lark status");
     }
-    logger.log(await formatLarkStatus(env));
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    logger.log(await formatLarkStatus(loadedEnv));
     return true;
   }
 
@@ -535,7 +536,16 @@ async function runLarkCommand(argv: string[], env: LarkRuntimeEnv, logger: CliLo
     if (args.length !== 0) {
       throw new Error("Usage: lark doctor");
     }
-    logger.log(await formatLarkDoctor(env));
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    logger.log(await formatLarkDoctor(loadedEnv));
+    return true;
+  }
+
+  if (subcommand === "wizard") {
+    if (args.length !== 0) {
+      throw new Error("Usage: lark wizard");
+    }
+    await runLarkWizard(env, logger);
     return true;
   }
 
@@ -543,7 +553,7 @@ async function runLarkCommand(argv: string[], env: LarkRuntimeEnv, logger: CliLo
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 
-  throw new Error("Usage: lark <status|doctor|run>");
+  throw new Error("Usage: lark <status|doctor|wizard|run>");
 }
 
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -1430,7 +1440,7 @@ Commands:
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
                                               Send files/text through the active turn side-channel or configured Telegram session
-  lark <status|doctor|run>                    Inspect or run the Feishu/Lark channel
+  lark <status|doctor|wizard|run>             Inspect, configure, or run the Feishu/Lark channel
   dashboard [--live]                         Open a visual status dashboard in the browser
   help                                        Show this help message`;
 

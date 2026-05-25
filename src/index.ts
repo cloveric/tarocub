@@ -27,6 +27,7 @@ import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-e
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
 import { upgradeInstanceAgentInstructions } from "./commands/access.js";
 import { runSearchMcpServer } from "./search/search-mcp-server.js";
+import { loadLarkRuntimeEnv } from "./lark/env-file.js";
 import { runLarkService } from "./lark/service.js";
 
 function renderLifecycleError(error: unknown): string {
@@ -49,13 +50,14 @@ async function main(): Promise<void> {
     }
 
     if (argv[0] === "lark" && argv[1] === "run") {
+      const larkEnv = await loadLarkRuntimeEnv(process.env);
       const abortController = new AbortController();
       const shutdownSigterm = () => abortController.abort();
       const shutdownSigint = () => abortController.abort();
       process.once("SIGTERM", shutdownSigterm);
       process.once("SIGINT", shutdownSigint);
       try {
-        await runLarkService(process.env, { signal: abortController.signal });
+        await runLarkService(larkEnv, { signal: abortController.signal });
       } finally {
         process.removeListener("SIGTERM", shutdownSigterm);
         process.removeListener("SIGINT", shutdownSigint);

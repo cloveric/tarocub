@@ -128,6 +128,44 @@ describe("runCli", () => {
     }
   });
 
+  it("loads Lark credentials from the generated lark.env file", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "status"], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      const output = messages.join("\n");
+      expect(handled).toBe(true);
+      expect(output).toContain("App ID: configured");
+      expect(output).toContain("App Secret: configured");
+      expect(output).toContain("Domain: feishu");
+      expect(output).toContain(path.join(stateDir, "lark.env"));
+      expect(output).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("reports a running Lark service lock in status", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
