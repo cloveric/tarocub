@@ -61,6 +61,7 @@ Telegram remains the mature primary channel. Feishu/Lark support is a second ent
 ```bash
 npm run build
 node dist/src/index.js lark wizard   # scan to create/bind a PersonalAgent app
+node dist/src/index.js lark provision # re-check/provision an existing app
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
 node dist/src/index.js lark run
@@ -132,6 +133,7 @@ For raw `lark.card` payloads, bridge decorates ordinary button elements with Car
 
 ## Release Highlights
 
+- **v4.6.45** — adds `lark provision` so an existing Feishu/Lark app can re-run the wizard's permission/subscription checks after you grant app-management permissions, without creating another QR app.
 - **v4.6.44** — teaches `lark wizard` to provision-check the app after QR registration: it verifies required scopes, requests admin approval for configured-but-unauthorized scopes, patches websocket event/callback subscriptions when app-management permission is available, and otherwise reports the missing management scope.
 - **v4.6.43** — fixes Feishu/Lark wizard domain handling so saved `LARK_DOMAIN=feishu|lark` values map to the official SDK domains at runtime and to the correct account registration hosts during QR setup.
 - **v4.6.42** — adds `lark wizard`, a QR-code PersonalAgent registration flow that saves Feishu/Lark app credentials to `lark.env` and lets `lark status/doctor/run` auto-load them.

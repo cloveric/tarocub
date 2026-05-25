@@ -59,6 +59,7 @@ import { runCronCli } from "../cron-cli.js";
 import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir } from "../lark/env-file.js";
 import { resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkRuntimeEnv } from "../lark/service.js";
 import { runLarkWizard } from "../lark/wizard.js";
+import { formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "../lark/provisioning.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -82,6 +83,7 @@ export interface CliOptions {
   logger?: CliLogger;
   serviceDeps?: ServiceCommandDeps;
   sendDeps?: ConfiguredSendDeps;
+  larkProvisionApp?: (input: { appId: string; appSecret: string; domain?: string; logger?: CliLogger }) => Promise<LarkProvisioningResult>;
 }
 
 function normalizeCommandArgs(argv: string[]): string[] {
@@ -519,7 +521,12 @@ async function formatLarkDoctor(env: LarkRuntimeEnv): Promise<string> {
   ].join("\n");
 }
 
-async function runLarkCommand(argv: string[], env: LarkRuntimeEnv, logger: CliLogger): Promise<boolean> {
+async function runLarkCommand(
+  argv: string[],
+  env: LarkRuntimeEnv,
+  logger: CliLogger,
+  deps: { provisionApp?: CliOptions["larkProvisionApp"] } = {},
+): Promise<boolean> {
   const subcommand = argv[1] ?? "status";
   const args = argv.slice(2);
 
@@ -541,6 +548,30 @@ async function runLarkCommand(argv: string[], env: LarkRuntimeEnv, logger: CliLo
     return true;
   }
 
+  if (subcommand === "provision") {
+    if (args.length !== 0) {
+      throw new Error("Usage: lark provision");
+    }
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    if (!loadedEnv.LARK_APP_ID) {
+      throw new Error("LARK_APP_ID is required");
+    }
+    if (!loadedEnv.LARK_APP_SECRET) {
+      throw new Error("LARK_APP_SECRET is required");
+    }
+    const provisioning = await (deps.provisionApp ?? provisionLarkApp)({
+      appId: loadedEnv.LARK_APP_ID,
+      appSecret: loadedEnv.LARK_APP_SECRET,
+      ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
+      logger,
+    });
+    logger.log([
+      "Lark app provisioning",
+      ...formatLarkProvisioningResult(provisioning).map((line) => `- ${line}`),
+    ].join("\n"));
+    return true;
+  }
+
   if (subcommand === "wizard") {
     if (args.length !== 0) {
       throw new Error("Usage: lark wizard");
@@ -553,7 +584,7 @@ async function runLarkCommand(argv: string[], env: LarkRuntimeEnv, logger: CliLo
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 
-  throw new Error("Usage: lark <status|doctor|wizard|run>");
+  throw new Error("Usage: lark <status|doctor|provision|wizard|run>");
 }
 
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -1440,7 +1471,7 @@ Commands:
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
                                               Send files/text through the active turn side-channel or configured Telegram session
-  lark <status|doctor|wizard|run>             Inspect, configure, or run the Feishu/Lark channel
+  lark <status|doctor|provision|wizard|run>   Inspect, configure, or run the Feishu/Lark channel
   dashboard [--live]                         Open a visual status dashboard in the browser
   help                                        Show this help message`;
 
@@ -1786,7 +1817,7 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   }
 
   if (normalized[0] === "lark") {
-    return runLarkCommand(normalized, env, logger);
+    return runLarkCommand(normalized, env, logger, { provisionApp: options.larkProvisionApp });
   }
 
   if (normalized[0] === "access") {

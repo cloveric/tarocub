@@ -225,6 +225,62 @@ describe("runCli", () => {
     }
   });
 
+  it("provisions an existing Lark app without printing secrets", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const provisionApp = vi.fn(async () => ({
+      grantedScopes: ["im:message:send_as_bot"],
+      missingScopes: [],
+      unauthorizedScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+      applied: false,
+      patchedSubscriptions: true,
+    }));
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "provision"], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkProvisionApp: provisionApp,
+      });
+
+      expect(handled).toBe(true);
+      expect(provisionApp).toHaveBeenCalledWith(expect.objectContaining({
+        appId: "cli_from_file",
+        appSecret: "secret-from-file",
+        domain: "feishu",
+      }));
+      const output = messages.join("\n");
+      expect(output).toContain("Lark app provisioning");
+      expect(output).toContain("Lark websocket event/callback subscriptions updated.");
+      expect(output).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("updates an existing .env file instead of replacing unrelated lines", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 

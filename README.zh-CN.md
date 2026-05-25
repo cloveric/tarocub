@@ -61,6 +61,7 @@ Telegram 仍然是最成熟的主通道。飞书/Lark 是第二入口，复用�
 ```bash
 npm run build
 node dist/src/index.js lark wizard   # 扫码创建/绑定 PersonalAgent app
+node dist/src/index.js lark provision # 对现有 app 重新检查/补齐权限订阅
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
 node dist/src/index.js lark run
@@ -132,6 +133,7 @@ Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 
 ## 近期亮点
 
+- **v4.6.45** — 新增 `lark provision`，现有飞书/Lark app 在补了 app 管理权限后，可以直接重跑 wizard 的权限/订阅检查，不用再扫码创建一个新 app。
 - **v4.6.44** — 让 `lark wizard` 在扫码注册后做 app provisioning 检查：检查必需 scope、对已配置但未授权的 scope 发起管理员授权申请；如果有 app 管理权限就补齐 websocket 事件/回调订阅，否则明确提示缺哪个管理 scope。
 - **v4.6.43** — 修复飞书/Lark wizard 的 domain 处理：`LARK_DOMAIN=feishu|lark` 会在运行时映射到官方 SDK domain，并在二维码注册时映射到正确的账号注册域名。
 - **v4.6.42** — 新增 `lark wizard`，通过二维码创建/绑定 Feishu/Lark PersonalAgent app，凭据保存到 `lark.env`，并让 `lark status/doctor/run` 自动读取。
