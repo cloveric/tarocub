@@ -3,7 +3,7 @@ import qrcode from "qrcode-terminal";
 
 import { writeLarkEnvFile } from "./env-file.js";
 import { formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "./provisioning.js";
-import type { LarkRuntimeEnv } from "./service.js";
+import type { LarkRuntimeEnv } from "./config.js";
 
 export interface LarkWizardLogger {
   log(message?: unknown, ...optionalParams: unknown[]): void;

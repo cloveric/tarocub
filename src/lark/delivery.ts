@@ -13,7 +13,7 @@ import {
 import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import type { LarkServiceRuntime } from "./runtime.js";
-import type { LarkChannelLike, LarkSendOptions } from "./service.js";
+import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 
 type LarkSendPathKind = "file" | "image" | "audio" | "video";
 

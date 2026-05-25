@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { LarkRuntimeEnv } from "./service.js";
+import type { LarkRuntimeEnv } from "./config.js";
 
 export const LARK_ENV_FILE_NAME = "lark.env";
 

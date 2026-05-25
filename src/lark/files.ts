@@ -9,7 +9,7 @@ import {
   type FileWorkflowResult,
 } from "../runtime/file-workflow.js";
 import type { NormalizedTelegramAttachment } from "../telegram/update-normalizer.js";
-import type { LarkChannelLike } from "./service.js";
+import type { LarkChannelLike } from "./types.js";
 import type {
   LarkNormalizedAttachment,
   LarkNormalizedBridgeMessage,

@@ -5,7 +5,7 @@ import { CronAccessDeniedError } from "../runtime/cron-errors.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
 import type { LarkServiceRuntime } from "./runtime.js";
-import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./service.js";
+import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
 
 type LarkCronDeliverResponse = (input: {
   channel: LarkChannelLike;

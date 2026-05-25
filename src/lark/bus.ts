@@ -17,7 +17,7 @@ import {
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
 import type { LarkServiceRuntime } from "./runtime.js";
-import type { LarkBridgeLike, LarkChannelLike } from "./service.js";
+import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 
 type LarkBusCommandInput = {
   channel: LarkChannelLike;

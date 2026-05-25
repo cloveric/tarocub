@@ -30,7 +30,7 @@ import {
 } from "./bus.js";
 import type { LarkNormalizedBridgeMessage } from "./message-normalizer.js";
 import type { LarkServiceRuntime } from "./runtime.js";
-import type { LarkBridgeLike, LarkChannelLike } from "./service.js";
+import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
 const VALID_LARK_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
