@@ -81,8 +81,8 @@ The Lark channel currently supports:
 
 - inbound p2p/group messages normalized into the same `Bridge.handleAuthorizedMessage` path, protected by the same pairing/allowlist access store as Telegram;
 - topic/thread isolation through `conversationKey`;
-- streaming interactive cards with a stop button;
-- approval cards for engine permission requests;
+- streaming interactive cards with a Card 2.0 callback stop button;
+- approval cards for engine permission requests, with callback operators checked against bridge access policy before resolving;
 - inbound image/file resources downloaded into the bridge workspace;
 - outbound `[send-file:/abs/path]`, `[send-image:/abs/path]`, `send.audio`, `send.video`, and `send.batch` tool tags delivered back to Lark;
 - rich Feishu posts through `lark.post` tool tags when plain Markdown is too limiting;
@@ -102,7 +102,7 @@ Lark-specific tool tags use the same compact JSON tag shape as Telegram side-cha
 [tool:{"name":"send.video","payload":{"path":"/absolute/path/demo.mp4"}}]
 ```
 
-For raw `lark.card` payloads, bridge decorates ordinary button elements with routing metadata when a conversation is available. If you already provide a `value.cctb_lark` field, that explicit callback payload is preserved.
+For raw `lark.card` payloads, bridge decorates ordinary button elements with Card 2.0 `behaviors: [{type:"callback", value: ...}]` routing metadata when a conversation is available. If you already provide callback metadata, that explicit payload is preserved.
 
 `lark-cli` is useful inside agent turns for Feishu Docs/IM/Calendar operations, but it is not used as the inbound bot transport. Long-connection message delivery uses `@larksuiteoapi/node-sdk` because it exposes normalized message events, card callbacks, streaming cards, and media helpers directly.
 
@@ -127,6 +127,7 @@ For raw `lark.card` payloads, bridge decorates ordinary button elements with rou
 
 ## Release Highlights
 
+- **v4.6.41** — aligns Feishu/Lark interactive cards with Card 2.0 callback `behaviors`, access-checks card operators before stop/approval/choice actions, and splits Lark chat/user numeric ID maps to reduce collision blast radius.
 - **v4.6.40** — hardens the Feishu/Lark channel preview with a single-service lock, safer user-facing errors, Lark ID collision detection, raw card button routing, stronger `lark status` diagnostics, and more tolerant Feishu Docs CLI output parsing.
 - **v4.6.39** — adds the Feishu/Lark channel preview: official Lark Channel SDK long connection, bridge runtime reuse, streaming/approval/custom cards, rich posts, Feishu Docs creation, merged-forward context, inbound resources, timeline diagnostics, and outbound file/media tags.
 - **v4.6.22** — adds Antigravity CLI as a third backend engine, including Telegram `/engine antigravity`, YOLO/full-auto process execution, `/goal` passthrough, safe `/model` guardrails for print mode, conversation auto-binding, and `/resume conversation <id>`.

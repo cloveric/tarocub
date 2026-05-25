@@ -2,6 +2,7 @@ import type { EngineStreamEvent } from "../codex/adapter.js";
 
 export interface LarkRunState {
   conversationKey: string;
+  bridgeChatType?: "private" | "group";
   status: "running" | "done" | "error";
   thinking: string[];
   tools: Array<{
@@ -19,9 +20,10 @@ export interface LarkApprovalCardInput {
   toolInput?: unknown;
 }
 
-export function initialLarkRunState(conversationKey: string): LarkRunState {
+export function initialLarkRunState(conversationKey: string, bridgeChatType?: "private" | "group"): LarkRunState {
   return {
     conversationKey,
+    ...(bridgeChatType ? { bridgeChatType } : {}),
     status: "running",
     thinking: [],
     tools: [],
@@ -111,10 +113,11 @@ export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> 
         content: "停止",
       },
       type: "danger",
-      value: {
+      behaviors: [callbackBehavior({
         cctb_lark: "stop",
         conversationKey: state.conversationKey,
-      },
+        ...(state.bridgeChatType ? { bridgeChatType: state.bridgeChatType } : {}),
+      })],
     });
   }
 
@@ -189,13 +192,20 @@ function approvalButtonColumn(
           content: text,
         },
         type,
-        value: {
+        behaviors: [callbackBehavior({
           cctb_lark: "approval",
           requestId,
           decision,
-        },
+        })],
       },
     ],
+  };
+}
+
+function callbackBehavior(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: "callback",
+    value,
   };
 }
 

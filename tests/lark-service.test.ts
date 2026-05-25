@@ -405,6 +405,7 @@ describe("lark service", () => {
       });
 
       const raw = JSON.stringify(channel.send.mock.calls);
+      expect(raw).toContain('"behaviors"');
       expect(raw).toContain('"cctb_lark":"choice"');
       expect(raw).toContain('"conversationKey":"lark:oc_chat"');
       expect(raw).toContain('"id":"approve"');
@@ -652,7 +653,7 @@ describe("lark service", () => {
   it("detects Lark numeric id collisions before access state can be shared", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-id-collision-"));
     const bridgeChatId = stableLarkNumericId("lark:oc_chat");
-    await writeFile(path.join(stateDir, "lark-id-map.json"), JSON.stringify({
+    await writeFile(path.join(stateDir, "lark-chat-id-map.json"), JSON.stringify({
       [String(bridgeChatId)]: "chat:lark:other_chat",
     }));
     const channel = fakeChannel();
@@ -680,7 +681,7 @@ describe("lark service", () => {
           mentionedBot: false,
           createTime: Date.now(),
         },
-      })).rejects.toThrow("Lark numeric ID collision");
+      })).rejects.toThrow("Lark chat numeric ID collision");
 
       expect(bridge.checkAccess).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
@@ -738,6 +739,90 @@ describe("lark service", () => {
     }
   });
 
+  it("rejects unauthorized Lark card choices before running the bridge", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-choice-denied-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const, text: "未授权" })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_1",
+          operator: { openId: "ou_intruder" },
+          action: {
+            value: {
+              cctb_lark: "choice",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              label: "继续",
+              value: "continue",
+            },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.checkAccess).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_intruder"),
+        chatType: "private",
+        conversationKey: "lark:oc_chat",
+      }));
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "未授权" }, { replyTo: "card_1" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unauthorized Lark stop actions", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-denied-"));
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const, text: "未授权" })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_1",
+          operator: { openId: "ou_intruder" },
+          action: {
+            value: {
+              cctb_lark: "stop",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+            },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(abortController.signal.aborted).toBe(false);
+      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "未授权" }, { replyTo: "card_1" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolves approval card actions", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
@@ -768,6 +853,55 @@ describe("lark service", () => {
     });
 
     await expect(pending).resolves.toEqual({ behavior: "allow", scope: "session" });
+  });
+
+  it("rejects unauthorized Lark approval actions without resolving the approval", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-approval-denied-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const, text: "未授权" })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const resolve = vi.fn();
+    const reject = vi.fn();
+    const timer = setTimeout(() => undefined, 60_000);
+    runtime.pendingApprovals.set("req_1", {
+      requestId: "req_1",
+      chatId: "oc_chat",
+      conversationKey: "lark:oc_chat",
+      bridgeChatType: "private",
+      resolve,
+      reject,
+      timer,
+    });
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_card",
+          operator: { openId: "ou_intruder" },
+          action: {
+            value: { cctb_lark: "approval", requestId: "req_1", decision: "allow_session" },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(reject).not.toHaveBeenCalled();
+      expect(runtime.pendingApprovals.has("req_1")).toBe(true);
+      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "未授权" }, { replyTo: "om_card" });
+    } finally {
+      clearTimeout(timer);
+      runtime.pendingApprovals.clear();
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 });
 

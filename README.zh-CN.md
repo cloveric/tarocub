@@ -81,8 +81,8 @@ node dist/src/index.js lark run
 
 - p2p/group 消息进入同一条 `Bridge.handleAuthorizedMessage` 路径，并复用 Telegram 侧同一套 pairing/allowlist 访问控制；
 - 用 `conversationKey` 隔离话题/thread；
-- streaming interactive card 和停止按钮；
-- 引擎权限请求审批卡片；
+- streaming interactive card 和 Card 2.0 callback 停止按钮；
+- 引擎权限请求审批卡片，点击审批前会按操作者重新走 bridge 访问控制；
 - 收到图片/文件资源后下载到 bridge workspace；
 - 通过 `[send-file:/abs/path]`、`[send-image:/abs/path]`、`send.audio`、`send.video` 和 `send.batch` tool tag 把文件/图片/音视频发回 Lark；
 - 通过 `lark.post` tool tag 发送富文本/图文混排消息；
@@ -102,7 +102,7 @@ Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 [tool:{"name":"send.video","payload":{"path":"/absolute/path/demo.mp4"}}]
 ```
 
-如果传 raw `lark.card` payload，bridge 会在存在会话上下文时给普通按钮自动补回调 metadata；如果你已经显式提供 `value.cctb_lark`，则保留你的自定义回调。
+如果传 raw `lark.card` payload，bridge 会在存在会话上下文时给普通按钮自动补 Card 2.0 `behaviors: [{type:"callback", value: ...}]` 回调 metadata；如果你已经显式提供 callback metadata，则保留你的自定义回调。
 
 `lark-cli` 适合在 agent turn 里处理飞书 Docs/IM/Calendar 等操作，但它不是入站 bot transport。入站长连接使用 `@larksuiteoapi/node-sdk`，因为它直接提供 normalized message event、card callback、streaming card 和 media helper。
 
@@ -127,6 +127,7 @@ Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 
 ## 近期亮点
 
+- **v4.6.41** — 将飞书/Lark 交互卡片对齐到 Card 2.0 callback `behaviors`，stop/approval/choice 点击前按操作者重新鉴权，并拆分 Lark chat/user numeric ID map 以收窄碰撞影响面。
 - **v4.6.40** — 加固飞书/Lark 通道预览：单服务锁、安全的用户可见错误、Lark ID 碰撞检测、raw card 按钮回调补全、更明确的 `lark status` 诊断，以及更兼容的飞书文档 CLI 输出解析。
 - **v4.6.39** — 新增飞书/Lark 通道预览：官方 Lark Channel SDK 长连接、复用 bridge runtime、streaming/审批/自定义卡片、富文本 post、飞书文档创建、合并转发上下文、入站资源下载、timeline 诊断和出站文件/媒体标签。
 - **v4.6.22** — 新增 Antigravity CLI 作为第三个后端引擎，支持 Telegram `/engine antigravity`、YOLO/full-auto process 执行、`/goal` 透传、print mode 下安全拦截 `/model`、conversation 自动绑定和 `/resume conversation <id>`。

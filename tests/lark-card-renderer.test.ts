@@ -27,12 +27,15 @@ describe("lark card renderer", () => {
   });
 
   it("renders a stop button while a run is active", () => {
-    const card = renderLarkRunCard(initialLarkRunState("lark:oc_chat")) as any;
+    const card = renderLarkRunCard(initialLarkRunState("lark:oc_chat", "group")) as any;
     const serialized = JSON.stringify(card);
 
     expect(card.config.streaming_mode).toBe(true);
     expect(serialized).toContain("停止");
     expect(serialized).toContain("lark:oc_chat");
+    expect(serialized).toContain('"behaviors"');
+    expect(serialized).toContain('"type":"callback"');
+    expect(serialized).toContain('"bridgeChatType":"group"');
   });
 
   it("renders approval cards with scoped allow and deny actions", () => {
@@ -47,5 +50,7 @@ describe("lark card renderer", () => {
     expect(serialized).toContain("Bash");
     expect(serialized).toContain("allow_session");
     expect(serialized).toContain("deny");
+    expect(serialized).toContain('"behaviors"');
+    expect(serialized).toContain('"type":"callback"');
   });
 });

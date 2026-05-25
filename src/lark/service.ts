@@ -76,7 +76,8 @@ export interface LarkChannelLike {
 
 type LarkSendPathKind = "file" | "image" | "audio" | "video";
 
-const LARK_ID_MAP_FILENAME = "lark-id-map.json";
+const LARK_CHAT_ID_MAP_FILENAME = "lark-chat-id-map.json";
+const LARK_USER_ID_MAP_FILENAME = "lark-user-id-map.json";
 const LARK_SERVICE_LOCK_DIR = "lark-service";
 
 export interface LarkRuntimeChannelLike extends LarkChannelLike {
@@ -165,6 +166,8 @@ export interface LarkActiveRun {
 export interface PendingLarkApproval {
   requestId: string;
   chatId: string;
+  conversationKey?: string;
+  bridgeChatType?: "private" | "group";
   replyTo?: string;
   resolve: (decision: EngineApprovalDecision) => void;
   reject: (error: Error) => void;
@@ -436,9 +439,9 @@ async function runNormalizedLarkMessage(
   try {
     await input.channel.stream(normalized.chatId, {
       card: {
-        initial: renderLarkRunCard(initialLarkRunState(normalized.conversationKey)),
+        initial: renderLarkRunCard(initialLarkRunState(normalized.conversationKey, normalized.bridgeChatType)),
         producer: async (controller) => {
-          let runState = initialLarkRunState(normalized.conversationKey);
+          let runState = initialLarkRunState(normalized.conversationKey, normalized.bridgeChatType);
           const updateCard = async (event: EngineStreamEvent) => {
             const cardEvent = stripDeliveryTagsFromEvent(event);
             runState = applyLarkEngineEvent(runState, cardEvent);
@@ -461,6 +464,8 @@ async function runNormalizedLarkMessage(
                 channel: input.channel,
                 runtime: input.runtime,
                 chatId: normalized.chatId,
+                conversationKey: normalized.conversationKey,
+                bridgeChatType: normalized.bridgeChatType,
                 replyTo: controller.messageId,
                 request,
                 abortSignal: request.abortSignal ?? abortController.signal,
@@ -552,6 +557,8 @@ export async function requestLarkApproval(input: {
   channel: LarkChannelLike;
   runtime: LarkServiceRuntime;
   chatId: string;
+  conversationKey?: string;
+  bridgeChatType?: "private" | "group";
   replyTo?: string;
   request: EngineApprovalRequest;
   abortSignal?: AbortSignal;
@@ -576,6 +583,8 @@ export async function requestLarkApproval(input: {
     const pending: PendingLarkApproval = {
       requestId,
       chatId: input.chatId,
+      ...(input.conversationKey ? { conversationKey: input.conversationKey } : {}),
+      ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       resolve,
       reject,
@@ -629,6 +638,14 @@ export async function handleLarkCardAction(input: {
   }
 
   if (value.cctb_lark === "stop" && typeof value.conversationKey === "string") {
+    const bridgeChatType = bridgeChatTypeFromValue(value.bridgeChatType);
+    if (!await ensureLarkCardActionAccess({
+      ...input,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+    })) {
+      return true;
+    }
     const active = input.runtime.activeRuns.get(value.conversationKey);
     active?.abortController.abort();
     const skippedQueued = input.runtime.chatQueue.clearPending(value.conversationKey);
@@ -650,6 +667,16 @@ export async function handleLarkCardAction(input: {
       });
       return true;
     }
+    if (
+      pending.conversationKey &&
+      !await ensureLarkCardActionAccess({
+        ...input,
+        conversationKey: pending.conversationKey,
+        bridgeChatType: pending.bridgeChatType ?? "private",
+      })
+    ) {
+      return true;
+    }
     cleanupPendingApproval(input.runtime, value.requestId);
     pending.resolve(renderApprovalDecision(value.decision));
     await input.channel.send(input.event.chatId, { text: renderApprovalResolution(value.decision) }, {
@@ -661,6 +688,14 @@ export async function handleLarkCardAction(input: {
   if (value.cctb_lark === "choice" && typeof value.conversationKey === "string") {
     if (!input.bridge || !input.stateDir) {
       return false;
+    }
+    const bridgeChatType = bridgeChatTypeFromValue(value.bridgeChatType);
+    if (!await ensureLarkCardActionAccess({
+      ...input,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+    })) {
+      return true;
     }
     const label = typeof value.label === "string" ? value.label : "choice";
     const choiceValue = typeof value.value === "string" ? value.value : JSON.stringify(value.value ?? label);
@@ -676,12 +711,6 @@ export async function handleLarkCardAction(input: {
       `用户点击了飞书卡片按钮：${label}`,
       `value: ${choiceValue}`,
     ].filter((line): line is string => line !== undefined).join("\n");
-    const bridgeChatType = bridgeChatTypeFromValue(value.bridgeChatType);
-    await assertStableLarkIdMapping(
-      input.stateDir,
-      stableLarkNumericId(`user:${input.event.operator?.openId ?? input.event.operator?.userId ?? "unknown"}`),
-      `user:${input.event.operator?.openId ?? input.event.operator?.userId ?? "unknown"}`,
-    );
     await input.runtime.chatQueue.enqueue(value.conversationKey, async () => {
       await runLarkCardChoice({
         channel: input.channel,
@@ -745,9 +774,9 @@ async function runLarkCardChoice(input: {
   try {
     await input.channel.stream(input.chatId, {
       card: {
-        initial: renderLarkRunCard(initialLarkRunState(input.conversationKey)),
+        initial: renderLarkRunCard(initialLarkRunState(input.conversationKey, input.bridgeChatType)),
         producer: async (controller) => {
-          let runState = initialLarkRunState(input.conversationKey);
+          let runState = initialLarkRunState(input.conversationKey, input.bridgeChatType);
           const updateCard = async (event: EngineStreamEvent) => {
             const cardEvent = stripDeliveryTagsFromEvent(event);
             runState = applyLarkEngineEvent(runState, cardEvent);
@@ -769,6 +798,8 @@ async function runLarkCardChoice(input: {
                 channel: input.channel,
                 runtime: input.runtime,
                 chatId: input.chatId,
+                conversationKey: input.conversationKey,
+                bridgeChatType: input.bridgeChatType,
                 replyTo: controller.messageId,
                 request,
                 abortSignal: request.abortSignal ?? abortController.signal,
@@ -1210,13 +1241,13 @@ function buildLarkToolCard(
                 type: action.type === "danger" || action.type === "primary" || action.type === "default"
                   ? action.type
                   : "primary",
-                value: {
+                behaviors: [callbackBehavior({
                   cctb_lark: "choice",
                   ...(conversationKey ? { conversationKey } : {}),
                   ...(bridgeChatType ? { bridgeChatType } : {}),
                   label,
                   value,
-                },
+                })],
               },
             ],
           };
@@ -1276,19 +1307,103 @@ function decorateLarkCardNode(
 
   if (decorated.tag === "button") {
     const currentValue = payloadObject(decorated.value);
-    if (!currentValue?.cctb_lark) {
+    const existingCallback = findLarkCallbackValue(decorated.behaviors);
+    if (!currentValue?.cctb_lark && !existingCallback?.cctb_lark) {
       const label = extractButtonLabel(decorated);
-      decorated.value = {
-        cctb_lark: "choice",
-        conversationKey,
-        ...(bridgeChatType ? { bridgeChatType } : {}),
-        label,
-        value: currentValue ?? label,
-      };
+      decorated.behaviors = [
+        ...arrayValue(decorated.behaviors),
+        callbackBehavior({
+          cctb_lark: "choice",
+          conversationKey,
+          ...(bridgeChatType ? { bridgeChatType } : {}),
+          label,
+          value: currentValue ?? label,
+        }),
+      ];
+      delete decorated.value;
+    } else if (currentValue?.cctb_lark && !existingCallback?.cctb_lark) {
+      decorated.behaviors = [
+        ...arrayValue(decorated.behaviors),
+        callbackBehavior(currentValue),
+      ];
+      delete decorated.value;
     }
   }
 
   return decorated;
+}
+
+function callbackBehavior(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: "callback",
+    value,
+  };
+}
+
+function findLarkCallbackValue(behaviors: unknown): Record<string, unknown> | null {
+  for (const behavior of arrayValue(behaviors)) {
+    if (!behavior || typeof behavior !== "object" || Array.isArray(behavior)) {
+      continue;
+    }
+    const entry = behavior as Record<string, unknown>;
+    if (entry.type === "callback") {
+      return payloadObject(entry.value);
+    }
+  }
+  return null;
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+async function ensureLarkCardActionAccess(input: {
+  channel: LarkChannelLike;
+  bridge?: LarkBridgeLike;
+  stateDir?: string;
+  event: {
+    chatId: string;
+    messageId: string;
+    operator?: {
+      openId?: string;
+      userId?: string;
+      name?: string;
+    };
+  };
+  conversationKey: string;
+  bridgeChatType: "private" | "group";
+}): Promise<boolean> {
+  if (!input.bridge?.checkAccess || !input.stateDir) {
+    return true;
+  }
+
+  const operatorRawId = larkOperatorRawId(input.event.operator);
+  const chatId = stableLarkNumericId(input.conversationKey);
+  const userId = stableLarkNumericId(`user:${operatorRawId}`);
+  await assertStableLarkIdMappings(input.stateDir, [
+    ["chat", chatId, input.conversationKey],
+    ["user", userId, operatorRawId],
+  ]);
+
+  const decision = await input.bridge.checkAccess({
+    chatId,
+    userId,
+    chatType: input.bridgeChatType,
+    conversationKey: input.conversationKey,
+    locale: "zh",
+  });
+  if (decision.kind === "allow") {
+    return true;
+  }
+
+  await input.channel.send(input.event.chatId, {
+    text: decision.text ?? "当前操作者未获授权。",
+  }, { replyTo: input.event.messageId });
+  return false;
+}
+
+function larkOperatorRawId(operator: { openId?: string; userId?: string } | undefined): string {
+  return operator?.openId ?? operator?.userId ?? "unknown";
 }
 
 function extractButtonLabel(button: Record<string, unknown>): string {
@@ -1317,38 +1432,49 @@ function parseLarkDocumentCreateInput(payload: Record<string, unknown> | null): 
   };
 }
 
+type LarkNumericIdKind = "chat" | "user";
+
 async function verifyLarkNumericIds(stateDir: string, normalized: LarkNormalizedBridgeMessage): Promise<void> {
   await assertStableLarkIdMappings(stateDir, [
-    [normalized.bridgeChatId, `chat:${normalized.conversationKey}`],
-    [normalized.bridgeUserId, `user:${normalized.senderId}`],
+    ["chat", normalized.bridgeChatId, normalized.conversationKey],
+    ["user", normalized.bridgeUserId, normalized.senderId],
   ]);
 }
 
-async function assertStableLarkIdMapping(stateDir: string, numericId: number, rawId: string): Promise<void> {
-  await assertStableLarkIdMappings(stateDir, [[numericId, rawId]]);
+async function assertStableLarkIdMappings(stateDir: string, mappings: Array<[LarkNumericIdKind, number, string]>): Promise<void> {
+  const grouped = new Map<LarkNumericIdKind, Array<[number, string]>>();
+  for (const [kind, numericId, rawId] of mappings) {
+    const entries = grouped.get(kind) ?? [];
+    entries.push([numericId, rawId]);
+    grouped.set(kind, entries);
+  }
+
+  for (const [kind, entries] of grouped) {
+    const mapPath = path.join(stateDir, larkIdMapFilename(kind));
+    await withFileMutex(mapPath, async () => {
+      const store = new JsonStore<Record<string, string>>(mapPath, parseLarkIdMap);
+      const current = await store.read({});
+      let changed = false;
+      for (const [numericId, rawId] of entries) {
+        const key = String(numericId);
+        const existing = current[key];
+        if (existing && existing !== rawId) {
+          throw new Error(`Lark ${kind} numeric ID collision for ${numericId}`);
+        }
+        if (!existing) {
+          current[key] = rawId;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await store.write(current);
+      }
+    });
+  }
 }
 
-async function assertStableLarkIdMappings(stateDir: string, mappings: Array<[number, string]>): Promise<void> {
-  const mapPath = path.join(stateDir, LARK_ID_MAP_FILENAME);
-  await withFileMutex(mapPath, async () => {
-    const store = new JsonStore<Record<string, string>>(mapPath, parseLarkIdMap);
-    const current = await store.read({});
-    let changed = false;
-    for (const [numericId, rawId] of mappings) {
-      const key = String(numericId);
-      const existing = current[key];
-      if (existing && existing !== rawId) {
-        throw new Error(`Lark numeric ID collision for ${numericId}`);
-      }
-      if (!existing) {
-        current[key] = rawId;
-        changed = true;
-      }
-    }
-    if (changed) {
-      await store.write(current);
-    }
-  });
+function larkIdMapFilename(kind: LarkNumericIdKind): string {
+  return kind === "chat" ? LARK_CHAT_ID_MAP_FILENAME : LARK_USER_ID_MAP_FILENAME;
 }
 
 function parseLarkIdMap(value: unknown): Record<string, string> {
