@@ -1,0 +1,162 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+
+import { CronAccessDeniedError } from "../runtime/cron-errors.js";
+import type { CronExecutor } from "../runtime/cron-scheduler.js";
+import type { CronJobRecord } from "../state/cron-store-schema.js";
+import type { LarkServiceRuntime } from "./runtime.js";
+import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./service.js";
+
+type LarkCronDeliverResponse = (input: {
+  channel: LarkChannelLike;
+  runtime: LarkServiceRuntime;
+  chatId: string;
+  text: string;
+  stateDir: string;
+  requestOutputDir: string;
+  workspaceOverride?: string;
+  conversationKey: string;
+  bridgeChatType: "private" | "group";
+  replyTo?: string;
+  replyInThread?: boolean;
+}) => Promise<void>;
+
+export function buildLarkCronExecutor(input: {
+  channel: LarkChannelLike;
+  bridge: LarkBridgeLike;
+  runtime: LarkServiceRuntime;
+  stateDir: string;
+  workspaceOverride?: string;
+  agentInstructions?: () => string;
+  deliverResponse?: LarkCronDeliverResponse;
+}): CronExecutor {
+  return async (job: CronJobRecord, abortSignal?: AbortSignal): Promise<void> => {
+    if (job.channel !== "lark") {
+      throw new Error(`cannot execute non-Lark cron job ${job.id} on Lark service`);
+    }
+    if (!job.larkChatId) {
+      throw new Error(`Lark cron job ${job.id} is missing larkChatId`);
+    }
+    const bridgeChatType = job.chatType === "group" ? "group" : "private";
+    const conversationKey = job.conversationKey ?? `lark:${job.larkChatId}`;
+    const accessDecision = input.bridge.checkAccess
+      ? await input.bridge.checkAccess({
+        chatId: job.chatId,
+        userId: job.userId,
+        chatType: bridgeChatType,
+        conversationKey,
+        locale: job.locale ?? "zh",
+      })
+      : { kind: "allow" as const };
+    if (accessDecision.kind !== "allow") {
+      throw new CronAccessDeniedError(accessDecision.text ? `cron access denied: ${accessDecision.text}` : undefined);
+    }
+
+    if (job.deliveryMode === "notify") {
+      if (!job.mute) {
+        const replyOptions = larkCronReplyOptions(job);
+        if (replyOptions) {
+          await input.channel.send(job.larkChatId, { text: renderLarkCronNotification(job) }, replyOptions);
+        } else {
+          await input.channel.send(job.larkChatId, { text: renderLarkCronNotification(job) });
+        }
+      }
+      return;
+    }
+
+    const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
+    await mkdir(requestOutputDir, { recursive: true });
+    const result = await input.bridge.handleAuthorizedMessage({
+      chatId: job.chatId,
+      userId: job.userId,
+      chatType: bridgeChatType,
+      text: job.prompt,
+      conversationKey,
+      files: [],
+      requestOutputDir,
+      workspaceOverride: input.workspaceOverride,
+      abortSignal,
+      instructions: input.agentInstructions?.(),
+    });
+    if (job.mute) {
+      return;
+    }
+    if (!input.deliverResponse) {
+      await input.channel.send(job.larkChatId, {
+        markdown: result.text || "（空回复）",
+      }, {
+        ...larkCronReplyFields(job),
+      });
+      return;
+    }
+    await input.deliverResponse({
+      channel: input.channel,
+      runtime: input.runtime,
+      chatId: job.larkChatId,
+      text: result.text,
+      stateDir: input.stateDir,
+      requestOutputDir,
+      workspaceOverride: input.workspaceOverride,
+      conversationKey,
+      bridgeChatType,
+      ...larkCronReplyFields(job),
+    });
+  };
+}
+
+function stripLarkReminderPrefix(prompt: string): string {
+  const trimmed = prompt.trim();
+  const stripped = trimmed
+    .replace(/^(?:提醒我|提醒一下我|提醒一下|提醒)[\s:：,，。.]*/u, "")
+    .replace(/^remind me(?:\s+to)?[\s:：,，.]*/i, "")
+    .trim();
+  return stripped || trimmed;
+}
+
+function stripLeadingLarkReminderTimeAnchors(prompt: string): string {
+  let body = prompt.trim();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stripped = body
+      .replace(
+        /^(?:(?:大后天|明上午|明下午|明晚上|今天|明天|后天|今晚|今早|明早|明晚|早上|上午|中午|下午|晚上|凌晨)(?:的)?|(?:下下|本|这|下)?周[一二三四五六日天](?:的)?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?(?:的)?)[\s:：,，。.]*/u,
+        "",
+      )
+      .replace(/^(?:today|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|next\s+\w+)(?:'s)?[\s:：,，.]*/i, "")
+      .trim();
+    if (stripped === body || stripped.length === 0) {
+      break;
+    }
+    body = stripped;
+  }
+  return body || prompt.trim();
+}
+
+function renderLarkCronNotification(job: CronJobRecord): string {
+  const body = stripLeadingLarkReminderTimeAnchors(stripLarkReminderPrefix(job.prompt));
+  return job.locale === "en"
+    ? `⏰ Reminder\n${body}`
+    : `⏰ 提醒\n${body}`;
+}
+
+function larkCronReplyOptions(job: CronJobRecord): LarkSendOptions | undefined {
+  return larkReplyOptions(...larkCronReplyTuple(job));
+}
+
+function larkCronReplyFields(job: CronJobRecord): { replyTo?: string; replyInThread?: boolean } {
+  const [replyTo, replyInThread] = larkCronReplyTuple(job);
+  return replyTo ? { replyTo, replyInThread } : {};
+}
+
+function larkCronReplyTuple(job: CronJobRecord): [string | undefined, boolean | undefined] {
+  return job.larkThreadId && job.larkMessageId ? [job.larkMessageId, true] : [undefined, undefined];
+}
+
+function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | undefined): LarkSendOptions | undefined {
+  if (!replyTo) {
+    return undefined;
+  }
+  return {
+    replyTo,
+    ...(replyInThread !== undefined ? { replyInThread } : {}),
+  };
+}

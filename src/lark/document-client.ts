@@ -1,0 +1,131 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
+const execFile = promisify(execFileCallback);
+
+export interface LarkDocumentCreateInput {
+  title?: string;
+  content: string;
+  docFormat?: "xml" | "markdown";
+  as?: "user" | "bot";
+  parentToken?: string;
+  parentPosition?: string;
+}
+
+export interface LarkDocumentCreateResult {
+  title?: string;
+  url?: string;
+  documentId?: string;
+}
+
+export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput): Promise<LarkDocumentCreateResult> {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-doc-"));
+  const contentFileName = "content.md";
+  const contentPath = path.join(tempDir, contentFileName);
+  const docFormat = input.docFormat ?? inferDocFormat(input.content);
+  if (docFormat !== "markdown") {
+    throw new Error("lark.doc.create currently requires markdown content with the installed lark-cli");
+  }
+  await writeFile(contentPath, input.content);
+  const args = [
+    "docs",
+    "+create",
+    "--as",
+    input.as ?? "user",
+  ];
+  if (input.title?.trim()) {
+    args.push("--title", input.title.trim());
+  }
+  args.push(
+    "--markdown",
+    `@${contentFileName}`,
+  );
+  if (input.parentToken) {
+    args.push("--folder-token", input.parentToken);
+  }
+  if (input.parentPosition) {
+    throw new Error("lark.doc.create parentPosition is not supported by the installed lark-cli; use parentToken/folder token instead");
+  }
+  try {
+    const { stdout } = await execFile("lark-cli", args, { cwd: tempDir, maxBuffer: 10 * 1024 * 1024 });
+    const parsed = parseLarkCliJson(stdout) as {
+      ok?: boolean;
+      data?: {
+        document?: {
+          title?: string;
+          url?: string;
+          document_id?: string;
+          documentId?: string;
+        };
+        url?: string;
+      };
+      error?: {
+        message?: string;
+      };
+    };
+    if (parsed.ok === false) {
+      throw new Error(parsed.error?.message ?? "lark-cli docs +create failed");
+    }
+    const document = parsed.data?.document;
+    return {
+      title: document?.title ?? input.title,
+      url: document?.url ?? parsed.data?.url,
+      documentId: document?.document_id ?? document?.documentId,
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  }
+}
+
+export function parseLarkDocumentCreateInput(payload: Record<string, unknown> | null): LarkDocumentCreateInput {
+  if (!payload || typeof payload.content !== "string" || payload.content.trim().length === 0) {
+    throw new Error("lark.doc.create requires payload.content");
+  }
+  const docFormat = payload.docFormat === "markdown" || payload.format === "markdown"
+    ? "markdown"
+    : payload.docFormat === "xml" || payload.format === "xml"
+      ? "xml"
+      : undefined;
+  const as = payload.as === "bot" ? "bot" : payload.as === "user" ? "user" : undefined;
+  return {
+    content: payload.content,
+    ...(typeof payload.title === "string" ? { title: payload.title } : {}),
+    ...(docFormat ? { docFormat } : {}),
+    ...(as ? { as } : {}),
+    ...(typeof payload.parentToken === "string" ? { parentToken: payload.parentToken } : {}),
+    ...(typeof payload.parentPosition === "string" ? { parentPosition: payload.parentPosition } : {}),
+  };
+}
+
+function parseLarkCliJson(stdout: string): unknown {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error("lark-cli docs +create returned empty output");
+  }
+
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    // Some lark-cli commands print human-readable headers before the JSON body.
+  }
+
+  const jsonStart = trimmed.lastIndexOf("\n{");
+  if (jsonStart !== -1) {
+    const candidate = trimmed.slice(jsonStart + 1);
+    return JSON.parse(candidate) as unknown;
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  if (firstBrace !== -1) {
+    return JSON.parse(trimmed.slice(firstBrace)) as unknown;
+  }
+
+  throw new Error("lark-cli docs +create did not return JSON output");
+}
+
+function inferDocFormat(content: string): "xml" | "markdown" {
+  return /^\s*</.test(content) ? "xml" : "markdown";
+}

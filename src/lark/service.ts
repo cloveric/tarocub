@@ -1,14 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 
 import {
-  Client,
   createLarkChannel,
-  Domain,
   type CardActionEvent,
   type CommentEvent,
   type LarkChannelOptions,
@@ -22,7 +17,6 @@ import type {
   EngineStreamEvent,
 } from "../codex/adapter.js";
 import type { BridgeAccessDecision } from "../runtime/bridge.js";
-import { ChatQueue } from "../runtime/chat-queue.js";
 import { createBridgeDependencies } from "../service.js";
 import {
   boundArchiveSummaryForTelegram,
@@ -59,21 +53,21 @@ import {
 import type { NormalizedTelegramAttachment, NormalizedTelegramMessage } from "../telegram/update-normalizer.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { classifyFailure } from "../runtime/error-classification.js";
-import { CronAccessDeniedError } from "../runtime/cron-errors.js";
-import { CronScheduler, type CronExecutor } from "../runtime/cron-scheduler.js";
-import type { ScannedSession } from "../runtime/session-scanner.js";
-import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
-import { loadBusConfig as defaultLoadBusConfig } from "../bus/bus-config.js";
-import { withFileMutex } from "../state/file-mutex.js";
-import { JsonStore } from "../state/json-store.js";
+import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { CronStore } from "../state/cron-store.js";
-import type { CronJobRecord } from "../state/cron-store-schema.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
-import { acquireInstanceLock, resolveInstanceLockPath, type InstanceLockHandle } from "../state/instance-lock.js";
 import { UsageStore } from "../state/usage-store.js";
 import { handleCronCommand, isCronCommand } from "../telegram/cron-commands.js";
 import { renderLarkApprovalCard } from "./card-renderer.js";
+import {
+  createLarkCommentClient,
+  type LarkCommentContext,
+  type LarkCommentFileType,
+} from "./comment-client.js";
+import { resolveLarkRuntimeConfig, type LarkRuntimeConfig, type LarkRuntimeEnv } from "./config.js";
+import { buildLarkCronExecutor } from "./cron.js";
+import { parseLarkDocumentCreateInput } from "./document-client.js";
 import {
   normalizeLarkMessage,
   stableLarkNumericId,
@@ -81,8 +75,21 @@ import {
   type LarkNormalizedBridgeMessage,
   type LarkNormalizedAttachment,
 } from "./message-normalizer.js";
+import { assertStableLarkIdMappings, verifyLarkNumericIds } from "./id-map.js";
+import {
+  createLarkServiceRuntime,
+  type LarkServiceRuntime,
+  type PendingLarkApproval,
+} from "./runtime.js";
+import { acquireLarkServiceLock } from "./service-lock.js";
 
-const execFile = promisify(execFileCallback);
+export { createLarkDocumentWithCli } from "./document-client.js";
+export type { LarkDocumentCreateInput, LarkDocumentCreateResult } from "./document-client.js";
+export { buildLarkCronExecutor } from "./cron.js";
+export { resolveLarkRuntimeConfig } from "./config.js";
+export type { LarkRuntimeConfig, LarkRuntimeEnv } from "./config.js";
+export { createLarkServiceRuntime } from "./runtime.js";
+export { resolveLarkServiceLockDir, resolveLarkServiceLockPath } from "./service-lock.js";
 
 export interface LarkSendOptions {
   replyTo?: string;
@@ -114,9 +121,6 @@ type DownloadedLarkAttachment = {
   localPath: string;
 };
 
-const LARK_CHAT_ID_MAP_FILENAME = "lark-chat-id-map.json";
-const LARK_USER_ID_MAP_FILENAME = "lark-user-id-map.json";
-const LARK_SERVICE_LOCK_DIR = "lark-service";
 const VALID_LARK_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
 const LARK_ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "antigravity"];
 
@@ -188,179 +192,9 @@ export interface LarkBridgeLike {
   }): Promise<{ cleared: boolean }>;
 }
 
-export interface LarkDocumentCreateInput {
-  title?: string;
-  content: string;
-  docFormat?: "xml" | "markdown";
-  as?: "user" | "bot";
-  parentToken?: string;
-  parentPosition?: string;
-}
-
-export interface LarkDocumentCreateResult {
-  title?: string;
-  url?: string;
-  documentId?: string;
-}
-
-export type LarkCommentFileType = "doc" | "docx" | "sheet" | "file" | "slides" | "bitable";
-
-export interface LarkCommentReplyContext {
-  replyId?: string;
-  userId?: string;
-  text: string;
-  docsLinks: string[];
-}
-
-export interface LarkCommentContext {
-  quote?: string;
-  replies: LarkCommentReplyContext[];
-}
-
-export interface LarkCommentClientLike {
-  getCommentContext(input: {
-    fileToken: string;
-    fileType: LarkCommentFileType;
-    commentId: string;
-  }): Promise<LarkCommentContext>;
-  createReply(input: {
-    fileToken: string;
-    fileType: LarkCommentFileType;
-    commentId: string;
-    text: string;
-  }): Promise<void>;
-}
-
-export interface LarkRuntimeEnv {
-  HOME?: string;
-  APPDATA?: string;
-  USERPROFILE?: string;
-  CODEX_HOME?: string;
-  CLAUDE_CONFIG_DIR?: string;
-  CODEX_TELEGRAM_INSTANCE?: string;
-  CODEX_TELEGRAM_STATE_DIR?: string;
-  CODEX_EXECUTABLE?: string;
-  CLAUDE_EXECUTABLE?: string;
-  ANTIGRAVITY_EXECUTABLE?: string;
-  LARK_APP_ID?: string;
-  LARK_APP_SECRET?: string;
-  LARK_DOMAIN?: string;
-  CCTB_LARK_STATE_DIR?: string;
-  LARK_REQUIRE_MENTION_IN_GROUP?: string;
-}
-
-export interface LarkRuntimeConfig {
-  appId: string;
-  appSecret: string;
-  domain?: LarkChannelOptions["domain"];
-  stateDir: string;
-  requireMentionInGroup: boolean;
-}
-
 export interface LarkServiceLogger {
   log(message?: unknown, ...optionalParams: unknown[]): void;
   error(message?: unknown, ...optionalParams: unknown[]): void;
-}
-
-export interface LarkActiveRun {
-  abortController: AbortController;
-}
-
-export interface LarkCronRuntime {
-  store: CronStore;
-  scheduler: Pick<CronScheduler, "refresh" | "runJobNow">;
-}
-
-export interface LarkBusRuntime {
-  loadBusConfig?: typeof defaultLoadBusConfig;
-  delegateToInstance?: typeof defaultDelegateToInstance;
-}
-
-export interface LarkMiniRuntime {
-  runQueuedBridgeTurn?: MiniBusCommandContext["runQueuedBridgeTurn"];
-}
-
-export interface LarkSessionRuntime {
-  scanRecentSessions?: (hours: number) => Promise<ScannedSession[]>;
-  scanRecentAntigravitySessions?: (hours: number) => Promise<ScannedSession[]>;
-}
-
-export interface PendingLarkApproval {
-  requestId: string;
-  chatId: string;
-  conversationKey?: string;
-  bridgeChatType?: "private" | "group";
-  replyTo?: string;
-  resolve: (decision: EngineApprovalDecision) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-  abortSignal?: AbortSignal;
-  abortHandler?: () => void;
-}
-
-export interface LarkServiceRuntime {
-  activeRuns: Map<string, LarkActiveRun>;
-  pendingApprovals: Map<string, PendingLarkApproval>;
-  chatQueue: ChatQueue;
-  cronRuntime?: LarkCronRuntime;
-  busRuntime?: LarkBusRuntime;
-  miniRuntime?: LarkMiniRuntime;
-  sessionRuntime?: LarkSessionRuntime;
-  commentClient?: LarkCommentClientLike;
-  createDocument: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
-}
-
-export function createLarkServiceRuntime(options: {
-  createDocument?: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
-  commentClient?: LarkCommentClientLike;
-  cronRuntime?: LarkCronRuntime;
-  busRuntime?: LarkBusRuntime;
-  miniRuntime?: LarkMiniRuntime;
-  sessionRuntime?: LarkSessionRuntime;
-} = {}): LarkServiceRuntime {
-  return {
-    activeRuns: new Map(),
-    pendingApprovals: new Map(),
-    chatQueue: new ChatQueue(),
-    ...(options.cronRuntime ? { cronRuntime: options.cronRuntime } : {}),
-    ...(options.busRuntime ? { busRuntime: options.busRuntime } : {}),
-    ...(options.miniRuntime ? { miniRuntime: options.miniRuntime } : {}),
-    ...(options.sessionRuntime ? { sessionRuntime: options.sessionRuntime } : {}),
-    ...(options.commentClient ? { commentClient: options.commentClient } : {}),
-    createDocument: options.createDocument ?? createLarkDocumentWithCli,
-  };
-}
-
-export function resolveLarkRuntimeConfig(env: LarkRuntimeEnv): LarkRuntimeConfig {
-  if (!env.LARK_APP_ID) {
-    throw new Error("LARK_APP_ID is required");
-  }
-  if (!env.LARK_APP_SECRET) {
-    throw new Error("LARK_APP_SECRET is required");
-  }
-  const homeDir = env.HOME ?? env.USERPROFILE;
-  if (!env.CCTB_LARK_STATE_DIR && !env.CODEX_TELEGRAM_STATE_DIR && !homeDir) {
-    throw new Error(process.platform === "win32" ? "USERPROFILE or HOME is required" : "HOME or USERPROFILE is required");
-  }
-
-  return {
-    appId: env.LARK_APP_ID,
-    appSecret: env.LARK_APP_SECRET,
-    ...(env.LARK_DOMAIN ? { domain: resolveLarkClientDomain(env.LARK_DOMAIN) } : {}),
-    stateDir: env.CCTB_LARK_STATE_DIR ?? env.CODEX_TELEGRAM_STATE_DIR ?? path.join(homeDir!, ".cctb", "lark"),
-    requireMentionInGroup: parseBooleanEnv(env.LARK_REQUIRE_MENTION_IN_GROUP, true),
-  };
-}
-
-function resolveLarkClientDomain(domain: string): LarkChannelOptions["domain"] {
-  const normalized = domain.trim().toLowerCase();
-  if (normalized === "feishu") {
-    return Domain.Feishu;
-  }
-  if (normalized === "lark") {
-    return Domain.Lark;
-  }
-  return domain;
 }
 
 export async function runLarkService(
@@ -455,7 +289,14 @@ export async function runLarkService(
       const cronStore = new CronStore(stateDir);
       cronScheduler = new CronScheduler({
         store: cronStore,
-        executor: buildLarkCronExecutor({ channel, bridge, runtime, stateDir }),
+        executor: buildLarkCronExecutor({
+          channel,
+          bridge,
+          runtime,
+          stateDir,
+          agentInstructions: larkAgentInstructions,
+          deliverResponse: deliverLarkResponse,
+        }),
         stateDir,
         instanceName: bridgeEnv.CODEX_TELEGRAM_INSTANCE,
         onJobFailure: async (job, detail) => {
@@ -485,25 +326,6 @@ export async function runLarkService(
     } finally {
       await serviceLock.release();
     }
-  }
-}
-
-export function resolveLarkServiceLockDir(stateDir: string): string {
-  return path.join(stateDir, LARK_SERVICE_LOCK_DIR);
-}
-
-export function resolveLarkServiceLockPath(stateDir: string): string {
-  return resolveInstanceLockPath(resolveLarkServiceLockDir(stateDir));
-}
-
-async function acquireLarkServiceLock(stateDir: string): Promise<InstanceLockHandle> {
-  try {
-    return await acquireInstanceLock(resolveLarkServiceLockDir(stateDir));
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("Instance lock already held")) {
-      throw new Error(error.message.replace("Instance lock", "Lark service lock"));
-    }
-    throw error;
   }
 }
 
@@ -1423,291 +1245,6 @@ async function sendLarkPath(input: {
   }, larkReplyOptions(input.replyTo, input.replyInThread));
 }
 
-type LarkCommentElement = {
-  type?: string;
-  text_run?: { text?: string };
-  docs_link?: { url?: string };
-  person?: { user_id?: string };
-};
-
-type LarkCommentReplyApiItem = {
-  reply_id?: string;
-  user_id?: string;
-  content?: {
-    elements?: LarkCommentElement[];
-  };
-};
-
-type LarkCommentApiItem = {
-  comment_id?: string;
-  quote?: string;
-  reply_list?: {
-    replies?: LarkCommentReplyApiItem[];
-  };
-};
-
-type LarkDriveCommentApiClient = {
-  drive: {
-    v1: {
-      fileComment: {
-        get(payload: {
-          params: {
-            file_type: LarkCommentFileType;
-            user_id_type: "open_id";
-            need_reaction: boolean;
-          };
-          path: {
-            file_token: string;
-            comment_id: string;
-          };
-        }): Promise<{ code?: number; msg?: string; data?: LarkCommentApiItem }>;
-        list(payload: {
-          params: {
-            file_type: LarkCommentFileType;
-            user_id_type: "open_id";
-            need_reaction: boolean;
-            page_size: number;
-          };
-          path: {
-            file_token: string;
-          };
-        }): Promise<{ code?: number; msg?: string; data?: { items?: LarkCommentApiItem[] } }>;
-      };
-      fileCommentReply: {
-        create(payload: {
-          data: {
-            content: {
-              elements: Array<{
-                type: "text_run";
-                text_run: { text: string };
-              }>;
-            };
-          };
-          params: {
-            file_type: LarkCommentFileType;
-            user_id_type: "open_id";
-          };
-          path: {
-            file_token: string;
-            comment_id: string;
-          };
-        }): Promise<{ code?: number; msg?: string }>;
-      };
-    };
-  };
-};
-
-const silentLarkSdkLogger = {
-  error: () => undefined,
-  warn: () => undefined,
-  info: () => undefined,
-  debug: () => undefined,
-  trace: () => undefined,
-};
-
-export function createLarkCommentClient(config: {
-  appId: string;
-  appSecret: string;
-  domain?: LarkChannelOptions["domain"];
-}): LarkCommentClientLike {
-  const client = new Client({
-    appId: config.appId,
-    appSecret: config.appSecret,
-    ...(config.domain !== undefined ? { domain: config.domain } : {}),
-    logger: silentLarkSdkLogger,
-  }) as unknown as LarkDriveCommentApiClient;
-
-  return {
-    async getCommentContext(input) {
-      const basePayload = {
-        params: {
-          file_type: input.fileType,
-          user_id_type: "open_id" as const,
-          need_reaction: false,
-        },
-        path: {
-          file_token: input.fileToken,
-          comment_id: input.commentId,
-        },
-      };
-
-      const getResult = await client.drive.v1.fileComment.get(basePayload).catch(() => null);
-      if (getResult?.code === 0 && getResult.data) {
-        return normalizeLarkCommentContext(getResult.data);
-      }
-
-      const listResult = await client.drive.v1.fileComment.list({
-        params: {
-          file_type: input.fileType,
-          user_id_type: "open_id",
-          need_reaction: false,
-          page_size: 50,
-        },
-        path: {
-          file_token: input.fileToken,
-        },
-      });
-      if (listResult.code !== 0) {
-        throw new Error(`Lark comment list failed: ${listResult.code ?? "unknown"} ${listResult.msg ?? ""}`.trim());
-      }
-      const comment = listResult.data?.items?.find((item) => item.comment_id === input.commentId);
-      if (!comment) {
-        throw new Error(`Lark comment not found: ${input.commentId}`);
-      }
-      return normalizeLarkCommentContext(comment);
-    },
-
-    async createReply(input) {
-      const result = await client.drive.v1.fileCommentReply.create({
-        data: {
-          content: {
-            elements: [{
-              type: "text_run",
-              text_run: {
-                text: input.text,
-              },
-            }],
-          },
-        },
-        params: {
-          file_type: input.fileType,
-          user_id_type: "open_id",
-        },
-        path: {
-          file_token: input.fileToken,
-          comment_id: input.commentId,
-        },
-      });
-      if (result.code !== 0) {
-        throw new Error(`Lark comment reply failed: ${result.code ?? "unknown"} ${result.msg ?? ""}`.trim());
-      }
-    },
-  };
-}
-
-function normalizeLarkCommentContext(comment: LarkCommentApiItem): LarkCommentContext {
-  return {
-    ...(comment.quote ? { quote: comment.quote } : {}),
-    replies: (comment.reply_list?.replies ?? []).map((reply) => {
-      const content = flattenLarkCommentElements(reply.content?.elements ?? []);
-      return {
-        ...(reply.reply_id ? { replyId: reply.reply_id } : {}),
-        ...(reply.user_id ? { userId: reply.user_id } : {}),
-        text: content.text,
-        docsLinks: content.docsLinks,
-      };
-    }),
-  };
-}
-
-function flattenLarkCommentElements(elements: LarkCommentElement[]): { text: string; docsLinks: string[] } {
-  const parts: string[] = [];
-  const docsLinks: string[] = [];
-  for (const element of elements) {
-    if (element.type === "text_run" && element.text_run?.text) {
-      parts.push(element.text_run.text);
-      continue;
-    }
-    if (element.type === "docs_link" && element.docs_link?.url) {
-      docsLinks.push(element.docs_link.url);
-      parts.push(element.docs_link.url);
-      continue;
-    }
-    if (element.type === "person" && element.person?.user_id) {
-      parts.push(`@${element.person.user_id}`);
-    }
-  }
-  return {
-    text: parts.join("").trim(),
-    docsLinks,
-  };
-}
-
-export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput): Promise<LarkDocumentCreateResult> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-doc-"));
-  const contentFileName = "content.md";
-  const contentPath = path.join(tempDir, contentFileName);
-  const docFormat = input.docFormat ?? inferDocFormat(input.content);
-  if (docFormat !== "markdown") {
-    throw new Error("lark.doc.create currently requires markdown content with the installed lark-cli");
-  }
-  await writeFile(contentPath, input.content);
-  const args = [
-    "docs",
-    "+create",
-    "--as",
-    input.as ?? "user",
-  ];
-  if (input.title?.trim()) {
-    args.push("--title", input.title.trim());
-  }
-  args.push(
-    "--markdown",
-    `@${contentFileName}`,
-  );
-  if (input.parentToken) {
-    args.push("--folder-token", input.parentToken);
-  }
-  if (input.parentPosition) {
-    throw new Error("lark.doc.create parentPosition is not supported by the installed lark-cli; use parentToken/folder token instead");
-  }
-  try {
-    const { stdout } = await execFile("lark-cli", args, { cwd: tempDir, maxBuffer: 10 * 1024 * 1024 });
-    const parsed = parseLarkCliJson(stdout) as {
-      ok?: boolean;
-      data?: {
-        document?: {
-          title?: string;
-          url?: string;
-          document_id?: string;
-          documentId?: string;
-        };
-        url?: string;
-      };
-      error?: {
-        message?: string;
-      };
-    };
-    if (parsed.ok === false) {
-      throw new Error(parsed.error?.message ?? "lark-cli docs +create failed");
-    }
-    const document = parsed.data?.document;
-    return {
-      title: document?.title ?? input.title,
-      url: document?.url ?? parsed.data?.url,
-      documentId: document?.document_id ?? document?.documentId,
-    };
-  } finally {
-    await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-  }
-}
-
-function parseLarkCliJson(stdout: string): unknown {
-  const trimmed = stdout.trim();
-  if (!trimmed) {
-    throw new Error("lark-cli docs +create returned empty output");
-  }
-
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    // Some lark-cli commands print human-readable headers before the JSON body.
-  }
-
-  const jsonStart = trimmed.lastIndexOf("\n{");
-  if (jsonStart !== -1) {
-    const candidate = trimmed.slice(jsonStart + 1);
-    return JSON.parse(candidate) as unknown;
-  }
-
-  const firstBrace = trimmed.indexOf("{");
-  if (firstBrace !== -1) {
-    return JSON.parse(trimmed.slice(firstBrace)) as unknown;
-  }
-
-  throw new Error("lark-cli docs +create did not return JSON output");
-}
-
 async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir: string; bridge: LarkBridgeLike }> {
   const { config, bridge } = await createBridgeDependencies({
     HOME: env.HOME,
@@ -1737,13 +1274,6 @@ function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve) => {
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
-}
-
-function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined) {
-    return fallback;
-  }
-  return /^(?:1|true|yes|on)$/i.test(value.trim());
 }
 
 function payloadObject(payload: unknown): Record<string, unknown> | null {
@@ -2018,84 +1548,6 @@ function extractButtonLabel(button: Record<string, unknown>): string {
   return content || "choice";
 }
 
-function parseLarkDocumentCreateInput(payload: Record<string, unknown> | null): LarkDocumentCreateInput {
-  if (!payload || typeof payload.content !== "string" || payload.content.trim().length === 0) {
-    throw new Error("lark.doc.create requires payload.content");
-  }
-  const docFormat = payload.docFormat === "markdown" || payload.format === "markdown"
-    ? "markdown"
-    : payload.docFormat === "xml" || payload.format === "xml"
-      ? "xml"
-      : undefined;
-  const as = payload.as === "bot" ? "bot" : payload.as === "user" ? "user" : undefined;
-  return {
-    content: payload.content,
-    ...(typeof payload.title === "string" ? { title: payload.title } : {}),
-    ...(docFormat ? { docFormat } : {}),
-    ...(as ? { as } : {}),
-    ...(typeof payload.parentToken === "string" ? { parentToken: payload.parentToken } : {}),
-    ...(typeof payload.parentPosition === "string" ? { parentPosition: payload.parentPosition } : {}),
-  };
-}
-
-type LarkNumericIdKind = "chat" | "user";
-
-async function verifyLarkNumericIds(stateDir: string, normalized: LarkNormalizedBridgeMessage): Promise<void> {
-  await assertStableLarkIdMappings(stateDir, [
-    ["chat", normalized.bridgeChatId, normalized.conversationKey],
-    ["user", normalized.bridgeUserId, normalized.senderId],
-  ]);
-}
-
-async function assertStableLarkIdMappings(stateDir: string, mappings: Array<[LarkNumericIdKind, number, string]>): Promise<void> {
-  const grouped = new Map<LarkNumericIdKind, Array<[number, string]>>();
-  for (const [kind, numericId, rawId] of mappings) {
-    const entries = grouped.get(kind) ?? [];
-    entries.push([numericId, rawId]);
-    grouped.set(kind, entries);
-  }
-
-  for (const [kind, entries] of grouped) {
-    const mapPath = path.join(stateDir, larkIdMapFilename(kind));
-    await withFileMutex(mapPath, async () => {
-      const store = new JsonStore<Record<string, string>>(mapPath, parseLarkIdMap);
-      const current = await store.read({});
-      let changed = false;
-      for (const [numericId, rawId] of entries) {
-        const key = String(numericId);
-        const existing = current[key];
-        if (existing && existing !== rawId) {
-          throw new Error(`Lark ${kind} numeric ID collision for ${numericId}`);
-        }
-        if (!existing) {
-          current[key] = rawId;
-          changed = true;
-        }
-      }
-      if (changed) {
-        await store.write(current);
-      }
-    });
-  }
-}
-
-function larkIdMapFilename(kind: LarkNumericIdKind): string {
-  return kind === "chat" ? LARK_CHAT_ID_MAP_FILENAME : LARK_USER_ID_MAP_FILENAME;
-}
-
-function parseLarkIdMap(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const parsed: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
-    if (/^\d+$/.test(key) && typeof raw === "string") {
-      parsed[key] = raw;
-    }
-  }
-  return parsed;
-}
-
 function renderLarkUserFacingError(error: unknown, phase: "prepare" | "engine" | "tool"): string {
   const category = classifyFailure(error);
   if (category === "auth") {
@@ -2125,10 +1577,6 @@ function renderLarkUserFacingError(error: unknown, phase: "prepare" | "engine" |
     case "engine":
       return "错误：本轮运行失败，详细原因已记录到日志。";
   }
-}
-
-function inferDocFormat(content: string): "xml" | "markdown" {
-  return /^\s*</.test(content) ? "xml" : "markdown";
 }
 
 function larkAgentInstructions(): string {
@@ -3128,126 +2576,6 @@ async function handleLarkCronCommand(
     outcome: "success",
     detail: "/cron",
   });
-}
-
-function stripLarkReminderPrefix(prompt: string): string {
-  const trimmed = prompt.trim();
-  const stripped = trimmed
-    .replace(/^(?:提醒我|提醒一下我|提醒一下|提醒)[\s:：,，。.]*/u, "")
-    .replace(/^remind me(?:\s+to)?[\s:：,，.]*/i, "")
-    .trim();
-  return stripped || trimmed;
-}
-
-function stripLeadingLarkReminderTimeAnchors(prompt: string): string {
-  let body = prompt.trim();
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const stripped = body
-      .replace(
-        /^(?:(?:大后天|明上午|明下午|明晚上|今天|明天|后天|今晚|今早|明早|明晚|早上|上午|中午|下午|晚上|凌晨)(?:的)?|(?:下下|本|这|下)?周[一二三四五六日天](?:的)?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?(?:的)?)[\s:：,，。.]*/u,
-        "",
-      )
-      .replace(/^(?:today|tomorrow|tonight|this\s+(?:morning|afternoon|evening)|next\s+\w+)(?:'s)?[\s:：,，.]*/i, "")
-      .trim();
-    if (stripped === body || stripped.length === 0) {
-      break;
-    }
-    body = stripped;
-  }
-  return body || prompt.trim();
-}
-
-function renderLarkCronNotification(job: CronJobRecord): string {
-  const body = stripLeadingLarkReminderTimeAnchors(stripLarkReminderPrefix(job.prompt));
-  return job.locale === "en"
-    ? `⏰ Reminder\n${body}`
-    : `⏰ 提醒\n${body}`;
-}
-
-export function buildLarkCronExecutor(input: {
-  channel: LarkChannelLike;
-  bridge: LarkBridgeLike;
-  runtime: LarkServiceRuntime;
-  stateDir: string;
-  workspaceOverride?: string;
-}): CronExecutor {
-  return async (job: CronJobRecord, abortSignal?: AbortSignal): Promise<void> => {
-    if (job.channel !== "lark") {
-      throw new Error(`cannot execute non-Lark cron job ${job.id} on Lark service`);
-    }
-    if (!job.larkChatId) {
-      throw new Error(`Lark cron job ${job.id} is missing larkChatId`);
-    }
-    const bridgeChatType = job.chatType === "group" ? "group" : "private";
-    const conversationKey = job.conversationKey ?? `lark:${job.larkChatId}`;
-    const accessDecision = input.bridge.checkAccess
-      ? await input.bridge.checkAccess({
-        chatId: job.chatId,
-        userId: job.userId,
-        chatType: bridgeChatType,
-        conversationKey,
-        locale: job.locale ?? "zh",
-      })
-      : { kind: "allow" as const };
-    if (accessDecision.kind !== "allow") {
-      throw new CronAccessDeniedError(accessDecision.text ? `cron access denied: ${accessDecision.text}` : undefined);
-    }
-
-    if (job.deliveryMode === "notify") {
-      if (!job.mute) {
-        const replyOptions = larkCronReplyOptions(job);
-        if (replyOptions) {
-          await input.channel.send(job.larkChatId, { text: renderLarkCronNotification(job) }, replyOptions);
-        } else {
-          await input.channel.send(job.larkChatId, { text: renderLarkCronNotification(job) });
-        }
-      }
-      return;
-    }
-
-    const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
-    await mkdir(requestOutputDir, { recursive: true });
-    const result = await input.bridge.handleAuthorizedMessage({
-      chatId: job.chatId,
-      userId: job.userId,
-      chatType: bridgeChatType,
-      text: job.prompt,
-      conversationKey,
-      files: [],
-      requestOutputDir,
-      workspaceOverride: input.workspaceOverride,
-      abortSignal,
-      instructions: larkAgentInstructions(),
-    });
-    if (job.mute) {
-      return;
-    }
-    await deliverLarkResponse({
-      channel: input.channel,
-      runtime: input.runtime,
-      chatId: job.larkChatId,
-      text: result.text,
-      stateDir: input.stateDir,
-      requestOutputDir,
-      workspaceOverride: input.workspaceOverride,
-      conversationKey,
-      bridgeChatType,
-      ...larkCronReplyFields(job),
-    });
-  };
-}
-
-function larkCronReplyOptions(job: CronJobRecord): LarkSendOptions | undefined {
-  return larkReplyOptions(...larkCronReplyTuple(job));
-}
-
-function larkCronReplyFields(job: CronJobRecord): { replyTo?: string; replyInThread?: boolean } {
-  const [replyTo, replyInThread] = larkCronReplyTuple(job);
-  return replyTo ? { replyTo, replyInThread } : {};
-}
-
-function larkCronReplyTuple(job: CronJobRecord): [string | undefined, boolean | undefined] {
-  return job.larkThreadId && job.larkMessageId ? [job.larkMessageId, true] : [undefined, undefined];
 }
 
 async function readRawLarkConfig(stateDir: string): Promise<Record<string, unknown>> {
