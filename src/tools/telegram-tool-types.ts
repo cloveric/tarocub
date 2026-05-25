@@ -1,16 +1,28 @@
-import type { CronRuntime } from "../runtime/cron-runtime.js";
+import type { CronStore } from "../state/cron-store.js";
 import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "../telegram/delivery-ledger.js";
 import type { TelegramApi } from "../telegram/api.js";
 import type { Locale } from "../telegram/message-renderer.js";
 
+export interface TelegramToolCronRuntime {
+  store: CronStore;
+  scheduler: {
+    refresh(): Promise<void> | void;
+    runJobNow(id: string): Promise<void>;
+  };
+}
+
 export interface TelegramToolContext {
-  cronRuntime: CronRuntime | null;
+  cronRuntime: TelegramToolCronRuntime | null;
   stateDir: string;
+  channel?: "telegram" | "lark";
   chatId: number;
   userId: number;
   chatType?: string;
   messageThreadId?: number;
   conversationKey?: string;
+  larkChatId?: string;
+  larkThreadId?: string;
+  larkMessageId?: string;
   locale: Locale;
   instanceName?: string;
   updateId?: number;

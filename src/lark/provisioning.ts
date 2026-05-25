@@ -1,8 +1,13 @@
 import { Client, Domain } from "@larksuiteoapi/node-sdk";
 
+import { redactLarkSensitiveText } from "./redaction.js";
+
 export const REQUIRED_LARK_SCOPES = [
+  "im:message.group_at_msg.include_bot:readonly",
   "im:message.group_at_msg:readonly",
+  "im:message.group_msg",
   "im:message.p2p_msg:readonly",
+  "im:message:readonly",
   "im:message:send_as_bot",
   "im:resource",
   "cardkit:card:read",
@@ -59,7 +64,7 @@ export async function provisionLarkApp(input: {
   client?: LarkProvisioningClient;
 }): Promise<LarkProvisioningResult> {
   const client = input.client ?? createProvisioningClient(input);
-  const before = await inspectLarkAppProvisioning(client, input.appId);
+  const before = await readLarkAppProvisioning(client, input.appId);
   let applied = false;
   let patchedSubscriptions = false;
 
@@ -82,11 +87,25 @@ export async function provisionLarkApp(input: {
     patchedSubscriptions = true;
   }
 
-  const after = await inspectLarkAppProvisioning(client, input.appId);
+  const after = await readLarkAppProvisioning(client, input.appId);
   return {
     ...(patchedSubscriptions ? assumePatchedSubscriptionsVisible(after, before) : after),
     applied,
     patchedSubscriptions,
+  };
+}
+
+export async function inspectLarkAppProvisioning(input: {
+  appId: string;
+  appSecret: string;
+  domain?: string;
+  client?: LarkProvisioningClient;
+}): Promise<LarkProvisioningResult> {
+  const client = input.client ?? createProvisioningClient(input);
+  const inspected = await readLarkAppProvisioning(client, input.appId);
+  return {
+    ...inspected,
+    applied: false,
   };
 }
 
@@ -111,11 +130,21 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
   }
   if (result.missingScopes.length > 0) {
     lines.push(`Scopes not present in app config: ${result.missingScopes.join(", ")}`);
+    lines.push(`Bulk import missing tenant scopes JSON: ${formatLarkTenantScopeImportJson(result.missingScopes)}`);
+    lines.push("Run `node dist/src/index.js lark permissions --missing` to reprint only the currently missing tenant scopes.");
+  }
+  if (result.missingScopes.includes("im:message.group_msg")) {
+    lines.push("Lark /group all requires im:message.group_msg; without it, ordinary group messages may not reach the bot.");
+    lines.push("This scope is not part of the PersonalAgent QR wizard default; add or bulk-import im:message.group_msg in the Feishu/Lark app permissions UI, then rerun lark provision and lark doctor.");
   }
   return lines;
 }
 
-async function inspectLarkAppProvisioning(client: LarkProvisioningClient, appId: string): Promise<Omit<LarkProvisioningResult, "applied">> {
+export function formatLarkTenantScopeImportJson(scopes: readonly string[]): string {
+  return JSON.stringify({ scopes: { tenant: [...scopes] } });
+}
+
+async function readLarkAppProvisioning(client: LarkProvisioningClient, appId: string): Promise<Omit<LarkProvisioningResult, "applied">> {
   const [scopeResult, appResult] = await Promise.all([
     client.application.scope.list(),
     client.application.application.get({
@@ -139,8 +168,11 @@ async function inspectLarkAppProvisioning(client: LarkProvisioningClient, appId:
   const missingScopes = REQUIRED_LARK_SCOPES.filter((scope) => !scopeStatus.has(scope));
   const unauthorizedScopes = REQUIRED_LARK_SCOPES.filter((scope) => scopeStatus.has(scope) && scopeStatus.get(scope) !== 1);
   const canPatchSubscriptions = LARK_APP_SUBSCRIPTION_PATCH_SCOPES.some((scope) => scopeStatus.get(scope) === 1);
-  const subscribedCallbacks = appResult.data?.app?.callback_info?.subscribed_callbacks ?? appResult.data?.app?.callback?.subscribed_callbacks ?? [];
-  const subscribedEvents = appResult.data?.app?.event?.subscribed_events ?? [];
+  const app = appResult.data?.app;
+  const subscribedCallbacks = app?.callback_info?.subscribed_callbacks ?? app?.callback?.subscribed_callbacks ?? [];
+  const subscribedEvents = app?.event?.subscribed_events
+    ?? await readLarkAppVersionSubscribedEvents(client, appId, app?.online_version_id)
+    ?? [];
 
   return {
     grantedScopes,
@@ -155,6 +187,27 @@ async function inspectLarkAppProvisioning(client: LarkProvisioningClient, appId:
     subscriptionPatchScopeOptions: [...LARK_APP_SUBSCRIPTION_PATCH_SCOPES],
     patchedSubscriptions: false,
   };
+}
+
+async function readLarkAppVersionSubscribedEvents(
+  client: LarkProvisioningClient,
+  appId: string,
+  versionId: string | undefined,
+): Promise<string[] | undefined> {
+  if (!versionId || !client.application.applicationAppVersion?.get) {
+    return undefined;
+  }
+  const versionResult = await client.application.applicationAppVersion.get({
+    params: { lang: "zh_cn", user_id_type: "open_id" },
+    path: { app_id: appId, version_id: versionId },
+  });
+  if (versionResult.code !== 0) {
+    throw new Error(`Lark app version get failed: ${versionResult.code ?? "unknown"} ${versionResult.msg ?? ""}`.trim());
+  }
+  const eventTypes = versionResult.data?.app_version?.event_infos
+    ?.map((event) => event.event_type)
+    .filter((event): event is string => Boolean(event));
+  return eventTypes ? uniqueSorted(eventTypes) : undefined;
 }
 
 async function patchLarkAppSubscriptions(
@@ -228,7 +281,7 @@ function describeLarkProvisioningError(error: unknown): string {
   const code = responseData?.code;
   const message = responseData?.msg ?? responseData?.message ?? (error instanceof Error ? error.message : String(error));
   const compact = String(message).replace(/\s+/g, " ").trim();
-  return `${code !== undefined ? `${code} ` : ""}${redactSecretLikeText(compact)}`.trim();
+  return `${code !== undefined ? `${code} ` : ""}${redactLarkSensitiveText(compact)}`.trim();
 }
 
 function extractResponseData(error: unknown): { code?: unknown; msg?: unknown; message?: unknown } | undefined {
@@ -239,14 +292,6 @@ function extractResponseData(error: unknown): { code?: unknown; msg?: unknown; m
   return typeof response?.data === "object" && response.data !== null
     ? response.data as { code?: unknown; msg?: unknown; message?: unknown }
     : undefined;
-}
-
-function redactSecretLikeText(value: string): string {
-  return value
-    .replace(/(Authorization:\s*Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[redacted]")
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
-    .replace(/(app_secret|client_secret|secret)=([^&\s]+)/gi, "$1=[redacted]")
-    .replace(/(Authorization:\s*)(?!Bearer\b)[^\s]+/gi, "$1[redacted]");
 }
 
 function createProvisioningClient(input: { appId: string; appSecret: string; domain?: string }): LarkProvisioningClient {
@@ -295,6 +340,28 @@ export interface LarkProvisioningClient {
         msg?: string;
       }>;
     };
+    applicationAppVersion?: {
+      get(payload: {
+        params: {
+          lang: "zh_cn" | "en_us" | "ja_jp";
+          user_id_type?: "user_id" | "union_id" | "open_id";
+        };
+        path: {
+          app_id: string;
+          version_id: string;
+        };
+      }): Promise<{
+        code?: number;
+        msg?: string;
+        data?: {
+          app_version?: {
+            event_infos?: Array<{
+              event_type?: string;
+            }>;
+          };
+        };
+      }>;
+    };
     application: {
       get(payload: {
         params: {
@@ -309,6 +376,7 @@ export interface LarkProvisioningClient {
         msg?: string;
         data?: {
           app?: {
+            online_version_id?: string;
             callback?: {
               subscribed_callbacks?: string[];
             };

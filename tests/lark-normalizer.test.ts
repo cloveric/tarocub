@@ -39,6 +39,8 @@ describe("normalizeLarkMessage", () => {
       chatId: "oc_topic",
       chatType: "group",
       threadId: "omt_thread",
+      rootId: "om_root",
+      replyToMessageId: "om_parent",
       senderId: "ou_user",
       content: "topic work",
       rawContentType: "text",
@@ -51,6 +53,8 @@ describe("normalizeLarkMessage", () => {
 
     expect(normalized?.conversationKey).toBe("lark:oc_topic:omt_thread");
     expect(normalized?.text).toContain("thread_id: omt_thread");
+    expect(normalized?.text).toContain("root_id: om_root");
+    expect(normalized?.text).toContain("reply_to_message_id: om_parent");
   });
 
   it("drops unmentioned group messages when mention is required", () => {

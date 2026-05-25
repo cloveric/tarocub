@@ -10,7 +10,7 @@ import { readConfiguredBotToken } from "../service.js";
 import { CrewRunStore } from "../state/crew-run-store.js";
 import { CronStore } from "../state/cron-store.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
-import { parseTimelineEvents } from "../state/timeline-log.js";
+import { parseTimelineEvents, summarizeTimelineEvents } from "../state/timeline-log.js";
 import type { UsageBucket, UsageRecord } from "../state/usage-store.js";
 import { inspectInstanceServiceLiveness, type ServiceCommandDeps } from "./service.js";
 
@@ -26,6 +26,7 @@ function resolveChannelsDir(env: Pick<EnvSource, "HOME" | "USERPROFILE">): strin
 
 export interface CronJobSnapshot {
   id: string;
+  channel: CronJobRecord["channel"];
   kind: "once" | "recurring";
   enabled: boolean;
   schedule: string;
@@ -40,12 +41,15 @@ export interface CronJobSnapshot {
   prompt: string;
   chatId: number;
   userId: number;
+  larkChatId: string | null;
+  larkThreadId: string | null;
+  larkMessageId: string | null;
 }
 
 export interface CurrentTaskSnapshot {
   status: "idle" | "running" | "stale";
   activeTurnCount: number;
-  source: "telegram" | "bus" | "cron" | "unknown";
+  source: "telegram" | "lark" | "bus" | "cron" | "unknown";
   chatId: number | null;
   userId: number | null;
   updateId: number | null;
@@ -97,6 +101,11 @@ export interface InstanceSnapshot {
   recentAudit: Array<{ type: string; outcome: string; timestamp: string; detail?: string }>;
   timelineTotal: number;
   recentTimeline: Array<{ type: string; outcome: string; timestamp: string; detail?: string }>;
+  retryCount: number;
+  budgetBlockedCount: number;
+  serviceErrorCount: number;
+  fileRejectedCount: number;
+  workflowFailedCount: number;
   currentTask: CurrentTaskSnapshot;
   liveLogs: LiveLogEntry[];
   crewLatestRunId: string | null;
@@ -272,7 +281,9 @@ function deriveCurrentTask(
       ? "bus"
       : lastStart?.channel === "telegram"
         ? "telegram"
-        : "unknown";
+        : lastStart?.channel === "lark"
+          ? "lark"
+          : "unknown";
   const lastTaskEvent = eventsSinceStart.at(-1) ?? lastEvent;
 
   return {
@@ -309,6 +320,7 @@ function toCronJobSnapshot(job: CronJobRecord): CronJobSnapshot {
   const targetAt = job.targetAt ?? null;
   return {
     id: job.id,
+    channel: job.channel,
     kind,
     enabled: job.enabled,
     schedule: kind === "once" && targetAt ? `once ${targetAt}` : job.cronExpr,
@@ -327,6 +339,9 @@ function toCronJobSnapshot(job: CronJobRecord): CronJobSnapshot {
     prompt: job.prompt,
     chatId: job.chatId,
     userId: job.userId,
+    larkChatId: job.larkChatId ?? null,
+    larkThreadId: job.larkThreadId ?? null,
+    larkMessageId: job.larkMessageId ?? null,
   };
 }
 
@@ -365,6 +380,7 @@ async function ci(
   const aa = await aal(path.join(d, "audit.log.jsonl"));
   const timelineRaw = await readFile(path.join(d, "timeline.log.jsonl"), "utf8").catch(() => "");
   const timelineEvents = parseTimelineEvents(timelineRaw);
+  const timelineSummary = summarizeTimelineEvents(timelineEvents);
   const cronJobs = await readCronSnapshots(d);
   const ra = aa.slice(-8).map(pa).filter((e): e is NonNullable<typeof e> => e !== null);
   const recentTimeline = timelineEvents.slice(-8).map(pt);
@@ -398,6 +414,11 @@ async function ci(
     claudeMdExists: await fe(path.join(d, "workspace", "CLAUDE.md")),
     usage: us, auditTotal: aa.length, lastSuccess: ls, lastFailure: lf,
     timelineTotal: timelineEvents.length,
+    retryCount: timelineSummary.retryCount,
+    budgetBlockedCount: timelineSummary.budgetBlockedCount,
+    serviceErrorCount: timelineSummary.serviceErrorCount,
+    fileRejectedCount: timelineSummary.fileRejectedCount,
+    workflowFailedCount: timelineSummary.workflowFailedCount,
     currentTask,
     liveLogs,
     crewLatestRunId: latestCrewRun.run?.runId ?? null,
@@ -605,6 +626,18 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
       ["Last event", task.lastEventType ?? "--"],
       ["Files", `${task.filesAccepted} accepted / ${task.filesRejected} rejected`],
     ].map(([label, value]) => `<div><span>${label}</span><strong>${esc(value)}</strong></div>`).join("");
+    const incidentCounts = [
+      ["Retries", inst.retryCount],
+      ["Service errors", inst.serviceErrorCount],
+      ["File rejects", inst.fileRejectedCount],
+      ["Budget blocks", inst.budgetBlockedCount],
+      ["Workflow fails", inst.workflowFailedCount],
+    ] as const;
+    const incidentTotal = incidentCounts.reduce((sum, [, value]) => sum + value, 0);
+    const incidentRows = incidentCounts.map(([label, value]) => {
+      const color = value > 0 ? "#C1392B" : "#6B7280";
+      return `<div><span>${label}</span><strong style="color:${color}">${value}</strong></div>`;
+    }).join("");
     const liveLogRows = inst.liveLogs.map(ev => {
       const c = ev.outcome === "error" || ev.outcome === "rejected" ? "#C1392B" : ev.outcome === "success" || ev.outcome === "accepted" ? "#2D8B46" : "#6B7280";
       const scope = [ev.channel, ev.chatId !== null ? `chat ${ev.chatId}` : "", ev.updateId !== null ? `update ${ev.updateId}` : ""].filter(Boolean).join(" · ");
@@ -634,6 +667,13 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
       const last = job.lastRunAt ? ft(job.lastRunAt) : "--";
       const failures = job.failureCount > 0 ? `<span>failures ${job.failureCount}/${job.maxFailures}</span>` : "";
       const err = job.lastError ? `<div class="cron-err">${esc(job.lastError)}</div>` : "";
+      const routeParts = job.channel === "lark"
+        ? [
+          "lark",
+          job.larkChatId ? `chat ${job.larkChatId}` : `chat ${job.chatId}`,
+          job.larkThreadId ? `thread ${job.larkThreadId}` : undefined,
+        ].filter((part): part is string => typeof part === "string" && part.length > 0)
+        : ["telegram", `chat ${job.chatId}`];
       return `
         <div class="cron-row">
           <div class="cron-top">
@@ -648,7 +688,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
             <span>next ${next}</span>
             <span>last ${last}</span>
             ${failures}
-            <span>chat ${job.chatId}</span>
+            ${routeParts.map((part) => `<span>${esc(part)}</span>`).join("")}
           </div>
           ${err}
         </div>`;
@@ -677,6 +717,15 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
           <div class="task-grid">${taskRows}</div>
           ${task.detail ? `<div class="task-detail">${esc(task.detail)}</div>` : ""}
         </section>
+
+        ${incidentTotal > 0 ? `
+        <section class="incidents">
+          <div class="incident-head">
+            <span>Incidents</span>
+            <strong>${incidentTotal}</strong>
+          </div>
+          <div class="incident-grid">${incidentRows}</div>
+        </section>` : ""}
 
         <div class="metrics">
           <div><span class="m-val">${inst.usage.requestCount.toLocaleString()}</span><span class="m-lbl">Requests</span></div>
@@ -737,7 +786,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 ${options.refreshSeconds && !options.live ? `<meta http-equiv="refresh" content="${options.refreshSeconds}">` : ""}
-<title>CC Telegram Bridge</title>
+<title>CC Bridge Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -819,6 +868,15 @@ body{font-family:'Inter',system-ui,sans-serif;background:#EFEDEA;color:#1A1A1A;m
 .task-grid strong{font-family:'JetBrains Mono',monospace;font-weight:500;color:#1A1A1A;text-align:right;overflow:hidden;text-overflow:ellipsis}
 .task-detail{margin-top:8px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#6B7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+/* Incidents */
+.incidents{border:1px solid #FECACA;border-radius:8px;padding:12px;margin-bottom:16px;background:#FFF7F7}
+.incident-head{display:flex;justify-content:space-between;align-items:center;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#991B1B}
+.incident-head strong{font-family:'JetBrains Mono',monospace;font-size:12px}
+.incident-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}
+.incident-grid div{border-top:1px solid #FEE2E2;padding-top:6px}
+.incident-grid span{display:block;font-size:9px;color:#6B7280;text-transform:uppercase;letter-spacing:1px}
+.incident-grid strong{display:block;margin-top:2px;font-family:'JetBrains Mono',monospace;font-size:13px}
+
 /* Cron */
 .cron{margin-bottom:12px;border:1px solid #E7E1DA;border-radius:8px;padding:10px 12px;background:#FCFBF8}
 .cron summary{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#6B7280;cursor:pointer;user-select:none;margin-bottom:8px}
@@ -867,14 +925,14 @@ body{font-family:'Inter',system-ui,sans-serif;background:#EFEDEA;color:#1A1A1A;m
 <div class="wrap">
   <div class="header">
     <div>
-      <h1>CC Telegram Bridge</h1>
+      <h1>CC Bridge Dashboard</h1>
       <div class="sub">Instance Dashboard</div>
     </div>
     <div class="mark">${now.slice(0, 19).replace("T", " ")} UTC</div>
   </div>
   <div class="stats">${stats}</div>
-  <div class="grid">${instances.length > 0 ? cards : '<div style="grid-column:1/-1;text-align:center;padding:80px 0;color:#6B7280;font-size:14px">No instances found.<br><code style="font-size:12px">telegram configure &lt;token&gt;</code></div>'}</div>
-  <div class="footer">${options.live ? "Live read-only dashboard" : "Read-only snapshot"} &middot; <code>${options.live ? "telegram dashboard --live" : "telegram dashboard --live for live logs"}</code></div>
+  <div class="grid">${instances.length > 0 ? cards : '<div style="grid-column:1/-1;text-align:center;padding:80px 0;color:#6B7280;font-size:14px">No instances found.<br><code style="font-size:12px">Configure Telegram with telegram configure YOUR_BOT_TOKEN; or Lark with lark wizard.</code></div>'}</div>
+  <div class="footer">${options.live ? "Live read-only dashboard" : "Read-only snapshot"} &middot; <code>${options.live ? "telegram dashboard --live / lark dashboard --live" : "telegram dashboard --live or lark dashboard --live for live logs"}</code></div>
 </div>
 ${options.live ? `<script id="dashboard-refresh">
 const refreshMs = ${Math.max(1, options.refreshSeconds ?? 2) * 1000};

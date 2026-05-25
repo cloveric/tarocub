@@ -42,6 +42,7 @@ export interface PendingLarkApproval {
   conversationKey?: string;
   bridgeChatType?: "private" | "group";
   replyTo?: string;
+  replyInThread?: boolean;
   resolve: (decision: EngineApprovalDecision) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -58,6 +59,7 @@ export interface LarkServiceRuntime {
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;
   commentClient?: LarkCommentClientLike;
+  transcribeMedia?: (filePath: string) => Promise<string>;
   createDocument: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
 }
 
@@ -68,6 +70,7 @@ export function createLarkServiceRuntime(options: {
   busRuntime?: LarkBusRuntime;
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;
+  transcribeMedia?: (filePath: string) => Promise<string>;
 } = {}): LarkServiceRuntime {
   return {
     activeRuns: new Map(),
@@ -78,6 +81,7 @@ export function createLarkServiceRuntime(options: {
     ...(options.miniRuntime ? { miniRuntime: options.miniRuntime } : {}),
     ...(options.sessionRuntime ? { sessionRuntime: options.sessionRuntime } : {}),
     ...(options.commentClient ? { commentClient: options.commentClient } : {}),
+    ...(options.transcribeMedia ? { transcribeMedia: options.transcribeMedia } : {}),
     createDocument: options.createDocument ?? createLarkDocumentWithCli,
   };
 }

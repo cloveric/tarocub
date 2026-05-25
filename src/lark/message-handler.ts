@@ -1,21 +1,30 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import type { EngineStreamEvent } from "../codex/adapter.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
+import { loadInstanceConfig } from "../telegram/instance-config.js";
+import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
+import { handleLarkCrewWorkflow } from "./bus.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
-import { requestLarkApproval } from "./card-actions.js";
+import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
 import {
   extractLarkMessageBody,
   formatLarkAccessReply,
+  handleLarkGroupCommandBeforeAccess,
   handleLarkSimpleCommand,
+  isLarkLocalEngineCommand,
   isStopCommand,
 } from "./commands.js";
-import { deliverLarkResponse } from "./delivery.js";
+import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import { renderLarkUserFacingError } from "./errors.js";
+import { LarkGroupModeStore } from "./group-mode-store.js";
+import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
 import {
   boundLarkArchiveSummary,
   downloadLarkAttachments,
   prepareLarkFileWorkflow,
+  renderLarkArchiveContinueCard,
   safeSegment,
   type DownloadedLarkAttachment,
 } from "./files.js";
@@ -24,10 +33,13 @@ import {
   type LarkIncomingMessage,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
+import { redactLarkErrorDetail } from "./redaction.js";
 import { verifyLarkNumericIds } from "./id-map.js";
 import type { LarkServiceRuntime } from "./runtime.js";
-import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
+import type { LarkBridgeLike, LarkChannelLike, LarkFetchedMessage } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
+
+const defaultTranscribeLarkMedia = createDefaultTranscribeVoice();
 
 export async function handleLarkMessage(input: {
   channel: LarkChannelLike;
@@ -38,12 +50,18 @@ export async function handleLarkMessage(input: {
   requireMentionInGroup?: boolean;
   workspaceOverride?: string;
 }): Promise<boolean> {
-  const normalized = normalizeLarkMessage(input.message, {
-    requireMentionInGroup: input.requireMentionInGroup,
+  const requireMentionInGroup = await resolveLarkMessageMentionRequirement({
+    stateDir: input.stateDir,
+    message: input.message,
+    defaultRequireMentionInGroup: input.requireMentionInGroup,
   });
-  if (!normalized) {
+  const baseNormalized = normalizeLarkMessage(input.message, {
+    requireMentionInGroup,
+  });
+  if (!baseNormalized) {
     return false;
   }
+  const normalized = await enrichLarkReplyContext(input.channel, baseNormalized);
   await appendLarkTimelineEvent(input.stateDir, normalized, {
     type: "input.received",
     outcome: "accepted",
@@ -55,7 +73,32 @@ export async function handleLarkMessage(input: {
   await verifyLarkNumericIds(input.stateDir, normalized);
 
   const commandText = extractLarkMessageBody(normalized.text);
+  const messageLocale = await resolveLarkLocale(input.stateDir);
   if (isStopCommand(commandText)) {
+    const accessDecision = input.bridge.checkAccess
+      ? await input.bridge.checkAccess({
+        chatId: normalized.bridgeChatId,
+        userId: normalized.bridgeUserId,
+        chatType: normalized.bridgeChatType,
+        conversationKey: normalized.conversationKey,
+        locale: messageLocale,
+      })
+      : { kind: "allow" as const };
+    if (accessDecision.kind !== "allow") {
+      await input.channel.send(normalized.chatId, {
+        text: formatLarkAccessReply(accessDecision.text ?? "当前聊天未获授权。"),
+      }, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "command.handled",
+        outcome: "denied",
+        detail: "/stop",
+        metadata: { rejected: "unauthorized-user" },
+      });
+      return true;
+    }
     const active = input.runtime.activeRuns.get(normalized.conversationKey);
     active?.abortController.abort();
     const skippedQueued = input.runtime.chatQueue.clearPending(normalized.conversationKey);
@@ -71,10 +114,74 @@ export async function handleLarkMessage(input: {
     return true;
   }
 
+  if (await handleLarkGroupCommandBeforeAccess({ ...input, requestApproval: requestLarkApproval }, normalized, commandText, messageLocale)) {
+    return true;
+  }
+
+  if (isLarkApprovalTextCommand(commandText)) {
+    const accessDecision = input.bridge.checkAccess
+      ? await input.bridge.checkAccess({
+        chatId: normalized.bridgeChatId,
+        userId: normalized.bridgeUserId,
+        chatType: normalized.bridgeChatType,
+        conversationKey: normalized.conversationKey,
+        locale: messageLocale,
+      })
+      : { kind: "allow" as const };
+    if (accessDecision.kind !== "allow") {
+      await input.channel.send(normalized.chatId, {
+        text: formatLarkAccessReply(accessDecision.text ?? "当前聊天未获授权。"),
+      }, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "command.handled",
+        outcome: "denied",
+        detail: "approval",
+        metadata: { rejected: "unauthorized-user" },
+      });
+      return true;
+    }
+    const approvalResult = await handleLarkApprovalTextCommand({
+      channel: input.channel,
+      runtime: input.runtime,
+      chatId: normalized.chatId,
+      messageId: normalized.messageId,
+      conversationKey: normalized.conversationKey,
+      bridgeChatType: normalized.bridgeChatType,
+      replyInThread: Boolean(normalized.threadId),
+      text: commandText,
+      locale: messageLocale,
+    });
+    if (approvalResult.handled) {
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "command.handled",
+        outcome: approvalResult.outcome,
+        detail: "approval",
+        metadata: {
+          command: "approval",
+          choice: approvalResult.choice,
+          ...(approvalResult.requestId ? { requestId: approvalResult.requestId } : {}),
+          ...(approvalResult.reason ? { reason: approvalResult.reason } : {}),
+        },
+      });
+    }
+    return approvalResult.handled;
+  }
+
   return await input.runtime.chatQueue.enqueue(normalized.conversationKey, async () => {
     return await runNormalizedLarkMessage(input, normalized);
   }, {
     onSkipped: async () => {
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "turn.completed",
+        outcome: "skipped",
+        detail: "queued turn skipped",
+        metadata: {
+          phase: "queue",
+        },
+      });
       await input.channel.send(normalized.chatId, { text: "已跳过排队中的任务。" }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
@@ -84,23 +191,47 @@ export async function handleLarkMessage(input: {
   });
 }
 
+async function resolveLarkMessageMentionRequirement(input: {
+  stateDir: string;
+  message: LarkIncomingMessage;
+  defaultRequireMentionInGroup?: boolean;
+}): Promise<boolean> {
+  if (input.message.chatType === "p2p") {
+    return false;
+  }
+  const groupMode = (await loadInstanceConfig(input.stateDir)).groupMode;
+  if (!groupMode.enabled) {
+    return true;
+  }
+  if (input.defaultRequireMentionInGroup === false) {
+    return false;
+  }
+  if (await new LarkGroupModeStore(input.stateDir).isListenAll(input.message.chatId)) {
+    return false;
+  }
+  return true;
+}
+
 async function runNormalizedLarkMessage(
   input: {
     channel: LarkChannelLike;
     bridge: LarkBridgeLike;
     runtime: LarkServiceRuntime;
     stateDir: string;
+    requireMentionInGroup?: boolean;
     workspaceOverride?: string;
   },
   normalized: LarkNormalizedBridgeMessage,
 ): Promise<boolean> {
+  const cfg = await loadInstanceConfig(input.stateDir);
+  const locale = await resolveLarkLocale(input.stateDir);
   const accessDecision = input.bridge.checkAccess
     ? await input.bridge.checkAccess({
       chatId: normalized.bridgeChatId,
       userId: normalized.bridgeUserId,
       chatType: normalized.bridgeChatType,
       conversationKey: normalized.conversationKey,
-      locale: "zh",
+      locale,
     })
     : { kind: "allow" as const };
   if (accessDecision.kind !== "allow") {
@@ -110,164 +241,420 @@ async function runNormalizedLarkMessage(
     });
     await appendLarkTimelineEvent(input.stateDir, normalized, {
       type: "turn.completed",
-      outcome: "reply",
+      outcome: "denied",
       detail: "access denied",
     });
     return true;
   }
 
   const commandText = extractLarkMessageBody(normalized.text);
-  if (await handleLarkSimpleCommand({ ...input, requestApproval: requestLarkApproval }, normalized, commandText)) {
-    return true;
-  }
 
-  const abortController = new AbortController();
+  let abortController: AbortController | undefined;
+  const activateRun = (): AbortController => {
+    if (!abortController) {
+      abortController = new AbortController();
+      input.runtime.activeRuns.set(normalized.conversationKey, { abortController });
+    }
+    return abortController;
+  };
 
-  let downloadedAttachments: DownloadedLarkAttachment[];
-  let files: string[];
-  let requestText = normalized.text;
-  let workflowRecordId: string | undefined;
-  let requestOutputDir: string;
   try {
-    downloadedAttachments = await downloadLarkAttachments({
-      channel: input.channel,
-      stateDir: input.stateDir,
-      messageId: normalized.messageId,
-      attachments: normalized.attachments,
-    });
-    files = downloadedAttachments.map((attachment) => attachment.localPath);
-    const workflowResult = await prepareLarkFileWorkflow({
-      stateDir: input.stateDir,
-      normalized,
-      commandText,
-      downloadedAttachments,
-    });
-    if (workflowResult?.workflowRecordId) {
+    const simpleCommandController = isLarkLocalEngineCommand(commandText) ? activateRun() : undefined;
+    if (await handleLarkSimpleCommand({
+      ...input,
+      requestApproval: requestLarkApproval,
+      abortSignal: simpleCommandController?.signal,
+    }, normalized, commandText)) {
+      return true;
+    }
+
+    const runController = activateRun();
+
+    if (await handleLarkCrewWorkflow({
+      ...input,
+      requestApproval: requestLarkApproval,
+      abortSignal: runController.signal,
+    }, normalized, commandText)) {
+      return true;
+    }
+
+    let downloadedAttachments: DownloadedLarkAttachment[];
+    let files: string[];
+    let requestText = normalized.text;
+    let workflowRecordId: string | undefined;
+    let requestOutputDir: string;
+    try {
+      downloadedAttachments = await downloadLarkAttachments({
+        channel: input.channel,
+        stateDir: input.stateDir,
+        messageId: normalized.messageId,
+        attachments: normalized.attachments,
+      });
+      const mediaDownloads = downloadedAttachments.filter(isTranscribableLarkMedia);
+      const workflowDownloads = downloadedAttachments.filter((attachment) => !isTranscribableLarkMedia(attachment));
+      if (mediaDownloads.length > 0) {
+        const transcribeMedia = input.runtime.transcribeMedia ?? defaultTranscribeLarkMedia;
+        for (const media of mediaDownloads) {
+          try {
+            const transcript = await transcribeMedia(media.localPath);
+            if (transcript.trim()) {
+              requestText = requestText.trim() ? `${requestText.trim()}\n${transcript.trim()}` : transcript.trim();
+            }
+          } catch {
+            await input.channel.send(normalized.chatId, {
+              text: "音视频转写失败，请发送文字消息或较短的音视频文件。",
+            }, {
+              replyTo: normalized.messageId,
+              replyInThread: Boolean(normalized.threadId),
+            });
+            await appendLarkTimelineEvent(input.stateDir, normalized, {
+              type: "turn.completed",
+              outcome: "error",
+              detail: "lark media transcription failed",
+              metadata: {
+                phase: "prepare",
+                kind: media.attachment.kind,
+              },
+            });
+            return true;
+          }
+        }
+      }
+      files = workflowDownloads.map((attachment) => attachment.localPath);
+      const workflowResult = await prepareLarkFileWorkflow({
+        stateDir: input.stateDir,
+        normalized: { ...normalized, text: requestText },
+        commandText,
+        downloadedAttachments: workflowDownloads,
+      });
+      if (workflowResult?.workflowRecordId) {
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "workflow.prepared",
+          detail: downloadedAttachments.length > 0 ? "attachment workflow prepared" : "workflow prepared",
+          metadata: {
+            workflowRecordId: workflowResult.workflowRecordId,
+            kind: workflowResult.kind,
+          },
+        });
+      }
+      if (workflowResult?.kind === "reply") {
+        const deliveryText = workflowResult.workflowRecordId
+          ? boundLarkArchiveSummary(workflowResult.text)
+          : workflowResult.text;
+        await sendLarkMarkdown(input.channel, normalized.chatId, deliveryText, {
+          replyTo: normalized.messageId,
+          replyInThread: Boolean(normalized.threadId),
+        });
+        if (workflowResult.workflowRecordId) {
+          await input.channel.send(normalized.chatId, {
+            card: renderLarkArchiveContinueCard({
+              uploadId: workflowResult.workflowRecordId,
+              conversationKey: normalized.conversationKey,
+              bridgeChatType: normalized.bridgeChatType,
+              replyInThread: Boolean(normalized.threadId),
+            }),
+          }, {
+            replyTo: normalized.messageId,
+            replyInThread: Boolean(normalized.threadId),
+          });
+        }
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "turn.completed",
+          outcome: "success",
+          metadata: {
+            responseChars: deliveryText.length,
+            attachments: normalized.attachments.length,
+            workflowRecordId: workflowResult.workflowRecordId,
+          },
+        });
+        return true;
+      }
+      if (workflowResult?.kind === "direct") {
+        requestText = workflowResult.text;
+        files = [...workflowResult.files];
+        workflowRecordId = workflowResult.workflowRecordId;
+      }
+      requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(normalized.messageId));
+      await mkdir(requestOutputDir, { recursive: true });
+    } catch (error) {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
-        type: "workflow.prepared",
-        detail: downloadedAttachments.length > 0 ? "attachment workflow prepared" : "workflow prepared",
+        type: "turn.completed",
+        outcome: "error",
+        detail: redactLarkErrorDetail(error),
         metadata: {
-          workflowRecordId: workflowResult.workflowRecordId,
-          kind: workflowResult.kind,
+          phase: "prepare",
         },
       });
+      await input.channel.send(normalized.chatId, {
+        text: renderLarkUserFacingError(error, "prepare", locale),
+      }, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+      return true;
     }
-    if (workflowResult?.kind === "reply") {
-      const deliveryText = workflowResult.workflowRecordId
-        ? boundLarkArchiveSummary(workflowResult.text)
-        : workflowResult.text;
-      await input.channel.send(normalized.chatId, { markdown: deliveryText }, {
+
+    try {
+      const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "engine.event",
+          detail: event.type,
+          metadata: {
+            toolName: "toolName" in event ? event.toolName : undefined,
+            textChars: "text" in event ? event.text.length : undefined,
+            status: "status" in event ? event.status : undefined,
+          },
+        });
+
+        if (event.type !== "task_notification") {
+          return;
+        }
+
+        const notificationText = [
+          renderLarkBackgroundTaskHeader(locale),
+          event.text.trim(),
+        ].filter(Boolean).join("\n");
+        try {
+          await deliverLarkResponse({
+            channel: input.channel,
+            runtime: input.runtime,
+            chatId: normalized.chatId,
+            replyTo: normalized.messageId,
+            replyInThread: Boolean(normalized.threadId),
+            text: notificationText,
+            stateDir: input.stateDir,
+            requestOutputDir,
+            workspaceOverride: input.workspaceOverride,
+            conversationKey: normalized.conversationKey,
+            bridgeChatType: normalized.bridgeChatType,
+            bridgeChatId: normalized.bridgeChatId,
+            bridgeUserId: normalized.bridgeUserId,
+            larkThreadId: normalized.threadId,
+            larkMessageId: normalized.messageId,
+          });
+        } catch (error) {
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event.delivery_failed",
+            outcome: "error",
+            detail: redactLarkErrorDetail(error),
+            metadata: {
+              eventType: event.type,
+            },
+          });
+        }
+      };
+
+      const result = await input.bridge.handleAuthorizedMessage({
+        chatId: normalized.bridgeChatId,
+        userId: normalized.bridgeUserId,
+        chatType: normalized.bridgeChatType,
+        locale,
+        text: requestText,
+        ...(normalized.replyContext ? { replyContext: normalized.replyContext } : {}),
+        conversationKey: normalized.conversationKey,
+        files,
+        requestOutputDir,
+        workspaceOverride: input.workspaceOverride,
+        abortSignal: runController.signal,
+        onApprovalRequest: async (request) => await requestLarkApproval({
+          channel: input.channel,
+          runtime: input.runtime,
+          chatId: normalized.chatId,
+          conversationKey: normalized.conversationKey,
+          bridgeChatType: normalized.bridgeChatType,
+          replyTo: normalized.messageId,
+          replyInThread: Boolean(normalized.threadId),
+          request,
+          abortSignal: request.abortSignal ?? runController.signal,
+        }),
+        onEngineEvent: handleEngineEvent,
+        instructions: larkAgentInstructions(),
+      });
+      await deliverLarkResponse({
+        channel: input.channel,
+        runtime: input.runtime,
+        chatId: normalized.chatId,
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+        text: result.text,
+        stateDir: input.stateDir,
+        requestOutputDir,
+        workspaceOverride: input.workspaceOverride,
+        conversationKey: normalized.conversationKey,
+        bridgeChatType: normalized.bridgeChatType,
+        bridgeChatId: normalized.bridgeChatId,
+        bridgeUserId: normalized.bridgeUserId,
+        larkThreadId: normalized.threadId,
+        larkMessageId: normalized.messageId,
+      });
+      if (workflowRecordId) {
+        await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
+          record.status = "completed";
+        });
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "workflow.completed",
+          detail: "workflow marked completed",
+          metadata: {
+            workflowRecordId,
+          },
+        });
+      }
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "turn.completed",
+        outcome: "success",
+        metadata: {
+          responseChars: result.text.length,
+          attachments: normalized.attachments.length,
+        },
+      });
+      return true;
+    } catch (error) {
+      await input.channel.send(normalized.chatId, {
+        text: renderLarkUserFacingError(error, "engine", locale),
+      }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
       });
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "turn.completed",
-        outcome: "success",
-        metadata: {
-          responseChars: deliveryText.length,
-          attachments: normalized.attachments.length,
-          workflowRecordId: workflowResult.workflowRecordId,
-        },
+        outcome: "error",
+        detail: redactLarkErrorDetail(error),
       });
       return true;
     }
-    if (workflowResult?.kind === "direct") {
-      requestText = workflowResult.text;
-      files = [...workflowResult.files];
-      workflowRecordId = workflowResult.workflowRecordId;
-    }
-    requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(normalized.messageId));
-    await mkdir(requestOutputDir, { recursive: true });
-  } catch (error) {
-    await appendLarkTimelineEvent(input.stateDir, normalized, {
-      type: "turn.completed",
-      outcome: "error",
-      detail: error instanceof Error ? error.message : String(error),
-      metadata: {
-        phase: "prepare",
-      },
-    });
-    await input.channel.send(normalized.chatId, {
-      text: renderLarkUserFacingError(error, "prepare"),
-    }, {
-      replyTo: normalized.messageId,
-      replyInThread: Boolean(normalized.threadId),
-    });
-    return true;
-  }
-
-  input.runtime.activeRuns.set(normalized.conversationKey, { abortController });
-  try {
-    const result = await input.bridge.handleAuthorizedMessage({
-      chatId: normalized.bridgeChatId,
-      userId: normalized.bridgeUserId,
-      chatType: normalized.bridgeChatType,
-      text: requestText,
-      conversationKey: normalized.conversationKey,
-      files,
-      requestOutputDir,
-      workspaceOverride: input.workspaceOverride,
-      abortSignal: abortController.signal,
-      onApprovalRequest: async (request) => await requestLarkApproval({
-        channel: input.channel,
-        runtime: input.runtime,
-        chatId: normalized.chatId,
-        conversationKey: normalized.conversationKey,
-        bridgeChatType: normalized.bridgeChatType,
-        replyTo: normalized.messageId,
-        request,
-        abortSignal: request.abortSignal ?? abortController.signal,
-      }),
-      instructions: larkAgentInstructions(),
-    });
-    await deliverLarkResponse({
-      channel: input.channel,
-      runtime: input.runtime,
-      chatId: normalized.chatId,
-      replyTo: normalized.messageId,
-      replyInThread: Boolean(normalized.threadId),
-      text: result.text,
-      stateDir: input.stateDir,
-      requestOutputDir,
-      workspaceOverride: input.workspaceOverride,
-      conversationKey: normalized.conversationKey,
-      bridgeChatType: normalized.bridgeChatType,
-    });
-    if (workflowRecordId) {
-      await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
-        record.status = "completed";
-      });
-      await appendLarkTimelineEvent(input.stateDir, normalized, {
-        type: "workflow.completed",
-        detail: "workflow marked completed",
-        metadata: {
-          workflowRecordId,
-        },
-      });
-    }
-    await appendLarkTimelineEvent(input.stateDir, normalized, {
-      type: "turn.completed",
-      outcome: "success",
-      metadata: {
-        responseChars: result.text.length,
-        attachments: normalized.attachments.length,
-      },
-    });
-    return true;
-  } catch (error) {
-    await input.channel.send(normalized.chatId, {
-      text: renderLarkUserFacingError(error, "engine"),
-    }, {
-      replyTo: normalized.messageId,
-      replyInThread: Boolean(normalized.threadId),
-    });
-    await appendLarkTimelineEvent(input.stateDir, normalized, {
-      type: "turn.completed",
-      outcome: "error",
-      detail: error instanceof Error ? error.message : String(error),
-    });
-    return true;
   } finally {
-    input.runtime.activeRuns.delete(normalized.conversationKey);
+    if (abortController) {
+      input.runtime.activeRuns.delete(normalized.conversationKey);
+    }
   }
+}
+
+async function enrichLarkReplyContext(
+  channel: LarkChannelLike,
+  normalized: LarkNormalizedBridgeMessage,
+): Promise<LarkNormalizedBridgeMessage> {
+  if (!normalized.replyToMessageId) {
+    return normalized;
+  }
+  try {
+    const fetched = await fetchLarkMessage(channel, normalized.replyToMessageId);
+    const text = fetched ? summarizeLarkFetchedMessage(fetched) : "";
+    if (!text) {
+      return normalized;
+    }
+    return {
+      ...normalized,
+      replyContext: {
+        messageId: normalized.replyToMessageId,
+        text,
+      },
+    };
+  } catch {
+    return normalized;
+  }
+}
+
+async function fetchLarkMessage(channel: LarkChannelLike, messageId: string): Promise<LarkFetchedMessage | null> {
+  if (channel.fetchMessage) {
+    return await channel.fetchMessage(messageId);
+  }
+  const rawClient = (channel as {
+    rawClient?: {
+      im?: {
+        v1?: {
+          message?: {
+            get(input: {
+              params: { user_id_type: "open_id" };
+              path: { message_id: string };
+            }): Promise<unknown>;
+          };
+        };
+      };
+    };
+  }).rawClient;
+  const getMessage = rawClient?.im?.v1?.message?.get;
+  if (!getMessage) {
+    return null;
+  }
+  const response = await getMessage({
+    params: { user_id_type: "open_id" },
+    path: { message_id: messageId },
+  });
+  return normalizeFetchedLarkMessage(response, messageId);
+}
+
+function normalizeFetchedLarkMessage(value: unknown, fallbackMessageId: string): LarkFetchedMessage | null {
+  const data = isRecord(value) ? value.data : undefined;
+  const item = isRecord(data) && Array.isArray(data.items) ? data.items[0] : undefined;
+  if (!isRecord(item)) {
+    return null;
+  }
+  const body = isRecord(item.body) ? item.body : undefined;
+  const messageId = typeof item.message_id === "string" ? item.message_id : fallbackMessageId;
+  const messageType = typeof item.msg_type === "string"
+    ? item.msg_type
+    : typeof item.message_type === "string" ? item.message_type : undefined;
+  const content = typeof body?.content === "string"
+    ? body.content
+    : typeof item.content === "string" ? item.content : undefined;
+  return { messageId, ...(messageType ? { messageType } : {}), ...(content ? { content } : {}) };
+}
+
+function summarizeLarkFetchedMessage(message: LarkFetchedMessage): string {
+  const content = message.content?.trim();
+  if (!content) {
+    return "";
+  }
+  const parsed = parseJsonObject(content);
+  const messageType = message.messageType;
+  let text = "";
+  if (parsed) {
+    if (typeof parsed.text === "string") {
+      text = parsed.text;
+    } else if (typeof parsed.file_name === "string") {
+      text = `[${messageType ?? "file"}: ${parsed.file_name}]`;
+    } else if (messageType === "post") {
+      text = extractPlainStrings(parsed).join("\n");
+    }
+  }
+  if (!text) {
+    text = content;
+  }
+  return text.replace(/\s+\n/g, "\n").trim().slice(0, 2000);
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractPlainStrings(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value.trim() ? [value.trim()] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap(extractPlainStrings);
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const direct = ["title", "text", "href"]
+    .flatMap((key) => typeof value[key] === "string" ? [String(value[key]).trim()] : [])
+    .filter(Boolean);
+  const nested = Object.entries(value)
+    .filter(([key]) => !["title", "text", "href"].includes(key))
+    .flatMap(([, child]) => extractPlainStrings(child));
+  return [...direct, ...nested];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isTranscribableLarkMedia(downloaded: DownloadedLarkAttachment): boolean {
+  return downloaded.attachment.kind === "audio" || downloaded.attachment.kind === "video";
 }

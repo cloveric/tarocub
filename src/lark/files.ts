@@ -104,6 +104,50 @@ export function boundLarkArchiveSummary(text: string): string {
   return boundArchiveSummaryForTelegram(text);
 }
 
+export function renderLarkArchiveContinueCard(input: {
+  uploadId: string;
+  conversationKey: string;
+  bridgeChatType: "private" | "group";
+  replyInThread?: boolean;
+}): object {
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: {
+        content: "Continue archive analysis",
+      },
+    },
+    body: {
+      direction: "vertical",
+      elements: [
+        {
+          tag: "markdown",
+          content: "压缩包摘要已生成。需要继续深入分析时，点击按钮或直接回复 `/continue`。",
+        },
+        {
+          tag: "button",
+          text: {
+            tag: "plain_text",
+            content: "Continue Analysis",
+          },
+          type: "primary",
+          behaviors: [{
+            type: "callback",
+            value: {
+              cctb_lark: "continue_archive",
+              uploadId: input.uploadId,
+              conversationKey: input.conversationKey,
+              bridgeChatType: input.bridgeChatType,
+              ...(input.replyInThread ? { replyInThread: true } : {}),
+            },
+          }],
+        },
+      ],
+    },
+  };
+}
+
 export function safeSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80) || "message";
 }

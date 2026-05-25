@@ -41,6 +41,11 @@ function baseSnapshot() {
     recentAudit: [],
     timelineTotal: 0,
     recentTimeline: [],
+    retryCount: 0,
+    budgetBlockedCount: 0,
+    serviceErrorCount: 0,
+    fileRejectedCount: 0,
+    workflowFailedCount: 0,
     liveLogs: [],
     currentTask: {
       status: "idle" as const,
@@ -68,6 +73,19 @@ function baseSnapshot() {
 }
 
 describe("collectInstanceSnapshots", () => {
+  it("uses channel-neutral dashboard branding and empty-state guidance", () => {
+    const html = renderHtml([]);
+
+    expect(html).toContain("<title>CC Bridge Dashboard</title>");
+    expect(html).toContain("<h1>CC Bridge Dashboard</h1>");
+    expect(html).toContain("Configure Telegram with");
+    expect(html).toContain("or Lark with");
+    expect(html).toContain("telegram dashboard --live");
+    expect(html).toContain("lark dashboard --live");
+    expect(html).not.toContain("CC Telegram Bridge");
+    expect(html).not.toContain("telegram configure &lt;token&gt;");
+  });
+
   it("uses CODEX_TELEGRAM_STATE_DIR as the dashboard source and does not treat a bare .env as a configured token", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const customStateDir = path.join(tempDir, "custom-alpha");
@@ -206,6 +224,49 @@ describe("collectInstanceSnapshots", () => {
     }
   });
 
+  it("surfaces Lark cron routing metadata in snapshots and dashboard html", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const customStateDir = path.join(tempDir, "custom-lark");
+
+    try {
+      await mkdir(customStateDir, { recursive: true });
+      await writeFile(path.join(customStateDir, "config.json"), JSON.stringify({ engine: "codex" }), "utf8");
+      const store = new CronStore(customStateDir);
+      await store.add({
+        channel: "lark",
+        chatId: 100,
+        userId: 200,
+        chatType: "group",
+        conversationKey: "lark:oc_lark_chat:thread_1",
+        larkChatId: "oc_lark_chat",
+        larkThreadId: "thread_1",
+        larkMessageId: "om_message_1",
+        cronExpr: "0 9 * * *",
+        prompt: "daily Lark briefing",
+      });
+
+      const snapshots = await collectInstanceSnapshots({
+        USERPROFILE: tempDir,
+        CODEX_TELEGRAM_STATE_DIR: customStateDir,
+      });
+
+      expect(snapshots[0]!.cronJobs[0]).toMatchObject({
+        channel: "lark",
+        larkChatId: "oc_lark_chat",
+        larkThreadId: "thread_1",
+        larkMessageId: "om_message_1",
+      });
+
+      const html = renderHtml(snapshots);
+      expect(html).toContain("daily Lark briefing");
+      expect(html).toContain("lark");
+      expect(html).toContain("oc_lark_chat");
+      expect(html).toContain("thread thread_1");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("includes a current task snapshot derived from runtime state and timeline events", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const customStateDir = path.join(tempDir, "custom-alpha");
@@ -265,6 +326,53 @@ describe("collectInstanceSnapshots", () => {
     }
   });
 
+  it("marks Lark turns as Lark current tasks in dashboard snapshots", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const customStateDir = path.join(tempDir, "custom-lark");
+    const startedAt = new Date(Date.now() - 6_000).toISOString();
+    const engineAt = new Date(Date.now() - 1_000).toISOString();
+
+    try {
+      await mkdir(customStateDir, { recursive: true });
+      await writeFile(path.join(customStateDir, "config.json"), JSON.stringify({ engine: "codex" }), "utf8");
+      await writeFile(
+        path.join(customStateDir, "runtime-state.json"),
+        JSON.stringify({
+          activeTurnCount: 1,
+          activeTurnStartedAt: startedAt,
+          activeTurnUpdatedAt: startedAt,
+        }),
+        "utf8",
+      );
+      await writeFile(
+        path.join(customStateDir, "timeline.log.jsonl"),
+        [
+          JSON.stringify({ timestamp: startedAt, type: "turn.started", channel: "lark", chatId: 100, userId: 200, conversationKey: "lark:oc_lark_chat" }),
+          JSON.stringify({ timestamp: engineAt, type: "engine.event", channel: "lark", chatId: 100, userId: 200, conversationKey: "lark:oc_lark_chat", detail: "tool_call" }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const snapshots = await collectInstanceSnapshots({
+        USERPROFILE: tempDir,
+        CODEX_TELEGRAM_STATE_DIR: customStateDir,
+      });
+
+      expect(snapshots[0]!.currentTask).toMatchObject({
+        status: "running",
+        source: "lark",
+        chatId: 100,
+        userId: 200,
+        lastEventType: "engine.event",
+      });
+
+      const html = renderHtml(snapshots);
+      expect(html).toContain("lark · chat 100");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("does not count historical file events as current-turn activity without a start marker", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const customStateDir = path.join(tempDir, "custom-alpha");
@@ -304,6 +412,49 @@ describe("collectInstanceSnapshots", () => {
     }
   });
 
+  it("summarizes incident counts from timeline events for dashboard triage", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const customStateDir = path.join(tempDir, "custom-alpha");
+
+    try {
+      await mkdir(customStateDir, { recursive: true });
+      await writeFile(path.join(customStateDir, "config.json"), JSON.stringify({ engine: "codex" }), "utf8");
+      await writeFile(
+        path.join(customStateDir, "timeline.log.jsonl"),
+        [
+          JSON.stringify({ timestamp: "2026-04-29T10:00:00.000Z", type: "turn.retried", channel: "telegram", outcome: "retry" }),
+          JSON.stringify({ timestamp: "2026-04-29T10:01:00.000Z", type: "service.error", channel: "lark", detail: "websocket dropped", outcome: "error" }),
+          JSON.stringify({ timestamp: "2026-04-29T10:02:00.000Z", type: "file.rejected", channel: "lark", outcome: "rejected" }),
+          JSON.stringify({ timestamp: "2026-04-29T10:03:00.000Z", type: "budget.blocked", channel: "telegram", outcome: "blocked" }),
+          JSON.stringify({ timestamp: "2026-04-29T10:04:00.000Z", type: "workflow.failed", channel: "lark", outcome: "error" }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const snapshots = await collectInstanceSnapshots({
+        USERPROFILE: tempDir,
+        CODEX_TELEGRAM_STATE_DIR: customStateDir,
+      });
+
+      expect(snapshots[0]).toMatchObject({
+        retryCount: 1,
+        serviceErrorCount: 1,
+        fileRejectedCount: 1,
+        budgetBlockedCount: 1,
+        workflowFailedCount: 1,
+      });
+
+      const html = renderHtml(snapshots);
+      expect(html).toContain("Incidents");
+      expect(html).toContain("Service errors");
+      expect(html).toContain("File rejects");
+      expect(html).toContain("Budget blocks");
+      expect(html).toContain("Workflow fails");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("renders cron status in the dashboard html", async () => {
     const html = renderHtml([
       {
@@ -311,6 +462,7 @@ describe("collectInstanceSnapshots", () => {
         cronJobs: [
           {
             id: "abcd1234",
+            channel: "telegram",
             kind: "once",
             enabled: false,
             schedule: "once 2026-04-29T10:05:00.000Z",
@@ -325,6 +477,9 @@ describe("collectInstanceSnapshots", () => {
             prompt: "drink water",
             chatId: 100,
             userId: 200,
+            larkChatId: null,
+            larkThreadId: null,
+            larkMessageId: null,
           },
         ],
       },

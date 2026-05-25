@@ -52,27 +52,42 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 | **Durable operations** | Keep cron jobs, audit logs, timeline logs, usage tracking, access checks, and service restart tooling outside model memory. |
 | **Source-traceable research** | Use the optional Brave/Tavily MCP for `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
 | **Multi-agent coordination** | Use Agent Bus for instance-to-instance delegation, Mini Bus for topic-to-topic workflows, and Board for durable Kanban tasks. |
-| **Feishu/Lark channel preview** | Reuse the same bridge runtime from Feishu/Lark via the official Lark Channel SDK, with streaming cards, stop buttons, approvals, and file/media delivery tags. |
+| **Feishu/Lark channel** | Reuse the same bridge runtime from Feishu/Lark via the official Lark Channel SDK, with direct final replies, stop buttons, approvals, file/media delivery tags, Docs comments, cron, Board, Mini Bus, and Agent Bus. |
 
-## Feishu / Lark Channel Preview
+## Feishu / Lark Channel
 
-Telegram remains the mature primary channel. Feishu/Lark support is a second entrypoint that reuses the same engine adapters, sessions, workspace, `agent.md`, approval model, and file-delivery tags.
+Telegram remains the deepest-tested channel, but Feishu/Lark is no longer a thin demo path. It is a second entrypoint that reuses the same engine adapters, sessions, workspace, `agent.md`, approval model, file-delivery tags, scheduled jobs, Board, Mini Bus, Agent Bus, and timeline/dashboard machinery.
 
 ```bash
 npm run build
 node dist/src/index.js lark wizard   # scan to create/bind a PersonalAgent app
 node dist/src/index.js lark provision # re-check/provision an existing app
+node dist/src/index.js lark permissions # print copyable tenant scope JSON
+node dist/src/index.js lark permissions --missing # print only currently missing tenant scopes
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
 node dist/src/index.js lark service start
 node dist/src/index.js lark service logs 80
 node dist/src/index.js lark service restart
+node dist/src/index.js lark send --chat oc_xxx --message "hello from CLI"
+node dist/src/index.js lark send --chat oc_xxx --reply-to om_xxx --thread --stdin
 node dist/src/index.js lark timeline 20
 node dist/src/index.js lark audit 20
 node dist/src/index.js lark dashboard
+node dist/src/index.js lark instructions path
+node dist/src/index.js lark instructions set ./lark-agent.md
+node dist/src/index.js lark engine claude
+node dist/src/index.js lark yolo on
+node dist/src/index.js lark budget set 12.50
+node dist/src/index.js lark locale zh
+node dist/src/index.js lark verbosity 2
+node dist/src/index.js lark usage
+node dist/src/index.js lark session list
+node dist/src/index.js lark task list
+node dist/src/index.js lark backup --out ./lark-state.cctb.gz
 ```
 
-`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes, Feishu Docs scopes, and cloud-doc comment read/write scopes. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. Environment variables still win if you prefer manual credentials:
+`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes, Feishu Docs scopes, cloud-doc comment read/write scopes, and the group-all message scope required for `/group all`. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. The PersonalAgent QR template does not currently guarantee `im:message.group_msg`; if you want ordinary non-mention group messages through `/group all`, add or bulk-import that scope in the Feishu/Lark app permissions UI and rerun `lark provision`. Environment variables still win if you prefer manual credentials:
 
 ```bash
 export LARK_APP_ID="cli_xxx"
@@ -86,28 +101,51 @@ Optional environment:
 | `CCTB_LARK_STATE_DIR` | State/workspace directory for the Lark service. Defaults to `~/.cctb/lark`. |
 | `CODEX_TELEGRAM_INSTANCE` | Instance name used by the shared engine config. Defaults to `lark`. |
 | `LARK_DOMAIN` | Override Lark/Feishu API domain when needed. |
-| `LARK_REQUIRE_MENTION_IN_GROUP` | Defaults to `true`; group messages must mention the bot unless disabled. |
+| `LARK_REQUIRE_MENTION_IN_GROUP` | Defaults to `true`; group messages must mention the bot unless the specific chat is switched with `/group all`. |
 
 The Lark channel currently supports:
 
 - inbound p2p/group messages normalized into the same `Bridge.handleAuthorizedMessage` path, protected by the same pairing/allowlist access store as Telegram;
-- basic chat commands: `/help`, `/status`, `/usage`, `/model`, `/effort`, `/fast`, `/engine`, `/yolo`, `/goal`, `/btw`, `/ask`, `/reset`, `/detach`, Claude/Antigravity `/resume` scan and explicit `/resume thread ...` / `/resume conversation ...`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, and `/stop`;
-- topic/thread isolation through `conversationKey`;
-- streaming interactive cards with a Card 2.0 callback stop button;
+- basic chat commands: `/help`, `/status`, `/usage`, `/model`, `/effort`, `/fast`, `/engine`, `/yolo`, `/goal`, `/btw`, `/ask`, `/reset`, `/detach`, Claude/Antigravity `/resume` scan and explicit `/resume thread ...` / `/resume conversation ...`, `/cron`, `/group status|allow|deny|on|off|all|at`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/continue`, and `/stop`;
+- topic/thread isolation through `conversationKey`, plus replied-message context enrichment so short follow-ups like "继续" or "就这个" keep the quoted Lark message text;
+- ordinary tasks return the final answer directly; interactive cards are reserved for stop controls, approvals, card choices, and archive continuation;
 - approval cards for engine permission requests, with callback operators checked against bridge access policy before resolving;
-- inbound image/file resources downloaded into the bridge workspace;
-- outbound `[send-file:/abs/path]`, `[send-image:/abs/path]`, `send.audio`, `send.video`, and `send.batch` tool tags delivered back to Lark;
+- inbound image/file resources downloaded into the bridge workspace, plus inbound Lark audio/video resources transcribed through the same local ASR path as Telegram before engine execution;
+- outbound `[send-file:/abs/path]`, `[send-image:/abs/path]`, `send.audio`, `send.video`, `send.batch`, and whole-response fenced `file:name.ext` blocks delivered back to Lark;
 - rich Feishu posts through `lark.post` tool tags when plain Markdown is too limiting;
 - custom interactive cards through `lark.card` tool tags, with button clicks fed back into the same bridge session;
 - Feishu Docs creation through `lark.doc.create` for long specs and reviewable documents;
 - Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, runs the same engine, and replies in the comment thread;
-- Lark-delivered scheduled reminders/tasks through `/cron`, with raw Lark chat routing stored on each job so scheduler fires can return to the correct Lark conversation;
+- Lark-delivered scheduled reminders/tasks through `/cron` or `cron.add` tool tags, with raw Lark chat/thread routing stored on each job so scheduler fires can return to the correct Lark conversation;
+- archive summaries with a Lark `Continue Analysis` card button and `/continue` fallback, matching Telegram's pause-then-continue archive workflow;
 - durable Kanban task state through `/board`, backed by the same `board.json` model as Telegram while writing timeline entries with `channel=lark`;
 - thread-to-thread Mini Bus workflows through `/mini`, so Lark group threads can be registered as named peers for ask/fan/chain/verify/crew flows;
 - Agent Bus delegation through `/fan`, `/chain`, and `/verify`, reusing the same configured `bus.parallel`, `bus.chain`, and `bus.verifier` peers as Telegram;
 - merged forwarded Feishu messages preserved as `<forwarded_lark_messages>` task context for one-click handoff workflows;
 - a per-state-dir service lock plus `lark service start|stop|restart|status|logs|doctor`, so accidental duplicate `lark run` processes do not double-consume the same Lark events and recovery is operator-friendly;
-- timeline entries with `channel=lark`, plus Lark-scoped `lark timeline`, `lark audit`, and `lark dashboard` aliases, so Lark traffic can be inspected without routing through the Telegram CLI surface.
+- `lark send`, the Lark-side sibling of Telegram `send`, for operator-initiated text/file/image delivery from the local CLI using saved app credentials;
+- timeline entries with `channel=lark`, plus Lark-scoped `lark timeline`, `lark audit`, `lark dashboard`, `lark instructions`, `lark engine`, `lark yolo`, `lark budget`, `lark locale`, `lark verbosity`, `lark usage`, `lark session`, and `lark task` aliases, so Lark traffic, agent instructions, runtime config, session bindings, and file workflows can be inspected without routing through the Telegram CLI surface.
+
+### Lark vs Telegram parity boundary
+
+Most bridge-level features now exist on both channels. The remaining differences are platform-driven and should be treated as product constraints, not hidden bugs:
+
+| Area | Telegram | Feishu/Lark |
+|---|---|---|
+| Ordinary private chat | Supported | Supported after `lark access pair` / allowlist |
+| Group self-service | `/group allow`, `/group all`, `/group at` | Same commands; `/group all` also needs the app scope `im:message.group_msg`; multi-agent @bot groups should also grant `im:message.group_at_msg.include_bot:readonly` |
+| Running feedback | Native `typing...` action | No exact Lark equivalent; ordinary turns return final answers directly, while explicit workflows use cards |
+| Scheduled work | `/cron` and `cron.add` return to the Telegram chat/topic | `/cron` and `cron.add` preserve raw Lark chat/thread routing |
+| Files and media | Files/images/voice/audio/video, subject to Telegram Bot API limits | Files/images/audio/video through Lark resources and local ASR |
+| Interactive workflows | Inline buttons for stop, approvals, and continue-analysis | Card 2.0 callbacks for stop, approvals, choices, and continue-analysis |
+| Docs comments | Not a Telegram concept | Feishu Docs comment @mentions can run the bridge and reply in-thread |
+| Observability | `telegram status`, `doctor`, `timeline`, `audit`, `dashboard`, `instructions`, `session`, `task`, `backup`, `restore`, `send` | `lark status`, `doctor`, `timeline`, `audit`, `dashboard`, `instructions`, `session`, `task`, `backup`, `restore`, `send` use the Lark state dir and saved app credentials |
+
+If `lark doctor` reports `im:message.group_msg` missing, Lark group slash commands and @mentions can still work, but ordinary non-mention group messages may never reach the bridge because Feishu/Lark filters them before the local service sees them. This scope is a manual Feishu/Lark app permission step, not something fixed by recreating the same PersonalAgent QR app. Open Feishu/Lark Developer Console → your app → Permissions, choose the bulk import/open flow, and paste the compact JSON printed by `lark doctor` or `lark permissions --missing`, for example:
+
+```json
+{"scopes":{"tenant":["im:message.group_msg"]}}
+```
 
 Access control is intentionally shared with the existing bridge store. If a private Lark chat is not paired, the bot replies with the pairing/allowlist instruction instead of running the engine. Use the Lark-specific alias against the Lark state dir: `node dist/src/index.js lark access pair <code>`, `lark access allow <numeric-chat-id>`, `lark access policy allowlist`, and `lark access status`.
 
@@ -116,12 +154,27 @@ Lark-specific tool tags use the same compact JSON tag shape as Telegram side-cha
 ```text
 [tool:{"name":"lark.card","payload":{"title":"Choose","body":"What next?","actions":[{"label":"Continue","value":"continue"}]}}]
 [tool:{"name":"lark.doc.create","payload":{"title":"Spec","content":"# Spec\n\nBody","docFormat":"markdown"}}]
+[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]
 [tool:{"name":"send.video","payload":{"path":"/absolute/path/demo.mp4"}}]
 ```
 
 For raw `lark.card` payloads, bridge decorates ordinary button elements with Card 2.0 `behaviors: [{type:"callback", value: ...}]` routing metadata when a conversation is available. If you already provide callback metadata, that explicit payload is preserved.
 
-`lark-cli` is useful inside agent turns for Feishu Docs/IM/Calendar operations, but it is not used as the inbound bot transport. Long-connection message delivery uses `@larksuiteoapi/node-sdk` because it exposes normalized message events, card callbacks, streaming cards, and media helpers directly.
+`lark-cli` is useful inside agent turns for Feishu Docs/IM/Calendar operations, but it is not used as the inbound bot transport. Long-connection message delivery uses `@larksuiteoapi/node-sdk` because it exposes normalized message events, card callbacks, and media helpers directly.
+
+### Lark Production Smoke Checklist
+
+Before calling a Lark app production-ready, run these checks against the real app created by `lark wizard` or rechecked by `lark provision`:
+
+1. `node dist/src/index.js lark status` shows configured credentials without printing secrets.
+2. `node dist/src/index.js lark doctor` reports the long-connection, message, card, resource, Docs, comment, reply-context, and group-all scopes as configured or tells you the exact missing admin scope.
+3. In a private Lark chat, send `test`; the bot should reply directly with the final answer, not a long-running placeholder card.
+4. Send `/status`, `/help`, `/usage`, `/goal 写发布说明`, `/goal status`, `/stop`, and `/reset`; each should reply in the same chat/thread.
+5. In a Lark group, confirm the default mention-only behavior, then use `/group all` and `/group at` to switch ordinary-message handling on and off.
+6. Send an image, a file, an audio resource, and a video resource; files should enter the workspace, while audio/video should be transcribed before the engine runs.
+7. Ask the agent to create a reminder and verify the emitted `cron.add` tool tag creates a Lark-routed job; then run or wait for the job and confirm it returns to the same Lark chat/thread.
+8. Trigger a permission request, a `lark.card` choice button, and an archive `Continue Analysis` card; every button should callback exactly once and respect Lark access checks.
+9. Create a Feishu Docs comment that @mentions the bot; it should fetch comment context and reply in the comment thread.
 
 ## Product Boundary
 
@@ -528,14 +581,14 @@ Budget is enforced in real-time — the bot replies with a bilingual message whe
 
 ## Voice Input (ASR)
 
-Send voice messages in Telegram — the bridge transcribes them locally before forwarding the text to the AI engine. No cloud ASR service required.
+Send voice messages in Telegram, or audio/video resources through the Lark channel — the bridge transcribes them locally before forwarding the text to the AI engine. No cloud ASR service required.
 
 **How it works:**
 
-1. User sends a voice message in Telegram
+1. User sends a voice/audio/video message in Telegram or a Lark audio/video resource
 2. The bridge downloads the `.ogg` file
 3. Transcribes it via a local ASR service (HTTP first, CLI fallback)
-4. The transcript replaces the voice attachment as the user's text message
+4. The transcript is appended to the user's text message
 5. The AI engine processes it as a normal text request
 
 **Setup with Qwen3-ASR (example):**
@@ -580,7 +633,7 @@ The watchdog only covers the warm HTTP ASR path. CLI fallback still exists for t
 
 **Custom ASR integration:**
 
-To use a different ASR engine, modify the `createDefaultTranscribeVoice()` function in `src/telegram/message-input.ts`. The function receives the local path to an `.ogg` audio file and should return the transcribed text as a string.
+To use a different ASR engine, modify the `createDefaultTranscribeVoice()` function in `src/telegram/message-input.ts` or inject `transcribeMedia` in the Lark runtime tests. The function receives the local path to the audio/video file and should return the transcribed text as a string.
 
 ---
 
@@ -1259,7 +1312,7 @@ Telegram users can also use:
 - `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
 - `/model [name|off]` — switch model for Codex/Claude; Antigravity explains the `agy --print` limitation and does not forward `/model` as chat
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
-- `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex enforces explicit budgets, while Claude Code and Antigravity receive explicit budgets as native goal guidance. Codex also supports `/goal status` and `/goal clear`.
+- `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex stores the budget structurally when one is provided, while Claude Code and Antigravity receive explicit budgets as native goal guidance. Codex also supports `/goal status` and `/goal clear`.
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
 - `/fan <prompt>` — query current bot plus configured parallel bots
@@ -1361,6 +1414,22 @@ Group usage has a second allow layer: the Telegram user must already be authoriz
 By default, ordinary group messages are ignored unless they mention the bot username or reply to one of the bot's messages. Slash commands still work. Use `/group all` inside a group if you want that allowed group to behave like an always-listening shared chat; use `/group at` in the same group to return to the safer default. For `/group all` to hear ordinary messages, promote the bot to admin in that group so Telegram actually delivers ordinary group messages to it. BotFather privacy mode can also affect delivery, but group admin is the practical setup path. Unauthorized group messages are silent and only audited, so strangers cannot make the bot spam a group.
 
 Forum topics are isolated conversations: each topic gets its own engine session and cron scope. Within the same topic, authorized users share that topic's session context; use a separate topic when you want a separate temporary conversation.
+
+### Lark Groups And Threads
+
+Lark private chats are paired through `lark access`. Authorized Lark users can enable a group from inside that group, matching Telegram's self-service group setup:
+
+```text
+/group status
+/group allow
+/group deny
+/group on
+/group off
+/group all
+/group at
+```
+
+By default, ordinary Lark group messages must mention the bot, but explicit slash commands are still accepted so authorized users can recover with commands such as `/group on`. Use `/group allow` to authorize the current group, `/group all` to let ordinary group messages enter the bridge queue, and `/group at` to return to the safer mention-only mode. Trigger mode is stored in the Lark state directory as `lark-group-mode.json`, while allowed Lark group numeric ids are stored in the Lark instance config; neither affects Telegram `groupMode`. `/group all` also requires the Feishu/Lark app scope `im:message.group_msg`; `lark doctor` and `lark provision` report that scope explicitly when the app is still mention-only at the platform layer and print a compact bulk-import JSON for the missing tenant scopes. The QR wizard may create a working PersonalAgent app without that ordinary-group scope, so add it manually or by permission import if you need non-mention group traffic.
 
 ---
 

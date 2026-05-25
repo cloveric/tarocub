@@ -232,7 +232,7 @@ export class Bridge {
     locale?: Locale;
     text: string;
     replyContext?: {
-      messageId: number;
+      messageId: number | string;
       text: string;
     };
     messageThreadId?: number;

@@ -31,6 +31,8 @@ describe("lark card renderer", () => {
     const serialized = JSON.stringify(card);
 
     expect(card.config.streaming_mode).toBe(true);
+    expect(serialized).toContain("任务处理中");
+    expect(serialized).not.toContain("CC Telegram Bridge is working");
     expect(serialized).toContain("停止");
     expect(serialized).toContain("lark:oc_chat");
     expect(serialized).toContain('"behaviors"');

@@ -26,6 +26,7 @@ export const TimelineEventSchema = z.object({
     "engine.event",
     "engine.event.delivery_failed",
     "tool.executed",
+    "service.error",
     "delivery.ledger_mismatch",
     "file.accepted",
     "file.rejected",

@@ -33,6 +33,13 @@ export interface LarkChannelLike {
   }, opts?: LarkSendOptions): Promise<{ messageId: string }>;
   updateCard?(messageId: string, card: object): Promise<void>;
   downloadResource(fileKey: string, type: "image" | "file"): Promise<Buffer>;
+  fetchMessage?(messageId: string): Promise<LarkFetchedMessage | null>;
+}
+
+export interface LarkFetchedMessage {
+  messageId: string;
+  messageType?: string;
+  content?: string;
 }
 
 export interface LarkRuntimeChannelLike extends LarkChannelLike {
@@ -68,6 +75,10 @@ export interface LarkBridgeLike {
     messageThreadId?: number;
     locale?: "en" | "zh";
     text: string;
+    replyContext?: {
+      messageId: string;
+      text: string;
+    };
     conversationKey?: string;
     files: string[];
     onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;

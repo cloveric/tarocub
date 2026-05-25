@@ -4,8 +4,12 @@ import path from "node:path";
 import { CronAccessDeniedError } from "../runtime/cron-errors.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
+import { sendLarkMarkdown } from "./delivery.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
+
+const LARK_CRON_TEXT_LIMIT = 3500;
+const LARK_CRON_FAILURE_PROMPT_LIMIT = 700;
 
 type LarkCronDeliverResponse = (input: {
   channel: LarkChannelLike;
@@ -17,6 +21,10 @@ type LarkCronDeliverResponse = (input: {
   workspaceOverride?: string;
   conversationKey: string;
   bridgeChatType: "private" | "group";
+  bridgeChatId?: number;
+  bridgeUserId?: number;
+  larkThreadId?: string;
+  larkMessageId?: string;
   replyTo?: string;
   replyInThread?: boolean;
 }) => Promise<void>;
@@ -72,6 +80,7 @@ export function buildLarkCronExecutor(input: {
       chatType: bridgeChatType,
       text: job.prompt,
       conversationKey,
+      locale: job.locale ?? "zh",
       files: [],
       requestOutputDir,
       workspaceOverride: input.workspaceOverride,
@@ -82,9 +91,7 @@ export function buildLarkCronExecutor(input: {
       return;
     }
     if (!input.deliverResponse) {
-      await input.channel.send(job.larkChatId, {
-        markdown: result.text || "（空回复）",
-      }, {
+      await sendLarkMarkdown(input.channel, job.larkChatId, result.text || "（空回复）", {
         ...larkCronReplyFields(job),
       });
       return;
@@ -99,9 +106,57 @@ export function buildLarkCronExecutor(input: {
       workspaceOverride: input.workspaceOverride,
       conversationKey,
       bridgeChatType,
+      bridgeChatId: job.chatId,
+      bridgeUserId: job.userId,
+      larkThreadId: job.larkThreadId,
+      larkMessageId: job.larkMessageId,
       ...larkCronReplyFields(job),
     });
   };
+}
+
+export async function sendLarkCronFailureNotification(
+  channel: LarkChannelLike,
+  job: CronJobRecord,
+  detail: string,
+): Promise<void> {
+  if (job.channel !== "lark" || !job.larkChatId || job.mute) {
+    return;
+  }
+  const message = buildLarkCronFailureMessage(job, detail);
+  const replyOptions = larkCronReplyOptions(job);
+  if (replyOptions) {
+    await channel.send(job.larkChatId, { text: message }, replyOptions);
+    return;
+  }
+  await channel.send(job.larkChatId, { text: message });
+}
+
+function buildLarkCronFailureMessage(job: CronJobRecord, detail: string): string {
+  const prompt = truncateLarkCronText(
+    job.prompt,
+    LARK_CRON_FAILURE_PROMPT_LIMIT,
+    job.locale === "en" ? "..." : "…",
+  );
+  const prefix = job.locale === "en"
+    ? `⚠️ Scheduled task failed\nID  ${job.id}\n📝 ${prompt}\nError: `
+    : `⚠️ 定时任务执行失败\nID  ${job.id}\n📝 ${prompt}\n错误：`;
+  const remaining = Math.max(0, LARK_CRON_TEXT_LIMIT - prefix.length);
+  const truncationNotice = job.locale === "en"
+    ? "\n... (error detail truncated; see service logs or timeline.)"
+    : "\n…（错误详情过长，已截断；完整详情见服务日志或 timeline。）";
+  return `${prefix}${truncateLarkCronText(detail, remaining, truncationNotice)}`;
+}
+
+function truncateLarkCronText(value: string, limit: number, truncationNotice: string): string {
+  const text = value.trim();
+  if (text.length <= limit) {
+    return text;
+  }
+  if (limit <= truncationNotice.length) {
+    return truncationNotice.slice(0, limit);
+  }
+  return `${text.slice(0, limit - truncationNotice.length).trimEnd()}${truncationNotice}`;
 }
 
 function stripLarkReminderPrefix(prompt: string): string {
@@ -133,9 +188,11 @@ function stripLeadingLarkReminderTimeAnchors(prompt: string): string {
 
 function renderLarkCronNotification(job: CronJobRecord): string {
   const body = stripLeadingLarkReminderTimeAnchors(stripLarkReminderPrefix(job.prompt));
-  return job.locale === "en"
-    ? `⏰ Reminder\n${body}`
-    : `⏰ 提醒\n${body}`;
+  const prefix = job.locale === "en" ? "⏰ Reminder\n" : "⏰ 提醒\n";
+  const truncationNotice = job.locale === "en"
+    ? "\n... (reminder text truncated.)"
+    : "\n…（提醒内容过长，已截断。）";
+  return `${prefix}${truncateLarkCronText(body, LARK_CRON_TEXT_LIMIT - prefix.length, truncationNotice)}`;
 }
 
 function larkCronReplyOptions(job: CronJobRecord): LarkSendOptions | undefined {

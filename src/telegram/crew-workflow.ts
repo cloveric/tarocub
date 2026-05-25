@@ -361,7 +361,7 @@ async function appendCrewTimelineEvent(
 ): Promise<void> {
   await appendTimelineEventBestEffort(stateDir, {
     type: input.type,
-    channel: "telegram",
+    channel: input.context.channel ?? "telegram",
     chatId: input.normalized.chatId,
     userId: input.normalized.userId,
     updateId: input.context.updateId,

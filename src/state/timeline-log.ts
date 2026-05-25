@@ -22,6 +22,7 @@ export interface TimelineEvent {
     | "engine.event"
     | "engine.event.delivery_failed"
     | "tool.executed"
+    | "service.error"
     | "delivery.ledger_mismatch"
     | "file.accepted"
     | "file.rejected"
@@ -52,6 +53,7 @@ export interface TimelineSummary {
   lastCrewRunAt?: string;
   retryCount: number;
   budgetBlockedCount: number;
+  serviceErrorCount: number;
   fileRejectedCount: number;
   workflowFailedCount: number;
   crewRunsStartedCount: number;
@@ -125,6 +127,7 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
     totalEvents: events.length,
     retryCount: 0,
     budgetBlockedCount: 0,
+    serviceErrorCount: 0,
     fileRejectedCount: 0,
     workflowFailedCount: 0,
     crewRunsStartedCount: 0,
@@ -139,6 +142,10 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
 
     if (event.type === "budget.blocked") {
       summary.budgetBlockedCount += 1;
+    }
+
+    if (event.type === "service.error") {
+      summary.serviceErrorCount += 1;
     }
 
     if (event.type === "file.rejected") {

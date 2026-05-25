@@ -110,6 +110,7 @@ export interface ServiceStatus {
   lastBudgetBlockedAt?: string;
   retryCount: number | null;
   budgetBlockedCount: number | null;
+  serviceErrorCount: number | null;
   fileRejectedCount: number | null;
   workflowFailedCount: number | null;
   crewRunsStartedCount: number | null;
@@ -875,6 +876,7 @@ export async function getServiceStatus(
     totalEvents: 0,
     retryCount: 0,
     budgetBlockedCount: 0,
+    serviceErrorCount: 0,
     fileRejectedCount: 0,
     workflowFailedCount: 0,
     crewRunsStartedCount: 0,
@@ -961,6 +963,7 @@ export async function getServiceStatus(
     lastBudgetBlockedAt: timelineSummary.lastBudgetBlockedAt,
     retryCount: timelineWarning === undefined ? timelineSummary.retryCount : null,
     budgetBlockedCount: timelineWarning === undefined ? timelineSummary.budgetBlockedCount : null,
+    serviceErrorCount: timelineWarning === undefined ? timelineSummary.serviceErrorCount : null,
     fileRejectedCount: timelineWarning === undefined ? timelineSummary.fileRejectedCount : null,
     workflowFailedCount: timelineWarning === undefined ? timelineSummary.workflowFailedCount : null,
     crewRunsStartedCount: timelineWarning === undefined ? timelineSummary.crewRunsStartedCount : null,
@@ -1134,7 +1137,7 @@ export async function runServiceDoctor(
         ? `Timeline events: unknown (${status.timelineWarning}).`
         : status.crewRunStateWarning !== undefined
           ? `Timeline events: ${status.timelineEvents}. Crew runs: unknown (${status.crewRunStateWarning}).`
-          : `Timeline events: ${status.timelineEvents}. Last turn completion: ${status.lastTurnCompletionAt ?? "none"}. Last retry: ${status.lastRetryAt ?? "none"}. Last budget block: ${status.lastBudgetBlockedAt ?? "none"}. Last crew run: ${status.lastCrewRunAt ?? "none"}. Incident counts: retries=${status.retryCount}, budget blocks=${status.budgetBlockedCount}, file rejections=${status.fileRejectedCount}, workflow failures=${status.workflowFailedCount}, crew runs started=${status.crewRunsStartedCount}, crew runs completed=${status.crewRunsCompletedCount}, crew runs failed=${status.crewRunsFailedCount}. Latest crew run: ${status.latestCrewRunId ? `${status.latestCrewRunId} (${status.latestCrewRunWorkflow ?? "unknown"}, ${status.latestCrewRunStatus ?? "unknown"}/${status.latestCrewRunStage ?? "unknown"}, updated ${status.latestCrewRunUpdatedAt ?? "unknown"})` : "none"}.`,
+          : `Timeline events: ${status.timelineEvents}. Last turn completion: ${status.lastTurnCompletionAt ?? "none"}. Last retry: ${status.lastRetryAt ?? "none"}. Last budget block: ${status.lastBudgetBlockedAt ?? "none"}. Last crew run: ${status.lastCrewRunAt ?? "none"}. Incident counts: retries=${status.retryCount}, budget blocks=${status.budgetBlockedCount}, service errors=${status.serviceErrorCount}, file rejections=${status.fileRejectedCount}, workflow failures=${status.workflowFailedCount}, crew runs started=${status.crewRunsStartedCount}, crew runs completed=${status.crewRunsCompletedCount}, crew runs failed=${status.crewRunsFailedCount}. Latest crew run: ${status.latestCrewRunId ? `${status.latestCrewRunId} (${status.latestCrewRunWorkflow ?? "unknown"}, ${status.latestCrewRunStatus ?? "unknown"}/${status.latestCrewRunStage ?? "unknown"}, updated ${status.latestCrewRunUpdatedAt ?? "unknown"})` : "none"}.`,
   });
   checks.push({
     name: "tasks",

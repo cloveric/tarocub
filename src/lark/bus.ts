@@ -1,5 +1,9 @@
-import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
+import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import { handleBoardTelegramCommand, type BoardCommandContext } from "../telegram/board-commands.js";
+import {
+  handleCrewTelegramWorkflow,
+  type CrewWorkflowContext,
+} from "../telegram/crew-workflow.js";
 import {
   handleDelegationTelegramCommand,
   type DelegationCommandBridge,
@@ -16,7 +20,11 @@ import {
   stableLarkNumericId,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
+import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
+import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
+import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
+import { appendLarkTimelineEvent } from "./timeline.js";
 import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 
 type LarkBusCommandInput = {
@@ -42,14 +50,12 @@ export async function handleLarkBoardCommand(
   commandText: string,
 ): Promise<boolean> {
   const cfg = await loadInstanceConfig(input.stateDir);
+  const locale = await resolveLarkLocale(input.stateDir);
   const abortController = new AbortController();
   const boardContext: BoardCommandContext = {
     api: {
       sendMessage: async (_chatId: number, text: string) => {
-        await input.channel.send(normalized.chatId, { markdown: text }, {
-          replyTo: normalized.messageId,
-          replyInThread: Boolean(normalized.threadId),
-        });
+        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
         return { message_id: 0, text };
       },
     },
@@ -71,12 +77,17 @@ export async function handleLarkBoardCommand(
       request,
       abortSignal: request.abortSignal ?? abortController.signal,
     }),
+    onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
+      locale,
+      source: "board",
+      workspaceOverride: cfg.resume?.workspacePath,
+    }),
   };
 
   return await handleBoardTelegramCommand({
     stateDir: input.stateDir,
     startedAt: Date.now(),
-    locale: "zh",
+    locale,
     normalized: toBoardTelegramMessage(normalized, commandText),
     context: boardContext,
   });
@@ -102,14 +113,12 @@ export async function handleLarkMiniBusCommand(
   commandText: string,
 ): Promise<boolean> {
   const cfg = await loadInstanceConfig(input.stateDir);
+  const locale = await resolveLarkLocale(input.stateDir);
   const abortController = new AbortController();
   const context: MiniBusCommandContext = {
     api: {
       sendMessage: async (_chatId: number, text: string) => {
-        await input.channel.send(normalized.chatId, { markdown: text }, {
-          replyTo: normalized.messageId,
-          replyInThread: Boolean(normalized.threadId),
-        });
+        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
         return { message_id: 0, text };
       },
     },
@@ -128,6 +137,11 @@ export async function handleLarkMiniBusCommand(
       request,
       abortSignal: request.abortSignal ?? abortController.signal,
     }),
+    onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
+      locale,
+      source: "mini",
+      workspaceOverride: cfg.resume?.workspacePath,
+    }),
   };
   const bridge: MiniBusCommandBridge = {
     handleAuthorizedMessage: async (bridgeInput) => await input.bridge.handleAuthorizedMessage(bridgeInput),
@@ -136,7 +150,7 @@ export async function handleLarkMiniBusCommand(
   return await handleMiniBusTelegramCommand({
     stateDir: input.stateDir,
     startedAt: Date.now(),
-    locale: "zh",
+    locale,
     cfg: {
       budgetUsd: cfg.budgetUsd,
       resume: cfg.resume,
@@ -175,18 +189,21 @@ export async function handleLarkDelegationCommand(
   commandText: string,
 ): Promise<boolean> {
   const cfg = await loadInstanceConfig(input.stateDir);
+  const locale = await resolveLarkLocale(input.stateDir);
   const context: DelegationCommandContext = {
     api: {
       sendMessage: async (_chatId: number, text: string) => {
-        await input.channel.send(normalized.chatId, { markdown: text }, {
-          replyTo: normalized.messageId,
-          replyInThread: Boolean(normalized.threadId),
-        });
+        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
         return { message_id: 0, text };
       },
     },
     channel: "lark",
     instanceName: "lark",
+    onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
+      locale,
+      source: "delegation",
+      workspaceOverride: cfg.resume?.workspacePath,
+    }),
   };
   const bridge: DelegationCommandBridge = {
     handleAuthorizedMessage: async (bridgeInput) => {
@@ -204,7 +221,7 @@ export async function handleLarkDelegationCommand(
   return await handleDelegationTelegramCommand({
     stateDir: input.stateDir,
     startedAt: Date.now(),
-    locale: "zh",
+    locale,
     cfg: {
       budgetUsd: cfg.budgetUsd,
       resume: cfg.resume,
@@ -215,6 +232,132 @@ export async function handleLarkDelegationCommand(
     loadBusConfig: input.runtime.busRuntime?.loadBusConfig,
     delegateToInstance: input.runtime.busRuntime?.delegateToInstance,
   });
+}
+
+export async function handleLarkCrewWorkflow(
+  input: LarkBusCommandInput & {
+    abortSignal?: AbortSignal;
+  },
+  normalized: LarkNormalizedBridgeMessage,
+  prompt: string,
+): Promise<boolean> {
+  if (normalized.attachments.length > 0) {
+    return false;
+  }
+
+  const cfg = await loadInstanceConfig(input.stateDir);
+  const locale = await resolveLarkLocale(input.stateDir);
+  const context: CrewWorkflowContext = {
+    api: {
+      sendMessage: async (_chatId: number, text: string) => {
+        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
+        return { message_id: 0, text };
+      },
+    },
+    channel: "lark",
+    instanceName: "lark",
+    abortSignal: input.abortSignal,
+    bridge: {
+      handleAuthorizedMessage: async (bridgeInput) => await input.bridge.handleAuthorizedMessage(bridgeInput),
+    },
+    onApprovalRequest: async (request) => await input.requestApproval({
+      channel: input.channel,
+      runtime: input.runtime,
+      chatId: normalized.chatId,
+      conversationKey: normalized.conversationKey,
+      bridgeChatType: normalized.bridgeChatType,
+      replyTo: normalized.messageId,
+      request,
+      abortSignal: request.abortSignal ?? input.abortSignal,
+    }),
+    onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
+      locale,
+      source: "crew",
+      workspaceOverride: cfg.resume?.workspacePath,
+    }),
+  };
+
+  return await handleCrewTelegramWorkflow({
+    stateDir: input.stateDir,
+    startedAt: Date.now(),
+    locale,
+    cfg: {
+      budgetUsd: cfg.budgetUsd,
+      resume: cfg.resume,
+    },
+    normalized: toDelegationTelegramMessage(normalized, prompt),
+    context,
+    loadBusConfig: input.runtime.busRuntime?.loadBusConfig,
+    delegateToInstance: input.runtime.busRuntime?.delegateToInstance,
+  });
+}
+
+function larkCommandReplyOptions(normalized: LarkNormalizedBridgeMessage): { replyTo: string; replyInThread: boolean } {
+  return {
+    replyTo: normalized.messageId,
+    replyInThread: Boolean(normalized.threadId),
+  };
+}
+
+function createLarkBusEngineEventHandler(
+  input: LarkBusCommandInput,
+  normalized: LarkNormalizedBridgeMessage,
+  options: {
+    locale: "en" | "zh";
+    source: string;
+    workspaceOverride?: string;
+  },
+): (event: EngineStreamEvent) => Promise<void> {
+  return async (event) => {
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "engine.event",
+      detail: event.type,
+      metadata: {
+        source: options.source,
+        toolName: "toolName" in event ? event.toolName : undefined,
+        textChars: "text" in event ? event.text.length : undefined,
+        status: "status" in event ? event.status : undefined,
+      },
+    });
+
+    if (event.type !== "task_notification") {
+      return;
+    }
+
+    const notificationText = [
+      renderLarkBackgroundTaskHeader(options.locale),
+      event.text.trim(),
+    ].filter(Boolean).join("\n");
+
+    try {
+      await deliverLarkResponse({
+        channel: input.channel,
+        runtime: input.runtime,
+        chatId: normalized.chatId,
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+        text: notificationText,
+        stateDir: input.stateDir,
+        workspaceOverride: options.workspaceOverride,
+        conversationKey: normalized.conversationKey,
+        bridgeChatType: normalized.bridgeChatType,
+        bridgeChatId: normalized.bridgeChatId,
+        bridgeUserId: normalized.bridgeUserId,
+        larkThreadId: normalized.threadId,
+        larkMessageId: normalized.messageId,
+      });
+    } catch (error) {
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "engine.event.delivery_failed",
+        outcome: "error",
+        detail: redactLarkErrorDetail(error),
+        metadata: {
+          source: options.source,
+          eventType: event.type,
+        },
+      });
+    }
+  };
 }
 
 function toDelegationTelegramMessage(

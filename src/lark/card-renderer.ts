@@ -18,6 +18,7 @@ export interface LarkApprovalCardInput {
   requestId: string;
   toolName: string;
   toolInput?: unknown;
+  replyInThread?: boolean;
 }
 
 export function initialLarkRunState(conversationKey: string, bridgeChatType?: "private" | "group"): LarkRunState {
@@ -75,7 +76,7 @@ export function applyLarkEngineEvent(
 
 export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> {
   const elements: unknown[] = [
-    markdownElement(state.status === "running" ? "**CC Telegram Bridge is working...**" : "**Done**"),
+    markdownElement(state.status === "running" ? "**任务处理中...**" : "**已完成**"),
   ];
 
   if (state.thinking.length > 0) {
@@ -157,9 +158,9 @@ export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<str
         {
           tag: "column_set",
           columns: [
-            approvalButtonColumn(input.requestId, "allow_once", "允许一次", "primary"),
-            approvalButtonColumn(input.requestId, "allow_session", "本轮允许", "default"),
-            approvalButtonColumn(input.requestId, "deny", "拒绝", "danger"),
+            approvalButtonColumn(input.requestId, "allow_once", "允许一次", "primary", input.replyInThread),
+            approvalButtonColumn(input.requestId, "allow_session", "本轮允许", "default", input.replyInThread),
+            approvalButtonColumn(input.requestId, "deny", "拒绝", "danger", input.replyInThread),
           ],
         },
       ],
@@ -179,6 +180,7 @@ function approvalButtonColumn(
   decision: "allow_once" | "allow_session" | "deny",
   text: string,
   type: "primary" | "default" | "danger",
+  replyInThread: boolean | undefined,
 ): Record<string, unknown> {
   return {
     tag: "column",
@@ -196,6 +198,7 @@ function approvalButtonColumn(
           cctb_lark: "approval",
           requestId,
           decision,
+          ...(replyInThread ? { replyInThread: true } : {}),
         })],
       },
     ],

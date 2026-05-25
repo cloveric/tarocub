@@ -15,6 +15,8 @@ export interface LarkIncomingMessage {
   senderId: string;
   senderName?: string;
   threadId?: string;
+  rootId?: string;
+  replyToMessageId?: string;
   content?: string;
   rawContentType?: string;
   resources?: LarkResourceDescriptor[];
@@ -38,6 +40,7 @@ export interface LarkNormalizedBridgeMessage {
   messageId: string;
   chatId: string;
   threadId?: string;
+  replyToMessageId?: string;
   senderId: string;
   senderName?: string;
   bridgeChatId: number;
@@ -45,6 +48,10 @@ export interface LarkNormalizedBridgeMessage {
   bridgeChatType: LarkBridgeChatType;
   conversationKey: string;
   text: string;
+  replyContext?: {
+    messageId: string;
+    text: string;
+  };
   attachments: LarkNormalizedAttachment[];
 }
 
@@ -65,8 +72,9 @@ export function normalizeLarkMessage(
 ): LarkNormalizedBridgeMessage | null {
   const requireMentionInGroup = options.requireMentionInGroup ?? false;
   const isGroupLike = message.chatType !== "p2p";
+  const isExplicitSlashCommand = isLarkSlashCommand(message.content);
 
-  if (isGroupLike && requireMentionInGroup && !message.mentionedBot && !message.mentionAll) {
+  if (isGroupLike && requireMentionInGroup && !message.mentionedBot && !message.mentionAll && !isExplicitSlashCommand) {
     return null;
   }
 
@@ -78,6 +86,7 @@ export function normalizeLarkMessage(
     messageId: message.messageId,
     chatId: message.chatId,
     ...(message.threadId ? { threadId: message.threadId } : {}),
+    ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}),
     senderId: message.senderId,
     ...(message.senderName ? { senderName: message.senderName } : {}),
     bridgeChatId: stableLarkNumericId(conversationKey),
@@ -87,6 +96,10 @@ export function normalizeLarkMessage(
     text,
     attachments,
   };
+}
+
+function isLarkSlashCommand(content: string | undefined): boolean {
+  return Boolean(content?.trim().startsWith("/"));
 }
 
 function buildLarkConversationKey(chatId: string, threadId?: string): string {
@@ -125,6 +138,8 @@ function buildLarkText(
     `chat_id: ${message.chatId}`,
     `chat_type: ${message.chatType}`,
     ...(message.threadId ? [`thread_id: ${message.threadId}`] : []),
+    ...(message.rootId ? [`root_id: ${message.rootId}`] : []),
+    ...(message.replyToMessageId ? [`reply_to_message_id: ${message.replyToMessageId}`] : []),
     `message_id: ${message.messageId}`,
     `sender_id: ${message.senderId}`,
     ...(message.senderName ? [`sender_name: ${message.senderName}`] : []),

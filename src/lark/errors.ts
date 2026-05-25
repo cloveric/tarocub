@@ -1,7 +1,42 @@
 import { classifyFailure } from "../runtime/error-classification.js";
+import type { Locale } from "../telegram/message-renderer.js";
 
-export function renderLarkUserFacingError(error: unknown, phase: "prepare" | "engine" | "tool"): string {
+export function renderLarkUserFacingError(
+  error: unknown,
+  phase: "prepare" | "engine" | "tool",
+  locale: Locale = "zh",
+): string {
   const category = classifyFailure(error);
+  if (locale === "en") {
+    if (category === "auth") {
+      return "Error: engine or Lark authentication has expired. Please sign in again and retry.";
+    }
+    if (category === "write-permission") {
+      return "Error: the current runtime cannot write to disk. Please adjust permissions and retry.";
+    }
+    if (category === "file-workflow") {
+      return "Error: file processing failed. Try a smaller or different file.";
+    }
+    if (category === "session-state") {
+      return "Error: session state is unavailable. Reset the session or ask an operator to check state files.";
+    }
+    if (category === "workflow-state") {
+      return "Error: workflow state is unavailable. Retry later or ask an operator to check the service.";
+    }
+    if (category === "engine-cli") {
+      return "Error: engine runtime failed. Restart the instance and retry.";
+    }
+
+    switch (phase) {
+      case "prepare":
+        return "Error: failed to prepare the Lark message. Please retry later.";
+      case "tool":
+        return "Error: Lark tool execution failed. Details were recorded in logs.";
+      case "engine":
+        return "Error: this turn failed. Details were recorded in logs.";
+    }
+  }
+
   if (category === "auth") {
     return "错误：引擎或飞书认证已失效，请重新登录后重试。";
   }

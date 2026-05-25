@@ -5,15 +5,20 @@ import {
 
 import { createBridgeDependencies } from "../service.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
+import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { CronStore } from "../state/cron-store.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 import { handleLarkComment, normalizeLarkCommentFileType } from "./comment-handler.js";
 import { createLarkCommentClient } from "./comment-client.js";
 import { resolveLarkRuntimeConfig, type LarkRuntimeConfig, type LarkRuntimeEnv } from "./config.js";
-import { buildLarkCronExecutor } from "./cron.js";
+import { buildLarkCronExecutor, sendLarkCronFailureNotification } from "./cron.js";
 import { deliverLarkResponse } from "./delivery.js";
+import { larkOperatorRawId } from "./identity.js";
+import { resolveLarkLocale } from "./locale.js";
 import { handleLarkMessage } from "./message-handler.js";
+import { stableLarkNumericId } from "./message-normalizer.js";
+import { redactLarkErrorDetail } from "./redaction.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import {
   createLarkServiceRuntime,
@@ -28,7 +33,7 @@ import type {
 
 export { createLarkDocumentWithCli } from "./document-client.js";
 export type { LarkDocumentCreateInput, LarkDocumentCreateResult } from "./document-client.js";
-export { buildLarkCronExecutor } from "./cron.js";
+export { buildLarkCronExecutor, sendLarkCronFailureNotification } from "./cron.js";
 export { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 export { handleLarkComment } from "./comment-handler.js";
 export { handleLarkMessage } from "./message-handler.js";
@@ -100,36 +105,52 @@ export async function runLarkService(
           requireMentionInGroup: config.requireMentionInGroup,
         });
       } catch (error) {
-        logger.error("Lark message handling failed:", error);
+        logLarkServiceError(logger, "Lark message handling failed", error);
+        await appendLarkServiceMessageErrorTimelineEvent(stateDir, message);
+        const locale = await resolveLarkLocale(stateDir);
         await channel!.send(message.chatId, {
-          text: renderLarkUserFacingError(error, "engine"),
-        }, { replyTo: message.messageId }).catch(() => undefined);
+          text: renderLarkUserFacingError(error, "engine", locale),
+        }, {
+          replyTo: message.messageId,
+          ...((message as { threadId?: string }).threadId ? { replyInThread: true } : {}),
+        }).catch(() => undefined);
       }
     });
     channel.on("cardAction", async (event) => {
       try {
         await handleLarkCardAction({ channel: channel!, bridge, runtime, stateDir, event });
       } catch (error) {
-        logger.error("Lark card action handling failed:", error);
+        logLarkServiceError(logger, "Lark card action handling failed", error);
+        await appendLarkServiceCardActionErrorTimelineEvent(stateDir, event);
+        const locale = await resolveLarkLocale(stateDir);
+        await channel!.send(event.chatId, {
+          text: renderLarkUserFacingError(error, "engine", locale),
+        }, {
+          replyTo: event.messageId,
+          ...getCardActionReplyInThreadOption(event),
+        }).catch(() => undefined);
       }
     });
     channel.on("comment", async (event) => {
       try {
         await handleLarkComment({ bridge, runtime, stateDir, event });
       } catch (error) {
-        logger.error("Lark comment handling failed:", error);
+        logLarkServiceError(logger, "Lark comment handling failed", error);
+        await appendLarkServiceCommentErrorTimelineEvent(stateDir, event);
         if (event.mentionedBot && runtime.commentClient) {
+          const locale = await resolveLarkLocale(stateDir);
           await runtime.commentClient.createReply({
             fileToken: event.fileToken,
             fileType: normalizeLarkCommentFileType(event.fileType),
             commentId: event.commentId,
-            text: renderLarkUserFacingError(error, "engine"),
+            text: renderLarkUserFacingError(error, "engine", locale),
           }).catch(() => undefined);
         }
       }
     });
-    channel.on("error", (error) => {
-      logger.error("Lark channel error:", error);
+    channel.on("error", async (error) => {
+      logLarkServiceError(logger, "Lark channel error", error);
+      await appendLarkChannelErrorTimelineEvent(stateDir, error);
     });
 
     await channel.connect();
@@ -149,14 +170,7 @@ export async function runLarkService(
         stateDir,
         instanceName: bridgeEnv.CODEX_TELEGRAM_INSTANCE,
         onJobFailure: async (job, detail) => {
-          if (job.channel !== "lark" || !job.larkChatId || job.mute) {
-            return;
-          }
-          await channel!.send(job.larkChatId, {
-            text: job.locale === "zh"
-              ? `⚠️ 定时任务执行失败\nID  ${job.id}\n📝 ${job.prompt}\n错误：${detail}`
-              : `⚠️ Scheduled task failed\nID  ${job.id}\n📝 ${job.prompt}\nError: ${detail}`,
-          });
+          await sendLarkCronFailureNotification(channel!, job, detail);
         },
       });
       await cronScheduler.start();
@@ -176,6 +190,141 @@ export async function runLarkService(
       await serviceLock.release();
     }
   }
+}
+
+function logLarkServiceError(logger: LarkServiceLogger, label: string, error: unknown): void {
+  logger.error(`${label}: ${redactLarkErrorDetail(error)}`);
+}
+
+async function appendLarkChannelErrorTimelineEvent(stateDir: string, error: unknown): Promise<void> {
+  const conversationKey = "lark:service";
+  await appendTimelineEventBestEffort(stateDir, {
+    type: "service.error",
+    channel: "lark",
+    chatId: stableLarkNumericId(conversationKey),
+    conversationKey,
+    outcome: "error",
+    detail: redactLarkErrorDetail(error),
+    metadata: {
+      phase: "channel",
+    },
+  }, "Lark channel error timeline event");
+}
+
+async function appendLarkServiceCommentErrorTimelineEvent(
+  stateDir: string,
+  event: {
+    fileToken: string;
+    fileType: string;
+    commentId: string;
+    operator?: {
+      openId?: string;
+      userId?: string;
+    };
+    mentionedBot?: boolean;
+  },
+): Promise<void> {
+  const conversationKey = `lark-comment:${event.fileToken}`;
+  const operatorRawId = larkOperatorRawId(event.operator);
+  await appendTimelineEventBestEffort(stateDir, {
+    type: "turn.completed",
+    channel: "lark",
+    chatId: stableLarkNumericId(conversationKey),
+    userId: stableLarkNumericId(`user:${operatorRawId}`),
+    conversationKey,
+    outcome: "error",
+    detail: "service-level comment handling failed",
+    metadata: {
+      phase: "service-comment",
+      larkSurface: "comment",
+      fileToken: event.fileToken,
+      fileType: normalizeLarkCommentFileType(event.fileType),
+      commentId: event.commentId,
+      mentionedBot: event.mentionedBot === true,
+    },
+  }, "Lark service comment error timeline event");
+}
+
+async function appendLarkServiceCardActionErrorTimelineEvent(
+  stateDir: string,
+  event: {
+    messageId: string;
+    chatId: string;
+    operator?: {
+      openId?: string;
+      userId?: string;
+    };
+    action?: {
+      value?: unknown;
+    };
+  },
+): Promise<void> {
+  const value = getCardActionValue(event);
+  const conversationKey = typeof value?.conversationKey === "string" ? value.conversationKey : `lark:${event.chatId}`;
+  const operatorRawId = event.operator?.openId ?? event.operator?.userId ?? "unknown";
+  await appendTimelineEventBestEffort(stateDir, {
+    type: "turn.completed",
+    channel: "lark",
+    chatId: stableLarkNumericId(conversationKey),
+    userId: stableLarkNumericId(`user:${operatorRawId}`),
+    conversationKey,
+    outcome: "error",
+    detail: "service-level card action handling failed",
+    metadata: {
+      phase: "service-card-action",
+      larkChatId: event.chatId,
+      larkMessageId: event.messageId,
+      bridgeChatType: value?.bridgeChatType === "group" ? "group" : "private",
+    },
+  }, "Lark service card action error timeline event");
+}
+
+async function appendLarkServiceMessageErrorTimelineEvent(
+  stateDir: string,
+  message: {
+    messageId: string;
+    chatId: string;
+    chatType: string;
+    senderId?: string;
+    threadId?: string;
+  },
+): Promise<void> {
+  const conversationKey = message.threadId ? `lark:${message.chatId}:${message.threadId}` : `lark:${message.chatId}`;
+  await appendTimelineEventBestEffort(stateDir, {
+    type: "turn.completed",
+    channel: "lark",
+    chatId: stableLarkNumericId(conversationKey),
+    userId: stableLarkNumericId(`user:${message.senderId ?? "unknown"}`),
+    conversationKey,
+    outcome: "error",
+    detail: "service-level message handling failed",
+    metadata: {
+      phase: "service-message",
+      larkChatId: message.chatId,
+      larkMessageId: message.messageId,
+      bridgeChatType: message.chatType === "p2p" ? "private" : "group",
+    },
+  }, "Lark service message error timeline event");
+}
+
+function getCardActionReplyInThreadOption(event: {
+  action?: {
+    value?: unknown;
+  };
+}): { replyInThread: true } | Record<string, never> {
+  const value = getCardActionValue(event);
+  return value?.replyInThread === true ? { replyInThread: true } : {};
+}
+
+function getCardActionValue(event: {
+  action?: {
+    value?: unknown;
+  };
+}): Record<string, unknown> | null {
+  const value = event.action?.value;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir: string; bridge: LarkBridgeLike }> {

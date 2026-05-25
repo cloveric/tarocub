@@ -114,7 +114,19 @@ function parsePayload(payload: unknown): unknown {
 
 function buildCronInput(
   payload: unknown,
-  context: Pick<CronAddToolContext, "chatId" | "messageThreadId" | "userId" | "chatType" | "locale">,
+  context: Pick<
+    CronAddToolContext,
+    | "channel"
+    | "chatId"
+    | "messageThreadId"
+    | "userId"
+    | "chatType"
+    | "conversationKey"
+    | "larkChatId"
+    | "larkThreadId"
+    | "larkMessageId"
+    | "locale"
+  >,
 ): CronJobInput {
   const parsedPayload = parsePayload(payload);
   if (!parsedPayload || typeof parsedPayload !== "object" || Array.isArray(parsedPayload)) {
@@ -142,10 +154,15 @@ function buildCronInput(
       throw new Error(`invalid cron expression: "${cronExpr}"`);
     }
     return {
+      channel: context.channel,
       chatId: context.chatId,
       messageThreadId: context.messageThreadId,
       userId: context.userId,
       chatType: context.chatType ?? "private",
+      conversationKey: context.conversationKey,
+      larkChatId: context.larkChatId,
+      larkThreadId: context.larkThreadId,
+      larkMessageId: context.larkMessageId,
       locale: context.locale,
       cronExpr,
       timezone,
@@ -177,10 +194,15 @@ function buildCronInput(
   }
 
   return {
+    channel: context.channel,
     chatId: context.chatId,
     messageThreadId: context.messageThreadId,
     userId: context.userId,
     chatType: context.chatType ?? "private",
+    conversationKey: context.conversationKey,
+    larkChatId: context.larkChatId,
+    larkThreadId: context.larkThreadId,
+    larkMessageId: context.larkMessageId,
     locale: context.locale,
     cronExpr: cronExprFromRunAt(targetAt),
     timezone,
@@ -219,7 +241,7 @@ export async function executeCronAddTool(payload: unknown, context: CronAddToolC
     await appendTimelineEventBestEffort(context.stateDir, {
       type: "command.handled",
       instanceName: context.instanceName,
-      channel: "telegram",
+      channel: context.channel ?? "telegram",
       chatId: context.chatId,
       userId: context.userId,
       updateId: context.updateId,
@@ -239,7 +261,7 @@ export async function executeCronAddTool(payload: unknown, context: CronAddToolC
     await appendTimelineEventBestEffort(context.stateDir, {
       type: "command.handled",
       instanceName: context.instanceName,
-      channel: "telegram",
+      channel: context.channel ?? "telegram",
       chatId: context.chatId,
       userId: context.userId,
       updateId: context.updateId,

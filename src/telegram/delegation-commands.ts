@@ -1,5 +1,6 @@
 import { loadBusConfig as defaultLoadBusConfig, type BusConfig } from "../bus/bus-config.js";
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
+import type { EngineStreamEvent } from "../codex/adapter.js";
 import {
   appendUpdateHandleAuditEventBestEffort,
   maybeReplyWithBudgetExhausted,
@@ -68,6 +69,7 @@ function buildChainStagePrompt(input: {
 
 export interface DelegationCommandContext extends TelegramTurnContext {
   abortSignal?: AbortSignal;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
 }
 
 export interface DelegationCommandBridge {
@@ -80,6 +82,7 @@ export interface DelegationCommandBridge {
     files: string[];
     workspaceOverride?: string;
     abortSignal?: AbortSignal;
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   }): Promise<{
     text: string;
     usage?: {
@@ -133,6 +136,7 @@ export async function handleDelegationTelegramCommand(input: {
         locale,
         text: btwCmd.prompt,
         files: [],
+        onEngineEvent: context.onEngineEvent,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
       const chunks = chunkTelegramMessage(result.text);
@@ -263,6 +267,7 @@ export async function handleDelegationTelegramCommand(input: {
         text: fanCommand.prompt,
         files: [],
         workspaceOverride: cfg.resume?.workspacePath,
+        onEngineEvent: context.onEngineEvent,
       })
         .then(async (r) => {
           await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, r.usage);
@@ -448,6 +453,7 @@ export async function handleDelegationTelegramCommand(input: {
         text: verifyCommand.prompt,
         files: [],
         workspaceOverride: cfg.resume?.workspacePath,
+        onEngineEvent: context.onEngineEvent,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
 
