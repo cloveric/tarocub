@@ -66,7 +66,7 @@ node dist/src/index.js lark doctor
 node dist/src/index.js lark run
 ```
 
-`lark wizard` 会走官方 Lark SDK 的 PersonalAgent 注册流程，在终端打印二维码，并把凭据保存到 `~/.cctb/lark/lark.env`（或 `CCTB_LARK_STATE_DIR/lark.env`）。如果你更想手动填凭据，环境变量仍然优先：
+`lark wizard` 会走官方 Lark SDK 的 PersonalAgent 注册流程，在终端打印二维码，把凭据保存到 `~/.cctb/lark/lark.env`（或 `CCTB_LARK_STATE_DIR/lark.env`），然后检查 bridge 需要的能力：接收消息事件、卡片回调、bot 发消息/资源权限、飞书文档权限。如果 app 有管理权限，wizard 会补齐事件/回调订阅；如果没有，会明确告诉你缺哪个管理 scope。如果你更想手动填凭据，环境变量仍然优先：
 
 ```bash
 export LARK_APP_ID="cli_xxx"
@@ -132,6 +132,7 @@ Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 
 ## 近期亮点
 
+- **v4.6.44** — 让 `lark wizard` 在扫码注册后做 app provisioning 检查：检查必需 scope、对已配置但未授权的 scope 发起管理员授权申请；如果有 app 管理权限就补齐 websocket 事件/回调订阅，否则明确提示缺哪个管理 scope。
 - **v4.6.43** — 修复飞书/Lark wizard 的 domain 处理：`LARK_DOMAIN=feishu|lark` 会在运行时映射到官方 SDK domain，并在二维码注册时映射到正确的账号注册域名。
 - **v4.6.42** — 新增 `lark wizard`，通过二维码创建/绑定 Feishu/Lark PersonalAgent app，凭据保存到 `lark.env`，并让 `lark status/doctor/run` 自动读取。
 - **v4.6.41** — 将飞书/Lark 交互卡片对齐到 Card 2.0 callback `behaviors`，stop/approval/choice 点击前按操作者重新鉴权，并拆分 Lark chat/user numeric ID map 以收窄碰撞影响面。

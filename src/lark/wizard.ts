@@ -2,6 +2,7 @@ import { registerApp } from "@larksuiteoapi/node-sdk";
 import qrcode from "qrcode-terminal";
 
 import { writeLarkEnvFile } from "./env-file.js";
+import { formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "./provisioning.js";
 import type { LarkRuntimeEnv } from "./service.js";
 
 export interface LarkWizardLogger {
@@ -29,6 +30,7 @@ export interface LarkWizardRegisterAppOptions {
 export interface LarkWizardOptions {
   registerAppImpl?: (options: LarkWizardRegisterAppOptions) => Promise<LarkWizardRegisterAppResult>;
   generateQRCode?: (url: string) => void;
+  provisionApp?: (input: { appId: string; appSecret: string; domain?: string; logger?: LarkWizardLogger }) => Promise<LarkProvisioningResult>;
 }
 
 export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogger = console, options: LarkWizardOptions = {}): Promise<string> {
@@ -73,6 +75,20 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
     logger.log(`Operator open_id: ${result.user_info.open_id}`);
   }
   logger.log(`Saved credentials to ${envPath}`);
+  try {
+    const provisioning = await (options.provisionApp ?? provisionLarkApp)({
+      appId: result.client_id,
+      appSecret: result.client_secret,
+      ...(domain ? { domain } : {}),
+      logger,
+    });
+    for (const line of formatLarkProvisioningResult(provisioning)) {
+      logger.log(line);
+    }
+  } catch (error) {
+    logger.log(`Lark permission provisioning check failed: ${error instanceof Error ? error.message : String(error)}`);
+    logger.log("The app credentials were saved; run `node dist/src/index.js lark doctor` and check the Feishu developer console if callbacks or media fail.");
+  }
   logger.log("Run: node dist/src/index.js lark doctor");
   logger.log("Run: node dist/src/index.js lark run");
 

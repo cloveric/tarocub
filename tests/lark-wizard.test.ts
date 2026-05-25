@@ -13,6 +13,20 @@ describe("runLarkWizard", () => {
     const stateDir = path.join(tempDir, "lark-state");
     const messages: string[] = [];
     const qrUrls: string[] = [];
+    const provisionApp = vi.fn(async () => ({
+      grantedScopes: ["im:message:send_as_bot"],
+      missingScopes: [],
+      unauthorizedScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+      applied: false,
+      patchedSubscriptions: false,
+    }));
     const registerAppImpl = vi.fn(async (options: {
       onQRCodeReady: (info: { url: string; expireIn: number }) => void;
       onStatusChange?: (info: { status: "polling" | "slow_down" | "domain_switched" }) => void;
@@ -36,6 +50,7 @@ describe("runLarkWizard", () => {
         {
           registerAppImpl,
           generateQRCode: (url) => qrUrls.push(url),
+          provisionApp,
         },
       );
 
@@ -45,6 +60,11 @@ describe("runLarkWizard", () => {
         domain: "accounts.feishu.cn",
         source: "cc-telegram-bridge",
       }));
+      expect(provisionApp).toHaveBeenCalledWith(expect.objectContaining({
+        appId: "cli_personal",
+        appSecret: "secret-personal",
+        domain: "feishu",
+      }));
       const saved = await readFile(envPath, "utf8");
       expect(saved).toContain('LARK_APP_ID="cli_personal"');
       expect(saved).toContain('LARK_APP_SECRET="secret-personal"');
@@ -52,6 +72,7 @@ describe("runLarkWizard", () => {
       expect(saved).toContain(`CCTB_LARK_STATE_DIR="${stateDir}"`);
       expect(saved).toContain('CODEX_TELEGRAM_INSTANCE="lark"');
       expect(messages.join("\n")).toContain("Operator open_id: ou_operator");
+      expect(messages.join("\n")).toContain("Lark required scopes: ok");
       expect(messages.join("\n")).not.toContain("secret-personal");
     } finally {
       await removeTempRoot(tempDir);

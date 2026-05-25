@@ -66,7 +66,7 @@ node dist/src/index.js lark doctor
 node dist/src/index.js lark run
 ```
 
-`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, and writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`). Environment variables still win if you prefer manual credentials:
+`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes, and Feishu Docs scopes. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. Environment variables still win if you prefer manual credentials:
 
 ```bash
 export LARK_APP_ID="cli_xxx"
@@ -132,6 +132,7 @@ For raw `lark.card` payloads, bridge decorates ordinary button elements with Car
 
 ## Release Highlights
 
+- **v4.6.44** — teaches `lark wizard` to provision-check the app after QR registration: it verifies required scopes, requests admin approval for configured-but-unauthorized scopes, patches websocket event/callback subscriptions when app-management permission is available, and otherwise reports the missing management scope.
 - **v4.6.43** — fixes Feishu/Lark wizard domain handling so saved `LARK_DOMAIN=feishu|lark` values map to the official SDK domains at runtime and to the correct account registration hosts during QR setup.
 - **v4.6.42** — adds `lark wizard`, a QR-code PersonalAgent registration flow that saves Feishu/Lark app credentials to `lark.env` and lets `lark status/doctor/run` auto-load them.
 - **v4.6.41** — aligns Feishu/Lark interactive cards with Card 2.0 callback `behaviors`, access-checks card operators before stop/approval/choice actions, and splits Lark chat/user numeric ID maps to reduce collision blast radius.
