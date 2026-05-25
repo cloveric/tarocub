@@ -57,6 +57,18 @@ export class RuntimeStateStore {
     });
   }
 
+  async markTurnActivity(now = new Date()): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const state = await this.load();
+      if ((state.activeTurnCount ?? 0) <= 0) {
+        return;
+      }
+
+      state.activeTurnUpdatedAt = now.toISOString();
+      await this.store.write(state);
+    });
+  }
+
   async markTurnCompleted(now = new Date()): Promise<void> {
     return this.enqueueWrite(async () => {
       const state = await this.load();

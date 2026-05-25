@@ -184,6 +184,43 @@ describe("telegram turn bookkeeping", () => {
     }
   });
 
+  it("records budget blocks on the active bridge channel", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-turn-bookkeeping-"));
+    await mkdir(root, { recursive: true });
+    const context = {
+      ...createAuditContext(),
+      channel: "lark" as const,
+    };
+    const normalized = createNormalizedMessage();
+
+    try {
+      await writeFile(
+        path.join(root, "usage.json"),
+        JSON.stringify({
+          totalInputTokens: 10,
+          totalOutputTokens: 5,
+          totalCachedTokens: 0,
+          totalCostUsd: 0.75,
+          requestCount: 2,
+          lastUpdatedAt: "2026-04-17T00:00:00.000Z",
+        }),
+        "utf8",
+      );
+
+      const blocked = await maybeReplyWithBudgetExhausted(root, 0.5, "en", context, normalized);
+
+      expect(blocked).toBe(true);
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "budget.blocked",
+        channel: "lark",
+        detail: "budget exhausted",
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("records threshold-reached audit events after usage is written", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-turn-bookkeeping-"));
     const context = createAuditContext();
@@ -207,6 +244,33 @@ describe("telegram turn bookkeeping", () => {
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "budget.threshold_reached",
         channel: "telegram",
+        detail: "budget threshold reached: $0.7500 / $0.50",
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("records budget threshold events on the active bridge channel", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-turn-bookkeeping-"));
+    const context = {
+      ...createAuditContext(),
+      channel: "lark" as const,
+    };
+    const normalized = createNormalizedMessage();
+
+    try {
+      await recordTurnUsageAndBudgetAudit(root, 0.5, context, normalized, {
+        inputTokens: 11,
+        outputTokens: 7,
+        cachedTokens: 2,
+        costUsd: 0.75,
+      });
+
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "budget.threshold_reached",
+        channel: "lark",
         detail: "budget threshold reached: $0.7500 / $0.50",
       }));
     } finally {

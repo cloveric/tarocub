@@ -110,6 +110,8 @@ export interface EngineCommandBridge {
     chatId: number;
     userId: number;
     chatType: string;
+    messageThreadId?: number;
+    conversationKey?: string;
     locale: Locale;
     text: string;
     files: string[];
@@ -230,6 +232,8 @@ export async function handleLocalEngineTelegramCommand(input: {
         chatId: normalized.chatId,
         userId: normalized.userId,
         chatType: normalized.chatType,
+        messageThreadId: normalized.messageThreadId,
+        conversationKey: normalized.conversationKey,
         locale,
         text: "/compact",
         files: [],
@@ -289,6 +293,8 @@ export async function handleLocalEngineTelegramCommand(input: {
       chatId: normalized.chatId,
       userId: normalized.userId,
       chatType: normalized.chatType,
+      messageThreadId: normalized.messageThreadId,
+      conversationKey: normalized.conversationKey,
       locale,
       text: "/ultrareview",
       files: [],
@@ -329,6 +335,8 @@ export async function handleLocalEngineTelegramCommand(input: {
       chatId: normalized.chatId,
       userId: normalized.userId,
       chatType: normalized.chatType,
+      messageThreadId: normalized.messageThreadId,
+      conversationKey: normalized.conversationKey,
       locale,
       text: "/context",
       files: [],

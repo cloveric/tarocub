@@ -7,7 +7,7 @@ import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 type GoalAction =
   | { kind: "status" }
   | { kind: "clear" }
-  | { kind: "set"; objective: string; tokenBudget: number | null }
+  | { kind: "set"; objective: string; tokenBudget: number | null; explicitUnbounded: boolean }
   | { kind: "invalid"; reason: "invalid_budget" | "missing_objective" };
 
 function parseTokenBudget(value: string): number | null {
@@ -27,6 +27,15 @@ function parseTokenBudget(value: string): number | null {
 }
 
 function parseSetGoal(rest: string): Extract<GoalAction, { kind: "set" | "invalid" }> {
+  const unboundedMatch = rest.match(/^(?:--unbounded|--no-budget)(?:\s+([\s\S]+))?$/i);
+  if (/^(?:--unbounded|--no-budget)(?:$|\s+)/i.test(rest)) {
+    const objective = unboundedMatch?.[1]?.trim() ?? "";
+    if (!objective) {
+      return { kind: "invalid", reason: "missing_objective" };
+    }
+    return { kind: "set", objective, tokenBudget: null, explicitUnbounded: true };
+  }
+
   const budgetMatch = rest.match(/^(?:--budget|-b)(?:=|\s+)(\S+)(?:\s+([\s\S]+))?$/i);
   if (/^(?:--budget|-b)(?:$|=|\s+)/i.test(rest)) {
     const tokenBudget = budgetMatch ? parseTokenBudget(budgetMatch[1] ?? "") : null;
@@ -37,10 +46,10 @@ function parseSetGoal(rest: string): Extract<GoalAction, { kind: "set" | "invali
     if (!objective) {
       return { kind: "invalid", reason: "missing_objective" };
     }
-    return { kind: "set", objective, tokenBudget };
+    return { kind: "set", objective, tokenBudget, explicitUnbounded: false };
   }
 
-  return { kind: "set", objective: rest, tokenBudget: null };
+  return { kind: "set", objective: rest, tokenBudget: null, explicitUnbounded: false };
 }
 
 function parseGoalCommand(text: string): GoalAction | null {
@@ -91,8 +100,8 @@ function toNativeGoalCommandTextForAction(
 function renderInvalidGoalCommand(reason: "invalid_budget" | "missing_objective", locale: Locale): string {
   if (reason === "missing_objective") {
     return locale === "zh"
-      ? "请在 token 预算后写目标，例如：/goal --budget 50000 写发布说明。"
-      : "Add a goal after the token budget, for example: /goal --budget 50000 write release notes.";
+      ? "请写目标，例如：/goal 写发布说明；如需限额，用 /goal --budget 50000 写发布说明。"
+      : "Add a goal, for example: /goal write release notes; use /goal --budget 50000 write release notes when you want a limit.";
   }
   return locale === "zh"
     ? "无效的 /goal token 预算。用法：--budget 50000 或 -b 50k。"
@@ -156,11 +165,12 @@ export async function handleGoalTelegramCommand(input: {
   }
 
   const { locale, normalized } = input;
+  if (action.kind === "invalid") {
+    await input.context.api.sendMessage(normalized.chatId, renderInvalidGoalCommand(action.reason, locale));
+    return true;
+  }
+
   if (input.cfg.engine === "claude" || input.cfg.engine === "antigravity") {
-    if (action.kind === "invalid") {
-      await input.context.api.sendMessage(normalized.chatId, renderInvalidGoalCommand(action.reason, locale));
-      return true;
-    }
     // Claude Code and Antigravity implement /goal as native slash commands.
     // Let them pass through the ordinary engine path instead of trying to
     // emulate Codex's structured goal API here. Strip Telegram's optional
@@ -179,11 +189,6 @@ export async function handleGoalTelegramCommand(input: {
         ? "当前引擎暂不支持 /goal。请切换到 Codex 或 Claude。"
         : "The current engine does not support /goal yet. Switch to Codex or Claude.",
     );
-    return true;
-  }
-
-  if (action.kind === "invalid") {
-    await input.context.api.sendMessage(normalized.chatId, renderInvalidGoalCommand(action.reason, locale));
     return true;
   }
 

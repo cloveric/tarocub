@@ -42,6 +42,7 @@ describe("provisionLarkApp", () => {
     expect(result.missingEvents).toEqual([]);
     expect(result.missingOptionalEvents).toEqual([]);
     expect(result.patchedSubscriptions).toBe(true);
+    expect(formatLarkProvisioningResult(result).join("\n")).toContain("Lark doc-comment event: ok");
   });
 
   it("trusts a successful subscription patch when app get omits event subscriptions", async () => {

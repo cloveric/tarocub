@@ -388,14 +388,14 @@ describe("dispatchAuthorizedTelegramMessage", () => {
   });
 
   it("handles /goal before ordinary message preparation", async () => {
-    const normalized = createNormalizedMessage("/goal ship this");
+    const normalized = createNormalizedMessage("/goal -b 50k ship this");
     const sendMessage = vi.fn();
     const setThreadGoal = vi.fn().mockResolvedValue({
       goal: {
         threadId: "thread-1",
         objective: "ship this",
         status: "active",
-        tokenBudget: null,
+        tokenBudget: 50_000,
         tokensUsed: 0,
         timeUsedSeconds: 0,
         createdAt: 1,
@@ -449,14 +449,14 @@ describe("dispatchAuthorizedTelegramMessage", () => {
       } as never,
     });
 
-    expect(setThreadGoal).toHaveBeenCalledWith(expect.objectContaining({ objective: "ship this" }));
+    expect(setThreadGoal).toHaveBeenCalledWith(expect.objectContaining({ objective: "ship this", tokenBudget: 50_000 }));
     expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Goal set"));
     expect(prepareTelegramMessageInput).not.toHaveBeenCalled();
     expect(executeWorkflowAwareTelegramTurn).not.toHaveBeenCalled();
   });
 
   it("passes Claude /goal through to the ordinary engine turn", async () => {
-    const normalized = createNormalizedMessage("/goal@cloveric17bot reply exactly OK when the task is done");
+    const normalized = createNormalizedMessage("/goal@cloveric17bot --unbounded reply exactly OK when the task is done");
     const prepareTelegramMessageInput = vi.fn().mockImplementation(async (input: { normalized: NormalizedTelegramMessage }) => ({
       kind: "ready",
       text: input.normalized.text,

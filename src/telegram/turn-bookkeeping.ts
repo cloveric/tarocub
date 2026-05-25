@@ -11,6 +11,7 @@ import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 export interface TelegramTurnContext {
   api: Pick<TelegramApi, "sendMessage">;
   instanceName?: string;
+  channel?: "telegram" | "lark";
   updateId?: number;
 }
 
@@ -19,7 +20,7 @@ export async function appendUpdateHandleAuditEventBestEffort(
   context: TelegramTurnContext,
   normalized: NormalizedTelegramMessage,
   input: {
-    outcome: "success" | "error" | "reply" | "duplicate" | "invalid" | "empty";
+    outcome: "success" | "error" | "reply" | "duplicate" | "invalid" | "empty" | "stopped";
     detail?: string;
     metadata?: Record<string, unknown>;
   },
@@ -46,7 +47,7 @@ export async function appendUpdateHandleAuditEventBestEffort(
   await appendTimelineEventBestEffort(stateDir, {
     type: typeof input.metadata?.command === "string" ? "command.handled" : "turn.completed",
     instanceName: context.instanceName,
-    channel: "telegram",
+    channel: context.channel ?? "telegram",
     chatId: normalized.chatId,
     ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,
@@ -122,7 +123,7 @@ export async function maybeReplyWithBudgetExhausted(
   await appendTimelineEventBestEffort(stateDir, {
     type: "budget.blocked",
     instanceName: context.instanceName,
-    channel: "telegram",
+    channel: context.channel ?? "telegram",
     chatId: normalized.chatId,
     ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,
@@ -154,7 +155,7 @@ export async function recordTurnUsageAndBudgetAudit(
   await appendTimelineEventBestEffort(stateDir, {
     type: "budget.threshold_reached",
     instanceName: context.instanceName,
-    channel: "telegram",
+    channel: context.channel ?? "telegram",
     chatId: normalized.chatId,
     ...getTelegramConversationLogScope(normalized),
     userId: normalized.userId,

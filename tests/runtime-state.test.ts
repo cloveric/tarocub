@@ -72,6 +72,24 @@ describe("RuntimeStateStore", () => {
     }
   });
 
+  it("refreshes active turn activity without changing the original start time", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new RuntimeStateStore(path.join(tempDir, "runtime-state.json"));
+
+    try {
+      await store.markTurnStarted(new Date("2026-04-26T22:00:00.000Z"));
+      await store.markTurnActivity(new Date("2026-04-26T22:05:00.000Z"));
+
+      await expect(store.load()).resolves.toMatchObject({
+        activeTurnCount: 1,
+        activeTurnStartedAt: "2026-04-26T22:00:00.000Z",
+        activeTurnUpdatedAt: "2026-04-26T22:05:00.000Z",
+      });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("resets stale active turns without losing the handled update offset", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new RuntimeStateStore(path.join(tempDir, "runtime-state.json"));

@@ -15,6 +15,7 @@ export const CronJobIdSchema = z.string().regex(/^[a-f0-9]{8}$/, "cron id must b
 export const CronSessionModeSchema = z.enum(["reuse", "new_per_run"]);
 export const CronDeliveryModeSchema = z.enum(["agent", "notify"]);
 export const CronLocaleSchema = z.enum(["zh", "en"]);
+export const CronChannelSchema = z.enum(["telegram", "lark"]);
 
 export const CronRunHistoryEntrySchema = z.object({
   ranAt: IsoTimestampSchema,
@@ -24,10 +25,15 @@ export const CronRunHistoryEntrySchema = z.object({
 
 export const CronJobRecordSchema = z.object({
   id: CronJobIdSchema,
+  channel: CronChannelSchema.default("telegram"),
   chatId: z.number().int(),
   messageThreadId: z.number().int().optional(),
   userId: z.number().int(),
   chatType: z.string().min(1).default("private"),
+  conversationKey: z.string().min(1).max(300).optional(),
+  larkChatId: z.string().min(1).max(200).optional(),
+  larkThreadId: z.string().min(1).max(200).optional(),
+  larkMessageId: z.string().min(1).max(200).optional(),
   locale: CronLocaleSchema.optional(),
   cronExpr: z.string().min(1).max(120),
   timezone: TimezoneSchema.optional(),
@@ -61,3 +67,4 @@ export type CronJobRecord = z.output<typeof CronJobRecordSchema>;
 export type CronSessionMode = z.output<typeof CronSessionModeSchema>;
 export type CronDeliveryMode = z.output<typeof CronDeliveryModeSchema>;
 export type CronLocale = z.output<typeof CronLocaleSchema>;
+export type CronChannel = z.output<typeof CronChannelSchema>;

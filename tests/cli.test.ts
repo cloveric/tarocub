@@ -197,6 +197,74 @@ describe("runCli", () => {
     }
   });
 
+  it("restarts the managed Lark service through the lark service command", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+
+    try {
+      const handled = await runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir,
+        logPath: path.join(stateDir, "lark-service.log"),
+      }));
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir,
+        logPath: path.join(stateDir, "lark-service.log"),
+        entrypoint: expect.stringContaining(path.join("dist", "src", "index.js")),
+      }));
+      expect(waitUntilRunning).toHaveBeenCalledWith(expect.objectContaining({ stateDir }));
+      expect(messages.join("\n")).toContain("Stopped Lark service.");
+      expect(messages.join("\n")).toContain("Started Lark service.");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("prints managed Lark service logs through the lark service command", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const readLogs = vi.fn(async () => "first\nsecond");
+
+    try {
+      const handled = await runCli(["lark", "service", "logs", "5"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { readLogs },
+      });
+
+      expect(handled).toBe(true);
+      expect(readLogs).toHaveBeenCalledWith({
+        stateDir,
+        logPath: path.join(stateDir, "lark-service.log"),
+        tail: 5,
+      });
+      expect(messages).toEqual(["first\nsecond"]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("diagnoses Lark channel configuration without printing secrets", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
@@ -276,6 +344,66 @@ describe("runCli", () => {
       expect(output).toContain("Lark app provisioning");
       expect(output).toContain("Lark websocket event/callback subscriptions updated.");
       expect(output).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("manages Lark access in the Lark state directory", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+
+    try {
+      const store = new AccessStore(path.join(stateDir, "access.json"));
+      const issued = await store.issuePairingCode({
+        telegramUserId: 42,
+        telegramChatId: 84,
+        now: new Date(),
+      });
+
+      await runCli(["lark", "access", "pair", issued.code], {
+        env: {
+          USERPROFILE: tempDir,
+          CODEX_TELEGRAM_INSTANCE: "bot6",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+      await runCli(["lark", "access", "policy", "allowlist"], {
+        env: {
+          USERPROFILE: tempDir,
+          CODEX_TELEGRAM_INSTANCE: "bot6",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+      await runCli(["lark", "access", "allow", "84"], {
+        env: {
+          USERPROFILE: tempDir,
+          CODEX_TELEGRAM_INSTANCE: "bot6",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+      await runCli(["lark", "access", "status"], {
+        env: {
+          USERPROFILE: tempDir,
+          CODEX_TELEGRAM_INSTANCE: "bot6",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect((await store.getStatus()).pairedUsers).toBe(1);
+      expect(await readFile(path.join(stateDir, "access.json"), "utf8")).toContain("84");
+      await expect(readFile(path.join(stateDir, "agent.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(messages).toEqual([
+        'Redeemed pairing code for instance "lark" and chat 84.',
+        'Updated access policy for instance "lark" to "allowlist".',
+        'Allowed chat 84 for instance "lark".',
+        "Instance: lark\nPolicy: allowlist\nMulti-chat: off\nPaired users: 1\nAllowlist: 84\nPending pairs: none",
+      ]);
     } finally {
       await removeTempRoot(tempDir);
     }
@@ -1384,6 +1512,73 @@ describe("runCli", () => {
       expect(messages).toEqual([
         '{"timestamp":"2026-04-08T00:00:00.000Z","type":"turn.completed","channel":"telegram","outcome":"success","chatId":1}',
       ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("reads Lark audit and timeline from the Lark state directory", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "audit.log.jsonl"),
+        [
+          '{"timestamp":"2026-05-25T00:00:00.000Z","type":"lark.one","outcome":"success"}',
+          '{"timestamp":"2026-05-25T00:00:01.000Z","type":"lark.two","outcome":"success"}',
+        ].join("\n") + "\n",
+        "utf8",
+      );
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        [
+          '{"timestamp":"2026-05-25T00:00:00.000Z","type":"turn.completed","channel":"telegram","outcome":"success"}',
+          '{"timestamp":"2026-05-25T00:00:01.000Z","type":"turn.completed","channel":"lark","outcome":"success"}',
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      await runCli(["lark", "audit", "1"], {
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+      await runCli(["lark", "timeline"], {
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(messages).toEqual([
+        '{"timestamp":"2026-05-25T00:00:01.000Z","type":"lark.two","outcome":"success"}',
+        '{"timestamp":"2026-05-25T00:00:01.000Z","type":"turn.completed","channel":"lark","outcome":"success"}',
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("generates a Lark dashboard from the Lark state directory", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const dashboardPath = path.join(stateDir, "dashboard.html");
+    const generateDashboard = vi.fn(async () => dashboardPath);
+
+    try {
+      const handled = await runCli(["lark", "dashboard"], {
+        env: { USERPROFILE: tempDir, CODEX_TELEGRAM_INSTANCE: "bot6", CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+        dashboardDeps: { generateDashboard },
+      });
+
+      expect(handled).toBe(true);
+      expect(generateDashboard).toHaveBeenCalledWith(expect.objectContaining({
+        CODEX_TELEGRAM_STATE_DIR: stateDir,
+        CODEX_TELEGRAM_INSTANCE: "lark",
+      }));
+      expect(messages).toEqual([`Dashboard generated: ${dashboardPath}`]);
     } finally {
       await removeTempRoot(tempDir);
     }

@@ -57,10 +57,10 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function waitForCondition(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+async function waitForCondition(condition: () => boolean | Promise<boolean>, timeoutMs = 1_000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (condition()) {
+    if (await condition()) {
       return;
     }
 
@@ -957,6 +957,81 @@ describe("polling helpers", () => {
       await expect(readFile(runtimeStatePath, "utf8").then(JSON.parse)).resolves.toMatchObject({
         lastHandledUpdateId: 11,
       });
+    } finally {
+      release.resolve();
+      await removeTempRoot(root);
+    }
+  });
+
+  it("refreshes runtime activity when an in-flight engine turn emits stream events", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const runtimeStatePath = path.join(root, "runtime-state.json");
+    const eventSent = createDeferred<void>();
+    const release = createDeferred<void>();
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ onEngineEvent }: { onEngineEvent?: (event: { type: "session" }) => Promise<void> | void }) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await onEngineEvent?.({ type: "session" });
+        eventSent.resolve();
+        await release.promise;
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      await mkdir(root, { recursive: true });
+      await writeFile(runtimeStatePath, JSON.stringify({
+        schemaVersion: 1,
+        lastHandledUpdateId: 9,
+        activeTurnCount: 0,
+      }), "utf8");
+
+      const run = processTelegramUpdates(
+        [
+          {
+            update_id: 10,
+            message: {
+              chat: { id: 123, type: "private" },
+              from: { id: 456 },
+              text: "long task",
+            },
+          },
+        ],
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+        },
+        logger,
+      );
+
+      await eventSent.promise;
+      await waitForCondition(async () => {
+        const state = JSON.parse(await readFile(runtimeStatePath, "utf8")) as {
+          activeTurnStartedAt?: string;
+          activeTurnUpdatedAt?: string;
+        };
+        return state.activeTurnUpdatedAt !== state.activeTurnStartedAt;
+      });
+      const state = JSON.parse(await readFile(runtimeStatePath, "utf8")) as {
+        activeTurnStartedAt?: string;
+        activeTurnUpdatedAt?: string;
+      };
+      expect(state.activeTurnStartedAt).toBeDefined();
+      expect(state.activeTurnUpdatedAt).toBeDefined();
+      expect(state.activeTurnUpdatedAt).not.toBe(state.activeTurnStartedAt);
+
+      release.resolve();
+      await run;
     } finally {
       release.resolve();
       await removeTempRoot(root);
@@ -2577,6 +2652,63 @@ describe("polling helpers", () => {
 
     expect(callCount).toBe(1);
     expect(api.sendMessage).toHaveBeenCalledWith(123, "Current task stopped.");
+  });
+
+  it("records a stopped completion when /stop aborts an in-flight engine turn", async () => {
+    const logger = { error: vi.fn() };
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+    };
+    const started = createDeferred<void>();
+    const aborted = createDeferred<void>();
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+        started.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          abortSignal?.addEventListener("abort", () => {
+            aborted.resolve();
+            reject(new Error("Task was stopped by user"));
+          }, { once: true });
+        });
+        return { text: "unreachable" };
+      }),
+    };
+    const chatQueue = new ChatQueue();
+
+    try {
+      const firstRun = processTelegramUpdates(
+        [{ update_id: 3, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "first" } }],
+        { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+        logger,
+      );
+      await started.promise;
+
+      const stopRun = processTelegramUpdates(
+        [{ update_id: 4, message: { chat: { id: 123, type: "private" }, from: { id: 456 }, text: "/stop" } }],
+        { api: api as never, bridge: bridge as never, inboxDir, chatQueue },
+        logger,
+      );
+
+      await aborted.promise;
+      await Promise.all([firstRun, stopRun]);
+
+      const events = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        updateId: 3,
+        outcome: "stopped",
+        detail: "Task was stopped by user",
+      }));
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Current task stopped.");
+    } finally {
+      await removeTempRoot(root);
+    }
   });
 
   it("does not reply twice when the same /stop update is fetched while the command is still in flight", async () => {

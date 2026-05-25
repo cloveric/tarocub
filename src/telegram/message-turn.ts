@@ -103,6 +103,7 @@ export interface WorkflowAwareTurnContext {
   abortSignal?: AbortSignal;
   sessionIdOverride?: string;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  onTurnActivity?: () => void | Promise<void>;
   instanceName?: string;
   updateId?: number;
 }
@@ -518,6 +519,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     ];
   };
   const handleEngineEvent = (event: EngineStreamEvent): void => {
+    void Promise.resolve(context.onTurnActivity?.()).catch(() => {});
     void appendTimelineEventBestEffort(stateDir, {
       type: "engine.event",
       instanceName: context.instanceName,

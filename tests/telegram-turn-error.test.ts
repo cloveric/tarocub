@@ -32,6 +32,7 @@ describe("maybeRetryTelegramTurnError", () => {
     try {
       const handled = await maybeRetryTelegramTurnError({
         stateDir: root,
+        startedAt: Date.now(),
         normalized,
         classifiedError: new Error("auth expired"),
         failureCategory: "auth",
@@ -73,6 +74,7 @@ describe("maybeRetryTelegramTurnError", () => {
     try {
       const handled = await maybeRetryTelegramTurnError({
         stateDir: root,
+        startedAt: Date.now(),
         normalized,
         classifiedError: new Error("no such session"),
         failureCategory: "session-state",
@@ -118,6 +120,7 @@ describe("maybeRetryTelegramTurnError", () => {
     try {
       const handled = await maybeRetryTelegramTurnError({
         stateDir: root,
+        startedAt: Date.now(),
         normalized,
         classifiedError: new Error("no such session"),
         failureCategory: "session-state",

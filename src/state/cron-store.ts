@@ -8,18 +8,24 @@ import {
   CronJobRecordSchema,
   CronStoreStateSchema,
   type CronJobRecord,
+  type CronChannel,
   type CronDeliveryMode,
   type CronLocale,
   type CronSessionMode,
 } from "./cron-store-schema.js";
 
-export type { CronJobRecord, CronDeliveryMode, CronLocale, CronSessionMode } from "./cron-store-schema.js";
+export type { CronJobRecord, CronChannel, CronDeliveryMode, CronLocale, CronSessionMode } from "./cron-store-schema.js";
 
 export interface CronJobInput {
+  channel?: CronChannel;
   chatId: number;
   messageThreadId?: number;
   userId: number;
   chatType?: string;
+  conversationKey?: string;
+  larkChatId?: string;
+  larkThreadId?: string;
+  larkMessageId?: string;
   locale?: CronLocale;
   cronExpr: string;
   timezone?: string;
@@ -37,10 +43,15 @@ export interface CronJobInput {
 }
 
 export interface CronJobUpdate {
+  channel?: CronChannel;
   cronExpr?: string;
   timezone?: string;
   prompt?: string;
   description?: string | null;
+  conversationKey?: string | null;
+  larkChatId?: string | null;
+  larkThreadId?: string | null;
+  larkMessageId?: string | null;
   enabled?: boolean;
   runOnce?: boolean;
   targetAt?: string | null;
@@ -144,10 +155,15 @@ export class CronStore {
       const timestamp = nowIso();
       const record = CronJobRecordSchema.parse({
         id,
+        channel: input.channel ?? "telegram",
         chatId: input.chatId,
         messageThreadId: input.messageThreadId,
         userId: input.userId,
         chatType: input.chatType ?? "private",
+        conversationKey: input.conversationKey,
+        larkChatId: input.larkChatId,
+        larkThreadId: input.larkThreadId,
+        larkMessageId: input.larkMessageId,
         locale: input.locale,
         cronExpr: input.cronExpr,
         timezone: normalizeCronTimezone(input.timezone) ?? this.defaultTimezone,
@@ -198,6 +214,7 @@ export class CronStore {
       }
       const merged: CronJobRecord = {
         ...existing,
+        channel: patch.channel ?? existing.channel,
         cronExpr: patch.cronExpr ?? existing.cronExpr,
         timezone: patch.timezone === undefined
           ? existing.timezone
@@ -207,6 +224,22 @@ export class CronStore {
           patch.description === null
             ? undefined
             : patch.description ?? existing.description,
+        conversationKey:
+          patch.conversationKey === null
+            ? undefined
+            : patch.conversationKey ?? existing.conversationKey,
+        larkChatId:
+          patch.larkChatId === null
+            ? undefined
+            : patch.larkChatId ?? existing.larkChatId,
+        larkThreadId:
+          patch.larkThreadId === null
+            ? undefined
+            : patch.larkThreadId ?? existing.larkThreadId,
+        larkMessageId:
+          patch.larkMessageId === null
+            ? undefined
+            : patch.larkMessageId ?? existing.larkMessageId,
         enabled: nextEnabled,
         runOnce: patch.runOnce ?? existing.runOnce,
         targetAt:

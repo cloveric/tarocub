@@ -1,5 +1,5 @@
 import type { TelegramApi } from "./api.js";
-import type { CronJobRecord, CronSessionMode } from "../state/cron-store-schema.js";
+import type { CronChannel, CronJobRecord, CronSessionMode } from "../state/cron-store-schema.js";
 import type { CronStore } from "../state/cron-store.js";
 import type { CronScheduler } from "../runtime/cron-scheduler.js";
 import { validateCronExpression } from "../runtime/cron-scheduler.js";
@@ -12,9 +12,13 @@ export interface CronCommandContext {
   scheduler: CronScheduler;
   chatId: number;
   userId: number;
+  channel?: CronChannel;
   chatType?: string;
   messageThreadId?: number;
   conversationKey?: string;
+  larkChatId?: string;
+  larkThreadId?: string;
+  larkMessageId?: string;
   locale: CronLocale;
 }
 
@@ -234,10 +238,15 @@ async function handleAdd(rest: string, context: CronCommandContext): Promise<voi
   let record: CronJobRecord;
   try {
     record = await context.store.add({
+      channel: context.channel ?? "telegram",
       chatId: context.chatId,
       messageThreadId: context.messageThreadId,
       userId: context.userId,
       chatType: context.chatType ?? "private",
+      conversationKey: context.conversationKey,
+      larkChatId: context.larkChatId,
+      larkThreadId: context.larkThreadId,
+      larkMessageId: context.larkMessageId,
       locale: context.locale,
       cronExpr,
       prompt,

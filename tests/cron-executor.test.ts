@@ -8,6 +8,7 @@ function makeJob(overrides: Partial<CronJobRecord> = {}): CronJobRecord {
   const now = new Date().toISOString();
   return {
     id: "abcd1234",
+    channel: "telegram",
     chatId: 100,
     userId: 200,
     chatType: "private",
@@ -37,6 +38,23 @@ function makeBridge(overrides: Record<string, unknown> = {}) {
 }
 
 describe("buildCronExecutor", () => {
+  it("skips non-Telegram jobs before access checks or delivery", async () => {
+    const handler = vi.fn().mockResolvedValue(undefined);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
+    const bridge = makeBridge();
+    const executor = buildCronExecutor({ api: api as never, bridge, inboxDir: "/tmp/inbox", handler });
+
+    await executor(makeJob({
+      channel: "lark",
+      larkChatId: "oc_lark",
+      deliveryMode: "notify",
+    }));
+
+    expect((bridge as { checkAccess: ReturnType<typeof vi.fn> }).checkAccess).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("invokes the handler with a synthetic NormalizedTelegramMessage", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const api = { sendMessage: vi.fn() } as never;
@@ -301,6 +319,14 @@ describe("buildCronExecutor", () => {
 });
 
 describe("sendCronFailureNotification", () => {
+  it("does not send Telegram failure notifications for non-Telegram jobs", async () => {
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
+
+    await sendCronFailureNotification(api, makeJob({ channel: "lark", larkChatId: "oc_lark" }), "boom");
+
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("sends a localized failure message to the job chat", async () => {
     const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }) };
 

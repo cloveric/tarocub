@@ -110,6 +110,7 @@ export interface TelegramDeliveryContext {
   runQueuedBridgeTurn?<T>(conversationKey: string, job: () => Promise<T>): Promise<T>;
   sessionIdOverride?: string;
   onAuthRetry?: () => Promise<void>;
+  onTurnActivity?: () => void | Promise<void>;
   _authRetried?: boolean;
   _staleSessionRetried?: boolean;
 }
@@ -295,6 +296,7 @@ export async function handleNormalizedTelegramMessage(
     const failureCategory = classifyFailure(error);
     if (await maybeRetryTelegramTurnError({
       stateDir,
+      startedAt,
       normalized,
       classifiedError,
       failureCategory,

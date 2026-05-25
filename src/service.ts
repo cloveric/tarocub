@@ -876,6 +876,9 @@ export async function runQueuedTelegramTurn(
         await handleNormalizedTelegramMessage(normalized, {
           ...context,
           abortSignal: taskController.signal,
+          onTurnActivity: async () => {
+            await getRuntimeStateStore(context.inboxDir).markTurnActivity();
+          },
           runQueuedBridgeTurn: context.runQueuedBridgeTurn ?? (async (conversationKey, job) => {
             if (chatQueue.isBusy(conversationKey)) {
               throw new Error(`target conversation is busy: ${conversationKey}`);
@@ -1484,6 +1487,9 @@ export async function processTelegramUpdates(
             ...context,
             updateId,
             abortSignal: taskController.signal,
+            onTurnActivity: async () => {
+              await runtimeStateStore.markTurnActivity();
+            },
             runQueuedBridgeTurn: context.runQueuedBridgeTurn ?? (async (conversationKey, job) => {
               if (chatQueue.isBusy(conversationKey)) {
                 throw new Error(`target conversation is busy: ${conversationKey}`);

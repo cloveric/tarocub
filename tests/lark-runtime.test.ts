@@ -65,6 +65,50 @@ describe("runLarkService", () => {
     }
   });
 
+  it("uses the Lark instance label even when launched from a Telegram bot environment", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-instance-"));
+    const abortController = new AbortController();
+    const channel = {
+      on: vi.fn(() => () => undefined),
+      connect: vi.fn(async () => {
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+    const createBridge = vi.fn(async () => ({
+      stateDir,
+      bridge: {
+        handleAuthorizedMessage: vi.fn(),
+      },
+    }));
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        CODEX_TELEGRAM_INSTANCE: "bot6",
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge,
+        signal: abortController.signal,
+        logger: silentLogger(),
+      });
+
+      expect(createBridge).toHaveBeenCalledWith(expect.objectContaining({
+        CODEX_TELEGRAM_STATE_DIR: stateDir,
+        CODEX_TELEGRAM_INSTANCE: "lark",
+      }), expect.any(Object));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("maps short Lark domain names to SDK domain constants", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-domain-"));
     const abortController = new AbortController();

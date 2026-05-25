@@ -97,6 +97,7 @@ export interface AuthorizedTelegramDispatchContext {
   runQueuedBridgeTurn?<T>(conversationKey: string, job: () => Promise<T>): Promise<T>;
   sessionIdOverride?: string;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  onTurnActivity?: () => void | Promise<void>;
   instanceName?: string;
   updateId?: number;
 }

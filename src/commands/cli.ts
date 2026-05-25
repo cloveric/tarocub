@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { readFile, readdir, rename, unlink, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { resolveInstanceStateDir, type EnvSource } from "../config.js";
@@ -62,9 +63,32 @@ import { runLarkWizard } from "../lark/wizard.js";
 import { formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "../lark/provisioning.js";
 
 const execFile = promisify(execFileCallback);
+const LARK_SERVICE_TMUX_SESSION = "cctb-lark-service";
 
 export interface CliLogger {
   log: (message: string) => void;
+}
+
+export interface LarkServiceCommandInput {
+  env: LarkRuntimeEnv;
+  stateDir: string;
+  logPath: string;
+  entrypoint: string;
+  cwd: string;
+}
+
+export interface LarkServiceCommandDeps {
+  start?: (input: LarkServiceCommandInput) => Promise<"started" | "already_running">;
+  stop?: (input: LarkServiceCommandInput) => Promise<"stopped" | "not_running">;
+  waitUntilRunning?: (input: LarkServiceCommandInput) => Promise<void>;
+  readLogs?: (input: { stateDir: string; logPath: string; tail: number }) => Promise<string>;
+}
+
+interface DashboardCommandEnv extends Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "CODEX_TELEGRAM_INSTANCE"> {}
+
+export interface DashboardCommandDeps {
+  generateDashboard?: (env: DashboardCommandEnv) => Promise<string>;
+  serveDashboard?: (env: DashboardCommandEnv) => Promise<{ url: string; closed: Promise<void> }>;
 }
 
 export interface CliOptions {
@@ -82,7 +106,9 @@ export interface CliOptions {
   };
   logger?: CliLogger;
   serviceDeps?: ServiceCommandDeps;
+  larkServiceDeps?: LarkServiceCommandDeps;
   sendDeps?: ConfiguredSendDeps;
+  dashboardDeps?: DashboardCommandDeps;
   larkProvisionApp?: (input: { appId: string; appSecret: string; domain?: string; logger?: CliLogger }) => Promise<LarkProvisioningResult>;
 }
 
@@ -94,8 +120,8 @@ function normalizeCommandArgs(argv: string[]): string[] {
   return argv;
 }
 
-function extractInstanceOption(argv: string[]): { instanceName: string; args: string[] } {
-  let instanceName = "default";
+function extractInstanceOption(argv: string[], defaultInstanceName = "default"): { instanceName: string; args: string[] } {
+  let instanceName = normalizeInstanceName(defaultInstanceName);
   const args: string[] = [];
 
   for (let index = 0; index < argv.length; index++) {
@@ -280,19 +306,25 @@ async function runAccessCommand(
   argv: string[],
   env: InstanceTokenEnv,
   logger: CliLogger,
+  options: {
+    commandName?: string;
+    defaultInstanceName?: string;
+    ensureAgentInstructions?: boolean;
+  } = {},
 ): Promise<boolean> {
+  const commandName = options.commandName ?? "telegram access";
   if (argv.length < 2) {
-    throw new Error("Usage: telegram access <pair|policy|allow|revoke|multi> ...");
+    throw new Error(`Usage: ${commandName} <pair|policy|allow|revoke|multi|status> ...`);
   }
 
   const subcommand = argv[1];
-  const { instanceName, args } = extractInstanceOption(argv.slice(2));
+  const { instanceName, args } = extractInstanceOption(argv.slice(2), options.defaultInstanceName);
   const auditStateDir = resolveAuditStateDir(env, instanceName);
   const store = new AccessStore(resolveInstanceAccessStatePath(env, instanceName));
 
   if (subcommand === "pair") {
     if (args.length !== 1) {
-      throw new Error("Usage: telegram access pair [--instance <name>] <code>");
+      throw new Error(`Usage: ${commandName} pair [--instance <name>] <code>`);
     }
 
     const code = args[0];
@@ -316,14 +348,16 @@ async function runAccessCommand(
       outcome: "success",
       metadata: { code },
     });
-    await ensureDefaultInstanceAgentInstructions(env, instanceName);
+    if (options.ensureAgentInstructions !== false) {
+      await ensureDefaultInstanceAgentInstructions(env, instanceName);
+    }
     logger.log(`Redeemed pairing code for instance "${instanceName}" and chat ${pairedUser.telegramChatId}.`);
     return true;
   }
 
   if (subcommand === "policy") {
     if (args.length !== 1 || (args[0] !== "pairing" && args[0] !== "allowlist")) {
-      throw new Error("Usage: telegram access policy [--instance <name>] <pairing|allowlist>");
+      throw new Error(`Usage: ${commandName} policy [--instance <name>] <pairing|allowlist>`);
     }
 
     await store.setPolicy(args[0]);
@@ -339,7 +373,7 @@ async function runAccessCommand(
 
   if (subcommand === "allow") {
     if (args.length !== 1) {
-      throw new Error("Usage: telegram access allow [--instance <name>] <chat-id>");
+      throw new Error(`Usage: ${commandName} allow [--instance <name>] <chat-id>`);
     }
 
     const chatId = parseChatId(args[0]);
@@ -356,7 +390,7 @@ async function runAccessCommand(
 
   if (subcommand === "revoke") {
     if (args.length !== 1) {
-      throw new Error("Usage: telegram access revoke [--instance <name>] <chat-id>");
+      throw new Error(`Usage: ${commandName} revoke [--instance <name>] <chat-id>`);
     }
 
     const chatId = parseChatId(args[0]);
@@ -373,7 +407,7 @@ async function runAccessCommand(
 
   if (subcommand === "multi") {
     if (args.length !== 1 || (args[0] !== "on" && args[0] !== "off")) {
-      throw new Error("Usage: telegram access multi [--instance <name>] <on|off>");
+      throw new Error(`Usage: ${commandName} multi [--instance <name>] <on|off>`);
     }
 
     const enabled = args[0] === "on";
@@ -388,7 +422,16 @@ async function runAccessCommand(
     return true;
   }
 
-  throw new Error("Usage: telegram access <pair|policy|allow|revoke|multi> ...");
+  if (subcommand === "status") {
+    if (args.length !== 0) {
+      throw new Error(`Usage: ${commandName} status [--instance <name>]`);
+    }
+
+    logger.log(formatAccessStatus(instanceName, await store.getStatus()));
+    return true;
+  }
+
+  throw new Error(`Usage: ${commandName} <pair|policy|allow|revoke|multi|status> ...`);
 }
 
 async function runStatusCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -424,7 +467,8 @@ async function formatLarkStatus(env: LarkRuntimeEnv): Promise<string> {
     `Env file: ${stateDir.startsWith("(unknown:") ? "unknown" : resolveLarkEnvFilePath(env)}`,
     `Service: ${await describeLarkServiceLock(stateDir)}`,
     `Require mention in groups: ${parseLarkBooleanEnv(env.LARK_REQUIRE_MENTION_IN_GROUP, true) ? "yes" : "no"}`,
-    "Run: node dist/src/index.js lark run",
+    "Run: node dist/src/index.js lark service start",
+    "Direct run: node dist/src/index.js lark run",
   ];
 
   return lines.join("\n");
@@ -521,14 +565,322 @@ async function formatLarkDoctor(env: LarkRuntimeEnv): Promise<string> {
   ].join("\n");
 }
 
+function resolveLarkServiceLogPath(stateDir: string): string {
+  return path.join(stateDir, "lark-service.log");
+}
+
+function resolveCliEntrypoint(): string {
+  const modulePath = fileURLToPath(import.meta.url);
+  if (modulePath.endsWith(".js")) {
+    return path.resolve(path.dirname(modulePath), "..", "index.js");
+  }
+  return path.resolve("dist/src/index.js");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+async function tmuxSessionExists(sessionName: string): Promise<boolean> {
+  try {
+    await execFile("tmux", ["has-session", "-t", sessionName], { timeout: 3_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function defaultStartLarkService(input: LarkServiceCommandInput): Promise<"started" | "already_running"> {
+  await mkdir(input.stateDir, { recursive: true });
+  if ((await describeLarkServiceLock(input.stateDir)).startsWith("running ")) {
+    return "already_running";
+  }
+  if (await tmuxSessionExists(LARK_SERVICE_TMUX_SESSION)) {
+    await execFile("tmux", ["kill-session", "-t", LARK_SERVICE_TMUX_SESSION], { timeout: 5_000 }).catch(() => undefined);
+  }
+
+  const command = [
+    "cd",
+    shellQuote(input.cwd),
+    "&&",
+    shellQuote(process.execPath),
+    shellQuote(input.entrypoint),
+    "lark",
+    "run",
+    ">>",
+    shellQuote(input.logPath),
+    "2>&1",
+  ].join(" ");
+  await execFile("tmux", ["new-session", "-d", "-s", LARK_SERVICE_TMUX_SESSION, command], { timeout: 5_000 });
+  return "started";
+}
+
+async function defaultWaitUntilLarkServiceRunning(input: LarkServiceCommandInput): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  let lastStatus = "unknown";
+  while (Date.now() < deadline) {
+    lastStatus = await describeLarkServiceLock(input.stateDir);
+    if (lastStatus.startsWith("running ")) {
+      return;
+    }
+    await sleep(100);
+  }
+  throw new Error(`Lark service did not publish a running lock after start; last status: ${lastStatus}`);
+}
+
+async function readLarkLockPid(stateDir: string): Promise<number | null> {
+  try {
+    const parsed = JSON.parse(await readFile(resolveLarkServiceLockPath(stateDir), "utf8")) as { pid?: unknown };
+    return typeof parsed.pid === "number" ? parsed.pid : null;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function defaultStopLarkService(input: LarkServiceCommandInput): Promise<"stopped" | "not_running"> {
+  let stopped = false;
+  try {
+    await execFile("tmux", ["kill-session", "-t", LARK_SERVICE_TMUX_SESSION], { timeout: 5_000 });
+    stopped = true;
+  } catch {
+    // The service may have been started outside tmux; fall back to the lock PID.
+  }
+
+  const pid = await readLarkLockPid(input.stateDir);
+  if (pid !== null && isProcessAlive(pid)) {
+    process.kill(pid, "SIGTERM");
+    stopped = true;
+    await waitForProcessExit(pid, 5_000);
+  }
+
+  return stopped ? "stopped" : "not_running";
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(100);
+  }
+}
+
+async function defaultReadLarkServiceLogs(input: { logPath: string; tail: number }): Promise<string> {
+  try {
+    const raw = await readFile(input.logPath, "utf8");
+    const lines = raw.split(/\r?\n/);
+    return lines.slice(Math.max(0, lines.length - input.tail)).join("\n").trim() || "(empty)";
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return `(no Lark service log at ${input.logPath})`;
+    }
+    throw error;
+  }
+}
+
+function formatLarkServiceAction(action: "start" | "stop", result: "started" | "already_running" | "stopped" | "not_running"): string {
+  if (result === "started") {
+    return "Started Lark service.";
+  }
+  if (result === "already_running") {
+    return "Lark service is already running.";
+  }
+  if (result === "stopped") {
+    return "Stopped Lark service.";
+  }
+  return action === "stop" ? "Lark service is not running." : "Lark service was not started.";
+}
+
+async function runLarkServiceCommand(
+  args: string[],
+  env: LarkRuntimeEnv,
+  logger: CliLogger,
+  deps: LarkServiceCommandDeps = {},
+): Promise<boolean> {
+  if (args.length === 0) {
+    throw new Error("Usage: lark service <start|stop|restart|status|logs|doctor>");
+  }
+
+  const subcommand = args[0];
+  const loadedEnv = await loadLarkRuntimeEnv(env);
+
+  if (subcommand === "status") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark service status");
+    }
+    logger.log(await formatLarkStatus(loadedEnv));
+    return true;
+  }
+
+  if (subcommand === "doctor") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark service doctor");
+    }
+    logger.log(await formatLarkDoctor(loadedEnv));
+    return true;
+  }
+
+  const stateDir = resolveLarkStateDir(loadedEnv);
+  const logPath = resolveLarkServiceLogPath(stateDir);
+  const commandInput: LarkServiceCommandInput = {
+    env: loadedEnv,
+    stateDir,
+    logPath,
+    entrypoint: resolveCliEntrypoint(),
+    cwd: process.cwd(),
+  };
+
+  if (subcommand === "logs") {
+    if (args.length > 2) {
+      throw new Error("Usage: lark service logs [tail-count]");
+    }
+    const tail = args[1] ? parsePositiveInteger(args[1], "tail count") : 80;
+    logger.log(await (deps.readLogs ?? defaultReadLarkServiceLogs)({ stateDir, logPath, tail }));
+    return true;
+  }
+
+  if (subcommand === "start") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark service start");
+    }
+    resolveLarkRuntimeConfig(loadedEnv);
+    const result = await (deps.start ?? defaultStartLarkService)(commandInput);
+    if (result === "started") {
+      await (deps.waitUntilRunning ?? defaultWaitUntilLarkServiceRunning)(commandInput);
+    }
+    logger.log(formatLarkServiceAction("start", result));
+    return true;
+  }
+
+  if (subcommand === "stop") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark service stop");
+    }
+    logger.log(formatLarkServiceAction("stop", await (deps.stop ?? defaultStopLarkService)(commandInput)));
+    return true;
+  }
+
+  if (subcommand === "restart") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark service restart");
+    }
+    resolveLarkRuntimeConfig(loadedEnv);
+    logger.log(formatLarkServiceAction("stop", await (deps.stop ?? defaultStopLarkService)(commandInput)));
+    const result = await (deps.start ?? defaultStartLarkService)(commandInput);
+    if (result === "started") {
+      await (deps.waitUntilRunning ?? defaultWaitUntilLarkServiceRunning)(commandInput);
+    }
+    logger.log(formatLarkServiceAction("start", result));
+    return true;
+  }
+
+  throw new Error("Usage: lark service <start|stop|restart|status|logs|doctor>");
+}
+
+async function runLarkAccessCommand(
+  args: string[],
+  env: LarkRuntimeEnv,
+  logger: CliLogger,
+): Promise<boolean> {
+  const loadedEnv = await loadLarkRuntimeEnv(env);
+  const stateDir = resolveLarkStateDir(loadedEnv);
+  const instanceName = "lark";
+  return await runAccessCommand(["access", ...args], {
+    HOME: loadedEnv.HOME,
+    USERPROFILE: loadedEnv.USERPROFILE,
+    CODEX_TELEGRAM_STATE_DIR: stateDir,
+    CODEX_TELEGRAM_INSTANCE: instanceName,
+  }, logger, {
+    commandName: "lark access",
+    defaultInstanceName: instanceName,
+    ensureAgentInstructions: false,
+  });
+}
+
+async function resolveLarkScopedEnv(env: LarkRuntimeEnv): Promise<{ env: InstanceTokenEnv; instanceName: string }> {
+  const loadedEnv = await loadLarkRuntimeEnv(env);
+  const stateDir = resolveLarkStateDir(loadedEnv);
+  const instanceName = "lark";
+  return {
+    instanceName,
+    env: {
+      HOME: loadedEnv.HOME,
+      USERPROFILE: loadedEnv.USERPROFILE,
+      CODEX_TELEGRAM_STATE_DIR: stateDir,
+      CODEX_TELEGRAM_INSTANCE: instanceName,
+    },
+  };
+}
+
+function hasOption(args: string[], option: string): boolean {
+  return args.some((arg) => arg === option || arg.startsWith(`${option}=`));
+}
+
+async function runDashboardCommand(
+  args: string[],
+  env: DashboardCommandEnv,
+  logger: CliLogger,
+  deps: DashboardCommandDeps = {},
+): Promise<boolean> {
+  const live = args.includes("--live") || args.includes("--serve");
+  const dashboardModule = (!deps.generateDashboard || (live && !deps.serveDashboard))
+    ? await import("./dashboard.js")
+    : null;
+
+  if (live) {
+    const serveDashboard = deps.serveDashboard ?? dashboardModule!.serveDashboard;
+    const dashboard = await serveDashboard(env);
+    logger.log(`Live dashboard: ${dashboard.url} (press Ctrl+C to stop)`);
+    await dashboard.closed;
+    return true;
+  }
+
+  const generateDashboard = deps.generateDashboard ?? dashboardModule!.generateDashboard;
+  const outPath = await generateDashboard(env);
+  logger.log(`Dashboard generated: ${outPath}`);
+  return true;
+}
+
 async function runLarkCommand(
   argv: string[],
   env: LarkRuntimeEnv,
   logger: CliLogger,
-  deps: { provisionApp?: CliOptions["larkProvisionApp"] } = {},
+  deps: { provisionApp?: CliOptions["larkProvisionApp"]; service?: LarkServiceCommandDeps; dashboard?: DashboardCommandDeps } = {},
 ): Promise<boolean> {
   const subcommand = argv[1] ?? "status";
   const args = argv.slice(2);
+
+  if (subcommand === "service") {
+    return await runLarkServiceCommand(args, env, logger, deps.service);
+  }
+
+  if (subcommand === "access") {
+    return await runLarkAccessCommand(args, env, logger);
+  }
+
+  if (subcommand === "audit") {
+    const scoped = await resolveLarkScopedEnv(env);
+    return await runAuditCommand(["audit", "--instance", scoped.instanceName, ...args], scoped.env, logger);
+  }
+
+  if (subcommand === "timeline") {
+    const scoped = await resolveLarkScopedEnv(env);
+    const timelineArgs = hasOption(args, "--channel") ? args : ["--channel", "lark", ...args];
+    return await runTimelineCommand(["timeline", "--instance", scoped.instanceName, ...timelineArgs], scoped.env, logger);
+  }
+
+  if (subcommand === "dashboard") {
+    const scoped = await resolveLarkScopedEnv(env);
+    return await runDashboardCommand(args, scoped.env, logger, deps.dashboard);
+  }
 
   if (subcommand === "status") {
     if (args.length !== 0) {
@@ -584,7 +936,7 @@ async function runLarkCommand(
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 
-  throw new Error("Usage: lark <status|doctor|provision|wizard|run>");
+  throw new Error("Usage: lark <status|doctor|provision|wizard|run|service|access|audit|timeline|dashboard>");
 }
 
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -1443,7 +1795,7 @@ Commands:
   configure <token> [--instance <name>]       Configure bot token for an instance
   service <start|stop|restart|status|logs|doctor> [--instance <name>|--all]
                                               Manage the service lifecycle
-  access <pair|policy|allow|revoke|multi> [--instance <name>]
+  access <pair|policy|allow|revoke|multi|status> [--instance <name>]
                                               Manage access control
   status [--instance <name>]                  Show access policy and paired users
   session list [--instance <name>]            Inspect chat-to-thread bindings
@@ -1471,7 +1823,15 @@ Commands:
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
                                               Send files/text through the active turn side-channel or configured Telegram session
-  lark <status|doctor|provision|wizard|run>   Inspect, configure, or run the Feishu/Lark channel
+  lark <status|doctor|provision|wizard|run|service|access|audit|timeline|dashboard>
+                                              Inspect, configure, or run the Feishu/Lark channel
+  lark service <start|stop|restart|status|logs|doctor>
+                                              Manage the Feishu/Lark service lifecycle
+  lark access <pair|policy|allow|revoke|multi|status>
+                                              Manage Feishu/Lark access control in the Lark state dir
+  lark audit [count] / lark timeline [count]
+                                              Inspect Feishu/Lark audit and timeline logs
+  lark dashboard [--live]                     Open a Feishu/Lark-scoped visual status dashboard
   dashboard [--live]                         Open a visual status dashboard in the browser
   help                                        Show this help message`;
 
@@ -1817,7 +2177,11 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   }
 
   if (normalized[0] === "lark") {
-    return runLarkCommand(normalized, env, logger, { provisionApp: options.larkProvisionApp });
+    return runLarkCommand(normalized, env, logger, {
+      provisionApp: options.larkProvisionApp,
+      service: options.larkServiceDeps,
+      dashboard: options.dashboardDeps,
+    });
   }
 
   if (normalized[0] === "access") {
@@ -1869,17 +2233,7 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   }
 
   if (normalized[0] === "dashboard") {
-    const live = normalized.includes("--live") || normalized.includes("--serve");
-    const { generateDashboard, serveDashboard } = await import("./dashboard.js");
-    if (live) {
-      const dashboard = await serveDashboard(env);
-      logger.log(`Live dashboard: ${dashboard.url} (press Ctrl+C to stop)`);
-      await dashboard.closed;
-      return true;
-    }
-    const outPath = await generateDashboard(env);
-    logger.log(`Dashboard generated: ${outPath}`);
-    return true;
+    return await runDashboardCommand(normalized.slice(1), env, logger, options.dashboardDeps);
   }
 
   if (normalized[0] === "logs") {

@@ -64,7 +64,12 @@ node dist/src/index.js lark wizard   # scan to create/bind a PersonalAgent app
 node dist/src/index.js lark provision # re-check/provision an existing app
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
-node dist/src/index.js lark run
+node dist/src/index.js lark service start
+node dist/src/index.js lark service logs 80
+node dist/src/index.js lark service restart
+node dist/src/index.js lark timeline 20
+node dist/src/index.js lark audit 20
+node dist/src/index.js lark dashboard
 ```
 
 `lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes, Feishu Docs scopes, and cloud-doc comment read/write scopes. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. Environment variables still win if you prefer manual credentials:
@@ -86,6 +91,7 @@ Optional environment:
 The Lark channel currently supports:
 
 - inbound p2p/group messages normalized into the same `Bridge.handleAuthorizedMessage` path, protected by the same pairing/allowlist access store as Telegram;
+- basic chat commands: `/help`, `/status`, `/usage`, `/model`, `/effort`, `/fast`, `/engine`, `/yolo`, `/goal`, `/btw`, `/ask`, `/reset`, `/detach`, Claude/Antigravity `/resume` scan and explicit `/resume thread ...` / `/resume conversation ...`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, and `/stop`;
 - topic/thread isolation through `conversationKey`;
 - streaming interactive cards with a Card 2.0 callback stop button;
 - approval cards for engine permission requests, with callback operators checked against bridge access policy before resolving;
@@ -95,11 +101,15 @@ The Lark channel currently supports:
 - custom interactive cards through `lark.card` tool tags, with button clicks fed back into the same bridge session;
 - Feishu Docs creation through `lark.doc.create` for long specs and reviewable documents;
 - Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, runs the same engine, and replies in the comment thread;
+- Lark-delivered scheduled reminders/tasks through `/cron`, with raw Lark chat routing stored on each job so scheduler fires can return to the correct Lark conversation;
+- durable Kanban task state through `/board`, backed by the same `board.json` model as Telegram while writing timeline entries with `channel=lark`;
+- thread-to-thread Mini Bus workflows through `/mini`, so Lark group threads can be registered as named peers for ask/fan/chain/verify/crew flows;
+- Agent Bus delegation through `/fan`, `/chain`, and `/verify`, reusing the same configured `bus.parallel`, `bus.chain`, and `bus.verifier` peers as Telegram;
 - merged forwarded Feishu messages preserved as `<forwarded_lark_messages>` task context for one-click handoff workflows;
-- a per-state-dir service lock, so accidental duplicate `lark run` processes do not double-consume the same Lark events;
-- timeline entries with `channel=lark`, so `telegram timeline --channel lark` and `lark status` diagnostics can separate Lark traffic from Telegram traffic.
+- a per-state-dir service lock plus `lark service start|stop|restart|status|logs|doctor`, so accidental duplicate `lark run` processes do not double-consume the same Lark events and recovery is operator-friendly;
+- timeline entries with `channel=lark`, plus Lark-scoped `lark timeline`, `lark audit`, and `lark dashboard` aliases, so Lark traffic can be inspected without routing through the Telegram CLI surface.
 
-Access control is intentionally shared with the existing bridge store. If a private Lark chat is not paired, the bot replies with the pairing/allowlist instruction instead of running the engine. For now, use the existing `telegram access ...` CLI to manage the shared store for the Lark state dir/instance; dedicated Lark aliases may be added later.
+Access control is intentionally shared with the existing bridge store. If a private Lark chat is not paired, the bot replies with the pairing/allowlist instruction instead of running the engine. Use the Lark-specific alias against the Lark state dir: `node dist/src/index.js lark access pair <code>`, `lark access allow <numeric-chat-id>`, `lark access policy allowlist`, and `lark access status`.
 
 Lark-specific tool tags use the same compact JSON tag shape as Telegram side-channel tools:
 
@@ -203,7 +213,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Streaming / early delivery | JSON stream events feed timeline and early file delivery | Claude stream events feed timeline and early file delivery | stdout chunks feed timeline and early file delivery when `agy --print` streams output |
 | Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
-| `/goal` | Bridge-native goal API with optional token budget | Passed through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Passed through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
+| `/goal` | Bridge-native goal API; defaults to no token budget unless `--budget` is provided | Passes through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Passes through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
 | `/model` | Bridge config passed to Codex startup | Bridge config passed to Claude startup | Not available from Telegram in `agy --print`; use local interactive `agy /model` |
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Not supported by the bridge yet |
 | Skills / plugins | Uses the configured Codex home; isolated homes symlink `skills/` back to the shared Codex skills dir | Uses the shared Claude config plus workspace `CLAUDE.md`, `skills/`, and `plugins/` | Uses Antigravity's own native CLI/plugin config. Reusable bridge skills should be shared as separate skill files/docs and referenced or copied per engine; each instance `agent.md` remains its own private instruction file. Do not import Claude/Codex native plugins into Antigravity unless you explicitly choose to. |
@@ -783,9 +793,9 @@ In any bot's Telegram chat:
 
 This is not an autonomous dispatcher yet. It gives the bridge durable planning state first: richer task cards, WIP limits, run history, dependency promotion, review gates, and explicit one-task execution with `/board run <id>`. Automatic dispatch should build on this primitive rather than bypassing the task model.
 
-### Mini Bus: topic-to-topic workflows
+### Mini Bus: topic/thread-to-topic/thread workflows
 
-Inside an allowed Telegram group or forum, `/mini` lets one bot treat different topics as lightweight peers. Each peer keeps its own topic session, uses the same instance config and `agent.md`, and can be asked directly, queried in parallel, or chained sequentially. This is useful for temporary planning/review threads without creating new bot instances.
+Inside an allowed Telegram group/forum or Lark group thread, `/mini` lets one bot treat different topics/threads as lightweight peers. Each peer keeps its own session, uses the same instance config and `agent.md`, and can be asked directly, queried in parallel, or chained sequentially. This is useful for temporary planning/review threads without creating new bot instances.
 
 Use Mini Bus when you want separate working memory without separate bots:
 
@@ -799,7 +809,7 @@ Prerequisites:
 
 - the bot must be in an allowed Telegram group or forum topic
 - if the group uses BotFather privacy mode, make the bot an admin so it can see ordinary group messages; otherwise mention/reply-to the bot or use commands
-- register each topic from inside that topic with `/mini here <name>`
+- register each Telegram topic or Lark thread from inside that topic/thread with `/mini here <name>`
 
 Typical setup:
 
@@ -840,9 +850,9 @@ After setup, use the coordinator topic to call the peers:
 - `/mini verify [name] <prompt>` — execute in the current topic, then ask the configured or named verifier topic to review it
 - `/mini rm <name>` — remove a topic peer
 
-The practical benefit is isolation with low overhead: every topic has its own session and cron scope, but all topics share the same bot token, workspace, engine settings, budget tracking, approvals, timeline, and audit logs. That makes Mini Bus good for short-lived multi-agent work such as planning, drafting, review, research, or temporary cron/job conversations.
+The practical benefit is isolation with low overhead: every topic/thread has its own session and cron scope, but all peers share the same bot/app, workspace, engine settings, budget tracking, approvals, timeline, and audit logs. That makes Mini Bus good for short-lived multi-agent work such as planning, drafting, review, research, or temporary cron/job conversations.
 
-Mini Bus is intentionally scoped to the current Telegram group. It does not open another bot token or another workspace; if multiple topics edit the same files concurrently, the same workspace-conflict rules apply as any concurrent local agents.
+Mini Bus is intentionally scoped to the current Telegram group or Lark group. It does not open another bot token/app or another workspace; if multiple topics/threads edit the same files concurrently, the same workspace-conflict rules apply as any concurrent local agents.
 
 Mini crew is the topic-scoped version of Agent Bus crew: the coordinator runs in the current topic context, decomposes the task, sends research sub-questions to the `researcher` topic in parallel, then routes analysis, writing, review, and any revision loop through the configured role topics. It uses the same `crew-runs/*.json`, timeline, audit, budget, approval, and topic-session boundaries as the instance-level workflow.
 
@@ -1249,7 +1259,7 @@ Telegram users can also use:
 - `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
 - `/model [name|off]` — switch model for Codex/Claude; Antigravity explains the `agy --print` limitation and does not forward `/model` as chat
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
-- `/goal <completion condition>` — set an engine goal. Codex also supports `/goal status`, `/goal clear`, and `--budget`; Claude Code and Antigravity pass through to their native `/goal` slash commands.
+- `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex enforces explicit budgets, while Claude Code and Antigravity receive explicit budgets as native goal guidance. Codex also supports `/goal status` and `/goal clear`.
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
 - `/fan <prompt>` — query current bot plus configured parallel bots

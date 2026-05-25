@@ -333,12 +333,29 @@ function defaultFindServiceProcessIds(entryPath: string, instanceName: string): 
     encoding: "utf8",
   });
 
-  if (result.status !== 0 || !result.stdout) {
+  const psPids = parseServiceProcessIdsFromProcessList(result.stdout, entryPath, instanceName);
+  if (result.status === 0 && psPids.length > 0) {
+    return psPids;
+  }
+
+  const pgrepResult = spawnSync("pgrep", ["-fl", "dist/src/index.js"], {
+    encoding: "utf8",
+  });
+
+  if (pgrepResult.status !== 0 || !pgrepResult.stdout) {
+    return psPids;
+  }
+
+  return parseServiceProcessIdsFromProcessList(pgrepResult.stdout, entryPath, instanceName);
+}
+
+function parseServiceProcessIdsFromProcessList(stdout: string | null | undefined, entryPath: string, instanceName: string): number[] {
+  if (!stdout) {
     return [];
   }
 
   const pids: number[] = [];
-  for (const line of result.stdout.split(/\r?\n/)) {
+  for (const line of stdout.split(/\r?\n/)) {
     const match = line.match(/^\s*(\d+)\s+(.+)$/);
     if (!match?.[1] || !match[2]) {
       continue;
@@ -351,6 +368,27 @@ function defaultFindServiceProcessIds(entryPath: string, instanceName: string): 
   }
 
   return pids;
+}
+
+async function findRunningServiceProcessIds(
+  paths: Pick<ServicePaths, "entryPath" | "instanceName">,
+  deps: Required<Pick<ServiceCommandDeps, "isProcessAlive" | "isExpectedServiceProcess" | "findServiceProcessIds">>,
+): Promise<number[]> {
+  const runningPids: number[] = [];
+  const seen = new Set<number>();
+
+  for (const pid of await deps.findServiceProcessIds(paths.entryPath, paths.instanceName)) {
+    if (seen.has(pid)) {
+      continue;
+    }
+    seen.add(pid);
+
+    if (deps.isProcessAlive(pid) && deps.isExpectedServiceProcess(pid, paths.entryPath, paths.instanceName)) {
+      runningPids.push(pid);
+    }
+  }
+
+  return runningPids;
 }
 
 async function defaultReadProcessEnvironment(pid: number): Promise<Record<string, string> | null> {
@@ -617,6 +655,7 @@ export async function startServiceInstance(
   const paths = resolveServicePaths(env, instanceName, cwd);
   const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
   const isExpectedServiceProcess = deps.isExpectedServiceProcess ?? defaultIsExpectedServiceProcess;
+  const findServiceProcessIds = deps.findServiceProcessIds ?? defaultFindServiceProcessIds;
   const spawnDetachedProcess = deps.spawnDetached ?? defaultSpawnDetached;
   const sleep = deps.sleep ?? defaultSleep;
 
@@ -631,6 +670,15 @@ export async function startServiceInstance(
     isExpectedServiceProcess(existingLock.pid, paths.entryPath, paths.instanceName)
   ) {
     throw new Error(`Instance "${paths.instanceName}" is already running with pid ${existingLock.pid}.`);
+  }
+
+  const locklessPids = await findRunningServiceProcessIds(paths, {
+    isProcessAlive,
+    isExpectedServiceProcess,
+    findServiceProcessIds,
+  });
+  if (locklessPids.length > 0) {
+    throw new Error(`Instance "${paths.instanceName}" is already running with pid ${locklessPids[0]}.`);
   }
 
   await mkdir(paths.stateDir, { recursive: true });
@@ -771,14 +819,25 @@ export async function getServiceStatus(
   const paths = resolveServicePaths(env, instanceName, cwd);
   const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
   const isExpectedServiceProcess = deps.isExpectedServiceProcess ?? defaultIsExpectedServiceProcess;
+  const findServiceProcessIds = deps.findServiceProcessIds ?? defaultFindServiceProcessIds;
   const lockRecord = await readLockRecord(paths.lockPath);
-  const pid = lockRecord?.pid ?? null;
-  const running =
-    pid !== null &&
-    isProcessAlive(pid) &&
-    isExpectedServiceProcess(pid, paths.entryPath, paths.instanceName);
+  const lockedPid = lockRecord?.pid ?? null;
+  const lockedRunning =
+    lockedPid !== null &&
+    isProcessAlive(lockedPid) &&
+    isExpectedServiceProcess(lockedPid, paths.entryPath, paths.instanceName);
+  let runningPid = lockedRunning ? lockedPid : null;
+  if (runningPid === null) {
+    const locklessPids = await findRunningServiceProcessIds(paths, {
+      isProcessAlive,
+      isExpectedServiceProcess,
+      findServiceProcessIds,
+    });
+    runningPid = locklessPids[0] ?? null;
+  }
+  const running = runningPid !== null;
   if (!running) {
-    removeLockIfMatches(paths.lockPath, pid);
+    removeLockIfMatches(paths.lockPath, lockedPid);
   }
   const accessStore = new AccessStore(path.join(paths.stateDir, "access.json"));
   const accessStatus = await accessStore.getStatus();
@@ -874,7 +933,7 @@ export async function getServiceStatus(
   return {
     instanceName: paths.instanceName,
     running,
-    pid: running ? pid : null,
+    pid: runningPid,
     engine,
     runtime: engineRuntime,
     lockPath: paths.lockPath,

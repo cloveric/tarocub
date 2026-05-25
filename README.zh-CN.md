@@ -64,7 +64,12 @@ node dist/src/index.js lark wizard   # 扫码创建/绑定 PersonalAgent app
 node dist/src/index.js lark provision # 对现有 app 重新检查/补齐权限订阅
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
-node dist/src/index.js lark run
+node dist/src/index.js lark service start
+node dist/src/index.js lark service logs 80
+node dist/src/index.js lark service restart
+node dist/src/index.js lark timeline 20
+node dist/src/index.js lark audit 20
+node dist/src/index.js lark dashboard
 ```
 
 `lark wizard` 会走官方 Lark SDK 的 PersonalAgent 注册流程，在终端打印二维码，把凭据保存到 `~/.cctb/lark/lark.env`（或 `CCTB_LARK_STATE_DIR/lark.env`），然后检查 bridge 需要的能力：接收消息事件、卡片回调、bot 发消息/资源权限、飞书文档权限。如果 app 有管理权限，wizard 会补齐事件/回调订阅；如果没有，会明确告诉你缺哪个管理 scope。如果你更想手动填凭据，环境变量仍然优先：
@@ -86,6 +91,7 @@ export LARK_APP_SECRET="..."
 当前 Lark 通道支持：
 
 - p2p/group 消息进入同一条 `Bridge.handleAuthorizedMessage` 路径，并复用 Telegram 侧同一套 pairing/allowlist 访问控制；
+- 基础聊天命令：`/help`、`/status`、`/usage`、`/model`、`/effort`、`/fast`、`/engine`、`/yolo`、`/goal`、`/btw`、`/ask`、`/reset`、`/detach`、Claude/Antigravity `/resume` 扫描选择、显式 `/resume thread ...` / `/resume conversation ...`、`/cron`、`/board`、`/mini`、`/fan`、`/chain`、`/verify`、`/stop`；
 - 用 `conversationKey` 隔离话题/thread；
 - streaming interactive card 和 Card 2.0 callback 停止按钮；
 - 引擎权限请求审批卡片，点击审批前会按操作者重新走 bridge 访问控制；
@@ -94,11 +100,16 @@ export LARK_APP_SECRET="..."
 - 通过 `lark.post` tool tag 发送富文本/图文混排消息；
 - 通过 `lark.card` tool tag 发送自定义交互卡片，按钮点击会回流到同一个 bridge session；
 - 通过 `lark.doc.create` 创建飞书文档，适合长 specs/docs 和可评论反馈的材料；
+- 飞书云文档评论 @bot：bridge 会拉取评论上下文，跑同一套 engine，并回复到评论线程；
+- 通过 `/cron` 创建飞书/Lark 侧定时提醒和定时任务，每条任务保存 raw Lark chat 路由，scheduler 触发后能回到正确的 Lark 会话；
+- 通过 `/board` 管理持久 Kanban 任务，复用 Telegram 的 `board.json` 状态模型，同时 timeline 记为 `channel=lark`；
+- 通过 `/mini` 把飞书群 thread 注册成具名 peer，支持 ask/fan/chain/verify/crew 这类 thread-to-thread 协作；
+- 通过 `/fan`、`/chain`、`/verify` 调用 Agent Bus，复用 Telegram 同一套 `bus.parallel`、`bus.chain` 和 `bus.verifier` 配置；
 - 飞书合并转发消息会保留为 `<forwarded_lark_messages>` 任务上下文，方便“一键转发给 bot 处理”；
-- 按 state dir 加 Lark 服务锁，误开多个 `lark run` 时不会让多个进程同时消费同一批飞书事件；
-- timeline 会记录 `channel=lark`，所以可以用 `telegram timeline --channel lark` 和 `lark status` 把 Lark 流量与 Telegram 流量区分开。
+- 按 state dir 加 Lark 服务锁，并提供 `lark service start|stop|restart|status|logs|doctor`，误开多个 `lark run` 时不会让多个进程同时消费同一批飞书事件，恢复也更像 Telegram service；
+- timeline 会记录 `channel=lark`，并提供 Lark 专用的 `lark timeline` / `lark audit` / `lark dashboard` 别名，所以不用再绕到 Telegram CLI 也能检查 Lark 流量。
 
-访问控制故意复用现有 bridge store。未配对的 Lark 私聊不会直接跑引擎，而是返回配对/allowlist 指引。目前先用现有 `telegram access ...` CLI 管理 Lark state dir/instance 的共享访问表；之后可以再补 Lark 专用别名。
+访问控制故意复用现有 bridge store。未配对的 Lark 私聊不会直接跑引擎，而是返回配对/allowlist 指引。现在可以直接用 Lark 专用别名管理 Lark state dir：`node dist/src/index.js lark access pair <code>`、`lark access allow <numeric-chat-id>`、`lark access policy allowlist` 和 `lark access status`。
 
 Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 
@@ -201,7 +212,7 @@ npm run dev -- telegram engine --instance review-bot
 | 流式反馈 / 提前投递 | JSON stream event 进入 timeline，并支持提前文件投递 | Claude stream event 进入 timeline，并支持提前文件投递 | 如果 `agy --print` 流式吐 stdout，stdout chunk 会进入 timeline，并支持提前文件投递 |
 | YOLO 关闭时的 Telegram 审批 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--full-auto` | Claude 权限请求会变成 Telegram 内联按钮 | 先在 Telegram 预审批整轮 turn，通过后本轮用 `--dangerously-skip-permissions` |
 | YOLO 模式 | `--full-auto` / `--dangerously-bypass-*` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `--dangerously-skip-permissions` |
-| `/goal` | bridge 原生 goal API，支持 token budget | 透传给 Claude Code 原生 `/goal`；`--budget` 会变成原生 goal hint | 透传给 Antigravity 原生 `/goal`；`--budget` 会变成原生 goal hint |
+| `/goal` | bridge 原生 goal API；默认无 token 预算，除非显式提供 `--budget` | 透传给 Claude Code 原生 `/goal`；`--budget` 会变成原生 goal hint | 透传给 Antigravity 原生 `/goal`；`--budget` 会变成原生 goal hint |
 | `/model` | bridge 配置后传给 Codex 启动参数 | bridge 配置后传给 Claude 启动参数 | Telegram 的 `agy --print` 暂不支持；请用本机交互式 `agy /model` |
 | `/compact` | 不需要（每次 exec 无状态） | 压缩会话上下文，减少 token 消耗 | 暂不支持 |
 | Skills / plugins | 使用已配置的 Codex home；隔离 home 会把 `skills/` 软链回共享 Codex skills 目录 | 使用共享 Claude 配置，同时支持 workspace `CLAUDE.md`、`skills/`、`plugins/` | 使用 Antigravity 自己的原生 CLI/plugin 配置。可复用的 bridge skills 应作为独立 skill 文件/文档共享，再按引擎引用或复制；每个实例的 `agent.md` 仍然是自己的私有指令文件。除非明确需要，不要把 Claude/Codex 原生插件导入 Antigravity。 |
@@ -763,9 +774,9 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 
 当前版本不是自动调度器。它先把任务状态模型打稳：更完整的任务卡、WIP 限制、run history、依赖推进、review gate，以及 `/board run <ID>` 这种一次只跑一张卡的显式执行。后续自动 dispatch 应该基于这个原语，而不是绕过任务模型。
 
-### Mini Bus：topic 到 topic 的工作流
+### Mini Bus：topic/thread 到 topic/thread 的工作流
 
-在已允许的 Telegram 群聊或 forum 里，`/mini` 可以让同一个 bot 把不同 topic 当成轻量 peer。每个 peer 保留自己的 topic session，复用同一个实例配置和 `agent.md`，可以单点询问、并行查询，也可以按顺序串联。适合临时 planning/review 线程，不需要再新建 bot 实例。
+在已允许的 Telegram 群聊/forum 或 Lark 群 thread 里，`/mini` 可以让同一个 bot/app 把不同 topic/thread 当成轻量 peer。每个 peer 保留自己的 session，复用同一个实例配置和 `agent.md`，可以单点询问、并行查询，也可以按顺序串联。适合临时 planning/review 线程，不需要再新建 bot 实例。
 
 适合用 Mini Bus 的场景：
 
@@ -779,7 +790,7 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 
 - bot 已经加入并允许当前 Telegram 群或 forum
 - 如果 BotFather 开了群隐私模式，建议把 bot 设成群管理员，这样它才能看到普通群消息；否则用命令、@bot 或回复 bot 触发
-- 每个 topic 都要在那个 topic 里执行 `/mini here <名称>` 注册
+- 每个 Telegram topic 或 Lark thread 都要在对应 topic/thread 里执行 `/mini here <名称>` 注册
 
 典型配置：
 
@@ -820,9 +831,9 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 - `/mini verify [名称] <提示>` — 先在当前 topic 执行，再让已配置或指定的 verifier topic 复核
 - `/mini rm <名称>` — 移除某个 topic peer
 
-它的实际好处是：用很低成本换到上下文隔离。每个 topic 有自己的 session 和 cron 范围，但仍然共用同一个 bot token、workspace、engine 设置、预算统计、审批、timeline 和 audit。适合临时多 agent 工作，比如规划、写作、复核、研究，或者把 cron/job 放到旁路 topic 里。
+它的实际好处是：用很低成本换到上下文隔离。每个 topic/thread 有自己的 session 和 cron 范围，但仍然共用同一个 bot/app、workspace、engine 设置、预算统计、审批、timeline 和 audit。适合临时多 agent 工作，比如规划、写作、复核、研究，或者把 cron/job 放到旁路 topic/thread 里。
 
-Mini Bus 只作用于当前 Telegram 群，不会打开新的 bot token，也不会创建新的 workspace；如果多个 topic 同时改同一批文件，仍然要按本地并发 agent 的方式处理工作区冲突。
+Mini Bus 只作用于当前 Telegram 群或 Lark 群，不会打开新的 bot token/app，也不会创建新的 workspace；如果多个 topic/thread 同时改同一批文件，仍然要按本地并发 agent 的方式处理工作区冲突。
 
 Mini crew 是 Agent Bus crew 的 topic 版本：coordinator 在当前 topic 里启动，先拆分任务，再把 research 子问题并行发给 `researcher` topic，随后把 analysis、writing、review 和修订循环交给配置好的角色 topic。它复用同一套 `crew-runs/*.json`、timeline、audit、budget、approval 和 topic session 隔离机制。
 
@@ -1228,7 +1239,7 @@ Telegram 用户也可以使用：
 - `/effort [low|medium|high|xhigh|max|off]` — 设置推理强度（`max` 仅 Claude 可用；Codex 会改用 `xhigh`）
 - `/model [名称|off]` — 为 Codex/Claude 切换模型；Antigravity 会解释 `agy --print` 限制，不会把 `/model` 当聊天发进模型
 - `/fast [on|off|status]` — 切换 Codex Fast Mode。bridge 实例里把它当实验选项使用；如果出现 Codex runtime 失败，先 `/fast off`，不要反复重试；下一条简单消息仍失败时，再重启该实例一次。
-- `/goal <完成条件>` — 设置引擎 goal。Codex 还支持 `/goal status`、`/goal clear` 和 `--budget`；Claude Code 和 Antigravity 会直接透传给原生 `/goal` slash command。
+- `/goal <完成条件>` — 设置引擎 goal。默认无 token 预算，除非显式提供 `--budget`；Codex 会强制执行显式预算，Claude Code 和 Antigravity 会把显式预算作为原生 goal 指导。Codex 同时支持 `/goal status` 和 `/goal clear`。
 - `/btw <问题>` — 旁问（不影响当前会话）
 - `/ask <实例> <提示>` — 委托给指定 peer bot
 - `/fan <提示>` — 查询当前 bot 和并行 specialist bot

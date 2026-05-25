@@ -17,7 +17,7 @@ import {
 } from "./turn-bookkeeping.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import { isResetCommand } from "./command-detection.js";
-import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
+import { getNormalizedTelegramConversationKey, getTelegramConversationKey } from "./conversation-key.js";
 
 export interface SessionCommandConfig {
   engine: InstanceEngine;
@@ -178,12 +178,14 @@ function sessionScopeRecordFields(normalized: NormalizedTelegramMessage): {
   telegramThreadId?: number;
   conversationKey?: string;
 } {
+  const conversationKey = getNormalizedTelegramConversationKey(normalized);
+  const defaultConversationKey = getTelegramConversationKey(normalized.chatId, normalized.messageThreadId);
   if (normalized.messageThreadId === undefined) {
-    return {};
+    return conversationKey === defaultConversationKey ? {} : { conversationKey };
   }
   return {
     telegramThreadId: normalized.messageThreadId,
-    conversationKey: getNormalizedTelegramConversationKey(normalized),
+    conversationKey,
   };
 }
 

@@ -95,6 +95,7 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
     `Lark required scopes: ${result.missingScopes.length === 0 && result.unauthorizedScopes.length === 0 ? "ok" : "attention needed"}`,
     `Lark message event: ${result.missingEvents.length === 0 ? "ok" : "missing " + result.missingEvents.join(", ")}`,
     `Lark card callback: ${result.missingCallbacks.length === 0 ? "ok" : "missing " + result.missingCallbacks.join(", ")}`,
+    `Lark doc-comment event: ${result.missingOptionalEvents.length === 0 ? "ok" : "missing " + result.missingOptionalEvents.join(", ")}`,
   ];
   if (result.applied) {
     lines.push("Lark scope approval request submitted; tenant admin approval may still be required.");
@@ -110,9 +111,6 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
   }
   if (result.missingScopes.length > 0) {
     lines.push(`Scopes not present in app config: ${result.missingScopes.join(", ")}`);
-  }
-  if (result.missingOptionalEvents.length > 0) {
-    lines.push(`Optional doc-comment event not subscribed: ${result.missingOptionalEvents.join(", ")}`);
   }
   return lines;
 }

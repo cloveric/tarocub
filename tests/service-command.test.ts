@@ -65,6 +65,34 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("refuses to start when the same instance is already running without a lock", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const spawnDetached = vi.fn();
+
+    try {
+      await expect(
+        runCli(["telegram", "service", "start", "--instance", "alpha"], {
+          env: { USERPROFILE: tempDir },
+          logger: { log: (message) => messages.push(message) },
+          serviceDeps: {
+            cwd: REPO_ROOT,
+            findServiceProcessIds: async () => [54322],
+            isProcessAlive: (pid) => pid === 54322,
+            isExpectedServiceProcess: (pid) => pid === 54322,
+            spawnDetached,
+            sleep: async () => {},
+          },
+        }),
+      ).rejects.toThrow('Instance "alpha" is already running with pid 54322.');
+
+      expect(spawnDetached).not.toHaveBeenCalled();
+      expect(messages).toEqual([]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("passes explicit ASR watchdog env from the instance .env when starting a service", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
@@ -278,6 +306,31 @@ describe("telegram service commands", () => {
       expect(messages[0]).toContain("Lock path:");
       expect(messages[0]).toContain("Bot token configured: no");
       expect(messages[0]).not.toContain("Bot identity:");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("reports a lockless same-instance service process as running", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      const handled = await runCli(["telegram", "service", "status", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          findServiceProcessIds: async () => [54322],
+          isProcessAlive: (pid) => pid === 54322,
+          isExpectedServiceProcess: (pid) => pid === 54322,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("Instance: alpha");
+      expect(messages[0]).toContain("Running: yes");
+      expect(messages[0]).toContain("Pid: 54322");
     } finally {
       await removeTempRoot(tempDir);
     }

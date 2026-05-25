@@ -84,6 +84,7 @@ function renderDeliveredFilesBeforeErrorMessage(filePaths: readonly string[] | u
 
 export async function maybeRetryTelegramTurnError(input: {
   stateDir: string;
+  startedAt: number;
   normalized: NormalizedTelegramMessage;
   classifiedError: unknown;
   failureCategory: ReturnType<typeof classifyFailure>;
@@ -102,9 +103,18 @@ export async function maybeRetryTelegramTurnError(input: {
   beforeRetry?: (reason: "auth refresh" | "stale session") => Promise<void>;
   restart: () => Promise<void>;
 }): Promise<boolean> {
-  const { stateDir, normalized, classifiedError, failureCategory, context, sessionStore, stopTyping, beforeRetry, restart } = input;
+  const { stateDir, startedAt, normalized, classifiedError, failureCategory, context, sessionStore, stopTyping, beforeRetry, restart } = input;
 
   if (context.abortSignal?.aborted) {
+    await appendUpdateHandleAuditEventBestEffort(stateDir, context as TelegramTurnContext, normalized, {
+      outcome: "stopped",
+      detail: "Task was stopped by user",
+      metadata: {
+        durationMs: Date.now() - startedAt,
+        attachments: normalized.attachments.length,
+        stopped: true,
+      },
+    });
     return true;
   }
 

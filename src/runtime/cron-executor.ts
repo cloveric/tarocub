@@ -172,6 +172,10 @@ function createCronSessionId(job: CronJobRecord): string {
 export function buildCronExecutor(options: BuildCronExecutorOptions): (job: CronJobRecord, abortSignal?: AbortSignal) => Promise<void> {
   const handler = options.handler;
   return async (job: CronJobRecord, abortSignal?: AbortSignal): Promise<void> => {
+    if ((job.channel ?? "telegram") !== "telegram") {
+      return;
+    }
+
     const accessDecision = await options.bridge.checkAccess({
       chatId: job.chatId,
       userId: job.userId,
@@ -217,6 +221,10 @@ export async function sendCronFailureNotification(
   job: CronJobRecord,
   detail: string,
 ): Promise<void> {
+  if ((job.channel ?? "telegram") !== "telegram") {
+    return;
+  }
+
   if (job.mute) {
     return;
   }

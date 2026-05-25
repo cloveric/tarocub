@@ -201,7 +201,7 @@ export class CronScheduler {
       await appendTimelineEventBestEffort(this.stateDir, {
         type: "cron.triggered",
         instanceName: this.instanceName,
-        channel: "telegram",
+        channel: job.channel,
         chatId: job.chatId,
         userId: job.userId,
         metadata: {
@@ -231,7 +231,7 @@ export class CronScheduler {
         await appendTimelineEventBestEffort(this.stateDir, {
           type: "cron.completed",
           instanceName: this.instanceName,
-          channel: "telegram",
+          channel: job.channel,
           chatId: job.chatId,
           userId: job.userId,
           outcome: "success",
@@ -245,7 +245,7 @@ export class CronScheduler {
         await appendTimelineEventBestEffort(this.stateDir, {
           type: "cron.completed",
           instanceName: this.instanceName,
-          channel: "telegram",
+          channel: job.channel,
           chatId: job.chatId,
           userId: job.userId,
           outcome: "error",
@@ -294,7 +294,7 @@ export class CronScheduler {
     await appendTimelineEventBestEffort(this.stateDir, {
       type: "cron.skipped",
       instanceName: this.instanceName,
-      channel: "telegram",
+      channel: job?.channel ?? "telegram",
       chatId: job?.chatId,
       userId: job?.userId,
       outcome: "skipped",
@@ -315,7 +315,7 @@ export class CronScheduler {
       await appendTimelineEventBestEffort(this.stateDir, {
         type: "cron.failure_notification_failed",
         instanceName: this.instanceName,
-        channel: "telegram",
+        channel: job.channel,
         chatId: job.chatId,
         userId: job.userId,
         outcome: "error",
@@ -336,7 +336,7 @@ export class CronScheduler {
       await appendTimelineEventBestEffort(this.stateDir, {
         type: "cron.disabled_after_failures",
         instanceName: this.instanceName,
-        channel: "telegram",
+        channel: job.channel,
         chatId: job.chatId,
         userId: job.userId,
         outcome: "disabled",
@@ -354,7 +354,7 @@ export class CronScheduler {
       await appendTimelineEventBestEffort(this.stateDir, {
         type: "cron.disabled_after_failures",
         instanceName: this.instanceName,
-        channel: "telegram",
+        channel: job.channel,
         chatId: job.chatId,
         userId: job.userId,
         outcome: "error",
@@ -406,7 +406,7 @@ export class CronScheduler {
       await appendTimelineEventBestEffort(this.stateDir, {
         type: "cron.skipped",
         instanceName: this.instanceName,
-        channel: "telegram",
+        channel: job.channel,
         chatId: job.chatId,
         userId: job.userId,
         outcome: "error",

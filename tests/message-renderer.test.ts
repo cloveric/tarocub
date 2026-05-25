@@ -226,7 +226,7 @@ describe("message rendering", () => {
     expect(help).toContain("/board [list|add|desc|accept|priority|labels|check|assign|dep|limits|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]");
     expect(help).toContain("/mini [status|here|order|parallel|verifier|role|crew|ask|fan|chain|verify]");
     expect(help).toContain("/goal <goal> - set a goal");
-    expect(help).toContain("Claude and Antigravity pass through to native /goal");
+    expect(help).toContain("default is unbounded unless --budget is provided");
     expect(help).toContain("/reset");
     expect(help).toContain("/help");
   });

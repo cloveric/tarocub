@@ -14,7 +14,40 @@ function createNormalizedMessage(text: string): NormalizedTelegramMessage {
 }
 
 describe("handleGoalTelegramCommand", () => {
-  it("sets a Codex thread goal from Telegram", async () => {
+  it("sets an unbounded Codex thread goal by default", async () => {
+    const sendMessage = vi.fn();
+    const setThreadGoal = vi.fn().mockResolvedValue({
+      goal: {
+        threadId: "thread-123",
+        objective: "ship the release",
+        status: "active",
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "codex" },
+      normalized: createNormalizedMessage("/goal ship the release"),
+      context: {
+        api: { sendMessage },
+        bridge: { setThreadGoal },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(setThreadGoal).toHaveBeenCalledWith(expect.objectContaining({
+      objective: "ship the release",
+      tokenBudget: null,
+    }));
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("no token budget"));
+  });
+
+  it("sets an explicitly unbounded Codex thread goal from Telegram", async () => {
     const sendMessage = vi.fn();
     const setThreadGoal = vi.fn().mockResolvedValue({
       goal: {
@@ -39,7 +72,7 @@ describe("handleGoalTelegramCommand", () => {
           workspacePath: "/tmp/project",
         },
       },
-      normalized: createNormalizedMessage("/goal ship the release"),
+      normalized: createNormalizedMessage("/goal --unbounded ship the release"),
       context: {
         api: { sendMessage },
         bridge: { setThreadGoal },
@@ -134,22 +167,41 @@ describe("handleGoalTelegramCommand", () => {
     expect(sendMessage).toHaveBeenCalledWith(123, "No active goal for this chat.");
   });
 
-  it("lets Claude /goal pass through to the native Claude Code slash command", async () => {
+  it("passes unbounded Claude goals through by default", async () => {
     const sendMessage = vi.fn();
-    const setThreadGoal = vi.fn();
+    const normalized = createNormalizedMessage("/goal 写发布说明");
 
     const handled = await handleGoalTelegramCommand({
       locale: "zh",
       cfg: { engine: "claude" },
-      normalized: createNormalizedMessage("/goal 写发布说明"),
+      normalized,
       context: {
         api: { sendMessage },
-        bridge: { setThreadGoal },
+        bridge: {},
       },
     });
 
     expect(handled).toBe(false);
-    expect(setThreadGoal).not.toHaveBeenCalled();
+    expect(normalized.text).toBe("/goal 写发布说明");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("lets explicitly unbounded Claude goals pass through to the native Claude Code slash command", async () => {
+    const sendMessage = vi.fn();
+    const normalized = createNormalizedMessage("/goal --unbounded 写发布说明");
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "zh",
+      cfg: { engine: "claude" },
+      normalized,
+      context: {
+        api: { sendMessage },
+        bridge: {},
+      },
+    });
+
+    expect(handled).toBe(false);
+    expect(normalized.text).toBe("/goal 写发布说明");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -172,22 +224,41 @@ describe("handleGoalTelegramCommand", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("lets Antigravity /goal pass through to the native agy slash command", async () => {
+  it("passes unbounded Antigravity goals through by default", async () => {
     const sendMessage = vi.fn();
-    const setThreadGoal = vi.fn();
+    const normalized = createNormalizedMessage("/goal run a long investigation");
 
     const handled = await handleGoalTelegramCommand({
       locale: "en",
       cfg: { engine: "antigravity" },
-      normalized: createNormalizedMessage("/goal run a long investigation"),
+      normalized,
       context: {
         api: { sendMessage },
-        bridge: { setThreadGoal },
+        bridge: {},
       },
     });
 
     expect(handled).toBe(false);
-    expect(setThreadGoal).not.toHaveBeenCalled();
+    expect(normalized.text).toBe("/goal run a long investigation");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("lets explicitly unbounded Antigravity goals pass through to the native agy slash command", async () => {
+    const sendMessage = vi.fn();
+    const normalized = createNormalizedMessage("/goal --unbounded run a long investigation");
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "antigravity" },
+      normalized,
+      context: {
+        api: { sendMessage },
+        bridge: {},
+      },
+    });
+
+    expect(handled).toBe(false);
+    expect(normalized.text).toBe("/goal run a long investigation");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
