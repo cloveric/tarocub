@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
+import { Domain } from "@larksuiteoapi/node-sdk";
 
 import { acquireInstanceLock } from "../src/state/instance-lock.js";
 import { resolveLarkServiceLockDir, runLarkService } from "../src/lark/service.js";
@@ -58,6 +59,49 @@ describe("runLarkService", () => {
       expect(channel.on).toHaveBeenCalledWith("error", expect.any(Function));
       expect(channel.connect).toHaveBeenCalledTimes(1);
       expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps short Lark domain names to SDK domain constants", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-domain-"));
+    const abortController = new AbortController();
+    const channel = {
+      on: vi.fn(() => () => undefined),
+      connect: vi.fn(async () => {
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+    const createChannel = vi.fn(() => channel);
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        LARK_DOMAIN: "feishu",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel,
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+          },
+        }),
+        signal: abortController.signal,
+        logger: silentLogger(),
+      });
+
+      expect(createChannel).toHaveBeenCalledWith(expect.objectContaining({
+        domain: Domain.Feishu,
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

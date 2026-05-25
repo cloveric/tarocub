@@ -31,7 +31,7 @@ describe("runLarkWizard", () => {
 
     try {
       const envPath = await runLarkWizard(
-        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, LARK_DOMAIN: "feishu" },
         { log: (message) => messages.push(String(message ?? "")) },
         {
           registerAppImpl,
@@ -42,6 +42,7 @@ describe("runLarkWizard", () => {
       expect(envPath).toBe(path.join(stateDir, "lark.env"));
       expect(qrUrls).toEqual(["https://open.feishu.cn/qr"]);
       expect(registerAppImpl).toHaveBeenCalledWith(expect.objectContaining({
+        domain: "accounts.feishu.cn",
         source: "cc-telegram-bridge",
       }));
       const saved = await readFile(envPath, "utf8");

@@ -132,6 +132,7 @@ For raw `lark.card` payloads, bridge decorates ordinary button elements with Car
 
 ## Release Highlights
 
+- **v4.6.43** — fixes Feishu/Lark wizard domain handling so saved `LARK_DOMAIN=feishu|lark` values map to the official SDK domains at runtime and to the correct account registration hosts during QR setup.
 - **v4.6.42** — adds `lark wizard`, a QR-code PersonalAgent registration flow that saves Feishu/Lark app credentials to `lark.env` and lets `lark status/doctor/run` auto-load them.
 - **v4.6.41** — aligns Feishu/Lark interactive cards with Card 2.0 callback `behaviors`, access-checks card operators before stop/approval/choice actions, and splits Lark chat/user numeric ID maps to reduce collision blast radius.
 - **v4.6.40** — hardens the Feishu/Lark channel preview with a single-service lock, safer user-facing errors, Lark ID collision detection, raw card button routing, stronger `lark status` diagnostics, and more tolerant Feishu Docs CLI output parsing.

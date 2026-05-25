@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 
 import {
   createLarkChannel,
+  Domain,
   type CardActionEvent,
   type LarkChannelOptions,
   type NormalizedMessage,
@@ -149,7 +150,7 @@ export interface LarkRuntimeEnv {
 export interface LarkRuntimeConfig {
   appId: string;
   appSecret: string;
-  domain?: string;
+  domain?: LarkChannelOptions["domain"];
   stateDir: string;
   requireMentionInGroup: boolean;
 }
@@ -209,10 +210,21 @@ export function resolveLarkRuntimeConfig(env: LarkRuntimeEnv): LarkRuntimeConfig
   return {
     appId: env.LARK_APP_ID,
     appSecret: env.LARK_APP_SECRET,
-    ...(env.LARK_DOMAIN ? { domain: env.LARK_DOMAIN } : {}),
+    ...(env.LARK_DOMAIN ? { domain: resolveLarkClientDomain(env.LARK_DOMAIN) } : {}),
     stateDir: env.CCTB_LARK_STATE_DIR ?? env.CODEX_TELEGRAM_STATE_DIR ?? path.join(homeDir!, ".cctb", "lark"),
     requireMentionInGroup: parseBooleanEnv(env.LARK_REQUIRE_MENTION_IN_GROUP, true),
   };
+}
+
+function resolveLarkClientDomain(domain: string): LarkChannelOptions["domain"] {
+  const normalized = domain.trim().toLowerCase();
+  if (normalized === "feishu") {
+    return Domain.Feishu;
+  }
+  if (normalized === "lark") {
+    return Domain.Lark;
+  }
+  return domain;
 }
 
 export async function runLarkService(
@@ -250,7 +262,7 @@ export async function runLarkService(
           enabled: false,
         },
       },
-      ...(config.domain ? { domain: config.domain } : {}),
+      ...(config.domain !== undefined ? { domain: config.domain } : {}),
     };
     channel = options.createChannel
       ? options.createChannel(channelOptions)

@@ -19,6 +19,7 @@ export interface LarkWizardRegisterAppResult {
 
 export interface LarkWizardRegisterAppOptions {
   domain?: string;
+  larkDomain?: string;
   source?: string;
   signal?: AbortSignal;
   onQRCodeReady: (info: { url: string; expireIn: number }) => void;
@@ -37,7 +38,7 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
   logger.log("Scan the QR code with the Feishu/Lark mobile app, then choose or create a PersonalAgent app.");
 
   const result: LarkWizardRegisterAppResult = await register({
-    ...(env.LARK_DOMAIN ? { domain: env.LARK_DOMAIN } : {}),
+    ...resolveLarkRegistrationDomains(env.LARK_DOMAIN),
     source: "cc-telegram-bridge",
     onQRCodeReady: (info) => {
       logger.log("");
@@ -76,4 +77,18 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
   logger.log("Run: node dist/src/index.js lark run");
 
   return envPath;
+}
+
+function resolveLarkRegistrationDomains(domain: string | undefined): { domain?: string; larkDomain?: string } {
+  if (!domain) {
+    return {};
+  }
+  const normalized = domain.trim().toLowerCase();
+  if (normalized === "feishu") {
+    return { domain: "accounts.feishu.cn" };
+  }
+  if (normalized === "lark") {
+    return { domain: "accounts.larksuite.com", larkDomain: "accounts.larksuite.com" };
+  }
+  return { domain };
 }
