@@ -16,8 +16,8 @@
 </p>
 
 <h3 align="center">
-  给本地 Codex、Claude Code 和 Antigravity CLI 接一个 Telegram 控制台。<br>
-  在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，不替换你已经在用的引擎。
+  给本地 Codex、Claude Code 和 Antigravity CLI 接一个 Telegram-first 控制台。<br>
+  在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，也可以把同一套 bridge 暴露到飞书/Lark。
 </h3>
 
 <p align="center">
@@ -52,12 +52,65 @@ npm run dev -- telegram service start
 | **稳定的长任务运维** | cron、audit、timeline、usage tracking、访问控制和服务重启都由 bridge 管，不塞进模型记忆。 |
 | **可追溯网页研究** | 可选 Brave/Tavily MCP 提供 `web_search`、`web_extract`、provider status、fallback notice 和 source log。 |
 | **多 agent 编排** | Agent Bus 做实例间 delegation，Mini Bus 做 topic 间协作，Board 做持久化 Kanban 任务。 |
+| **飞书/Lark 通道预览** | 通过官方 Lark Channel SDK 复用同一个 bridge runtime，支持 streaming card、停止按钮、审批和文件/媒体投递标签。 |
+
+## 飞书 / Lark 通道预览
+
+Telegram 仍然是最成熟的主通道。飞书/Lark 是第二入口，复用同一套 engine adapter、session、workspace、`agent.md`、审批模型和文件投递标签。
+
+```bash
+export LARK_APP_ID="cli_xxx"
+export LARK_APP_SECRET="..."
+
+npm run build
+node dist/src/index.js lark status
+node dist/src/index.js lark doctor
+node dist/src/index.js lark run
+```
+
+可选环境变量：
+
+| 变量 | 含义 |
+|---|---|
+| `CCTB_LARK_STATE_DIR` | Lark 服务的状态和 workspace 目录，默认 `~/.cctb/lark`。 |
+| `CODEX_TELEGRAM_INSTANCE` | 复用现有 engine 配置时使用的实例名，默认 `lark`。 |
+| `LARK_DOMAIN` | 需要时覆盖 Lark/飞书 API domain。 |
+| `LARK_REQUIRE_MENTION_IN_GROUP` | 默认 `true`；群消息必须提到 bot 才会触发，除非显式关闭。 |
+
+当前 Lark 通道支持：
+
+- p2p/group 消息进入同一条 `Bridge.handleAuthorizedMessage` 路径，并复用 Telegram 侧同一套 pairing/allowlist 访问控制；
+- 用 `conversationKey` 隔离话题/thread；
+- streaming interactive card 和停止按钮；
+- 引擎权限请求审批卡片；
+- 收到图片/文件资源后下载到 bridge workspace；
+- 通过 `[send-file:/abs/path]`、`[send-image:/abs/path]`、`send.audio`、`send.video` 和 `send.batch` tool tag 把文件/图片/音视频发回 Lark；
+- 通过 `lark.post` tool tag 发送富文本/图文混排消息；
+- 通过 `lark.card` tool tag 发送自定义交互卡片，按钮点击会回流到同一个 bridge session；
+- 通过 `lark.doc.create` 创建飞书文档，适合长 specs/docs 和可评论反馈的材料；
+- 飞书合并转发消息会保留为 `<forwarded_lark_messages>` 任务上下文，方便“一键转发给 bot 处理”；
+- 按 state dir 加 Lark 服务锁，误开多个 `lark run` 时不会让多个进程同时消费同一批飞书事件；
+- timeline 会记录 `channel=lark`，所以可以用 `telegram timeline --channel lark` 和 `lark status` 把 Lark 流量与 Telegram 流量区分开。
+
+访问控制故意复用现有 bridge store。未配对的 Lark 私聊不会直接跑引擎，而是返回配对/allowlist 指引。目前先用现有 `telegram access ...` CLI 管理 Lark state dir/instance 的共享访问表；之后可以再补 Lark 专用别名。
+
+Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
+
+```text
+[tool:{"name":"lark.card","payload":{"title":"请选择","body":"下一步怎么做？","actions":[{"label":"继续","value":"continue"}]}}]
+[tool:{"name":"lark.doc.create","payload":{"title":"Spec","content":"# Spec\n\n正文","docFormat":"markdown"}}]
+[tool:{"name":"send.video","payload":{"path":"/absolute/path/demo.mp4"}}]
+```
+
+如果传 raw `lark.card` payload，bridge 会在存在会话上下文时给普通按钮自动补回调 metadata；如果你已经显式提供 `value.cctb_lark`，则保留你的自定义回调。
+
+`lark-cli` 适合在 agent turn 里处理飞书 Docs/IM/Calendar 等操作，但它不是入站 bot transport。入站长连接使用 `@larksuiteoapi/node-sdk`，因为它直接提供 normalized message event、card callback、streaming card 和 media helper。
 
 ## 产品边界
 
 | 它是 | 它不是 |
 |---|---|
-| 一个把现有 Codex / Claude Code / Antigravity 暴露到 Telegram 的本地 bridge。 | 一个托管 SaaS agent 平台，或 Codex/Claude Code/Antigravity 的替代品。 |
+| 一个把现有 Codex / Claude Code / Antigravity 暴露到 Telegram，并可选暴露到飞书/Lark 的本地 bridge。 | 一个托管 SaaS agent 平台，或 Codex/Claude Code/Antigravity 的替代品。 |
 | 一个管理会话、文件、审批、定时任务和多 agent 路由的控制层。 | 一个模型供应商、推理服务或独立 LLM runtime。 |
 | 一个给重度 CLI agent 用户使用的实用运维层。 | 一个面向所有 IM 平台的通用聊天机器人框架。 |
 | 一个把 delivery receipt、审计日志和任务状态移出脆弱 prompt 的地方。 | 一个保证模型永远自动正确完成任务的魔法盒。 |
@@ -74,6 +127,8 @@ npm run dev -- telegram service start
 
 ## 近期亮点
 
+- **v4.6.40** — 加固飞书/Lark 通道预览：单服务锁、安全的用户可见错误、Lark ID 碰撞检测、raw card 按钮回调补全、更明确的 `lark status` 诊断，以及更兼容的飞书文档 CLI 输出解析。
+- **v4.6.39** — 新增飞书/Lark 通道预览：官方 Lark Channel SDK 长连接、复用 bridge runtime、streaming/审批/自定义卡片、富文本 post、飞书文档创建、合并转发上下文、入站资源下载、timeline 诊断和出站文件/媒体标签。
 - **v4.6.22** — 新增 Antigravity CLI 作为第三个后端引擎，支持 Telegram `/engine antigravity`、YOLO/full-auto process 执行、`/goal` 透传、print mode 下安全拦截 `/model`、conversation 自动绑定和 `/resume conversation <id>`。
 - **v4.6.18** — 规范化 Telegram 群里的 `/goal@botname`，让原生引擎收到普通 `/goal`，同时 Codex 继续使用结构化 goal 处理。
 - **v4.6.17** — 让 Claude Code 的 `/goal` 可以从 Telegram 透传，不再把 goal 当成 Codex-only 功能。

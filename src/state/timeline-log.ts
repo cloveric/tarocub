@@ -33,7 +33,7 @@ export interface TimelineEvent {
     | "cron.disabled_after_failures"
     | "cron.failure_notification_failed";
   instanceName?: string;
-  channel?: "telegram" | "bus";
+  channel?: "telegram" | "bus" | "lark";
   chatId?: number;
   messageThreadId?: number;
   conversationKey?: string;

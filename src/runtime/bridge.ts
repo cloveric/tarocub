@@ -243,6 +243,7 @@ export class Bridge {
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
     requestOutputDir?: string;
     workspaceOverride?: string;
+    instructions?: string;
     sideChannelCommand?: string;
     extraEnv?: Record<string, string>;
     abortSignal?: AbortSignal;
@@ -310,7 +311,7 @@ export class Bridge {
     const response = await this.adapter.sendUserMessage(session.sessionId, {
       text,
       files: input.files,
-      instructions: undefined,
+      instructions: input.instructions,
       onProgress: input.onProgress,
       onApprovalRequest: input.onApprovalRequest,
       onEngineEvent: handleEngineEvent,

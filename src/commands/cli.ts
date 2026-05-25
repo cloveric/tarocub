@@ -1,5 +1,7 @@
+import { execFile as execFileCallback } from "node:child_process";
 import { readFile, readdir, rename, unlink, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { AccessStore } from "../state/access-store.js";
@@ -54,6 +56,9 @@ import { applyEngineSelection } from "../telegram/instance-config.js";
 import { runSideChannelSendCommand } from "../telegram/side-channel-send.js";
 import { runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps } from "./send.js";
 import { runCronCli } from "../cron-cli.js";
+import { resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkRuntimeEnv } from "../lark/service.js";
+
+const execFile = promisify(execFileCallback);
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -66,6 +71,11 @@ export interface CliOptions {
   > & {
     CCTB_SEND_URL?: string;
     CCTB_SEND_TOKEN?: string;
+    LARK_APP_ID?: string;
+    LARK_APP_SECRET?: string;
+    LARK_DOMAIN?: string;
+    CCTB_LARK_STATE_DIR?: string;
+    LARK_REQUIRE_MENTION_IN_GROUP?: string;
   };
   logger?: CliLogger;
   serviceDeps?: ServiceCommandDeps;
@@ -391,6 +401,151 @@ async function runStatusCommand(argv: string[], env: InstanceTokenEnv, logger: C
   return true;
 }
 
+function resolveLarkStateDirForCli(env: LarkRuntimeEnv): string {
+  if (env.CCTB_LARK_STATE_DIR) {
+    return env.CCTB_LARK_STATE_DIR;
+  }
+  if (env.CODEX_TELEGRAM_STATE_DIR) {
+    return env.CODEX_TELEGRAM_STATE_DIR;
+  }
+  const homeDir = env.HOME ?? env.USERPROFILE;
+  return homeDir ? path.join(homeDir, ".cctb", "lark") : "(unknown: HOME or USERPROFILE is required)";
+}
+
+async function formatLarkStatus(env: LarkRuntimeEnv): Promise<string> {
+  const stateDir = resolveLarkStateDirForCli(env);
+  const lines = [
+    "Lark channel",
+    `App ID: ${env.LARK_APP_ID ? "configured" : "missing"}`,
+    `App Secret: ${env.LARK_APP_SECRET ? "configured" : "missing"}`,
+    `Domain: ${env.LARK_DOMAIN ?? "default"}`,
+    `State dir: ${stateDir}`,
+    `Service: ${await describeLarkServiceLock(stateDir)}`,
+    `Require mention in groups: ${parseLarkBooleanEnv(env.LARK_REQUIRE_MENTION_IN_GROUP, true) ? "yes" : "no"}`,
+    "Run: node dist/src/index.js lark run",
+  ];
+
+  return lines.join("\n");
+}
+
+async function describeLarkServiceLock(stateDir: string): Promise<string> {
+  if (stateDir.startsWith("(unknown:")) {
+    return "unknown";
+  }
+
+  const lockPath = resolveLarkServiceLockPath(stateDir);
+  try {
+    const parsed = JSON.parse(await readFile(lockPath, "utf8")) as {
+      pid?: unknown;
+      acquiredAt?: unknown;
+    };
+    if (typeof parsed.pid !== "number") {
+      return `unknown lock (${lockPath})`;
+    }
+    const status = isProcessAlive(parsed.pid) ? "running" : "stale";
+    const acquiredAt = typeof parsed.acquiredAt === "string" ? ` since ${parsed.acquiredAt}` : "";
+    return `${status} pid ${parsed.pid}${acquiredAt}`;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "not running";
+    }
+    return `unknown (${error instanceof Error ? error.message : String(error)})`;
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") {
+        return false;
+      }
+      if (code === "EPERM") {
+        return true;
+      }
+    }
+    throw error;
+  }
+}
+
+function parseLarkBooleanEnv(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+  return /^(?:1|true|yes|on)$/i.test(value.trim());
+}
+
+async function checkLarkCliDocsCreate(): Promise<string> {
+  try {
+    const { stdout, stderr } = await execFile(
+      "lark-cli",
+      ["docs", "+create", "--help"],
+      { timeout: 3_000, maxBuffer: 1024 * 1024 },
+    );
+    const help = `${stdout}\n${stderr}`;
+    if (help.includes("--markdown") && help.includes("--title")) {
+      return "ok lark-cli docs +create: markdown create flags available";
+    }
+    return "warn lark-cli docs +create: installed CLI help did not expose --markdown/--title";
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `warn lark-cli docs +create: ${detail}`;
+  }
+}
+
+async function formatLarkDoctor(env: LarkRuntimeEnv): Promise<string> {
+  const stateDir = resolveLarkStateDirForCli(env);
+  const checks = [
+    `${env.LARK_APP_ID ? "ok" : "fail"} LARK_APP_ID: ${env.LARK_APP_ID ? "configured" : "missing"}`,
+    `${env.LARK_APP_SECRET ? "ok" : "fail"} LARK_APP_SECRET: ${env.LARK_APP_SECRET ? "configured" : "missing"}`,
+    `ok State dir: ${stateDir}`,
+    `ok Service lock: ${await describeLarkServiceLock(stateDir)}`,
+    await checkLarkCliDocsCreate(),
+  ];
+
+  try {
+    resolveLarkRuntimeConfig(env);
+    checks.push("ok runtime config: valid");
+  } catch (error) {
+    checks.push(`fail runtime config: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  return [
+    "Lark channel doctor",
+    ...checks.map((line) => `- ${line}`),
+  ].join("\n");
+}
+
+async function runLarkCommand(argv: string[], env: LarkRuntimeEnv, logger: CliLogger): Promise<boolean> {
+  const subcommand = argv[1] ?? "status";
+  const args = argv.slice(2);
+
+  if (subcommand === "status") {
+    if (args.length !== 0) {
+      throw new Error("Usage: lark status");
+    }
+    logger.log(await formatLarkStatus(env));
+    return true;
+  }
+
+  if (subcommand === "doctor") {
+    if (args.length !== 0) {
+      throw new Error("Usage: lark doctor");
+    }
+    logger.log(await formatLarkDoctor(env));
+    return true;
+  }
+
+  if (subcommand === "run") {
+    throw new Error("Usage: node dist/src/index.js lark run");
+  }
+
+  throw new Error("Usage: lark <status|doctor|run>");
+}
+
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
   const { instanceName, args } = extractInstanceOption(argv.slice(1));
   const filter: AuditEventFilter = { tail: 20 };
@@ -469,7 +624,7 @@ async function runTimelineCommand(argv: string[], env: InstanceTokenEnv, logger:
 
     if (argument === "--type") {
       if (index + 1 >= args.length) {
-        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]");
       }
       filter.type = args[index + 1] as TimelineEventFilter["type"];
       index++;
@@ -478,7 +633,7 @@ async function runTimelineCommand(argv: string[], env: InstanceTokenEnv, logger:
 
     if (argument === "--chat") {
       if (index + 1 >= args.length) {
-        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]");
       }
       filter.chatId = parseChatId(args[index + 1]);
       index++;
@@ -487,7 +642,7 @@ async function runTimelineCommand(argv: string[], env: InstanceTokenEnv, logger:
 
     if (argument === "--outcome") {
       if (index + 1 >= args.length) {
-        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]");
       }
       filter.outcome = args[index + 1];
       index++;
@@ -496,18 +651,18 @@ async function runTimelineCommand(argv: string[], env: InstanceTokenEnv, logger:
 
     if (argument === "--channel") {
       if (index + 1 >= args.length) {
-        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]");
       }
       const value = args[index + 1];
-      if (value !== "telegram" && value !== "bus") {
-        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+      if (value !== "telegram" && value !== "bus" && value !== "lark") {
+        throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]");
       }
       filter.channel = value;
       index++;
       continue;
     }
 
-    throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]");
+    throw new Error("Usage: telegram timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]");
   }
 
   const timelinePath = resolveTimelineLogPath(resolveAuditStateDir(env, instanceName));
@@ -1258,7 +1413,7 @@ Commands:
   task clear [--instance <name>] <upload-id>  Clear a file workflow record
   audit [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>]
                                               View audit trail
-  timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus>]
+  timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]
                                               View timeline trail
   instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run]
                                               Manage per-instance agent.md
@@ -1275,6 +1430,7 @@ Commands:
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
                                               Send files/text through the active turn side-channel or configured Telegram session
+  lark <status|doctor|run>                    Inspect or run the Feishu/Lark channel
   dashboard [--live]                         Open a visual status dashboard in the browser
   help                                        Show this help message`;
 
@@ -1617,6 +1773,10 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
     const result = await runCronCli(normalized.slice(1), { env: cronEnv });
     process.exitCode = result.exitCode;
     return true;
+  }
+
+  if (normalized[0] === "lark") {
+    return runLarkCommand(normalized, env, logger);
   }
 
   if (normalized[0] === "access") {

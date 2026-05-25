@@ -4,7 +4,7 @@ import { copyFile, mkdir, readFile, readdir, rename, symlink, lstat } from "node
 import { execFile } from "node:child_process";
 import path from "node:path";
 
-import { resolveConfig, resolveInstanceStateDir, type EnvSource } from "./config.js";
+import { resolveBridgeConfig, resolveConfig, resolveInstanceStateDir, type EnvSource } from "./config.js";
 import { Bridge } from "./runtime/bridge.js";
 import { ProcessCodexAdapter } from "./codex/process-adapter.js";
 import { ClaudeStreamAdapter } from "./codex/claude-stream-adapter.js";
@@ -625,6 +625,7 @@ async function migrateClaudeEngineHomeIfPresent(
 function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = { ...process.env };
   delete childEnv.TELEGRAM_BOT_TOKEN;
+  delete childEnv.LARK_APP_SECRET;
 
   const overlay: Array<[keyof EnvSource, string]> = [
     ["HOME", "HOME"],
@@ -721,9 +722,10 @@ async function createAdapter(
   return new ProcessCodexAdapter(config.codexExecutable, childEnv, undefined, instructionsPath, configPath, undefined, workspacePath);
 }
 
-export async function createServiceDependencies(env: EnvSource): Promise<{ config: ReturnType<typeof resolveConfig>; api: TelegramApi; bridge: Bridge }> {
-  const config = resolveConfig(env);
-  const api = new TelegramApi(config.telegramBotToken);
+async function createBridgeDependenciesForConfig(
+  env: EnvSource,
+  config: ReturnType<typeof resolveConfig>,
+): Promise<{ config: ReturnType<typeof resolveConfig>; bridge: Bridge }> {
   const accessStore = new AccessStore(config.accessStatePath);
   const sessionStore = new SessionStore(config.sessionStatePath);
   const instructionsPath = path.join(config.stateDir, "agent.md");
@@ -733,6 +735,18 @@ export async function createServiceDependencies(env: EnvSource): Promise<{ confi
   const bridge = new Bridge(accessStore, sessionManager, adapter, {
     loadGroupMode: async () => (await loadInstanceConfig(config.stateDir)).groupMode,
   });
+
+  return { config, bridge };
+}
+
+export async function createBridgeDependencies(env: EnvSource): Promise<{ config: ReturnType<typeof resolveConfig>; bridge: Bridge }> {
+  return createBridgeDependenciesForConfig(env, resolveBridgeConfig(env));
+}
+
+export async function createServiceDependencies(env: EnvSource): Promise<{ config: ReturnType<typeof resolveConfig>; api: TelegramApi; bridge: Bridge }> {
+  const config = resolveConfig(env);
+  const api = new TelegramApi(config.telegramBotToken);
+  const { bridge } = await createBridgeDependenciesForConfig(env, config);
 
   return { config, api, bridge };
 }

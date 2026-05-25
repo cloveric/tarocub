@@ -38,7 +38,7 @@ export const TimelineEventSchema = z.object({
     "cron.failure_notification_failed",
   ]),
   instanceName: z.string().optional(),
-  channel: z.enum(["telegram", "bus"]).optional(),
+  channel: z.enum(["telegram", "bus", "lark"]).optional(),
   chatId: z.number().int().optional(),
   messageThreadId: z.number().int().optional(),
   conversationKey: z.string().optional(),

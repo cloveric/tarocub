@@ -27,6 +27,7 @@ import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-e
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
 import { upgradeInstanceAgentInstructions } from "./commands/access.js";
 import { runSearchMcpServer } from "./search/search-mcp-server.js";
+import { runLarkService } from "./lark/service.js";
 
 function renderLifecycleError(error: unknown): string {
   if (error instanceof Error) {
@@ -44,6 +45,21 @@ async function main(): Promise<void> {
 
     if (argv[0] === "search-mcp") {
       await runSearchMcpServer();
+      return;
+    }
+
+    if (argv[0] === "lark" && argv[1] === "run") {
+      const abortController = new AbortController();
+      const shutdownSigterm = () => abortController.abort();
+      const shutdownSigint = () => abortController.abort();
+      process.once("SIGTERM", shutdownSigterm);
+      process.once("SIGINT", shutdownSigint);
+      try {
+        await runLarkService(process.env, { signal: abortController.signal });
+      } finally {
+        process.removeListener("SIGTERM", shutdownSigterm);
+        process.removeListener("SIGINT", shutdownSigint);
+      }
       return;
     }
 

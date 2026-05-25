@@ -117,6 +117,14 @@ export function resolveConfig(env: EnvSource = process.env): AppConfig {
     throw new Error("TELEGRAM_BOT_TOKEN is required");
   }
 
+  return resolveBaseConfig(env, telegramBotToken);
+}
+
+export function resolveBridgeConfig(env: EnvSource = process.env): AppConfig {
+  return resolveBaseConfig(env, env.TELEGRAM_BOT_TOKEN ?? "");
+}
+
+function resolveBaseConfig(env: EnvSource, telegramBotToken: string): AppConfig {
   const instanceName = normalizeInstanceName(env.CODEX_TELEGRAM_INSTANCE);
   const stateDir = resolveInstanceStateDir(env);
 
