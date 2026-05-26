@@ -31,7 +31,7 @@ import {
 } from "./bus.js";
 import { sendLarkMarkdown } from "./delivery.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
-import { readRawLarkConfig, resolveLarkLocale } from "./locale.js";
+import { readRawLarkConfig, renderLarkCronRuntimeMissing, renderLarkUserAccessDenied, resolveLarkLocale } from "./locale.js";
 import type { LarkNormalizedBridgeMessage } from "./message-normalizer.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
@@ -47,6 +47,8 @@ type RequestLarkApproval = (input: {
   conversationKey?: string;
   bridgeChatType?: "private" | "group";
   replyTo?: string;
+  replyInThread?: boolean;
+  locale?: Locale;
   request: EngineApprovalRequest;
   abortSignal?: AbortSignal;
 }) => Promise<EngineApprovalDecision>;
@@ -116,7 +118,7 @@ export async function handleLarkSimpleCommand(
       input,
       normalized,
       "/status",
-      await renderLarkStatusMessage(input.runtime, normalized, input.stateDir, input.requireMentionInGroup),
+      await renderLarkStatusMessage(input.runtime, normalized, input.stateDir, commandLocale, input.requireMentionInGroup),
     );
     return true;
   }
@@ -188,7 +190,7 @@ export async function handleLarkGroupCommandBeforeAccess(
   });
   if (auth.kind !== "allow") {
     await input.channel.send(normalized.chatId, {
-      text: formatLarkAccessReply(auth.text ?? "当前用户未获授权。"),
+      text: formatLarkAccessReply(auth.text ?? renderLarkUserAccessDenied(locale)),
     }, {
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
@@ -757,6 +759,7 @@ async function renderLarkStatusMessage(
   runtime: LarkServiceRuntime,
   normalized: LarkNormalizedBridgeMessage,
   stateDir: string,
+  locale: Locale,
   requireMentionInGroup?: boolean,
 ): Promise<string> {
   const cfg = await loadInstanceConfig(stateDir);
@@ -764,78 +767,127 @@ async function renderLarkStatusMessage(
   const session = await new SessionStore(path.join(stateDir, "session.json"))
     .findByConversationKeySafe(normalized.conversationKey);
   const currentSession = session.record;
-  const workflowLines = await renderLarkWorkflowStatusLines(stateDir, normalized.bridgeChatId);
+  const workflowLines = await renderLarkWorkflowStatusLines(stateDir, normalized.bridgeChatId, locale);
   const groupModeLines = normalized.bridgeChatType === "group"
-    ? await renderLarkGroupModeStatusLines(stateDir, normalized.chatId, requireMentionInGroup)
+    ? await renderLarkGroupModeStatusLines(stateDir, normalized.chatId, locale, requireMentionInGroup)
     : [];
+  const activeRun = runtime.activeRuns.has(normalized.conversationKey);
+  if (locale === "en") {
+    return [
+      "**Lark conversation status**",
+      "",
+      `Engine: ${cfg.engine}`,
+      `Model: ${cfg.model ?? "default"}`,
+      `Effort: ${cfg.effort ?? "default"}`,
+      `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
+      `Approval mode: ${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
+      `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
+      `Locale: ${locale}`,
+      `Verbosity: ${cfg.verbosity}`,
+      `Timezone: ${cfg.timezone}`,
+      `Conversation: ${normalized.conversationKey}`,
+      `Chat type: ${normalized.bridgeChatType}`,
+      ...groupModeLines,
+      session.warning
+        ? `Session bound: unknown (${session.warning})`
+        : `Session bound: ${currentSession ? "yes" : "no"}`,
+      ...(cfg.engine === "codex" && currentSession ? [`Current thread: ${currentSession.codexSessionId}`] : []),
+      ...(cfg.engine === "antigravity" && currentSession ? [`Current conversation: ${currentSession.codexSessionId}`] : []),
+      ...workflowLines,
+      `Active run: ${activeRun ? "yes" : "no"}`,
+      `Pending approvals: ${runtime.pendingApprovals.size}`,
+    ].join("\n");
+  }
+
   return [
-    "**Lark conversation status**",
+    "**Lark 会话状态**",
     "",
-    `Engine: ${cfg.engine}`,
-    `Model: ${cfg.model ?? "default"}`,
-    `Effort: ${cfg.effort ?? "default"}`,
-    `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
-    `Approval mode: ${renderLarkApprovalModeStatus(rawConfig.approvalMode)}`,
-    `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
-    `Locale: ${cfg.locale}`,
-    `Verbosity: ${cfg.verbosity}`,
-    `Timezone: ${cfg.timezone}`,
-    `Conversation: ${normalized.conversationKey}`,
-    `Chat type: ${normalized.bridgeChatType}`,
+    `引擎：${cfg.engine}`,
+    `模型：${cfg.model ?? "默认"}`,
+    `推理强度：${cfg.effort ?? "默认"}`,
+    `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
+    `审批模式：${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
+    `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,
+    `语言：${locale}`,
+    `详细度：${cfg.verbosity}`,
+    `时区：${cfg.timezone}`,
+    `会话：${normalized.conversationKey}`,
+    `聊天类型：${normalized.bridgeChatType}`,
     ...groupModeLines,
     session.warning
-      ? `Session bound: unknown (${session.warning})`
-      : `Session bound: ${currentSession ? "yes" : "no"}`,
-    ...(cfg.engine === "codex" && currentSession ? [`Current thread: ${currentSession.codexSessionId}`] : []),
-    ...(cfg.engine === "antigravity" && currentSession ? [`Current conversation: ${currentSession.codexSessionId}`] : []),
+      ? `会话绑定：未知（${session.warning}）`
+      : `会话绑定：${currentSession ? "是" : "否"}`,
+    ...(cfg.engine === "codex" && currentSession ? [`当前 thread：${currentSession.codexSessionId}`] : []),
+    ...(cfg.engine === "antigravity" && currentSession ? [`当前 conversation：${currentSession.codexSessionId}`] : []),
     ...workflowLines,
-    `Active run: ${runtime.activeRuns.has(normalized.conversationKey) ? "yes" : "no"}`,
-    `Pending approvals: ${runtime.pendingApprovals.size}`,
+    `当前运行：${activeRun ? "是" : "否"}`,
+    `待处理审批：${runtime.pendingApprovals.size}`,
   ].join("\n");
 }
 
-function renderLarkApprovalModeStatus(mode: unknown): string {
+function renderLarkApprovalModeStatus(mode: unknown, locale: Locale): string {
   if (mode === "bypass") {
     return "YOLO unsafe/bypass";
   }
   if (mode === "full-auto") {
     return "YOLO/full-auto";
   }
-  return "normal approvals";
+  return locale === "en" ? "normal approvals" : "普通审批";
 }
 
 function isBlockingWorkflowStatus(status: FileWorkflowStatus): boolean {
   return status === "preparing" || status === "processing" || status === "failed";
 }
 
-async function renderLarkWorkflowStatusLines(stateDir: string, chatId: number): Promise<string[]> {
+async function renderLarkWorkflowStatusLines(stateDir: string, chatId: number, locale: Locale): Promise<string[]> {
   const workflowResult = await new FileWorkflowStore(stateDir).inspect();
   if (workflowResult.warning) {
-    return [`Workflows: unknown (${workflowResult.warning})`];
+    return locale === "en"
+      ? [`Workflows: unknown (${workflowResult.warning})`]
+      : [`工作流：未知（${workflowResult.warning}）`];
   }
   const records = workflowResult.state.records.filter((record) => record.chatId === chatId);
-  return [
-    `Blocking workflows: ${records.filter((record) => isBlockingWorkflowStatus(record.status)).length}`,
-    `Waiting workflows: ${records.filter((record) => record.status === "awaiting_continue").length}`,
-  ];
+  const blocking = records.filter((record) => isBlockingWorkflowStatus(record.status)).length;
+  const waiting = records.filter((record) => record.status === "awaiting_continue").length;
+  return locale === "en"
+    ? [
+        `Blocking workflows: ${blocking}`,
+        `Waiting workflows: ${waiting}`,
+      ]
+    : [
+        `阻塞工作流：${blocking}`,
+        `等待工作流：${waiting}`,
+      ];
 }
 
 async function renderLarkGroupModeStatusLines(
   stateDir: string,
   chatId: string,
+  locale: Locale,
   requireMentionInGroup?: boolean,
 ): Promise<string[]> {
   const store = new LarkGroupModeStore(stateDir);
   const listenAll = await store.isListenAll(chatId);
   const requiresMention = requireMentionInGroup !== false && !listenAll;
+  if (locale === "en") {
+    const source = listenAll
+      ? "/group all override"
+      : requireMentionInGroup === false
+        ? "global mention requirement disabled"
+        : "default mention mode";
+    return [
+      `Group trigger: ${requiresMention ? "requires @bot / mention" : "accepts ordinary group messages"}`,
+      `Group mode source: ${source}`,
+    ];
+  }
   const source = listenAll
     ? "/group all override"
     : requireMentionInGroup === false
-      ? "global mention requirement disabled"
-      : "default mention mode";
+      ? "全局已关闭 @bot 要求"
+      : "默认 @bot 模式";
   return [
-    `Group trigger: ${requiresMention ? "requires @bot / mention" : "accepts ordinary group messages"}`,
-    `Group mode source: ${source}`,
+    `群聊触发：${requiresMention ? "需要 @bot / mention" : "接受普通群消息"}`,
+    `群聊模式来源：${source}`,
   ];
 }
 
@@ -981,7 +1033,10 @@ async function handleLarkFastCommand(stateDir: string, cfg: InstanceConfig, acti
     return locale === "en" ? "Codex Fast Mode disabled." : "Codex Fast Mode 已关闭。";
   }
   if (action === "status") {
-    return `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`;
+    if (locale === "en") {
+      return `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`;
+    }
+    return `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`;
   }
   return locale === "en" ? "Usage: /fast [on|off|status]" : "用法: /fast [on|off|status]";
 }
@@ -1214,7 +1269,7 @@ async function handleLarkCronCommand(
   locale: Locale,
 ): Promise<void> {
   if (!input.runtime.cronRuntime) {
-    await sendLarkCommandMarkdown(input, normalized, "/cron", "Lark cron runtime 尚未启动。请重启 Lark service 后再试。");
+    await sendLarkCommandMarkdown(input, normalized, "/cron", renderLarkCronRuntimeMissing(locale));
     return;
   }
 

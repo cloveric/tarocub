@@ -1,4 +1,5 @@
 import type { EngineStreamEvent } from "../codex/adapter.js";
+import type { Locale } from "../telegram/message-renderer.js";
 
 export interface LarkRunState {
   conversationKey: string;
@@ -19,6 +20,7 @@ export interface LarkApprovalCardInput {
   toolName: string;
   toolInput?: unknown;
   replyInThread?: boolean;
+  locale?: Locale;
 }
 
 export function initialLarkRunState(conversationKey: string, bridgeChatType?: "private" | "group"): LarkRunState {
@@ -74,9 +76,10 @@ export function applyLarkEngineEvent(
   }
 }
 
-export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> {
+export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): Record<string, unknown> {
+  const labels = runCardLabels(locale);
   const elements: unknown[] = [
-    markdownElement(state.status === "running" ? "**任务处理中...**" : "**已完成**"),
+    markdownElement(state.status === "running" ? `**${labels.running}**` : `**${labels.done}**`),
   ];
 
   if (state.thinking.length > 0) {
@@ -111,7 +114,7 @@ export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> 
       tag: "button",
       text: {
         tag: "plain_text",
-        content: "停止",
+        content: labels.stop,
       },
       type: "danger",
       behaviors: [callbackBehavior({
@@ -128,7 +131,7 @@ export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> 
       streaming_mode: state.status === "running",
       update_multi: true,
       summary: {
-        content: cardSummary(state),
+        content: cardSummary(state, locale),
       },
     },
     body: {
@@ -139,8 +142,15 @@ export function renderLarkRunCard(state: LarkRunState): Record<string, unknown> 
   };
 }
 
+function runCardLabels(locale: Locale): { running: string; done: string; stop: string } {
+  return locale === "en"
+    ? { running: "Task is running...", done: "Done", stop: "Stop" }
+    : { running: "任务处理中...", done: "已完成", stop: "停止" };
+}
+
 export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<string, unknown> {
   const toolInput = input.toolInput === undefined ? "" : `\n${formatJson(input.toolInput)}`;
+  const labels = approvalCardLabels(input.locale ?? "zh");
 
   return {
     schema: "2.0",
@@ -158,14 +168,20 @@ export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<str
         {
           tag: "column_set",
           columns: [
-            approvalButtonColumn(input.requestId, "allow_once", "允许一次", "primary", input.replyInThread),
-            approvalButtonColumn(input.requestId, "allow_session", "本轮允许", "default", input.replyInThread),
-            approvalButtonColumn(input.requestId, "deny", "拒绝", "danger", input.replyInThread),
+            approvalButtonColumn(input.requestId, "allow_once", labels.allowOnce, "primary", input.replyInThread),
+            approvalButtonColumn(input.requestId, "allow_session", labels.allowSession, "default", input.replyInThread),
+            approvalButtonColumn(input.requestId, "deny", labels.deny, "danger", input.replyInThread),
           ],
         },
       ],
     },
   };
+}
+
+function approvalCardLabels(locale: Locale): { allowOnce: string; allowSession: string; deny: string } {
+  return locale === "en"
+    ? { allowOnce: "Allow once", allowSession: "Allow for this turn", deny: "Deny" }
+    : { allowOnce: "允许一次", allowSession: "本轮允许", deny: "拒绝" };
 }
 
 function markdownElement(content: string): Record<string, unknown> {
@@ -234,10 +250,10 @@ function formatJson(value: unknown): string {
   }
 }
 
-function cardSummary(state: LarkRunState): string {
+function cardSummary(state: LarkRunState, locale: Locale): string {
   if (state.status === "running") {
-    return "Agent is running";
+    return locale === "en" ? "Task is running" : "任务处理中";
   }
   const text = state.resultText || state.assistantText;
-  return text.trim().slice(0, 80) || "Done";
+  return text.trim().slice(0, 80) || (locale === "en" ? "Done" : "已完成");
 }

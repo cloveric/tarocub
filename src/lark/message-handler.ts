@@ -19,7 +19,14 @@ import {
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
-import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
+import {
+  renderLarkBackgroundTaskHeader,
+  renderLarkChatAccessDenied,
+  renderLarkMediaTranscriptionFailure,
+  renderLarkQueuedTaskSkipped,
+  renderLarkStopResult,
+  resolveLarkLocale,
+} from "./locale.js";
 import {
   boundLarkArchiveSummary,
   downloadLarkAttachments,
@@ -86,7 +93,7 @@ export async function handleLarkMessage(input: {
       : { kind: "allow" as const };
     if (accessDecision.kind !== "allow") {
       await input.channel.send(normalized.chatId, {
-        text: formatLarkAccessReply(accessDecision.text ?? "当前聊天未获授权。"),
+        text: formatLarkAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale)),
       }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
@@ -102,7 +109,7 @@ export async function handleLarkMessage(input: {
     const active = input.runtime.activeRuns.get(normalized.conversationKey);
     active?.abortController.abort();
     const skippedQueued = input.runtime.chatQueue.clearPending(normalized.conversationKey);
-    await input.channel.send(normalized.chatId, { text: active || skippedQueued ? "已停止。" : "当前没有正在运行的任务。" }, {
+    await input.channel.send(normalized.chatId, { text: renderLarkStopResult(Boolean(active || skippedQueued), messageLocale) }, {
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
     });
@@ -130,7 +137,7 @@ export async function handleLarkMessage(input: {
       : { kind: "allow" as const };
     if (accessDecision.kind !== "allow") {
       await input.channel.send(normalized.chatId, {
-        text: formatLarkAccessReply(accessDecision.text ?? "当前聊天未获授权。"),
+        text: formatLarkAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale)),
       }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
@@ -182,7 +189,7 @@ export async function handleLarkMessage(input: {
           phase: "queue",
         },
       });
-      await input.channel.send(normalized.chatId, { text: "已跳过排队中的任务。" }, {
+      await input.channel.send(normalized.chatId, { text: renderLarkQueuedTaskSkipped(messageLocale) }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
       });
@@ -235,7 +242,7 @@ async function runNormalizedLarkMessage(
     })
     : { kind: "allow" as const };
   if (accessDecision.kind !== "allow") {
-    await input.channel.send(normalized.chatId, { text: formatLarkAccessReply(accessDecision.text ?? "当前聊天未获授权。") }, {
+    await input.channel.send(normalized.chatId, { text: formatLarkAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(locale)) }, {
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
     });
@@ -302,7 +309,7 @@ async function runNormalizedLarkMessage(
             }
           } catch {
             await input.channel.send(normalized.chatId, {
-              text: "音视频转写失败，请发送文字消息或较短的音视频文件。",
+              text: renderLarkMediaTranscriptionFailure(locale),
             }, {
               replyTo: normalized.messageId,
               replyInThread: Boolean(normalized.threadId),
@@ -352,6 +359,7 @@ async function runNormalizedLarkMessage(
               conversationKey: normalized.conversationKey,
               bridgeChatType: normalized.bridgeChatType,
               replyInThread: Boolean(normalized.threadId),
+              locale,
             }),
           }, {
             replyTo: normalized.messageId,
@@ -464,6 +472,7 @@ async function runNormalizedLarkMessage(
           bridgeChatType: normalized.bridgeChatType,
           replyTo: normalized.messageId,
           replyInThread: Boolean(normalized.threadId),
+          locale,
           request,
           abortSignal: request.abortSignal ?? runController.signal,
         }),

@@ -19,7 +19,14 @@ import { renderLarkUserFacingError } from "./errors.js";
 import { safeSegment } from "./files.js";
 import { assertStableLarkIdMappings } from "./id-map.js";
 import { larkOperatorRawId } from "./identity.js";
-import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
+import {
+  renderLarkApprovalExpired,
+  renderLarkBackgroundTaskHeader,
+  renderLarkOperatorAccessDenied,
+  renderLarkQueuedTaskSkipped,
+  renderLarkStopResult,
+  resolveLarkLocale,
+} from "./locale.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime, PendingLarkApproval } from "./runtime.js";
@@ -45,6 +52,7 @@ export async function requestLarkApproval(input: {
   bridgeChatType?: "private" | "group";
   replyTo?: string;
   replyInThread?: boolean;
+  locale?: Locale;
   request: EngineApprovalRequest;
   abortSignal?: AbortSignal;
 }): Promise<EngineApprovalDecision> {
@@ -64,7 +72,7 @@ export async function requestLarkApproval(input: {
       pending.resolve({ behavior: "deny" });
       void input.channel.send(
         input.chatId,
-        { text: "审批已过期，已拒绝。" },
+        { text: renderLarkApprovalExpired(input.locale ?? "zh") },
         larkReplyOptions(input.replyTo, input.replyInThread),
       ).catch(() => undefined);
     }, TELEGRAM_APPROVAL_TIMEOUT_MS);
@@ -97,6 +105,7 @@ export async function requestLarkApproval(input: {
         toolName: input.request.toolName,
         toolInput: input.request.toolInput,
         replyInThread: input.replyInThread,
+        locale: input.locale,
       }),
     }, larkReplyOptions(input.replyTo, input.replyInThread)).catch((error) => {
       cleanup();
@@ -189,7 +198,7 @@ export async function handleLarkCardAction(input: {
     const active = input.runtime.activeRuns.get(value.conversationKey);
     active?.abortController.abort();
     const skippedQueued = input.runtime.chatQueue.clearPending(value.conversationKey);
-    await input.channel.send(input.event.chatId, { text: active || skippedQueued ? "已停止。" : "当前没有正在运行的任务。" }, {
+    await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active || skippedQueued), locale) }, {
       replyTo: input.event.messageId,
       ...(replyInThread ? { replyInThread: true } : {}),
     });
@@ -289,6 +298,7 @@ export async function handleLarkCardAction(input: {
     }
     const label = typeof value.label === "string" ? value.label : "choice";
     const choiceValue = typeof value.value === "string" ? value.value : JSON.stringify(value.value ?? label);
+    const locale = await resolveLarkLocale(input.stateDir);
     const text = [
       "<lark_card_action>",
       `message_id: ${input.event.messageId}`,
@@ -298,7 +308,7 @@ export async function handleLarkCardAction(input: {
       `choice_value: ${choiceValue}`,
       "</lark_card_action>",
       "",
-      `用户点击了飞书卡片按钮：${label}`,
+      locale === "en" ? `The user clicked a Lark card button: ${label}` : `用户点击了飞书卡片按钮：${label}`,
       `value: ${choiceValue}`,
     ].filter((line): line is string => line !== undefined).join("\n");
     const userId = stableLarkNumericId(`user:${input.event.operator?.openId ?? input.event.operator?.userId ?? "unknown"}`);
@@ -333,7 +343,7 @@ export async function handleLarkCardAction(input: {
           detail: "queued turn skipped",
           metadata: { phase: "queue" },
         });
-        await input.channel.send(input.event.chatId, { text: "已跳过排队中的任务。" }, larkReplyOptions(input.event.messageId, replyInThread));
+        await input.channel.send(input.event.chatId, { text: renderLarkQueuedTaskSkipped(locale) }, larkReplyOptions(input.event.messageId, replyInThread));
         return true;
       },
     });
@@ -390,7 +400,7 @@ export async function handleLarkCardAction(input: {
           detail: "queued turn skipped",
           metadata: { phase: "queue" },
         });
-        await input.channel.send(input.event.chatId, { text: "已跳过排队中的任务。" }, larkReplyOptions(input.event.messageId, replyInThread));
+        await input.channel.send(input.event.chatId, { text: renderLarkQueuedTaskSkipped(locale) }, larkReplyOptions(input.event.messageId, replyInThread));
         return true;
       },
     });
@@ -456,7 +466,7 @@ async function ensureLarkCardActionAccess(input: {
   }
 
   await input.channel.send(input.event.chatId, {
-    text: decision.text ?? "当前操作者未获授权。",
+    text: decision.text ?? renderLarkOperatorAccessDenied(locale),
   }, larkReplyOptions(input.event.messageId, input.replyInThread));
   await appendLarkCardActionTurnEvent({
     stateDir: input.stateDir,
@@ -565,6 +575,7 @@ async function runLarkCardChoice(input: {
         bridgeChatType: input.bridgeChatType,
         replyTo: input.replyTo,
         replyInThread: input.replyInThread,
+        locale,
         request,
         abortSignal: request.abortSignal ?? abortController.signal,
       }),
@@ -721,6 +732,7 @@ async function runLarkArchiveContinueCardAction(input: {
         bridgeChatType: input.bridgeChatType,
         replyTo: input.replyTo,
         replyInThread: input.replyInThread,
+        locale,
         request,
         abortSignal: request.abortSignal ?? abortController.signal,
       }),

@@ -7,6 +7,7 @@ import type { EngineStreamEvent } from "../codex/adapter.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { stripCronAddTags } from "../telegram/cron-tags.js";
 import { stripDeliveryTags } from "../telegram/delivery-tags.js";
+import type { Locale } from "../telegram/message-renderer.js";
 import { stripTelegramToolTags } from "../telegram/tool-tags.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import type { LarkCommentContext, LarkCommentFileType } from "./comment-client.js";
@@ -14,7 +15,7 @@ import { renderLarkUserFacingError } from "./errors.js";
 import { safeSegment } from "./files.js";
 import { assertStableLarkIdMappings } from "./id-map.js";
 import { larkOperatorRawId } from "./identity.js";
-import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
+import { renderLarkBackgroundTaskHeader, renderLarkOperatorAccessDenied, resolveLarkLocale } from "./locale.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
@@ -69,7 +70,7 @@ export async function handleLarkComment(input: {
       fileToken: input.event.fileToken,
       fileType,
       commentId: input.event.commentId,
-      text: accessDecision.text ?? "当前操作者未获授权。",
+      text: accessDecision.text ?? renderLarkOperatorAccessDenied(locale),
     });
     return true;
   }
@@ -143,7 +144,7 @@ export async function handleLarkComment(input: {
         userId: bridgeUserId,
         chatType: "group",
         conversationKey,
-        text: buildLarkCommentPrompt(input.event, fileType, context),
+        text: buildLarkCommentPrompt(input.event, fileType, context, locale),
         locale,
         files: [],
         requestOutputDir,
@@ -151,7 +152,7 @@ export async function handleLarkComment(input: {
         instructions: larkAgentInstructions(),
         onEngineEvent: handleEngineEvent,
       });
-      const cleaned = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(result.text))).trim() || "（空回复）";
+      const cleaned = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(result.text))).trim() || renderLarkEmptyCommentReply(locale);
       await input.runtime.commentClient!.createReply({
         fileToken: input.event.fileToken,
         fileType,
@@ -240,6 +241,7 @@ function buildLarkCommentPrompt(
   event: CommentEvent,
   fileType: LarkCommentFileType,
   context: LarkCommentContext,
+  locale: Locale,
 ): string {
   const latestReply = context.replies.at(-1);
   const replies = context.replies
@@ -265,7 +267,29 @@ function buildLarkCommentPrompt(
     replies || undefined,
     "</lark_comment_context>",
     "",
-    "你正在飞书云文档评论线程里回复用户。请直接回答评论里的请求，必要时可用 lark-cli 读取文档上下文。",
-    latestReply?.text ? `用户评论：${latestReply.text}` : "用户在云文档评论中 @ 了你，请根据上下文回复。",
+    renderLarkCommentPromptInstruction(locale),
+    latestReply?.text
+      ? renderLarkLatestCommentLine(latestReply.text, locale)
+      : renderLarkMissingLatestCommentLine(locale),
   ].filter((line): line is string => line !== undefined).join("\n");
+}
+
+function renderLarkCommentPromptInstruction(locale: Locale): string {
+  return locale === "en"
+    ? "You are replying in a Feishu/Lark document comment thread. Answer the user's comment directly; use lark-cli to read document context when needed."
+    : "你正在飞书云文档评论线程里回复用户。请直接回答评论里的请求，必要时可用 lark-cli 读取文档上下文。";
+}
+
+function renderLarkLatestCommentLine(text: string, locale: Locale): string {
+  return locale === "en" ? `User comment: ${text}` : `用户评论：${text}`;
+}
+
+function renderLarkMissingLatestCommentLine(locale: Locale): string {
+  return locale === "en"
+    ? "The user mentioned you in a document comment. Reply using the available context."
+    : "用户在云文档评论中 @ 了你，请根据上下文回复。";
+}
+
+function renderLarkEmptyCommentReply(locale: Locale): string {
+  return locale === "en" ? "(empty reply)" : "（空回复）";
 }

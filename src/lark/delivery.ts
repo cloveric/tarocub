@@ -373,7 +373,7 @@ async function executeLarkToolTag(input: {
   }
 
   if (input.name === "lark.card" || input.name === "send.card") {
-    const card = buildLarkToolCard(payload, input.conversationKey, input.bridgeChatType, input.replyInThread);
+    const card = buildLarkToolCard(payload, input.conversationKey, input.bridgeChatType, input.replyInThread, input.locale);
     await input.channel.send(input.chatId, { card }, larkReplyOptions(input.replyTo, input.replyInThread));
     return true;
   }
@@ -672,6 +672,7 @@ function buildLarkToolCard(
   conversationKey: string | undefined,
   bridgeChatType: "private" | "group" | undefined,
   replyInThread: boolean | undefined,
+  locale: Locale,
 ): object {
   if (!payload) {
     throw new Error("lark.card requires an object payload");
@@ -680,7 +681,7 @@ function buildLarkToolCard(
     return decorateRawLarkCard(payload.card as Record<string, unknown>, conversationKey, bridgeChatType, replyInThread);
   }
 
-  const title = typeof payload.title === "string" ? payload.title : "请选择";
+  const title = typeof payload.title === "string" ? payload.title : defaultLarkToolCardTitle(locale);
   const body = typeof payload.body === "string" ? payload.body : "";
   const actions = Array.isArray(payload.actions) ? payload.actions : [];
   const elements: unknown[] = [
@@ -695,7 +696,7 @@ function buildLarkToolCard(
       columns: actions
         .filter((action): action is Record<string, unknown> => Boolean(action) && typeof action === "object" && !Array.isArray(action))
         .map((action) => {
-          const label = typeof action.label === "string" ? action.label : "选择";
+          const label = typeof action.label === "string" ? action.label : defaultLarkToolCardActionLabel(locale);
           const value = action.value ?? label;
           return {
             tag: "column",
@@ -745,6 +746,14 @@ function buildLarkToolCard(
       elements,
     },
   };
+}
+
+function defaultLarkToolCardTitle(locale: Locale): string {
+  return locale === "en" ? "Choose" : "请选择";
+}
+
+function defaultLarkToolCardActionLabel(locale: Locale): string {
+  return locale === "en" ? "Choose" : "选择";
 }
 
 function decorateRawLarkCard(

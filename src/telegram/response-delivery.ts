@@ -21,6 +21,7 @@ function isMarkdownParseError(error: unknown): boolean {
     text.includes("can't parse entities") ||
     text.includes("cannot parse entities") ||
     text.includes("parse entities") ||
+    text.includes("messageentitytexturl") ||
     text.includes("parse_mode")
   );
 }

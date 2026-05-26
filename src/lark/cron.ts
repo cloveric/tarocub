@@ -91,7 +91,7 @@ export function buildLarkCronExecutor(input: {
       return;
     }
     if (!input.deliverResponse) {
-      await sendLarkMarkdown(input.channel, job.larkChatId, result.text || "（空回复）", {
+      await sendLarkMarkdown(input.channel, job.larkChatId, result.text || renderLarkEmptyCronAgentReply(job), {
         ...larkCronReplyFields(job),
       });
       return;
@@ -193,6 +193,10 @@ function renderLarkCronNotification(job: CronJobRecord): string {
     ? "\n... (reminder text truncated.)"
     : "\n…（提醒内容过长，已截断。）";
   return `${prefix}${truncateLarkCronText(body, LARK_CRON_TEXT_LIMIT - prefix.length, truncationNotice)}`;
+}
+
+function renderLarkEmptyCronAgentReply(job: CronJobRecord): string {
+  return job.locale === "en" ? "(empty reply)" : "（空回复）";
 }
 
 function larkCronReplyOptions(job: CronJobRecord): LarkSendOptions | undefined {

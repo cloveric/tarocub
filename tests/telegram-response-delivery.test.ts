@@ -659,4 +659,21 @@ describe("deliverTelegramResponse", () => {
     expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "preferred_layout", { parseMode: "Markdown" });
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "preferred_layout");
   });
+
+  it("falls back to plain text when Telegram rejects Markdown text URL entities", async () => {
+    const api = {
+      sendMessage: vi.fn()
+        .mockRejectedValueOnce(new Error("Telegram API request failed for sendMessage: Bad Request: messageEntityTextUrl.url must be encoded in UTF-8"))
+        .mockResolvedValueOnce({ message_id: 2 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
+    };
+
+    const text = "[流式更新卡片 — 飞书开放平台](https://open.feishu.cn/document/server-docs/im-v1/message-card/流式更新卡片)";
+    await expect(
+      deliverTelegramResponse(api as never, 123, text, "/tmp/inbox", undefined, undefined, "zh"),
+    ).resolves.toBe(0);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, text, { parseMode: "Markdown" });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, text);
+  });
 });

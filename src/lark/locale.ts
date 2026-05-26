@@ -20,3 +20,42 @@ export async function resolveLarkLocale(stateDir: string): Promise<Locale> {
 export function renderLarkBackgroundTaskHeader(locale: Locale): string {
   return locale === "en" ? "Background task completed" : "后台任务完成";
 }
+
+export function renderLarkStopResult(stopped: boolean, locale: Locale): string {
+  if (locale === "en") {
+    return stopped ? "Stopped." : "No active task.";
+  }
+  return stopped ? "已停止。" : "当前没有正在运行的任务。";
+}
+
+export function renderLarkQueuedTaskSkipped(locale: Locale): string {
+  return locale === "en" ? "Queued task skipped." : "已跳过排队中的任务。";
+}
+
+export function renderLarkMediaTranscriptionFailure(locale: Locale): string {
+  return locale === "en"
+    ? "Audio/video transcription failed. Please send text or a shorter audio/video file."
+    : "音视频转写失败，请发送文字消息或较短的音视频文件。";
+}
+
+export function renderLarkCronRuntimeMissing(locale: Locale): string {
+  return locale === "en"
+    ? "Lark cron runtime is not started. Restart the Lark service and try again."
+    : "Lark cron runtime 尚未启动。请重启 Lark service 后再试。";
+}
+
+export function renderLarkApprovalExpired(locale: Locale): string {
+  return locale === "en" ? "Approval expired (denied)." : "审批已过期，已拒绝。";
+}
+
+export function renderLarkChatAccessDenied(locale: Locale): string {
+  return locale === "en" ? "Current chat is not authorized." : "当前聊天未获授权。";
+}
+
+export function renderLarkUserAccessDenied(locale: Locale): string {
+  return locale === "en" ? "Current user is not authorized." : "当前用户未获授权。";
+}
+
+export function renderLarkOperatorAccessDenied(locale: Locale): string {
+  return locale === "en" ? "Current operator is not authorized." : "当前操作者未获授权。";
+}

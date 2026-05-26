@@ -174,6 +174,35 @@ describe("lark service", () => {
     }
   });
 
+  it("renders default Lark chat access denials in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-access-denial-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_access_denial_en", content: "hello" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "Current chat is not authorized." },
+        { replyTo: "om_access_denial_en", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("delivers Lark background task notifications from engine stream events", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-"));
     const channel = fakeChannel();
@@ -431,6 +460,48 @@ describe("lark service", () => {
     }
   });
 
+  it("renders Lark media transcription failures in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-en-fail-"));
+    const transcribeMedia = vi.fn(async () => {
+      throw new Error("asr down");
+    });
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async (key: string) => Buffer.from(`media:${key}`)),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const runtime = createLarkServiceRuntime({ transcribeMedia });
+
+    try {
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }));
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_media_fail_en",
+          content: "summarize this",
+          resources: [
+            { type: "audio", fileKey: "audio_key", fileName: "voice.m4a" },
+          ],
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "Audio/video transcription failed. Please send text or a shorter audio/video file." },
+        { replyTo: "om_media_fail_en", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("summarizes Lark zip archives and waits for continue instead of running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-summary-"));
     const zipBuffer = createZipBuffer({
@@ -484,6 +555,43 @@ describe("lark service", () => {
       });
       expect(workflowState.records[0]?.summary).toContain("src/");
       expect(workflowState.records[0]?.summary).toContain("index.ts");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders Lark archive continuation cards in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-summary-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const zipBuffer = createZipBuffer({
+      "README.md": "# hello",
+      "src/index.ts": "console.log('hi')",
+    });
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => zipBuffer),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_zip_en",
+          content: "Analyze this archive",
+          resources: [{ type: "file", fileKey: "file_zip", fileName: "repo.zip" }],
+        }),
+      });
+
+      const calls = JSON.stringify(channel.send.mock.calls);
+      expect(calls).toContain("Archive summary generated");
+      expect(calls).toContain("Continue Analysis");
+      expect(calls).not.toContain("压缩包摘要已生成");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -552,6 +660,46 @@ describe("lark service", () => {
         "oc_chat",
         { markdown: "analysis from card done" },
         { replyTo: "om_card" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders missing Lark archive continuation replies in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-missing-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        event: {
+          messageId: "om_card_missing",
+          chatId: "oc_chat",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "continue_archive",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              uploadId: "missing-upload",
+            },
+          },
+        },
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "That archive is no longer waiting for continued analysis in this chat." },
+        { replyTo: "om_card_missing" },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -956,6 +1104,43 @@ describe("lark service", () => {
     }
   });
 
+  it("renders default Lark group command authorization denials in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-denial-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      checkUserAuthorization: vi.fn(async () => ({ kind: "reply" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_group_denial_en",
+          chatId: "oc_group_en",
+          chatType: "group",
+          mentionedBot: true,
+          content: "/group allow",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_group_en",
+        { text: "Current user is not authorized." },
+        { replyTo: "om_group_denial_en", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders Lark group command replies in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-output-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
@@ -1316,20 +1501,60 @@ describe("lark service", () => {
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         {
-          markdown: expect.stringContaining("Current thread: thread-status-123"),
+          markdown: expect.stringContaining("当前 thread：thread-status-123"),
         },
         { replyTo: "om_status", replyInThread: false },
       );
       expect(JSON.stringify(channel.send.mock.calls)).toContain("lark:oc_chat");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("会话绑定：是");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("审批模式：YOLO/full-auto");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("预算：$12.50");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("语言：zh");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("详细度：2");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("时区：Asia/Shanghai");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("当前运行：是");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("等待工作流：1");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("阻塞工作流：0");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers the Lark status command in English when Lark locale is explicitly English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en", engine: "codex" }) + "\n");
+    await new SessionStore(path.join(stateDir, "session.json")).upsert({
+      telegramChatId: stableLarkNumericId("lark:oc_chat"),
+      conversationKey: "lark:oc_chat",
+      codexSessionId: "thread-status-en",
+      status: "idle",
+      updatedAt: new Date("2026-05-25T00:00:00.000Z").toISOString(),
+    });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_status_en", content: "/status" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("**Lark conversation status**") },
+        { replyTo: "om_status_en", replyInThread: false },
+      );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Engine: codex");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Session bound: yes");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Approval mode: YOLO/full-auto");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Budget: $12.50");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Locale: zh");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Verbosity: 2");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Timezone: Asia/Shanghai");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Active run: yes");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Waiting workflows: 1");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Blocking workflows: 0");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Current thread: thread-status-en");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Active run: no");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1355,7 +1580,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("Active run: no") },
+        { markdown: expect.stringContaining("当前运行：否") },
         { replyTo: "om_status_idle", replyInThread: false },
       );
     } finally {
@@ -1386,12 +1611,12 @@ describe("lark service", () => {
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         {
-          markdown: expect.stringContaining("**Lark conversation status**"),
+          markdown: expect.stringContaining("**Lark 会话状态**"),
         },
         { replyTo: "om_status_bad_config", replyInThread: false },
       );
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Engine: codex");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Approval mode: normal approvals");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("引擎：codex");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("审批模式：普通审批");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1440,12 +1665,12 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_group",
-        { markdown: expect.stringContaining("Group trigger: accepts ordinary group messages") },
+        { markdown: expect.stringContaining("群聊触发：接受普通群消息") },
         { replyTo: "om_group_status", replyInThread: false },
       );
       expect(channel.send).toHaveBeenCalledWith(
         "oc_group",
-        { markdown: expect.stringContaining("Group mode source: /group all override") },
+        { markdown: expect.stringContaining("群聊模式来源：/group all override") },
         { replyTo: "om_group_status", replyInThread: false },
       );
     } finally {
@@ -1490,6 +1715,39 @@ describe("lark service", () => {
         "oc_chat",
         { text: "已停止。" },
         { replyTo: "om_stop", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders Lark stop text replies in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-en-"));
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }));
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_stop_en", content: "/stop" }),
+      });
+
+      expect(abortController.signal.aborted).toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "Stopped." },
+        { replyTo: "om_stop_en", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -1646,6 +1904,39 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 opus");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Effort 已设为 max");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers Lark fast status in Chinese when Lark locale is Chinese", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-fast-status-zh-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "codex",
+      codexServiceTier: "fast",
+      locale: "zh",
+    }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_fast_status_zh", content: "/fast status" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "Codex Fast Mode：开启" },
+        { replyTo: "om_fast_status_zh", replyInThread: false },
+      );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2132,6 +2423,36 @@ describe("lark service", () => {
     }
   });
 
+  it("renders missing Lark cron runtime guidance in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-runtime-en-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }));
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_cron_runtime_en", content: "/cron list" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "Lark cron runtime is not started. Restart the Lark service and try again." },
+        { replyTo: "om_cron_runtime_en", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes the configured Lark locale into cron commands", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-locale-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
@@ -2510,6 +2831,58 @@ describe("lark service", () => {
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: "agent result" },
+        {},
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders empty Lark cron agent replies in the stored Lark locale", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-empty-en-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "" })),
+    };
+    const executor = buildLarkCronExecutor({
+      channel,
+      bridge,
+      runtime,
+      stateDir,
+    });
+
+    try {
+      await executor({
+        id: "emptycron",
+        channel: "lark",
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_user"),
+        chatType: "private",
+        conversationKey: "lark:oc_chat",
+        larkChatId: "oc_chat",
+        cronExpr: "0 9 * * *",
+        timezone: "Asia/Shanghai",
+        prompt: "daily summary",
+        enabled: true,
+        runOnce: false,
+        sessionMode: "new_per_run",
+        deliveryMode: "agent",
+        mute: false,
+        silent: false,
+        timeoutMins: 30,
+        maxFailures: 3,
+        createdAt: "2026-05-25T00:00:00.000Z",
+        updatedAt: "2026-05-25T00:00:00.000Z",
+        failureCount: 0,
+        runHistory: [],
+        locale: "en",
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "(empty reply)" },
         {},
       );
     } finally {
@@ -3829,6 +4202,38 @@ describe("lark service", () => {
     expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已停止。" }, { replyTo: "om_card" });
   });
 
+  it("renders Lark stop card action replies in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-card-en-"));
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    const channel = fakeChannel();
+
+    try {
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }));
+
+      const handled = await handleLarkCardAction({
+        channel,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_card_en",
+          operator: { openId: "ou_user" },
+          action: {
+            value: { cctb_lark: "stop", conversationKey: "lark:oc_chat" },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(abortController.signal.aborted).toBe(true);
+      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "Stopped." }, { replyTo: "om_card_en" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("ignores Lark document comments that do not mention the bot", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-skip-"));
     const commentClient = fakeCommentClient();
@@ -3914,10 +4319,25 @@ describe("lark service", () => {
   it("passes the configured Lark locale into document comment turns and access checks", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-locale-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
-    const commentClient = fakeCommentClient();
+    const commentClient = fakeCommentClient({
+      getCommentContext: vi.fn(async () => ({
+        quote: "",
+        replies: [{
+          replyId: "reply_1",
+          userId: "ou_user",
+          text: "@bot please summarize this",
+          docsLinks: [],
+        }],
+      })),
+    });
     const bridge = {
       checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
-      handleAuthorizedMessage: vi.fn(async () => ({ text: "comment reply" })),
+      handleAuthorizedMessage: vi.fn(async (_input: {
+        conversationKey?: string;
+        files: string[];
+        locale?: string;
+        text: string;
+      }) => ({ text: "comment reply" })),
     };
 
     try {
@@ -3935,6 +4355,67 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         locale: "en",
         conversationKey: "lark-comment:doc_token",
+      }));
+      const promptText = bridge.handleAuthorizedMessage.mock.calls[0]![0].text;
+      expect(promptText).toContain("You are replying in a Feishu/Lark document comment thread.");
+      expect(promptText).toContain("User comment:");
+      expect(promptText).not.toContain("你正在飞书云文档评论线程里回复用户");
+      expect(promptText).not.toContain("用户评论：");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders empty Lark document comment replies in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-empty-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const commentClient = fakeCommentClient();
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "[send-file:/tmp/ignored.txt]" })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime: createLarkServiceRuntime({ commentClient }),
+        stateDir,
+        event: fakeCommentEvent(),
+      });
+
+      expect(handled).toBe(true);
+      expect(commentClient.createReply).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        text: "(empty reply)",
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders default Lark document comment operator denials in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-denial-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const commentClient = fakeCommentClient();
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "reply" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime: createLarkServiceRuntime({ commentClient }),
+        stateDir,
+        event: fakeCommentEvent({ operator: { openId: "ou_intruder" } }),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(commentClient.createReply).toHaveBeenCalledWith(expect.objectContaining({
+        text: "Current operator is not authorized.",
       }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -4755,6 +5236,37 @@ describe("lark service", () => {
     }
   });
 
+  it("renders default lark.card labels in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-default-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: '[tool:{"name":"lark.card","payload":{"actions":[{"value":"continue"}]}}]',
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_default_card_en",
+          content: "send default card",
+        }),
+      });
+
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("Choose");
+      expect(rendered).not.toContain("请选择");
+      expect(rendered).not.toContain("选择");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("decorates raw lark.card buttons so choices route back to the bridge", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-raw-card-"));
     const channel = fakeChannel();
@@ -5088,6 +5600,45 @@ describe("lark service", () => {
     }
   });
 
+  it("renders skipped queued Lark messages in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-message-skipped-en-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, _job: () => Promise<T>, options?: {
+        onSkipped?: () => T | Promise<T>;
+      }): Promise<T> => {
+        return options?.onSkipped ? await options.onSkipped() : undefined as T;
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }));
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_skipped_en", content: "hello" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "Queued task skipped." },
+        { replyTo: "om_skipped_en", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("creates Feishu docs from lark.doc.create tool tags", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-doc-"));
     const runtime = createLarkServiceRuntime({
@@ -5358,7 +5909,7 @@ describe("lark service", () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
     const bridge = {
-      handleAuthorizedMessage: vi.fn(async () => ({ text: "choice handled" })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string; locale?: string; conversationKey?: string }) => ({ text: "choice handled" })),
     };
 
     try {
@@ -5408,7 +5959,7 @@ describe("lark service", () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
     const bridge = {
-      handleAuthorizedMessage: vi.fn(async () => ({ text: "choice handled" })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string; locale?: string; conversationKey?: string }) => ({ text: "choice handled" })),
     };
 
     try {
@@ -5437,7 +5988,10 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         locale: "en",
         conversationKey: "lark:oc_chat",
+        text: expect.stringContaining("The user clicked a Lark card button: Continue"),
       }));
+      const bridgeText = bridge.handleAuthorizedMessage.mock.calls[0]![0].text;
+      expect(bridgeText).not.toContain("用户点击了飞书卡片按钮");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -5923,6 +6477,51 @@ describe("lark service", () => {
     }
   });
 
+  it("renders default Lark card action operator denials in English when Lark locale is English", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-denial-en-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_denial_en",
+          operator: { openId: "ou_intruder" },
+          action: {
+            value: {
+              cctb_lark: "stop",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+            },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(abortController.signal.aborted).toBe(false);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "Current operator is not authorized." },
+        { replyTo: "card_denial_en" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects unauthorized Lark stop actions", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-denied-"));
     const runtime = createLarkServiceRuntime();
@@ -6008,6 +6607,38 @@ describe("lark service", () => {
     });
 
     await expect(pending).resolves.toEqual({ behavior: "allow", scope: "session" });
+  });
+
+  it("renders Lark approval timeout replies in English when Lark locale is English", async () => {
+    vi.useFakeTimers();
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel,
+      runtime,
+      chatId: "oc_chat",
+      replyTo: "om_request",
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "npm test" },
+      } satisfies EngineApprovalRequest,
+    });
+
+    try {
+      await vi.runAllTimersAsync();
+
+      await expect(pending).resolves.toEqual({ behavior: "deny" });
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "Approval expired (denied)." },
+        { replyTo: "om_request" },
+      );
+    } finally {
+      runtime.pendingApprovals.clear();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps Lark approval card action replies inside the originating thread", async () => {

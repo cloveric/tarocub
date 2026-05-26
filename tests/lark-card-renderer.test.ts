@@ -40,6 +40,17 @@ describe("lark card renderer", () => {
     expect(serialized).toContain('"bridgeChatType":"group"');
   });
 
+  it("renders active run cards in English when locale is English", () => {
+    const card = renderLarkRunCard(initialLarkRunState("lark:oc_chat", "group"), "en") as any;
+    const serialized = JSON.stringify(card);
+
+    expect(card.config.streaming_mode).toBe(true);
+    expect(serialized).toContain("Task is running");
+    expect(serialized).toContain("Stop");
+    expect(serialized).not.toContain("任务处理中");
+    expect(serialized).not.toContain("停止");
+  });
+
   it("renders approval cards with scoped allow and deny actions", () => {
     const card = renderLarkApprovalCard({
       requestId: "req_1",
@@ -54,5 +65,23 @@ describe("lark card renderer", () => {
     expect(serialized).toContain("deny");
     expect(serialized).toContain('"behaviors"');
     expect(serialized).toContain('"type":"callback"');
+  });
+
+  it("renders approval cards in English when locale is English", () => {
+    const card = renderLarkApprovalCard({
+      requestId: "req_1",
+      toolName: "Bash",
+      toolInput: { command: "npm test" },
+      locale: "en",
+    }) as any;
+    const serialized = JSON.stringify(card);
+
+    expect(serialized).toContain("Approval requested");
+    expect(serialized).toContain("Allow once");
+    expect(serialized).toContain("Allow for this turn");
+    expect(serialized).toContain("Deny");
+    expect(serialized).not.toContain("允许一次");
+    expect(serialized).not.toContain("本轮允许");
+    expect(serialized).not.toContain("拒绝");
   });
 });

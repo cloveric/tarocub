@@ -16,6 +16,7 @@ import {
   type MiniBusCommandContext,
 } from "../telegram/mini-bus-commands.js";
 import type { NormalizedTelegramMessage } from "../telegram/update-normalizer.js";
+import type { Locale } from "../telegram/message-renderer.js";
 import {
   stableLarkNumericId,
   type LarkNormalizedBridgeMessage,
@@ -39,6 +40,8 @@ type LarkBusCommandInput = {
     conversationKey?: string;
     bridgeChatType?: "private" | "group";
     replyTo?: string;
+    replyInThread?: boolean;
+    locale?: Locale;
     request: EngineApprovalRequest;
     abortSignal?: AbortSignal;
   }) => Promise<EngineApprovalDecision>;
@@ -74,6 +77,8 @@ export async function handleLarkBoardCommand(
       conversationKey: normalized.conversationKey,
       bridgeChatType: normalized.bridgeChatType,
       replyTo: normalized.messageId,
+      replyInThread: Boolean(normalized.threadId),
+      locale,
       request,
       abortSignal: request.abortSignal ?? abortController.signal,
     }),
@@ -134,6 +139,8 @@ export async function handleLarkMiniBusCommand(
       conversationKey: normalized.conversationKey,
       bridgeChatType: normalized.bridgeChatType,
       replyTo: normalized.messageId,
+      replyInThread: Boolean(normalized.threadId),
+      locale,
       request,
       abortSignal: request.abortSignal ?? abortController.signal,
     }),
@@ -267,6 +274,8 @@ export async function handleLarkCrewWorkflow(
       conversationKey: normalized.conversationKey,
       bridgeChatType: normalized.bridgeChatType,
       replyTo: normalized.messageId,
+      replyInThread: Boolean(normalized.threadId),
+      locale,
       request,
       abortSignal: request.abortSignal ?? input.abortSignal,
     }),

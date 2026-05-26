@@ -8,6 +8,7 @@ import {
   type DownloadedAttachment,
   type FileWorkflowResult,
 } from "../runtime/file-workflow.js";
+import type { Locale } from "../telegram/message-renderer.js";
 import type { NormalizedTelegramAttachment } from "../telegram/update-normalizer.js";
 import type { LarkChannelLike } from "./types.js";
 import type {
@@ -109,7 +110,9 @@ export function renderLarkArchiveContinueCard(input: {
   conversationKey: string;
   bridgeChatType: "private" | "group";
   replyInThread?: boolean;
+  locale?: Locale;
 }): object {
+  const locale = input.locale ?? "zh";
   return {
     schema: "2.0",
     config: {
@@ -123,7 +126,9 @@ export function renderLarkArchiveContinueCard(input: {
       elements: [
         {
           tag: "markdown",
-          content: "压缩包摘要已生成。需要继续深入分析时，点击按钮或直接回复 `/continue`。",
+          content: locale === "en"
+            ? "Archive summary generated. To continue deeper analysis, click the button or reply with `/continue`."
+            : "压缩包摘要已生成。需要继续深入分析时，点击按钮或直接回复 `/continue`。",
         },
         {
           tag: "button",
