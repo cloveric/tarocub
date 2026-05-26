@@ -83,7 +83,12 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   ];
 
   if (state.thinking.length > 0) {
-    elements.push(markdownElement(`**Thinking**\n${state.thinking.slice(-2).join("\n\n")}`));
+    elements.push(collapsiblePanel({
+      title: state.status === "running" ? labels.thinkingActive : labels.thinkingDone,
+      expanded: state.status === "running",
+      color: "grey",
+      body: state.thinking.slice(-2).join("\n\n"),
+    }));
   }
 
   if (state.tools.length > 0) {
@@ -94,7 +99,12 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
         return `- ${tool.toolName}${input}`;
       })
       .join("\n");
-    elements.push(markdownElement(`**Tools**\n${tools}`));
+    elements.push(collapsiblePanel({
+      title: labels.tools,
+      expanded: state.status === "running",
+      color: "blue",
+      body: tools,
+    }));
   }
 
   const bodyText = state.resultText || state.assistantText;
@@ -107,6 +117,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   }
 
   if (state.status === "running") {
+    elements.push(markdownElement(`_${labels.outputting}_`));
     elements.push({
       tag: "hr",
     });
@@ -142,10 +153,34 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   };
 }
 
-function runCardLabels(locale: Locale): { running: string; done: string; stop: string } {
+function runCardLabels(locale: Locale): {
+  running: string;
+  done: string;
+  stop: string;
+  thinkingActive: string;
+  thinkingDone: string;
+  tools: string;
+  outputting: string;
+} {
   return locale === "en"
-    ? { running: "Task is running...", done: "Done", stop: "Stop" }
-    : { running: "任务处理中...", done: "已完成", stop: "停止" };
+    ? {
+      running: "Task is running...",
+      done: "Done",
+      stop: "Stop",
+      thinkingActive: "Thinking",
+      thinkingDone: "Thinking complete",
+      tools: "Tool calls",
+      outputting: "Streaming output",
+    }
+    : {
+      running: "任务处理中...",
+      done: "已完成",
+      stop: "停止",
+      thinkingActive: "思考中",
+      thinkingDone: "思考完成",
+      tools: "工具调用",
+      outputting: "正在输出",
+    };
 }
 
 export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<string, unknown> {
@@ -188,6 +223,29 @@ function markdownElement(content: string): Record<string, unknown> {
   return {
     tag: "markdown",
     content,
+  };
+}
+
+function collapsiblePanel(input: {
+  title: string;
+  expanded: boolean;
+  color: "grey" | "blue" | "red";
+  body: string;
+}): Record<string, unknown> {
+  return {
+    tag: "collapsible_panel",
+    expanded: input.expanded,
+    header: {
+      title: { tag: "markdown", content: `**${input.title}**` },
+      vertical_align: "center",
+      icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
+      icon_position: "follow_text",
+      icon_expanded_angle: -180,
+    },
+    border: { color: input.color, corner_radius: "5px" },
+    vertical_spacing: "8px",
+    padding: "8px 8px 8px 8px",
+    elements: [{ tag: "markdown", content: input.body || "_无内容_", text_size: "notation" }],
   };
 }
 

@@ -17,7 +17,7 @@ import { larkAccessChatIdFromConversationKey } from "./message-normalizer.js";
 
 const LARK_CONFIG_ENGINES: InstanceEngine[] = ["codex", "claude", "antigravity"];
 
-export type LarkConfigActionName = "engine" | "fast" | "yolo" | "locale" | "group" | "refresh";
+export type LarkConfigActionName = "engine" | "fast" | "yolo" | "locale" | "group" | "refresh" | "submit";
 
 export interface LarkConfigCardActionValue extends Record<string, unknown> {
   cctb_lark: "config";
@@ -86,6 +86,7 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
 
   const elements: unknown[] = [
     markdownElement(summaryLines.join("\n")),
+    configFormSection(input, cfg, raw.approvalMode),
     section(labels.engineSection, [
       button(optionLabel(labels.codex, cfg.engine === "codex", labels), "engine", "codex", input, cfg.engine === "codex" ? "primary" : "default"),
       button(optionLabel(labels.claude, cfg.engine === "claude", labels), "engine", "claude", input, cfg.engine === "claude" ? "primary" : "default"),
@@ -138,8 +139,12 @@ export async function applyLarkConfigCardAction(
   stateDir: string,
   value: LarkConfigCardActionValue,
   locale: Locale,
+  formValue?: Record<string, unknown>,
 ): Promise<string> {
   const labels = larkConfigLabels(locale);
+  if (value.action === "submit") {
+    return await applySubmitAction(stateDir, value, formValue, locale);
+  }
   if (value.action === "refresh") {
     return labels.refreshed;
   }
@@ -159,6 +164,57 @@ export async function applyLarkConfigCardAction(
     return await applyGroupAction(stateDir, value, locale);
   }
   return locale === "en" ? "Unsupported config action." : "不支持的配置操作。";
+}
+
+async function applySubmitAction(
+  stateDir: string,
+  value: LarkConfigCardActionValue,
+  formValue: Record<string, unknown> | undefined,
+  locale: Locale,
+): Promise<string> {
+  if (!formValue) {
+    return locale === "en" ? "No form values received." : "没有收到表单值。";
+  }
+  const selectedEngine = stringFormValue(formValue.engine);
+  const selectedFast = stringFormValue(formValue.fast);
+  const selectedYolo = stringFormValue(formValue.yolo);
+  const selectedLocale = stringFormValue(formValue.locale);
+  const noticeLocale: Locale = selectedLocale === "en" || selectedLocale === "zh" ? selectedLocale : locale;
+
+  const notices: string[] = [];
+  if (selectedEngine) {
+    notices.push(await applyEngineAction(stateDir, selectedEngine, noticeLocale));
+  }
+  if ((!selectedEngine || selectedEngine === "codex") && selectedFast) {
+    notices.push(await applyFastAction(stateDir, selectedFast, noticeLocale));
+  }
+  if (selectedYolo) {
+    notices.push(await applyYoloAction(stateDir, selectedYolo, noticeLocale));
+  }
+  if (selectedLocale) {
+    notices.push(await applyLocaleAction(stateDir, selectedLocale, noticeLocale));
+  }
+  if (value.bridgeChatType === "group") {
+    const groupAction = stringFormValue(formValue.group);
+    if (groupAction) {
+      notices.push(await applyGroupAction(stateDir, { ...value, action: "group", value: groupAction }, noticeLocale));
+    }
+  }
+
+  const compact = notices.filter(Boolean).slice(0, 3).join("；");
+  if (noticeLocale === "en") {
+    return compact ? `Saved. ${compact}` : "Saved.";
+  }
+  return compact ? `已保存。${compact}` : "已保存。";
+}
+
+function stringFormValue(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const maybe = (value as Record<string, unknown>).value;
+    return typeof maybe === "string" ? maybe : undefined;
+  }
+  return undefined;
 }
 
 async function applyEngineAction(stateDir: string, value: string | undefined, locale: Locale): Promise<string> {
@@ -330,6 +386,81 @@ function allowGroup(groupMode: GroupModeConfig, chatId: number): void {
   }
 }
 
+function configFormSection(
+  context: LarkConfigCardContext,
+  cfg: InstanceConfig,
+  approvalMode: unknown,
+): Record<string, unknown> {
+  const isEn = context.locale === "en";
+  const yoloValue = approvalMode === "bypass" ? "unsafe" : approvalMode === "full-auto" ? "on" : "off";
+  const formElements: unknown[] = [
+    markdownElement(isEn
+      ? "**Guided settings**\nChange several settings at once, then submit. Quick buttons below still work for one-tap changes."
+      : "**引导式设置**\n可以一次调整多项配置后提交。下面的快捷按钮仍然可以单点修改。"),
+    selectStatic("engine", cfg.engine, [
+      ["codex", "Codex"],
+      ["claude", "Claude"],
+      ["antigravity", "Antigravity"],
+    ]),
+    selectStatic("fast", cfg.codexServiceTier === "fast" ? "on" : "off", [
+      ["on", isEn ? "Fast on" : "Fast 开"],
+      ["off", isEn ? "Fast off" : "Fast 关"],
+    ]),
+    selectStatic("yolo", yoloValue, [
+      ["on", isEn ? "YOLO on" : "YOLO 开"],
+      ["off", isEn ? "YOLO off" : "YOLO 关"],
+      ["unsafe", isEn ? "Unsafe bypass" : "Unsafe bypass"],
+    ]),
+    selectStatic("locale", context.locale, [
+      ["zh", "中文"],
+      ["en", "English"],
+    ]),
+  ];
+
+  if (context.bridgeChatType === "group") {
+    formElements.push(selectStatic("group", "at", [
+      ["allow", isEn ? "Allow this group" : "允许本群"],
+      ["all", isEn ? "Listen to ordinary messages" : "监听普通消息"],
+      ["at", isEn ? "Require @bot" : "仅 @bot"],
+    ]));
+  }
+
+  formElements.push({
+    tag: "button",
+    text: { tag: "plain_text", content: isEn ? "Save settings" : "保存设置" },
+    type: "primary",
+    width: "fill",
+    form_action_type: "submit",
+    behaviors: [callbackBehavior({
+      cctb_lark: "config",
+      action: "submit",
+      conversationKey: context.conversationKey,
+      bridgeChatType: context.bridgeChatType,
+      ...(context.replyInThread ? { replyInThread: true } : {}),
+      larkChatId: context.larkChatId,
+      bridgeChatId: context.bridgeChatId,
+    })],
+  });
+
+  return {
+    tag: "form",
+    name: "lark_config_form",
+    elements: formElements,
+  };
+}
+
+function selectStatic(name: string, initial: string, options: Array<[string, string]>): Record<string, unknown> {
+  return {
+    tag: "select_static",
+    name,
+    initial_option: initial,
+    options: options.map(([value, label]) => ({
+      text: { tag: "plain_text", content: label },
+      value,
+    })),
+  };
+}
+
 function section(title: string, buttons: unknown[]): Record<string, unknown> {
   return {
     tag: "column_set",
@@ -401,7 +532,8 @@ function isLarkConfigActionName(value: unknown): value is LarkConfigActionName {
     value === "yolo" ||
     value === "locale" ||
     value === "group" ||
-    value === "refresh";
+    value === "refresh" ||
+    value === "submit";
 }
 
 function approvalModeLabel(value: unknown, locale: Locale): string {

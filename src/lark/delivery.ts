@@ -789,27 +789,44 @@ function buildLarkOptionSection(input: {
 
   return [
     {
-      tag: "markdown",
-      content: [
-        `**${optionMarker(input.index)}. ${title}**`,
-        ...(description && description !== title ? [description] : []),
-      ].join("\n"),
-    },
-    {
-      tag: "button",
-      text: {
-        tag: "plain_text",
-        content: buttonLabel,
+      tag: "collapsible_panel",
+      expanded: input.index === 0,
+      header: {
+        title: { tag: "markdown", content: `**${optionMarker(input.index)}. ${title}**` },
+        vertical_align: "center",
+        icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
+        icon_position: "follow_text",
+        icon_expanded_angle: -180,
       },
-      type,
-      behaviors: [callbackBehavior({
-        cctb_lark: "choice",
-        ...(input.conversationKey ? { conversationKey: input.conversationKey } : {}),
-        ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
-        ...(input.replyInThread ? { replyInThread: true } : {}),
-        label,
-        value,
-      })],
+      border: { color: input.index === 0 ? "blue" : "grey", corner_radius: "5px" },
+      vertical_spacing: "8px",
+      padding: "8px 8px 8px 8px",
+      elements: [
+        {
+          tag: "markdown",
+          content: description && description !== title
+            ? description
+            : input.locale === "en" ? "_Click the button below to choose this option._" : "_点击下方按钮选择此项。_",
+          text_size: "notation",
+        },
+        {
+          tag: "button",
+          text: {
+            tag: "plain_text",
+            content: buttonLabel,
+          },
+          width: "fill",
+          type,
+          behaviors: [callbackBehavior({
+            cctb_lark: "choice",
+            ...(input.conversationKey ? { conversationKey: input.conversationKey } : {}),
+            ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
+            ...(input.replyInThread ? { replyInThread: true } : {}),
+            label,
+            value,
+          })],
+        },
+      ],
     },
   ];
 }

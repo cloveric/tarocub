@@ -9,12 +9,16 @@ import type {
 } from "../codex/adapter.js";
 import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { prepareArchiveContinueWorkflow } from "../runtime/file-workflow.js";
+import { scanRecentAntigravityConversations, scanRecentClaudeSessions } from "../runtime/session-scanner.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
+import { SessionStore } from "../state/session-store.js";
 import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
+import { loadInstanceConfig, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { renderLarkApprovalCard } from "./card-renderer.js";
+import { renderLarkResumeScanCard } from "./command-cards.js";
 import {
   applyLarkConfigCardAction,
   isLarkConfigCardActionValue,
@@ -180,6 +184,8 @@ export async function handleLarkCardAction(input: {
     };
     action: {
       value: unknown;
+      form_value?: unknown;
+      formValue?: unknown;
     };
   };
 }): Promise<boolean> {
@@ -226,7 +232,7 @@ export async function handleLarkCardAction(input: {
       return true;
     }
 
-    const notice = await applyLarkConfigCardAction(input.stateDir, value, locale);
+    const notice = await applyLarkConfigCardAction(input.stateDir, value, locale, actionFormValue(input.event.action));
     const bridgeChatId = typeof value.bridgeChatId === "number" && Number.isInteger(value.bridgeChatId)
       ? value.bridgeChatId
       : stableLarkNumericId(value.conversationKey);
@@ -262,6 +268,63 @@ export async function handleLarkCardAction(input: {
         configValue: value.value,
       },
     });
+    return true;
+  }
+
+  if (value.cctb_lark === "resume_scan" && typeof value.conversationKey === "string") {
+    if (!input.stateDir) {
+      return false;
+    }
+    const bridgeChatType = bridgeChatTypeFromValue(value.bridgeChatType);
+    if (!await ensureLarkCardActionAccess({
+      ...input,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      replyInThread,
+      action: "resume",
+    })) {
+      return true;
+    }
+    const cfg = await loadInstanceConfig(input.stateDir);
+    const kind = cfg.engine === "antigravity" ? "antigravity" : "claude";
+    const sessions = kind === "antigravity"
+      ? await scanRecentAntigravityConversations(24)
+      : cfg.engine === "claude"
+        ? await scanRecentClaudeSessions(1)
+        : [];
+    const card = renderLarkResumeScanCard({
+      kind,
+      sessions,
+      locale,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      replyInThread,
+    });
+    await input.channel.send(input.event.chatId, { card }, larkReplyOptions(input.event.messageId, replyInThread));
+    return true;
+  }
+
+  if (
+    value.cctb_lark === "resume" &&
+    typeof value.conversationKey === "string" &&
+    typeof value.sessionId === "string" &&
+    (value.engine === "claude" || value.engine === "antigravity")
+  ) {
+    if (!input.stateDir) {
+      return false;
+    }
+    const bridgeChatType = bridgeChatTypeFromValue(value.bridgeChatType);
+    if (!await ensureLarkCardActionAccess({
+      ...input,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      replyInThread,
+      action: "resume",
+    })) {
+      return true;
+    }
+    const result = await applyLarkResumeCardAction(input.stateDir, value, locale);
+    await input.channel.send(input.event.chatId, { text: result }, larkReplyOptions(input.event.messageId, replyInThread));
     return true;
   }
 
@@ -924,7 +987,7 @@ async function appendLarkCardActionTurnEvent(
   }, "Lark card action turn timeline event");
 }
 
-type LarkCardActionTimelineAction = "stop" | "approval" | "choice" | "continue_archive" | "config";
+type LarkCardActionTimelineAction = "stop" | "approval" | "choice" | "continue_archive" | "config" | "resume";
 
 function extractButtonLabel(button: Record<string, unknown>): string {
   const text = payloadObject(button.text);
@@ -1047,6 +1110,89 @@ function renderTextApprovalResolution(choice: LarkApprovalChoice, locale: Locale
     return "已拒绝。";
   }
   return choice === "session" ? "已允许本轮。" : "已允许一次。";
+}
+
+async function applyLarkResumeCardAction(
+  stateDir: string,
+  value: Record<string, unknown>,
+  locale: Locale,
+): Promise<string> {
+  const conversationKey = String(value.conversationKey);
+  const engine = value.engine === "antigravity" ? "antigravity" : "claude";
+  const sessionId = String(value.sessionId);
+  const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+  const cfg = await loadInstanceConfig(stateDir);
+  const existing = await sessionStore.findByConversationKeySafe(conversationKey);
+  const currentResume = cfg.resume;
+  await sessionStore.upsert({
+    telegramChatId: stableLarkNumericId(conversationKey),
+    conversationKey,
+    codexSessionId: sessionId,
+    status: "idle",
+    updatedAt: new Date().toISOString(),
+    suspendedPrevious: buildSuspendedPreviousSnapshot({
+      existingRecord: existing.record,
+      currentResume,
+    }),
+  });
+
+  if (engine === "claude") {
+    const workspacePath = typeof value.workspacePath === "string" && value.workspacePath.trim()
+      ? value.workspacePath
+      : null;
+    if (!workspacePath) {
+      return locale === "en"
+        ? "Cannot resume this session because its workspace path is unknown."
+        : "无法恢复这个 session：工作区路径未知。";
+    }
+    await updateInstanceConfig(stateDir, (config) => {
+      config.resume = {
+        sessionId,
+        dirName: typeof value.dirName === "string" ? value.dirName : sessionId,
+        workspacePath,
+      };
+    });
+    const displayName = typeof value.displayName === "string" ? value.displayName : sessionId;
+    return locale === "en"
+      ? `Resumed session: ${displayName}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`
+      : `已恢复 session：${displayName}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`;
+  }
+
+  await updateInstanceConfig(stateDir, (config) => {
+    delete config.resume;
+  });
+  return locale === "en"
+    ? `Attached Antigravity conversation: ${sessionId}\n\nSend a message to continue. Use /detach when done.`
+    : `已绑定 Antigravity conversation：${sessionId}\n\n发送消息继续对话，完成后发 /detach 断开。`;
+}
+
+function buildSuspendedPreviousSnapshot(input: {
+  existingRecord: {
+    codexSessionId: string;
+    suspendedPrevious?: {
+      sessionId: string | null;
+      resume: ResumeState | null;
+    };
+  } | null;
+  currentResume: ResumeState | undefined;
+}): { sessionId: string | null; resume: ResumeState | null } | undefined {
+  if (input.existingRecord?.suspendedPrevious) {
+    return input.existingRecord.suspendedPrevious;
+  }
+  if (!input.existingRecord?.codexSessionId && !input.currentResume) {
+    return undefined;
+  }
+  return {
+    sessionId: input.existingRecord?.codexSessionId ?? null,
+    resume: input.currentResume ?? null,
+  };
+}
+
+function actionFormValue(action: { form_value?: unknown; formValue?: unknown }): Record<string, unknown> | undefined {
+  const raw = action.form_value ?? action.formValue;
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : undefined;
 }
 
 function actionValue(value: unknown): Record<string, unknown> | null {

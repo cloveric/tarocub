@@ -203,6 +203,12 @@ export async function handleLocalSessionTelegramCommand(input: {
   scanRecentAntigravitySessions?: (hours: number) => Promise<ScannedSession[]>;
   formatSessionListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
   formatAntigravityConversationListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
+  sendResumeScanResult?: (input: {
+    kind: "claude" | "antigravity";
+    sessions: ScannedSession[];
+    visibleSessions: ScannedSession[];
+    locale: Locale;
+  }) => Promise<void>;
 }): Promise<boolean> {
   const {
     stateDir,
@@ -218,6 +224,7 @@ export async function handleLocalSessionTelegramCommand(input: {
     scanRecentAntigravitySessions = scanRecentAntigravityConversations,
     formatSessionListMessage = formatSessionList,
     formatAntigravityConversationListMessage = formatAntigravityConversationList,
+    sendResumeScanResult,
   } = input;
   const conversationKey = getNormalizedTelegramConversationKey(normalized);
 
@@ -272,7 +279,16 @@ export async function handleLocalSessionTelegramCommand(input: {
         } else {
           pendingResumeScans.delete(conversationKey);
         }
-        await context.api.sendMessage(normalized.chatId, msg);
+        if (sendResumeScanResult) {
+          await sendResumeScanResult({
+            kind: "antigravity",
+            sessions,
+            visibleSessions: selectableSessions,
+            locale,
+          });
+        } else {
+          await context.api.sendMessage(normalized.chatId, msg);
+        }
         await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
           startedAt,
           command: "resume",
@@ -454,7 +470,16 @@ export async function handleLocalSessionTelegramCommand(input: {
         resumeAuditText = locale === "zh"
           ? "最近 1 小时内没有找到本地 session。"
           : "No local sessions found in the last hour.";
-        await context.api.sendMessage(normalized.chatId, resumeAuditText);
+        if (sendResumeScanResult) {
+          await sendResumeScanResult({
+            kind: "claude",
+            sessions: [],
+            visibleSessions: [],
+            locale,
+          });
+        } else {
+          await context.api.sendMessage(normalized.chatId, resumeAuditText);
+        }
       } else {
         resumeAuditText = formatSessionListMessage(sessions, locale);
         pendingResumeScans.set(conversationKey, {
@@ -462,7 +487,16 @@ export async function handleLocalSessionTelegramCommand(input: {
           scannedAt: Date.now(),
           sessions,
         });
-        await context.api.sendMessage(normalized.chatId, resumeAuditText);
+        if (sendResumeScanResult) {
+          await sendResumeScanResult({
+            kind: "claude",
+            sessions,
+            visibleSessions: sessions,
+            locale,
+          });
+        } else {
+          await context.api.sendMessage(normalized.chatId, resumeAuditText);
+        }
       }
     } else {
       const cached = getPendingResumeScan(conversationKey, "claude");

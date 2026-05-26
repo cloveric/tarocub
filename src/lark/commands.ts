@@ -35,6 +35,7 @@ import {
   handleLarkMiniBusCommand,
 } from "./bus.js";
 import type { LarkCliStatus } from "./cli.js";
+import { renderLarkResumeScanCard, renderLarkStatusCard } from "./command-cards.js";
 import { isLarkConfigCommand, renderLarkConfigCard } from "./config-card.js";
 import { sendLarkMarkdown } from "./delivery.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
@@ -142,12 +143,23 @@ export async function handleLarkSimpleCommand(
   }
 
   if (isStatusCommand(commandText)) {
-    await sendLarkCommandMarkdown(
-      input,
-      normalized,
-      "/status",
-      await renderLarkStatusMessage(input.runtime, normalized, input.stateDir, commandLocale, input.requireMentionInGroup),
-    );
+    const markdown = await renderLarkStatusMessage(input.runtime, normalized, input.stateDir, commandLocale, input.requireMentionInGroup);
+    await input.channel.send(normalized.chatId, {
+      card: renderLarkStatusCard({
+        markdown,
+        locale: commandLocale,
+        conversationKey: normalized.conversationKey,
+        bridgeChatType: normalized.bridgeChatType,
+        larkChatId: normalized.chatId,
+        bridgeChatId: normalized.bridgeAccessChatId,
+        replyInThread: Boolean(normalized.threadId),
+      }),
+    }, larkCommandReplyOptions(normalized));
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "success",
+      detail: "/status",
+    });
     return true;
   }
 
@@ -333,6 +345,18 @@ async function handleLarkSessionCommand(
     validateCodexThread: input.bridge.validateCodexThread?.bind(input.bridge),
     scanRecentSessions: input.runtime.sessionRuntime?.scanRecentSessions,
     scanRecentAntigravitySessions: input.runtime.sessionRuntime?.scanRecentAntigravitySessions,
+    sendResumeScanResult: async ({ kind, visibleSessions }) => {
+      await input.channel.send(normalized.chatId, {
+        card: renderLarkResumeScanCard({
+          kind,
+          sessions: visibleSessions,
+          locale,
+          conversationKey: normalized.conversationKey,
+          bridgeChatType: normalized.bridgeChatType,
+          replyInThread: Boolean(normalized.threadId),
+        }),
+      }, larkCommandReplyOptions(normalized));
+    },
   });
 }
 

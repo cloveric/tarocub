@@ -1771,14 +1771,15 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        {
-          markdown: expect.stringContaining("当前 thread：thread-status-123"),
-        },
+        { card: expect.any(Object) },
         { replyTo: "om_status", replyInThread: false },
       );
       expect(JSON.stringify(channel.send.mock.calls)).toContain("lark:oc_chat");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("会话绑定：是");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("审批模式：YOLO/full-auto");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("飞书会话状态");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("打开配置");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("恢复会话");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("预算：$12.50");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("语言：zh");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("详细度：2");
@@ -1830,10 +1831,13 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("**Lark conversation status**") },
+        { card: expect.any(Object) },
         { replyTo: "om_status_en", replyInThread: false },
       );
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Engine: codex");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Lark conversation status");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Open config");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Resume session");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Model: default (Codex config: gpt-test-default)");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Effort: default (Codex config: xhigh)");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Session bound: yes");
@@ -1871,9 +1875,10 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("当前运行：否") },
+        { card: expect.any(Object) },
         { replyTo: "om_status_idle", replyInThread: false },
       );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("当前运行：否");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1901,11 +1906,10 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        {
-          markdown: expect.stringContaining("**Lark 会话状态**"),
-        },
+        { card: expect.any(Object) },
         { replyTo: "om_status_bad_config", replyInThread: false },
       );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("**Lark 会话状态**");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("引擎：codex");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("审批模式：普通审批");
     } finally {
@@ -1956,14 +1960,11 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_group",
-        { markdown: expect.stringContaining("群聊触发：接受普通群消息") },
+        { card: expect.any(Object) },
         { replyTo: "om_group_status", replyInThread: false },
       );
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_group",
-        { markdown: expect.stringContaining("群聊模式来源：/group all override") },
-        { replyTo: "om_group_status", replyInThread: false },
-      );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("群聊触发：接受普通群消息");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("群聊模式来源：/group all override");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2010,14 +2011,11 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_group",
-        { markdown: expect.stringContaining("群聊触发：需要 @bot / mention") },
+        { card: expect.any(Object) },
         { replyTo: "om_group_disabled_status", replyInThread: false },
       );
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_group",
-        { markdown: expect.stringContaining("群聊模式来源：群聊模式已关闭") },
-        { replyTo: "om_group_disabled_status", replyInThread: false },
-      );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("群聊触发：需要 @bot / mention");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("群聊模式来源：群聊模式已关闭");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2381,6 +2379,9 @@ describe("lark service", () => {
       );
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).toContain("飞书配置面板");
+      expect(rendered).toContain('"tag":"form"');
+      expect(rendered).toContain('"tag":"select_static"');
+      expect(rendered).toContain('"form_action_type":"submit"');
       expect(rendered).toContain('"cctb_lark":"config"');
       expect(rendered).toContain('"action":"engine"');
       expect(rendered).toContain('"action":"yolo"');
@@ -2748,9 +2749,12 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("demo") },
+        { card: expect.any(Object) },
         { replyTo: "om_resume_scan", replyInThread: false },
       );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("恢复历史会话");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("恢复此会话");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("claude-session-1");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: expect.stringContaining("已恢复 session：demo") },
@@ -7336,6 +7340,118 @@ describe("lark service", () => {
           configAction: "engine",
         }),
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies Lark config form submissions after access checks", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-form-action-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "codex",
+      locale: "zh",
+      codexServiceTier: "fast",
+      approvalMode: "full-auto",
+    }) + "\n");
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_config_form",
+          operator: { openId: "ou_user", name: "User" },
+          action: {
+            value: {
+              cctb_lark: "config",
+              action: "submit",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+            },
+            form_value: {
+              engine: "claude",
+              fast: "off",
+              yolo: "off",
+              locale: "en",
+            },
+          },
+        },
+      });
+
+      const config = await loadInstanceConfig(stateDir);
+      const rawConfig = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(handled).toBe(true);
+      expect(config.engine).toBe("claude");
+      expect(config.locale).toBe("en");
+      expect(rawConfig.approvalMode).toBe("normal");
+      expect(config.codexServiceTier).toBeUndefined();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.updateCard).toHaveBeenCalledWith("card_config_form", expect.any(Object));
+      expect(JSON.stringify(channel.updateCard.mock.calls)).toContain("Saved");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes a Claude session from a Lark resume card button", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-card-action-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_resume",
+          operator: { openId: "ou_user", name: "User" },
+          action: {
+            value: {
+              cctb_lark: "resume",
+              engine: "claude",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              sessionId: "claude-session-card",
+              dirName: "-Users-cloveric-projects-demo",
+              displayName: "demo",
+              workspacePath: "/Users/cloveric/projects/demo",
+            },
+          },
+        },
+      });
+
+      const record = await sessionStore.findByConversationKey("lark:oc_chat");
+      const config = await loadInstanceConfig(stateDir);
+      expect(handled).toBe(true);
+      expect(record?.codexSessionId).toBe("claude-session-card");
+      expect(config.resume).toMatchObject({
+        sessionId: "claude-session-card",
+        workspacePath: "/Users/cloveric/projects/demo",
+      });
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: expect.stringContaining("已恢复 session：demo") },
+        { replyTo: "card_resume" },
+      );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

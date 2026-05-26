@@ -40,6 +40,24 @@ describe("lark card renderer", () => {
     expect(serialized).toContain('"bridgeChatType":"group"');
   });
 
+  it("renders active runs as a collapsible task console", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, { type: "thinking", text: "先分析问题边界" });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file: "src/lark/card-renderer.ts" } });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolInput: { command: "npm test" } });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "我正在整理结果。" });
+
+    const card = renderLarkRunCard(state) as any;
+    const serialized = JSON.stringify(card);
+
+    expect(card.config.streaming_mode).toBe(true);
+    expect(serialized).toContain("collapsible_panel");
+    expect(serialized).toContain("思考中");
+    expect(serialized).toContain("工具调用");
+    expect(serialized).toContain("正在输出");
+    expect(serialized).toContain("我正在整理结果。");
+  });
+
   it("renders active run cards in English when locale is English", () => {
     const card = renderLarkRunCard(initialLarkRunState("lark:oc_chat", "group"), "en") as any;
     const serialized = JSON.stringify(card);
