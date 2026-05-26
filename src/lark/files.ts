@@ -99,7 +99,7 @@ async function downloadLarkAttachmentBody(
   const rawClient = (channel as { rawClient?: LarkRawClientLike }).rawClient;
   const getMessageResource = rawClient?.im?.v1?.messageResource?.get;
   if (getMessageResource) {
-    const resourceType: LarkMessageResourceType = attachment.kind;
+    const resourceType: LarkMessageResourceType = attachment.kind === "image" ? "image" : "file";
     const response = await getMessageResource({
       path: {
         message_id: messageId,

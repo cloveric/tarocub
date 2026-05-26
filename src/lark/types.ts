@@ -23,7 +23,7 @@ export interface LarkStreamControllerLike {
   update(card: object | ((current: object) => object)): Promise<void>;
 }
 
-export type LarkMessageResourceType = "image" | "file" | "audio" | "video";
+export type LarkMessageResourceType = "image" | "file";
 
 export interface LarkMessageResourceResponseLike {
   getReadableStream(): NodeJS.ReadableStream;

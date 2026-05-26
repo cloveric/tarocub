@@ -463,7 +463,7 @@ describe("lark service", () => {
     }
   });
 
-  it("downloads user-sent Lark audio through the message resource API before transcription", async () => {
+  it("downloads user-sent Lark audio as a file resource before transcription", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audio-resource-"));
     const messageResourceGet = vi.fn(async () => ({
       getReadableStream: () => Readable.from([Buffer.from("voice body")]),
@@ -510,7 +510,7 @@ describe("lark service", () => {
           file_key: "file_v3_voice",
         },
         params: {
-          type: "audio",
+          type: "file",
         },
       });
       expect(transcribeMedia).toHaveBeenCalledWith(expect.stringMatching(/audio-1\.ogg$/));
