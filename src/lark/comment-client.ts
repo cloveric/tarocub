@@ -29,6 +29,22 @@ export interface LarkCommentClientLike {
     commentId: string;
     text: string;
   }): Promise<void>;
+  createTopLevelComment?(input: {
+    fileToken: string;
+    fileType: LarkCommentFileType;
+    commentId: string;
+    text: string;
+  }): Promise<void>;
+  addReaction?(input: LarkCommentReactionInput): Promise<void>;
+  removeReaction?(input: LarkCommentReactionInput): Promise<void>;
+}
+
+export interface LarkCommentReactionInput {
+  fileToken: string;
+  fileType: LarkCommentFileType;
+  commentId: string;
+  replyId: string;
+  reactionType: "Typing";
 }
 
 type LarkCommentElement = {
@@ -55,6 +71,11 @@ type LarkCommentApiItem = {
 };
 
 type LarkDriveCommentApiClient = {
+  request(payload: {
+    method: "POST";
+    url: string;
+    data: Record<string, unknown>;
+  }): Promise<{ code?: number; msg?: string }>;
   drive: {
     v1: {
       fileComment: {
@@ -80,6 +101,27 @@ type LarkDriveCommentApiClient = {
             file_token: string;
           };
         }): Promise<{ code?: number; msg?: string; data?: { items?: LarkCommentApiItem[] } }>;
+        create(payload: {
+          data: {
+            reply_list: {
+              replies: Array<{
+                content: {
+                  elements: Array<{
+                    type: "text_run";
+                    text_run: { text: string };
+                  }>;
+                };
+              }>;
+            };
+          };
+          params: {
+            file_type: LarkCommentFileType;
+            user_id_type: "open_id";
+          };
+          path: {
+            file_token: string;
+          };
+        }): Promise<{ code?: number; msg?: string }>;
       };
       fileCommentReply: {
         create(payload: {
@@ -187,10 +229,72 @@ export function createLarkCommentClient(config: {
         },
       });
       if (result.code !== 0) {
-        throw new Error(`Lark comment reply failed: ${result.code ?? "unknown"} ${result.msg ?? ""}`.trim());
+        throw larkCommentApiError("Lark comment reply failed", result.code, result.msg);
       }
     },
+
+    async createTopLevelComment(input) {
+      const result = await client.drive.v1.fileComment.create({
+        data: {
+          reply_list: {
+            replies: [{
+              content: {
+                elements: [{
+                  type: "text_run",
+                  text_run: {
+                    text: input.text,
+                  },
+                }],
+              },
+            }],
+          },
+        },
+        params: {
+          file_type: input.fileType,
+          user_id_type: "open_id",
+        },
+        path: {
+          file_token: input.fileToken,
+        },
+      });
+      if (result.code !== 0) {
+        throw larkCommentApiError("Lark top-level comment failed", result.code, result.msg);
+      }
+    },
+
+    async addReaction(input) {
+      await updateLarkCommentReaction(client, input, "add");
+    },
+
+    async removeReaction(input) {
+      await updateLarkCommentReaction(client, input, "delete");
+    },
   };
+}
+
+async function updateLarkCommentReaction(
+  client: LarkDriveCommentApiClient,
+  input: LarkCommentReactionInput,
+  action: "add" | "delete",
+): Promise<void> {
+  const result = await client.request({
+    method: "POST",
+    url: `/open-apis/drive/v2/files/${encodeURIComponent(input.fileToken)}/comments/reaction?file_type=${encodeURIComponent(input.fileType)}`,
+    data: {
+      action,
+      reply_id: input.replyId,
+      reaction_type: input.reactionType,
+    },
+  });
+  if (result.code !== 0) {
+    throw larkCommentApiError(`Lark comment reaction ${action} failed`, result.code, result.msg);
+  }
+}
+
+function larkCommentApiError(prefix: string, code: number | undefined, message: string | undefined): Error {
+  return Object.assign(new Error(`${prefix}: ${code ?? "unknown"} ${message ?? ""}`.trim()), {
+    code,
+  });
 }
 
 function normalizeLarkCommentContext(comment: LarkCommentApiItem): LarkCommentContext {

@@ -1,7 +1,10 @@
+import { execFile as execFileCallback } from "node:child_process";
+import path from "node:path";
 import { registerApp } from "@larksuiteoapi/node-sdk";
 import qrcode from "qrcode-terminal";
 
-import { writeLarkEnvFile } from "./env-file.js";
+import { ensureLarkCliBridgeBindingConfig } from "./cli.js";
+import { resolveLarkStateDir, writeLarkEnvFile } from "./env-file.js";
 import { formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "./provisioning.js";
 import type { LarkRuntimeEnv } from "./config.js";
 
@@ -31,6 +34,7 @@ export interface LarkWizardOptions {
   registerAppImpl?: (options: LarkWizardRegisterAppOptions) => Promise<LarkWizardRegisterAppResult>;
   generateQRCode?: (url: string) => void;
   provisionApp?: (input: { appId: string; appSecret: string; domain?: string; logger?: LarkWizardLogger }) => Promise<LarkProvisioningResult>;
+  initLarkCli?: (input: { appId: string; appSecret: string; brand: "feishu" | "lark"; stateDir: string; homeDir?: string }) => Promise<void>;
 }
 
 export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogger = console, options: LarkWizardOptions = {}): Promise<string> {
@@ -89,10 +93,56 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
     logger.log(`Lark permission provisioning check failed: ${error instanceof Error ? error.message : String(error)}`);
     logger.log("The app credentials were saved; run `node dist/src/index.js lark doctor` and check the Feishu developer console if callbacks or media fail.");
   }
+  try {
+    const stateDir = resolveLarkStateDir(env);
+    await (options.initLarkCli ?? initLarkCliFromWizard)({
+      appId: result.client_id,
+      appSecret: result.client_secret,
+      brand: domain === "lark" ? "lark" : "feishu",
+      stateDir,
+      homeDir: env.HOME ?? env.USERPROFILE,
+    });
+    logger.log("lark-cli bound to bridge credentials through the lark-channel source.");
+  } catch (error) {
+    logger.log(`lark-cli init skipped: ${error instanceof Error ? error.message : String(error)}`);
+    logger.log("Run: node dist/src/index.js lark cli bind --identity bot-only");
+  }
   logger.log("Run: node dist/src/index.js lark doctor");
   logger.log("Run: node dist/src/index.js lark run");
 
   return envPath;
+}
+
+async function initLarkCliFromWizard(input: { appId: string; appSecret: string; brand: "feishu" | "lark"; stateDir: string; homeDir?: string }): Promise<void> {
+  await ensureLarkCliBridgeBindingConfig({
+    appId: input.appId,
+    stateDir: input.stateDir,
+    brand: input.brand,
+    homeDir: input.homeDir,
+    entrypoint: path.resolve(process.argv[1] ?? "dist/src/index.js"),
+  });
+  return new Promise((resolve, reject) => {
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...(input.homeDir ? { HOME: input.homeDir, USERPROFILE: input.homeDir } : {}),
+      CCTB_LARK_STATE_DIR: input.stateDir,
+      LARK_CHANNEL: "1",
+    };
+    delete childEnv.LARK_APP_SECRET;
+    const child = execFileCallback(
+      "lark-cli",
+      ["config", "bind", "--source", "lark-channel", "--app-id", input.appId, "--identity", "bot-only"],
+      { timeout: 30_000, maxBuffer: 512 * 1024, env: childEnv },
+      (error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      },
+    );
+    child.stdin?.end();
+  });
 }
 
 function resolveLarkRegistrationDomains(domain: string | undefined): { domain?: string; larkDomain?: string } {

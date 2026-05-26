@@ -727,39 +727,20 @@ function buildLarkToolCard(
     },
   ];
   if (actions.length > 0) {
-    elements.push({
-      tag: "column_set",
-      columns: actions
-        .filter((action): action is Record<string, unknown> => Boolean(action) && typeof action === "object" && !Array.isArray(action))
-        .map((action) => {
-          const label = typeof action.label === "string" ? action.label : defaultLarkToolCardActionLabel(locale);
-          const value = action.value ?? label;
-          return {
-            tag: "column",
-            width: "weighted",
-            weight: 1,
-            elements: [
-              {
-                tag: "button",
-                text: {
-                  tag: "plain_text",
-                  content: label,
-                },
-                type: action.type === "danger" || action.type === "primary" || action.type === "default"
-                  ? action.type
-                  : "primary",
-                behaviors: [callbackBehavior({
-                  cctb_lark: "choice",
-                  ...(conversationKey ? { conversationKey } : {}),
-                  ...(bridgeChatType ? { bridgeChatType } : {}),
-                  ...(replyInThread ? { replyInThread: true } : {}),
-                  label,
-                  value,
-                })],
-              },
-            ],
-          };
-        }),
+    const normalizedActions = actions
+      .filter((action): action is Record<string, unknown> => Boolean(action) && typeof action === "object" && !Array.isArray(action));
+    normalizedActions.forEach((action, index) => {
+      elements.push(...buildLarkOptionSection({
+        action,
+        index,
+        conversationKey,
+        bridgeChatType,
+        replyInThread,
+        locale,
+      }));
+      if (index < normalizedActions.length - 1) {
+        elements.push({ tag: "hr" });
+      }
     });
   }
 
@@ -782,6 +763,62 @@ function buildLarkToolCard(
       elements,
     },
   };
+}
+
+function buildLarkOptionSection(input: {
+  action: Record<string, unknown>;
+  index: number;
+  conversationKey: string | undefined;
+  bridgeChatType: "private" | "group" | undefined;
+  replyInThread: boolean | undefined;
+  locale: Locale;
+}): unknown[] {
+  const label = stringValue(input.action.label) ?? defaultLarkToolCardActionLabel(input.locale);
+  const value = input.action.value ?? label;
+  const title = stringValue(input.action.title) ?? label;
+  const description = stringValue(input.action.description) ??
+    stringValue(input.action.body) ??
+    stringValue(input.action.detail) ??
+    stringValue(input.action.text);
+  const buttonLabel = stringValue(input.action.buttonLabel) ??
+    stringValue(input.action.cta) ??
+    defaultLarkToolCardActionLabel(input.locale);
+  const type = input.action.type === "danger" || input.action.type === "primary" || input.action.type === "default"
+    ? input.action.type
+    : "primary";
+
+  return [
+    {
+      tag: "markdown",
+      content: [
+        `**${optionMarker(input.index)}. ${title}**`,
+        ...(description && description !== title ? [description] : []),
+      ].join("\n"),
+    },
+    {
+      tag: "button",
+      text: {
+        tag: "plain_text",
+        content: buttonLabel,
+      },
+      type,
+      behaviors: [callbackBehavior({
+        cctb_lark: "choice",
+        ...(input.conversationKey ? { conversationKey: input.conversationKey } : {}),
+        ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
+        ...(input.replyInThread ? { replyInThread: true } : {}),
+        label,
+        value,
+      })],
+    },
+  ];
+}
+
+function optionMarker(index: number): string {
+  if (index >= 0 && index < 26) {
+    return String.fromCharCode("A".charCodeAt(0) + index);
+  }
+  return String(index + 1);
 }
 
 function normalizeLarkChoicePayload(payload: Record<string, unknown> | null, locale: Locale): Record<string, unknown> {

@@ -13,6 +13,7 @@ describe("runLarkWizard", () => {
     const stateDir = path.join(tempDir, "lark-state");
     const messages: string[] = [];
     const qrUrls: string[] = [];
+    const initLarkCli = vi.fn(async () => undefined);
     const provisionApp = vi.fn(async () => ({
       grantedScopes: ["im:message:send_as_bot"],
       missingScopes: [],
@@ -51,6 +52,7 @@ describe("runLarkWizard", () => {
           registerAppImpl,
           generateQRCode: (url) => qrUrls.push(url),
           provisionApp,
+          initLarkCli,
         },
       );
 
@@ -65,6 +67,13 @@ describe("runLarkWizard", () => {
         appSecret: "secret-personal",
         domain: "feishu",
       }));
+      expect(initLarkCli).toHaveBeenCalledWith({
+        appId: "cli_personal",
+        appSecret: "secret-personal",
+        brand: "feishu",
+        stateDir,
+        homeDir: tempDir,
+      });
       const saved = await readFile(envPath, "utf8");
       expect(saved).toContain('LARK_APP_ID="cli_personal"');
       expect(saved).toContain('LARK_APP_SECRET="secret-personal"');
@@ -73,6 +82,7 @@ describe("runLarkWizard", () => {
       expect(saved).toContain('CODEX_TELEGRAM_INSTANCE="lark"');
       expect(messages.join("\n")).toContain("Operator open_id: ou_operator");
       expect(messages.join("\n")).toContain("Lark required scopes: ok");
+      expect(messages.join("\n")).toContain("lark-cli bound to bridge credentials through the lark-channel source.");
       expect(messages.join("\n")).not.toContain("secret-personal");
     } finally {
       await removeTempRoot(tempDir);

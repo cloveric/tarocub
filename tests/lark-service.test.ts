@@ -4600,6 +4600,96 @@ describe("lark service", () => {
     }
   });
 
+  it("adds and removes a typing reaction while answering mentioned Lark document comments", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-reaction-"));
+    const commentClient = fakeCommentClient({
+      getCommentContext: vi.fn(async () => ({
+        quote: "被选中的原文",
+        replies: [{
+          replyId: "reply_1",
+          userId: "ou_user",
+          text: "@bot 看这里",
+          docsLinks: [],
+        }],
+      })),
+      addReaction: vi.fn(async () => undefined),
+      removeReaction: vi.fn(async () => undefined),
+    });
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "评论回复" })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime: createLarkServiceRuntime({ commentClient }),
+        stateDir,
+        event: fakeCommentEvent(),
+      });
+
+      expect(handled).toBe(true);
+      expect(commentClient.addReaction).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        replyId: "reply_1",
+        reactionType: "Typing",
+      });
+      expect(commentClient.removeReaction).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        replyId: "reply_1",
+        reactionType: "Typing",
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to a top-level Lark document comment when thread replies are rejected", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-top-level-"));
+    const replyError = Object.assign(new Error("whole document comments do not accept thread replies"), {
+      code: 1069302,
+    });
+    const commentClient = fakeCommentClient({
+      createReply: vi.fn(async () => {
+        throw replyError;
+      }),
+      createTopLevelComment: vi.fn(async () => undefined),
+    });
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "整篇评论回复" })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime: createLarkServiceRuntime({ commentClient }),
+        stateDir,
+        event: fakeCommentEvent(),
+      });
+
+      expect(handled).toBe(true);
+      expect(commentClient.createReply).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        text: "整篇评论回复",
+      });
+      expect(commentClient.createTopLevelComment).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        text: "整篇评论回复",
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("executes Lark document creation tags from document comments instead of silently stripping them", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-doc-tool-"));
     const commentClient = fakeCommentClient();
@@ -5621,6 +5711,42 @@ describe("lark service", () => {
       expect(rendered).toContain("改写");
       expect(rendered).toContain('"cctb_lark":"choice"');
       expect(rendered).toContain('"conversationKey":"lark:oc_chat"');
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders long Lark choices as readable option sections instead of long button labels", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-choice-rich-"));
+    const channel = fakeChannel();
+    const longLabel = "结构性修复：重构卡片 UI，把说明和按钮拆开，避免按钮文字被截断";
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: `[tool:{"name":"lark.choice","payload":{"title":"请选择执行方向","prompt":"这次更像飞书原生交互。","options":[{"label":"${longLabel}","value":"structured","description":"适合要做成产品级体验；耗时更长，但后续 Plan Mode 和配置卡都能复用。"},{"label":"保守修复","value":"minimal","description":"只修当前问题，最快上线。"}]}}]`,
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_choice_rich",
+          content: "ask rich choice",
+        }),
+      });
+
+      const sendCalls = channel.send.mock.calls as unknown as Array<[string, unknown, unknown?]>;
+      const card = sendCalls.find((call) => JSON.stringify(call).includes("请选择执行方向"))?.[1];
+      const rendered = JSON.stringify(card);
+      expect(rendered).toContain("A. 结构性修复");
+      expect(rendered).toContain("适合要做成产品级体验");
+      expect(rendered).toContain('"content":"选择"');
+      expect(rendered).not.toContain(`"content":"${longLabel}"`);
+      expect(rendered).toContain('"value":"structured"');
+      expect(rendered).toContain('"cctb_lark":"choice"');
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -7767,6 +7893,9 @@ function fakeLarkMessage(overrides: Partial<{
 function fakeCommentClient(overrides: Partial<{
   getCommentContext: ReturnType<typeof vi.fn>;
   createReply: ReturnType<typeof vi.fn>;
+  createTopLevelComment: ReturnType<typeof vi.fn>;
+  addReaction: ReturnType<typeof vi.fn>;
+  removeReaction: ReturnType<typeof vi.fn>;
 }> = {}) {
   return {
     getCommentContext: overrides.getCommentContext ?? vi.fn(async () => ({
@@ -7774,6 +7903,9 @@ function fakeCommentClient(overrides: Partial<{
       replies: [],
     })),
     createReply: overrides.createReply ?? vi.fn(async () => undefined),
+    createTopLevelComment: overrides.createTopLevelComment ?? vi.fn(async () => undefined),
+    addReaction: overrides.addReaction ?? vi.fn(async () => undefined),
+    removeReaction: overrides.removeReaction ?? vi.fn(async () => undefined),
   };
 }
 

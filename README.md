@@ -87,7 +87,7 @@ node dist/src/index.js lark task list
 node dist/src/index.js lark backup --out ./lark-state.cctb.gz
 ```
 
-`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes including the base `im:message` permission, Feishu Docs scopes, cloud-doc comment read/write scopes, and the group-all message scope required for `/group all`. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. The PersonalAgent QR template does not currently guarantee `im:message.group_msg`; if you want ordinary non-mention group messages through `/group all`, add or bulk-import that scope in the Feishu/Lark app permissions UI and rerun `lark provision`. Environment variables still win if you prefer manual credentials:
+`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes including the base `im:message` permission, Feishu Docs scopes, cloud-doc comment read/write scopes, and the group-all message scope required for `/group all`. It also tries to bind the local `lark-cli` through a `lark-channel` source config and exec-provider secret getter, so agents can use Docs/Drive/Calendar-style CLI operations without putting the app secret in argv or child-process env; failure is reported but does not block the bot. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. The PersonalAgent QR template does not currently guarantee `im:message.group_msg`; if you want ordinary non-mention group messages through `/group all`, add or bulk-import that scope in the Feishu/Lark app permissions UI and rerun `lark provision`. Environment variables still win if you prefer manual credentials:
 
 ```bash
 export LARK_APP_ID="cli_xxx"
@@ -116,7 +116,7 @@ The Lark channel currently supports:
 - rich Feishu posts through `lark.post` tool tags when plain Markdown is too limiting;
 - bridge-managed user choice cards through `lark.choice`, plus custom interactive cards through `lark.card`; button clicks are access-checked, audited, and fed back into the same bridge session;
 - Feishu Docs creation through `lark.doc.create` for long specs and reviewable documents; the default creator identity is the app/bot, with opt-in `as:"user"` when you really want the local `lark-cli` user identity;
-- Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, runs the same engine, replies in-thread, and can execute `lark.doc.create`; chat-only delivery/reminder tools are reported as unsupported instead of being silently swallowed;
+- Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, marks the triggering reply with a temporary Typing reaction when possible, runs the same engine, replies in-thread or falls back to a top-level comment when the document does not allow thread replies, and can execute `lark.doc.create`; chat-only delivery/reminder tools are reported as unsupported instead of being silently swallowed;
 - Lark-delivered scheduled reminders/tasks through `/cron` or `cron.add` tool tags, with raw Lark chat/thread routing stored on each job so scheduler fires can return to the correct Lark conversation;
 - archive summaries with a Lark `Continue Analysis` card button and `/continue` fallback, matching Telegram's pause-then-continue archive workflow;
 - durable Kanban task state through `/board`, backed by the same `board.json` model as Telegram while writing timeline entries with `channel=lark`;
@@ -160,7 +160,7 @@ Lark-specific tool tags use the same compact JSON tag shape as Telegram side-cha
 [tool:{"name":"send.video","payload":{"path":"/absolute/path/demo.mp4"}}]
 ```
 
-Use `lark.choice` for ordinary “pick one option” workflows. Use raw `lark.card` only when you need a custom Card 2.0 layout.
+Use `lark.choice` for ordinary “pick one option” workflows, including Plan Mode-style choices where Codex/Claude asks the user to pick a direction before continuing. Long option text belongs in `label`/`description`; the bridge renders each option as a readable section and keeps the actual button short (`Choose` / `选择`) so Feishu mobile clients do not truncate the decision text. Use raw `lark.card` only when you need a custom Card 2.0 layout.
 
 For raw `lark.card` payloads, bridge decorates ordinary button elements with Card 2.0 `behaviors: [{type:"callback", value: ...}]` routing metadata when a conversation is available. If you already provide callback metadata, that explicit payload is preserved.
 
@@ -170,7 +170,11 @@ Bridge-managed `lark-cli` helpers:
 
 ```bash
 node dist/src/index.js lark cli init
+node dist/src/index.js lark cli preflight --install --identity bot-only
 node dist/src/index.js lark cli bind --identity bot-only
+node dist/src/index.js lark cli identity status
+node dist/src/index.js lark cli identity user-default
+node dist/src/index.js lark cli identity bot-only
 node dist/src/index.js lark secrets list
 printf '{"protocolVersion":1,"ids":["app-<app_id>"]}\n' | node dist/src/index.js lark secrets get
 node dist/src/index.js lark auth start --recommend --domain docs,drive
@@ -178,7 +182,9 @@ node dist/src/index.js lark auth finish <device-code>
 node dist/src/index.js lark auth status --verify
 ```
 
-`lark cli init` feeds the app secret to `lark-cli config init --app-secret-stdin`, so the secret does not appear in argv or normal command output. `lark secrets get` implements the exec-provider protocol shape used by OpenClaw/Lark tooling and returns only explicitly requested secret ids such as `app-<app_id>`. OAuth is intentionally two-step: start returns a device-flow URL immediately, and finish polls the device code in the foreground after the user confirms authorization. Do not start OAuth from a group chat; send device-flow URLs only in private chats.
+`lark cli preflight` checks for `lark-cli`, optionally installs `@larksuite/cli`, writes the `lark-channel` source profile, binds it, and applies the requested identity policy. `bot-only` is the safe default: `default-as bot` plus `strict-mode bot`. `user-default` is an explicit opt-in for user-identity operations: it binds with `--force`, sets `default-as user`, and relaxes strict mode to `off` so agent turns can use user-backed Docs/Drive/Calendar actions when the user has authorized them. `lark cli identity ...` switches the same policy later without recreating the app. In all modes, the app secret stays in the bridge Lark state dir and is resolved only through `lark secrets get`; it is not passed in child-process argv/env.
+
+`lark cli init` remains available when you explicitly want to initialize lark-cli directly from the app credentials through stdin. OAuth is intentionally two-step: start returns a device-flow URL immediately, and finish polls the device code in the foreground after the user confirms authorization. Do not start OAuth from a group chat; send device-flow URLs only in private chats.
 
 ### Lark Production Smoke Checklist
 

@@ -35,6 +35,7 @@ export async function handleLarkComment(input: {
   if (!input.runtime.commentClient) {
     throw new Error("Lark comment client is not configured");
   }
+  const commentClient = input.runtime.commentClient;
 
   const fileType = normalizeLarkCommentFileType(input.event.fileType);
   const operatorRawId = larkOperatorRawId(input.event.operator);
@@ -67,7 +68,7 @@ export async function handleLarkComment(input: {
       event: input.event,
       fileType,
     });
-    await input.runtime.commentClient.createReply({
+    await createLarkCommentReply(commentClient, {
       fileToken: input.event.fileToken,
       fileType,
       commentId: input.event.commentId,
@@ -77,13 +78,25 @@ export async function handleLarkComment(input: {
   }
 
   return await input.runtime.chatQueue.enqueue(conversationKey, async () => {
-    const context = await input.runtime.commentClient!.getCommentContext({
+    const context = await commentClient.getCommentContext({
       fileToken: input.event.fileToken,
       fileType,
       commentId: input.event.commentId,
     });
     const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.event.commentId));
     await mkdir(requestOutputDir, { recursive: true });
+    const reactionReplyId = input.event.replyId ?? context.replies.at(-1)?.replyId;
+    let reactionAdded = false;
+    if (reactionReplyId) {
+      reactionAdded = await commentClient.addReaction?.({
+        fileToken: input.event.fileToken,
+        fileType,
+        commentId: input.event.commentId,
+        replyId: reactionReplyId,
+        reactionType: "Typing",
+      }).then(() => true, () => false) ?? false;
+    }
+
     try {
       await appendLarkCommentTimelineEvent(input.stateDir, {
         type: "turn.started",
@@ -118,7 +131,7 @@ export async function handleLarkComment(input: {
           event.text.trim(),
         ].filter(Boolean).join("\n");
         try {
-          await input.runtime.commentClient!.createReply({
+          await createLarkCommentReply(commentClient, {
             fileToken: input.event.fileToken,
             fileType,
             commentId: input.event.commentId,
@@ -158,7 +171,7 @@ export async function handleLarkComment(input: {
         runtime: input.runtime,
         locale,
       });
-      await input.runtime.commentClient!.createReply({
+      await createLarkCommentReply(commentClient, {
         fileToken: input.event.fileToken,
         fileType,
         commentId: input.event.commentId,
@@ -175,7 +188,7 @@ export async function handleLarkComment(input: {
       });
       return true;
     } catch (error) {
-      await input.runtime.commentClient!.createReply({
+      await createLarkCommentReply(commentClient, {
         fileToken: input.event.fileToken,
         fileType,
         commentId: input.event.commentId,
@@ -192,8 +205,50 @@ export async function handleLarkComment(input: {
         fileType,
       });
       return true;
+    } finally {
+      if (reactionAdded && reactionReplyId) {
+        await commentClient.removeReaction?.({
+          fileToken: input.event.fileToken,
+          fileType,
+          commentId: input.event.commentId,
+          replyId: reactionReplyId,
+          reactionType: "Typing",
+        }).catch(() => undefined);
+      }
     }
   });
+}
+
+async function createLarkCommentReply(
+  client: NonNullable<LarkServiceRuntime["commentClient"]>,
+  input: {
+    fileToken: string;
+    fileType: LarkCommentFileType;
+    commentId: string;
+    text: string;
+  },
+): Promise<void> {
+  try {
+    await client.createReply(input);
+  } catch (error) {
+    if (larkCommentErrorCode(error) === 1069302 && client.createTopLevelComment) {
+      await client.createTopLevelComment(input);
+      return;
+    }
+    throw error;
+  }
+}
+
+function larkCommentErrorCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const direct = (error as { code?: unknown }).code;
+  if (typeof direct === "number") {
+    return direct;
+  }
+  const nested = (error as { response?: { data?: { code?: unknown } } }).response?.data?.code;
+  return typeof nested === "number" ? nested : undefined;
 }
 
 export function normalizeLarkCommentFileType(value: string): LarkCommentFileType {

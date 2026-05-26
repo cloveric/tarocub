@@ -64,7 +64,7 @@ import { CronStore } from "../state/cron-store.js";
 import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir, writeLarkEnvFile } from "../lark/env-file.js";
 import { LarkGroupModeStore } from "../lark/group-mode-store.js";
 import { createLarkServiceRuntime, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
-import { detectLarkCliStatus, type LarkCliStatus } from "../lark/cli.js";
+import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
 import {
@@ -929,44 +929,62 @@ async function runLarkCliBridgeCommand(
   }
   if (action === "bind") {
     const { identity, force } = parseLarkCliBindArgs(args.slice(1));
-    const loadedEnv = await loadLarkRuntimeEnv(env);
-    if (!loadedEnv.LARK_APP_ID) {
-      throw new Error("LARK_APP_ID is required");
-    }
-    await runCommand({
-      file: "lark-cli",
-      args: [
-        "config",
-        "bind",
-        "--source",
-        "lark-channel",
-        "--app-id",
-        loadedEnv.LARK_APP_ID,
-        "--identity",
-        identity,
-        ...(force ? ["--force"] : []),
-      ],
-      env: {
-        ...process.env,
-        ...loadedEnv,
-        LARK_CHANNEL: "1",
-      },
-      timeoutMs: 30_000,
+    await bindLarkCliBridgeIdentity(env, runCommand, {
+      identity,
+      force,
     });
     logger.log(`lark-cli bound to bridge credentials with ${identity} identity.`);
     return true;
   }
-  throw new Error("Usage: lark cli <init|bind>");
+  if (action === "preflight") {
+    const { install, identity } = parseLarkCliPreflightArgs(args.slice(1));
+    await ensureLarkCliAvailable({ install, logger, runCommand });
+    await configureLarkCliIdentity(env, runCommand, { identity });
+    logger.log([
+      "lark-cli preflight complete.",
+      `identity: ${identity}`,
+      "source: lark-channel",
+      "Secrets: served through bridge exec-provider; app secret is not passed in argv/env.",
+    ].join("\n"));
+    return true;
+  }
+  if (action === "identity") {
+    const identityAction = parseLarkCliIdentityCommandArgs(args.slice(1));
+    if (identityAction === "status") {
+      const defaultAs = await runCommand({
+        file: "lark-cli",
+        args: ["config", "default-as"],
+        timeoutMs: 30_000,
+      });
+      const strictMode = await runCommand({
+        file: "lark-cli",
+        args: ["config", "strict-mode"],
+        timeoutMs: 30_000,
+      });
+      logger.log(redactLarkSensitiveText([
+        "lark-cli identity status:",
+        `default-as: ${formatCommandOutput(defaultAs)}`,
+        `strict-mode: ${formatCommandOutput(strictMode)}`,
+      ].join("\n")));
+      return true;
+    }
+    await configureLarkCliIdentity(env, runCommand, { identity: identityAction });
+    logger.log(`lark-cli identity set to ${identityAction}.`);
+    return true;
+  }
+  throw new Error("Usage: lark cli <init|bind|preflight|identity>");
 }
 
-function parseLarkCliBindArgs(args: string[]): { identity: "bot-only" | "user-default"; force: boolean } {
-  let identity: "bot-only" | "user-default" = "bot-only";
+type LarkCliBridgeIdentity = "bot-only" | "user-default";
+
+function parseLarkCliBindArgs(args: string[]): { identity: LarkCliBridgeIdentity; force: boolean } {
+  let identity: LarkCliBridgeIdentity = "bot-only";
   let force = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--identity") {
-      const value = args[++index];
-      if (value !== "bot-only" && value !== "user-default") {
+      const value = parseLarkCliIdentityValue(args[++index]);
+      if (!value) {
         throw new Error("Usage: lark cli bind [--identity bot-only|user-default] [--force]");
       }
       identity = value;
@@ -979,6 +997,163 @@ function parseLarkCliBindArgs(args: string[]): { identity: "bot-only" | "user-de
     throw new Error("Usage: lark cli bind [--identity bot-only|user-default] [--force]");
   }
   return { identity, force };
+}
+
+function parseLarkCliPreflightArgs(args: string[]): { install: boolean; identity: LarkCliBridgeIdentity } {
+  let install = false;
+  let identity: LarkCliBridgeIdentity = "bot-only";
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--install") {
+      install = true;
+      continue;
+    }
+    if (arg === "--identity") {
+      const value = parseLarkCliIdentityValue(args[++index]);
+      if (!value) {
+        throw new Error("Usage: lark cli preflight [--install] [--identity bot-only|user-default]");
+      }
+      identity = value;
+      continue;
+    }
+    throw new Error("Usage: lark cli preflight [--install] [--identity bot-only|user-default]");
+  }
+  return { install, identity };
+}
+
+function parseLarkCliIdentityCommandArgs(args: string[]): LarkCliBridgeIdentity | "status" {
+  if (args.length !== 1) {
+    throw new Error("Usage: lark cli identity <status|bot-only|user-default>");
+  }
+  if (args[0] === "status") {
+    return "status";
+  }
+  const identity = parseLarkCliIdentityValue(args[0]);
+  if (!identity) {
+    throw new Error("Usage: lark cli identity <status|bot-only|user-default>");
+  }
+  return identity;
+}
+
+function parseLarkCliIdentityValue(value: string | undefined): LarkCliBridgeIdentity | null {
+  return value === "bot-only" || value === "user-default" ? value : null;
+}
+
+async function ensureLarkCliAvailable(input: {
+  install: boolean;
+  logger: CliLogger;
+  runCommand: LarkRunCommand;
+}): Promise<void> {
+  try {
+    await input.runCommand({
+      file: "lark-cli",
+      args: ["--version"],
+      timeoutMs: 10_000,
+    });
+    return;
+  } catch (error) {
+    if (!input.install) {
+      throw new Error([
+        "lark-cli is not available.",
+        "Install it with: npm install -g @larksuite/cli",
+        `Details: ${renderCommandError(error)}`,
+      ].join("\n"));
+    }
+  }
+
+  input.logger.log("lark-cli not found; installing @larksuite/cli globally...");
+  await input.runCommand({
+    file: "npm",
+    args: ["install", "-g", "@larksuite/cli"],
+    timeoutMs: 120_000,
+  });
+}
+
+async function configureLarkCliIdentity(
+  env: LarkRuntimeEnv,
+  runCommand: LarkRunCommand,
+  input: { identity: LarkCliBridgeIdentity },
+): Promise<void> {
+  await bindLarkCliBridgeIdentity(env, runCommand, {
+    identity: input.identity,
+    force: input.identity === "user-default",
+  });
+  await runCommand({
+    file: "lark-cli",
+    args: ["config", "default-as", input.identity === "user-default" ? "user" : "bot"],
+    timeoutMs: 30_000,
+  });
+  await runCommand({
+    file: "lark-cli",
+    args: ["config", "strict-mode", input.identity === "user-default" ? "off" : "bot"],
+    timeoutMs: 30_000,
+  });
+}
+
+async function bindLarkCliBridgeIdentity(
+  env: LarkRuntimeEnv,
+  runCommand: LarkRunCommand,
+  input: { identity: LarkCliBridgeIdentity; force: boolean },
+): Promise<void> {
+  const context = await prepareLarkCliBridgeContext(env);
+  await runCommand({
+    file: "lark-cli",
+    args: [
+      "config",
+      "bind",
+      "--source",
+      "lark-channel",
+      "--app-id",
+      context.appId,
+      "--identity",
+      input.identity,
+      ...(input.force ? ["--force"] : []),
+    ],
+    env: context.childEnv,
+    timeoutMs: 30_000,
+  });
+}
+
+async function prepareLarkCliBridgeContext(env: LarkRuntimeEnv): Promise<{
+  appId: string;
+  childEnv: NodeJS.ProcessEnv;
+}> {
+  const loadedEnv = await loadLarkRuntimeEnv(env);
+  if (!loadedEnv.LARK_APP_ID) {
+    throw new Error("LARK_APP_ID is required");
+  }
+  const stateDir = resolveLarkStateDir(loadedEnv);
+  const brand = loadedEnv.LARK_DOMAIN === "lark" ? "lark" : "feishu";
+  await ensureLarkCliBridgeBindingConfig({
+    appId: loadedEnv.LARK_APP_ID,
+    stateDir,
+    brand,
+    homeDir: loadedEnv.HOME ?? loadedEnv.USERPROFILE,
+    entrypoint: resolveCliEntrypoint(),
+  });
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...(loadedEnv.HOME ? { HOME: loadedEnv.HOME } : {}),
+    ...(loadedEnv.USERPROFILE ? { USERPROFILE: loadedEnv.USERPROFILE } : {}),
+    CCTB_LARK_STATE_DIR: stateDir,
+    LARK_CHANNEL: "1",
+  };
+  delete childEnv.LARK_APP_SECRET;
+  return {
+    appId: loadedEnv.LARK_APP_ID,
+    childEnv,
+  };
+}
+
+function formatCommandOutput(result: { stdout: string; stderr: string }): string {
+  return `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim() || "(empty)";
+}
+
+function renderCommandError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
 }
 
 async function runLarkAuthCommand(

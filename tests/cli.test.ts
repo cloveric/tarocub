@@ -1025,6 +1025,191 @@ describe("runCli", () => {
     }
   });
 
+  it("binds lark-cli through a lark-channel source wrapper without leaking the app secret to the child env", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-cli-bind-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async (_input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => ({ stdout: "bound\n", stderr: "" }));
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "cli", "bind", "--identity", "bot-only"], {
+        env: {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "bind", "--source", "lark-channel", "--app-id", "cli_from_file", "--identity", "bot-only"],
+      }));
+      const [bindCall] = runCommand.mock.calls;
+      const childEnv = bindCall?.[0].env;
+      expect(childEnv?.LARK_CHANNEL).toBe("1");
+      expect(childEnv?.CCTB_LARK_STATE_DIR).toBe(stateDir);
+      expect(childEnv).not.toHaveProperty("LARK_APP_SECRET");
+      expect(JSON.stringify(runCommand.mock.calls)).not.toContain("secret-from-file");
+
+      const sourceConfig = await readFile(path.join(tempDir, ".lark-channel", "config.json"), "utf8");
+      expect(sourceConfig).toContain('"source": "exec"');
+      expect(sourceConfig).toContain('"id": "app-cli_from_file"');
+      expect(sourceConfig).not.toContain("secret-from-file");
+      const wrapper = await readFile(path.join(tempDir, ".lark-channel", "secrets-getter"), "utf8");
+      expect(wrapper).toContain("lark secrets get");
+      expect(wrapper).toContain(stateDir);
+      expect(wrapper).not.toContain("secret-from-file");
+      expect(messages.join("\n")).toContain("lark-cli bound to bridge credentials with bot-only identity.");
+      expect(messages.join("\n")).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("preflights lark-cli by installing on request and opting into user-default identity without leaking secrets", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-cli-preflight-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => {
+      if (input.file === "lark-cli" && input.args[0] === "--version") {
+        throw new Error("spawn lark-cli ENOENT");
+      }
+      if (input.file === "npm") {
+        return { stdout: "installed\n", stderr: "" };
+      }
+      return { stdout: "ok\n", stderr: "" };
+    });
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "cli", "preflight", "--install", "--identity", "user-default"], {
+        env: {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "npm",
+        args: ["install", "-g", "@larksuite/cli"],
+      }));
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: [
+          "config",
+          "bind",
+          "--source",
+          "lark-channel",
+          "--app-id",
+          "cli_from_file",
+          "--identity",
+          "user-default",
+          "--force",
+        ],
+      }));
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "default-as", "user"],
+      }));
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "strict-mode", "off"],
+      }));
+      expect(JSON.stringify(runCommand.mock.calls)).not.toContain("secret-from-file");
+      const output = messages.join("\n");
+      expect(output).toContain("lark-cli preflight complete.");
+      expect(output).toContain("identity: user-default");
+      expect(output).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("switches lark-cli back to bot-only identity with a strict bot policy", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-cli-identity-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async () => ({ stdout: "ok\n", stderr: "" }));
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "cli", "identity", "bot-only"], {
+        env: {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "bind", "--source", "lark-channel", "--app-id", "cli_from_file", "--identity", "bot-only"],
+      }));
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "default-as", "bot"],
+      }));
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "strict-mode", "bot"],
+      }));
+      expect(JSON.stringify(runCommand.mock.calls)).not.toContain("secret-from-file");
+      expect(messages.join("\n")).toContain("lark-cli identity set to bot-only.");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("starts two-step Lark OAuth through lark-cli without blocking for browser approval", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-auth-start-"));
     const messages: string[] = [];

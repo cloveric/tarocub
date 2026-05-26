@@ -39,6 +39,9 @@ describe("larkAgentInstructions", () => {
     const instructions = larkAgentInstructions();
 
     expect(instructions).toContain("Prefer `lark.choice` for explicit user selections");
+    expect(instructions).toContain("When planning mode or a tool asks the user to choose");
+    expect(instructions).toContain("render the options as a `lark.choice` card");
+    expect(instructions).toContain("put long option text in `label`/`description`");
     expect(instructions).toContain("do not call `lark-cli` just to send a choice card");
     expect(instructions).toContain("`lark-cli` is an optional local power tool");
     expect(instructions).toContain("For Feishu Docs/IM/Calendar/Drive operations, prefer local `lark-cli` when available");
