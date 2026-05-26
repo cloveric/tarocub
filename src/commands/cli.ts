@@ -1,4 +1,4 @@
-import { execFile as execFileCallback } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile, readdir, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
@@ -64,6 +64,7 @@ import { CronStore } from "../state/cron-store.js";
 import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir, writeLarkEnvFile } from "../lark/env-file.js";
 import { LarkGroupModeStore } from "../lark/group-mode-store.js";
 import { createLarkServiceRuntime, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
+import { detectLarkCliStatus, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
 import {
@@ -83,6 +84,18 @@ const LARK_SERVICE_TMUX_SESSION_PREFIX = "cctb-lark-service-";
 export interface CliLogger {
   log: (message: string) => void;
 }
+
+export interface LarkRunCommandInput {
+  file: string;
+  args: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  stdinText?: string;
+  timeoutMs?: number;
+  maxBuffer?: number;
+}
+
+export type LarkRunCommand = (input: LarkRunCommandInput) => Promise<{ stdout: string; stderr: string }>;
 
 export interface LarkServiceCommandInput {
   env: LarkRuntimeEnv;
@@ -139,6 +152,9 @@ export interface CliOptions {
   dashboardDeps?: DashboardCommandDeps;
   larkProvisionApp?: (input: { appId: string; appSecret: string; domain?: string; logger?: CliLogger }) => Promise<LarkProvisioningResult>;
   larkInspectApp?: (input: { appId: string; appSecret: string; domain?: string }) => Promise<LarkProvisioningResult>;
+  larkDetectCli?: () => Promise<LarkCliStatus>;
+  larkRunCommand?: LarkRunCommand;
+  stdinText?: string;
 }
 
 function normalizeCommandArgs(argv: string[]): string[] {
@@ -485,9 +501,12 @@ function resolveLarkStateDirForCli(env: LarkRuntimeEnv): string {
   }
 }
 
-async function formatLarkStatus(env: LarkRuntimeEnv): Promise<string> {
+async function formatLarkStatus(
+  env: LarkRuntimeEnv,
+  detectCli: () => Promise<LarkCliStatus> = detectLarkCliStatus,
+): Promise<string> {
   const stateDir = resolveLarkStateDirForCli(env);
-  const operationalLines = await inspectLarkOperationalStatus(stateDir);
+  const operationalLines = await inspectLarkOperationalStatus(stateDir, detectCli);
   const serviceStatus = await describeLarkServiceLock(stateDir);
   const lines = [
     "Lark channel",
@@ -518,7 +537,14 @@ function formatLarkStatusNextSteps(serviceStatus: string): string[] {
   ];
 }
 
-async function inspectLarkOperationalStatus(stateDir: string): Promise<string[]> {
+async function inspectLarkOperationalStatus(
+  stateDir: string,
+  detectCli: () => Promise<LarkCliStatus> = detectLarkCliStatus,
+): Promise<string[]> {
+  const larkCliStatus = await detectCli().catch((error): LarkCliStatus => ({
+    available: false,
+    error: error instanceof Error ? error.message : String(error),
+  }));
   if (stateDir.startsWith("(unknown:")) {
     return [
       "Engine: unknown",
@@ -530,6 +556,7 @@ async function inspectLarkOperationalStatus(stateDir: string): Promise<string[]>
       "Locale: unknown",
       "Verbosity: unknown",
       "Timezone: unknown",
+      `Lark CLI: ${renderLarkCliStatusForTerminal(larkCliStatus)}`,
       "Allowed Lark groups: unknown",
       "Listen-all Lark groups: unknown",
       "Lark cron jobs: unknown",
@@ -572,6 +599,7 @@ async function inspectLarkOperationalStatus(stateDir: string): Promise<string[]>
     `Locale: ${cfg?.locale ?? "unknown"}`,
     `Verbosity: ${cfg?.verbosity ?? "unknown"}`,
     `Timezone: ${cfg?.timezone ?? "unknown"}`,
+    `Lark CLI: ${renderLarkCliStatusForTerminal(larkCliStatus)}`,
     `Allowed Lark groups: ${allowedGroups}`,
     `Listen-all Lark groups: ${listenAllGroups}`,
     `Lark cron jobs: ${cronJobs}`,
@@ -581,6 +609,18 @@ async function inspectLarkOperationalStatus(stateDir: string): Promise<string[]>
     lines.splice(cronLineIndex === -1 ? lines.length : cronLineIndex, 0, "Group-all platform scope: requires im:message.group_msg; run `lark doctor` if ordinary group messages do not arrive.");
   }
   return lines;
+}
+
+function renderLarkCliStatusForTerminal(status: LarkCliStatus): string {
+  if (status.available) {
+    return status.version ? `available (${status.version})` : "available";
+  }
+  return status.error ? `unavailable (${truncateCliStatusDetail(status.error)})` : "unavailable";
+}
+
+function truncateCliStatusDetail(detail: string): string {
+  const normalized = detail.replace(/\s+/g, " ").trim();
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
 async function readRawLarkCliConfig(stateDir: string): Promise<Record<string, unknown>> {
@@ -670,6 +710,64 @@ async function checkLarkCliDocsCreate(): Promise<string> {
   }
 }
 
+async function runLarkCommandProcess(input: LarkRunCommandInput): Promise<{ stdout: string; stderr: string }> {
+  const timeoutMs = input.timeoutMs ?? 30_000;
+  const maxBuffer = input.maxBuffer ?? 10 * 1024 * 1024;
+  return await new Promise((resolve, reject) => {
+    const child = spawn(input.file, input.args, {
+      cwd: input.cwd,
+      env: input.env ?? process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(new Error(`${input.file} ${input.args.join(" ")} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    const append = (target: "stdout" | "stderr", chunk: Buffer) => {
+      if (target === "stdout") {
+        stdout += chunk.toString("utf8");
+      } else {
+        stderr += chunk.toString("utf8");
+      }
+      if (stdout.length + stderr.length > maxBuffer) {
+        child.kill("SIGTERM");
+        finish(new Error(`${input.file} ${input.args.join(" ")} exceeded output limit`));
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
+    child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
+    child.on("error", (error) => finish(error));
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const detail = redactLarkSensitiveText(`${stderr}\n${stdout}`.trim());
+      finish(new Error(`${input.file} ${input.args.join(" ")} failed${signal ? ` (${signal})` : ""}${detail ? `: ${detail}` : ""}`));
+    });
+    if (input.stdinText !== undefined) {
+      child.stdin.end(input.stdinText);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
 async function formatLarkDoctor(
   env: LarkRuntimeEnv,
   inspectApp: NonNullable<CliOptions["larkInspectApp"]> = inspectLarkAppProvisioning,
@@ -729,6 +827,260 @@ function redactLarkDoctorError(error: unknown, env: LarkRuntimeEnv): string {
     detail = detail.split(value).join("[redacted]");
   }
   return redactLarkSensitiveText(detail);
+}
+
+async function runLarkSecretsCommand(
+  args: string[],
+  env: LarkRuntimeEnv,
+  logger: CliLogger,
+  stdinText?: string,
+): Promise<boolean> {
+  const action = args[0] ?? "";
+  if (action === "get") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark secrets get");
+    }
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    logger.log(formatLarkSecretProviderResponse(loadedEnv, parseLarkSecretProviderRequest(stdinText ?? await readCliStdin())));
+    return true;
+  }
+  if (action === "list") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark secrets list");
+    }
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    logger.log(loadedEnv.LARK_APP_ID ? `app-${loadedEnv.LARK_APP_ID}` : "No Lark app secret is configured.");
+    return true;
+  }
+  throw new Error("Usage: lark secrets <get|list>");
+}
+
+function parseLarkSecretProviderRequest(input: string): { ids: string[] } {
+  if (!input.trim()) {
+    return { ids: [] };
+  }
+  const parsed = JSON.parse(input) as { ids?: unknown };
+  return {
+    ids: Array.isArray(parsed.ids) ? parsed.ids.filter((id): id is string => typeof id === "string") : [],
+  };
+}
+
+function formatLarkSecretProviderResponse(env: LarkRuntimeEnv, request: { ids: string[] }): string {
+  const values: Record<string, string> = {};
+  const errors: Record<string, { message: string }> = {};
+  const secretId = env.LARK_APP_ID ? `app-${env.LARK_APP_ID}` : undefined;
+  for (const id of request.ids) {
+    if (secretId && id === secretId && env.LARK_APP_SECRET) {
+      values[id] = env.LARK_APP_SECRET;
+    } else {
+      errors[id] = { message: "not found" };
+    }
+  }
+  return JSON.stringify({
+    protocolVersion: 1,
+    values,
+    ...(Object.keys(errors).length > 0 ? { errors } : {}),
+  });
+}
+
+async function readCliStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    return "";
+  }
+  return await new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      data += chunk;
+    });
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", reject);
+  });
+}
+
+async function runLarkCliBridgeCommand(
+  args: string[],
+  env: LarkRuntimeEnv,
+  logger: CliLogger,
+  runCommand: LarkRunCommand,
+): Promise<boolean> {
+  const action = args[0] ?? "";
+  if (action === "init") {
+    if (args.length !== 1) {
+      throw new Error("Usage: lark cli init");
+    }
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    if (!loadedEnv.LARK_APP_ID) {
+      throw new Error("LARK_APP_ID is required");
+    }
+    if (!loadedEnv.LARK_APP_SECRET) {
+      throw new Error("LARK_APP_SECRET is required");
+    }
+    const brand = loadedEnv.LARK_DOMAIN === "lark" ? "lark" : "feishu";
+    await runCommand({
+      file: "lark-cli",
+      args: ["config", "init", "--app-id", loadedEnv.LARK_APP_ID, "--app-secret-stdin", "--brand", brand],
+      stdinText: `${loadedEnv.LARK_APP_SECRET}\n`,
+      timeoutMs: 30_000,
+    });
+    logger.log("lark-cli config initialized from bridge credentials.");
+    return true;
+  }
+  if (action === "bind") {
+    const { identity, force } = parseLarkCliBindArgs(args.slice(1));
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    if (!loadedEnv.LARK_APP_ID) {
+      throw new Error("LARK_APP_ID is required");
+    }
+    await runCommand({
+      file: "lark-cli",
+      args: [
+        "config",
+        "bind",
+        "--source",
+        "lark-channel",
+        "--app-id",
+        loadedEnv.LARK_APP_ID,
+        "--identity",
+        identity,
+        ...(force ? ["--force"] : []),
+      ],
+      env: {
+        ...process.env,
+        ...loadedEnv,
+        LARK_CHANNEL: "1",
+      },
+      timeoutMs: 30_000,
+    });
+    logger.log(`lark-cli bound to bridge credentials with ${identity} identity.`);
+    return true;
+  }
+  throw new Error("Usage: lark cli <init|bind>");
+}
+
+function parseLarkCliBindArgs(args: string[]): { identity: "bot-only" | "user-default"; force: boolean } {
+  let identity: "bot-only" | "user-default" = "bot-only";
+  let force = false;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--identity") {
+      const value = args[++index];
+      if (value !== "bot-only" && value !== "user-default") {
+        throw new Error("Usage: lark cli bind [--identity bot-only|user-default] [--force]");
+      }
+      identity = value;
+      continue;
+    }
+    if (arg === "--force") {
+      force = true;
+      continue;
+    }
+    throw new Error("Usage: lark cli bind [--identity bot-only|user-default] [--force]");
+  }
+  return { identity, force };
+}
+
+async function runLarkAuthCommand(
+  args: string[],
+  logger: CliLogger,
+  runCommand: LarkRunCommand,
+): Promise<boolean> {
+  const action = args[0] ?? "";
+  if (action === "start") {
+    const result = await runCommand({
+      file: "lark-cli",
+      args: ["auth", "login", "--no-wait", "--json", ...normalizeLarkAuthStartArgs(args.slice(1))],
+      timeoutMs: 30_000,
+    });
+    logger.log(formatLarkOAuthStartResult(result.stdout));
+    return true;
+  }
+  if (action === "finish") {
+    if (args.length !== 2 || args[1]?.startsWith("-")) {
+      throw new Error("Usage: lark auth finish <device-code>");
+    }
+    await runCommand({
+      file: "lark-cli",
+      args: ["auth", "login", "--device-code", args[1]],
+      timeoutMs: 11 * 60 * 1000,
+    });
+    logger.log("Lark OAuth finished.");
+    return true;
+  }
+  if (action === "status") {
+    if (args.length > 2 || (args[1] && args[1] !== "--verify")) {
+      throw new Error("Usage: lark auth status [--verify]");
+    }
+    const result = await runCommand({
+      file: "lark-cli",
+      args: ["auth", "status", ...(args[1] === "--verify" ? ["--verify"] : [])],
+      timeoutMs: 30_000,
+    });
+    logger.log(redactLarkSensitiveText(`${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim()));
+    return true;
+  }
+  throw new Error("Usage: lark auth <start|finish|status>");
+}
+
+function normalizeLarkAuthStartArgs(args: string[]): string[] {
+  const normalized: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--recommend") {
+      normalized.push(arg);
+      continue;
+    }
+    if (arg === "--domain" || arg === "--scope" || arg === "--exclude") {
+      const value = args[++index];
+      if (!value) {
+        throw new Error("Usage: lark auth start [--recommend] [--domain <domains>] [--scope <scopes>] [--exclude <scopes>]");
+      }
+      normalized.push(arg, value);
+      continue;
+    }
+    if (arg.startsWith("--domain=") || arg.startsWith("--scope=") || arg.startsWith("--exclude=")) {
+      normalized.push(arg);
+      continue;
+    }
+    throw new Error("Usage: lark auth start [--recommend] [--domain <domains>] [--scope <scopes>] [--exclude <scopes>]");
+  }
+  return normalized;
+}
+
+function formatLarkOAuthStartResult(stdout: string): string {
+  const parsed = parseJsonFromPossiblyDecoratedOutput(stdout) as {
+    verification_url?: string;
+    verification_uri?: string;
+    device_code?: string;
+    user_code?: string;
+    expires_in?: number;
+  };
+  const verificationUrl = parsed.verification_url ?? parsed.verification_uri;
+  if (!verificationUrl || !parsed.device_code) {
+    throw new Error("lark-cli auth login --no-wait did not return verification_url and device_code");
+  }
+  return [
+    "Lark OAuth started.",
+    "Open this URL in a private chat/device flow:",
+    verificationUrl,
+    ...(parsed.user_code ? [`User code: ${parsed.user_code}`] : []),
+    `Device code: ${parsed.device_code}`,
+    ...(typeof parsed.expires_in === "number" ? [`Expires in: ${parsed.expires_in}s`] : []),
+    `Finish: node dist/src/index.js lark auth finish ${parsed.device_code}`,
+  ].join("\n");
+}
+
+function parseJsonFromPossiblyDecoratedOutput(output: string): unknown {
+  const trimmed = output.trim();
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    const firstBrace = trimmed.indexOf("{");
+    if (firstBrace !== -1) {
+      return JSON.parse(trimmed.slice(firstBrace)) as unknown;
+    }
+  }
+  throw new Error("Expected JSON output from lark-cli");
 }
 
 function resolveLarkServiceLogPath(stateDir: string): string {
@@ -1273,6 +1625,9 @@ async function runLarkCommand(
     service?: LarkServiceCommandDeps;
     send?: LarkSendCommandDeps;
     dashboard?: DashboardCommandDeps;
+    detectCli?: CliOptions["larkDetectCli"];
+    runCommand?: CliOptions["larkRunCommand"];
+    stdinText?: CliOptions["stdinText"];
   } = {},
 ): Promise<boolean> {
   const subcommand = argv[1] ?? "status";
@@ -1287,6 +1642,18 @@ async function runLarkCommand(
 
   if (subcommand === "send") {
     return await runLarkSendCommand(args, env, logger, deps.send);
+  }
+
+  if (subcommand === "secrets") {
+    return await runLarkSecretsCommand(args, env, logger, deps.stdinText);
+  }
+
+  if (subcommand === "cli") {
+    return await runLarkCliBridgeCommand(args, env, logger, deps.runCommand ?? runLarkCommandProcess);
+  }
+
+  if (subcommand === "auth") {
+    return await runLarkAuthCommand(args, logger, deps.runCommand ?? runLarkCommandProcess);
   }
 
   if (subcommand === "access") {
@@ -1382,7 +1749,7 @@ async function runLarkCommand(
       throw new Error("Usage: lark status");
     }
     const loadedEnv = await loadLarkRuntimeEnv(env);
-    logger.log(await formatLarkStatus(loadedEnv));
+    logger.log(await formatLarkStatus(loadedEnv, deps.detectCli ?? detectLarkCliStatus));
     return true;
   }
 
@@ -1470,7 +1837,7 @@ async function runLarkCommand(
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 
-  throw new Error("Usage: lark <status|doctor|provision|permissions|wizard|run|service|send|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
+  throw new Error("Usage: lark <status|doctor|provision|permissions|wizard|run|service|send|secrets|cli|auth|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
 }
 
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -2904,6 +3271,9 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
       service: options.larkServiceDeps,
       send: options.larkSendDeps,
       dashboard: options.dashboardDeps,
+      detectCli: options.larkDetectCli,
+      runCommand: options.larkRunCommand,
+      stdinText: options.stdinText,
     });
   }
 

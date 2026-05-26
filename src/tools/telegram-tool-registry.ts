@@ -279,22 +279,28 @@ export function createDefaultTelegramToolRegistry(): TelegramToolRegistry {
   });
   registry.register({
     name: "cron.remove",
-    description: "Removes a Telegram scheduled task in the current chat.",
+    description: "Removes a scheduled task in the current chat by id, or by query when exactly one task matches.",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string", pattern: "^[a-f0-9]{8}$" } },
-      required: ["id"],
+      properties: {
+        id: { type: "string", pattern: "^[a-f0-9]{8}$" },
+        query: { type: "string", minLength: 1, maxLength: 200 },
+      },
+      oneOf: [{ required: ["id"] }, { required: ["query"] }],
       additionalProperties: false,
     },
     execute: executeCronRemoveTool,
   });
   registry.register({
     name: "cron.toggle",
-    description: "Enables or disables a Telegram scheduled task in the current chat.",
+    description: "Enables or disables a scheduled task in the current chat by id, or by query when exactly one task matches.",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string", pattern: "^[a-f0-9]{8}$" } },
-      required: ["id"],
+      properties: {
+        id: { type: "string", pattern: "^[a-f0-9]{8}$" },
+        query: { type: "string", minLength: 1, maxLength: 200 },
+      },
+      oneOf: [{ required: ["id"] }, { required: ["query"] }],
       additionalProperties: false,
     },
     execute: executeCronToggleTool,

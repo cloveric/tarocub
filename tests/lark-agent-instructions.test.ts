@@ -27,7 +27,23 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("exactly one of `in`, `at`, or `cron`");
     expect(instructions).toContain("never include `chatId` or `userId`");
     expect(instructions).toContain("let the bridge confirm");
+    expect(instructions).toContain("cron.list");
+    expect(instructions).toContain("cron.remove");
+    expect(instructions).toContain("cron.toggle");
+    expect(instructions).toContain("list first");
     expect(instructions).toContain("if URL(s) are provided, read them directly");
     expect(instructions).toContain("use `web_search` for discovery/current facts");
+  });
+
+  it("prefers bridge-managed choice cards and treats lark-cli as an optional power tool", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("Prefer `lark.choice` for explicit user selections");
+    expect(instructions).toContain("do not call `lark-cli` just to send a choice card");
+    expect(instructions).toContain("`lark-cli` is an optional local power tool");
+    expect(instructions).toContain("For Feishu Docs/IM/Calendar/Drive operations, prefer local `lark-cli` when available");
+    expect(instructions).toContain("For Lark OAuth, only start authorization in private chats");
+    expect(instructions).toContain("use `lark auth start` first");
+    expect(instructions).toContain("never run OAuth login in the background");
   });
 });

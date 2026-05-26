@@ -69,6 +69,10 @@ describe("executeTelegramTool", () => {
 
   it("keeps generated agent instructions concise", () => {
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("payload:{message?,images?,files?}");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.list"');
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.remove"');
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.toggle"');
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("list first");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("if URL(s) are provided");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("use `web_search` for discovery");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("```tool-call");
@@ -203,6 +207,58 @@ describe("executeTelegramTool", () => {
     });
   });
 
+  it("removes current-chat cron jobs by unique query without requiring the user to know the id", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const refresh = vi.spyOn(scheduler, "refresh");
+      const mine = await store.add({ chatId: 123, userId: 456, cronExpr: "*/10 * * * *", prompt: "看生益科技" });
+      await store.add({ chatId: 123, userId: 456, cronExpr: "0 9 * * *", prompt: "morning summary" });
+      await store.add({ chatId: 999, userId: 456, cronExpr: "*/10 * * * *", prompt: "看生益科技" });
+
+      const result = await executeTelegramTool({
+        name: "cron.remove",
+        payload: { query: "生益科技" },
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "zh",
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.message).toContain(mine.id);
+      expect(await store.get(mine.id)).toBeNull();
+      expect(refresh).toHaveBeenCalled();
+    });
+  });
+
+  it("refuses query-based cron removal when more than one current-chat task matches", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const first = await store.add({ chatId: 123, userId: 456, cronExpr: "*/10 * * * *", prompt: "看生益科技价格" });
+      const second = await store.add({ chatId: 123, userId: 456, cronExpr: "*/30 * * * *", prompt: "看生益科技新闻" });
+
+      const result = await executeTelegramTool({
+        name: "cron.remove",
+        payload: { query: "生益科技" },
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "zh",
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("匹配到多个任务");
+      expect(result.message).toContain(first.id);
+      expect(result.message).toContain(second.id);
+      expect(await store.get(first.id)).not.toBeNull();
+      expect(await store.get(second.id)).not.toBeNull();
+    });
+  });
+
   it("refuses to remove another chat's cron job", async () => {
     await withCronRuntime(async ({ stateDir, store, scheduler }) => {
       const theirs = await store.add({ chatId: 999, userId: 456, cronExpr: "0 9 * * *", prompt: "theirs" });
@@ -243,6 +299,28 @@ describe("executeTelegramTool", () => {
 
       expect(result.ok).toBe(true);
       expect(result.message).toContain("disabled");
+      expect((await store.get(mine.id))?.enabled).toBe(false);
+    });
+  });
+
+  it("toggles current-chat cron jobs by unique query", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const mine = await store.add({ chatId: 123, userId: 456, cronExpr: "*/10 * * * *", prompt: "看生益科技" });
+
+      const result = await executeTelegramTool({
+        name: "cron.toggle",
+        payload: { query: "生益科技" },
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "zh",
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.message).toContain(mine.id);
       expect((await store.get(mine.id))?.enabled).toBe(false);
     });
   });

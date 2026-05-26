@@ -17,6 +17,7 @@ import {
 } from "../telegram/tool-tags.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { executeCronAddTool } from "../tools/cron-add-tool.js";
+import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { resolveLarkLocale } from "./locale.js";
@@ -316,6 +317,29 @@ async function executeLarkToolTag(input: {
     return result.ok;
   }
 
+  if (input.name.startsWith("cron.")) {
+    const result = await executeTelegramTool({
+      name: input.name,
+      payload: input.payload,
+      context: {
+        cronRuntime: input.runtime.cronRuntime ?? null,
+        stateDir: input.stateDir,
+        channel: "lark",
+        chatId: input.bridgeChatId ?? stableLarkNumericId(input.conversationKey ?? `lark:${input.chatId}`),
+        userId: input.bridgeUserId ?? stableLarkNumericId(`user:${input.conversationKey ?? input.chatId}`),
+        chatType: input.bridgeChatType ?? "private",
+        conversationKey: input.conversationKey,
+        larkChatId: input.chatId,
+        larkThreadId: input.larkThreadId,
+        larkMessageId: input.larkMessageId ?? input.replyTo,
+        locale: input.locale,
+        instanceName: "lark",
+      },
+    });
+    await sendLarkMarkdown(input.channel, input.chatId, result.message, larkReplyOptions(input.replyTo, input.replyInThread));
+    return result.ok;
+  }
+
   if (
     input.name === "send.file" ||
     input.name === "send.image" ||
@@ -369,6 +393,18 @@ async function executeLarkToolTag(input: {
       throw new Error(`${input.name} requires an object payload`);
     }
     await input.channel.send(input.chatId, { post }, larkReplyOptions(input.replyTo, input.replyInThread));
+    return true;
+  }
+
+  if (input.name === "lark.choice" || input.name === "send.choice") {
+    const card = buildLarkToolCard(
+      normalizeLarkChoicePayload(payload, input.locale),
+      input.conversationKey,
+      input.bridgeChatType,
+      input.replyInThread,
+      input.locale,
+    );
+    await input.channel.send(input.chatId, { card }, larkReplyOptions(input.replyTo, input.replyInThread));
     return true;
   }
 
@@ -746,6 +782,46 @@ function buildLarkToolCard(
       elements,
     },
   };
+}
+
+function normalizeLarkChoicePayload(payload: Record<string, unknown> | null, locale: Locale): Record<string, unknown> {
+  if (!payload) {
+    throw new Error("lark.choice requires an object payload");
+  }
+  const prompt = stringValue(payload.prompt) ?? stringValue(payload.body) ?? stringValue(payload.question) ?? "";
+  const title = stringValue(payload.title) ?? defaultLarkToolCardTitle(locale);
+  const rawOptions = Array.isArray(payload.options)
+    ? payload.options
+    : Array.isArray(payload.actions)
+      ? payload.actions
+      : [];
+  const actions = rawOptions
+    .map((option): Record<string, unknown> | null => {
+      if (typeof option === "string") {
+        return { label: option, value: option };
+      }
+      if (!option || typeof option !== "object" || Array.isArray(option)) {
+        return null;
+      }
+      const entry = option as Record<string, unknown>;
+      const label = stringValue(entry.label) ?? stringValue(entry.text) ?? stringValue(entry.value) ?? defaultLarkToolCardActionLabel(locale);
+      return {
+        ...entry,
+        label,
+        value: entry.value ?? label,
+      };
+    })
+    .filter((action): action is Record<string, unknown> => action !== null);
+
+  return {
+    title,
+    body: prompt,
+    actions,
+  };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function defaultLarkToolCardTitle(locale: Locale): string {

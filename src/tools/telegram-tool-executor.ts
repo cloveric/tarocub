@@ -21,7 +21,7 @@ export async function executeTelegramTool(
     await appendTimelineEventBestEffort(input.context.stateDir, {
       type: "tool.executed",
       instanceName: input.context.instanceName,
-      channel: "telegram",
+      channel: input.context.channel ?? "telegram",
       chatId: input.context.chatId,
       userId: input.context.userId,
       updateId: input.context.updateId,
@@ -38,7 +38,7 @@ export async function executeTelegramTool(
     await appendTimelineEventBestEffort(input.context.stateDir, {
       type: "tool.executed",
       instanceName: input.context.instanceName,
-      channel: "telegram",
+      channel: input.context.channel ?? "telegram",
       chatId: input.context.chatId,
       userId: input.context.userId,
       updateId: input.context.updateId,

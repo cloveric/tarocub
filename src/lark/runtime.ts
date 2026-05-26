@@ -6,6 +6,7 @@ import type { CronScheduler } from "../runtime/cron-scheduler.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import type { CronStore } from "../state/cron-store.js";
 import type { MiniBusCommandContext } from "../telegram/mini-bus-commands.js";
+import { detectLarkCliStatus, type LarkCliStatus } from "./cli.js";
 import type { LarkCommentClientLike } from "./comment-client.js";
 import {
   createLarkDocumentWithCli,
@@ -60,6 +61,7 @@ export interface LarkServiceRuntime {
   sessionRuntime?: LarkSessionRuntime;
   commentClient?: LarkCommentClientLike;
   transcribeMedia?: (filePath: string) => Promise<string>;
+  detectLarkCli: () => Promise<LarkCliStatus>;
   createDocument: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
 }
 
@@ -71,6 +73,7 @@ export function createLarkServiceRuntime(options: {
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;
   transcribeMedia?: (filePath: string) => Promise<string>;
+  detectLarkCli?: () => Promise<LarkCliStatus>;
 } = {}): LarkServiceRuntime {
   return {
     activeRuns: new Map(),
@@ -82,6 +85,7 @@ export function createLarkServiceRuntime(options: {
     ...(options.sessionRuntime ? { sessionRuntime: options.sessionRuntime } : {}),
     ...(options.commentClient ? { commentClient: options.commentClient } : {}),
     ...(options.transcribeMedia ? { transcribeMedia: options.transcribeMedia } : {}),
+    detectLarkCli: options.detectLarkCli ?? detectLarkCliStatus,
     createDocument: options.createDocument ?? createLarkDocumentWithCli,
   };
 }

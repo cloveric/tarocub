@@ -109,12 +109,12 @@ The Lark channel currently supports:
 - inbound p2p/group messages normalized into the same `Bridge.handleAuthorizedMessage` path, protected by the same pairing/allowlist access store as Telegram;
 - basic chat commands: `/help`, `/status`, `/usage`, `/model`, `/effort`, `/fast`, `/engine`, `/yolo`, `/goal`, `/btw`, `/ask`, `/reset`, `/detach`, Claude/Antigravity `/resume` scan and explicit `/resume thread ...` / `/resume conversation ...`, `/cron`, `/group status|allow|deny|on|off|all|at`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/continue`, and `/stop`;
 - topic/thread isolation through `conversationKey`, plus replied-message context enrichment so short follow-ups like "继续" or "就这个" keep the quoted Lark message text;
-- ordinary tasks return the final answer directly; interactive cards are reserved for stop controls, approvals, card choices, and archive continuation;
+- ordinary tasks return the final answer directly; interactive cards are reserved for stop controls, approvals, `lark.choice` / card choices, and archive continuation;
 - approval cards for engine permission requests, with callback operators checked against bridge access policy before resolving;
 - inbound image/file resources downloaded into the bridge workspace for the current turn, then cleaned up after staging/transcription; inbound Lark audio/video resources use the same local ASR path as Telegram before engine execution;
 - outbound `[send-file:/abs/path]`, `[send-image:/abs/path]`, `send.audio`, `send.video`, `send.batch`, and whole-response fenced `file:name.ext` blocks delivered back to Lark;
 - rich Feishu posts through `lark.post` tool tags when plain Markdown is too limiting;
-- custom interactive cards through `lark.card` tool tags, with button clicks fed back into the same bridge session;
+- bridge-managed user choice cards through `lark.choice`, plus custom interactive cards through `lark.card`; button clicks are access-checked, audited, and fed back into the same bridge session;
 - Feishu Docs creation through `lark.doc.create` for long specs and reviewable documents; the default creator identity is the app/bot, with opt-in `as:"user"` when you really want the local `lark-cli` user identity;
 - Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, runs the same engine, replies in-thread, and can execute `lark.doc.create`; chat-only delivery/reminder tools are reported as unsupported instead of being silently swallowed;
 - Lark-delivered scheduled reminders/tasks through `/cron` or `cron.add` tool tags, with raw Lark chat/thread routing stored on each job so scheduler fires can return to the correct Lark conversation;
@@ -153,15 +153,32 @@ Access control is intentionally shared with the existing bridge store. If a priv
 Lark-specific tool tags use the same compact JSON tag shape as Telegram side-channel tools:
 
 ```text
+[tool:{"name":"lark.choice","payload":{"prompt":"What next?","options":[{"label":"Continue","value":"continue"},{"label":"Rewrite","value":"rewrite"}]}}]
 [tool:{"name":"lark.card","payload":{"title":"Choose","body":"What next?","actions":[{"label":"Continue","value":"continue"}]}}]
 [tool:{"name":"lark.doc.create","payload":{"title":"Spec","content":"# Spec\n\nBody","docFormat":"markdown"}}]
 [tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]
 [tool:{"name":"send.video","payload":{"path":"/absolute/path/demo.mp4"}}]
 ```
 
+Use `lark.choice` for ordinary “pick one option” workflows. Use raw `lark.card` only when you need a custom Card 2.0 layout.
+
 For raw `lark.card` payloads, bridge decorates ordinary button elements with Card 2.0 `behaviors: [{type:"callback", value: ...}]` routing metadata when a conversation is available. If you already provide callback metadata, that explicit payload is preserved.
 
-`lark-cli` is useful inside agent turns for Feishu Docs/IM/Calendar operations, but it is not used as the inbound bot transport. Long-connection message delivery uses `@larksuiteoapi/node-sdk` because it exposes normalized message events, card callbacks, and media helpers directly.
+`lark-cli` is the preferred local power layer inside agent turns for Feishu Docs/IM/Calendar/Drive operations, and it is required for features that explicitly call local CLI-backed tools such as `lark.doc.create`. `/status` reports whether the local CLI is visible to the service. It is not required for the core Lark bot transport, ordinary replies, access checks, stop/approval cards, `lark.choice`, or inbound media handling. Long-connection message delivery uses `@larksuiteoapi/node-sdk` because it exposes normalized message events, card callbacks, and media helpers directly.
+
+Bridge-managed `lark-cli` helpers:
+
+```bash
+node dist/src/index.js lark cli init
+node dist/src/index.js lark cli bind --identity bot-only
+node dist/src/index.js lark secrets list
+printf '{"protocolVersion":1,"ids":["app-<app_id>"]}\n' | node dist/src/index.js lark secrets get
+node dist/src/index.js lark auth start --recommend --domain docs,drive
+node dist/src/index.js lark auth finish <device-code>
+node dist/src/index.js lark auth status --verify
+```
+
+`lark cli init` feeds the app secret to `lark-cli config init --app-secret-stdin`, so the secret does not appear in argv or normal command output. `lark secrets get` implements the exec-provider protocol shape used by OpenClaw/Lark tooling and returns only explicitly requested secret ids such as `app-<app_id>`. OAuth is intentionally two-step: start returns a device-flow URL immediately, and finish polls the device code in the foreground after the user confirms authorization. Do not start OAuth from a group chat; send device-flow URLs only in private chats.
 
 ### Lark Production Smoke Checklist
 
@@ -198,6 +215,7 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
+- **v4.6.56** — sharpens Lark as a native control surface: interactive `/config` cards, bridge-managed `lark.choice` buttons, lark-cli status/init/bind/secrets/OAuth helpers, and safer cron management where `cron.remove` / `cron.toggle` can act by unique query without inventing task IDs.
 - **v4.6.53** — tightens the Feishu/Lark product edge: Telegram `service --all` no longer mistakes `~/.cctb/lark` for a Telegram bot, transient Lark attachments are cleaned after each turn, `lark send` requires an explicit `--chat`, Docs creation defaults to bot identity, and Lark doctor uses the shared secret redactor.
 - **v4.6.51–v4.6.52** — closes the main Lark parity gap: direct final replies, Lark-routed `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/goal`, service/audit/dashboard aliases, Telegram Markdown delivery hardening, and Lark-native running/done cards where the platform needs cards.
 - **v4.6.42–v4.6.46** — adds the QR `lark wizard`, `lark provision`, domain-safe PersonalAgent setup, permission/subscription checks, and Feishu Docs comment @mention support with in-thread replies.
@@ -468,9 +486,15 @@ Agents can schedule Telegram-delivered reminders and recurring tasks through the
 [tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]
 [tool:{"name":"cron.add","payload":{"at":"2026-05-01T09:00:00Z","prompt":"Monday standup"}}]
 [tool:{"name":"cron.add","payload":{"cron":"0 9 * * 1","prompt":"weekly summary"}}]
+[tool:{"name":"cron.list","payload":{}}]
+[tool:{"name":"cron.remove","payload":{"query":"weekly summary"}}]
+[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]
+[tool:{"name":"cron.toggle","payload":{"id":"<job-id>"}}]
 ```
 
 One-shot `in` / `at` reminders default to direct Telegram notifications, so prompts such as `提醒我：给玉姐带尿布` are not sent back through the AI model at fire time. Recurring `cron` jobs default to AI-run tasks; set `deliveryMode:"notify"` for recurring plain reminders, or `deliveryMode:"agent"` when a one-shot scheduled item should run the AI.
+
+When a user asks to cancel or pause an existing scheduled task and did not provide a job ID, agents can call `cron.remove` or `cron.toggle` with a `query` if the wording uniquely identifies one current chat/thread job. If the request is ambiguous, call `cron.list` first and ask the user which ID to change. Agents must not invent job IDs.
 
 Users can also manage tasks directly in Telegram:
 

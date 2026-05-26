@@ -29,6 +29,8 @@ import {
   handleLarkDelegationCommand,
   handleLarkMiniBusCommand,
 } from "./bus.js";
+import type { LarkCliStatus } from "./cli.js";
+import { isLarkConfigCommand, renderLarkConfigCard } from "./config-card.js";
 import { sendLarkMarkdown } from "./delivery.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
 import { readRawLarkConfig, renderLarkCronRuntimeMissing, renderLarkUserAccessDenied, resolveLarkLocale } from "./locale.js";
@@ -71,6 +73,27 @@ export async function handleLarkSimpleCommand(
   const commandLocale = await resolveLarkLocale(input.stateDir);
   if (isHelpCommand(commandText)) {
     await sendLarkCommandMarkdown(input, normalized, "/help", renderLarkHelpMessage(commandLocale));
+    return true;
+  }
+
+  if (isLarkConfigCommand(commandText)) {
+    await input.channel.send(normalized.chatId, {
+      card: await renderLarkConfigCard({
+        stateDir: input.stateDir,
+        conversationKey: normalized.conversationKey,
+        bridgeChatType: normalized.bridgeChatType,
+        larkChatId: normalized.chatId,
+        bridgeChatId: normalized.bridgeChatId,
+        replyInThread: Boolean(normalized.threadId),
+        locale: commandLocale,
+        requireMentionInGroup: input.requireMentionInGroup,
+      }),
+    }, larkCommandReplyOptions(normalized));
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "success",
+      detail: "/config",
+    });
     return true;
   }
 
@@ -469,6 +492,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "- `/fast [on|off|status]`: toggle Codex Fast Mode",
       "- `/engine [claude|codex|antigravity]`: inspect or switch the backend engine",
       "- `/yolo [on|off|unsafe]`: inspect or switch approval mode",
+      "- `/config`: open the interactive Lark settings panel",
       "- `/context` / `/compact` / `/ultrareview`: Claude context, compaction, and deep code-review commands",
       "- `/goal [status|clear|objective|--budget N objective]`: manage the current conversation goal; goals are unbounded by default",
       "- `/btw <question>`: ask a side question without touching the current session",
@@ -490,7 +514,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "Input and output:",
       "- Send requests, files, images, audio, or video directly; audio/video is transcribed locally first.",
       "- Supports `[send-file:/abs/path]`, `[send-image:/abs/path]`, `send.audio`, `send.video`, `send.batch`, and related delivery tags.",
-      "- Supports `lark.post`, `lark.card`, and `lark.doc.create` tool tags; `lark.card` buttons route back into the current conversation.",
+      "- Supports `lark.post`, `lark.choice`, `lark.card`, and `lark.doc.create` tool tags; choice/card buttons route back into the current conversation.",
       "- Feishu Docs comments that @mention the bot are answered in the comment thread with comment context.",
       "",
       "Runtime behavior:",
@@ -513,6 +537,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "- `/fast [on|off|status]`：开关 Codex Fast Mode",
     "- `/engine [claude|codex|antigravity]`：查看或切换后端引擎",
     "- `/yolo [on|off|unsafe]`：查看或切换审批模式",
+    "- `/config`：打开飞书交互配置面板",
     "- `/context` / `/compact` / `/ultrareview`：Claude 本地上下文、压缩和深度代码审查命令",
     "- `/goal [status|clear|目标|--budget N 目标]`：管理当前会话 goal；默认无 token 预算",
     "- `/btw <问题>`：旁问，不影响当前会话",
@@ -534,7 +559,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "输入和输出：",
     "- 直接发需求、文件、图片、音视频；音视频会先走本地 ASR 转写。",
     "- 支持 `[send-file:/abs/path]`、`[send-image:/abs/path]`、`send.audio`、`send.video`、`send.batch` 等发送标签。",
-    "- 支持 `lark.post`、`lark.card`、`lark.doc.create` 工具标签；`lark.card` 按钮会回到当前会话继续执行。",
+    "- 支持 `lark.post`、`lark.choice`、`lark.card`、`lark.doc.create` 工具标签；选择/卡片按钮会回到当前会话继续执行。",
     "- 飞书 Docs 评论 @bot 会读取评论上下文并在评论线程内回复。",
     "",
     "运行方式：",
@@ -771,6 +796,10 @@ async function renderLarkStatusMessage(
   const groupModeLines = normalized.bridgeChatType === "group"
     ? await renderLarkGroupModeStatusLines(stateDir, normalized.chatId, locale, requireMentionInGroup)
     : [];
+  const larkCliStatus = await runtime.detectLarkCli().catch((error): LarkCliStatus => ({
+    available: false,
+    error: error instanceof Error ? error.message : String(error),
+  }));
   const activeRun = runtime.activeRuns.has(normalized.conversationKey);
   if (locale === "en") {
     return [
@@ -785,6 +814,7 @@ async function renderLarkStatusMessage(
       `Locale: ${locale}`,
       `Verbosity: ${cfg.verbosity}`,
       `Timezone: ${cfg.timezone}`,
+      `Lark CLI: ${renderLarkCliStatus(larkCliStatus, locale)}`,
       `Conversation: ${normalized.conversationKey}`,
       `Chat type: ${normalized.bridgeChatType}`,
       ...groupModeLines,
@@ -811,6 +841,7 @@ async function renderLarkStatusMessage(
     `语言：${locale}`,
     `详细度：${cfg.verbosity}`,
     `时区：${cfg.timezone}`,
+    `Lark CLI：${renderLarkCliStatus(larkCliStatus, locale)}`,
     `会话：${normalized.conversationKey}`,
     `聊天类型：${normalized.bridgeChatType}`,
     ...groupModeLines,
@@ -823,6 +854,21 @@ async function renderLarkStatusMessage(
     `当前运行：${activeRun ? "是" : "否"}`,
     `待处理审批：${runtime.pendingApprovals.size}`,
   ].join("\n");
+}
+
+function renderLarkCliStatus(status: LarkCliStatus, locale: Locale): string {
+  if (status.available) {
+    return status.version
+      ? locale === "en" ? `available (${status.version})` : `可用（${status.version}）`
+      : locale === "en" ? "available" : "可用";
+  }
+  const detail = status.error ? ` (${truncateLarkStatusDetail(status.error)})` : "";
+  return locale === "en" ? `unavailable${detail}` : `不可用${detail}`;
+}
+
+function truncateLarkStatusDetail(detail: string): string {
+  const normalized = detail.replace(/\s+/g, " ").trim();
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
 }
 
 function renderLarkApprovalModeStatus(mode: unknown, locale: Locale): string {

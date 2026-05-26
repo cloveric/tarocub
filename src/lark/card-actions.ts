@@ -14,6 +14,11 @@ import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { renderLarkApprovalCard } from "./card-renderer.js";
+import {
+  applyLarkConfigCardAction,
+  isLarkConfigCardActionValue,
+  renderLarkConfigCard,
+} from "./config-card.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { safeSegment } from "./files.js";
@@ -201,6 +206,60 @@ export async function handleLarkCardAction(input: {
     await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active || skippedQueued), locale) }, {
       replyTo: input.event.messageId,
       ...(replyInThread ? { replyInThread: true } : {}),
+    });
+    return true;
+  }
+
+  if (isLarkConfigCardActionValue(value)) {
+    if (!input.stateDir) {
+      return false;
+    }
+    const bridgeChatType = bridgeChatTypeFromValue(value.bridgeChatType);
+    if (!await ensureLarkCardActionAccess({
+      ...input,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      replyInThread,
+      action: "config",
+    })) {
+      return true;
+    }
+
+    const notice = await applyLarkConfigCardAction(input.stateDir, value, locale);
+    const bridgeChatId = typeof value.bridgeChatId === "number" && Number.isInteger(value.bridgeChatId)
+      ? value.bridgeChatId
+      : stableLarkNumericId(value.conversationKey);
+    const card = await renderLarkConfigCard({
+      stateDir: input.stateDir,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      larkChatId: typeof value.larkChatId === "string" ? value.larkChatId : input.event.chatId,
+      bridgeChatId,
+      replyInThread,
+      locale: await resolveLarkLocale(input.stateDir),
+      notice,
+    });
+    if (input.channel.updateCard) {
+      await input.channel.updateCard(input.event.messageId, card);
+    } else {
+      await input.channel.send(input.event.chatId, { card }, larkReplyOptions(input.event.messageId, replyInThread));
+    }
+    await appendLarkCardActionTurnEvent({
+      stateDir: input.stateDir,
+      chatId: input.event.chatId,
+      replyTo: input.event.messageId,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      userId: stableLarkNumericId(`user:${larkOperatorRawId(input.event.operator)}`),
+    }, {
+      type: "turn.completed",
+      action: "config",
+      outcome: "success",
+      detail: "config",
+      metadata: {
+        configAction: value.action,
+        configValue: value.value,
+      },
     });
     return true;
   }
@@ -860,7 +919,7 @@ async function appendLarkCardActionTurnEvent(
   }, "Lark card action turn timeline event");
 }
 
-type LarkCardActionTimelineAction = "stop" | "approval" | "choice" | "continue_archive";
+type LarkCardActionTimelineAction = "stop" | "approval" | "choice" | "continue_archive" | "config";
 
 function extractButtonLabel(button: Record<string, unknown>): string {
   const text = payloadObject(button.text);
