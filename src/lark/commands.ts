@@ -520,7 +520,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "Runtime behavior:",
       "- Ordinary tasks return final answers directly; dangerous operations, card choices, and archive continuation use interactive cards.",
       "- Background task notifications return to the original Lark private chat, group, or thread.",
-      "- Group messages require @bot by default; `/group all` enables ordinary messages, but the app must also have `im:message.group_msg`.",
+      "- Group messages require @bot by default; `/group all` enables ordinary messages, but the app must also have `im:message` and `im:message.group_msg`.",
       "- If group slash commands work but ordinary messages do not arrive, run `node dist/src/index.js lark doctor` to inspect missing permissions.",
     ].join("\n");
   }
@@ -565,7 +565,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "运行方式：",
     "- 普通任务直接返回最终结果；危险操作、卡片选择和压缩包继续分析会使用飞书交互卡片。",
     "- 后台任务完成通知会回到原始 Lark 私聊、群聊或 thread。",
-    "- 群聊普通消息默认需要 @bot；`/group all` 可切到全量监听，但飞书应用必须额外拥有 `im:message.group_msg`。",
+    "- 群聊普通消息默认需要 @bot；`/group all` 可切到全量监听，但飞书应用必须额外拥有 `im:message` 和 `im:message.group_msg`。",
     "- 如果群里 slash 命令可用但普通消息收不到，先运行 `node dist/src/index.js lark doctor` 看缺失权限。",
   ].join("\n");
 }
@@ -726,7 +726,7 @@ function renderLarkGroupModeStatus(input: {
       `- Lark groups listening to ordinary messages: ${input.listenAllCount}`,
       "- Access control: authorized users can use `/group allow|deny` inside a Lark group; CLI alias `lark access` still manages users/private chats.",
       "- Global default: `LARK_REQUIRE_MENTION_IN_GROUP=1` requires @bot unless this chat uses `/group all`.",
-      "- Platform requirement: `/group all` also needs the Feishu/Lark app scope `im:message.group_msg`; run `lark doctor` if ordinary group messages still do not arrive.",
+      "- Platform requirement: `/group all` also needs the Feishu/Lark app scopes `im:message` and `im:message.group_msg`; run `lark doctor` if ordinary group messages still do not arrive.",
     ].join("\n");
   }
 
@@ -740,7 +740,7 @@ function renderLarkGroupModeStatus(input: {
     `- 正在监听普通消息的 Lark 群数：${input.listenAllCount}`,
     "- 访问控制：授权用户可在 Lark 群内使用 `/group allow|deny`；CLI 侧仍用 `lark access` 管理用户/私聊。",
     "- 全局默认：`LARK_REQUIRE_MENTION_IN_GROUP=1` 时需要 @bot，除非当前群使用 `/group all`。",
-    "- 平台要求：`/group all` 还需要飞书/Lark 应用权限 `im:message.group_msg`；普通群消息仍收不到时，请运行 `lark doctor` 检查。",
+    "- 平台要求：`/group all` 还需要飞书/Lark 应用权限 `im:message` 和 `im:message.group_msg`；普通群消息仍收不到时，请运行 `lark doctor` 检查。",
   ].join("\n");
 }
 

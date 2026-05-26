@@ -49,6 +49,11 @@ describe("runLarkService", () => {
         appSecret: "secret",
         transport: "websocket",
         source: "cc-telegram-bridge",
+        policy: {
+          dmMode: "open",
+          requireMention: false,
+          respondToMentionAll: false,
+        },
         safety: {
           chatQueue: {
             enabled: false,
@@ -56,6 +61,7 @@ describe("runLarkService", () => {
         },
       }));
       expect(channel.on).toHaveBeenCalledWith("message", expect.any(Function));
+      expect(channel.on).toHaveBeenCalledWith("reject", expect.any(Function));
       expect(channel.on).toHaveBeenCalledWith("cardAction", expect.any(Function));
       expect(channel.on).toHaveBeenCalledWith("comment", expect.any(Function));
       expect(channel.on).toHaveBeenCalledWith("error", expect.any(Function));

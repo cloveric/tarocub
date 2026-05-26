@@ -87,7 +87,7 @@ node dist/src/index.js lark task list
 node dist/src/index.js lark backup --out ./lark-state.cctb.gz
 ```
 
-`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes, Feishu Docs scopes, cloud-doc comment read/write scopes, and the group-all message scope required for `/group all`. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. The PersonalAgent QR template does not currently guarantee `im:message.group_msg`; if you want ordinary non-mention group messages through `/group all`, add or bulk-import that scope in the Feishu/Lark app permissions UI and rerun `lark provision`. Environment variables still win if you prefer manual credentials:
+`lark wizard` uses the official Lark SDK PersonalAgent registration flow, prints a QR code, writes credentials to `~/.cctb/lark/lark.env` (or `CCTB_LARK_STATE_DIR/lark.env`), then checks the app for the bridge surface: message receive events, card callbacks, bot message/resource scopes including the base `im:message` permission, Feishu Docs scopes, cloud-doc comment read/write scopes, and the group-all message scope required for `/group all`. If the app has management permission, the wizard patches event/callback subscriptions; otherwise it reports the exact management scope needed. The PersonalAgent QR template does not currently guarantee `im:message.group_msg`; if you want ordinary non-mention group messages through `/group all`, add or bulk-import that scope in the Feishu/Lark app permissions UI and rerun `lark provision`. Environment variables still win if you prefer manual credentials:
 
 ```bash
 export LARK_APP_ID="cli_xxx"
@@ -134,7 +134,7 @@ Most bridge-level features now exist on both channels. The remaining differences
 | Area | Telegram | Feishu/Lark |
 |---|---|---|
 | Ordinary private chat | Supported | Supported after `lark access pair` / allowlist |
-| Group self-service | `/group allow`, `/group all`, `/group at` | Same commands; `/group all` also needs the app scope `im:message.group_msg`; multi-agent @bot groups should also grant `im:message.group_at_msg.include_bot:readonly` |
+| Group self-service | `/group allow`, `/group all`, `/group at` | Same commands; `/group all` also needs the app scopes `im:message` and `im:message.group_msg`; multi-agent @bot groups should also grant `im:message.group_at_msg.include_bot:readonly` |
 | Running feedback | Native `typing...` action | No exact Lark equivalent; ordinary turns return final answers directly, while explicit workflows use cards |
 | Scheduled work | `/cron` and `cron.add` return to the Telegram chat/topic | `/cron` and `cron.add` preserve raw Lark chat/thread routing |
 | Files and media | Files/images/voice/audio/video, subject to Telegram Bot API limits | Files/images/audio/video through Lark resources and local ASR |
@@ -142,10 +142,10 @@ Most bridge-level features now exist on both channels. The remaining differences
 | Docs comments | Not a Telegram concept | Feishu Docs comment @mentions can run the bridge and reply in-thread |
 | Observability | `telegram status`, `doctor`, `timeline`, `audit`, `dashboard`, `instructions`, `session`, `task`, `backup`, `restore`, `send` | `lark status`, `doctor`, `timeline`, `audit`, `dashboard`, `instructions`, `session`, `task`, `backup`, `restore`, `send` use the Lark state dir and saved app credentials |
 
-If `lark doctor` reports `im:message.group_msg` missing, Lark group slash commands and @mentions can still work, but ordinary non-mention group messages may never reach the bridge because Feishu/Lark filters them before the local service sees them. This scope is a manual Feishu/Lark app permission step, not something fixed by recreating the same PersonalAgent QR app. Open Feishu/Lark Developer Console → your app → Permissions, choose the bulk import/open flow, and paste the compact JSON printed by `lark doctor` or `lark permissions --missing`, for example:
+If `lark doctor` reports `im:message` or `im:message.group_msg` missing, Lark group slash commands and @mentions can still work, but ordinary non-mention group messages may never reach the bridge because Feishu/Lark filters them before the local service sees them. These scopes are manual Feishu/Lark app permission steps, not something fixed by recreating the same PersonalAgent QR app. Open Feishu/Lark Developer Console → your app → Permissions, choose the bulk import/open flow, and paste the compact JSON printed by `lark doctor` or `lark permissions --missing`, for example:
 
 ```json
-{"scopes":{"tenant":["im:message.group_msg"]}}
+{"scopes":{"tenant":["im:message","im:message.group_msg"]}}
 ```
 
 Access control is intentionally shared with the existing bridge store. If a private Lark chat is not paired, the bot replies with the pairing/allowlist instruction instead of running the engine. Use the Lark-specific alias against the Lark state dir: `node dist/src/index.js lark access pair <code>`, `lark access allow <numeric-chat-id>`, `lark access policy allowlist`, and `lark access status`.
@@ -215,6 +215,7 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
+- **v4.6.58** — fixes Lark `/group all` ordinary group delivery by disabling SDK-level mention gating inside the bridge, adds safe raw/reject diagnostics, and updates `lark wizard` / `lark provision` to require both `im:message` and `im:message.group_msg`.
 - **v4.6.56** — sharpens Lark as a native control surface: interactive `/config` cards, bridge-managed `lark.choice` buttons, lark-cli status/init/bind/secrets/OAuth helpers, and safer cron management where `cron.remove` / `cron.toggle` can act by unique query without inventing task IDs.
 - **v4.6.53** — tightens the Feishu/Lark product edge: Telegram `service --all` no longer mistakes `~/.cctb/lark` for a Telegram bot, transient Lark attachments are cleaned after each turn, `lark send` requires an explicit `--chat`, Docs creation defaults to bot identity, and Lark doctor uses the shared secret redactor.
 - **v4.6.51–v4.6.52** — closes the main Lark parity gap: direct final replies, Lark-routed `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/goal`, service/audit/dashboard aliases, Telegram Markdown delivery hardening, and Lark-native running/done cards where the platform needs cards.
@@ -1446,7 +1447,7 @@ Lark private chats are paired through `lark access`. Authorized Lark users can e
 /group at
 ```
 
-By default, ordinary Lark group messages must mention the bot, but explicit slash commands are still accepted so authorized users can recover with commands such as `/group on`. Use `/group allow` to authorize the current group, `/group all` to let ordinary group messages enter the bridge queue, and `/group at` to return to the safer mention-only mode. Trigger mode is stored in the Lark state directory as `lark-group-mode.json`, while allowed Lark group numeric ids are stored in the Lark instance config; neither affects Telegram `groupMode`. `/group all` also requires the Feishu/Lark app scope `im:message.group_msg`; `lark doctor` and `lark provision` report that scope explicitly when the app is still mention-only at the platform layer and print a compact bulk-import JSON for the missing tenant scopes. The QR wizard may create a working PersonalAgent app without that ordinary-group scope, so add it manually or by permission import if you need non-mention group traffic.
+By default, ordinary Lark group messages must mention the bot, but explicit slash commands are still accepted so authorized users can recover with commands such as `/group on`. Use `/group allow` to authorize the current group, `/group all` to let ordinary group messages enter the bridge queue, and `/group at` to return to the safer mention-only mode. Trigger mode is stored in the Lark state directory as `lark-group-mode.json`, while allowed Lark group numeric ids are stored in the Lark instance config; neither affects Telegram `groupMode`. `/group all` also requires the Feishu/Lark app scopes `im:message` and `im:message.group_msg`; `lark doctor` and `lark provision` report those scopes explicitly when the app is still mention-only at the platform layer and print a compact bulk-import JSON for the missing tenant scopes. The QR wizard may create a working PersonalAgent app without that ordinary-group scope, so add it manually or by permission import if you need non-mention group traffic.
 
 ---
 

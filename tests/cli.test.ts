@@ -277,10 +277,10 @@ describe("runCli", () => {
       expect(output).toContain("Lark CLI: available (lark-cli version 1.0.40)");
       expect(output).toContain("Allowed Lark groups: 2");
       expect(output).toContain("Listen-all Lark groups: 1");
-      expect(output).toContain("Group-all platform scope: requires im:message.group_msg");
+      expect(output).toContain("Group-all platform scopes: require im:message and im:message.group_msg");
       expect(output).toContain("Lark cron jobs: 2 (enabled 1)");
-      expect(output.indexOf("Listen-all Lark groups: 1")).toBeLessThan(output.indexOf("Group-all platform scope: requires im:message.group_msg"));
-      expect(output.indexOf("Group-all platform scope: requires im:message.group_msg")).toBeLessThan(output.indexOf("Lark cron jobs: 2 (enabled 1)"));
+      expect(output.indexOf("Listen-all Lark groups: 1")).toBeLessThan(output.indexOf("Group-all platform scopes: require im:message and im:message.group_msg"));
+      expect(output.indexOf("Group-all platform scopes: require im:message and im:message.group_msg")).toBeLessThan(output.indexOf("Lark cron jobs: 2 (enabled 1)"));
     } finally {
       await removeTempRoot(tempDir);
     }
@@ -318,7 +318,7 @@ describe("runCli", () => {
       const output = messages.join("\n");
       expect(output).toContain("Allowed Lark groups: 1");
       expect(output).toContain("Listen-all Lark groups: 0");
-      expect(output).not.toContain("Group-all platform scope: requires im:message.group_msg");
+      expect(output).not.toContain("Group-all platform scopes: require im:message and im:message.group_msg");
     } finally {
       await removeTempRoot(tempDir);
     }

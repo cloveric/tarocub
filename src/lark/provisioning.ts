@@ -3,6 +3,7 @@ import { Client, Domain } from "@larksuiteoapi/node-sdk";
 import { redactLarkSensitiveText } from "./redaction.js";
 
 export const REQUIRED_LARK_SCOPES = [
+  "im:message",
   "im:message.group_at_msg.include_bot:readonly",
   "im:message.group_at_msg:readonly",
   "im:message.group_msg",
@@ -132,6 +133,10 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
     lines.push(`Scopes not present in app config: ${result.missingScopes.join(", ")}`);
     lines.push(`Bulk import missing tenant scopes JSON: ${formatLarkTenantScopeImportJson(result.missingScopes)}`);
     lines.push("Run `node dist/src/index.js lark permissions --missing` to reprint only the currently missing tenant scopes.");
+  }
+  if (result.missingScopes.includes("im:message")) {
+    lines.push("Lark message receive/send needs the base im:message scope; without it, broad group-message delivery may stay filtered even when narrower message scopes are present.");
+    lines.push("Add or bulk-import im:message in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
   }
   if (result.missingScopes.includes("im:message.group_msg")) {
     lines.push("Lark /group all requires im:message.group_msg; without it, ordinary group messages may not reach the bot.");

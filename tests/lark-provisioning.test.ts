@@ -218,6 +218,26 @@ describe("provisionLarkApp", () => {
     expect(formatLarkProvisioningResult(result).join("\n")).toContain("Scopes not present in app config: im:resource");
   });
 
+  it("requires the base bot message scope used by Feishu for message receive and send", async () => {
+    const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message");
+    const client = createProvisioningClientMock({
+      scopes,
+      apps: [
+        appProvisioning({
+          callbacks: [...REQUIRED_LARK_CALLBACKS],
+          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
+        }),
+      ],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result).join("\n");
+
+    expect(result.missingScopes).toEqual(["im:message"]);
+    expect(formatted).toContain("Scopes not present in app config: im:message");
+    expect(formatted).toContain("Lark message receive/send needs the base im:message scope");
+  });
+
   it("explains that group-all mode needs the ordinary group message scope", async () => {
     const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message.group_msg");
     const client = createProvisioningClientMock({
@@ -245,7 +265,9 @@ describe("provisionLarkApp", () => {
   });
 
   it("includes the bot-mention group scope for Lark agent-to-agent workflows", () => {
+    expect(REQUIRED_LARK_SCOPES).toContain("im:message");
     expect(REQUIRED_LARK_SCOPES).toContain("im:message.group_at_msg.include_bot:readonly");
+    expect(formatLarkTenantScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("\"im:message\"");
     expect(formatLarkTenantScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("im:message.group_at_msg.include_bot:readonly");
   });
 });

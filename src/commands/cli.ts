@@ -607,7 +607,7 @@ async function inspectLarkOperationalStatus(
   ];
   if (listenAllGroups !== "0" && listenAllGroups !== "unknown") {
     const cronLineIndex = lines.findIndex((line) => line.startsWith("Lark cron jobs:"));
-    lines.splice(cronLineIndex === -1 ? lines.length : cronLineIndex, 0, "Group-all platform scope: requires im:message.group_msg; run `lark doctor` if ordinary group messages do not arrive.");
+    lines.splice(cronLineIndex === -1 ? lines.length : cronLineIndex, 0, "Group-all platform scopes: require im:message and im:message.group_msg; run `lark doctor` if ordinary group messages do not arrive.");
   }
   return lines;
 }

@@ -83,6 +83,11 @@ export async function runLarkService(
       appSecret: config.appSecret,
       transport: "websocket",
       source: "cc-telegram-bridge",
+      policy: {
+        dmMode: "open",
+        requireMention: false,
+        respondToMentionAll: false,
+      },
       safety: {
         chatQueue: {
           enabled: false,
@@ -96,6 +101,16 @@ export async function runLarkService(
 
     channel.on("message", async (message) => {
       try {
+        logger.log("Lark raw message event", JSON.stringify({
+          chatId: message.chatId,
+          chatType: message.chatType,
+          messageId: message.messageId,
+          mentionedBot: message.mentionedBot === true,
+          mentionAll: message.mentionAll === true,
+          contentLength: typeof message.content === "string" ? message.content.length : 0,
+          rawContentType: message.rawContentType,
+          resources: Array.isArray(message.resources) ? message.resources.length : 0,
+        }));
         await handleLarkMessage({
           channel: channel!,
           bridge,
@@ -115,6 +130,13 @@ export async function runLarkService(
           ...((message as { threadId?: string }).threadId ? { replyInThread: true } : {}),
         }).catch(() => undefined);
       }
+    });
+    channel.on("reject", (event) => {
+      logger.log("Lark SDK rejected message", JSON.stringify({
+        chatId: event.chatId,
+        messageId: event.messageId,
+        reason: event.reason,
+      }));
     });
     channel.on("cardAction", async (event) => {
       try {

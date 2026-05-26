@@ -2,6 +2,7 @@ import type {
   CardActionEvent,
   CommentEvent,
   NormalizedMessage,
+  RejectEvent,
 } from "@larksuiteoapi/node-sdk";
 
 import type {
@@ -70,6 +71,7 @@ export interface LarkRuntimeChannelLike extends LarkChannelLike {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   on(name: "message", handler: (message: NormalizedMessage) => void | Promise<void>): () => void;
+  on(name: "reject", handler: (event: RejectEvent) => void): () => void;
   on(name: "cardAction", handler: (event: CardActionEvent) => void | Promise<void>): () => void;
   on(name: "comment", handler: (event: CommentEvent) => void | Promise<void>): () => void;
   on(name: "error", handler: (error: Error) => void): () => void;
