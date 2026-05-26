@@ -286,6 +286,44 @@ describe("runCli", () => {
     }
   });
 
+  it("does not report listen-all Lark groups as active while group mode is disabled", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "config.json"),
+        JSON.stringify({
+          groupMode: {
+            enabled: false,
+            allowedChatIds: [111],
+          },
+        }),
+        "utf8",
+      );
+      await new LarkGroupModeStore(stateDir).setListenAll("oc_group", true);
+
+      await runCli(["lark", "status"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      const output = messages.join("\n");
+      expect(output).toContain("Allowed Lark groups: 1");
+      expect(output).toContain("Listen-all Lark groups: 0");
+      expect(output).not.toContain("Group-all platform scope: requires im:message.group_msg");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("restarts the managed Lark service through the lark service command", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

@@ -576,7 +576,8 @@ async function inspectLarkOperationalStatus(
 
   let listenAllGroups = "unknown";
   try {
-    listenAllGroups = String(await new LarkGroupModeStore(stateDir).countListenAll());
+    const storedListenAllGroups = await new LarkGroupModeStore(stateDir).countListenAll();
+    listenAllGroups = cfg?.groupMode.enabled === false ? "0" : String(storedListenAllGroups);
   } catch {
     // Keep status usable even when group-mode state is unreadable.
   }

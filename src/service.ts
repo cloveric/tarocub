@@ -1317,7 +1317,7 @@ export async function processTelegramUpdates(
       const groupMode = normalized.chatType !== "private" && normalized.chatType !== "bus" && !normalized.callbackQueryId
         ? (await loadInstanceConfig(path.dirname(context.inboxDir))).groupMode
         : undefined;
-      const requireMention = groupMode ? !groupMode.listenAllChatIds.includes(normalized.chatId) : true;
+      const requireMention = groupMode ? !groupMode.enabled || !groupMode.listenAllChatIds.includes(normalized.chatId) : true;
       if (shouldIgnoreUnaddressedGroupMessage(update, normalized, context.botUsername, requireMention)) {
         if (updateId !== undefined) {
           await markUpdateCompleted(updateId);

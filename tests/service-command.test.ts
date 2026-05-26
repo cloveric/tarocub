@@ -1501,6 +1501,74 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("force-restarts an instance after escalating a stuck process to SIGKILL", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "default");
+    const lockPath = resolveInstanceLockPath(stateDir);
+    const killProcessTree = vi.fn();
+    const forceKillProcessTree = vi.fn();
+    const spawnDetached = vi.fn();
+    let forceKilled = false;
+    let started = false;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 54321,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+      );
+
+      const handled = await runCli(["telegram", "service", "restart", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => {
+            if (pid === 54321) {
+              return !forceKilled;
+            }
+
+            return pid === 12345 && started;
+          },
+          isExpectedServiceProcess: (pid) => pid === 54321 || (pid === 12345 && started),
+          killProcessTree,
+          forceKillProcessTree: (pid) => {
+            forceKillProcessTree(pid);
+            forceKilled = true;
+          },
+          findServiceProcessIds: () => [],
+          spawnDetached: (command, args, options) => {
+            started = true;
+            writeFileSync(
+              lockPath,
+              JSON.stringify({
+                pid: 12345,
+                token: "token-2",
+                acquiredAt: new Date().toISOString(),
+              }),
+              "utf8",
+            );
+            spawnDetached(command, args, options);
+          },
+          sleep: async () => {},
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(killProcessTree).toHaveBeenCalledWith(54321);
+      expect(forceKillProcessTree).toHaveBeenCalledWith(54321);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(messages).toEqual(['Started instance "default" with pid 12345.']);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("restarts all configured instances through --all", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

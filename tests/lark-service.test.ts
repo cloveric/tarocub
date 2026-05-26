@@ -19,6 +19,7 @@ import {
   requestLarkApproval,
 } from "../src/lark/service.js";
 import { deliverLarkResponse } from "../src/lark/delivery.js";
+import { LarkGroupModeStore } from "../src/lark/group-mode-store.js";
 import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
 import { CronStore } from "../src/state/cron-store.js";
 import { FileWorkflowStore } from "../src/state/file-workflow-store.js";
@@ -1419,6 +1420,22 @@ describe("lark service", () => {
           content: "/group off",
         }),
       });
+      expect(await new LarkGroupModeStore(stateDir).countListenAll()).toBe(0);
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_group",
+        { markdown: expect.stringContaining("群聊模式：关闭") },
+        { replyTo: "om_group_off", replyInThread: false },
+      );
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_group",
+        { markdown: expect.stringContaining("当前触发：需要 @bot") },
+        { replyTo: "om_group_off", replyInThread: false },
+      );
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_group",
+        { markdown: expect.stringContaining("正在监听普通消息的 Lark 群数：0") },
+        { replyTo: "om_group_off", replyInThread: false },
+      );
       bridge.handleAuthorizedMessage.mockClear();
       bridge.checkAccess.mockClear();
 
@@ -1744,6 +1761,60 @@ describe("lark service", () => {
         "oc_group",
         { markdown: expect.stringContaining("群聊模式来源：/group all override") },
         { replyTo: "om_group_status", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not report stale listen-all state while Lark group mode is disabled", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-disabled-group-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const runtime = createLarkServiceRuntime();
+
+    try {
+      await writeFile(
+        path.join(stateDir, "config.json"),
+        JSON.stringify({
+          groupMode: {
+            enabled: false,
+            allowedChatIds: [stableLarkNumericId("lark:oc_group")],
+            listenAllChatIds: [stableLarkNumericId("lark:oc_group")],
+          },
+        }),
+        "utf8",
+      );
+      await new LarkGroupModeStore(stateDir).setListenAll("oc_group", true);
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_group_disabled_status",
+          chatId: "oc_group",
+          chatType: "group",
+          mentionedBot: true,
+          content: "/status",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_group",
+        { markdown: expect.stringContaining("群聊触发：需要 @bot / mention") },
+        { replyTo: "om_group_disabled_status", replyInThread: false },
+      );
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_group",
+        { markdown: expect.stringContaining("群聊模式来源：群聊模式已关闭") },
+        { replyTo: "om_group_disabled_status", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });

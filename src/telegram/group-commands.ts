@@ -24,11 +24,12 @@ function currentGroupMode(config: Record<string, unknown>): GroupModeConfig {
   const allowedChatIds = Array.isArray(raw.allowedChatIds)
     ? raw.allowedChatIds.filter((value): value is number => Number.isInteger(value))
     : [];
-  const listenAllChatIds = Array.isArray(raw.listenAllChatIds)
+  const enabled = raw.enabled === false ? false : true;
+  const listenAllChatIds = enabled && Array.isArray(raw.listenAllChatIds)
     ? raw.listenAllChatIds.filter((value): value is number => Number.isInteger(value))
     : [];
   return {
-    enabled: raw.enabled === false ? false : true,
+    enabled,
     allowedChatIds: [...new Set(allowedChatIds)],
     listenAllChatIds: [...new Set(listenAllChatIds)],
   };
@@ -63,7 +64,7 @@ function renderGroupStatus(input: {
 }): string {
   const { locale, chatType, chatId, groupMode } = input;
   const currentAllowed = chatType !== "private" && groupMode.allowedChatIds.includes(chatId);
-  const currentListenAll = chatType !== "private" && groupMode.listenAllChatIds.includes(chatId);
+  const currentListenAll = chatType !== "private" && groupMode.enabled && groupMode.listenAllChatIds.includes(chatId);
   if (locale === "zh") {
     return [
       `群聊模式：${groupMode.enabled ? "开启" : "关闭"}`,
@@ -192,6 +193,7 @@ export async function handleGroupCommand(input: {
     await updateInstanceConfig((config) => {
       const groupMode = currentGroupMode(config);
       groupMode.enabled = false;
+      groupMode.listenAllChatIds = [];
       setGroupMode(config, groupMode);
     });
     responseText = locale === "zh" ? "群聊模式已关闭。" : "Group mode disabled.";

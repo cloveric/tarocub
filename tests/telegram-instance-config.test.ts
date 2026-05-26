@@ -147,7 +147,7 @@ describe("loadInstanceConfig", () => {
         groupMode: {
           enabled: false,
           allowedChatIds: [-100123],
-          listenAllChatIds: [-100123],
+          listenAllChatIds: [],
         },
       });
     } finally {

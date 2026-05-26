@@ -600,7 +600,9 @@ async function renderAndApplyLarkGroupCommand(
   } else if (action === "off" || action === "disable") {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
       groupMode.enabled = false;
+      groupMode.listenAllChatIds = [];
     });
+    await store.clearListenAll();
   } else if (isGroup && (action === "all" || action === "listen-all")) {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
       allowLarkGroup(groupMode, normalized.bridgeChatId);
@@ -623,7 +625,7 @@ async function renderAndApplyLarkGroupCommand(
   const countListenAll = await store.countListenAll();
   const groupMode = (await loadInstanceConfig(input.stateDir)).groupMode;
   const groupAllowed = normalized.bridgeChatType === "group" && groupMode.allowedChatIds.includes(normalized.bridgeChatId);
-  const requiresMention = input.requireMentionInGroup !== false && !listenAll;
+  const requiresMention = !groupMode.enabled || (input.requireMentionInGroup !== false && !listenAll);
   const status = renderLarkGroupModeStatus({
     locale,
     isGroup: normalized.bridgeChatType === "group",
@@ -769,7 +771,7 @@ function normalizeLarkGroupMode(groupMode: GroupModeConfig): GroupModeConfig {
   return {
     enabled: groupMode.enabled,
     allowedChatIds: [...new Set(groupMode.allowedChatIds)],
-    listenAllChatIds: [...new Set(groupMode.listenAllChatIds)],
+    listenAllChatIds: groupMode.enabled ? [...new Set(groupMode.listenAllChatIds)] : [],
   };
 }
 
@@ -794,7 +796,7 @@ async function renderLarkStatusMessage(
   const currentSession = session.record;
   const workflowLines = await renderLarkWorkflowStatusLines(stateDir, normalized.bridgeChatId, locale);
   const groupModeLines = normalized.bridgeChatType === "group"
-    ? await renderLarkGroupModeStatusLines(stateDir, normalized.chatId, locale, requireMentionInGroup)
+    ? await renderLarkGroupModeStatusLines(stateDir, normalized.chatId, cfg.groupMode.enabled, locale, requireMentionInGroup)
     : [];
   const larkCliStatus = await runtime.detectLarkCli().catch((error): LarkCliStatus => ({
     available: false,
@@ -909,14 +911,17 @@ async function renderLarkWorkflowStatusLines(stateDir: string, chatId: number, l
 async function renderLarkGroupModeStatusLines(
   stateDir: string,
   chatId: string,
+  groupModeEnabled: boolean,
   locale: Locale,
   requireMentionInGroup?: boolean,
 ): Promise<string[]> {
   const store = new LarkGroupModeStore(stateDir);
-  const listenAll = await store.isListenAll(chatId);
-  const requiresMention = requireMentionInGroup !== false && !listenAll;
+  const listenAll = groupModeEnabled && await store.isListenAll(chatId);
+  const requiresMention = !groupModeEnabled || (requireMentionInGroup !== false && !listenAll);
   if (locale === "en") {
-    const source = listenAll
+    const source = !groupModeEnabled
+      ? "group mode disabled"
+      : listenAll
       ? "/group all override"
       : requireMentionInGroup === false
         ? "global mention requirement disabled"
@@ -926,7 +931,9 @@ async function renderLarkGroupModeStatusLines(
       `Group mode source: ${source}`,
     ];
   }
-  const source = listenAll
+  const source = !groupModeEnabled
+    ? "群聊模式已关闭"
+    : listenAll
     ? "/group all override"
     : requireMentionInGroup === false
       ? "全局已关闭 @bot 要求"

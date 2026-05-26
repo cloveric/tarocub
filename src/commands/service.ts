@@ -55,6 +55,7 @@ export interface ServiceCommandDeps {
   ) => void;
   sleep?: (ms: number) => Promise<void>;
   killProcessTree?: (pid: number) => void;
+  forceKillProcessTree?: (pid: number) => void;
   findServiceProcessIds?: (entryPath: string, instanceName: string) => Promise<number[]> | number[];
   readTextFile?: (filePath: string) => Promise<string>;
   readConfiguredBotToken?: (env: ServiceCommandEnv, instanceName: string) => Promise<string | null>;
@@ -321,6 +322,23 @@ function defaultKillProcessTree(pid: number): void {
       process.kill(pid, "SIGTERM");
     } catch (error) {
       throw new Error(`Failed to stop pid ${pid}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+function defaultForceKillProcessTree(pid: number): void {
+  if (process.platform === "win32") {
+    defaultKillProcessTree(pid);
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      throw new Error(`Failed to force stop pid ${pid}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
@@ -764,6 +782,7 @@ export async function stopServiceInstance(
   const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
   const isExpectedServiceProcess = deps.isExpectedServiceProcess ?? defaultIsExpectedServiceProcess;
   const killProcessTree = deps.killProcessTree ?? defaultKillProcessTree;
+  const forceKillProcessTree = deps.forceKillProcessTree ?? defaultForceKillProcessTree;
   const findServiceProcessIds = deps.findServiceProcessIds ?? defaultFindServiceProcessIds;
   const sleep = deps.sleep ?? defaultSleep;
   const legacyLaunchAgentPath = resolveLegacyLaunchAgentPlistPath(env, instanceName);
@@ -806,6 +825,22 @@ export async function stopServiceInstance(
     }
 
     await sleep(250);
+  }
+
+  if (options.force) {
+    for (const pid of pidsToStop) {
+      if (isProcessAlive(pid)) {
+        forceKillProcessTree(pid);
+      }
+    }
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if ([...pidsToStop].every((pid) => !isProcessAlive(pid))) {
+        return `Stopped instance "${paths.instanceName}".${legacyLaunchdWarning}`;
+      }
+
+      await sleep(250);
+    }
   }
 
   throw new Error(`Instance "${paths.instanceName}" did not stop cleanly.`);

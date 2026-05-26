@@ -279,8 +279,8 @@ async function readLarkConfigGroupState(input: LarkConfigCardContext, cfg: Insta
   }
   const listenAll = await new LarkGroupModeStore(input.stateDir).isListenAll(input.larkChatId);
   return {
-    allowed: cfg.groupMode.allowedChatIds.includes(input.bridgeChatId),
-    listenAll,
+    allowed: cfg.groupMode.enabled && cfg.groupMode.allowedChatIds.includes(input.bridgeChatId),
+    listenAll: cfg.groupMode.enabled && listenAll,
   };
 }
 
@@ -309,7 +309,7 @@ function normalizeGroupMode(groupMode: GroupModeConfig): GroupModeConfig {
   return {
     enabled: groupMode.enabled,
     allowedChatIds: [...new Set(groupMode.allowedChatIds)],
-    listenAllChatIds: [...new Set(groupMode.listenAllChatIds)],
+    listenAllChatIds: groupMode.enabled ? [...new Set(groupMode.listenAllChatIds)] : [],
   };
 }
 

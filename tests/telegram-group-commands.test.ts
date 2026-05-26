@@ -6,6 +6,7 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { handleGroupCommand } from "../src/telegram/group-commands.js";
+import type { GroupModeConfig } from "../src/telegram/instance-config.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
 function normalized(text: string, input: Partial<NormalizedTelegramMessage> = {}): NormalizedTelegramMessage {
@@ -231,15 +232,17 @@ describe("handleGroupCommand", () => {
     }
   });
 
-  it("toggles group mode and reports invalid usage", async () => {
+  it("toggles group mode, clears listen-all state, and reports invalid usage", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-group-command-"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
       leaveChat: vi.fn().mockResolvedValue(undefined),
     };
+    const cfg: Record<string, unknown> = { groupMode: { enabled: true, allowedChatIds: [-100123], listenAllChatIds: [-100123] } };
+    const observedGroupModes: GroupModeConfig[] = [];
     const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
-      const cfg: Record<string, unknown> = { groupMode: { enabled: true, allowedChatIds: [-100123] } };
       mutate(cfg);
+      observedGroupModes.push(cfg.groupMode as GroupModeConfig);
     });
     const base = {
       stateDir: root,
@@ -261,6 +264,16 @@ describe("handleGroupCommand", () => {
       await handleGroupCommand({ ...base, normalized: normalized("/group nope") });
 
       expect(updateInstanceConfig).toHaveBeenCalledTimes(2);
+      expect(observedGroupModes[0]).toEqual({
+        enabled: false,
+        allowedChatIds: [-100123],
+        listenAllChatIds: [],
+      });
+      expect(observedGroupModes[1]).toEqual({
+        enabled: true,
+        allowedChatIds: [-100123],
+        listenAllChatIds: [],
+      });
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Group mode disabled.");
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Group mode enabled.");
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, "Usage: /group [status|allow|deny|on|off|all|at]");
@@ -375,6 +388,37 @@ describe("handleGroupCommand", () => {
       });
 
       expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("Current group listen mode: all messages"));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("does not report listen-all as active when group mode is disabled", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-group-command-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      leaveChat: vi.fn().mockResolvedValue(undefined),
+    };
+
+    try {
+      await handleGroupCommand({
+        stateDir: root,
+        startedAt: Date.now() - 5,
+        locale: "en",
+        cfg: { groupMode: { enabled: false, allowedChatIds: [-100123], listenAllChatIds: [-100123] } },
+        normalized: normalized("/group status"),
+        context: {
+          api: api as never,
+          bridge: { checkUserAuthorization: vi.fn().mockResolvedValue({ kind: "allow" }) },
+          instanceName: "default",
+          updateId: 85,
+        },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("Group mode: off"));
+      expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("Current group listen mode: mentions/replies only"));
+      expect(api.sendMessage).not.toHaveBeenCalledWith(-100123, expect.stringContaining("Current group listen mode: all messages"));
     } finally {
       await removeTempRoot(root);
     }

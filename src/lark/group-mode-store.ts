@@ -41,6 +41,12 @@ export class LarkGroupModeStore {
     });
   }
 
+  async clearListenAll(): Promise<void> {
+    await this.enqueueWrite(async () => {
+      await this.store.write({ listenAllChatIds: [] });
+    });
+  }
+
   async countListenAll(): Promise<number> {
     const state = await this.store.read({ listenAllChatIds: [] });
     return state.listenAllChatIds.length;

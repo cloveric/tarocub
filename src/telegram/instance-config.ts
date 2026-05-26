@@ -84,11 +84,12 @@ function parseGroupMode(raw: unknown): GroupModeConfig {
   const allowedChatIds = Array.isArray(r.allowedChatIds)
     ? [...new Set(r.allowedChatIds.filter((value): value is number => Number.isInteger(value)))]
     : [];
-  const listenAllChatIds = Array.isArray(r.listenAllChatIds)
+  const enabled = r.enabled === false ? false : true;
+  const listenAllChatIds = enabled && Array.isArray(r.listenAllChatIds)
     ? [...new Set(r.listenAllChatIds.filter((value): value is number => Number.isInteger(value)))]
     : [];
   return {
-    enabled: r.enabled === false ? false : true,
+    enabled,
     allowedChatIds,
     listenAllChatIds,
   };
