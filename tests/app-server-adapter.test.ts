@@ -395,11 +395,17 @@ describe("CodexAppServerAdapter", () => {
     ]);
 
     child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-123","delta":"READY"}}\n');
-    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null,"usage":{"input_tokens":12,"output_tokens":5,"cached_input_tokens":2,"cost_usd":0.001}}}}\n');
 
     await expect(promise).resolves.toEqual({
       text: "READY",
       sessionId: "thread-123",
+      usage: {
+        inputTokens: 12,
+        outputTokens: 5,
+        cachedTokens: 2,
+        costUsd: 0.001,
+      },
     });
     expect(progressUpdates).toEqual(["READY"]);
     expect(calls[0]?.command).toBe("codex");
@@ -873,11 +879,16 @@ describe("CodexAppServerAdapter", () => {
     await waitFor(() => child.stdin.lines.length >= 4);
     const threadRead = JSON.parse(child.stdin.lines[3] ?? "{}");
     expect(threadRead.method).toBe("thread/read");
-    child.stdout.emitData('{"id":4,"result":{"thread":{"turns":[{"id":"turn-1","items":[{"type":"agentMessage","text":"READY via thread read"}]}]}}}\n');
+    child.stdout.emitData('{"id":4,"result":{"thread":{"turns":[{"id":"turn-1","usage":{"inputTokens":9,"outputTokens":4,"cachedTokens":1},"items":[{"type":"agentMessage","text":"READY via thread read"}]}]}}}\n');
 
     await expect(promise).resolves.toEqual({
       text: "READY via thread read",
       sessionId: "thread-123",
+      usage: {
+        inputTokens: 9,
+        outputTokens: 4,
+        cachedTokens: 1,
+      },
     });
   });
 

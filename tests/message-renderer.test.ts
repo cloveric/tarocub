@@ -21,6 +21,7 @@ import {
   renderSessionStateErrorMessage,
   renderSessionResetMessage,
   renderUnauthorizedMessage,
+  renderUsageMessage,
   renderWorkingMessage,
 } from "../src/telegram/message-renderer.js";
 
@@ -286,6 +287,27 @@ describe("message rendering", () => {
         waitingTasks: 0,
       }),
     ).toContain("Current conversation: fdfc8ab1-7936-4599-98b0-d8ba2593c250");
+  });
+
+  it("distinguishes unmetered engine turns from zero-token usage", () => {
+    expect(renderUsageMessage({
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCachedTokens: 0,
+      totalCostUsd: 0,
+      requestCount: 0,
+      unmeteredRequestCount: 2,
+      lastUpdatedAt: "2026-05-26T00:00:00.000Z",
+    }, "zh")).toContain("未返回 token 明细的请求：2");
+    expect(renderUsageMessage({
+      totalInputTokens: 11,
+      totalOutputTokens: 7,
+      totalCachedTokens: 3,
+      totalCostUsd: 0.0012,
+      requestCount: 1,
+      unmeteredRequestCount: 1,
+      lastUpdatedAt: "2026-05-26T00:00:00.000Z",
+    }, "en")).toContain("Requests without token details: 1");
   });
 });
 

@@ -67,6 +67,7 @@ import { createLarkServiceRuntime, resolveLarkRuntimeConfig, resolveLarkServiceL
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
+import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSetting } from "../codex/user-defaults.js";
 import {
   REQUIRED_LARK_SCOPES,
   formatLarkProvisioningResult,
@@ -564,10 +565,12 @@ async function inspectLarkOperationalStatus(
   }
 
   let cfg: Awaited<ReturnType<typeof loadInstanceConfig>> | undefined;
+  let codexDefaults: Awaited<ReturnType<typeof loadCodexUserDefaults>> | undefined;
   let rawConfig: Record<string, unknown> = {};
   let allowedGroups = "unknown";
   try {
     cfg = await loadInstanceConfig(stateDir);
+    codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
     rawConfig = await readRawLarkCliConfig(stateDir);
     allowedGroups = String(cfg.groupMode.allowedChatIds.length);
   } catch {
@@ -592,8 +595,8 @@ async function inspectLarkOperationalStatus(
 
   const lines = [
     `Engine: ${cfg?.engine ?? "unknown"}`,
-    `Model: ${cfg?.model ?? (cfg ? "default" : "unknown")}`,
-    `Effort: ${cfg?.effort ?? (cfg ? "default" : "unknown")}`,
+    `Model: ${cfg ? renderCodexModelSetting(cfg.model, codexDefaults, "en") : "unknown"}`,
+    `Effort: ${cfg ? renderCodexEffortSetting(cfg.effort, codexDefaults, "en") : "unknown"}`,
     `Codex Fast Mode: ${cfg ? (cfg.codexServiceTier === "fast" ? "on" : "off") : "unknown"}`,
     `Approval mode: ${cfg ? renderLarkCliApprovalModeStatus(rawConfig.approvalMode) : "unknown"}`,
     `Budget: ${cfg ? (cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none") : "unknown"}`,

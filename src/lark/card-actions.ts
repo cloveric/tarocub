@@ -7,6 +7,7 @@ import type {
   EngineApprovalRequest,
   EngineStreamEvent,
 } from "../codex/adapter.js";
+import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { prepareArchiveContinueWorkflow } from "../runtime/file-workflow.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
@@ -643,6 +644,7 @@ async function runLarkCardChoice(input: {
       instructions: larkAgentInstructions(),
       onEngineEvent: handleEngineEvent,
     });
+    await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
     await deliverLarkResponse({
       channel: input.channel,
       runtime: input.runtime,
@@ -800,6 +802,7 @@ async function runLarkArchiveContinueCardAction(input: {
       instructions: larkAgentInstructions(),
       onEngineEvent: handleEngineEvent,
     });
+    await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
     await deliverLarkResponse({
       channel: input.channel,
       runtime: input.runtime,

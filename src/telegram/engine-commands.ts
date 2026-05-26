@@ -221,6 +221,20 @@ export async function handleLocalEngineTelegramCommand(input: {
   }
 
   if (isCompactCommand(normalized.text)) {
+    if (cfg.engine !== "claude") {
+      const msg = locale === "zh"
+        ? "/compact 仅支持 Claude 引擎。当前引擎不会执行本地上下文压缩；如需清空当前会话，请使用 /reset。"
+        : "/compact is only supported with the Claude engine. The current engine does not run local context compaction; use /reset to clear this conversation.";
+      await context.api.sendMessage(normalized.chatId, msg);
+      await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+        startedAt,
+        command: "compact",
+        responseText: msg,
+        metadata: { rejected: "wrong-engine" },
+      });
+      return true;
+    }
+
     await context.api.sendMessage(
       normalized.chatId,
       locale === "zh" ? "正在压缩会话上下文..." : "Compacting session context...",

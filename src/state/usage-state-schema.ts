@@ -16,6 +16,7 @@ export const UsageBucketSchema = z.object({
   totalCachedTokens: z.number().int().nonnegative(),
   totalCostUsd: z.number().nonnegative(),
   requestCount: z.number().int().nonnegative(),
+  unmeteredRequestCount: z.number().int().nonnegative().optional(),
   lastUpdatedAt: UsageTimestampSchema,
 }).passthrough();
 
@@ -25,6 +26,7 @@ export const UsageRecordSchema = z.object({
   totalCachedTokens: z.number().int().nonnegative(),
   totalCostUsd: z.number().nonnegative(),
   requestCount: z.number().int().nonnegative(),
+  unmeteredRequestCount: z.number().int().nonnegative().optional(),
   lastUpdatedAt: UsageTimestampSchema,
   daily: z.record(z.string(), UsageBucketSchema).optional(),
   monthly: z.record(z.string(), UsageBucketSchema).optional(),

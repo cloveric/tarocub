@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
 import type {
+  AdapterUsage,
   CodexAdapter,
   CodexAdapterResponse,
   CodexSessionHandle,
@@ -88,6 +89,7 @@ type PendingTurn = {
   chunks: string[];
   finalText?: string;
   generatedImageTags: string[];
+  usage?: AdapterUsage;
   errorMessage?: string;
   turnId?: string;
   onProgress?: (partialText: string) => void;
@@ -96,7 +98,7 @@ type PendingTurn = {
   inactivityTimeout?: ReturnType<typeof setTimeout>;
   inactivityTimeoutDisabled?: boolean;
   abortCleanup?: () => void;
-  resolve: (text: string) => void;
+  resolve: (result: { text: string; usage?: AdapterUsage }) => void;
   reject: (error: Error) => void;
 };
 
@@ -106,6 +108,49 @@ function isLogicalTelegramSessionId(sessionId: string): boolean {
 
 function numberOrNull(value: unknown): number | null {
   return typeof value === "number" ? value : null;
+}
+
+function readUsageNumber(value: Record<string, unknown>, ...keys: string[]): number | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function readAdapterUsage(value: unknown): AdapterUsage | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const usage = value as Record<string, unknown>;
+  const inputTokens = readUsageNumber(usage, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens");
+  const outputTokens = readUsageNumber(usage, "outputTokens", "output_tokens", "completionTokens", "completion_tokens");
+  const cachedTokens = readUsageNumber(usage, "cachedTokens", "cached_tokens", "cachedInputTokens", "cached_input_tokens");
+  const costUsd = readUsageNumber(usage, "costUsd", "cost_usd");
+  if (
+    inputTokens === undefined &&
+    outputTokens === undefined &&
+    cachedTokens === undefined &&
+    costUsd === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    cachedTokens: cachedTokens ?? 0,
+    ...(costUsd !== undefined ? { costUsd } : {}),
+  };
+}
+
+function readTurnUsage(value: unknown): AdapterUsage | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const turn = value as Record<string, unknown>;
+  return readAdapterUsage(turn.usage) ?? readAdapterUsage(turn);
 }
 
 function readThreadGoal(value: unknown): CodexThreadGoal | null {
@@ -262,7 +307,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     );
     const prompt = this.buildPrompt(input, instructions);
     const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions);
-    const text = await this.startTurn(
+    const turn = await this.startTurn(
       threadId,
       prompt,
       input.onProgress,
@@ -272,8 +317,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
     );
 
     return {
-      text: text.trim() || `Session ${threadId} completed.`,
+      text: turn.text.trim() || `Session ${threadId} completed.`,
       sessionId: threadId !== sessionId ? threadId : undefined,
+      usage: turn.usage,
     };
   }
 
@@ -610,6 +656,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       if (!pending) {
         return;
       }
+      pending.usage = readTurnUsage(parsed.params?.turn) ?? readTurnUsage(parsed.params?.usage) ?? pending.usage;
 
       pending.inactivityTimeout && clearTimeout(pending.inactivityTimeout);
       pending.inactivityTimeout = undefined;
@@ -873,8 +920,8 @@ export class CodexAppServerAdapter implements CodexAdapter {
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>,
     abortSignal?: AbortSignal,
     timeoutMs: number | null = this.turnTimeoutMs,
-  ): Promise<string> {
-    const pending = await new Promise<string>((resolve, reject) => {
+  ): Promise<{ text: string; usage?: AdapterUsage }> {
+    const pending = await new Promise<{ text: string; usage?: AdapterUsage }>((resolve, reject) => {
       const turnErrorPrefix = "Codex app-server turn";
       const rejectAndCleanup = (error: Error) => {
         pendingTurn.timeout && clearTimeout(pendingTurn.timeout);
@@ -885,14 +932,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
         pendingTurn.abortCleanup = undefined;
         reject(error);
       };
-      const resolveAndCleanup = (text: string) => {
+      const resolveAndCleanup = (result: { text: string; usage?: AdapterUsage }) => {
         pendingTurn.timeout && clearTimeout(pendingTurn.timeout);
         pendingTurn.timeout = undefined;
         pendingTurn.inactivityTimeout && clearTimeout(pendingTurn.inactivityTimeout);
         pendingTurn.inactivityTimeout = undefined;
         pendingTurn.abortCleanup?.();
         pendingTurn.abortCleanup = undefined;
-        resolve(text);
+        resolve(result);
       };
       const pendingTurn: PendingTurn = {
         chunks: [],
@@ -1049,6 +1096,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
 
       text = turnResult.text;
+      pending.usage = turnResult.usage ?? pending.usage;
     }
 
     if (!text.trim() && pending.errorMessage) {
@@ -1056,13 +1104,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return;
     }
 
-    pending.resolve(text);
+    pending.resolve({ text, usage: pending.usage });
   }
 
   private async readTurnResult(
     threadId: string,
     turnId: string | undefined,
-  ): Promise<{ text: string; errorMessage?: string }> {
+  ): Promise<{ text: string; usage?: AdapterUsage; errorMessage?: string }> {
     const result = (await this.request("thread/read", {
       threadId,
       includeTurns: true,
@@ -1122,7 +1170,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         text = [text, tag].filter(Boolean).join("\n");
       }
     }
-    return { text };
+    return { text, usage: readTurnUsage(targetTurn) };
   }
 
   destroy(expectedChildGeneration?: number): void {

@@ -309,6 +309,55 @@ describe("handleLocalEngineTelegramCommand", () => {
     }
   });
 
+  it("rejects /compact on the wrong engine instead of sending it as a model prompt", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(),
+    };
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/compact"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 78,
+        },
+        bridge,
+        sessionStore: {
+          removeByChatId: vi.fn(),
+          clearAll: vi.fn(),
+        },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "/compact is only supported with the Claude engine. The current engine does not run local context compaction; use /reset to clear this conversation.",
+      );
+      const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
+      expect(audit).toContainEqual(expect.objectContaining({
+        type: "update.handle",
+        outcome: "success",
+        metadata: expect.objectContaining({
+          command: "compact",
+          rejected: "wrong-engine",
+        }),
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("falls back to session reset when /compact execution fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
     const api = {

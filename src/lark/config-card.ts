@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSetting } from "../codex/user-defaults.js";
 import { SessionStore } from "../state/session-store.js";
 import {
   applyEngineSelection,
@@ -55,9 +56,16 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
   const cfg = await loadInstanceConfig(input.stateDir);
   const raw = await readRawLarkConfig(input.stateDir);
   const groupState = await readLarkConfigGroupState(input, cfg);
+  const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const labels = larkConfigLabels(input.locale);
   const approvalMode = approvalModeLabel(raw.approvalMode, input.locale);
   const fastOn = cfg.codexServiceTier === "fast";
+  const modelLabel = cfg.engine === "codex"
+    ? renderCodexModelSetting(cfg.model, codexDefaults, input.locale)
+    : cfg.model ?? labels.defaultValue;
+  const effortLabel = cfg.engine === "codex"
+    ? renderCodexEffortSetting(cfg.effort, codexDefaults, input.locale)
+    : cfg.effort ?? labels.defaultValue;
   const requiresMention = input.bridgeChatType === "group"
     ? input.requireMentionInGroup !== false && !groupState.listenAll
     : true;
@@ -66,8 +74,8 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
     "",
     input.notice ? `**${labels.updated}** ${input.notice}` : undefined,
     `- ${labels.engine}: ${cfg.engine}`,
-    `- ${labels.model}: ${cfg.model ?? labels.defaultValue}`,
-    `- ${labels.effort}: ${cfg.effort ?? labels.defaultValue}`,
+    `- ${labels.model}: ${modelLabel}`,
+    `- ${labels.effort}: ${effortLabel}`,
     `- ${labels.fast}: ${fastOn ? labels.on : labels.off}`,
     `- ${labels.yolo}: ${approvalMode}`,
     `- ${labels.locale}: ${input.locale}`,
@@ -79,30 +87,30 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
   const elements: unknown[] = [
     markdownElement(summaryLines.join("\n")),
     section(labels.engineSection, [
-      button(labels.codex, "engine", "codex", input, cfg.engine === "codex" ? "primary" : "default"),
-      button(labels.claude, "engine", "claude", input, cfg.engine === "claude" ? "primary" : "default"),
-      button(labels.antigravity, "engine", "antigravity", input, cfg.engine === "antigravity" ? "primary" : "default"),
+      button(optionLabel(labels.codex, cfg.engine === "codex", labels), "engine", "codex", input, cfg.engine === "codex" ? "primary" : "default"),
+      button(optionLabel(labels.claude, cfg.engine === "claude", labels), "engine", "claude", input, cfg.engine === "claude" ? "primary" : "default"),
+      button(optionLabel(labels.antigravity, cfg.engine === "antigravity", labels), "engine", "antigravity", input, cfg.engine === "antigravity" ? "primary" : "default"),
     ]),
     section(labels.speedSection, [
-      button(labels.fastOn, "fast", "on", input, fastOn ? "primary" : "default"),
-      button(labels.fastOff, "fast", "off", input, !fastOn ? "primary" : "default"),
+      button(optionLabel(labels.fastOn, fastOn, labels), "fast", "on", input, fastOn ? "primary" : "default"),
+      button(optionLabel(labels.fastOff, !fastOn, labels), "fast", "off", input, !fastOn ? "primary" : "default"),
     ]),
     section(labels.approvalSection, [
-      button(labels.yoloOn, "yolo", "on", input, raw.approvalMode === "full-auto" ? "primary" : "default"),
-      button(labels.yoloOff, "yolo", "off", input, !raw.approvalMode || raw.approvalMode === "normal" ? "primary" : "default"),
-      button(labels.yoloUnsafe, "yolo", "unsafe", input, raw.approvalMode === "bypass" ? "danger" : "default"),
+      button(optionLabel(labels.yoloOn, raw.approvalMode === "full-auto", labels), "yolo", "on", input, raw.approvalMode === "full-auto" ? "primary" : "default"),
+      button(optionLabel(labels.yoloOff, !raw.approvalMode || raw.approvalMode === "normal", labels), "yolo", "off", input, !raw.approvalMode || raw.approvalMode === "normal" ? "primary" : "default"),
+      button(optionLabel(labels.yoloUnsafe, raw.approvalMode === "bypass", labels), "yolo", "unsafe", input, raw.approvalMode === "bypass" ? "danger" : "default"),
     ]),
     section(labels.localeSection, [
-      button("中文", "locale", "zh", input, input.locale === "zh" ? "primary" : "default"),
-      button("English", "locale", "en", input, input.locale === "en" ? "primary" : "default"),
+      button(optionLabel("中文", input.locale === "zh", labels), "locale", "zh", input, input.locale === "zh" ? "primary" : "default"),
+      button(optionLabel("English", input.locale === "en", labels), "locale", "en", input, input.locale === "en" ? "primary" : "default"),
     ]),
   ];
 
   if (input.bridgeChatType === "group") {
     elements.push(section(labels.groupSection, [
-      button(labels.groupAllow, "group", "allow", input, groupState.allowed ? "primary" : "default"),
-      button(labels.groupAllButton, "group", "all", input, groupState.listenAll ? "primary" : "default"),
-      button(labels.groupAtButton, "group", "at", input, !groupState.listenAll ? "primary" : "default"),
+      button(optionLabel(labels.groupAllow, groupState.allowed, labels), "group", "allow", input, groupState.allowed ? "primary" : "default"),
+      button(optionLabel(labels.groupAllButton, groupState.listenAll, labels), "group", "all", input, groupState.listenAll ? "primary" : "default"),
+      button(optionLabel(labels.groupAtButton, !groupState.listenAll, labels), "group", "at", input, !groupState.listenAll ? "primary" : "default"),
     ]));
   }
 
@@ -334,16 +342,7 @@ function section(title: string, buttons: unknown[]): Record<string, unknown> {
         weight: 1,
         elements: [
           markdownElement(`**${title}**`),
-          {
-            tag: "column_set",
-            flex_mode: "none",
-            columns: buttons.map((item) => ({
-              tag: "column",
-              width: "weighted",
-              weight: 1,
-              elements: [item],
-            })),
-          },
+          ...buttons,
         ],
       },
     ],
@@ -363,6 +362,7 @@ function button(
       tag: "plain_text",
       content: label,
     },
+    width: "fill",
     type,
     behaviors: [callbackBehavior({
       cctb_lark: "config",
@@ -375,6 +375,10 @@ function button(
       bridgeChatId: context.bridgeChatId,
     })],
   };
+}
+
+function optionLabel(label: string, selected: boolean, labels: ReturnType<typeof larkConfigLabels>): string {
+  return selected ? `${labels.selectedPrefix}${label}` : label;
 }
 
 function markdownElement(content: string): Record<string, unknown> {
@@ -447,6 +451,7 @@ function larkConfigLabels(locale: Locale): {
   utilitySection: string;
   refresh: string;
   refreshed: string;
+  selectedPrefix: string;
 } {
   if (locale === "en") {
     return {
@@ -486,6 +491,7 @@ function larkConfigLabels(locale: Locale): {
       utilitySection: "Utility",
       refresh: "Refresh",
       refreshed: "Refreshed.",
+      selectedPrefix: "✓ ",
     };
   }
   return {
@@ -525,5 +531,6 @@ function larkConfigLabels(locale: Locale): {
     utilitySection: "工具",
     refresh: "刷新",
     refreshed: "已刷新。",
+    selectedPrefix: "✓ ",
   };
 }

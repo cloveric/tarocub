@@ -10,6 +10,7 @@ export interface UsageRecord {
   totalCachedTokens: number;
   totalCostUsd: number;
   requestCount: number;
+  unmeteredRequestCount?: number;
   lastUpdatedAt: string;
   daily?: Record<string, UsageBucket>;
   monthly?: Record<string, UsageBucket>;
@@ -21,6 +22,7 @@ export interface UsageBucket {
   totalCachedTokens: number;
   totalCostUsd: number;
   requestCount: number;
+  unmeteredRequestCount?: number;
   lastUpdatedAt: string;
 }
 
@@ -60,6 +62,11 @@ function addTurnUsage(target: UsageRecord | UsageBucket, turn: TurnUsage, timest
   target.lastUpdatedAt = timestamp;
 }
 
+function addUnmeteredUsage(target: UsageRecord | UsageBucket, timestamp: string): void {
+  target.unmeteredRequestCount = (target.unmeteredRequestCount ?? 0) + 1;
+  target.lastUpdatedAt = timestamp;
+}
+
 export class UsageStore {
   private readonly store: JsonStore<UsageRecord>;
   private static pendingWrites = new Map<string, Promise<void>>();
@@ -95,6 +102,32 @@ export class UsageStore {
         current.monthly[monthKey] ??= createEmptyBucket();
         addTurnUsage(current.daily[dayKey], turn, timestamp);
         addTurnUsage(current.monthly[monthKey], turn, timestamp);
+        await this.store.write(current);
+      });
+    };
+    const previous = UsageStore.pendingWrites.get(this.filePath) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    UsageStore.pendingWrites.set(this.filePath, run.then(
+      () => undefined,
+      () => undefined,
+    ));
+    await run;
+  }
+
+  async recordUnmetered(now = new Date()): Promise<void> {
+    const task = async () => {
+      await withFileMutex(this.filePath, async () => {
+        const current = await this.load();
+        const timestamp = now.toISOString();
+        addUnmeteredUsage(current, timestamp);
+        const dayKey = timestamp.slice(0, 10);
+        const monthKey = timestamp.slice(0, 7);
+        current.daily ??= {};
+        current.monthly ??= {};
+        current.daily[dayKey] ??= createEmptyBucket();
+        current.monthly[monthKey] ??= createEmptyBucket();
+        addUnmeteredUsage(current.daily[dayKey], timestamp);
+        addUnmeteredUsage(current.monthly[monthKey], timestamp);
         await this.store.write(current);
       });
     };

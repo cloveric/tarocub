@@ -44,7 +44,8 @@ describe("handleGoalTelegramCommand", () => {
       objective: "ship the release",
       tokenBudget: null,
     }));
-    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("no token budget"));
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Budget: unbounded"));
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Goal usage: not recorded yet"));
   });
 
   it("sets an explicitly unbounded Codex thread goal from Telegram", async () => {
@@ -124,7 +125,7 @@ describe("handleGoalTelegramCommand", () => {
       objective: "ship the release",
       tokenBudget: 50_000,
     }));
-    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("50000 token budget"));
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Budget: 50000 tokens"));
   });
 
   it("rejects invalid goal token budgets instead of treating them as objective text", async () => {

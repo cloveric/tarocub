@@ -104,7 +104,15 @@ describe("lark service", () => {
         bridgeReadAttachment = (await readFile(input.files[0]!, "utf8")) === "hello file";
         await input.onEngineEvent?.({ type: "assistant_text", text: "Hi from bridge" });
         await input.onEngineEvent?.({ type: "result", text: "Done from bridge" });
-        return { text: "Done from bridge" };
+        return {
+          text: "Done from bridge",
+          usage: {
+            inputTokens: 11,
+            outputTokens: 7,
+            cachedTokens: 3,
+            costUsd: 0.0012,
+          },
+        };
       }),
     };
 
@@ -143,6 +151,13 @@ describe("lark service", () => {
         { markdown: "Done from bridge" },
         { replyTo: "om_1" },
       );
+      await expect(new UsageStore(stateDir).load()).resolves.toMatchObject({
+        requestCount: 1,
+        totalInputTokens: 11,
+        totalOutputTokens: 7,
+        totalCachedTokens: 3,
+        totalCostUsd: 0.0012,
+      });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -936,6 +951,68 @@ describe("lark service", () => {
     }
   });
 
+  it("continues Lark zip archive analysis from the literal /continue slash command", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-slash-continue-"));
+    const zipBuffer = createZipBuffer({
+      "README.md": "# hello",
+      "src/index.ts": "console.log('hi')",
+    });
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => zipBuffer),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "slash analysis done" })),
+    };
+    const runtime = createLarkServiceRuntime();
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_zip",
+          content: "分析这个压缩包",
+          resources: [{ type: "file", fileKey: "file_zip", fileName: "repo.zip" }],
+        }),
+      });
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_slash_continue",
+          content: "/continue 看看结构",
+          resources: [],
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const bridgeInput = (bridge.handleAuthorizedMessage as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+        conversationKey: string;
+        files: string[];
+        text: string;
+      };
+      expect(bridgeInput).toEqual(expect.objectContaining({
+        conversationKey: "lark:oc_chat",
+        files: [],
+        text: expect.stringContaining("[Archive Analysis Context]"),
+      }));
+      expect(bridgeInput.text).toContain("看看结构");
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "slash analysis done" },
+        { replyTo: "om_slash_continue" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers the Lark help command without running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-help-"));
     const channel = fakeChannel();
@@ -1716,7 +1793,10 @@ describe("lark service", () => {
 
   it("answers the Lark status command in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-en-"));
+    const codexHome = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-codex-home-"));
+    const previousCodexHome = process.env.CODEX_HOME;
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en", engine: "codex" }) + "\n");
+    await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-test-default"\nmodel_reasoning_effort = "xhigh"\n');
     await new SessionStore(path.join(stateDir, "session.json")).upsert({
       telegramChatId: stableLarkNumericId("lark:oc_chat"),
       conversationKey: "lark:oc_chat",
@@ -1738,6 +1818,7 @@ describe("lark service", () => {
     });
 
     try {
+      process.env.CODEX_HOME = codexHome;
       await handleLarkMessage({
         channel,
         bridge,
@@ -1753,12 +1834,20 @@ describe("lark service", () => {
         { replyTo: "om_status_en", replyInThread: false },
       );
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Engine: codex");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Model: default (Codex config: gpt-test-default)");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Effort: default (Codex config: xhigh)");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Session bound: yes");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Current thread: thread-status-en");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Lark CLI: available (lark-cli version 1.0.40)");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Active run: no");
     } finally {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
       await rm(stateDir, { recursive: true, force: true });
+      await rm(codexHome, { recursive: true, force: true });
     }
   });
 
@@ -3551,7 +3640,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("无 token 预算") },
+        { markdown: expect.stringContaining("预算：不限制") },
         { replyTo: "om_goal", replyInThread: false },
       );
     } finally {
@@ -3600,7 +3689,12 @@ describe("lark service", () => {
       );
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("No token budget") },
+        { markdown: expect.stringContaining("Budget: unbounded") },
+        { replyTo: "om_goal_en", replyInThread: false },
+      );
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("Goal usage: not recorded yet") },
         { replyTo: "om_goal_en", replyInThread: false },
       );
     } finally {
@@ -3785,6 +3879,35 @@ describe("lark service", () => {
         "oc_chat",
         { markdown: expect.stringContaining("/context is only supported with the Claude engine.") },
         { replyTo: "om_context_en", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Lark compact commands on non-Claude engines instead of prompting the model", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-compact-wrong-engine-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_compact_wrong_engine", content: "/compact" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("/compact 仅支持 Claude 引擎") },
+        { replyTo: "om_compact_wrong_engine", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -7675,6 +7798,64 @@ describe("lark service", () => {
         metadata: expect.objectContaining({
           command: "approval",
           choice: "session",
+        }),
+      }));
+    } finally {
+      runtime.pendingApprovals.clear();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("denies Lark approval requests from /deny text commands when cards are unavailable", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-approval-deny-text-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const pending = requestLarkApproval({
+      channel,
+      runtime,
+      chatId: "oc_chat",
+      conversationKey: "lark:oc_chat",
+      bridgeChatType: "private",
+      replyTo: "om_request",
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "rm -rf /tmp/example" },
+      } satisfies EngineApprovalRequest,
+    });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_deny",
+          content: "/deny",
+        }),
+      });
+
+      await expect(pending).resolves.toEqual({ behavior: "deny" });
+      expect(runtime.pendingApprovals.size).toBe(0);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已拒绝。" }, { replyTo: "om_deny" });
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "command.handled",
+        channel: "lark",
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_user"),
+        conversationKey: "lark:oc_chat",
+        outcome: "success",
+        detail: "approval",
+        metadata: expect.objectContaining({
+          command: "approval",
+          choice: "deny",
         }),
       }));
     } finally {

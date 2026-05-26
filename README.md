@@ -221,6 +221,7 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
+- **v4.6.61** — polishes Lark operator UX: `/config` is now mobile-first with full-width choices and explicit Codex defaults, Lark/CLI status expands `default` to the underlying Codex config (`model` / `model_reasoning_effort`), `/goal` distinguishes unbounded budgets from missing data, `/usage` records completed turns whose engine omits token details without pretending they cost 0 tokens, and `/compact` is blocked on non-Claude engines instead of being forwarded as a normal prompt.
 - **v4.6.58** — fixes Lark `/group all` ordinary group delivery by disabling SDK-level mention gating inside the bridge, adds safe raw/reject diagnostics, and updates `lark wizard` / `lark provision` to require both `im:message` and `im:message.group_msg`.
 - **v4.6.56** — sharpens Lark as a native control surface: interactive `/config` cards, bridge-managed `lark.choice` buttons, lark-cli status/init/bind/secrets/OAuth helpers, and safer cron management where `cron.remove` / `cron.toggle` can act by unique query without inventing task IDs.
 - **v4.6.53** — tightens the Feishu/Lark product edge: Telegram `service --all` no longer mistakes `~/.cctb/lark` for a Telegram bot, transient Lark attachments are cleaned after each turn, `lark send` requires an explicit `--chat`, Docs creation defaults to bot identity, and Lark doctor uses the shared secret redactor.

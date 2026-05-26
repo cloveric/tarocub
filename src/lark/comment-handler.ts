@@ -4,6 +4,7 @@ import path from "node:path";
 import type { CommentEvent } from "@larksuiteoapi/node-sdk";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
+import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { extractCronAddTagMatches, stripCronAddTags } from "../telegram/cron-tags.js";
 import { extractDeliveryTagMatches, stripDeliveryTags } from "../telegram/delivery-tags.js";
@@ -166,6 +167,7 @@ export async function handleLarkComment(input: {
         instructions: larkAgentInstructions(),
         onEngineEvent: handleEngineEvent,
       });
+      await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
       const cleaned = await renderLarkCommentReplyFromEngineText({
         rawText: result.text,
         runtime: input.runtime,

@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
+import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { CronAccessDeniedError } from "../runtime/cron-errors.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
@@ -89,6 +90,7 @@ export function buildLarkCronExecutor(input: {
       abortSignal,
       instructions: input.agentInstructions?.(),
     });
+    await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
     if (job.mute) {
       return;
     }

@@ -110,11 +110,13 @@ function renderInvalidGoalCommand(reason: "invalid_budget" | "missing_objective"
 
 function renderGoal(goal: CodexThreadGoal, locale: Locale): string {
   const budget = goal.tokenBudget === null
-    ? locale === "zh" ? "无 token 预算" : "no token budget"
-    : locale === "zh" ? `${goal.tokenBudget} token 预算` : `${goal.tokenBudget} token budget`;
-  const usage = locale === "zh"
-    ? `已用 ${goal.tokensUsed} tokens，${Math.round(goal.timeUsedSeconds)} 秒`
-    : `${goal.tokensUsed} tokens used, ${Math.round(goal.timeUsedSeconds)} seconds`;
+    ? locale === "zh" ? "预算：不限制（未设置 token 上限）" : "Budget: unbounded (no token limit set)"
+    : locale === "zh" ? `预算：${goal.tokenBudget} token` : `Budget: ${goal.tokenBudget} tokens`;
+  const usage = goal.tokensUsed === 0 && Math.round(goal.timeUsedSeconds) === 0
+    ? locale === "zh" ? "Goal 用量：尚未产生统计" : "Goal usage: not recorded yet"
+    : locale === "zh"
+      ? `Goal 用量：${goal.tokensUsed} tokens，${Math.round(goal.timeUsedSeconds)} 秒`
+      : `Goal usage: ${goal.tokensUsed} tokens, ${Math.round(goal.timeUsedSeconds)} seconds`;
   return locale === "zh"
     ? `目标：${goal.objective}\n状态：${goal.status}\n${budget}\n${usage}`
     : `Goal: ${goal.objective}\nStatus: ${goal.status}\n${budget}\n${usage}`;

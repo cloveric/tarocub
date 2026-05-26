@@ -198,7 +198,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
       "/stop - 立即停止当前任务",
       "/context - 显示 Claude 上下文用量（仅 Claude；用来决定何时 /compact）",
       "/usage - 显示本实例累计 token 和费用",
-      "/compact - 压缩当前会话上下文",
+      "/compact - 压缩 Claude 会话上下文（仅 Claude；非 Claude 请用 /reset）",
       "/ultrareview - 代码审查（仅 Claude Opus 4.7+，常配合 /resume 到本地项目使用）",
       "/reset - 清除当前聊天的会话",
       "/help - 显示此帮助",
@@ -228,7 +228,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     "/stop - immediately stop the current task",
     "/context - show Claude context fill level (Claude only; helps decide when to /compact)",
     "/usage - show cumulative token & cost usage for this instance",
-    "/compact - compress the current session context",
+    "/compact - compact Claude session context (Claude only; use /reset for non-Claude engines)",
     "/ultrareview - dedicated code review (Claude Opus 4.7+ only; usually paired with /resume into a local project)",
     "/reset - clear the current chat session",
     "/help - show this help",
@@ -289,14 +289,34 @@ export function renderUsageMessage(
     totalCachedTokens: number;
     totalCostUsd: number;
     requestCount: number;
+    unmeteredRequestCount?: number;
     lastUpdatedAt: string;
   },
   locale: Locale = "en",
 ): string {
-  if (usage.requestCount === 0) {
+  const unmeteredRequestCount = usage.unmeteredRequestCount ?? 0;
+  if (usage.requestCount === 0 && unmeteredRequestCount === 0) {
     return locale === "zh"
       ? "暂无用量数据——处理完一轮请求后再查。"
       : "No usage data yet — run a request first.";
+  }
+  if (usage.requestCount === 0 && unmeteredRequestCount > 0) {
+    const lastSeen = usage.lastUpdatedAt || "never";
+    return locale === "zh"
+      ? [
+        `累计用量（本实例）：`,
+        `• 可计量请求数：0`,
+        `• 未返回 token 明细的请求：${unmeteredRequestCount.toLocaleString()}`,
+        `• 说明：当前引擎完成了请求，但没有返回 token 明细；不会假算为 0。`,
+        `• 最近更新：${lastSeen}`,
+      ].join("\n")
+      : [
+        `Cumulative usage (this instance):`,
+        `• Metered requests: 0`,
+        `• Requests without token details: ${unmeteredRequestCount.toLocaleString()}`,
+        `• Note: the current engine completed requests without returning token details; these are not counted as zero-token turns.`,
+        `• Last updated: ${lastSeen}`,
+      ].join("\n");
   }
   const cost = usage.totalCostUsd.toFixed(4);
   const lastSeen = usage.lastUpdatedAt || "never";
@@ -304,6 +324,7 @@ export function renderUsageMessage(
     return [
       `累计用量（本实例）：`,
       `• 请求数：${usage.requestCount.toLocaleString()}`,
+      ...(unmeteredRequestCount > 0 ? [`• 未返回 token 明细的请求：${unmeteredRequestCount.toLocaleString()}`] : []),
       `• 输入 tokens：${usage.totalInputTokens.toLocaleString()}`,
       `• 输出 tokens：${usage.totalOutputTokens.toLocaleString()}`,
       `• 缓存 tokens：${usage.totalCachedTokens.toLocaleString()}`,
@@ -314,6 +335,7 @@ export function renderUsageMessage(
   return [
     `Cumulative usage (this instance):`,
     `• Requests: ${usage.requestCount.toLocaleString()}`,
+    ...(unmeteredRequestCount > 0 ? [`• Requests without token details: ${unmeteredRequestCount.toLocaleString()}`] : []),
     `• Input tokens: ${usage.totalInputTokens.toLocaleString()}`,
     `• Output tokens: ${usage.totalOutputTokens.toLocaleString()}`,
     `• Cached tokens: ${usage.totalCachedTokens.toLocaleString()}`,

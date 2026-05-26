@@ -156,6 +156,36 @@ describe("UsageStore", () => {
     }
   });
 
+  it("records completed turns whose engine did not return token details", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new UsageStore(stateDir);
+
+    try {
+      await store.recordUnmetered(new Date("2026-05-26T08:00:00.000Z"));
+
+      await expect(store.load()).resolves.toMatchObject({
+        requestCount: 0,
+        unmeteredRequestCount: 1,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        daily: {
+          "2026-05-26": {
+            requestCount: 0,
+            unmeteredRequestCount: 1,
+          },
+        },
+        monthly: {
+          "2026-05": {
+            requestCount: 0,
+            unmeteredRequestCount: 1,
+          },
+        },
+      });
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
   it("serializes concurrent writes across separate processes", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const scriptPath = path.join(stateDir, "record-usage.ts");

@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
+import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
@@ -480,6 +481,7 @@ async function runNormalizedLarkMessage(
         onEngineEvent: handleEngineEvent,
         instructions: larkAgentInstructions(),
       });
+      await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
       await deliverLarkResponse({
         channel: input.channel,
         runtime: input.runtime,

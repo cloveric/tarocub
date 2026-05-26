@@ -55,11 +55,16 @@ export async function recordBridgeTurnUsage(
   usage: AdapterUsage | undefined,
   budgetUsd: number | undefined,
 ): Promise<RecordedTurnUsage | null> {
+  const usageStore = new UsageStore(stateDir);
   if (!usage) {
-    return null;
+    await usageStore.recordUnmetered();
+    const totals = await usageStore.load();
+    return {
+      usage: totals,
+      reachedBudget: false,
+    };
   }
 
-  const usageStore = new UsageStore(stateDir);
   await usageStore.record({
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,

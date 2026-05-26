@@ -5,6 +5,11 @@ import type {
   EngineApprovalDecision,
   EngineApprovalRequest,
 } from "../codex/adapter.js";
+import {
+  loadCodexUserDefaults,
+  renderCodexEffortSetting,
+  renderCodexModelSetting,
+} from "../codex/user-defaults.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { CronStore } from "../state/cron-store.js";
 import { FileWorkflowStore, type FileWorkflowStatus } from "../state/file-workflow-store.js";
@@ -790,6 +795,7 @@ async function renderLarkStatusMessage(
   requireMentionInGroup?: boolean,
 ): Promise<string> {
   const cfg = await loadInstanceConfig(stateDir);
+  const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const rawConfig = await readRawLarkConfig(stateDir);
   const session = await new SessionStore(path.join(stateDir, "session.json"))
     .findByConversationKeySafe(normalized.conversationKey);
@@ -808,8 +814,8 @@ async function renderLarkStatusMessage(
       "**Lark conversation status**",
       "",
       `Engine: ${cfg.engine}`,
-      `Model: ${cfg.model ?? "default"}`,
-      `Effort: ${cfg.effort ?? "default"}`,
+      `Model: ${renderCodexModelSetting(cfg.model, codexDefaults, locale)}`,
+      `Effort: ${renderCodexEffortSetting(cfg.effort, codexDefaults, locale)}`,
       `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
       `Approval mode: ${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
       `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
@@ -835,8 +841,8 @@ async function renderLarkStatusMessage(
     "**Lark 会话状态**",
     "",
     `引擎：${cfg.engine}`,
-    `模型：${cfg.model ?? "默认"}`,
-    `推理强度：${cfg.effort ?? "默认"}`,
+    `模型：${renderCodexModelSetting(cfg.model, codexDefaults, locale)}`,
+    `推理强度：${renderCodexEffortSetting(cfg.effort, codexDefaults, locale)}`,
     `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
     `审批模式：${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
     `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,
@@ -1195,21 +1201,27 @@ async function handleLarkYoloCommand(stateDir: string, action: string, locale: L
 
 function renderLarkGoal(goal: CodexThreadGoal, locale: Locale): string {
   if (locale === "en") {
-    const budget = goal.tokenBudget === null ? "No token budget" : `${goal.tokenBudget} token budget`;
+    const budget = goal.tokenBudget === null ? "Budget: unbounded (no token limit set)" : `Budget: ${goal.tokenBudget} tokens`;
+    const usage = goal.tokensUsed === 0 && Math.round(goal.timeUsedSeconds) === 0
+      ? "Goal usage: not recorded yet"
+      : `Goal usage: ${goal.tokensUsed} tokens, ${Math.round(goal.timeUsedSeconds)} seconds`;
     return [
       `Objective: ${goal.objective}`,
       `Status: ${goal.status}`,
       budget,
-      `Used ${goal.tokensUsed} tokens, ${Math.round(goal.timeUsedSeconds)} seconds`,
+      usage,
     ].join("\n");
   }
 
-  const budget = goal.tokenBudget === null ? "无 token 预算" : `${goal.tokenBudget} token 预算`;
+  const budget = goal.tokenBudget === null ? "预算：不限制（未设置 token 上限）" : `预算：${goal.tokenBudget} token`;
+  const usage = goal.tokensUsed === 0 && Math.round(goal.timeUsedSeconds) === 0
+    ? "Goal 用量：尚未产生统计"
+    : `Goal 用量：${goal.tokensUsed} tokens，${Math.round(goal.timeUsedSeconds)} 秒`;
   return [
     `目标：${goal.objective}`,
     `状态：${goal.status}`,
     budget,
-    `已用 ${goal.tokensUsed} tokens，${Math.round(goal.timeUsedSeconds)} 秒`,
+    usage,
   ].join("\n");
 }
 
