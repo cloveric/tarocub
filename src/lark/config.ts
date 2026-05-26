@@ -18,6 +18,7 @@ export interface LarkRuntimeEnv {
   LARK_DOMAIN?: string;
   CCTB_LARK_STATE_DIR?: string;
   LARK_REQUIRE_MENTION_IN_GROUP?: string;
+  CCTB_LARK_DEBUG?: string;
 }
 
 export interface LarkRuntimeConfig {

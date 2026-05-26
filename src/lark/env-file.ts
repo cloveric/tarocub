@@ -48,6 +48,7 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
     LARK_DOMAIN: env.LARK_DOMAIN ?? parsed.LARK_DOMAIN,
     CCTB_LARK_STATE_DIR: env.CCTB_LARK_STATE_DIR ?? parsed.CCTB_LARK_STATE_DIR,
     LARK_REQUIRE_MENTION_IN_GROUP: env.LARK_REQUIRE_MENTION_IN_GROUP ?? parsed.LARK_REQUIRE_MENTION_IN_GROUP,
+    CCTB_LARK_DEBUG: env.CCTB_LARK_DEBUG ?? parsed.CCTB_LARK_DEBUG,
     CODEX_TELEGRAM_INSTANCE: env.CODEX_TELEGRAM_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
   };
 }
@@ -100,13 +101,14 @@ function parseLarkEnvFile(content: string): Partial<LarkRuntimeEnv> {
 
 function isSupportedLarkEnvKey(key: string): key is keyof Pick<
   LarkRuntimeEnv,
-  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CODEX_TELEGRAM_INSTANCE"
+  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "CODEX_TELEGRAM_INSTANCE"
 > {
   return key === "LARK_APP_ID" ||
     key === "LARK_APP_SECRET" ||
     key === "LARK_DOMAIN" ||
     key === "CCTB_LARK_STATE_DIR" ||
     key === "LARK_REQUIRE_MENTION_IN_GROUP" ||
+    key === "CCTB_LARK_DEBUG" ||
     key === "CODEX_TELEGRAM_INSTANCE";
 }
 

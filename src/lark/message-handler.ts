@@ -85,7 +85,7 @@ export async function handleLarkMessage(input: {
   if (isStopCommand(commandText)) {
     const accessDecision = input.bridge.checkAccess
       ? await input.bridge.checkAccess({
-        chatId: normalized.bridgeChatId,
+        chatId: normalized.bridgeAccessChatId,
         userId: normalized.bridgeUserId,
         chatType: normalized.bridgeChatType,
         conversationKey: normalized.conversationKey,
@@ -129,7 +129,7 @@ export async function handleLarkMessage(input: {
   if (isLarkApprovalTextCommand(commandText)) {
     const accessDecision = input.bridge.checkAccess
       ? await input.bridge.checkAccess({
-        chatId: normalized.bridgeChatId,
+        chatId: normalized.bridgeAccessChatId,
         userId: normalized.bridgeUserId,
         chatType: normalized.bridgeChatType,
         conversationKey: normalized.conversationKey,
@@ -235,7 +235,7 @@ async function runNormalizedLarkMessage(
   const locale = await resolveLarkLocale(input.stateDir);
   const accessDecision = input.bridge.checkAccess
     ? await input.bridge.checkAccess({
-      chatId: normalized.bridgeChatId,
+      chatId: normalized.bridgeAccessChatId,
       userId: normalized.bridgeUserId,
       chatType: normalized.bridgeChatType,
       conversationKey: normalized.conversationKey,
@@ -454,7 +454,7 @@ async function runNormalizedLarkMessage(
       };
 
       const result = await input.bridge.handleAuthorizedMessage({
-        chatId: normalized.bridgeChatId,
+        chatId: normalized.bridgeAccessChatId,
         userId: normalized.bridgeUserId,
         chatType: normalized.bridgeChatType,
         locale,

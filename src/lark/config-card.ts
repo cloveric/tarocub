@@ -12,6 +12,7 @@ import {
 import type { Locale } from "../telegram/message-renderer.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
 import { readRawLarkConfig } from "./locale.js";
+import { larkAccessChatIdFromConversationKey } from "./message-normalizer.js";
 
 const LARK_CONFIG_ENGINES: InstanceEngine[] = ["codex", "claude", "antigravity"];
 
@@ -238,22 +239,23 @@ async function applyGroupAction(
   value: LarkConfigCardActionValue,
   locale: Locale,
 ): Promise<string> {
-  if (value.bridgeChatType !== "group" || !value.larkChatId || !Number.isInteger(value.bridgeChatId)) {
+  if (value.bridgeChatType !== "group" || !value.larkChatId) {
     return locale === "en" ? "Group settings are available only inside a Lark group." : "群聊设置只能在飞书群里使用。";
   }
   const groupAction = value.value;
   const store = new LarkGroupModeStore(stateDir);
+  const bridgeChatId = larkAccessChatIdFromConversationKey(value.conversationKey);
   if (groupAction === "allow") {
     await updateGroupMode(stateDir, (groupMode) => {
-      allowGroup(groupMode, value.bridgeChatId!);
+      allowGroup(groupMode, bridgeChatId);
     });
     return locale === "en" ? "Current Lark group allowed." : "当前飞书群已允许。";
   }
   if (groupAction === "all") {
     await updateGroupMode(stateDir, (groupMode) => {
-      allowGroup(groupMode, value.bridgeChatId!);
-      if (!groupMode.listenAllChatIds.includes(value.bridgeChatId!)) {
-        groupMode.listenAllChatIds.push(value.bridgeChatId!);
+      allowGroup(groupMode, bridgeChatId);
+      if (!groupMode.listenAllChatIds.includes(bridgeChatId)) {
+        groupMode.listenAllChatIds.push(bridgeChatId);
       }
     });
     await store.setListenAll(value.larkChatId, true);
@@ -261,8 +263,8 @@ async function applyGroupAction(
   }
   if (groupAction === "at") {
     await updateGroupMode(stateDir, (groupMode) => {
-      allowGroup(groupMode, value.bridgeChatId!);
-      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== value.bridgeChatId);
+      allowGroup(groupMode, bridgeChatId);
+      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== bridgeChatId);
     });
     await store.setListenAll(value.larkChatId, false);
     return locale === "en" ? "Current group now requires @bot / mention." : "当前群已切回需要 @bot / mention。";

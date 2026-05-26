@@ -303,6 +303,130 @@ describe("runLarkService", () => {
     }
   });
 
+  it("does not log raw Lark message metadata on the hot path unless debug logging is enabled", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-no-raw-log-"));
+    const abortController = new AbortController();
+    const handlers = new Map<string, (payload: any) => Promise<void> | void>();
+    const logger = silentLogger();
+    const channel = {
+      on: vi.fn((name: string, handler: (payload: any) => Promise<void> | void) => {
+        handlers.set(name, handler);
+        return () => undefined;
+      }),
+      connect: vi.fn(async () => {
+        await handlers.get("message")?.({
+          messageId: "om_group_noise",
+          chatId: "oc_group",
+          chatType: "group",
+          senderId: "ou_user",
+          content: "ordinary group message",
+          rawContentType: "text",
+          resources: [],
+          mentions: [],
+          mentionAll: false,
+          mentionedBot: false,
+          createTime: Date.now(),
+        });
+        await handlers.get("reject")?.({
+          chatId: "oc_group",
+          messageId: "om_rejected",
+          reason: "not-mentioned",
+        });
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+          },
+        }),
+        signal: abortController.signal,
+        logger,
+      });
+
+      const logs = JSON.stringify(logger.log.mock.calls);
+      expect(logs).not.toContain("Lark raw message event");
+      expect(logs).not.toContain("Lark SDK rejected message");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs raw Lark message metadata when CCTB_LARK_DEBUG is enabled", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-debug-raw-log-"));
+    const abortController = new AbortController();
+    const handlers = new Map<string, (payload: any) => Promise<void> | void>();
+    const logger = silentLogger();
+    const channel = {
+      on: vi.fn((name: string, handler: (payload: any) => Promise<void> | void) => {
+        handlers.set(name, handler);
+        return () => undefined;
+      }),
+      connect: vi.fn(async () => {
+        await handlers.get("message")?.({
+          messageId: "om_debug",
+          chatId: "oc_group",
+          chatType: "group",
+          senderId: "ou_user",
+          content: "debug me",
+          rawContentType: "text",
+          resources: [],
+          mentions: [],
+          mentionAll: false,
+          mentionedBot: true,
+          createTime: Date.now(),
+        });
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+        CCTB_LARK_DEBUG: "1",
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(async () => ({ text: "ok" })),
+          },
+        }),
+        signal: abortController.signal,
+        logger,
+      });
+
+      const logs = JSON.stringify(logger.log.mock.calls);
+      expect(logs).toContain("Lark raw message event");
+      expect(logs).toContain("om_debug");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reports service-level card action errors inside the originating Lark thread", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-card-error-"));
     const abortController = new AbortController();

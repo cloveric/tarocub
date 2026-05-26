@@ -63,6 +63,7 @@ export async function runLarkService(
 ): Promise<void> {
   const logger = options.logger ?? console;
   const config = resolveLarkRuntimeConfig(env);
+  const debugLogging = isLarkDebugEnabled(env.CCTB_LARK_DEBUG);
   const bridgeEnv = {
     ...env,
     CODEX_TELEGRAM_STATE_DIR: config.stateDir,
@@ -101,16 +102,18 @@ export async function runLarkService(
 
     channel.on("message", async (message) => {
       try {
-        logger.log("Lark raw message event", JSON.stringify({
-          chatId: message.chatId,
-          chatType: message.chatType,
-          messageId: message.messageId,
-          mentionedBot: message.mentionedBot === true,
-          mentionAll: message.mentionAll === true,
-          contentLength: typeof message.content === "string" ? message.content.length : 0,
-          rawContentType: message.rawContentType,
-          resources: Array.isArray(message.resources) ? message.resources.length : 0,
-        }));
+        if (debugLogging) {
+          logger.log("Lark raw message event", JSON.stringify({
+            chatId: message.chatId,
+            chatType: message.chatType,
+            messageId: message.messageId,
+            mentionedBot: message.mentionedBot === true,
+            mentionAll: message.mentionAll === true,
+            contentLength: typeof message.content === "string" ? message.content.length : 0,
+            rawContentType: message.rawContentType,
+            resources: Array.isArray(message.resources) ? message.resources.length : 0,
+          }));
+        }
         await handleLarkMessage({
           channel: channel!,
           bridge,
@@ -132,11 +135,13 @@ export async function runLarkService(
       }
     });
     channel.on("reject", (event) => {
-      logger.log("Lark SDK rejected message", JSON.stringify({
-        chatId: event.chatId,
-        messageId: event.messageId,
-        reason: event.reason,
-      }));
+      if (debugLogging) {
+        logger.log("Lark SDK rejected message", JSON.stringify({
+          chatId: event.chatId,
+          messageId: event.messageId,
+          reason: event.reason,
+        }));
+      }
     });
     channel.on("cardAction", async (event) => {
       try {
@@ -347,6 +352,13 @@ function getCardActionValue(event: {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
+}
+
+function isLarkDebugEnabled(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return /^(?:1|true|yes|on)$/i.test(value.trim());
 }
 
 async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir: string; bridge: LarkBridgeLike }> {

@@ -83,7 +83,7 @@ export async function handleLarkSimpleCommand(
         conversationKey: normalized.conversationKey,
         bridgeChatType: normalized.bridgeChatType,
         larkChatId: normalized.chatId,
-        bridgeChatId: normalized.bridgeChatId,
+        bridgeChatId: normalized.bridgeAccessChatId,
         replyInThread: Boolean(normalized.threadId),
         locale: commandLocale,
         requireMentionInGroup: input.requireMentionInGroup,
@@ -205,7 +205,7 @@ export async function handleLarkGroupCommandBeforeAccess(
   }
 
   const auth = await input.bridge.checkUserAuthorization({
-    chatId: normalized.bridgeChatId,
+    chatId: normalized.bridgeAccessChatId,
     userId: normalized.bridgeUserId,
     chatType: normalized.bridgeChatType,
     conversationKey: normalized.conversationKey,
@@ -585,12 +585,12 @@ async function renderAndApplyLarkGroupCommand(
   const isGroup = normalized.bridgeChatType === "group";
   if (isGroup && (action === "allow" || action === "add")) {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
-      allowLarkGroup(groupMode, normalized.bridgeChatId);
+      allowLarkGroup(groupMode, normalized.bridgeAccessChatId);
     });
   } else if (isGroup && (action === "deny" || action === "remove" || action === "rm")) {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
-      groupMode.allowedChatIds = groupMode.allowedChatIds.filter((chatId) => chatId !== normalized.bridgeChatId);
-      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== normalized.bridgeChatId);
+      groupMode.allowedChatIds = groupMode.allowedChatIds.filter((chatId) => chatId !== normalized.bridgeAccessChatId);
+      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== normalized.bridgeAccessChatId);
     });
     await store.setListenAll(normalized.chatId, false);
   } else if (action === "on" || action === "enable") {
@@ -605,9 +605,9 @@ async function renderAndApplyLarkGroupCommand(
     await store.clearListenAll();
   } else if (isGroup && (action === "all" || action === "listen-all")) {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
-      allowLarkGroup(groupMode, normalized.bridgeChatId);
-      if (!groupMode.listenAllChatIds.includes(normalized.bridgeChatId)) {
-        groupMode.listenAllChatIds.push(normalized.bridgeChatId);
+      allowLarkGroup(groupMode, normalized.bridgeAccessChatId);
+      if (!groupMode.listenAllChatIds.includes(normalized.bridgeAccessChatId)) {
+        groupMode.listenAllChatIds.push(normalized.bridgeAccessChatId);
       }
     });
     await store.setListenAll(normalized.chatId, true);
@@ -616,22 +616,22 @@ async function renderAndApplyLarkGroupCommand(
     (action === "at" || action === "mention" || action === "mentions" || action === "listen-mentions")
   ) {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
-      allowLarkGroup(groupMode, normalized.bridgeChatId);
-      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== normalized.bridgeChatId);
+      allowLarkGroup(groupMode, normalized.bridgeAccessChatId);
+      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== normalized.bridgeAccessChatId);
     });
     await store.setListenAll(normalized.chatId, false);
   }
   const listenAll = normalized.bridgeChatType === "group" ? await store.isListenAll(normalized.chatId) : false;
   const countListenAll = await store.countListenAll();
   const groupMode = (await loadInstanceConfig(input.stateDir)).groupMode;
-  const groupAllowed = normalized.bridgeChatType === "group" && groupMode.allowedChatIds.includes(normalized.bridgeChatId);
+  const groupAllowed = normalized.bridgeChatType === "group" && groupMode.allowedChatIds.includes(normalized.bridgeAccessChatId);
   const requiresMention = !groupMode.enabled || (input.requireMentionInGroup !== false && !listenAll);
   const status = renderLarkGroupModeStatus({
     locale,
     isGroup: normalized.bridgeChatType === "group",
     groupEnabled: groupMode.enabled,
     groupAllowed,
-    bridgeChatId: normalized.bridgeChatId,
+    bridgeChatId: normalized.bridgeAccessChatId,
     requiresMention,
     allowedCount: groupMode.allowedChatIds.length,
     listenAllCount: countListenAll,
@@ -662,21 +662,21 @@ async function renderAndApplyLarkGroupCommand(
   if (action === "allow" || action === "add") {
     if (locale === "en") {
       return normalized.bridgeChatType === "group"
-        ? `${status}\n\nAllowed current Lark group (${normalized.bridgeChatId}). Only authorized users can still use it.`
+        ? `${status}\n\nAllowed current Lark group (${normalized.bridgeAccessChatId}). Only authorized users can still use it.`
         : `${status}\n\nSend /group allow inside the Lark group you want to enable.`;
     }
     return normalized.bridgeChatType === "group"
-      ? `${status}\n\n已允许当前飞书群 (${normalized.bridgeChatId})。群内仍只有已授权用户可使用。`
+      ? `${status}\n\n已允许当前飞书群 (${normalized.bridgeAccessChatId})。群内仍只有已授权用户可使用。`
       : `${status}\n\n请在要启用的飞书群里发送 /group allow。`;
   }
   if (action === "deny" || action === "remove" || action === "rm") {
     if (locale === "en") {
       return normalized.bridgeChatType === "group"
-        ? `${status}\n\nRemoved current Lark group (${normalized.bridgeChatId}).`
+        ? `${status}\n\nRemoved current Lark group (${normalized.bridgeAccessChatId}).`
         : `${status}\n\nSend /group deny inside the Lark group you want to remove.`;
     }
     return normalized.bridgeChatType === "group"
-      ? `${status}\n\n已移除当前飞书群 (${normalized.bridgeChatId})。`
+      ? `${status}\n\n已移除当前飞书群 (${normalized.bridgeAccessChatId})。`
       : `${status}\n\n请在要移除的飞书群里发送 /group deny。`;
   }
   if (action === "on" || action === "enable") {

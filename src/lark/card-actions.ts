@@ -32,7 +32,7 @@ import {
   renderLarkStopResult,
   resolveLarkLocale,
 } from "./locale.js";
-import { stableLarkNumericId } from "./message-normalizer.js";
+import { larkAccessChatIdFromConversationKey, larkAccessConversationKeyFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime, PendingLarkApproval } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
@@ -505,11 +505,13 @@ async function ensureLarkCardActionAccess(input: {
   }
 
   const operatorRawId = larkOperatorRawId(input.event.operator);
-  const chatId = stableLarkNumericId(input.conversationKey);
+  const chatId = larkAccessChatIdFromConversationKey(input.conversationKey);
   const userId = stableLarkNumericId(`user:${operatorRawId}`);
+  const accessConversationKey = larkAccessConversationKeyFromConversationKey(input.conversationKey);
   const locale = await resolveLarkLocale(input.stateDir);
   await assertStableLarkIdMappings(input.stateDir, [
-    ["chat", chatId, input.conversationKey],
+    ["chat", stableLarkNumericId(input.conversationKey), input.conversationKey],
+    ["chat", chatId, accessConversationKey],
     ["user", userId, operatorRawId],
   ]);
 
@@ -617,7 +619,7 @@ async function runLarkCardChoice(input: {
       }
     };
     const result = await input.bridge.handleAuthorizedMessage({
-      chatId: bridgeChatId,
+      chatId: larkAccessChatIdFromConversationKey(input.conversationKey),
       userId: input.userId,
       chatType: input.bridgeChatType,
       conversationKey: input.conversationKey,
@@ -774,7 +776,7 @@ async function runLarkArchiveContinueCardAction(input: {
       }
     };
     const result = await input.bridge.handleAuthorizedMessage({
-      chatId: bridgeChatId,
+      chatId: larkAccessChatIdFromConversationKey(input.conversationKey),
       userId: input.userId,
       chatType: input.bridgeChatType,
       conversationKey: input.conversationKey,

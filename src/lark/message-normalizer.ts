@@ -44,9 +44,11 @@ export interface LarkNormalizedBridgeMessage {
   senderId: string;
   senderName?: string;
   bridgeChatId: number;
+  bridgeAccessChatId: number;
   bridgeUserId: number;
   bridgeChatType: LarkBridgeChatType;
   conversationKey: string;
+  accessConversationKey: string;
   text: string;
   replyContext?: {
     messageId: string;
@@ -79,6 +81,7 @@ export function normalizeLarkMessage(
   }
 
   const conversationKey = buildLarkConversationKey(message.chatId, message.threadId);
+  const accessConversationKey = buildLarkConversationKey(message.chatId);
   const attachments = normalizeLarkResources(message.resources ?? []);
   const text = buildLarkText(message, attachments);
 
@@ -90,9 +93,11 @@ export function normalizeLarkMessage(
     senderId: message.senderId,
     ...(message.senderName ? { senderName: message.senderName } : {}),
     bridgeChatId: stableLarkNumericId(conversationKey),
+    bridgeAccessChatId: stableLarkNumericId(accessConversationKey),
     bridgeUserId: stableLarkNumericId(`user:${message.senderId}`),
     bridgeChatType: message.chatType === "p2p" ? "private" : "group",
     conversationKey,
+    accessConversationKey,
     text,
     attachments,
   };
@@ -102,8 +107,20 @@ function isLarkSlashCommand(content: string | undefined): boolean {
   return Boolean(content?.trim().startsWith("/"));
 }
 
-function buildLarkConversationKey(chatId: string, threadId?: string): string {
+export function buildLarkConversationKey(chatId: string, threadId?: string): string {
   return threadId ? `lark:${chatId}:${threadId}` : `lark:${chatId}`;
+}
+
+export function larkAccessConversationKeyFromConversationKey(conversationKey: string): string {
+  const match = conversationKey.match(/^lark:([^:]+)(?::.+)?$/);
+  if (!match) {
+    return conversationKey;
+  }
+  return buildLarkConversationKey(match[1]!);
+}
+
+export function larkAccessChatIdFromConversationKey(conversationKey: string): number {
+  return stableLarkNumericId(larkAccessConversationKeyFromConversationKey(conversationKey));
 }
 
 function normalizeLarkResources(resources: LarkResourceDescriptor[]): LarkNormalizedAttachment[] {

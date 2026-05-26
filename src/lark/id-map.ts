@@ -12,6 +12,7 @@ type LarkNumericIdKind = "chat" | "user";
 export async function verifyLarkNumericIds(stateDir: string, normalized: LarkNormalizedBridgeMessage): Promise<void> {
   await assertStableLarkIdMappings(stateDir, [
     ["chat", normalized.bridgeChatId, normalized.conversationKey],
+    ["chat", normalized.bridgeAccessChatId, normalized.accessConversationKey],
     ["user", normalized.bridgeUserId, normalized.senderId],
   ]);
 }

@@ -5,6 +5,7 @@ import { CronAccessDeniedError } from "../runtime/cron-errors.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
 import { sendLarkMarkdown } from "./delivery.js";
+import { larkAccessChatIdFromConversationKey } from "./message-normalizer.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
 
@@ -47,9 +48,10 @@ export function buildLarkCronExecutor(input: {
     }
     const bridgeChatType = job.chatType === "group" ? "group" : "private";
     const conversationKey = job.conversationKey ?? `lark:${job.larkChatId}`;
+    const accessChatId = larkAccessChatIdFromConversationKey(conversationKey);
     const accessDecision = input.bridge.checkAccess
       ? await input.bridge.checkAccess({
-        chatId: job.chatId,
+        chatId: accessChatId,
         userId: job.userId,
         chatType: bridgeChatType,
         conversationKey,
@@ -75,7 +77,7 @@ export function buildLarkCronExecutor(input: {
     const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
     await mkdir(requestOutputDir, { recursive: true });
     const result = await input.bridge.handleAuthorizedMessage({
-      chatId: job.chatId,
+      chatId: accessChatId,
       userId: job.userId,
       chatType: bridgeChatType,
       text: job.prompt,

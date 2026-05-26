@@ -1133,6 +1133,119 @@ describe("lark service", () => {
     }
   });
 
+  it("stores Lark /group allow from a thread against the base group", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-thread-group-allow-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const, text: "当前聊天未获授权。" })),
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const groupChatId = stableLarkNumericId("lark:oc_group");
+    const threadChatId = stableLarkNumericId("lark:oc_group:omt_topic");
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_group_allow_thread",
+          chatId: "oc_group",
+          chatType: "group",
+          threadId: "omt_topic",
+          mentionedBot: true,
+          content: "/group allow",
+        }),
+      });
+
+      const cfg = await loadInstanceConfig(stateDir);
+      expect(cfg.groupMode.enabled).toBe(true);
+      expect(cfg.groupMode.allowedChatIds).toContain(groupChatId);
+      expect(cfg.groupMode.allowedChatIds).not.toContain(threadChatId);
+      expect(bridge.checkUserAuthorization).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: groupChatId,
+        conversationKey: "lark:oc_group:omt_topic",
+      }));
+      expect(bridge.checkAccess).not.toHaveBeenCalled();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets an allowed Lark group authorize messages inside its threads without another /group allow", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-thread-access-"));
+    const channel = fakeChannel();
+    const groupChatId = stableLarkNumericId("lark:oc_group");
+    const threadChatId = stableLarkNumericId("lark:oc_group:omt_topic");
+    const bridge = {
+      checkAccess: vi.fn(async (input: { chatId: number }) => input.chatId === groupChatId
+        ? { kind: "allow" as const }
+        : { kind: "reply" as const, text: `unexpected chat ${input.chatId}` }),
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "thread answer" })),
+    };
+    const runtime = createLarkServiceRuntime();
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_group_allow",
+          chatId: "oc_group",
+          chatType: "group",
+          mentionedBot: true,
+          content: "/group allow",
+        }),
+      });
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_thread_request",
+          chatId: "oc_group",
+          chatType: "group",
+          threadId: "omt_topic",
+          mentionedBot: true,
+          content: "thread question",
+        }),
+      });
+
+      expect(bridge.checkAccess).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: groupChatId,
+        userId: stableLarkNumericId("user:ou_user"),
+        chatType: "group",
+        conversationKey: "lark:oc_group:omt_topic",
+      }));
+      expect(bridge.checkAccess).not.toHaveBeenCalledWith(expect.objectContaining({
+        chatId: threadChatId,
+      }));
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: groupChatId,
+        conversationKey: "lark:oc_group:omt_topic",
+        text: expect.stringContaining("thread question"),
+      }));
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_group",
+        { markdown: "thread answer" },
+        { replyTo: "om_thread_request", replyInThread: true },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes the configured Lark locale into group command access checks", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-locale-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
