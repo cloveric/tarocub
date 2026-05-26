@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 
 import AdmZip from "adm-zip";
 import { describe, expect, it, vi } from "vitest";
@@ -457,6 +458,67 @@ describe("lark service", () => {
         { markdown: "done" },
         { replyTo: "om_media" },
       );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("downloads user-sent Lark audio through the message resource API before transcription", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audio-resource-"));
+    const messageResourceGet = vi.fn(async () => ({
+      getReadableStream: () => Readable.from([Buffer.from("voice body")]),
+    }));
+    const transcribeMedia = vi.fn(async (filePath: string) => `transcript:${path.basename(filePath)}`);
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => {
+        throw new Error("wrong Lark resource download API");
+      }),
+      rawClient: {
+        im: {
+          v1: {
+            messageResource: {
+              get: messageResourceGet,
+            },
+          },
+        },
+      },
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+    const runtime = createLarkServiceRuntime({ transcribeMedia });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_voice",
+          content: "",
+          resources: [
+            { type: "audio", fileKey: "file_v3_voice" },
+          ],
+        }),
+      });
+
+      expect(messageResourceGet).toHaveBeenCalledWith({
+        path: {
+          message_id: "om_voice",
+          file_key: "file_v3_voice",
+        },
+        params: {
+          type: "audio",
+        },
+      });
+      expect(transcribeMedia).toHaveBeenCalledWith(expect.stringMatching(/audio-1\.ogg$/));
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        files: [],
+        text: expect.stringContaining("transcript:audio-1.ogg"),
+      }));
+      expect(channel.downloadResource).not.toHaveBeenCalled();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

@@ -23,6 +23,30 @@ export interface LarkStreamControllerLike {
   update(card: object | ((current: object) => object)): Promise<void>;
 }
 
+export type LarkMessageResourceType = "image" | "file" | "audio" | "video";
+
+export interface LarkMessageResourceResponseLike {
+  getReadableStream(): NodeJS.ReadableStream;
+}
+
+export interface LarkRawClientLike {
+  im?: {
+    v1?: {
+      messageResource?: {
+        get(payload: {
+          path: {
+            message_id: string;
+            file_key: string;
+          };
+          params: {
+            type: LarkMessageResourceType;
+          };
+        }): Promise<LarkMessageResourceResponseLike>;
+      };
+    };
+  };
+}
+
 export interface LarkChannelLike {
   send(to: string, input: unknown, opts?: LarkSendOptions): Promise<{ messageId: string }>;
   stream(to: string, input: {

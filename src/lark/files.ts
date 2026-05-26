@@ -10,7 +10,7 @@ import {
 } from "../runtime/file-workflow.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import type { NormalizedTelegramAttachment } from "../telegram/update-normalizer.js";
-import type { LarkChannelLike } from "./types.js";
+import type { LarkChannelLike, LarkMessageResourceType, LarkRawClientLike } from "./types.js";
 import type {
   LarkNormalizedAttachment,
   LarkNormalizedBridgeMessage,
@@ -82,14 +82,46 @@ export async function downloadLarkAttachments(input: {
   await mkdir(dir, { recursive: true });
   const files: DownloadedLarkAttachment[] = [];
   for (const [index, attachment] of input.attachments.entries()) {
-    const downloadType = attachment.kind === "image" ? "image" : "file";
-    const body = await input.channel.downloadResource(attachment.fileKey, downloadType);
+    const body = await downloadLarkAttachmentBody(input.channel, input.messageId, attachment);
     const fileName = attachment.fileName ?? `${attachment.kind}-${index + 1}${defaultExtension(attachment.kind)}`;
     const filePath = path.join(dir, safeFileName(fileName));
     await writeFile(filePath, body);
     files.push({ attachment, localPath: filePath });
   }
   return files;
+}
+
+async function downloadLarkAttachmentBody(
+  channel: LarkChannelLike,
+  messageId: string,
+  attachment: LarkNormalizedAttachment,
+): Promise<Buffer> {
+  const rawClient = (channel as { rawClient?: LarkRawClientLike }).rawClient;
+  const getMessageResource = rawClient?.im?.v1?.messageResource?.get;
+  if (getMessageResource) {
+    const resourceType: LarkMessageResourceType = attachment.kind;
+    const response = await getMessageResource({
+      path: {
+        message_id: messageId,
+        file_key: attachment.fileKey,
+      },
+      params: {
+        type: resourceType,
+      },
+    });
+    return await readableToBuffer(response.getReadableStream());
+  }
+
+  const downloadType = attachment.kind === "image" ? "image" : "file";
+  return await channel.downloadResource(attachment.fileKey, downloadType);
+}
+
+async function readableToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream as AsyncIterable<Buffer | Uint8Array | string>) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
 export async function cleanupLarkMessageArtifacts(stateDir: string, messageId: string): Promise<void> {
