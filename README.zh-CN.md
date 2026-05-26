@@ -87,6 +87,7 @@ export LARK_APP_SECRET="..."
 | `CODEX_TELEGRAM_INSTANCE` | 复用现有 engine 配置时使用的实例名，默认 `lark`。 |
 | `LARK_DOMAIN` | 需要时覆盖 Lark/飞书 API domain。 |
 | `LARK_REQUIRE_MENTION_IN_GROUP` | 默认 `true`；群消息必须提到 bot 才会触发，除非显式关闭。 |
+| `CCTB_LARK_DOC_CREATE_AS` / `LARK_DOC_CREATE_AS` | 可选 `user`/`bot`，控制 `lark.doc.create` 的创建身份；默认 `bot`。 |
 
 当前 Lark 通道支持：
 
@@ -95,18 +96,19 @@ export LARK_APP_SECRET="..."
 - 用 `conversationKey` 隔离话题/thread；
 - streaming interactive card 和 Card 2.0 callback 停止按钮；
 - 引擎权限请求审批卡片，点击审批前会按操作者重新走 bridge 访问控制；
-- 收到图片/文件资源后下载到 bridge workspace；
+- 收到图片/文件资源后只在当前 turn 临时下载，完成 staging/转写后清理临时输入；
 - 通过 `[send-file:/abs/path]`、`[send-image:/abs/path]`、`send.audio`、`send.video` 和 `send.batch` tool tag 把文件/图片/音视频发回 Lark；
 - 通过 `lark.post` tool tag 发送富文本/图文混排消息；
 - 通过 `lark.card` tool tag 发送自定义交互卡片，按钮点击会回流到同一个 bridge session；
-- 通过 `lark.doc.create` 创建飞书文档，适合长 specs/docs 和可评论反馈的材料；
-- 飞书云文档评论 @bot：bridge 会拉取评论上下文，跑同一套 engine，并回复到评论线程；
+- 通过 `lark.doc.create` 创建飞书文档，适合长 specs/docs 和可评论反馈的材料；默认用 app/bot 身份创建，确实需要本机 `lark-cli` 用户身份时可显式 `as:"user"`；
+- 飞书云文档评论 @bot：bridge 会拉取评论上下文，跑同一套 engine，并回复到评论线程；评论里可以执行 `lark.doc.create`，但聊天投递/定时任务类工具会明确提示不支持，不再静默吞掉；
 - 通过 `/cron` 创建飞书/Lark 侧定时提醒和定时任务，每条任务保存 raw Lark chat 路由，scheduler 触发后能回到正确的 Lark 会话；
 - 通过 `/board` 管理持久 Kanban 任务，复用 Telegram 的 `board.json` 状态模型，同时 timeline 记为 `channel=lark`；
 - 通过 `/mini` 把飞书群 thread 注册成具名 peer，支持 ask/fan/chain/verify/crew 这类 thread-to-thread 协作；
 - 通过 `/fan`、`/chain`、`/verify` 调用 Agent Bus，复用 Telegram 同一套 `bus.parallel`、`bus.chain` 和 `bus.verifier` 配置；
 - 飞书合并转发消息会保留为 `<forwarded_lark_messages>` 任务上下文，方便“一键转发给 bot 处理”；
 - 按 state dir 加 Lark 服务锁，并提供 `lark service start|stop|restart|status|logs|doctor`，误开多个 `lark run` 时不会让多个进程同时消费同一批飞书事件，恢复也更像 Telegram service；
+- `lark send --chat <oc_xxx>` 支持本地 CLI 主动发文本/文件/图片到 Lark，必须显式指定目标 chat，避免误发到上一次保存的会话；
 - timeline 会记录 `channel=lark`，并提供 Lark 专用的 `lark timeline` / `lark audit` / `lark dashboard` 别名，所以不用再绕到 Telegram CLI 也能检查 Lark 流量。
 
 访问控制故意复用现有 bridge store。未配对的 Lark 私聊不会直接跑引擎，而是返回配对/allowlist 指引。现在可以直接用 Lark 专用别名管理 Lark state dir：`node dist/src/index.js lark access pair <code>`、`lark access allow <numeric-chat-id>`、`lark access policy allowlist` 和 `lark access status`。
@@ -144,20 +146,13 @@ Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 
 ## 近期亮点
 
-- **v4.6.45** — 新增 `lark provision`，现有飞书/Lark app 在补了 app 管理权限后，可以直接重跑 wizard 的权限/订阅检查，不用再扫码创建一个新 app。
-- **v4.6.44** — 让 `lark wizard` 在扫码注册后做 app provisioning 检查：检查必需 scope、对已配置但未授权的 scope 发起管理员授权申请；如果有 app 管理权限就补齐 websocket 事件/回调订阅，否则明确提示缺哪个管理 scope。
-- **v4.6.43** — 修复飞书/Lark wizard 的 domain 处理：`LARK_DOMAIN=feishu|lark` 会在运行时映射到官方 SDK domain，并在二维码注册时映射到正确的账号注册域名。
-- **v4.6.42** — 新增 `lark wizard`，通过二维码创建/绑定 Feishu/Lark PersonalAgent app，凭据保存到 `lark.env`，并让 `lark status/doctor/run` 自动读取。
-- **v4.6.41** — 将飞书/Lark 交互卡片对齐到 Card 2.0 callback `behaviors`，stop/approval/choice 点击前按操作者重新鉴权，并拆分 Lark chat/user numeric ID map 以收窄碰撞影响面。
-- **v4.6.40** — 加固飞书/Lark 通道预览：单服务锁、安全的用户可见错误、Lark ID 碰撞检测、raw card 按钮回调补全、更明确的 `lark status` 诊断，以及更兼容的飞书文档 CLI 输出解析。
-- **v4.6.39** — 新增飞书/Lark 通道预览：官方 Lark Channel SDK 长连接、复用 bridge runtime、streaming/审批/自定义卡片、富文本 post、飞书文档创建、合并转发上下文、入站资源下载、timeline 诊断和出站文件/媒体标签。
-- **v4.6.22** — 新增 Antigravity CLI 作为第三个后端引擎，支持 Telegram `/engine antigravity`、YOLO/full-auto process 执行、`/goal` 透传、print mode 下安全拦截 `/model`、conversation 自动绑定和 `/resume conversation <id>`。
-- **v4.6.18** — 规范化 Telegram 群里的 `/goal@botname`，让原生引擎收到普通 `/goal`，同时 Codex 继续使用结构化 goal 处理。
-- **v4.6.17** — 让 Claude Code 的 `/goal` 可以从 Telegram 透传，不再把 goal 当成 Codex-only 功能。
-- **v4.6.16** — 补齐 Telegram 音频处理：直接 `voice`、直接 `audio/.m4a`、音频类 document、被引用的音频 document 都会走同一套 ASR 转写路径。
-- **v4.6.14** — 加强 `/stop` 和服务重启清理，避免旧的重复进程在重启后继续 typing 或继续发文件。
-- **v4.6.10** — 将可选 Brave/Tavily Search MCP 打磨成正式研究插件，带 `sourceLog`、provider 元数据、fallback 提示、`web_extract`、`provider_status` 和 `health_check`。
-- **v4.6.2** — 新增 `/board` 持久化 Kanban 任务和 `/mini` topic-to-topic workflow，适合在同群里组织 planner/writer/reviewer 式协作。
+- **v4.6.53** — 收紧飞书/Lark 产品边界：Telegram `service --all` 不再误扫 `~/.cctb/lark`，Lark 临时附件 turn 后清理，`lark send` 必须显式 `--chat`，Docs 默认用 bot 身份创建，doctor 复用统一 secret 脱敏。
+- **v4.6.51–v4.6.52** — 补齐 Lark 主要 parity：直接最终回复、Lark 路由 `/cron`、`/board`、`/mini`、`/fan`、`/chain`、`/verify`、`/goal`，以及 service/audit/dashboard aliases 和 Telegram Markdown 投递加固。
+- **v4.6.42–v4.6.46** — 新增 QR `lark wizard`、`lark provision`、domain-safe PersonalAgent setup、权限/订阅检查，以及飞书云文档评论 @bot 后 in-thread 回复。
+- **v4.6.39–v4.6.41** — 引入飞书/Lark 通道预览：官方 Channel SDK 长连接、消息/卡片回调、服务锁、资源投递、Docs 创建、Card 2.0 callback behaviors。
+- **v4.6.22** — 新增 Antigravity CLI 第三后端，引入 `/engine antigravity`、YOLO/full-auto、conversation 绑定和 print-mode 模型 guardrails。
+- **v4.6.10–v4.6.18** — 加固 Telegram 核心：Codex/Claude `/goal`、音视频 ASR、`/stop` 旧进程清理，以及 Search MCP 的 `web_extract`、source log、provider metadata 和 health check。
+- **v4.6.2** — 新增 `/board` 持久化 Kanban 和 `/mini` topic/thread workflow。
 
 **升级已有 generated 实例指令：** 更新代码后请刷新已生成的 `agent.md` block，让旧 bot 拿到最新短 Telegram Transport block：
 

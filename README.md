@@ -102,6 +102,7 @@ Optional environment:
 | `CODEX_TELEGRAM_INSTANCE` | Instance name used by the shared engine config. Defaults to `lark`. |
 | `LARK_DOMAIN` | Override Lark/Feishu API domain when needed. |
 | `LARK_REQUIRE_MENTION_IN_GROUP` | Defaults to `true`; group messages must mention the bot unless the specific chat is switched with `/group all`. |
+| `CCTB_LARK_DOC_CREATE_AS` / `LARK_DOC_CREATE_AS` | Optional `user`/`bot` override for `lark.doc.create`; default is `bot`. |
 
 The Lark channel currently supports:
 
@@ -110,12 +111,12 @@ The Lark channel currently supports:
 - topic/thread isolation through `conversationKey`, plus replied-message context enrichment so short follow-ups like "继续" or "就这个" keep the quoted Lark message text;
 - ordinary tasks return the final answer directly; interactive cards are reserved for stop controls, approvals, card choices, and archive continuation;
 - approval cards for engine permission requests, with callback operators checked against bridge access policy before resolving;
-- inbound image/file resources downloaded into the bridge workspace, plus inbound Lark audio/video resources transcribed through the same local ASR path as Telegram before engine execution;
+- inbound image/file resources downloaded into the bridge workspace for the current turn, then cleaned up after staging/transcription; inbound Lark audio/video resources use the same local ASR path as Telegram before engine execution;
 - outbound `[send-file:/abs/path]`, `[send-image:/abs/path]`, `send.audio`, `send.video`, `send.batch`, and whole-response fenced `file:name.ext` blocks delivered back to Lark;
 - rich Feishu posts through `lark.post` tool tags when plain Markdown is too limiting;
 - custom interactive cards through `lark.card` tool tags, with button clicks fed back into the same bridge session;
-- Feishu Docs creation through `lark.doc.create` for long specs and reviewable documents;
-- Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, runs the same engine, and replies in the comment thread;
+- Feishu Docs creation through `lark.doc.create` for long specs and reviewable documents; the default creator identity is the app/bot, with opt-in `as:"user"` when you really want the local `lark-cli` user identity;
+- Feishu Docs comment mentions: when a cloud-doc comment @mentions the bot, the bridge fetches comment context, runs the same engine, replies in-thread, and can execute `lark.doc.create`; chat-only delivery/reminder tools are reported as unsupported instead of being silently swallowed;
 - Lark-delivered scheduled reminders/tasks through `/cron` or `cron.add` tool tags, with raw Lark chat/thread routing stored on each job so scheduler fires can return to the correct Lark conversation;
 - archive summaries with a Lark `Continue Analysis` card button and `/continue` fallback, matching Telegram's pause-then-continue archive workflow;
 - durable Kanban task state through `/board`, backed by the same `board.json` model as Telegram while writing timeline entries with `channel=lark`;
@@ -123,7 +124,7 @@ The Lark channel currently supports:
 - Agent Bus delegation through `/fan`, `/chain`, and `/verify`, reusing the same configured `bus.parallel`, `bus.chain`, and `bus.verifier` peers as Telegram;
 - merged forwarded Feishu messages preserved as `<forwarded_lark_messages>` task context for one-click handoff workflows;
 - a per-state-dir service lock plus `lark service start|stop|restart|status|logs|doctor`, so accidental duplicate `lark run` processes do not double-consume the same Lark events and recovery is operator-friendly;
-- `lark send`, the Lark-side sibling of Telegram `send`, for operator-initiated text/file/image delivery from the local CLI using saved app credentials;
+- `lark send --chat <oc_xxx>`, the Lark-side sibling of Telegram `send`, for operator-initiated text/file/image delivery from the local CLI using saved app credentials without guessing a target chat;
 - timeline entries with `channel=lark`, plus Lark-scoped `lark timeline`, `lark audit`, `lark dashboard`, `lark instructions`, `lark engine`, `lark yolo`, `lark budget`, `lark locale`, `lark verbosity`, `lark usage`, `lark session`, and `lark task` aliases, so Lark traffic, agent instructions, runtime config, session bindings, and file workflows can be inspected without routing through the Telegram CLI surface.
 
 ### Lark vs Telegram parity boundary
@@ -197,21 +198,13 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
-- **v4.6.46** — completes Feishu/Lark cloud-doc comment mentions: `drive.notice.comment_add_v1` events now route @bot comments through the bridge engine, fetch comment context, reply in-thread, enforce shared user access, and provision comment read/write scopes.
-- **v4.6.45** — adds `lark provision` so an existing Feishu/Lark app can re-run the wizard's permission/subscription checks after you grant app-management permissions, without creating another QR app.
-- **v4.6.44** — teaches `lark wizard` to provision-check the app after QR registration: it verifies required scopes, requests admin approval for configured-but-unauthorized scopes, patches websocket event/callback subscriptions when app-management permission is available, and otherwise reports the missing management scope.
-- **v4.6.43** — fixes Feishu/Lark wizard domain handling so saved `LARK_DOMAIN=feishu|lark` values map to the official SDK domains at runtime and to the correct account registration hosts during QR setup.
-- **v4.6.42** — adds `lark wizard`, a QR-code PersonalAgent registration flow that saves Feishu/Lark app credentials to `lark.env` and lets `lark status/doctor/run` auto-load them.
-- **v4.6.41** — aligns Feishu/Lark interactive cards with Card 2.0 callback `behaviors`, access-checks card operators before stop/approval/choice actions, and splits Lark chat/user numeric ID maps to reduce collision blast radius.
-- **v4.6.40** — hardens the Feishu/Lark channel preview with a single-service lock, safer user-facing errors, Lark ID collision detection, raw card button routing, stronger `lark status` diagnostics, and more tolerant Feishu Docs CLI output parsing.
-- **v4.6.39** — adds the Feishu/Lark channel preview: official Lark Channel SDK long connection, bridge runtime reuse, streaming/approval/custom cards, rich posts, Feishu Docs creation, merged-forward context, inbound resources, timeline diagnostics, and outbound file/media tags.
-- **v4.6.22** — adds Antigravity CLI as a third backend engine, including Telegram `/engine antigravity`, YOLO/full-auto process execution, `/goal` passthrough, safe `/model` guardrails for print mode, conversation auto-binding, and `/resume conversation <id>`.
-- **v4.6.18** — normalizes `/goal@botname` in Telegram groups so native engines receive a plain `/goal` command while Codex keeps structured goal handling.
-- **v4.6.17** — passes Claude Code `/goal` through from Telegram instead of treating goals as Codex-only.
-- **v4.6.16** — completes Telegram audio handling: direct `voice`, direct `audio/.m4a`, audio-like documents, and quoted audio documents all go through the same ASR transcription path.
-- **v4.6.14** — hardens `/stop` and service restart cleanup so stale duplicate processes cannot keep typing or sending files after a restart.
-- **v4.6.10** — promotes the optional Brave/Tavily Search MCP into a release-ready research add-on with `sourceLog`, provider metadata, fallback notices, `web_extract`, `provider_status`, and `health_check`.
-- **v4.6.2** — adds `/board` durable Kanban tasks and `/mini` topic-to-topic workflows for same-group planner/writer/reviewer style coordination.
+- **v4.6.53** — tightens the Feishu/Lark product edge: Telegram `service --all` no longer mistakes `~/.cctb/lark` for a Telegram bot, transient Lark attachments are cleaned after each turn, `lark send` requires an explicit `--chat`, Docs creation defaults to bot identity, and Lark doctor uses the shared secret redactor.
+- **v4.6.51–v4.6.52** — closes the main Lark parity gap: direct final replies, Lark-routed `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/goal`, service/audit/dashboard aliases, Telegram Markdown delivery hardening, and Lark-native running/done cards where the platform needs cards.
+- **v4.6.42–v4.6.46** — adds the QR `lark wizard`, `lark provision`, domain-safe PersonalAgent setup, permission/subscription checks, and Feishu Docs comment @mention support with in-thread replies.
+- **v4.6.39–v4.6.41** — introduces the Feishu/Lark channel preview on the official Channel SDK, including message/card callbacks, app credentials, Lark service locks, safer errors, resource delivery, Docs creation, and Card 2.0 callback behaviors.
+- **v4.6.22** — adds Antigravity CLI as a third backend engine with `/engine antigravity`, YOLO/full-auto process execution, conversation binding, and safe print-mode model guardrails.
+- **v4.6.10–v4.6.18** — hardens core Telegram operations: `/goal` routing for Codex/Claude, audio/video ASR intake, stale-process `/stop` cleanup, and optional Search MCP with `web_extract`, provider metadata, source logs, and health checks.
+- **v4.6.2** — adds `/board` durable Kanban state and `/mini` topic/thread workflows for lightweight multi-agent collaboration.
 
 **Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the latest compact Telegram Transport block:
 

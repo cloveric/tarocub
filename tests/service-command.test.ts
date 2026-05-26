@@ -1711,6 +1711,35 @@ describe("telegram service commands", () => {
     ).rejects.toThrow("Use either --instance <name> or --all, not both.");
   });
 
+  it("does not treat the default Lark state directory as a Telegram instance for --all", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
+      await writeFile(path.join(tempDir, ".cctb", "alpha", ".env"), 'TELEGRAM_BOT_TOKEN="token-alpha"\n');
+      await mkdir(path.join(tempDir, ".cctb", "lark"), { recursive: true });
+      await writeFile(path.join(tempDir, ".cctb", "lark", "lark.env"), [
+        'LARK_APP_ID="cli_a"',
+        'LARK_APP_SECRET="lark-secret"',
+        "",
+      ].join("\n"));
+
+      const handled = await runCli(["telegram", "service", "status", "--all"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      const output = messages.join("\n");
+      expect(handled).toBe(true);
+      expect(output).toContain("Instance: alpha");
+      expect(output).not.toContain("Instance: lark");
+      expect(output).not.toContain("TELEGRAM_BOT_TOKEN is required");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("refuses to restart an instance while a Telegram turn is active unless forced", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, ".cctb", "default");

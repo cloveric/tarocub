@@ -34,7 +34,7 @@ export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput):
     "docs",
     "+create",
     "--as",
-    input.as ?? "user",
+    input.as ?? resolveDefaultLarkDocumentActor(),
   ];
   if (input.title?.trim()) {
     args.push("--title", input.title.trim());
@@ -128,4 +128,9 @@ function parseLarkCliJson(stdout: string): unknown {
 
 function inferDocFormat(content: string): "xml" | "markdown" {
   return /^\s*</.test(content) ? "xml" : "markdown";
+}
+
+function resolveDefaultLarkDocumentActor(): "user" | "bot" {
+  const value = process.env.CCTB_LARK_DOC_CREATE_AS ?? process.env.LARK_DOC_CREATE_AS;
+  return value?.trim().toLowerCase() === "user" ? "user" : "bot";
 }

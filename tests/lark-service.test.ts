@@ -91,6 +91,7 @@ describe("lark service", () => {
     const channel = fakeChannel({
       downloadResource: vi.fn(async () => Buffer.from("hello file")),
     });
+    let bridgeReadAttachment = false;
     const bridge = {
       handleAuthorizedMessage: vi.fn(async (input: {
         chatType: string;
@@ -98,6 +99,7 @@ describe("lark service", () => {
         files: string[];
         onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
       }) => {
+        bridgeReadAttachment = (await readFile(input.files[0]!, "utf8")) === "hello file";
         await input.onEngineEvent?.({ type: "assistant_text", text: "Hi from bridge" });
         await input.onEngineEvent?.({ type: "result", text: "Done from bridge" });
         return { text: "Done from bridge" };
@@ -133,7 +135,7 @@ describe("lark service", () => {
       }));
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
       expect(bridgeInput.files).toHaveLength(1);
-      await expect(readFile(bridgeInput.files[0]!, "utf8")).resolves.toBe("hello file");
+      expect(bridgeReadAttachment).toBe(true);
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: "Done from bridge" },
@@ -4309,7 +4311,53 @@ describe("lark service", () => {
         fileToken: "doc_token",
         fileType: "docx",
         commentId: "comment_1",
-        text: "这是评论回复。",
+        text: expect.stringContaining("这是评论回复。"),
+      });
+      expect(commentClient.createReply).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining("云文档评论里不能执行聊天投递或定时任务工具"),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("executes Lark document creation tags from document comments instead of silently stripping them", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-doc-tool-"));
+    const commentClient = fakeCommentClient();
+    const runtime = createLarkServiceRuntime({
+      commentClient,
+      createDocument: vi.fn(async () => ({
+        title: "Spec",
+        url: "https://example.feishu.cn/docx/doc_1",
+        documentId: "doc_1",
+      })),
+    });
+    const bridge = {
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: '[tool:{"name":"lark.doc.create","payload":{"title":"Spec","content":"# Spec\\n\\n正文","docFormat":"markdown"}}]',
+      })),
+    };
+
+    try {
+      const handled = await handleLarkComment({
+        bridge,
+        runtime,
+        stateDir,
+        event: fakeCommentEvent(),
+      });
+
+      expect(handled).toBe(true);
+      expect(runtime.createDocument).toHaveBeenCalledWith(expect.objectContaining({
+        title: "Spec",
+        content: "# Spec\n\n正文",
+        docFormat: "markdown",
+      }));
+      expect(commentClient.createReply).toHaveBeenCalledWith({
+        fileToken: "doc_token",
+        fileType: "docx",
+        commentId: "comment_1",
+        text: expect.stringContaining("https://example.feishu.cn/docx/doc_1"),
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -4366,7 +4414,7 @@ describe("lark service", () => {
     }
   });
 
-  it("renders empty Lark document comment replies in English when Lark locale is English", async () => {
+  it("explains unsupported document comment side effects instead of returning an empty reply", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-comment-empty-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
     const commentClient = fakeCommentClient();
@@ -4388,7 +4436,7 @@ describe("lark service", () => {
         fileToken: "doc_token",
         fileType: "docx",
         commentId: "comment_1",
-        text: "(empty reply)",
+        text: expect.stringContaining("Document comments cannot execute chat delivery or scheduled-task tools"),
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -5505,6 +5553,40 @@ describe("lark service", () => {
     }
   });
 
+  it("cleans up transient Lark attachment downloads after the turn finishes", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-attachment-cleanup-"));
+    const downloadedPath = path.join(stateDir, "workspace", ".lark-files", "om_cleanup", "input", "report.txt");
+    let engineSawDownloadedFile = false;
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => Buffer.from("report body")),
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: { files: string[] }) => {
+        engineSawDownloadedFile = (await readFile(input.files[0]!, "utf8")) === "report body";
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_cleanup",
+          content: "read this",
+          resources: [{ type: "file", fileKey: "file_1", fileName: "report.txt" }],
+        }),
+      });
+
+      expect(engineSawDownloadedFile).toBe(true);
+      await expect(readFile(downloadedPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("records Lark turns in the shared timeline", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-timeline-"));
     const channel = fakeChannel();
@@ -5812,6 +5894,7 @@ describe("lark service", () => {
 
       expect(created.url).toBe("https://example.feishu.cn/docx/doc_1");
       expect(args).not.toContain("--api-version");
+      expect(args.slice(args.indexOf("--as"), args.indexOf("--as") + 2)).toEqual(["--as", "bot"]);
       expect(args).toContain("--title");
       expect(args).toContain("Spec");
       expect(args).toContain("--markdown");
@@ -5823,6 +5906,42 @@ describe("lark service", () => {
       await expect(readFile(contentLogPath, "utf8")).resolves.toBe("正文");
     } finally {
       process.env.PATH = originalPath;
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows explicitly opting Lark document creation back into local user identity", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-as-user-"));
+    const binDir = path.join(tempDir, "bin");
+    const fakeCliPath = path.join(binDir, "lark-cli");
+    const logPath = path.join(tempDir, "args.json");
+    const originalPath = process.env.PATH;
+    const originalAs = process.env.CCTB_LARK_DOC_CREATE_AS;
+    await mkdir(binDir, { recursive: true });
+    await writeFile(fakeCliPath, [
+      "#!/usr/bin/env node",
+      "const { writeFileSync } = require('node:fs');",
+      `writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
+      "console.log(JSON.stringify({ ok: true, data: { document: { title: 'Spec', url: 'https://example.feishu.cn/docx/doc_1', document_id: 'doc_1' } } }));",
+    ].join("\n"), { mode: 0o755 });
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    process.env.CCTB_LARK_DOC_CREATE_AS = "user";
+
+    try {
+      await createLarkDocumentWithCli({
+        title: "Spec",
+        content: "正文",
+        docFormat: "markdown",
+      });
+      const args = JSON.parse(await readFile(logPath, "utf8")) as string[];
+      expect(args.slice(args.indexOf("--as"), args.indexOf("--as") + 2)).toEqual(["--as", "user"]);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalAs === undefined) {
+        delete process.env.CCTB_LARK_DOC_CREATE_AS;
+      } else {
+        process.env.CCTB_LARK_DOC_CREATE_AS = originalAs;
+      }
       await rm(tempDir, { recursive: true, force: true });
     }
   });

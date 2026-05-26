@@ -612,6 +612,38 @@ describe("runCli", () => {
     }
   });
 
+  it("redacts JSON-style Lark provisioning errors in doctor output", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const inspectApp = vi.fn(async () => {
+      throw new Error('failed with "client_secret":"json-secret" access_token: token-secret Authorization: Bearer bearer-secret');
+    });
+
+    try {
+      const handled = await runCli(["lark", "doctor"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "super-secret",
+          CCTB_LARK_STATE_DIR: path.join(tempDir, "lark-state"),
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkInspectApp: inspectApp,
+      });
+
+      const output = messages.join("\n");
+      expect(handled).toBe(true);
+      expect(output).not.toContain("json-secret");
+      expect(output).not.toContain("token-secret");
+      expect(output).not.toContain("bearer-secret");
+      expect(output).toContain('"client_secret":"[redacted]"');
+      expect(output).toContain("access_token: [redacted]");
+      expect(output).toContain("Authorization: Bearer [redacted]");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("warns in Lark doctor when the service lock is stale", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
@@ -716,7 +748,7 @@ describe("runCli", () => {
         "123": "lark:oc_auto",
       }));
 
-      const handled = await runCli(["lark", "send", "--message", "hello", "--file", filePath], {
+      const handled = await runCli(["lark", "send", "--chat", "oc_auto", "--message", "hello", "--file", filePath], {
         env: {
           USERPROFILE: tempDir,
           LARK_APP_ID: "cli_a",
@@ -750,6 +782,36 @@ describe("runCli", () => {
         undefined,
       );
       expect(messages).toEqual(["Sent to Lark chat oc_auto."]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("requires an explicit Lark chat target instead of guessing from saved chats", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-send-explicit-"));
+    const stateDir = path.join(tempDir, "lark-state");
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "lark-chat-id-map.json"), JSON.stringify({
+        "123": "lark:oc_only_seen_chat",
+      }));
+
+      await expect(runCli(["lark", "send", "--message", "hello"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "send-secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        larkSendDeps: {
+          createChannel: vi.fn(() => ({
+            send: vi.fn(),
+            stream: vi.fn(),
+            downloadResource: vi.fn(),
+          }) as never),
+        },
+      })).rejects.toThrow("lark send requires --chat <oc_xxx>");
     } finally {
       await removeTempRoot(tempDir);
     }
@@ -1825,7 +1887,7 @@ describe("runCli", () => {
       expect(messages[0]).not.toContain("session <list|show|inspect|reset>");
       expect(messages[0]).toContain("task inspect [--instance <name>] <upload-id>");
       expect(messages[0]).toContain("task clear [--instance <name>] <upload-id>");
-      expect(messages[0]).toContain("lark send [--chat <oc_xxx>] [--reply-to <message-id>] [--thread]");
+      expect(messages[0]).toContain("lark send --chat <oc_xxx> [--reply-to <message-id>] [--thread]");
       expect(messages[0]).toContain("[--stdin]");
     } finally {
       await removeTempRoot(tempDir);

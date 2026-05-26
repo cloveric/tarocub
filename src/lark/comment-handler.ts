@@ -5,12 +5,13 @@ import type { CommentEvent } from "@larksuiteoapi/node-sdk";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
-import { stripCronAddTags } from "../telegram/cron-tags.js";
-import { stripDeliveryTags } from "../telegram/delivery-tags.js";
+import { extractCronAddTagMatches, stripCronAddTags } from "../telegram/cron-tags.js";
+import { extractDeliveryTagMatches, stripDeliveryTags } from "../telegram/delivery-tags.js";
 import type { Locale } from "../telegram/message-renderer.js";
-import { stripTelegramToolTags } from "../telegram/tool-tags.js";
+import { extractTelegramToolTagMatches, parseTelegramToolTagPayload, stripTelegramToolTags } from "../telegram/tool-tags.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import type { LarkCommentContext, LarkCommentFileType } from "./comment-client.js";
+import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { safeSegment } from "./files.js";
 import { assertStableLarkIdMappings } from "./id-map.js";
@@ -152,7 +153,11 @@ export async function handleLarkComment(input: {
         instructions: larkAgentInstructions(),
         onEngineEvent: handleEngineEvent,
       });
-      const cleaned = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(result.text))).trim() || renderLarkEmptyCommentReply(locale);
+      const cleaned = await renderLarkCommentReplyFromEngineText({
+        rawText: result.text,
+        runtime: input.runtime,
+        locale,
+      });
       await input.runtime.commentClient!.createReply({
         fileToken: input.event.fileToken,
         fileType,
@@ -290,6 +295,72 @@ function renderLarkMissingLatestCommentLine(locale: Locale): string {
     : "用户在云文档评论中 @ 了你，请根据上下文回复。";
 }
 
+async function renderLarkCommentReplyFromEngineText(input: {
+  rawText: string;
+  runtime: LarkServiceRuntime;
+  locale: Locale;
+}): Promise<string> {
+  const toolMatches = extractTelegramToolTagMatches(input.rawText);
+  const cronMatches = extractCronAddTagMatches(input.rawText);
+  const deliveryMatches = extractDeliveryTagMatches(input.rawText);
+  const cleaned = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(input.rawText))).trim();
+  const additions: string[] = [];
+  let unsupportedSideEffect = cronMatches.length > 0 || deliveryMatches.length > 0;
+
+  for (const match of toolMatches) {
+    try {
+      const parsed = parseTelegramToolTagPayload(match.payload);
+      if (parsed.name === "lark.doc.create" || parsed.name === "lark.doc") {
+        const docInput = parseLarkDocumentCreateInput(payloadObject(parsed.payload));
+        const created = await input.runtime.createDocument(docInput);
+        additions.push(renderLarkCommentDocumentCreated(docInput.title, created.title, created.url ?? created.documentId, input.locale));
+        continue;
+      }
+      unsupportedSideEffect = true;
+    } catch (error) {
+      additions.push(renderLarkCommentToolError(error, input.locale));
+    }
+  }
+
+  if (unsupportedSideEffect) {
+    additions.push(renderLarkUnsupportedCommentToolNotice(input.locale));
+  }
+
+  return [cleaned, ...additions].filter(Boolean).join("\n\n") || renderLarkEmptyCommentReply(input.locale);
+}
+
+function renderLarkCommentDocumentCreated(
+  requestedTitle: string | undefined,
+  createdTitle: string | undefined,
+  location: string | undefined,
+  locale: Locale,
+): string {
+  const label = createdTitle ?? requestedTitle ?? "飞书文档";
+  const target = location ?? "(created)";
+  return locale === "en"
+    ? `Created ${label}:\n${target}`
+    : `已创建 ${label}：\n${target}`;
+}
+
+function renderLarkUnsupportedCommentToolNotice(locale: Locale): string {
+  return locale === "en"
+    ? "Document comments cannot execute chat delivery or scheduled-task tools. Ask in a Lark chat/thread if you need files, cards, media, or reminders."
+    : "云文档评论里不能执行聊天投递或定时任务工具。需要发文件、卡片、媒体或提醒时，请在 Lark 聊天/线程里操作。";
+}
+
+function renderLarkCommentToolError(error: unknown, locale: Locale): string {
+  const detail = redactLarkErrorDetail(error);
+  return locale === "en"
+    ? `Comment tool was not executed: ${detail}`
+    : `评论工具未执行：${detail}`;
+}
+
 function renderLarkEmptyCommentReply(locale: Locale): string {
   return locale === "en" ? "(empty reply)" : "（空回复）";
+}
+
+function payloadObject(payload: unknown): Record<string, unknown> | null {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
 }

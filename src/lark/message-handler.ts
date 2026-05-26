@@ -29,6 +29,7 @@ import {
 } from "./locale.js";
 import {
   boundLarkArchiveSummary,
+  cleanupLarkMessageArtifacts,
   downloadLarkAttachments,
   prepareLarkFileWorkflow,
   renderLarkArchiveContinueCard,
@@ -535,6 +536,7 @@ async function runNormalizedLarkMessage(
     if (abortController) {
       input.runtime.activeRuns.delete(normalized.conversationKey);
     }
+    await cleanupLarkMessageArtifacts(input.stateDir, normalized.messageId).catch(() => undefined);
   }
 }
 

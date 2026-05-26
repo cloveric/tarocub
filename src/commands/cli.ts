@@ -74,6 +74,7 @@ import {
   provisionLarkApp,
   type LarkProvisioningResult,
 } from "../lark/provisioning.js";
+import { redactLarkSensitiveText } from "../lark/redaction.js";
 
 const execFile = promisify(execFileCallback);
 const LEGACY_LARK_SERVICE_TMUX_SESSION = "cctb-lark-service";
@@ -727,7 +728,7 @@ function redactLarkDoctorError(error: unknown, env: LarkRuntimeEnv): string {
   for (const value of [env.LARK_APP_SECRET, env.LARK_APP_ID].filter((item): item is string => Boolean(item))) {
     detail = detail.split(value).join("[redacted]");
   }
-  return detail.replace(/(Bearer|app_secret=)\s*[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]");
+  return redactLarkSensitiveText(detail);
 }
 
 function resolveLarkServiceLogPath(stateDir: string): string {
@@ -1093,10 +1094,10 @@ interface ParsedLarkSendArgs {
 }
 
 const LARK_SEND_HELP_TEXT = [
-  "Usage: lark send [--chat <oc_xxx>] [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin] [text]",
+  "Usage: lark send --chat <oc_xxx> [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin] [text]",
   "",
   "Options:",
-  "  --chat, --chat-id <oc_xxx>       Target Lark chat id. If omitted, exactly one saved Lark chat must exist.",
+  "  --chat, --chat-id <oc_xxx>       Target Lark chat id. Required; the CLI will not guess from saved chats.",
   "  --reply-to <message-id>          Reply to a specific Lark message.",
   "  --thread                         Keep the reply inside the replied message thread; requires --reply-to.",
   "  --message, -m <text>             Send text/markdown.",
@@ -1191,36 +1192,8 @@ async function resolveLarkSendChatId(stateDir: string, explicitChatId?: string):
   if (explicitChatId) {
     return explicitChatId;
   }
-
-  const fs = await import("node:fs/promises");
-  const mapPath = path.join(stateDir, "lark-chat-id-map.json");
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(await fs.readFile(mapPath, "utf8")) as Record<string, unknown>;
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("No Lark chat has been seen yet; pass --chat <oc_xxx>.");
-    }
-    throw error;
-  }
-
-  const targets = Object.values(parsed)
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => larkChatIdFromStoredConversation(value))
-    .filter((value): value is string => Boolean(value));
-  const uniqueTargets = [...new Set(targets)];
-  if (uniqueTargets.length === 0) {
-    throw new Error("No Lark chat has been seen yet; pass --chat <oc_xxx>.");
-  }
-  if (uniqueTargets.length > 1) {
-    throw new Error("Multiple Lark chats found; pass --chat <oc_xxx>.");
-  }
-  return uniqueTargets[0]!;
-}
-
-function larkChatIdFromStoredConversation(value: string): string | null {
-  const match = value.match(/^lark:([^:]+)(?::[^:]+)?$/);
-  return match?.[1] ?? null;
+  void stateDir;
+  throw new Error("lark send requires --chat <oc_xxx>; refusing to infer a target chat from saved Lark state.");
 }
 
 async function runLarkSendCommand(
@@ -2430,7 +2403,7 @@ Commands:
   lark permissions [--missing]                Print copyable Feishu/Lark tenant permission JSON
   lark service <start|stop|restart|status|logs|doctor>
                                               Manage the Feishu/Lark service lifecycle
-  lark send [--chat <oc_xxx>] [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin]
+  lark send --chat <oc_xxx> [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin]
                                               Send files/text to a Lark chat using saved app credentials
   lark access <pair|policy|allow|revoke|multi|status>
                                               Manage Feishu/Lark access control in the Lark state dir
@@ -2467,12 +2440,47 @@ async function listConfiguredInstanceNames(env: InstanceTokenEnv): Promise<strin
   const channelsDir = resolveChannelsDirFromEnv(env);
   try {
     const dirents = await fs.readdir(channelsDir, { withFileTypes: true });
-    return dirents
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) => entry.name)
-      .sort();
+    const names: string[] = [];
+    for (const entry of dirents) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) {
+        continue;
+      }
+      if (await isLarkOnlyStateDir(path.join(channelsDir, entry.name))) {
+        continue;
+      }
+      names.push(entry.name);
+    }
+    return names.sort();
   } catch {
     return [];
+  }
+}
+
+async function isLarkOnlyStateDir(stateDir: string): Promise<boolean> {
+  const envText = await readOptionalFile(path.join(stateDir, ".env"));
+  if (envText && /\bTELEGRAM_BOT_TOKEN\s*=/.test(envText)) {
+    return false;
+  }
+  return Boolean(await readOptionalFile(path.join(stateDir, "lark.env"))) ||
+    await isDirectory(path.join(stateDir, "lark-service")) ||
+    Boolean(await readOptionalFile(path.join(stateDir, "lark-chat-id-map.json"))) ||
+    Boolean(await readOptionalFile(path.join(stateDir, "lark-user-id-map.json")));
+}
+
+async function readOptionalFile(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+async function isDirectory(dirPath: string): Promise<boolean> {
+  try {
+    await readdir(dirPath);
+    return true;
+  } catch {
+    return false;
   }
 }
 
