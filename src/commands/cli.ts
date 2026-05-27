@@ -2094,6 +2094,7 @@ async function runLarkSetupCommand(
 
   loadedEnv = await loadLarkRuntimeEnv(env);
   let authSummary = "auth: skipped";
+  const authNextSteps: string[] = [];
   if (!options.skipAuth) {
     try {
       const context = await prepareLarkCliBridgeContext(env);
@@ -2106,9 +2107,14 @@ async function runLarkSetupCommand(
       authSummary = "auth: ok";
     } catch (error) {
       authSummary = `auth: attention needed (${redactLarkSensitiveText(renderCommandError(error))})`;
+      authNextSteps.push(
+        `auth next: ${RECOMMENDED_LARK_USER_AUTH_START_COMMAND}`,
+        "auth finish: node dist/src/index.js lark auth finish <device-code>",
+      );
     }
   }
   summary.push(authSummary);
+  summary.push(...authNextSteps);
 
   const doctor = await formatLarkDoctor(loadedEnv, deps.inspectApp ?? inspectLarkAppProvisioning);
   summary.push(hasActionableLarkDoctorProblem(doctor) ? "doctor: attention needed" : "doctor: ok");
@@ -2120,6 +2126,8 @@ async function runLarkSetupCommand(
   ].join("\n"));
   return true;
 }
+
+const RECOMMENDED_LARK_USER_AUTH_START_COMMAND = 'node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"';
 
 function hasActionableLarkDoctorProblem(doctor: string): boolean {
   return doctor

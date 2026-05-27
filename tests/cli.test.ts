@@ -1348,6 +1348,69 @@ describe("runCli", () => {
     }
   });
 
+  it("prints the recommended Lark OAuth command when setup finds missing user identity", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-setup-auth-missing-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async (input: { args: string[] }) => {
+      if (input.args.join(" ") === "auth status --verify") {
+        throw new Error("User identity: missing");
+      }
+      return { stdout: "ok\n", stderr: "" };
+    });
+    const inspectApp = vi.fn(async () => ({
+      grantedScopes: ["im:message:send_as_bot"],
+      missingScopes: [],
+      unauthorizedScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+      applied: false,
+      patchedSubscriptions: false,
+    }));
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "setup", "--skip-wizard", "--identity", "bot-only", "--skip-provision"], {
+        env: {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+        larkInspectApp: inspectApp,
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      const output = messages.join("\n");
+      expect(output).toContain("auth: attention needed");
+      expect(output).toContain("node dist/src/index.js lark auth start --recommend --domain docs,drive");
+      expect(output).toContain("sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read");
+      expect(output).toContain("node dist/src/index.js lark auth finish <device-code>");
+      expect(output).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("finishes Lark OAuth by polling the device code in the foreground", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-auth-finish-"));
     const stateDir = path.join(tempDir, "lark-state");

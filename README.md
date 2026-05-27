@@ -234,11 +234,11 @@ lark send --chat oc_xxx --message "hello"
 
 ## Current Release
 
+- **v4.6.69** — makes Lark setup more self-healing: when user OAuth is missing, setup now prints the recommended Docs/Drive/Sheets auth command, and the docs clarify that `user-default` no longer force-rebinds existing lark-cli sessions.
 - **v4.6.68** — deepens Lark-native reliability: safe running reactions, native @name resolution, card-to-text fallback, one-shot `lark setup`, clearer permission repair, and safer lark-cli binding that will not wipe user OAuth.
 - **v4.6.67** — closes a Lark runtime secret-boundary gap: runtime `lark-cli` child processes now get `LARK_CHANNEL=1` without inheriting `LARK_APP_SECRET`.
 - **v4.6.66** — documents and surfaces the `lark-cli >= 1.0.41` floor for current document creation flags.
 - **v4.6.65** — completes the Lark-native CLI layer for Docs, `/newgroup`, Sheets workflows, wizard/provisioning, and OAuth guidance.
-- **v4.6.64** — makes reminder tool failures user-safe and prevents accidental reminder tags when the user did not ask to schedule anything.
 
 See [GitHub Releases](https://github.com/cloveric/cc-telegram-bridge/releases) for the full changelog.
 
