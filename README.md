@@ -229,6 +229,7 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
+- **v4.6.67** — closes a Lark runtime secret-boundary gap: `lark-cli` child processes launched from document and `/newgroup` workflows now get `LARK_CHANNEL=1` without inheriting `LARK_APP_SECRET`, keeping the runtime path aligned with the bridge secret-provider model.
 - **v4.6.66** — documents and surfaces the `lark-cli >= 1.0.41` requirement for the new Lark document flags, so wizard and doctor guide users to upgrade before Docs/Sheets-native workflows fail on older machines.
 - **v4.6.65** — completes the Lark-native CLI layer: `lark-channel` now carries safe bridge credentials into Docs, `/newgroup`, and Sheets workflows; wizard/provisioning covers document auto-grant plus spreadsheet scopes; user OAuth guidance is built into setup; and Lark agent instructions prefer `lark-cli sheets` for real spreadsheet create/read/write/append/export instead of treating sheets as plain docs.
 - **v4.6.64** — makes reminder tool failures user-safe: invalid `cron.add` natural-language times such as `at:"午后"` now render clear localized guidance instead of raw validator text, legacy `[cron-add:...]` failures no longer keep misleading "scheduled" prose, and Telegram/Lark agent instructions only permit reminder tool tags when the user explicitly asks to schedule one.
