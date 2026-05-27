@@ -5,7 +5,7 @@
 > This is the long-form reference that used to live on the GitHub landing page. The shorter README keeps the repo homepage readable; this file keeps the full operational detail.
 
 <p align="center">
-  <img src="../assets/github-banner.png" alt="CC Telegram Bridge" width="100%" />
+  <img src="../assets/github-banner.png" alt="CC Agent Bridge for Telegram and Feishu/Lark" width="100%" />
 </p>
 
 <p align="center">

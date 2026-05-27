@@ -51,41 +51,41 @@
     <text x="315" y="124" fill="#67E8F9" font-family="'SF Mono', 'Cascadia Code', Consolas, monospace" font-size="13" font-weight="600" letter-spacing="1.5">NATIVE CLI</text>
 
     <rect x="474" y="100" width="210" height="36" rx="18" fill="rgba(249,115,22,0.1)" stroke="rgba(249,115,22,0.2)" stroke-width="1"/>
-    <text x="493" y="124" fill="#FDBA74" font-family="'SF Mono', 'Cascadia Code', Consolas, monospace" font-size="13" font-weight="600" letter-spacing="1.5">CODEX + CLAUDE</text>
+    <text x="510" y="124" fill="#FDBA74" font-family="'SF Mono', 'Cascadia Code', Consolas, monospace" font-size="13" font-weight="600" letter-spacing="1.5">3 ENGINES</text>
 
     <!-- Title -->
-    <text x="80" y="200" fill="#F1F5F9" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="52" font-weight="800" letter-spacing="-1.5">CC Telegram</text>
+    <text x="80" y="200" fill="#F1F5F9" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="52" font-weight="800" letter-spacing="-1.5">CC Agent</text>
     <text x="80" y="268" fill="#F1F5F9" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="52" font-weight="800" letter-spacing="-1.5">Bridge</text>
 
     <!-- Accent line -->
     <rect x="80" y="288" width="120" height="3" rx="1.5" fill="url(#accentGrad)"/>
 
     <!-- Subtitle -->
-    <text x="80" y="330" fill="#94A3B8" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="400">The real Codex and Claude Code CLI on Telegram.</text>
-    <text x="80" y="358" fill="#94A3B8" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="400">Multi-bot, multi-engine, fully isolated.</text>
+    <text x="80" y="330" fill="#94A3B8" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="400">Real Codex, Claude Code, and Antigravity CLIs.</text>
+    <text x="80" y="358" fill="#94A3B8" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="400">Operated from Telegram and Feishu/Lark.</text>
 
     <!-- Feature pills row 1 -->
     <g>
       <rect x="80" y="396" width="130" height="30" rx="15" fill="rgba(34,211,238,0.1)" stroke="rgba(34,211,238,0.2)" stroke-width="1"/>
-      <text x="99" y="416" fill="#67E8F9" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">agent.md</text>
+      <text x="105" y="416" fill="#67E8F9" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Telegram</text>
 
       <rect x="222" y="396" width="150" height="30" rx="15" fill="rgba(130,140,248,0.1)" stroke="rgba(130,140,248,0.2)" stroke-width="1"/>
-      <text x="240" y="416" fill="#A5B4FC" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Streaming</text>
+      <text x="246" y="416" fill="#A5B4FC" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Feishu / Lark</text>
 
       <rect x="384" y="396" width="160" height="30" rx="15" fill="rgba(192,132,252,0.1)" stroke="rgba(192,132,252,0.2)" stroke-width="1"/>
-      <text x="402" y="416" fill="#D8B4FE" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Access Control</text>
+      <text x="414" y="416" fill="#D8B4FE" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Session Resume</text>
     </g>
 
     <!-- Feature pills row 2 -->
     <g>
       <rect x="80" y="436" width="130" height="30" rx="15" fill="rgba(34,197,94,0.1)" stroke="rgba(34,197,94,0.2)" stroke-width="1"/>
-      <text x="98" y="456" fill="#86EFAC" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Budget Cap</text>
+      <text x="115" y="456" fill="#86EFAC" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">ASR</text>
 
       <rect x="222" y="436" width="150" height="30" rx="15" fill="rgba(251,191,36,0.1)" stroke="rgba(251,191,36,0.2)" stroke-width="1"/>
-      <text x="240" y="456" fill="#FDE68A" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Backup / i18n</text>
+      <text x="249" y="456" fill="#FDE68A" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Agent Bus</text>
 
       <rect x="384" y="436" width="160" height="30" rx="15" fill="rgba(248,113,113,0.1)" stroke="rgba(248,113,113,0.2)" stroke-width="1"/>
-      <text x="402" y="456" fill="#FCA5A5" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Session Resume</text>
+      <text x="430" y="456" fill="#FCA5A5" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="600">Mini Bus</text>
     </g>
 
     <!-- Tech stack -->
@@ -97,13 +97,13 @@
       <rect x="288" y="490" width="80" height="26" rx="6" fill="rgba(255,255,255,0.05)"/>
       <text x="302" y="508" fill="#64748B" font-family="'SF Mono', Consolas, monospace" font-size="11" font-weight="500">Vitest</text>
       <rect x="378" y="490" width="160" height="26" rx="6" fill="rgba(255,255,255,0.05)"/>
-      <text x="392" y="508" fill="#64748B" font-family="'SF Mono', Consolas, monospace" font-size="11" font-weight="500">Win / Mac / Linux</text>
+      <text x="392" y="508" fill="#64748B" font-family="'SF Mono', Consolas, monospace" font-size="11" font-weight="500">Docs / Sheets</text>
     </g>
   </g>
 
   <!-- Right side: Two bot instance cards stacked -->
   <g>
-    <!-- Card 1: "work" bot (Codex) -->
+    <!-- Card 1: Telegram surface -->
     <rect x="700" y="108" width="500" height="200" rx="16" fill="rgba(15,20,35,0.85)" stroke="rgba(148,163,184,0.1)" stroke-width="1"/>
     <rect x="700" y="108" width="500" height="200" rx="16" fill="url(#cardGlow1)"/>
 
@@ -111,25 +111,25 @@
     <circle cx="726" cy="132" r="5" fill="#EF4444" fill-opacity="0.8"/>
     <circle cx="744" cy="132" r="5" fill="#F59E0B" fill-opacity="0.8"/>
     <circle cx="762" cy="132" r="5" fill="#22C55E" fill-opacity="0.8"/>
-    <rect x="790" y="122" width="80" height="20" rx="10" fill="rgba(130,140,248,0.15)"/>
-    <text x="806" y="136" fill="#A5B4FC" font-family="'SF Mono', Consolas, monospace" font-size="11" font-weight="600">work</text>
+    <rect x="790" y="122" width="120" height="20" rx="10" fill="rgba(34,211,238,0.15)"/>
+    <text x="806" y="136" fill="#67E8F9" font-family="'SF Mono', Consolas, monospace" font-size="11" font-weight="600">Telegram</text>
 
     <!-- Card 1 content -->
     <text x="726" y="170" fill="#6366F1" font-family="'SF Mono', Consolas, monospace" font-size="12" font-weight="600">$</text>
     <text x="740" y="170" fill="#CBD5E1" font-family="'SF Mono', Consolas, monospace" font-size="12"> telegram service start --instance work</text>
     <text x="726" y="194" fill="#34D399" font-family="'SF Mono', Consolas, monospace" font-size="12">&#x2713;</text>
-    <text x="740" y="194" fill="#94A3B8" font-family="'SF Mono', Consolas, monospace" font-size="12"> Running | engine: codex | app-server</text>
+    <text x="740" y="194" fill="#94A3B8" font-family="'SF Mono', Consolas, monospace" font-size="12"> Running | Codex | voice + files + cron</text>
 
-    <text x="726" y="222" fill="#64748B" font-family="'SF Mono', Consolas, monospace" font-size="11">  agent.md:</text>
-    <text x="840" y="222" fill="#A5B4FC" font-family="'SF Mono', Consolas, monospace" font-size="11">"Senior code reviewer. Focus on</text>
-    <text x="840" y="238" fill="#A5B4FC" font-family="'SF Mono', Consolas, monospace" font-size="11"> correctness and security."</text>
+    <text x="726" y="222" fill="#64748B" font-family="'SF Mono', Consolas, monospace" font-size="11">  chat:</text>
+    <text x="840" y="222" fill="#A5B4FC" font-family="'SF Mono', Consolas, monospace" font-size="11">/resume thread &lt;id&gt;</text>
+    <text x="840" y="238" fill="#A5B4FC" font-family="'SF Mono', Consolas, monospace" font-size="11">send.file + send.image + ASR</text>
 
     <rect x="726" y="260" width="160" height="24" rx="8" fill="rgba(34,211,238,0.08)"/>
-    <text x="740" y="276" fill="#67E8F9" font-family="'SF Mono', Consolas, monospace" font-size="11">Budget: $10.00 cap</text>
+    <text x="740" y="276" fill="#67E8F9" font-family="'SF Mono', Consolas, monospace" font-size="11">Agent Bus / Mini Bus</text>
     <rect x="900" y="260" width="190" height="24" rx="8" fill="rgba(34,197,94,0.08)"/>
-    <text x="914" y="276" fill="#86EFAC" font-family="'SF Mono', Consolas, monospace" font-size="11">Sessions: resume enabled</text>
+    <text x="914" y="276" fill="#86EFAC" font-family="'SF Mono', Consolas, monospace" font-size="11">Timeline + audit logs</text>
 
-    <!-- Card 2: "assistant" bot (Claude) -->
+    <!-- Card 2: Feishu/Lark surface -->
     <rect x="700" y="332" width="500" height="200" rx="16" fill="rgba(15,20,35,0.85)" stroke="rgba(148,163,184,0.1)" stroke-width="1"/>
     <rect x="700" y="332" width="500" height="200" rx="16" fill="url(#cardGlow2)"/>
 
@@ -137,23 +137,23 @@
     <circle cx="726" cy="356" r="5" fill="#EF4444" fill-opacity="0.8"/>
     <circle cx="744" cy="356" r="5" fill="#F59E0B" fill-opacity="0.8"/>
     <circle cx="762" cy="356" r="5" fill="#22C55E" fill-opacity="0.8"/>
-    <rect x="790" y="346" width="110" height="20" rx="10" fill="rgba(192,132,252,0.15)"/>
-    <text x="806" y="360" fill="#D8B4FE" font-family="'SF Mono', Consolas, monospace" font-size="11" font-weight="600">assistant</text>
+    <rect x="790" y="346" width="130" height="20" rx="10" fill="rgba(192,132,252,0.15)"/>
+    <text x="806" y="360" fill="#D8B4FE" font-family="'SF Mono', Consolas, monospace" font-size="11" font-weight="600">Feishu / Lark</text>
 
     <!-- Card 2 content -->
     <text x="726" y="394" fill="#6366F1" font-family="'SF Mono', Consolas, monospace" font-size="12" font-weight="600">$</text>
-    <text x="740" y="394" fill="#CBD5E1" font-family="'SF Mono', Consolas, monospace" font-size="12"> telegram service start --instance assistant</text>
+    <text x="740" y="394" fill="#CBD5E1" font-family="'SF Mono', Consolas, monospace" font-size="12"> lark service start</text>
     <text x="726" y="418" fill="#34D399" font-family="'SF Mono', Consolas, monospace" font-size="12">&#x2713;</text>
-    <text x="740" y="418" fill="#94A3B8" font-family="'SF Mono', Consolas, monospace" font-size="12"> Running | engine: claude | stream</text>
+    <text x="740" y="418" fill="#94A3B8" font-family="'SF Mono', Consolas, monospace" font-size="12"> Running | cards | Docs comments | Sheets</text>
 
-    <text x="726" y="446" fill="#64748B" font-family="'SF Mono', Consolas, monospace" font-size="11">  agent.md:</text>
-    <text x="840" y="446" fill="#D8B4FE" font-family="'SF Mono', Consolas, monospace" font-size="11">"Friendly assistant. Reply in</text>
-    <text x="840" y="462" fill="#D8B4FE" font-family="'SF Mono', Consolas, monospace" font-size="11"> Chinese. Keep answers concise."</text>
+    <text x="726" y="446" fill="#64748B" font-family="'SF Mono', Consolas, monospace" font-size="11">  card:</text>
+    <text x="840" y="446" fill="#D8B4FE" font-family="'SF Mono', Consolas, monospace" font-size="11">lark.choice + approvals</text>
+    <text x="840" y="462" fill="#D8B4FE" font-family="'SF Mono', Consolas, monospace" font-size="11">/newgroup + comment @bot</text>
 
     <rect x="726" y="484" width="160" height="24" rx="8" fill="rgba(34,211,238,0.08)"/>
-    <text x="740" y="500" fill="#67E8F9" font-family="'SF Mono', Consolas, monospace" font-size="11">Locale: zh | YOLO</text>
+    <text x="740" y="500" fill="#67E8F9" font-family="'SF Mono', Consolas, monospace" font-size="11">lark-cli native</text>
     <rect x="900" y="484" width="190" height="24" rx="8" fill="rgba(34,197,94,0.08)"/>
-    <text x="914" y="500" fill="#86EFAC" font-family="'SF Mono', Consolas, monospace" font-size="11">CLAUDE.md + workspace/</text>
+    <text x="914" y="500" fill="#86EFAC" font-family="'SF Mono', Consolas, monospace" font-size="11">secret-provider safe</text>
   </g>
 
   <!-- Bottom border accent -->
