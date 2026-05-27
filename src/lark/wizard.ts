@@ -105,6 +105,8 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
     logger.log("lark-cli bound to bridge credentials through the lark-channel source.");
   } catch (error) {
     logger.log(`lark-cli init skipped: ${error instanceof Error ? error.message : String(error)}`);
+    logger.log("Full Lark-native functionality requires lark-cli; basic chat can still run, but docs/newgroup/Drive-style actions need the CLI.");
+    logger.log("Install/preflight: node dist/src/index.js lark cli preflight --install --identity bot-only");
     logger.log("Run: node dist/src/index.js lark cli bind --identity bot-only");
   }
   logger.log("Run: node dist/src/index.js lark doctor");

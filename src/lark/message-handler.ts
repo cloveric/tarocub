@@ -70,7 +70,8 @@ export async function handleLarkMessage(input: {
   if (!baseNormalized) {
     return false;
   }
-  const normalized = await enrichLarkReplyContext(input.channel, baseNormalized);
+  const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, input.message);
+  const normalized = await enrichLarkReplyContext(input.channel, expandedNormalized);
   await appendLarkTimelineEvent(input.stateDir, normalized, {
     type: "input.received",
     outcome: "accepted",
@@ -567,6 +568,29 @@ async function enrichLarkReplyContext(
   }
 }
 
+async function enrichLarkMergedForwardContext(
+  channel: LarkChannelLike,
+  normalized: LarkNormalizedBridgeMessage,
+  message: LarkIncomingMessage,
+): Promise<LarkNormalizedBridgeMessage> {
+  if (message.rawContentType !== "merge_forward") {
+    return normalized;
+  }
+  try {
+    const fetched = await fetchLarkMessage(channel, message.messageId);
+    const expanded = fetched ? summarizeLarkMergedForward(fetched) : "";
+    if (!expanded) {
+      return normalized;
+    }
+    return {
+      ...normalized,
+      text: replaceOrAppendLarkForwardedMessages(normalized.text, expanded),
+    };
+  } catch {
+    return normalized;
+  }
+}
+
 async function fetchLarkMessage(channel: LarkChannelLike, messageId: string): Promise<LarkFetchedMessage | null> {
   if (channel.fetchMessage) {
     return await channel.fetchMessage(messageId);
@@ -598,11 +622,22 @@ async function fetchLarkMessage(channel: LarkChannelLike, messageId: string): Pr
 
 function normalizeFetchedLarkMessage(value: unknown, fallbackMessageId: string): LarkFetchedMessage | null {
   const data = isRecord(value) ? value.data : undefined;
-  const item = isRecord(data) && Array.isArray(data.items) ? data.items[0] : undefined;
-  if (!isRecord(item)) {
+  const items = isRecord(data) && Array.isArray(data.items) ? data.items.filter(isRecord) : [];
+  const item = items[0];
+  if (!item) {
     return null;
   }
+  const parent = normalizeFetchedLarkMessageItem(item, fallbackMessageId);
+  const children = items
+    .slice(1)
+    .filter((child) => child.upper_message_id === undefined || child.upper_message_id === parent.messageId)
+    .map((child) => normalizeFetchedLarkMessageItem(child, fallbackMessageId));
+  return children.length > 0 ? { ...parent, children } : parent;
+}
+
+function normalizeFetchedLarkMessageItem(item: Record<string, unknown>, fallbackMessageId: string): LarkFetchedMessage {
   const body = isRecord(item.body) ? item.body : undefined;
+  const sender = isRecord(item.sender) ? item.sender : undefined;
   const messageId = typeof item.message_id === "string" ? item.message_id : fallbackMessageId;
   const messageType = typeof item.msg_type === "string"
     ? item.msg_type
@@ -610,7 +645,31 @@ function normalizeFetchedLarkMessage(value: unknown, fallbackMessageId: string):
   const content = typeof body?.content === "string"
     ? body.content
     : typeof item.content === "string" ? item.content : undefined;
-  return { messageId, ...(messageType ? { messageType } : {}), ...(content ? { content } : {}) };
+  const senderId = typeof sender?.id === "string"
+    ? sender.id
+    : typeof item.sender_id === "string" ? item.sender_id : undefined;
+  const senderName = typeof sender?.name === "string"
+    ? sender.name
+    : typeof item.sender_name === "string" ? item.sender_name : undefined;
+  const createTime = typeof item.create_time === "string"
+    ? item.create_time
+    : typeof item.createTime === "string" ? item.createTime : undefined;
+  return {
+    messageId,
+    ...(messageType ? { messageType } : {}),
+    ...(content ? { content } : {}),
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(createTime ? { createTime } : {}),
+  };
+}
+
+function replaceOrAppendLarkForwardedMessages(text: string, expanded: string): string {
+  const block = `<forwarded_lark_messages>\n${expanded}\n</forwarded_lark_messages>`;
+  if (/<forwarded_lark_messages>[\s\S]*?<\/forwarded_lark_messages>/.test(text)) {
+    return text.replace(/<forwarded_lark_messages>[\s\S]*?<\/forwarded_lark_messages>/, block);
+  }
+  return [text, block].filter(Boolean).join("\n\n");
 }
 
 function summarizeLarkFetchedMessage(message: LarkFetchedMessage): string {
@@ -634,6 +693,30 @@ function summarizeLarkFetchedMessage(message: LarkFetchedMessage): string {
     text = content;
   }
   return text.replace(/\s+\n/g, "\n").trim().slice(0, 2000);
+}
+
+function summarizeLarkMergedForward(message: LarkFetchedMessage): string {
+  const children = message.children ?? [];
+  if (children.length === 0) {
+    return "";
+  }
+  return children
+    .map((child, index) => {
+      const text = summarizeLarkFetchedMessage(child);
+      if (!text) {
+        return "";
+      }
+      const sender = child.senderName ?? child.senderId ?? "unknown";
+      return [
+        `message ${index + 1}:`,
+        `sender: ${sender}`,
+        ...(child.messageType ? [`type: ${child.messageType}`] : []),
+        text,
+      ].join("\n");
+    })
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(0, 8000);
 }
 
 function parseJsonObject(value: string): Record<string, unknown> | null {

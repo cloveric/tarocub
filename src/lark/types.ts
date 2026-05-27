@@ -65,6 +65,10 @@ export interface LarkFetchedMessage {
   messageId: string;
   messageType?: string;
   content?: string;
+  senderId?: string;
+  senderName?: string;
+  createTime?: string;
+  children?: LarkFetchedMessage[];
 }
 
 export interface LarkRuntimeChannelLike extends LarkChannelLike {

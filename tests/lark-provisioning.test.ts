@@ -5,6 +5,7 @@ import {
   REQUIRED_LARK_EVENTS,
   REQUIRED_LARK_SCOPES,
   formatLarkProvisioningResult,
+  formatLarkScopeImportJson,
   formatLarkTenantScopeImportJson,
   inspectLarkAppProvisioning,
   provisionLarkApp,
@@ -258,7 +259,7 @@ describe("provisionLarkApp", () => {
     expect(formatted).toContain("ordinary group messages may not reach the bot");
     expect(formatted).toContain("not part of the PersonalAgent QR wizard default");
     expect(formatted).toContain("add or bulk-import im:message.group_msg");
-    expect(formatted).toContain('Bulk import missing tenant scopes JSON: {"scopes":{"tenant":["im:message.group_msg"]}}');
+    expect(formatted).toContain('Bulk import missing scopes JSON: {"scopes":{"tenant":["im:message.group_msg"]}}');
     expect(formatted).toContain("node dist/src/index.js lark permissions --missing");
     expect(formatted).toContain("then rerun lark provision and lark doctor");
     expect(formatted).not.toContain("recreate the app with the QR wizard");
@@ -269,6 +270,45 @@ describe("provisionLarkApp", () => {
     expect(REQUIRED_LARK_SCOPES).toContain("im:message.group_at_msg.include_bot:readonly");
     expect(formatLarkTenantScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("\"im:message\"");
     expect(formatLarkTenantScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("im:message.group_at_msg.include_bot:readonly");
+  });
+
+  it("includes chat creation scopes for Lark /newgroup workflows", () => {
+    expect(REQUIRED_LARK_SCOPES).toContain("im:chat");
+    expect(REQUIRED_LARK_SCOPES).toContain("im:chat:create");
+    expect(REQUIRED_LARK_SCOPES).not.toContain("im:chat:create_by_user");
+    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain('"tenant":["im:chat","im:chat:create"');
+    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).not.toContain("im:chat:create_by_user");
+  });
+
+  it("explains that /newgroup needs the bot chat creation scopes", async () => {
+    const scopes = grantAllRequiredScopes()
+      .filter((scope) => scope.scope_name !== "im:chat");
+    const client = createProvisioningClientMock({
+      scopes,
+      apps: [
+        appProvisioning({
+          callbacks: [...REQUIRED_LARK_CALLBACKS],
+          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
+        }),
+      ],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result).join("\n");
+
+    expect(result.missingScopes).toEqual(["im:chat"]);
+    expect(formatted).toContain("Lark /newgroup requires im:chat and im:chat:create for bot-created project groups");
+    expect(formatted).toContain("cannot create fresh Lark project groups");
+    expect(formatted).toContain('Bulk import missing scopes JSON: {"scopes":{"tenant":["im:chat"]}}');
+    expect(formatted).toContain("Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open");
+    expect(formatted).toContain("Publish the app version");
+    expect(formatted).toContain("Rerun `node dist/src/index.js lark provision`");
+    expect(formatted).toContain("Smoke test `/newgroup CCTB smoke test`");
+  });
+
+  it("renders im:chat:create_by_user as a user-scope import instead of tenant-scope JSON", () => {
+    expect(formatLarkScopeImportJson(["im:chat:create_by_user"])).toBe('{"scopes":{"user":["im:chat:create_by_user"]}}');
+    expect(formatLarkTenantScopeImportJson(["im:chat:create_by_user"])).toBe('{"scopes":{"tenant":["im:chat:create_by_user"]}}');
   });
 });
 

@@ -41,6 +41,7 @@ import { sendLarkMarkdown } from "./delivery.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
 import { readRawLarkConfig, renderLarkCronRuntimeMissing, renderLarkUserAccessDenied, resolveLarkLocale } from "./locale.js";
 import type { LarkNormalizedBridgeMessage } from "./message-normalizer.js";
+import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
@@ -104,6 +105,12 @@ export async function handleLarkSimpleCommand(
   }
 
   if (await handleLarkSessionCommand(input, normalized, commandText, commandLocale)) {
+    return true;
+  }
+
+  const newGroupCommand = parseLarkNewGroupCommand(commandText);
+  if (newGroupCommand) {
+    await handleLarkNewGroupCommand(input, normalized, newGroupCommand, commandLocale);
     return true;
   }
 
@@ -451,6 +458,163 @@ function parseLarkYoloCommand(text: string): { action: string } | null {
   return match ? { action: (match[1] ?? "").trim().toLowerCase() } : null;
 }
 
+type LarkNewGroupCommand =
+  | { kind: "create"; mode: "group" | "topic"; name: string }
+  | { kind: "invalid"; reason: "missing_name" };
+
+function parseLarkNewGroupCommand(text: string): LarkNewGroupCommand | null {
+  const trimmed = text.trim();
+  const topicMatch = trimmed.match(/^\/newtopic(?:\s+([\s\S]+))?$/i);
+  if (topicMatch) {
+    const name = topicMatch[1]?.trim() ?? "";
+    return name ? { kind: "create", mode: "topic", name } : { kind: "invalid", reason: "missing_name" };
+  }
+
+  const groupMatch = trimmed.match(/^\/newgroup(?:\s+([\s\S]+))?$/i);
+  if (!groupMatch) return null;
+  const rest = groupMatch[1]?.trim() ?? "";
+  if (!rest) {
+    return { kind: "invalid", reason: "missing_name" };
+  }
+  const topicPrefix = rest.match(/^(?:topic|--topic)(?:\s+([\s\S]+))?$/i);
+  if (topicPrefix) {
+    const name = topicPrefix[1]?.trim() ?? "";
+    return name ? { kind: "create", mode: "topic", name } : { kind: "invalid", reason: "missing_name" };
+  }
+  return {
+    kind: "create",
+    mode: "group",
+    name: rest,
+  };
+}
+
+async function handleLarkNewGroupCommand(
+  input: LarkCommandInput,
+  normalized: LarkNormalizedBridgeMessage,
+  command: LarkNewGroupCommand,
+  locale: Locale,
+): Promise<void> {
+  if (command.kind === "invalid") {
+    await sendLarkCommandMarkdown(input, normalized, "/newgroup", renderLarkNewGroupUsage(locale));
+    return;
+  }
+
+  let created: Awaited<ReturnType<LarkServiceRuntime["createChat"]>>;
+  try {
+    created = await input.runtime.createChat({
+      name: command.name,
+      mode: command.mode,
+      operatorOpenId: normalized.senderId,
+    });
+  } catch (error) {
+    await sendLarkCommandMarkdown(input, normalized, "/newgroup", renderLarkNewGroupFailed(locale, error));
+    return;
+  }
+
+  let welcomeWarning: string | undefined;
+  try {
+    await input.channel.send(created.chatId, {
+      markdown: renderLarkNewGroupWelcome(command.name, command.mode, locale),
+    });
+  } catch (error) {
+    welcomeWarning = redactLarkErrorDetail(error);
+  }
+
+  await sendLarkCommandMarkdown(
+    input,
+    normalized,
+    "/newgroup",
+    renderLarkNewGroupCreated({
+      locale,
+      mode: command.mode,
+      name: created.name ?? command.name,
+      chatId: created.chatId,
+      shareLink: created.shareLink,
+      welcomeWarning,
+    }),
+  );
+}
+
+function renderLarkNewGroupUsage(locale: Locale): string {
+  return locale === "en"
+    ? [
+        "**Create a Lark chat**",
+        "",
+        "Usage:",
+        "- `/newgroup <name>`: create a normal group chat",
+        "- `/newgroup topic <name>` or `/newtopic <name>`: create a topic-style group",
+        "",
+        "The bridge will invite the requesting user when using bot identity.",
+      ].join("\n")
+    : [
+        "**创建飞书会话**",
+        "",
+        "用法：",
+        "- `/newgroup <名称>`：创建普通飞书群",
+        "- `/newgroup topic <名称>` 或 `/newtopic <名称>`：创建飞书话题群",
+        "",
+        "默认用 bot 身份创建，并把发起人拉进新群。",
+      ].join("\n");
+}
+
+function renderLarkNewGroupWelcome(name: string, mode: "group" | "topic", locale: Locale): string {
+  if (locale === "en") {
+    return [
+      `**${name}** is connected to cc-telegram-bridge.`,
+      "",
+      mode === "topic"
+        ? "Use each topic as an isolated session, or send `/status` to inspect this conversation."
+        : "Use replies/threads as isolated sessions, or send `/status` to inspect this conversation.",
+    ].join("\n");
+  }
+  return [
+    `**${name}** 这个${mode === "topic" ? "话题群" : "群"}已经接入 cc-telegram-bridge。`,
+    "",
+    mode === "topic"
+      ? "每个话题都可以作为独立 session 使用；发送 `/status` 可查看当前会话。"
+      : "可以用 thread/reply 形成独立 session；发送 `/status` 可查看当前会话。",
+  ].join("\n");
+}
+
+function renderLarkNewGroupCreated(input: {
+  locale: Locale;
+  mode: "group" | "topic";
+  name: string;
+  chatId: string;
+  shareLink?: string;
+  welcomeWarning?: string;
+}): string {
+  const kind = input.mode === "topic"
+    ? input.locale === "en" ? "topic chat" : "飞书话题群"
+    : input.locale === "en" ? "Lark group" : "飞书群";
+  const lines = input.locale === "en"
+    ? [
+        `Created ${kind}: ${input.name}`,
+        `Chat ID: ${input.chatId}`,
+      ]
+    : [
+        `已创建${kind}：${input.name}`,
+        `Chat ID：${input.chatId}`,
+      ];
+  if (input.shareLink) {
+    lines.push(input.locale === "en" ? `Link: ${input.shareLink}` : `链接：${input.shareLink}`);
+  }
+  if (input.welcomeWarning) {
+    lines.push("");
+    lines.push(input.locale === "en"
+      ? `Created, but the welcome message failed to send: ${input.welcomeWarning}`
+      : `已创建，但欢迎消息发送失败：${input.welcomeWarning}`);
+  }
+  return lines.join("\n");
+}
+
+function renderLarkNewGroupFailed(locale: Locale, error: unknown): string {
+  const detail = redactLarkErrorDetail(error);
+  return locale === "en"
+    ? `Failed to create Lark chat: ${detail}\n\nCheck that the app has im:chat / im:chat:create and rerun lark provision. If chat creation is configured with user identity, also add im:chat:create_by_user.`
+    : `创建飞书群失败：${detail}\n\n请检查应用是否已开通 im:chat / im:chat:create，并重新运行 lark provision。如果配置为用户身份建群，还需要 im:chat:create_by_user。`;
+}
+
 type LarkGoalCommand =
   | { kind: "status" }
   | { kind: "clear" }
@@ -530,6 +694,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "- `/resume` / `/resume <number>`: scan and select local Claude sessions; Antigravity scans recent conversations",
       "- `/resume thread <thread-id>`: bind a Codex thread",
       "- `/resume conversation <conversation-id>`: bind an Antigravity conversation explicitly",
+      "- `/newgroup <name>` / `/newgroup topic <name>`: create a new Lark group or topic chat for a fresh project/session space",
       "- `/cron ...`: manage Lark-side reminders and scheduled tasks",
       "- `/group [status|allow|deny|on|off|all|at]`: manage the current Lark group and mention requirement",
       "- `/board ...`: manage the durable Kanban board",
@@ -575,6 +740,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "- `/resume` / `/resume <编号>`：Claude 扫描并选择本地 session；Antigravity 扫描 recent conversation",
     "- `/resume thread <thread-id>`：绑定 Codex thread",
     "- `/resume conversation <conversation-id>`：显式绑定 Antigravity conversation",
+    "- `/newgroup <名称>` / `/newgroup topic <名称>`：创建新的飞书群/话题群，作为新的项目或 session 空间",
     "- `/cron ...`：管理飞书侧定时提醒和任务",
     "- `/group [status|allow|deny|on|off|all|at]`：管理当前飞书群授权和是否需要 @bot 才响应",
     "- `/board ...`：管理持久任务板",

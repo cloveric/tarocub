@@ -88,4 +88,61 @@ describe("runLarkWizard", () => {
       await removeTempRoot(tempDir);
     }
   });
+
+  it("prints lark-cli install guidance when wizard CLI binding cannot run", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-wizard-cli-missing-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const initLarkCli = vi.fn(async () => {
+      throw new Error("spawn lark-cli ENOENT");
+    });
+    const registerAppImpl = vi.fn(async (options: {
+      onQRCodeReady: (info: { url: string; expireIn: number }) => void;
+    }) => {
+      options.onQRCodeReady({ url: "https://open.feishu.cn/qr", expireIn: 600 });
+      return {
+        client_id: "cli_personal",
+        client_secret: "secret-personal",
+        user_info: {
+          open_id: "ou_operator",
+          tenant_brand: "feishu" as const,
+        },
+      };
+    });
+
+    try {
+      await runLarkWizard(
+        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, LARK_DOMAIN: "feishu" },
+        { log: (message) => messages.push(String(message ?? "")) },
+        {
+          registerAppImpl,
+          generateQRCode: () => undefined,
+          provisionApp: vi.fn(async () => ({
+            grantedScopes: [],
+            missingScopes: [],
+            unauthorizedScopes: [],
+            subscribedCallbacks: ["card.action.trigger"],
+            missingCallbacks: [],
+            subscribedEvents: ["im.message.receive_v1"],
+            missingEvents: [],
+            missingOptionalEvents: [],
+            canPatchSubscriptions: true,
+            subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+            applied: false,
+            patchedSubscriptions: false,
+          })),
+          initLarkCli,
+        },
+      );
+
+      const output = messages.join("\n");
+      expect(output).toContain("lark-cli init skipped: spawn lark-cli ENOENT");
+      expect(output).toContain("Full Lark-native functionality requires lark-cli");
+      expect(output).toContain("node dist/src/index.js lark cli preflight --install --identity bot-only");
+      expect(output).toContain("node dist/src/index.js lark cli bind --identity bot-only");
+      expect(output).not.toContain("secret-personal");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
 });

@@ -33,6 +33,8 @@ import type {
 
 export { createLarkDocumentWithCli } from "./document-client.js";
 export type { LarkDocumentCreateInput, LarkDocumentCreateResult } from "./document-client.js";
+export { createLarkChatWithCli } from "./chat-client.js";
+export type { LarkChatCreateInput, LarkChatCreateResult } from "./chat-client.js";
 export { buildLarkCronExecutor, sendLarkCronFailureNotification } from "./cron.js";
 export { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 export { handleLarkComment } from "./comment-handler.js";

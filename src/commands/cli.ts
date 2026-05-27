@@ -71,7 +71,8 @@ import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSettin
 import {
   REQUIRED_LARK_SCOPES,
   formatLarkProvisioningResult,
-  formatLarkTenantScopeImportJson,
+  formatLarkScopeImportJson,
+  formatLarkScopeImportNextSteps,
   inspectLarkAppProvisioning,
   provisionLarkApp,
   type LarkProvisioningResult,
@@ -1980,12 +1981,13 @@ async function runLarkCommand(
         ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
       });
       const lines = [
-        "Lark missing tenant scopes JSON",
+        "Lark missing scopes JSON",
         "Paste this into Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
         inspected.missingScopes.length > 0
-          ? formatLarkTenantScopeImportJson(inspected.missingScopes)
-          : "No missing required tenant scopes.",
+          ? formatLarkScopeImportJson(inspected.missingScopes)
+          : "No missing required scopes.",
       ];
+      lines.push(...formatLarkScopeImportNextSteps(inspected.missingScopes));
       if (inspected.unauthorizedScopes.length > 0) {
         lines.push(`Already configured but awaiting approval: ${inspected.unauthorizedScopes.join(", ")}`);
       }
@@ -1997,9 +1999,10 @@ async function runLarkCommand(
       throw new Error("Usage: lark permissions [--missing]");
     }
     logger.log([
-      "Lark required tenant scopes JSON",
+      "Lark required scopes JSON",
       "Paste this into Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
-      formatLarkTenantScopeImportJson(REQUIRED_LARK_SCOPES),
+      formatLarkScopeImportJson(REQUIRED_LARK_SCOPES),
+      ...formatLarkScopeImportNextSteps(REQUIRED_LARK_SCOPES),
     ].join("\n"));
     return true;
   }
@@ -2946,7 +2949,7 @@ Commands:
                                               Send files/text through the active turn side-channel or configured Telegram session
   lark <status|doctor|provision|permissions|wizard|run|service|send|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>
                                               Inspect, configure, or run the Feishu/Lark channel
-  lark permissions [--missing]                Print copyable Feishu/Lark tenant permission JSON
+  lark permissions [--missing]                Print copyable Feishu/Lark permission JSON
   lark service <start|stop|restart|status|logs|doctor>
                                               Manage the Feishu/Lark service lifecycle
   lark send --chat <oc_xxx> [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin]

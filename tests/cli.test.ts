@@ -1273,7 +1273,7 @@ describe("runCli", () => {
     }
   });
 
-  it("prints a copyable Lark tenant permission JSON without app credentials", async () => {
+  it("prints a copyable Lark permission JSON without app credentials", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
 
@@ -1288,10 +1288,13 @@ describe("runCli", () => {
 
       const output = messages.join("\n");
       expect(handled).toBe(true);
-      expect(output).toContain("Lark required tenant scopes JSON");
+      expect(output).toContain("Lark required scopes JSON");
       expect(output).toContain("Feishu/Lark Developer Console");
       expect(output).toContain("Permissions");
       expect(output).toContain("bulk import");
+      expect(output).toContain("Publish the app version");
+      expect(output).toContain("node dist/src/index.js lark provision");
+      expect(output).toContain("node dist/src/index.js lark doctor");
       expect(output).toContain('"im:message.group_msg"');
       expect(output).toContain('"cardkit:card:write"');
       expect(output).toContain('"docs:document.comment:create"');
@@ -1301,7 +1304,7 @@ describe("runCli", () => {
     }
   });
 
-  it("prints only currently missing Lark tenant permissions when requested", async () => {
+  it("prints only currently missing Lark permissions when requested", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
     const inspectApp = vi.fn(async () => ({
@@ -1337,8 +1340,12 @@ describe("runCli", () => {
         appId: "cli_a",
         appSecret: "super-secret",
       }));
-      expect(output).toContain("Lark missing tenant scopes JSON");
+      expect(output).toContain("Lark missing scopes JSON");
       expect(output).toContain('"im:message.group_msg"');
+      expect(output).toContain('"tenant":["im:message.group_msg"]');
+      expect(output).toContain("Publish the app version");
+      expect(output).toContain("node dist/src/index.js lark provision");
+      expect(output).toContain("node dist/src/index.js lark doctor");
       expect(output).not.toContain('"im:message:send_as_bot"');
       expect(output).not.toContain("super-secret");
       expect(output).toContain("Already configured but awaiting approval: docs:document.comment:create");

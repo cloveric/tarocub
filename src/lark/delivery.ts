@@ -396,9 +396,18 @@ async function executeLarkToolTag(input: {
     return true;
   }
 
-  if (input.name === "lark.choice" || input.name === "send.choice") {
+  if (
+    input.name === "lark.choice" ||
+    input.name === "send.choice" ||
+    input.name === "request_user_input" ||
+    input.name === "lark.request_user_input" ||
+    input.name === "lark.plan" ||
+    input.name === "plan.choice"
+  ) {
     const card = buildLarkToolCard(
-      normalizeLarkChoicePayload(payload, input.locale),
+      input.name === "request_user_input" || input.name === "lark.request_user_input"
+        ? normalizeLarkRequestUserInputPayload(payload, input.locale)
+        : normalizeLarkChoicePayload(payload, input.locale),
       input.conversationKey,
       input.bridgeChatType,
       input.replyInThread,
@@ -871,6 +880,49 @@ function normalizeLarkChoicePayload(payload: Record<string, unknown> | null, loc
     title,
     body: prompt,
     actions,
+  };
+}
+
+function normalizeLarkRequestUserInputPayload(payload: Record<string, unknown> | null, locale: Locale): Record<string, unknown> {
+  if (!payload) {
+    throw new Error("request_user_input requires an object payload");
+  }
+  const questions = Array.isArray(payload.questions)
+    ? payload.questions.filter((question): question is Record<string, unknown> => Boolean(question) && typeof question === "object" && !Array.isArray(question))
+    : [];
+  const question = questions[0];
+  if (!question) {
+    return normalizeLarkChoicePayload(payload, locale);
+  }
+  const questionId = stringValue(question.id);
+  const title = stringValue(question.header) ?? stringValue(payload.title) ?? defaultLarkToolCardTitle(locale);
+  const prompt = stringValue(question.question) ?? stringValue(payload.prompt) ?? "";
+  const rawOptions = Array.isArray(question.options) ? question.options : [];
+  const options = rawOptions
+    .map((option): Record<string, unknown> | null => {
+      if (typeof option === "string") {
+        return {
+          label: option,
+          value: questionId ? `${questionId}:${option}` : option,
+        };
+      }
+      if (!option || typeof option !== "object" || Array.isArray(option)) {
+        return null;
+      }
+      const entry = option as Record<string, unknown>;
+      const label = stringValue(entry.label) ?? stringValue(entry.text) ?? stringValue(entry.value) ?? defaultLarkToolCardActionLabel(locale);
+      const rawValue = stringValue(entry.value) ?? label;
+      return {
+        ...entry,
+        label,
+        value: questionId ? `${questionId}:${rawValue}` : rawValue,
+      };
+    })
+    .filter((option): option is Record<string, unknown> => option !== null);
+  return {
+    title,
+    body: prompt,
+    actions: options,
   };
 }
 
