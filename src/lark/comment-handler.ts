@@ -370,7 +370,7 @@ async function renderLarkCommentReplyFromEngineText(input: {
       if (parsed.name === "lark.doc.create" || parsed.name === "lark.doc") {
         const docInput = parseLarkDocumentCreateInput(payloadObject(parsed.payload));
         const created = await input.runtime.createDocument(docInput);
-        additions.push(renderLarkCommentDocumentCreated(docInput.title, created.title, created.url ?? created.documentId, input.locale));
+        additions.push(renderLarkCommentDocumentCreated(docInput.title, created.title, created.url ?? created.documentId, created.warning, input.locale));
         continue;
       }
       unsupportedSideEffect = true;
@@ -390,13 +390,19 @@ function renderLarkCommentDocumentCreated(
   requestedTitle: string | undefined,
   createdTitle: string | undefined,
   location: string | undefined,
+  warning: string | undefined,
   locale: Locale,
 ): string {
   const label = createdTitle ?? requestedTitle ?? "飞书文档";
   const target = location ?? "(created)";
+  const note = warning
+    ? locale === "en"
+      ? `\n\nNote: ${warning}`
+      : `\n\n提示：${warning}`
+    : "";
   return locale === "en"
-    ? `Created ${label}:\n${target}`
-    : `已创建 ${label}：\n${target}`;
+    ? `Created ${label}:\n${target}${note}`
+    : `已创建 ${label}：\n${target}${note}`;
 }
 
 function renderLarkUnsupportedCommentToolNotice(locale: Locale): string {

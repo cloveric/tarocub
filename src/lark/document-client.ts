@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { buildLarkCliChannelEnv } from "./cli-env.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -19,6 +20,7 @@ export interface LarkDocumentCreateResult {
   title?: string;
   url?: string;
   documentId?: string;
+  warning?: string;
 }
 
 export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput): Promise<LarkDocumentCreateResult> {
@@ -32,6 +34,8 @@ export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput):
   await writeFile(contentPath, input.content);
   const args = [
     "docs",
+    "--api-version",
+    "v2",
     "+create",
     "--as",
     input.as ?? resolveDefaultLarkDocumentActor(),
@@ -40,17 +44,23 @@ export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput):
     args.push("--title", input.title.trim());
   }
   args.push(
-    "--markdown",
+    "--content",
     `@${contentFileName}`,
+    "--doc-format",
+    "markdown",
   );
   if (input.parentToken) {
-    args.push("--folder-token", input.parentToken);
+    args.push("--parent-token", input.parentToken);
   }
   if (input.parentPosition) {
-    throw new Error("lark.doc.create parentPosition is not supported by the installed lark-cli; use parentToken/folder token instead");
+    args.push("--parent-position", input.parentPosition);
   }
   try {
-    const { stdout } = await execFile("lark-cli", args, { cwd: tempDir, maxBuffer: 10 * 1024 * 1024 });
+    const { stdout, stderr } = await execFile("lark-cli", args, {
+      cwd: tempDir,
+      env: buildLarkCliChannelEnv(),
+      maxBuffer: 10 * 1024 * 1024,
+    });
     const parsed = parseLarkCliJson(stdout) as {
       ok?: boolean;
       data?: {
@@ -61,6 +71,12 @@ export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput):
           documentId?: string;
         };
         url?: string;
+        permission_grant?: {
+          status?: string;
+          message?: string;
+          hint?: string;
+          required_scope?: string;
+        };
       };
       error?: {
         message?: string;
@@ -74,10 +90,32 @@ export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput):
       title: document?.title ?? input.title,
       url: document?.url ?? parsed.data?.url,
       documentId: document?.document_id ?? document?.documentId,
+      warning: renderLarkDocumentCreateWarning(parsed.data?.permission_grant, stderr),
     };
   } finally {
     await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
+}
+
+function renderLarkDocumentCreateWarning(
+  grant: {
+    status?: string;
+    message?: string;
+    hint?: string;
+    required_scope?: string;
+  } | undefined,
+  stderr: string,
+): string | undefined {
+  if (grant?.status && grant.status !== "success") {
+    return [
+      `permission_grant=${grant.status}`,
+      grant.required_scope ? `required_scope=${grant.required_scope}` : undefined,
+      grant.message,
+      grant.hint,
+    ].filter((line): line is string => Boolean(line?.trim())).join(" ");
+  }
+  const warning = stderr.split(/\r?\n/).map((line) => line.trim()).find((line) => /^Warning:/i.test(line));
+  return warning || undefined;
 }
 
 export function parseLarkDocumentCreateInput(payload: Record<string, unknown> | null): LarkDocumentCreateInput {

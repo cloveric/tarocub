@@ -428,9 +428,14 @@ async function executeLarkToolTag(input: {
     const created = await input.runtime.createDocument(docInput);
     const label = created.title ?? docInput.title ?? "飞书文档";
     const location = created.url ?? created.documentId ?? "(created)";
+    const warning = created.warning
+      ? input.locale === "en"
+        ? `\n\nNote: ${created.warning}`
+        : `\n\n提示：${created.warning}`
+      : "";
     await sendLarkMarkdown(input.channel, input.chatId, input.locale === "en"
-      ? `Created ${label}:\n${location}`
-      : `已创建 ${label}：\n${location}`, larkReplyOptions(input.replyTo, input.replyInThread));
+      ? `Created ${label}:\n${location}${warning}`
+      : `已创建 ${label}：\n${location}${warning}`, larkReplyOptions(input.replyTo, input.replyInThread));
     return true;
   }
   await input.channel.send(input.chatId, {

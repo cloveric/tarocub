@@ -18,9 +18,14 @@ export const REQUIRED_LARK_SCOPES = [
   "docx:document:create",
   "docx:document:readonly",
   "docx:document:write_only",
+  "docs:permission.member:create",
   "drive:drive.metadata:readonly",
   "docs:document.comment:read",
   "docs:document.comment:create",
+  "sheets:spreadsheet:create",
+  "sheets:spreadsheet:read",
+  "sheets:spreadsheet:write_only",
+  "sheets:spreadsheet.meta:read",
 ] as const;
 
 export const REQUIRED_LARK_USER_SCOPES = [
@@ -156,6 +161,20 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
     lines.push("Lark /newgroup requires im:chat and im:chat:create for bot-created project groups; without them, the bot may receive messages but cannot create fresh Lark project groups.");
     lines.push("If you set CCTB_LARK_CHAT_CREATE_AS=user, also add the user-scope im:chat:create_by_user.");
     lines.push("Add or bulk-import the missing chat-creation scopes in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
+  }
+  if (result.missingScopes.includes("docs:permission.member:create")) {
+    lines.push("Lark document creation needs docs:permission.member:create so lark-cli can auto-grant the created document back to the requester.");
+    lines.push("Without it, lark.doc.create may create the document but print a Permission denied auto-grant warning.");
+    lines.push("After the scope is granted, run lark auth start/finish if lark auth status says the lark-channel user identity is missing; app permission and user identity are both needed for auto-grant.");
+  }
+  if (
+    result.missingScopes.includes("sheets:spreadsheet:create") ||
+    result.missingScopes.includes("sheets:spreadsheet:read") ||
+    result.missingScopes.includes("sheets:spreadsheet:write_only") ||
+    result.missingScopes.includes("sheets:spreadsheet.meta:read")
+  ) {
+    lines.push("Lark Sheets workflows need spreadsheet create/read/write/meta scopes so agents can create, inspect, read, and update Feishu spreadsheets through lark-cli.");
+    lines.push("After the app scopes are granted, run `node dist/src/index.js lark auth start --scope \"sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read\"` and finish the device flow for user-backed Sheets actions.");
   }
   return lines;
 }

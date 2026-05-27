@@ -83,6 +83,10 @@ describe("runLarkWizard", () => {
       expect(messages.join("\n")).toContain("Operator open_id: ou_operator");
       expect(messages.join("\n")).toContain("Lark required scopes: ok");
       expect(messages.join("\n")).toContain("lark-cli bound to bridge credentials through the lark-channel source.");
+      expect(messages.join("\n")).toContain("For user-backed Docs/Drive/Sheets actions");
+      expect(messages.join("\n")).toContain("node dist/src/index.js lark cli identity user-default");
+      expect(messages.join("\n")).toContain("sheets:spreadsheet:create");
+      expect(messages.join("\n")).toContain("node dist/src/index.js lark auth status --verify");
       expect(messages.join("\n")).not.toContain("secret-personal");
     } finally {
       await removeTempRoot(tempDir);
@@ -140,6 +144,7 @@ describe("runLarkWizard", () => {
       expect(output).toContain("Full Lark-native functionality requires lark-cli");
       expect(output).toContain("node dist/src/index.js lark cli preflight --install --identity bot-only");
       expect(output).toContain("node dist/src/index.js lark cli bind --identity bot-only");
+      expect(output).toContain("After binding, switch to user-default");
       expect(output).not.toContain("secret-personal");
     } finally {
       await removeTempRoot(tempDir);

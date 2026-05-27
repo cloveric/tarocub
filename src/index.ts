@@ -37,6 +37,10 @@ function renderLifecycleError(error: unknown): string {
   return String(error);
 }
 
+function hasHelpFlag(args: string[]): boolean {
+  return args.some((arg) => arg === "--help" || arg === "-h");
+}
+
 async function main(): Promise<void> {
   let logLifecycleEvent: (input: Parameters<typeof appendServiceLifecycleEventSync>[1]) => void = () => {};
   let removeUncaughtExceptionMonitor: (() => void) | undefined;
@@ -49,7 +53,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (argv[0] === "lark" && argv[1] === "run") {
+    if (argv[0] === "lark" && argv[1] === "run" && !hasHelpFlag(argv.slice(2))) {
       const larkEnv = await loadLarkRuntimeEnv(process.env);
       const abortController = new AbortController();
       const shutdownSigterm = () => abortController.abort();

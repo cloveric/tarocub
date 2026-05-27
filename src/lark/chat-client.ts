@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
+import { buildLarkCliChannelEnv } from "./cli-env.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -42,7 +43,10 @@ export async function createLarkChatWithCli(input: LarkChatCreateInput): Promise
     args.push("--set-bot-manager");
   }
 
-  const { stdout } = await execFile("lark-cli", args, { maxBuffer: 10 * 1024 * 1024 });
+  const { stdout } = await execFile("lark-cli", args, {
+    env: buildLarkCliChannelEnv(),
+    maxBuffer: 10 * 1024 * 1024,
+  });
   const parsed = parseLarkCliJson(stdout) as {
     ok?: boolean;
     data?: {

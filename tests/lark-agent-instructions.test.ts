@@ -49,6 +49,11 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("`lark-cli` is required for full Lark-native functionality");
     expect(instructions).toContain("basic chat transport can still work without it");
     expect(instructions).toContain("For Feishu Docs/IM/Calendar/Drive operations, prefer local `lark-cli`");
+    expect(instructions).toContain("For Feishu Sheets spreadsheet URLs");
+    expect(instructions).toContain("prefer `lark-cli sheets` shortcuts");
+    expect(instructions).toContain("use `sheets +info` before editing");
+    expect(instructions).toContain("Do not treat spreadsheets as plain Docs");
+    expect(instructions).toContain("structured lark-cli Sheets value objects");
     expect(instructions).toContain("For Lark OAuth, only start authorization in private chats");
     expect(instructions).toContain("use `lark auth start` first");
     expect(instructions).toContain("never run OAuth login in the background");

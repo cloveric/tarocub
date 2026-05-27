@@ -280,6 +280,19 @@ describe("provisionLarkApp", () => {
     expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).not.toContain("im:chat:create_by_user");
   });
 
+  it("includes document permission scopes for lark.doc.create auto-grant", () => {
+    expect(REQUIRED_LARK_SCOPES).toContain("docs:permission.member:create");
+    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("docs:permission.member:create");
+  });
+
+  it("includes spreadsheet scopes for Lark Sheets workflows", () => {
+    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet:create");
+    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet:read");
+    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet:write_only");
+    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet.meta:read");
+    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("sheets:spreadsheet:create");
+  });
+
   it("explains that /newgroup needs the bot chat creation scopes", async () => {
     const scopes = grantAllRequiredScopes()
       .filter((scope) => scope.scope_name !== "im:chat");
@@ -304,6 +317,51 @@ describe("provisionLarkApp", () => {
     expect(formatted).toContain("Publish the app version");
     expect(formatted).toContain("Rerun `node dist/src/index.js lark provision`");
     expect(formatted).toContain("Smoke test `/newgroup CCTB smoke test`");
+  });
+
+  it("explains that lark.doc.create needs document collaborator grant permission", async () => {
+    const scopes = grantAllRequiredScopes()
+      .filter((scope) => scope.scope_name !== "docs:permission.member:create");
+    const client = createProvisioningClientMock({
+      scopes,
+      apps: [
+        appProvisioning({
+          callbacks: [...REQUIRED_LARK_CALLBACKS],
+          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
+        }),
+      ],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result).join("\n");
+
+    expect(result.missingScopes).toEqual(["docs:permission.member:create"]);
+    expect(formatted).toContain("Lark document creation needs docs:permission.member:create");
+    expect(formatted).toContain("auto-grant the created document back to the requester");
+    expect(formatted).toContain("Permission denied auto-grant warning");
+    expect(formatted).toContain("user identity is missing");
+  });
+
+  it("explains that Lark Sheets workflows need spreadsheet scopes and user OAuth", async () => {
+    const scopes = grantAllRequiredScopes()
+      .filter((scope) => scope.scope_name !== "sheets:spreadsheet:create");
+    const client = createProvisioningClientMock({
+      scopes,
+      apps: [
+        appProvisioning({
+          callbacks: [...REQUIRED_LARK_CALLBACKS],
+          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
+        }),
+      ],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result).join("\n");
+
+    expect(result.missingScopes).toEqual(["sheets:spreadsheet:create"]);
+    expect(formatted).toContain("Lark Sheets workflows need spreadsheet create/read/write/meta scopes");
+    expect(formatted).toContain("lark auth start --scope");
+    expect(formatted).toContain("sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read");
   });
 
   it("renders im:chat:create_by_user as a user-scope import instead of tenant-scope JSON", () => {

@@ -701,14 +701,14 @@ async function checkLarkCliDocsCreate(): Promise<string> {
   try {
     const { stdout, stderr } = await execFile(
       "lark-cli",
-      ["docs", "+create", "--help"],
+      ["docs", "--api-version", "v2", "+create", "--help"],
       { timeout: 3_000, maxBuffer: 1024 * 1024 },
     );
     const help = `${stdout}\n${stderr}`;
-    if (help.includes("--markdown") && help.includes("--title")) {
-      return "ok lark-cli docs +create: markdown create flags available";
+    if (help.includes("--content") && help.includes("--doc-format")) {
+      return "ok lark-cli docs +create: v2 XML/Markdown create flags available";
     }
-    return "warn lark-cli docs +create: installed CLI help did not expose --markdown/--title";
+    return "warn lark-cli docs +create: installed CLI help did not expose v2 --content/--doc-format";
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return `warn lark-cli docs +create: ${detail}`;
@@ -955,14 +955,17 @@ async function runLarkCliBridgeCommand(
   if (action === "identity") {
     const identityAction = parseLarkCliIdentityCommandArgs(args.slice(1));
     if (identityAction === "status") {
+      const context = await prepareLarkCliBridgeContext(env);
       const defaultAs = await runCommand({
         file: "lark-cli",
         args: ["config", "default-as"],
+        env: context.childEnv,
         timeoutMs: 30_000,
       });
       const strictMode = await runCommand({
         file: "lark-cli",
         args: ["config", "strict-mode"],
+        env: context.childEnv,
         timeoutMs: 30_000,
       });
       logger.log(redactLarkSensitiveText([
@@ -1078,18 +1081,20 @@ async function configureLarkCliIdentity(
   runCommand: LarkRunCommand,
   input: { identity: LarkCliBridgeIdentity },
 ): Promise<void> {
-  await bindLarkCliBridgeIdentity(env, runCommand, {
+  const context = await bindLarkCliBridgeIdentity(env, runCommand, {
     identity: input.identity,
     force: input.identity === "user-default",
   });
   await runCommand({
     file: "lark-cli",
     args: ["config", "default-as", input.identity === "user-default" ? "user" : "bot"],
+    env: context.childEnv,
     timeoutMs: 30_000,
   });
   await runCommand({
     file: "lark-cli",
     args: ["config", "strict-mode", input.identity === "user-default" ? "off" : "bot"],
+    env: context.childEnv,
     timeoutMs: 30_000,
   });
 }
@@ -1098,7 +1103,7 @@ async function bindLarkCliBridgeIdentity(
   env: LarkRuntimeEnv,
   runCommand: LarkRunCommand,
   input: { identity: LarkCliBridgeIdentity; force: boolean },
-): Promise<void> {
+): Promise<{ childEnv: NodeJS.ProcessEnv }> {
   const context = await prepareLarkCliBridgeContext(env);
   await runCommand({
     file: "lark-cli",
@@ -1116,6 +1121,7 @@ async function bindLarkCliBridgeIdentity(
     env: context.childEnv,
     timeoutMs: 30_000,
   });
+  return { childEnv: context.childEnv };
 }
 
 async function prepareLarkCliBridgeContext(env: LarkRuntimeEnv): Promise<{
@@ -1162,14 +1168,17 @@ function renderCommandError(error: unknown): string {
 
 async function runLarkAuthCommand(
   args: string[],
+  env: LarkRuntimeEnv,
   logger: CliLogger,
   runCommand: LarkRunCommand,
 ): Promise<boolean> {
   const action = args[0] ?? "";
+  const context = await prepareLarkCliBridgeContext(env);
   if (action === "start") {
     const result = await runCommand({
       file: "lark-cli",
       args: ["auth", "login", "--no-wait", "--json", ...normalizeLarkAuthStartArgs(args.slice(1))],
+      env: context.childEnv,
       timeoutMs: 30_000,
     });
     logger.log(formatLarkOAuthStartResult(result.stdout));
@@ -1182,6 +1191,7 @@ async function runLarkAuthCommand(
     await runCommand({
       file: "lark-cli",
       args: ["auth", "login", "--device-code", args[1]],
+      env: context.childEnv,
       timeoutMs: 11 * 60 * 1000,
     });
     logger.log("Lark OAuth finished.");
@@ -1194,6 +1204,7 @@ async function runLarkAuthCommand(
     const result = await runCommand({
       file: "lark-cli",
       args: ["auth", "status", ...(args[1] === "--verify" ? ["--verify"] : [])],
+      env: context.childEnv,
       timeoutMs: 30_000,
     });
     logger.log(redactLarkSensitiveText(`${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim()));
@@ -1833,7 +1844,7 @@ async function runLarkCommand(
   }
 
   if (subcommand === "auth") {
-    return await runLarkAuthCommand(args, logger, deps.runCommand ?? runLarkCommandProcess);
+    return await runLarkAuthCommand(args, env, logger, deps.runCommand ?? runLarkCommandProcess);
   }
 
   if (subcommand === "access") {
@@ -2016,6 +2027,10 @@ async function runLarkCommand(
   }
 
   if (subcommand === "run") {
+    if (hasHelpFlag(args)) {
+      logger.log("Usage: node dist/src/index.js lark run");
+      return true;
+    }
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 

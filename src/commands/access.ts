@@ -292,6 +292,34 @@ function replaceTelegramTransportSection(content: string): string {
   return `${before}${before ? "\n\n" : ""}${DEFAULT_INSTANCE_AGENT_INSTRUCTIONS}${after ? `\n\n${after}` : ""}`;
 }
 
+function isGeneratedTelegramTransportSection(sectionText: string): boolean {
+  const normalized = trimForCompare(sectionText);
+  return normalized === trimForCompare(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS) ||
+    LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS.some((block) => trimForCompare(block) === normalized);
+}
+
+export function stripGeneratedTelegramTransportSection(content: string): { content: string; removed: boolean } {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const section = findTelegramTransportSection(normalized);
+  if (!section || !isGeneratedTelegramTransportSection(section.text)) {
+    return { content, removed: false };
+  }
+
+  const before = normalized.slice(0, section.start).trimEnd();
+  let after = normalized.slice(section.end).trimStart();
+  for (const block of GENERATED_SCHEDULED_TASKS_BLOCKS) {
+    const normalizedBlock = block.replace(/\r\n/g, "\n");
+    if (after.startsWith(normalizedBlock)) {
+      after = after.slice(normalizedBlock.length).trimStart();
+      after = stripGeneratedScheduledTasksResidue(after);
+      break;
+    }
+  }
+
+  const stripped = `${before}${before && after ? "\n\n" : ""}${after}`.trim();
+  return { content: stripped ? `${stripped}\n` : "", removed: true };
+}
+
 function isErrorCode(error: unknown, code: string): boolean {
   return typeof error === "object" &&
     error !== null &&

@@ -2,7 +2,10 @@ import {
   createLarkChannel,
   type LarkChannelOptions,
 } from "@larksuiteoapi/node-sdk";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 
+import { stripGeneratedTelegramTransportSection } from "../commands/access.js";
 import { createBridgeDependencies } from "../service.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
@@ -71,6 +74,7 @@ export async function runLarkService(
     CODEX_TELEGRAM_STATE_DIR: config.stateDir,
     CODEX_TELEGRAM_INSTANCE: "lark",
   };
+  await removeGeneratedTelegramTransportFromLarkAgent(config.stateDir, logger);
   const { stateDir, bridge } = options.createBridge
     ? await options.createBridge(bridgeEnv, config)
     : await createDefaultLarkBridge(bridgeEnv);
@@ -361,6 +365,27 @@ function isLarkDebugEnabled(value: unknown): boolean {
     return false;
   }
   return /^(?:1|true|yes|on)$/i.test(value.trim());
+}
+
+async function removeGeneratedTelegramTransportFromLarkAgent(
+  stateDir: string,
+  logger: LarkServiceLogger,
+): Promise<void> {
+  const agentPath = path.join(stateDir, "agent.md");
+  try {
+    const original = await readFile(agentPath, "utf8");
+    const stripped = stripGeneratedTelegramTransportSection(original);
+    if (!stripped.removed) {
+      return;
+    }
+    await writeFile(agentPath, stripped.content, { encoding: "utf8", mode: 0o600 });
+    logger.log("Removed generated Telegram Transport instructions from Lark agent.md; Lark transport is injected per turn.");
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
 }
 
 async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir: string; bridge: LarkBridgeLike }> {

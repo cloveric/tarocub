@@ -5298,6 +5298,7 @@ describe("lark service", () => {
         title: "Spec",
         url: "https://example.feishu.cn/docx/doc_1",
         documentId: "doc_1",
+        warning: "permission_grant=skipped no current user",
       })),
     });
     const bridge = {
@@ -5325,7 +5326,7 @@ describe("lark service", () => {
         fileToken: "doc_token",
         fileType: "docx",
         commentId: "comment_1",
-        text: expect.stringContaining("https://example.feishu.cn/docx/doc_1"),
+        text: expect.stringContaining("permission_grant=skipped no current user"),
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -6822,6 +6823,7 @@ describe("lark service", () => {
         title: "Spec",
         url: "https://example.feishu.cn/docx/doc_1",
         documentId: "doc_1",
+        warning: "permission_grant=skipped no current user",
       })),
     });
     const channel = fakeChannel();
@@ -6859,7 +6861,7 @@ describe("lark service", () => {
       }));
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("https://example.feishu.cn/docx/doc_1") },
+        { markdown: expect.stringContaining("permission_grant=skipped no current user") },
         { replyTo: "om_1" },
       );
     } finally {
@@ -6970,11 +6972,12 @@ describe("lark service", () => {
       "const path = require('node:path');",
       "const { readFileSync, writeFileSync } = require('node:fs');",
       `writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
-      "const markdownIndex = process.argv.indexOf('--markdown');",
-      "const markdownArg = markdownIndex === -1 ? '' : process.argv[markdownIndex + 1];",
-      "if (markdownArg?.startsWith('@') && path.isAbsolute(markdownArg.slice(1))) { throw new Error('absolute @file path rejected'); }",
-      `if (markdownArg?.startsWith('@')) writeFileSync(${JSON.stringify(contentLogPath)}, readFileSync(path.resolve(process.cwd(), markdownArg.slice(1)), 'utf8'));`,
-      "console.log(JSON.stringify({ ok: true, data: { document: { title: 'Spec', url: 'https://example.feishu.cn/docx/doc_1', document_id: 'doc_1' } } }));",
+      "const contentIndex = process.argv.indexOf('--content');",
+      "const contentArg = contentIndex === -1 ? '' : process.argv[contentIndex + 1];",
+      "if (contentArg?.startsWith('@') && path.isAbsolute(contentArg.slice(1))) { throw new Error('absolute @file path rejected'); }",
+      `if (contentArg?.startsWith('@')) writeFileSync(${JSON.stringify(contentLogPath)}, readFileSync(path.resolve(process.cwd(), contentArg.slice(1)), 'utf8'));`,
+      "if (process.env.LARK_CHANNEL !== '1') { throw new Error('missing lark-channel env'); }",
+      "console.log(JSON.stringify({ ok: true, data: { document: { title: 'Spec', url: 'https://example.feishu.cn/docx/doc_1', document_id: 'doc_1' }, permission_grant: { status: 'skipped', message: 'no current user' } } }));",
     ].join("\n"), { mode: 0o755 });
     process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
 
@@ -6987,16 +6990,18 @@ describe("lark service", () => {
       const args = JSON.parse(await readFile(logPath, "utf8")) as string[];
 
       expect(created.url).toBe("https://example.feishu.cn/docx/doc_1");
-      expect(args).not.toContain("--api-version");
+      expect(created.warning).toContain("permission_grant=skipped");
+      expect(created.warning).toContain("no current user");
+      expect(args.slice(args.indexOf("--api-version"), args.indexOf("--api-version") + 2)).toEqual(["--api-version", "v2"]);
       expect(args.slice(args.indexOf("--as"), args.indexOf("--as") + 2)).toEqual(["--as", "bot"]);
       expect(args).toContain("--title");
       expect(args).toContain("Spec");
-      expect(args).toContain("--markdown");
-      expect(args).not.toContain("--content");
-      expect(args).not.toContain("--doc-format");
+      expect(args).not.toContain("--markdown");
+      expect(args).toContain("--content");
+      expect(args.slice(args.indexOf("--doc-format"), args.indexOf("--doc-format") + 2)).toEqual(["--doc-format", "markdown"]);
       expect(args).not.toContain("--format");
-      const markdownArg = args[args.indexOf("--markdown") + 1]!;
-      expect(markdownArg).toBe("@content.md");
+      const contentArg = args[args.indexOf("--content") + 1]!;
+      expect(contentArg).toBe("@content.md");
       await expect(readFile(contentLogPath, "utf8")).resolves.toBe("正文");
     } finally {
       process.env.PATH = originalPath;
@@ -7015,6 +7020,7 @@ describe("lark service", () => {
       "#!/usr/bin/env node",
       "const { writeFileSync } = require('node:fs');",
       `writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
+      "if (process.env.LARK_CHANNEL !== '1') { throw new Error('missing lark-channel env'); }",
       "console.log(JSON.stringify({ ok: true, data: { chat: { chat_id: 'oc_new', name: '新项目', share_link: 'https://example.feishu.cn/chat/oc_new' } } }));",
     ].join("\n"), { mode: 0o755 });
     process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
@@ -7150,13 +7156,34 @@ describe("lark service", () => {
     }
   });
 
-  it("rejects unsupported parentPosition before invoking lark-cli", async () => {
-    await expect(createLarkDocumentWithCli({
-      title: "Spec",
-      content: "正文",
-      docFormat: "markdown",
-      parentPosition: "after:doc_1",
-    })).rejects.toThrow("parentPosition is not supported");
+  it("passes parentPosition through to the installed lark-cli", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-parent-position-"));
+    const binDir = path.join(tempDir, "bin");
+    const logPath = path.join(tempDir, "args.json");
+    const fakeCliPath = path.join(binDir, "lark-cli");
+    const originalPath = process.env.PATH;
+    await mkdir(binDir, { recursive: true });
+    await writeFile(fakeCliPath, [
+      "#!/usr/bin/env node",
+      "const { writeFileSync } = require('node:fs');",
+      `writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
+      "console.log(JSON.stringify({ ok: true, data: { document: { url: 'https://example.feishu.cn/docx/doc_1', document_id: 'doc_1' } } }));",
+    ].join("\n"), { mode: 0o755 });
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+
+    try {
+      await createLarkDocumentWithCli({
+        title: "Spec",
+        content: "正文",
+        docFormat: "markdown",
+        parentPosition: "after:doc_1",
+      });
+      const args = JSON.parse(await readFile(logPath, "utf8")) as string[];
+      expect(args.slice(args.indexOf("--parent-position"), args.indexOf("--parent-position") + 2)).toEqual(["--parent-position", "after:doc_1"]);
+    } finally {
+      process.env.PATH = originalPath;
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("detects Lark numeric id collisions before access state can be shared", async () => {

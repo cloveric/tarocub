@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -6,10 +6,54 @@ import { describe, expect, it, vi } from "vitest";
 import { Domain } from "@larksuiteoapi/node-sdk";
 
 import { acquireInstanceLock } from "../src/state/instance-lock.js";
+import { DEFAULT_INSTANCE_AGENT_INSTRUCTIONS } from "../src/commands/access.js";
 import { createLarkServiceRuntime, resolveLarkServiceLockDir, runLarkService } from "../src/lark/service.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 
 describe("runLarkService", () => {
+  it("removes generated Telegram transport instructions from Lark agent.md before starting", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-agent-cleanup-"));
+    const abortController = new AbortController();
+    const logger = silentLogger();
+    const channel = {
+      on: vi.fn(() => () => undefined),
+      connect: vi.fn(async () => {
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await writeFile(path.join(stateDir, "agent.md"), DEFAULT_INSTANCE_AGENT_INSTRUCTIONS, "utf8");
+
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+          },
+        }),
+        signal: abortController.signal,
+        logger,
+      });
+
+      await expect(readFile(path.join(stateDir, "agent.md"), "utf8")).resolves.toBe("");
+      expect(JSON.stringify(logger.log.mock.calls)).toContain("Removed generated Telegram Transport instructions");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("starts a Lark channel without requiring Telegram credentials", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-"));
     const abortController = new AbortController();
