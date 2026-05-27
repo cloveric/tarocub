@@ -16,7 +16,8 @@
 
 <p align="center">
   <strong>Local control plane for Codex, Claude Code, and Antigravity.</strong><br>
-  Run real CLI agents on your own machine, operate them from Telegram on your phone or Feishu/Lark at work, and keep sessions, files, tasks, and audit logs durable.
+  Run real CLI agents on your own machine, operate them from Telegram on your phone or Feishu/Lark at work, and keep sessions, files, tasks, and audit logs durable.<br>
+  Resume local sessions anytime from your phone, whether you are at your desk, commuting, or walking the dog.
 </p>
 
 <p align="center">
