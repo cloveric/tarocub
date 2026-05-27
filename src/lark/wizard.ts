@@ -103,6 +103,7 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
       homeDir: env.HOME ?? env.USERPROFILE,
     });
     logger.log("lark-cli bound to bridge credentials through the lark-channel source.");
+    logger.log("Full Lark-native document creation requires lark-cli >= 1.0.41.");
     logger.log("For user-backed Docs/Drive/Sheets actions and bot-created document auto-grant, run these in a private terminal/chat:");
     logger.log("Run: node dist/src/index.js lark cli identity user-default");
     logger.log('Run: node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"');
@@ -110,8 +111,8 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
     logger.log("Run: node dist/src/index.js lark auth status --verify");
   } catch (error) {
     logger.log(`lark-cli init skipped: ${error instanceof Error ? error.message : String(error)}`);
-    logger.log("Full Lark-native functionality requires lark-cli; basic chat can still run, but docs/newgroup/Drive-style actions need the CLI.");
-    logger.log("Install/preflight: node dist/src/index.js lark cli preflight --install --identity bot-only");
+    logger.log("Full Lark-native functionality requires lark-cli >= 1.0.41; basic chat can still run, but docs/newgroup/Drive-style actions need the CLI.");
+    logger.log("Install/update/preflight: node dist/src/index.js lark cli preflight --install --identity bot-only");
     logger.log("Run: node dist/src/index.js lark cli bind --identity bot-only");
     logger.log("After binding, switch to user-default and run `lark auth start`/`lark auth finish` for Docs/Drive/Sheets user-backed actions.");
   }

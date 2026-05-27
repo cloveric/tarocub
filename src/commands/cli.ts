@@ -706,12 +706,12 @@ async function checkLarkCliDocsCreate(): Promise<string> {
     );
     const help = `${stdout}\n${stderr}`;
     if (help.includes("--content") && help.includes("--doc-format")) {
-      return "ok lark-cli docs +create: v2 XML/Markdown create flags available";
+      return "ok lark-cli docs +create: v2 XML/Markdown create flags available (requires lark-cli >= 1.0.41)";
     }
-    return "warn lark-cli docs +create: installed CLI help did not expose v2 --content/--doc-format";
+    return "warn lark-cli docs +create: installed CLI help did not expose v2 --content/--doc-format; upgrade lark-cli to >= 1.0.41";
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    return `warn lark-cli docs +create: ${detail}`;
+    return `warn lark-cli docs +create: ${detail}; upgrade lark-cli to >= 1.0.41 if this machine has an older CLI`;
   }
 }
 

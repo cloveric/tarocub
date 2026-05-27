@@ -83,6 +83,7 @@ describe("runLarkWizard", () => {
       expect(messages.join("\n")).toContain("Operator open_id: ou_operator");
       expect(messages.join("\n")).toContain("Lark required scopes: ok");
       expect(messages.join("\n")).toContain("lark-cli bound to bridge credentials through the lark-channel source.");
+      expect(messages.join("\n")).toContain("requires lark-cli >= 1.0.41");
       expect(messages.join("\n")).toContain("For user-backed Docs/Drive/Sheets actions");
       expect(messages.join("\n")).toContain("node dist/src/index.js lark cli identity user-default");
       expect(messages.join("\n")).toContain("sheets:spreadsheet:create");
@@ -141,7 +142,7 @@ describe("runLarkWizard", () => {
 
       const output = messages.join("\n");
       expect(output).toContain("lark-cli init skipped: spawn lark-cli ENOENT");
-      expect(output).toContain("Full Lark-native functionality requires lark-cli");
+      expect(output).toContain("Full Lark-native functionality requires lark-cli >= 1.0.41");
       expect(output).toContain("node dist/src/index.js lark cli preflight --install --identity bot-only");
       expect(output).toContain("node dist/src/index.js lark cli bind --identity bot-only");
       expect(output).toContain("After binding, switch to user-default");

@@ -171,7 +171,7 @@ Use `lark.choice` or `request_user_input` for ordinary “pick one option” wor
 
 For raw `lark.card` payloads, bridge decorates ordinary button elements with Card 2.0 `behaviors: [{type:"callback", value: ...}]` routing metadata when a conversation is available. If you already provide callback metadata, that explicit payload is preserved.
 
-`lark-cli` is required for the full Lark-native experience: Feishu Docs/IM/Calendar/Drive operations, `lark.doc.create`, `/newgroup`, and other local CLI-backed actions. It is not required for the bare long-connection transport, ordinary replies, access checks, stop/approval cards, `lark.choice`, or inbound media handling. In practice, treat `lark-cli` as a required installation step for production setups, with the SDK-only path kept as a degraded fallback. `/status` and `lark doctor` report whether the local CLI is visible to the service.
+`lark-cli` is required for the full Lark-native experience: Feishu Docs/IM/Calendar/Drive/Sheets operations, `lark.doc.create`, `/newgroup`, and other local CLI-backed actions. Use `lark-cli >= 1.0.41`; older versions do not expose the v2 document creation flags (`--api-version v2`, `--content`, `--doc-format`, `--parent-token`, `--parent-position`) that this bridge now calls. It is not required for the bare long-connection transport, ordinary replies, access checks, stop/approval cards, `lark.choice`, or inbound media handling. In practice, treat `lark-cli` as a required installation step for production setups, with the SDK-only path kept as a degraded fallback. `/status` and `lark doctor` report whether the local CLI is visible to the service.
 
 Bridge-managed `lark-cli` helpers:
 
@@ -229,6 +229,7 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
+- **v4.6.66** — documents and surfaces the `lark-cli >= 1.0.41` requirement for the new Lark document flags, so wizard and doctor guide users to upgrade before Docs/Sheets-native workflows fail on older machines.
 - **v4.6.65** — completes the Lark-native CLI layer: `lark-channel` now carries safe bridge credentials into Docs, `/newgroup`, and Sheets workflows; wizard/provisioning covers document auto-grant plus spreadsheet scopes; user OAuth guidance is built into setup; and Lark agent instructions prefer `lark-cli sheets` for real spreadsheet create/read/write/append/export instead of treating sheets as plain docs.
 - **v4.6.64** — makes reminder tool failures user-safe: invalid `cron.add` natural-language times such as `at:"午后"` now render clear localized guidance instead of raw validator text, legacy `[cron-add:...]` failures no longer keep misleading "scheduled" prose, and Telegram/Lark agent instructions only permit reminder tool tags when the user explicitly asks to schedule one.
 - **v4.6.63** — brings Lark project workflows to parity: `/newgroup` / `/newtopic` replace the ambiguous `/new chat`, bot/user chat creation invites the requester correctly, merged forwarded messages expand into child-message context, Plan Mode `request_user_input` renders as readable choice cards, and `lark-cli` is documented and surfaced as required for full Lark-native functionality.
