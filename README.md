@@ -38,9 +38,30 @@ It is built for people who already use CLI agents heavily and want:
 - Feishu/Lark-native operation with cards, Docs comments, Sheets, and group workflows;
 - durable state for sessions, cron jobs, file delivery, usage, timelines, audit logs, and multi-agent routing.
 
+The intended setup flow is agent-assisted: clone the repo, open it in Codex, Claude Code, or Antigravity, and ask the agent to configure the bridge for you. The CLI exists so your local agent can do the boring setup work instead of making you hand-edit every file.
+
 The old long README is preserved as [Full Reference](./docs/full-reference.md). This landing page is intentionally short.
 
 ## Quick Start
+
+### Recommended: ask your local agent to configure it
+
+Open this repository in Codex, Claude Code, or Antigravity and say:
+
+```text
+Read the README and configure cc-telegram-bridge for me.
+Use this Telegram bot token: <paste token>
+Enable YOLO mode for my personal bot instance.
+```
+
+For Lark, say:
+
+```text
+Read the README and configure the Feishu/Lark bot for me.
+Run the Lark wizard, check permissions, install/bind lark-cli, and tell me what I need to scan or approve.
+```
+
+That is the preferred path. Manual commands are still below for operators who want to see each step.
 
 ### Telegram
 
@@ -56,6 +77,8 @@ npm run dev -- telegram configure <telegram-bot-token>
 npm run dev -- telegram yolo on
 npm run dev -- telegram service start
 ```
+
+`telegram yolo on` is the recommended default for a personal, trusted bot instance. It lets Codex, Claude Code, and Antigravity keep moving without asking for approval on every turn. Use `telegram yolo unsafe` only for fully trusted local workspaces, and use `telegram yolo off` when you explicitly want approval prompts.
 
 Send any message to the bot. It will reply with a pairing code:
 
