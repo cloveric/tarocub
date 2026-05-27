@@ -21,6 +21,7 @@ import { larkOperatorRawId } from "./identity.js";
 import { resolveLarkLocale } from "./locale.js";
 import { handleLarkMessage } from "./message-handler.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
+import { resolveLarkReactionSettings } from "./reactions.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import {
@@ -69,6 +70,7 @@ export async function runLarkService(
   const logger = options.logger ?? console;
   const config = resolveLarkRuntimeConfig(env);
   const debugLogging = isLarkDebugEnabled(env.CCTB_LARK_DEBUG);
+  const reactionSettings = resolveLarkReactionSettings(env);
   const bridgeEnv = {
     ...env,
     CODEX_TELEGRAM_STATE_DIR: config.stateDir,
@@ -127,6 +129,7 @@ export async function runLarkService(
           stateDir,
           message,
           requireMentionInGroup: config.requireMentionInGroup,
+          reactionSettings,
         });
       } catch (error) {
         logLarkServiceError(logger, "Lark message handling failed", error);

@@ -18,9 +18,11 @@ import {
 import type { Locale } from "../telegram/message-renderer.js";
 import { executeCronAddTool } from "../tools/cron-add-tool.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
+import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { resolveLarkLocale } from "./locale.js";
+import { resolveLarkMentionsInText, shouldResolveLarkMentions } from "./mention-resolver.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
@@ -197,7 +199,13 @@ export async function sendLarkMarkdown(
   options: LarkSendOptions | undefined,
 ): Promise<void> {
   for (const chunk of chunkLarkMarkdown(markdown)) {
-    await channel.send(chatId, { markdown: chunk }, options);
+    const resolvedChunk = await resolveLarkMentionsInText({
+      enabled: shouldResolveLarkMentions(process.env),
+      channel,
+      chatId,
+      text: chunk,
+    });
+    await channel.send(chatId, { markdown: resolvedChunk }, options);
   }
 }
 
@@ -404,22 +412,37 @@ async function executeLarkToolTag(input: {
     input.name === "lark.plan" ||
     input.name === "plan.choice"
   ) {
+    const cardPayload = input.name === "request_user_input" || input.name === "lark.request_user_input"
+      ? normalizeLarkRequestUserInputPayload(payload, input.locale)
+      : normalizeLarkChoicePayload(payload, input.locale);
     const card = buildLarkToolCard(
-      input.name === "request_user_input" || input.name === "lark.request_user_input"
-        ? normalizeLarkRequestUserInputPayload(payload, input.locale)
-        : normalizeLarkChoicePayload(payload, input.locale),
+      cardPayload,
       input.conversationKey,
       input.bridgeChatType,
       input.replyInThread,
       input.locale,
     );
-    await input.channel.send(input.chatId, { card }, larkReplyOptions(input.replyTo, input.replyInThread));
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.chatId,
+      card,
+      fallbackText: renderLarkToolCardFallback(cardPayload, input.locale),
+      options: larkReplyOptions(input.replyTo, input.replyInThread),
+      locale: input.locale,
+    });
     return true;
   }
 
   if (input.name === "lark.card" || input.name === "send.card") {
     const card = buildLarkToolCard(payload, input.conversationKey, input.bridgeChatType, input.replyInThread, input.locale);
-    await input.channel.send(input.chatId, { card }, larkReplyOptions(input.replyTo, input.replyInThread));
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.chatId,
+      card,
+      fallbackText: renderLarkToolCardFallback(payload, input.locale),
+      options: larkReplyOptions(input.replyTo, input.replyInThread),
+      locale: input.locale,
+    });
     return true;
   }
 
@@ -777,6 +800,27 @@ function buildLarkToolCard(
       elements,
     },
   };
+}
+
+function renderLarkToolCardFallback(payload: Record<string, unknown> | null, locale: Locale): string {
+  if (!payload) {
+    return locale === "en" ? "Interactive card could not be displayed." : "交互卡片无法显示。";
+  }
+  const title = stringValue(payload.title) ?? defaultLarkToolCardTitle(locale);
+  const body = stringValue(payload.body) ?? "";
+  const actions = Array.isArray(payload.actions)
+    ? payload.actions.filter((action): action is Record<string, unknown> => Boolean(action) && typeof action === "object" && !Array.isArray(action))
+    : [];
+  const lines = [
+    `**${title}**`,
+    body,
+    ...actions.map((action, index) => {
+      const label = stringValue(action.label) ?? stringValue(action.title) ?? defaultLarkToolCardActionLabel(locale);
+      const description = stringValue(action.description) ?? stringValue(action.text) ?? "";
+      return `${optionMarker(index)}. ${label}${description && description !== label ? ` — ${description}` : ""}`;
+    }),
+  ].filter(Boolean);
+  return lines.join("\n");
 }
 
 function buildLarkOptionSection(input: {

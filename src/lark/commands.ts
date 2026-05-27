@@ -11,6 +11,7 @@ import {
   renderCodexModelSetting,
 } from "../codex/user-defaults.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
+import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
 import { FileWorkflowStore, type FileWorkflowStatus } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
@@ -35,6 +36,7 @@ import {
   handleLarkMiniBusCommand,
 } from "./bus.js";
 import type { LarkCliStatus } from "./cli.js";
+import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkResumeScanCard, renderLarkStatusCard } from "./command-cards.js";
 import { isLarkConfigCommand, renderLarkConfigCard } from "./config-card.js";
 import { sendLarkMarkdown } from "./delivery.js";
@@ -151,7 +153,9 @@ export async function handleLarkSimpleCommand(
 
   if (isStatusCommand(commandText)) {
     const markdown = await renderLarkStatusMessage(input.runtime, normalized, input.stateDir, commandLocale, input.requireMentionInGroup);
-    await input.channel.send(normalized.chatId, {
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: normalized.chatId,
       card: renderLarkStatusCard({
         markdown,
         locale: commandLocale,
@@ -161,7 +165,10 @@ export async function handleLarkSimpleCommand(
         bridgeChatId: normalized.bridgeAccessChatId,
         replyInThread: Boolean(normalized.threadId),
       }),
-    }, larkCommandReplyOptions(normalized));
+      fallbackText: markdown,
+      options: larkCommandReplyOptions(normalized),
+      locale: commandLocale,
+    });
     await appendLarkTimelineEvent(input.stateDir, normalized, {
       type: "command.handled",
       outcome: "success",
@@ -353,7 +360,9 @@ async function handleLarkSessionCommand(
     scanRecentSessions: input.runtime.sessionRuntime?.scanRecentSessions,
     scanRecentAntigravitySessions: input.runtime.sessionRuntime?.scanRecentAntigravitySessions,
     sendResumeScanResult: async ({ kind, visibleSessions }) => {
-      await input.channel.send(normalized.chatId, {
+      await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: normalized.chatId,
         card: renderLarkResumeScanCard({
           kind,
           sessions: visibleSessions,
@@ -362,9 +371,27 @@ async function handleLarkSessionCommand(
           bridgeChatType: normalized.bridgeChatType,
           replyInThread: Boolean(normalized.threadId),
         }),
-      }, larkCommandReplyOptions(normalized));
+        fallbackText: renderLarkResumeFallback(kind, visibleSessions, locale),
+        options: larkCommandReplyOptions(normalized),
+        locale,
+      });
     },
   });
+}
+
+function renderLarkResumeFallback(
+  kind: "claude" | "antigravity",
+  sessions: ScannedSession[],
+  locale: Locale,
+): string {
+  if (sessions.length === 0) {
+    return locale === "en" ? `No recent ${kind} sessions found.` : `未找到最近的 ${kind} session。`;
+  }
+  const title = locale === "en" ? `Recent ${kind} sessions` : `最近的 ${kind} session`;
+  return [
+    title,
+    ...sessions.slice(0, 10).map((session, index) => `${index + 1}. ${session.displayName} (${session.sessionId}) @ ${session.modifiedAt.toISOString()}`),
+  ].join("\n");
 }
 
 function toSessionTelegramMessage(

@@ -39,6 +39,51 @@ function createZipBuffer(files: Record<string, string>): Buffer {
 }
 
 describe("lark service", () => {
+  it("does not add reactions to ignored Lark group messages", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-reaction-ignored-"));
+    const channel = fakeChannel({
+      addReaction: vi.fn(async () => "reaction_1"),
+      removeReaction: vi.fn(async () => undefined),
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        reactionSettings: {
+          processingEmoji: "OnIt",
+          doneEmoji: "DONE",
+          failureEmoji: "Warning",
+        },
+        message: {
+          messageId: "om_ignored",
+          chatId: "oc_group",
+          chatType: "group",
+          senderId: "ou_user",
+          content: "ordinary group chatter",
+          rawContentType: "text",
+          resources: [],
+          mentions: [],
+          mentionAll: false,
+          mentionedBot: false,
+          createTime: Date.now(),
+        },
+      });
+
+      expect(handled).toBe(false);
+      expect(channel.addReaction).not.toHaveBeenCalled();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not run the engine for an unpaired Lark private chat", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-access-"));
     const channel = fakeChannel();
@@ -84,6 +129,51 @@ describe("lark service", () => {
         outcome: "denied",
         detail: "access denied",
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not add reactions before Lark access allows a message", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-reaction-denied-"));
+    const channel = fakeChannel({
+      addReaction: vi.fn(async () => "reaction_1"),
+      removeReaction: vi.fn(async () => undefined),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const, text: "使用配对码 ABC123 配对此私聊" })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        reactionSettings: {
+          processingEmoji: "OnIt",
+          doneEmoji: "DONE",
+          failureEmoji: "Warning",
+        },
+        message: {
+          messageId: "om_denied_reaction",
+          chatId: "oc_chat",
+          chatType: "p2p",
+          senderId: "ou_user",
+          content: "hello",
+          rawContentType: "text",
+          resources: [],
+          mentions: [],
+          mentionAll: false,
+          mentionedBot: false,
+          createTime: Date.now(),
+        },
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.addReaction).not.toHaveBeenCalled();
+      expect(channel.removeReaction).not.toHaveBeenCalled();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -8448,6 +8538,81 @@ describe("lark service", () => {
     }
   });
 
+  it("resolves Lark approval fallback commands by request id", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-approval-id-text-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const pendingOnce = requestLarkApproval({
+        channel,
+        runtime,
+        chatId: "oc_chat",
+        conversationKey: "lark:oc_chat",
+        bridgeChatType: "private",
+        replyTo: "om_request_once",
+        request: {
+          engine: "claude",
+          toolName: "Bash",
+          toolInput: { command: "npm test" },
+        } satisfies EngineApprovalRequest,
+      });
+      const onceRequestId = [...runtime.pendingApprovals.keys()][0]!;
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_approve_once",
+          content: `/approve ${onceRequestId}`,
+        }),
+      });
+
+      await expect(pendingOnce).resolves.toEqual({ behavior: "allow", scope: "once" });
+      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已允许一次。" }, { replyTo: "om_approve_once" });
+
+      const pendingSession = requestLarkApproval({
+        channel,
+        runtime,
+        chatId: "oc_chat",
+        conversationKey: "lark:oc_chat",
+        bridgeChatType: "private",
+        replyTo: "om_request_session",
+        request: {
+          engine: "claude",
+          toolName: "Bash",
+          toolInput: { command: "npm run build" },
+        } satisfies EngineApprovalRequest,
+      });
+      const sessionRequestId = [...runtime.pendingApprovals.keys()][0]!;
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_approve_session",
+          content: `/approve-session ${sessionRequestId}`,
+        }),
+      });
+
+      await expect(pendingSession).resolves.toEqual({ behavior: "allow", scope: "session" });
+      expect(runtime.pendingApprovals.size).toBe(0);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已允许本轮。" }, { replyTo: "om_approve_session" });
+    } finally {
+      runtime.pendingApprovals.clear();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("denies Lark approval requests from /deny text commands when cards are unavailable", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-approval-deny-text-"));
     const runtime = createLarkServiceRuntime();
@@ -8848,6 +9013,9 @@ function fakeCommentClient(overrides: Partial<{
 
 type FakeLarkChannel = ReturnType<typeof baseFakeChannel> & {
   fetchMessage?: ReturnType<typeof vi.fn>;
+  addReaction?: ReturnType<typeof vi.fn>;
+  removeReaction?: ReturnType<typeof vi.fn>;
+  removeReactionByEmoji?: ReturnType<typeof vi.fn>;
   rawClient?: unknown;
 };
 

@@ -19,6 +19,14 @@ export interface LarkRuntimeEnv {
   CCTB_LARK_STATE_DIR?: string;
   LARK_REQUIRE_MENTION_IN_GROUP?: string;
   CCTB_LARK_DEBUG?: string;
+  CCTB_LARK_REACTION_EMOJI?: string;
+  LARK_REACTION_EMOJI?: string;
+  CCTB_LARK_DONE_EMOJI?: string;
+  LARK_DONE_EMOJI?: string;
+  CCTB_LARK_FAILURE_EMOJI?: string;
+  LARK_FAILURE_EMOJI?: string;
+  CCTB_LARK_RESOLVE_MENTIONS?: string;
+  LARK_RESOLVE_MENTIONS?: string;
 }
 
 export interface LarkRuntimeConfig {

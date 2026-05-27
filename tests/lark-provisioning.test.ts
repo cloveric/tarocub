@@ -265,6 +265,25 @@ describe("provisionLarkApp", () => {
     expect(formatted).not.toContain("recreate the app with the QR wizard");
   });
 
+  it("explains that Lark running feedback reactions need reaction write scope", async () => {
+    const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message.reactions:write_only");
+    const client = createProvisioningClientMock({
+      scopes,
+      apps: [
+        appProvisioning({
+          callbacks: [...REQUIRED_LARK_CALLBACKS],
+          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
+        }),
+      ],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result).join("\n");
+
+    expect(result.missingScopes).toEqual(["im:message.reactions:write_only"]);
+    expect(formatted).toContain("Lark running feedback reactions require im:message.reactions:write_only");
+  });
+
   it("includes the bot-mention group scope for Lark agent-to-agent workflows", () => {
     expect(REQUIRED_LARK_SCOPES).toContain("im:message");
     expect(REQUIRED_LARK_SCOPES).toContain("im:message.group_at_msg.include_bot:readonly");
@@ -278,6 +297,35 @@ describe("provisionLarkApp", () => {
     expect(REQUIRED_LARK_SCOPES).not.toContain("im:chat:create_by_user");
     expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain('"tenant":["im:chat","im:chat:create"');
     expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).not.toContain("im:chat:create_by_user");
+  });
+
+  it("includes reaction write scope for Lark running feedback", () => {
+    expect(REQUIRED_LARK_SCOPES).toContain("im:message.reactions:write_only");
+    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("im:message.reactions:write_only");
+  });
+
+  it("does not describe /newgroup repair when only mention member-read scope is missing", async () => {
+    const scopes = grantAllRequiredScopes()
+      .filter((scope) => scope.scope_name !== "im:chat.members:read");
+    const client = createProvisioningClientMock({
+      scopes,
+      apps: [
+        appProvisioning({
+          callbacks: [...REQUIRED_LARK_CALLBACKS],
+          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
+        }),
+      ],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result).join("\n");
+
+    expect(result.missingScopes).toEqual(["im:chat.members:read"]);
+    expect(formatted).toContain("Lark @name mention resolution requires im:chat.members:read");
+    expect(formatted).toContain("Add or bulk-import im:chat.members:read");
+    expect(formatted).not.toContain("Lark /newgroup requires im:chat");
+    expect(formatted).not.toContain("Smoke test `/newgroup CCTB smoke test`");
+    expect(formatted).not.toContain("missing chat-creation scopes");
   });
 
   it("includes document permission scopes for lark.doc.create auto-grant", () => {

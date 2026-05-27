@@ -5,11 +5,13 @@ import { redactLarkSensitiveText } from "./redaction.js";
 export const REQUIRED_LARK_SCOPES = [
   "im:chat",
   "im:chat:create",
+  "im:chat.members:read",
   "im:message",
   "im:message.group_at_msg.include_bot:readonly",
   "im:message.group_at_msg:readonly",
   "im:message.group_msg",
   "im:message.p2p_msg:readonly",
+  "im:message.reactions:write_only",
   "im:message:readonly",
   "im:message:send_as_bot",
   "im:resource",
@@ -154,13 +156,18 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
     lines.push("Lark /group all requires im:message.group_msg; without it, ordinary group messages may not reach the bot.");
     lines.push("This scope is not part of the PersonalAgent QR wizard default; add or bulk-import im:message.group_msg in the Feishu/Lark app permissions UI, then rerun lark provision and lark doctor.");
   }
-  if (
-    result.missingScopes.includes("im:chat") ||
-    result.missingScopes.includes("im:chat:create")
-  ) {
+  if (result.missingScopes.includes("im:message.reactions:write_only")) {
+    lines.push("Lark running feedback reactions require im:message.reactions:write_only; without it, the bot still replies normally but cannot show processing/done/error reactions.");
+    lines.push("Add or bulk-import im:message.reactions:write_only in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
+  }
+  if (result.missingScopes.includes("im:chat") || result.missingScopes.includes("im:chat:create")) {
     lines.push("Lark /newgroup requires im:chat and im:chat:create for bot-created project groups; without them, the bot may receive messages but cannot create fresh Lark project groups.");
     lines.push("If you set CCTB_LARK_CHAT_CREATE_AS=user, also add the user-scope im:chat:create_by_user.");
     lines.push("Add or bulk-import the missing chat-creation scopes in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
+  }
+  if (result.missingScopes.includes("im:chat.members:read")) {
+    lines.push("Lark @name mention resolution requires im:chat.members:read so the bridge can map display names to native Feishu/Lark at tags.");
+    lines.push("Add or bulk-import im:chat.members:read in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
   }
   if (result.missingScopes.includes("docs:permission.member:create")) {
     lines.push("Lark document creation needs docs:permission.member:create so lark-cli can auto-grant the created document back to the requester.");
@@ -199,14 +206,17 @@ export function formatLarkScopeImportNextSteps(scopes: readonly string[]): strin
   if (scopes.length === 0) {
     return [];
   }
-  return [
+  const lines = [
     "Next permission steps:",
     "1. Open Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
     `2. Paste this JSON: ${formatLarkScopeImportJson(scopes)}`,
     "3. Publish the app version and wait for tenant/admin approval if Feishu asks for it.",
     "4. Rerun `node dist/src/index.js lark provision`, then rerun `node dist/src/index.js lark doctor`.",
-    "5. Smoke test `/newgroup CCTB smoke test` in Lark if chat-creation scopes were missing.",
   ];
+  if (scopes.includes("im:chat") || scopes.includes("im:chat:create")) {
+    lines.push("5. Smoke test `/newgroup CCTB smoke test` in Lark if chat-creation scopes were missing.");
+  }
+  return lines;
 }
 
 async function readLarkAppProvisioning(client: LarkProvisioningClient, appId: string): Promise<Omit<LarkProvisioningResult, "applied">> {

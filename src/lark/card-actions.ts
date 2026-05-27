@@ -17,6 +17,7 @@ import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
 import { loadInstanceConfig, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
+import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkApprovalCard } from "./card-renderer.js";
 import { renderLarkResumeScanCard } from "./command-cards.js";
 import {
@@ -109,7 +110,9 @@ export async function requestLarkApproval(input: {
     }
 
     input.runtime.pendingApprovals.set(requestId, pending);
-    input.channel.send(input.chatId, {
+    sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.chatId,
       card: renderLarkApprovalCard({
         requestId,
         toolName: input.request.toolName,
@@ -117,11 +120,30 @@ export async function requestLarkApproval(input: {
         replyInThread: input.replyInThread,
         locale: input.locale,
       }),
-    }, larkReplyOptions(input.replyTo, input.replyInThread)).catch((error) => {
+      fallbackText: renderLarkApprovalFallbackText(requestId, input.request, input.locale ?? "zh"),
+      options: larkReplyOptions(input.replyTo, input.replyInThread),
+      locale: input.locale ?? "zh",
+    }).catch((error) => {
       cleanup();
       reject(error instanceof Error ? error : new Error(String(error)));
     });
   });
+}
+
+function renderLarkApprovalFallbackText(requestId: string, request: EngineApprovalRequest, locale: Locale): string {
+  const toolInput = typeof request.toolInput === "string" ? request.toolInput : JSON.stringify(request.toolInput, null, 2);
+  if (locale === "en") {
+    return [
+      `Approval required: ${request.toolName}`,
+      toolInput,
+      `Reply with /approve ${requestId}, /approve-session ${requestId}, or /deny ${requestId}.`,
+    ].join("\n\n");
+  }
+  return [
+    `需要审批：${request.toolName}`,
+    toolInput,
+    `请回复 /approve ${requestId}、/approve-session ${requestId} 或 /deny ${requestId}。`,
+  ].join("\n\n");
 }
 
 export function isLarkApprovalTextCommand(text: string): boolean {
@@ -247,9 +269,27 @@ export async function handleLarkCardAction(input: {
       notice,
     });
     if (input.channel.updateCard) {
-      await input.channel.updateCard(input.event.messageId, card);
+      try {
+        await input.channel.updateCard(input.event.messageId, card);
+      } catch {
+        await sendLarkCardWithFallback({
+          channel: input.channel,
+          chatId: input.event.chatId,
+          card,
+          fallbackText: notice,
+          options: larkReplyOptions(input.event.messageId, replyInThread),
+          locale,
+        });
+      }
     } else {
-      await input.channel.send(input.event.chatId, { card }, larkReplyOptions(input.event.messageId, replyInThread));
+      await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: input.event.chatId,
+        card,
+        fallbackText: notice,
+        options: larkReplyOptions(input.event.messageId, replyInThread),
+        locale,
+      });
     }
     await appendLarkCardActionTurnEvent({
       stateDir: input.stateDir,
@@ -300,7 +340,14 @@ export async function handleLarkCardAction(input: {
       bridgeChatType,
       replyInThread,
     });
-    await input.channel.send(input.event.chatId, { card }, larkReplyOptions(input.event.messageId, replyInThread));
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.event.chatId,
+      card,
+      fallbackText: locale === "en" ? "Recent sessions are available, but the resume card could not be displayed." : "已找到最近 session，但恢复卡片无法显示。",
+      options: larkReplyOptions(input.event.messageId, replyInThread),
+      locale,
+    });
     return true;
   }
 
@@ -1018,6 +1065,24 @@ function parseLarkApprovalTextCommand(text: string):
       kind: "id",
       requestId: internal[1]!,
       choice: internal[2]!.toLowerCase() as LarkApprovalChoice,
+    };
+  }
+
+  const approveSessionById = trimmed.match(/^\/approve-session\s+([A-Za-z0-9_-]+)$/i);
+  if (approveSessionById) {
+    return {
+      kind: "id",
+      requestId: approveSessionById[1]!,
+      choice: "session",
+    };
+  }
+
+  const approveById = trimmed.match(/^\/approve\s+([A-Za-z0-9_-]+)$/i);
+  if (approveById && !/^(?:session|turn|always)$/i.test(approveById[1]!)) {
+    return {
+      kind: "id",
+      requestId: approveById[1]!,
+      choice: "once",
     };
   }
 

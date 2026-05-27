@@ -9,6 +9,7 @@ import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { handleLarkCrewWorkflow } from "./bus.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
+import { sendLarkCardWithFallback } from "./card-delivery.js";
 import {
   extractLarkMessageBody,
   formatLarkAccessReply,
@@ -45,6 +46,7 @@ import {
 import { redactLarkErrorDetail } from "./redaction.js";
 import { verifyLarkNumericIds } from "./id-map.js";
 import type { LarkServiceRuntime } from "./runtime.js";
+import { type LarkReactionSettings, withLarkMessageReactions } from "./reactions.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkFetchedMessage } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
@@ -58,6 +60,7 @@ export async function handleLarkMessage(input: {
   message: LarkIncomingMessage;
   requireMentionInGroup?: boolean;
   workspaceOverride?: string;
+  reactionSettings?: LarkReactionSettings;
 }): Promise<boolean> {
   const requireMentionInGroup = await resolveLarkMessageMentionRequirement({
     stateDir: input.stateDir,
@@ -72,6 +75,21 @@ export async function handleLarkMessage(input: {
   }
   const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, input.message);
   const normalized = await enrichLarkReplyContext(input.channel, expandedNormalized);
+  return await runAcceptedLarkMessage(input, normalized);
+}
+
+async function runAcceptedLarkMessage(
+  input: {
+    channel: LarkChannelLike;
+    bridge: LarkBridgeLike;
+    runtime: LarkServiceRuntime;
+    stateDir: string;
+    requireMentionInGroup?: boolean;
+    workspaceOverride?: string;
+    reactionSettings?: LarkReactionSettings;
+  },
+  normalized: LarkNormalizedBridgeMessage,
+): Promise<boolean> {
   await appendLarkTimelineEvent(input.stateDir, normalized, {
     type: "input.received",
     outcome: "accepted",
@@ -230,6 +248,7 @@ async function runNormalizedLarkMessage(
     stateDir: string;
     requireMentionInGroup?: boolean;
     workspaceOverride?: string;
+    reactionSettings?: LarkReactionSettings;
   },
   normalized: LarkNormalizedBridgeMessage,
 ): Promise<boolean> {
@@ -356,7 +375,9 @@ async function runNormalizedLarkMessage(
           replyInThread: Boolean(normalized.threadId),
         });
         if (workflowResult.workflowRecordId) {
-          await input.channel.send(normalized.chatId, {
+          await sendLarkCardWithFallback({
+            channel: input.channel,
+            chatId: normalized.chatId,
             card: renderLarkArchiveContinueCard({
               uploadId: workflowResult.workflowRecordId,
               conversationKey: normalized.conversationKey,
@@ -364,9 +385,14 @@ async function runNormalizedLarkMessage(
               replyInThread: Boolean(normalized.threadId),
               locale,
             }),
-          }, {
-            replyTo: normalized.messageId,
-            replyInThread: Boolean(normalized.threadId),
+            fallbackText: locale === "en"
+              ? `Archive prepared. Continue with /resume ${workflowResult.workflowRecordId}`
+              : `压缩包已准备好。继续处理请使用 /resume ${workflowResult.workflowRecordId}`,
+            options: {
+              replyTo: normalized.messageId,
+              replyInThread: Boolean(normalized.threadId),
+            },
+            locale,
           });
         }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
@@ -455,72 +481,74 @@ async function runNormalizedLarkMessage(
         }
       };
 
-      const result = await input.bridge.handleAuthorizedMessage({
-        chatId: normalized.bridgeAccessChatId,
-        userId: normalized.bridgeUserId,
-        chatType: normalized.bridgeChatType,
-        locale,
-        text: requestText,
-        ...(normalized.replyContext ? { replyContext: normalized.replyContext } : {}),
-        conversationKey: normalized.conversationKey,
-        files,
-        requestOutputDir,
-        workspaceOverride: input.workspaceOverride,
-        abortSignal: runController.signal,
-        onApprovalRequest: async (request) => await requestLarkApproval({
+      return await runAuthorizedLarkTurnWithReactions(input, normalized, async () => {
+        const result = await input.bridge.handleAuthorizedMessage({
+          chatId: normalized.bridgeAccessChatId,
+          userId: normalized.bridgeUserId,
+          chatType: normalized.bridgeChatType,
+          locale,
+          text: requestText,
+          ...(normalized.replyContext ? { replyContext: normalized.replyContext } : {}),
+          conversationKey: normalized.conversationKey,
+          files,
+          requestOutputDir,
+          workspaceOverride: input.workspaceOverride,
+          abortSignal: runController.signal,
+          onApprovalRequest: async (request) => await requestLarkApproval({
+            channel: input.channel,
+            runtime: input.runtime,
+            chatId: normalized.chatId,
+            conversationKey: normalized.conversationKey,
+            bridgeChatType: normalized.bridgeChatType,
+            replyTo: normalized.messageId,
+            replyInThread: Boolean(normalized.threadId),
+            locale,
+            request,
+            abortSignal: request.abortSignal ?? runController.signal,
+          }),
+          onEngineEvent: handleEngineEvent,
+          instructions: larkAgentInstructions(),
+        });
+        await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
+        await deliverLarkResponse({
           channel: input.channel,
           runtime: input.runtime,
           chatId: normalized.chatId,
-          conversationKey: normalized.conversationKey,
-          bridgeChatType: normalized.bridgeChatType,
           replyTo: normalized.messageId,
           replyInThread: Boolean(normalized.threadId),
-          locale,
-          request,
-          abortSignal: request.abortSignal ?? runController.signal,
-        }),
-        onEngineEvent: handleEngineEvent,
-        instructions: larkAgentInstructions(),
-      });
-      await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
-      await deliverLarkResponse({
-        channel: input.channel,
-        runtime: input.runtime,
-        chatId: normalized.chatId,
-        replyTo: normalized.messageId,
-        replyInThread: Boolean(normalized.threadId),
-        text: result.text,
-        stateDir: input.stateDir,
-        requestOutputDir,
-        workspaceOverride: input.workspaceOverride,
-        conversationKey: normalized.conversationKey,
-        bridgeChatType: normalized.bridgeChatType,
-        bridgeChatId: normalized.bridgeChatId,
-        bridgeUserId: normalized.bridgeUserId,
-        larkThreadId: normalized.threadId,
-        larkMessageId: normalized.messageId,
-      });
-      if (workflowRecordId) {
-        await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
-          record.status = "completed";
+          text: result.text,
+          stateDir: input.stateDir,
+          requestOutputDir,
+          workspaceOverride: input.workspaceOverride,
+          conversationKey: normalized.conversationKey,
+          bridgeChatType: normalized.bridgeChatType,
+          bridgeChatId: normalized.bridgeChatId,
+          bridgeUserId: normalized.bridgeUserId,
+          larkThreadId: normalized.threadId,
+          larkMessageId: normalized.messageId,
         });
+        if (workflowRecordId) {
+          await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
+            record.status = "completed";
+          });
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "workflow.completed",
+            detail: "workflow marked completed",
+            metadata: {
+              workflowRecordId,
+            },
+          });
+        }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
-          type: "workflow.completed",
-          detail: "workflow marked completed",
+          type: "turn.completed",
+          outcome: "success",
           metadata: {
-            workflowRecordId,
+            responseChars: result.text.length,
+            attachments: normalized.attachments.length,
           },
         });
-      }
-      await appendLarkTimelineEvent(input.stateDir, normalized, {
-        type: "turn.completed",
-        outcome: "success",
-        metadata: {
-          responseChars: result.text.length,
-          attachments: normalized.attachments.length,
-        },
+        return true;
       });
-      return true;
     } catch (error) {
       await input.channel.send(normalized.chatId, {
         text: renderLarkUserFacingError(error, "engine", locale),
@@ -541,6 +569,25 @@ async function runNormalizedLarkMessage(
     }
     await cleanupLarkMessageArtifacts(input.stateDir, normalized.messageId).catch(() => undefined);
   }
+}
+
+async function runAuthorizedLarkTurnWithReactions<T>(
+  input: {
+    channel: LarkChannelLike;
+    reactionSettings?: LarkReactionSettings;
+  },
+  normalized: LarkNormalizedBridgeMessage,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!input.reactionSettings) {
+    return await run();
+  }
+  return await withLarkMessageReactions({
+    channel: input.channel,
+    messageId: normalized.messageId,
+    settings: input.reactionSettings,
+    run,
+  });
 }
 
 async function enrichLarkReplyContext(

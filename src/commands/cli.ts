@@ -1083,7 +1083,7 @@ async function configureLarkCliIdentity(
 ): Promise<void> {
   const context = await bindLarkCliBridgeIdentity(env, runCommand, {
     identity: input.identity,
-    force: input.identity === "user-default",
+    force: false,
   });
   await runCommand({
     file: "lark-cli",
@@ -1824,6 +1824,14 @@ async function runLarkCommand(
   const subcommand = argv[1] ?? "status";
   const args = argv.slice(2);
 
+  if (subcommand === "setup") {
+    return await runLarkSetupCommand(args, env, logger, {
+      inspectApp: deps.inspectApp,
+      provisionApp: deps.provisionApp,
+      runCommand: deps.runCommand ?? runLarkCommandProcess,
+    });
+  }
+
   if (subcommand === "service") {
     return await runLarkServiceCommand(args, env, logger, {
       ...deps.service,
@@ -2034,7 +2042,137 @@ async function runLarkCommand(
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 
-  throw new Error("Usage: lark <status|doctor|provision|permissions|wizard|run|service|send|secrets|cli|auth|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
+  throw new Error("Usage: lark <setup|status|doctor|provision|permissions|wizard|run|service|send|secrets|cli|auth|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
+}
+
+async function runLarkSetupCommand(
+  args: string[],
+  env: LarkRuntimeEnv,
+  logger: CliLogger,
+  deps: {
+    inspectApp?: CliOptions["larkInspectApp"];
+    provisionApp?: CliOptions["larkProvisionApp"];
+    runCommand: LarkRunCommand;
+  },
+): Promise<boolean> {
+  const options = parseLarkSetupArgs(args);
+  const summary: string[] = [];
+
+  if (options.skipWizard) {
+    summary.push("wizard: skipped");
+  } else {
+    await runLarkWizard(env, logger);
+    summary.push("wizard: ok");
+  }
+
+  await ensureLarkCliAvailable({
+    install: options.installCli,
+    logger,
+    runCommand: deps.runCommand,
+  });
+  await configureLarkCliIdentity(env, deps.runCommand, { identity: options.identity });
+  summary.push("lark-cli: ok");
+
+  let loadedEnv = await loadLarkRuntimeEnv(env);
+  if (!options.skipProvision) {
+    if (!loadedEnv.LARK_APP_ID) {
+      throw new Error("LARK_APP_ID is required");
+    }
+    if (!loadedEnv.LARK_APP_SECRET) {
+      throw new Error("LARK_APP_SECRET is required");
+    }
+    const provisioning = await (deps.provisionApp ?? provisionLarkApp)({
+      appId: loadedEnv.LARK_APP_ID,
+      appSecret: loadedEnv.LARK_APP_SECRET,
+      ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
+      logger,
+    });
+    summary.push(`provision: ${provisioning.missingScopes.length === 0 && provisioning.unauthorizedScopes.length === 0 ? "ok" : "attention needed"}`);
+  } else {
+    summary.push("provision: skipped");
+  }
+
+  loadedEnv = await loadLarkRuntimeEnv(env);
+  let authSummary = "auth: skipped";
+  if (!options.skipAuth) {
+    try {
+      const context = await prepareLarkCliBridgeContext(env);
+      await deps.runCommand({
+        file: "lark-cli",
+        args: ["auth", "status", "--verify"],
+        env: context.childEnv,
+        timeoutMs: 30_000,
+      });
+      authSummary = "auth: ok";
+    } catch (error) {
+      authSummary = `auth: attention needed (${redactLarkSensitiveText(renderCommandError(error))})`;
+    }
+  }
+  summary.push(authSummary);
+
+  const doctor = await formatLarkDoctor(loadedEnv, deps.inspectApp ?? inspectLarkAppProvisioning);
+  summary.push(hasActionableLarkDoctorProblem(doctor) ? "doctor: attention needed" : "doctor: ok");
+  logger.log([
+    "Lark setup complete.",
+    ...summary.map((line) => `- ${line}`),
+    "",
+    doctor,
+  ].join("\n"));
+  return true;
+}
+
+function hasActionableLarkDoctorProblem(doctor: string): boolean {
+  return doctor
+    .split("\n")
+    .some((line) => {
+      if (!line.startsWith("- fail ") && !line.startsWith("- warn ")) {
+        return false;
+      }
+      return !line.startsWith("- warn Service lock:");
+    });
+}
+
+function parseLarkSetupArgs(args: string[]): {
+  skipWizard: boolean;
+  installCli: boolean;
+  identity: LarkCliBridgeIdentity;
+  skipProvision: boolean;
+  skipAuth: boolean;
+} {
+  let skipWizard = false;
+  let installCli = false;
+  let identity: LarkCliBridgeIdentity = "bot-only";
+  let skipProvision = false;
+  let skipAuth = false;
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--skip-wizard") {
+      skipWizard = true;
+      continue;
+    }
+    if (arg === "--install-cli") {
+      installCli = true;
+      continue;
+    }
+    if (arg === "--identity") {
+      const parsed = parseLarkCliIdentityValue(args[++index]);
+      if (!parsed) {
+        throw new Error("Usage: lark setup [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth]");
+      }
+      identity = parsed;
+      continue;
+    }
+    if (arg === "--skip-provision") {
+      skipProvision = true;
+      continue;
+    }
+    if (arg === "--skip-auth") {
+      skipAuth = true;
+      continue;
+    }
+    throw new Error("Usage: lark setup [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth]");
+  }
+  return { skipWizard, installCli, identity, skipProvision, skipAuth };
 }
 
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {

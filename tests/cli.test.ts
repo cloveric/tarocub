@@ -1151,7 +1151,6 @@ describe("runCli", () => {
           "cli_from_file",
           "--identity",
           "user-default",
-          "--force",
         ],
       }));
       expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
@@ -1272,6 +1271,78 @@ describe("runCli", () => {
       expect(output).toContain("https://open.feishu.cn/device");
       expect(output).toContain("Device code: device-123");
       expect(output).toContain("node dist/src/index.js lark auth finish device-123");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("runs an aggregate Lark setup flow without leaking the app secret", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-setup-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async () => ({ stdout: "ok\n", stderr: "" }));
+    const inspectApp = vi.fn(async () => ({
+      grantedScopes: ["im:message:send_as_bot"],
+      missingScopes: [],
+      unauthorizedScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+      applied: false,
+      patchedSubscriptions: false,
+    }));
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "setup", "--skip-wizard", "--install-cli", "--identity", "user-default", "--skip-provision"], {
+        env: {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+        larkInspectApp: inspectApp,
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "bind", "--source", "lark-channel", "--app-id", "cli_from_file", "--identity", "user-default"],
+      }));
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["auth", "status", "--verify"],
+      }));
+      expect(inspectApp).toHaveBeenCalledWith(expect.objectContaining({
+        appId: "cli_from_file",
+        appSecret: "secret-from-file",
+        domain: "feishu",
+      }));
+      const output = messages.join("\n");
+      expect(output).toContain("Lark setup complete.");
+      expect(output).toContain("wizard: skipped");
+      expect(output).toContain("lark-cli: ok");
+      expect(output).toContain("doctor: ok");
+      expect(output).not.toContain("secret-from-file");
+      expect(JSON.stringify(runCommand.mock.calls)).not.toContain("secret-from-file");
     } finally {
       await removeTempRoot(tempDir);
     }

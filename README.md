@@ -91,15 +91,13 @@ You can now talk to your local CLI agent from Telegram.
 
 ### Feishu / Lark
 
-For the full Lark-native setup, install `lark-cli >= 1.0.41`, then run the wizard:
+For the full Lark-native setup, let the aggregate setup command install/bind `lark-cli >= 1.0.41`, run the QR wizard, provision permissions, and check the app:
 
 ```bash
 npm install
 npm run build
 
-node dist/src/index.js lark wizard
-node dist/src/index.js lark cli preflight --install --identity bot-only
-node dist/src/index.js lark doctor
+node dist/src/index.js lark setup --install-cli --identity bot-only
 node dist/src/index.js lark service start
 ```
 
@@ -164,17 +162,18 @@ Lark has two levels:
 Recommended production flow:
 
 ```bash
-node dist/src/index.js lark wizard
-node dist/src/index.js lark cli preflight --install --identity bot-only
+node dist/src/index.js lark setup --install-cli --identity bot-only
 node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"
 node dist/src/index.js lark auth finish <device-code>
-node dist/src/index.js lark doctor
 node dist/src/index.js lark service restart
 ```
+
+`lark setup` wraps the QR wizard, lark-cli preflight/bind, app provisioning, OAuth status check, and `lark doctor`. If you already created the app and only want to re-check the local side, use `node dist/src/index.js lark setup --skip-wizard --install-cli --identity bot-only`.
 
 Useful Lark commands:
 
 ```bash
+node dist/src/index.js lark setup --install-cli
 node dist/src/index.js lark status
 node dist/src/index.js lark permissions --missing
 node dist/src/index.js lark access pair <code>
@@ -235,11 +234,11 @@ lark send --chat oc_xxx --message "hello"
 
 ## Current Release
 
+- **v4.6.68** — deepens Lark-native reliability: safe running reactions, native @name resolution, card-to-text fallback, one-shot `lark setup`, clearer permission repair, and safer lark-cli binding that will not wipe user OAuth.
 - **v4.6.67** — closes a Lark runtime secret-boundary gap: runtime `lark-cli` child processes now get `LARK_CHANNEL=1` without inheriting `LARK_APP_SECRET`.
 - **v4.6.66** — documents and surfaces the `lark-cli >= 1.0.41` floor for current document creation flags.
 - **v4.6.65** — completes the Lark-native CLI layer for Docs, `/newgroup`, Sheets workflows, wizard/provisioning, and OAuth guidance.
 - **v4.6.64** — makes reminder tool failures user-safe and prevents accidental reminder tags when the user did not ask to schedule anything.
-- **v4.6.63** — adds `/newgroup` / `/newtopic`, forwarded-message expansion, Plan Mode choice cards, and Lark CLI production guidance.
 
 See [GitHub Releases](https://github.com/cloveric/cc-telegram-bridge/releases) for the full changelog.
 
