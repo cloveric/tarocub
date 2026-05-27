@@ -3363,7 +3363,7 @@ describe("lark service", () => {
       });
 
       const rendered = JSON.stringify(channel.send.mock.calls);
-      expect(rendered).toContain("定时任务添加失败");
+      expect(rendered).toContain("提醒延迟格式无效");
       expect(rendered).not.toContain("已设置");
       expect(await store.list()).toHaveLength(0);
     } finally {

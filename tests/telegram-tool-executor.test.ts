@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CronScheduler } from "../src/runtime/cron-scheduler.js";
 import { CronStore } from "../src/state/cron-store.js";
 import { DEFAULT_INSTANCE_AGENT_INSTRUCTIONS } from "../src/commands/access.js";
+import { executeCronAddTool } from "../src/tools/cron-add-tool.js";
 import { executeTelegramTool } from "../src/tools/telegram-tool-executor.js";
 import { defaultTelegramToolRegistry, TelegramToolRegistry } from "../src/tools/telegram-tool-registry.js";
 import { extractTelegramToolTagMatches } from "../src/telegram/tool-tags.js";
@@ -73,6 +74,8 @@ describe("executeTelegramTool", () => {
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.remove"');
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.toggle"');
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("list first");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("Only emit reminder tool tags when the user explicitly asks");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("ISO date-time with timezone");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("if URL(s) are provided");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("use `web_search` for discovery");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("```tool-call");
@@ -115,6 +118,28 @@ describe("executeTelegramTool", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("renders direct cron.add execution errors as friendly reminder guidance", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const result = await executeCronAddTool(
+        { at: "afternoon", prompt: "check market" },
+        {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          locale: "en",
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("Invalid reminder time");
+      expect(result.message).toContain("at must be an ISO date-time");
+      expect(result.message).not.toContain("invalid at timestamp");
+      expect(await store.list()).toHaveLength(0);
+    });
   });
 
   it("returns a structured error for unknown tools", async () => {

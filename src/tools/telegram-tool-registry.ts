@@ -1,4 +1,4 @@
-import { executeCronAddTool } from "./cron-add-tool.js";
+import { executeCronAddTool, renderCronAddInvalidPayloadMessage } from "./cron-add-tool.js";
 import {
   executeCronListTool,
   executeCronRemoveTool,
@@ -142,10 +142,13 @@ function validateToolPayload(schema: TelegramToolInputSchema | undefined, payloa
 
 function renderInvalidPayload(name: string, detail: string, locale: ExecuteTelegramToolInput["context"]["locale"]): TelegramToolResult {
   const error = `invalid payload for ${name}: ${detail}`;
+  const message = name === "cron.add"
+    ? renderCronAddInvalidPayloadMessage(detail, locale)
+    : null;
   return {
     ok: false,
     status: "rejected",
-    message: locale === "zh" ? `✗ 工具参数无效：${error}` : `✗ Invalid tool payload: ${error}`,
+    message: message ?? (locale === "zh" ? `✗ 工具参数无效：${error}` : `✗ Invalid tool payload: ${error}`),
     error,
   };
 }

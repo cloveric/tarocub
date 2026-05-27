@@ -407,4 +407,49 @@ describe("telegram tool tags", () => {
       expect(await store.list()).toHaveLength(0);
     });
   });
+
+  it("renders invalid cron.add absolute times as friendly guidance", async () => {
+    await withContext(async ({ stateDir, store, scheduler }) => {
+      const text = await processTelegramToolTags({
+        text: '已设置\n[tool:{"name":"cron.add","payload":{"at":"午后","prompt":"看盘"}}]',
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "zh",
+        },
+      });
+
+      expect(text).toContain("提醒时间格式无效");
+      expect(text).toContain("at 必须使用 ISO 日期时间");
+      expect(text).toContain("如果只是相对时间，请改用 in");
+      expect(text).not.toContain("Invalid tool payload");
+      expect(text).not.toContain("at must be a valid date-time");
+      expect(text).not.toContain("已设置");
+      expect(await store.list()).toHaveLength(0);
+    });
+  });
+
+  it("does not expose raw validator text for invalid cron.add absolute times in English chats", async () => {
+    await withContext(async ({ stateDir, store, scheduler }) => {
+      const text = await processTelegramToolTags({
+        text: 'Scheduled\n[tool:{"name":"cron.add","payload":{"at":"afternoon","prompt":"check market"}}]',
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "en",
+        },
+      });
+
+      expect(text).toContain("Invalid reminder time");
+      expect(text).toContain("at must be an ISO date-time");
+      expect(text).not.toContain("Invalid tool payload");
+      expect(text).not.toContain("at must be a valid date-time");
+      expect(text).not.toContain("Scheduled");
+      expect(await store.list()).toHaveLength(0);
+    });
+  });
 });

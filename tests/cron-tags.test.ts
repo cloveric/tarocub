@@ -168,6 +168,26 @@ describe("cron-add fallback tags", () => {
     });
   });
 
+  it("renders invalid absolute times as friendly guidance", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const text = await processCronAddTags({
+        text: '已设置\n[cron-add:{"at":"午后","prompt":"看盘"}]',
+        cronRuntime: { store, scheduler },
+        stateDir,
+        chatId: 123,
+        userId: 456,
+        locale: "zh",
+      });
+
+      expect(await store.list()).toHaveLength(0);
+      expect(text).toContain("提醒时间格式无效");
+      expect(text).toContain("at 必须使用 ISO 日期时间");
+      expect(text).not.toContain("invalid at timestamp");
+      expect(text).not.toContain("已设置");
+      expect(text).not.toContain("[cron-add:");
+    });
+  });
+
   it("leaves text unchanged when there are no cron-add tags", async () => {
     await withCronRuntime(async ({ stateDir, store, scheduler }) => {
       const text = "nothing to schedule";

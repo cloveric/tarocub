@@ -31,6 +31,8 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("cron.remove");
     expect(instructions).toContain("cron.toggle");
     expect(instructions).toContain("list first");
+    expect(instructions).toContain("Only emit reminder tool tags when the user explicitly asks");
+    expect(instructions).toContain("ISO date-time with timezone");
     expect(instructions).toContain("if URL(s) are provided, read them directly");
     expect(instructions).toContain("use `web_search` for discovery/current facts");
   });

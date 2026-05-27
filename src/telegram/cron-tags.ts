@@ -184,6 +184,7 @@ export async function processCronAddTags(input: ProcessCronAddTagsInput): Promis
   }
 
   const messages: string[] = [];
+  let hadRejectedTool = false;
   for (const match of matches) {
     const result = await executeTelegramTool({
       name: "cron.add",
@@ -201,11 +202,13 @@ export async function processCronAddTags(input: ProcessCronAddTagsInput): Promis
         updateId: input.updateId,
       },
     });
+    if (!result.ok) {
+      hadRejectedTool = true;
+    }
     messages.push(result.message);
   }
 
-  return [
-    stripCronAddTags(input.text, matches),
-    ...messages,
-  ].filter((part) => part.trim()).join("\n\n");
+  return (hadRejectedTool ? messages : [stripCronAddTags(input.text, matches), ...messages])
+    .filter((part) => part.trim())
+    .join("\n\n");
 }

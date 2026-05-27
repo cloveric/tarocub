@@ -224,7 +224,25 @@ function renderAccepted(record: CronJobRecord, locale: Locale): string {
     : `✓ Scheduled task added  ID  ${record.id}\n⏰ ${when}${timezone}\n📝 ${record.prompt}`;
 }
 
+export function renderCronAddInvalidPayloadMessage(detail: string, locale: Locale): string | null {
+  if (detail === "at must be a valid date-time" || detail.startsWith("invalid at timestamp:")) {
+    return locale === "zh"
+      ? "✗ 提醒时间格式无效：at 必须使用 ISO 日期时间，例如 2026-05-27T13:30:00+08:00。如果只是相对时间，请改用 in，例如 {\"in\":\"10m\",\"prompt\":\"...\"}。"
+      : "✗ Invalid reminder time: at must be an ISO date-time, for example 2026-05-27T13:30:00+08:00. For relative delays, use in, for example {\"in\":\"10m\",\"prompt\":\"...\"}.";
+  }
+  if (detail.startsWith("in must match pattern") || detail === "in must be a duration like 10m, 2h, or 1d") {
+    return locale === "zh"
+      ? "✗ 提醒延迟格式无效：in 必须是 10m、2h、1d 这样的相对时长。需要具体日期时间时，请使用 ISO 格式的 at。"
+      : "✗ Invalid reminder delay: in must be a relative duration like 10m, 2h, or 1d. Use ISO date-time at for an exact date and time.";
+  }
+  return null;
+}
+
 function renderRejected(detail: string, locale: Locale): string {
+  const invalidPayloadMessage = renderCronAddInvalidPayloadMessage(detail, locale);
+  if (invalidPayloadMessage) {
+    return invalidPayloadMessage;
+  }
   return locale === "zh"
     ? `✗ 定时任务添加失败：${detail}`
     : `✗ Failed to add scheduled task: ${detail}`;
