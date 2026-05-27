@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/github-banner.png" alt="CC Agent Bridge for Telegram and Feishu/Lark" width="100%" />
+  <img src="./assets/github-banner-art.png" alt="Watercolor illustration of people using CC Agent Bridge across Telegram and Feishu/Lark" width="100%" />
 </p>
 
 <p align="center">
@@ -14,10 +14,10 @@
   <img src="https://img.shields.io/badge/channels-Telegram%20%7C%20Feishu%2FLark-2563eb?style=flat-square" alt="Telegram | Feishu/Lark">
 </p>
 
-<h3 align="center">
-  Local control plane for Codex, Claude Code, and Antigravity.<br>
-  Run real CLI agents on your machine, operate them from Telegram or Feishu/Lark, and keep sessions, files, tasks, and audit logs durable.
-</h3>
+<p align="center">
+  <strong>Local control plane for Codex, Claude Code, and Antigravity.</strong><br>
+  Run real CLI agents on your own machine, operate them from Telegram on your phone or Feishu/Lark at work, and keep sessions, files, tasks, and audit logs durable.
+</p>
 
 <p align="center">
   <a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;
