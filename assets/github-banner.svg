@@ -1,63 +1,63 @@
 <svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="leftFade" x1="0" y1="0" x2="760" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#050B18" stop-opacity="0.9"/>
-      <stop offset="0.45" stop-color="#050B18" stop-opacity="0.62"/>
-      <stop offset="1" stop-color="#050B18" stop-opacity="0"/>
+      <stop offset="0" stop-color="#FFF7E6" stop-opacity="0.94"/>
+      <stop offset="0.52" stop-color="#FFF7E6" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#FFF7E6" stop-opacity="0"/>
     </linearGradient>
     <linearGradient id="accent" x1="80" y1="312" x2="260" y2="312" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#22D3EE"/>
-      <stop offset="0.55" stop-color="#60A5FA"/>
-      <stop offset="1" stop-color="#A78BFA"/>
+      <stop stop-color="#14B8A6"/>
+      <stop offset="0.52" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#FB7185"/>
     </linearGradient>
     <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#020617" flood-opacity="0.55"/>
+      <feDropShadow dx="0" dy="12" stdDeviation="22" flood-color="#7C5D2E" flood-opacity="0.16"/>
     </filter>
   </defs>
 
   <image href="github-banner-art.png" x="0" y="0" width="1280" height="640" preserveAspectRatio="xMidYMid slice"/>
   <rect width="760" height="640" fill="url(#leftFade)"/>
-  <rect width="1280" height="640" fill="#020617" fill-opacity="0.08"/>
+  <rect width="1280" height="640" fill="#FFF7ED" fill-opacity="0.08"/>
 
   <g filter="url(#softShadow)">
-    <rect x="80" y="95" width="142" height="34" rx="17" fill="#0B2E48" fill-opacity="0.72" stroke="#22D3EE" stroke-opacity="0.32"/>
-    <text x="105" y="117" fill="#67E8F9" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">TELEGRAM</text>
+    <rect x="80" y="95" width="142" height="34" rx="17" fill="#E0F7FA" fill-opacity="0.86" stroke="#0891B2" stroke-opacity="0.26"/>
+    <text x="105" y="117" fill="#0E7490" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">TELEGRAM</text>
 
-    <rect x="236" y="95" width="158" height="34" rx="17" fill="#221A4A" fill-opacity="0.72" stroke="#A78BFA" stroke-opacity="0.34"/>
-    <text x="259" y="117" fill="#C4B5FD" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">FEISHU/LARK</text>
+    <rect x="236" y="95" width="158" height="34" rx="17" fill="#EDE9FE" fill-opacity="0.88" stroke="#8B5CF6" stroke-opacity="0.22"/>
+    <text x="259" y="117" fill="#6D28D9" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">FEISHU/LARK</text>
 
-    <rect x="408" y="95" width="132" height="34" rx="17" fill="#3A2413" fill-opacity="0.72" stroke="#FDBA74" stroke-opacity="0.32"/>
-    <text x="432" y="117" fill="#FDBA74" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">3 ENGINES</text>
+    <rect x="408" y="95" width="132" height="34" rx="17" fill="#FEF3C7" fill-opacity="0.9" stroke="#F59E0B" stroke-opacity="0.26"/>
+    <text x="432" y="117" fill="#B45309" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">3 ENGINES</text>
   </g>
 
-  <text x="80" y="215" fill="#F8FAFC" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="850" letter-spacing="-2.2">CC Agent</text>
-  <text x="80" y="285" fill="#F8FAFC" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="850" letter-spacing="-2.2">Bridge</text>
+  <text x="80" y="215" fill="#1F2937" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="850" letter-spacing="-2.2">CC Agent</text>
+  <text x="80" y="285" fill="#1F2937" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="850" letter-spacing="-2.2">Bridge</text>
   <rect x="82" y="314" width="182" height="4" rx="2" fill="url(#accent)"/>
 
-  <text x="80" y="360" fill="#CBD5E1" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="20" font-weight="500">Real Codex, Claude Code, and Antigravity CLIs.</text>
-  <text x="80" y="391" fill="#94A3B8" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="450">Operated from Telegram and Feishu/Lark.</text>
+  <text x="80" y="360" fill="#334155" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="20" font-weight="600">Real Codex, Claude Code, and Antigravity CLIs.</text>
+  <text x="80" y="391" fill="#64748B" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="500">Operated from Telegram and Feishu/Lark.</text>
 
   <g>
-    <rect x="80" y="438" width="138" height="31" rx="15.5" fill="#062D3D" fill-opacity="0.78" stroke="#22D3EE" stroke-opacity="0.22"/>
-    <text x="104" y="458" fill="#67E8F9" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">Session Resume</text>
+    <rect x="80" y="438" width="138" height="31" rx="15.5" fill="#CCFBF1" fill-opacity="0.86" stroke="#14B8A6" stroke-opacity="0.3"/>
+    <text x="104" y="458" fill="#0F766E" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">Session Resume</text>
 
-    <rect x="230" y="438" width="82" height="31" rx="15.5" fill="#063321" fill-opacity="0.76" stroke="#34D399" stroke-opacity="0.22"/>
-    <text x="257" y="458" fill="#86EFAC" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">ASR</text>
+    <rect x="230" y="438" width="82" height="31" rx="15.5" fill="#DCFCE7" fill-opacity="0.86" stroke="#22C55E" stroke-opacity="0.28"/>
+    <text x="257" y="458" fill="#15803D" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">ASR</text>
 
-    <rect x="324" y="438" width="110" height="31" rx="15.5" fill="#34260C" fill-opacity="0.76" stroke="#FBBF24" stroke-opacity="0.24"/>
-    <text x="350" y="458" fill="#FDE68A" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">Agent Bus</text>
+    <rect x="324" y="438" width="110" height="31" rx="15.5" fill="#FEF3C7" fill-opacity="0.88" stroke="#F59E0B" stroke-opacity="0.3"/>
+    <text x="350" y="458" fill="#B45309" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">Agent Bus</text>
 
-    <rect x="446" y="438" width="96" height="31" rx="15.5" fill="#2D193D" fill-opacity="0.76" stroke="#C084FC" stroke-opacity="0.25"/>
-    <text x="470" y="458" fill="#E9D5FF" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">Mini Bus</text>
+    <rect x="446" y="438" width="96" height="31" rx="15.5" fill="#FCE7F3" fill-opacity="0.88" stroke="#EC4899" stroke-opacity="0.22"/>
+    <text x="470" y="458" fill="#BE185D" font-family="'Inter', system-ui, sans-serif" font-size="12" font-weight="700">Mini Bus</text>
   </g>
 
   <g opacity="0.82">
-    <rect x="80" y="493" width="96" height="27" rx="7" fill="#0F172A" fill-opacity="0.76"/>
-    <text x="96" y="511" fill="#94A3B8" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600">TypeScript</text>
-    <rect x="188" y="493" width="86" height="27" rx="7" fill="#0F172A" fill-opacity="0.76"/>
-    <text x="204" y="511" fill="#94A3B8" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600">Node.js</text>
-    <rect x="286" y="493" width="134" height="27" rx="7" fill="#0F172A" fill-opacity="0.76"/>
-    <text x="302" y="511" fill="#94A3B8" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600">Docs / Sheets</text>
+    <rect x="80" y="493" width="96" height="27" rx="7" fill="#FFFFFF" fill-opacity="0.62"/>
+    <text x="96" y="511" fill="#64748B" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600">TypeScript</text>
+    <rect x="188" y="493" width="86" height="27" rx="7" fill="#FFFFFF" fill-opacity="0.62"/>
+    <text x="204" y="511" fill="#64748B" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600">Node.js</text>
+    <rect x="286" y="493" width="134" height="27" rx="7" fill="#FFFFFF" fill-opacity="0.62"/>
+    <text x="302" y="511" fill="#64748B" font-family="'SF Mono', Menlo, monospace" font-size="11" font-weight="600">Docs / Sheets</text>
   </g>
 
   <rect x="0" y="636" width="1280" height="4" fill="url(#accent)" opacity="0.8"/>
