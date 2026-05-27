@@ -22,7 +22,7 @@
 <p align="center">
   <a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#surfaces">Surfaces</a>&nbsp;&nbsp;|&nbsp;&nbsp;
-  <a href="#capabilities">Capabilities</a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#core-highlights">Core Highlights</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#lark-setup">Lark Setup</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#operator-commands">Commands</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#docs">Docs</a>
@@ -94,18 +94,39 @@ node dist/src/index.js lark doctor
 | **Feishu/Lark** | Team chat, interactive cards, Docs comments, Sheets/Docs/Drive workflows, group/thread workflows | Production-capable with `lark-cli` |
 | **Local CLI** | Operations, setup, debugging, status, backups, direct sends | First-class operator interface |
 
-## Capabilities
+## Core Highlights
 
-| Area | What you get |
+| Highlight | Why it matters |
 |---|---|
-| **Native engines** | Codex, Claude Code, and Antigravity run as their real local CLIs. |
-| **Session continuity** | Resume Claude sessions, attach Codex threads, and bind Antigravity conversations. |
-| **Files and media** | Send and receive files, images, generated artifacts, voice, audio, and video. |
-| **Feishu/Lark-native UX** | Card 2.0 callbacks, stop buttons, approval cards, `lark.choice`, Docs comments, `/newgroup`, Sheets guidance. |
-| **Scheduled work** | `/cron` and `cron.add` persist reminders and agent-run jobs across restarts. |
-| **Multi-agent work** | Agent Bus, Mini Bus, fan-out, chains, verifier flows, and durable Board tasks. |
-| **Operations** | Service locks, status, doctor, logs, timeline, audit, dashboard, usage, backup/restore. |
-| **Safety boundaries** | Access pairing, allowlists, card operator checks, state-dir isolation, secret redaction, and lark-cli secret-provider flow. |
+| **Real CLI engines, not a fake chat backend** | Codex, Claude Code, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
+| **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, and Antigravity conversations can be attached from chat and detached later. |
+| **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
+| **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
+| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources can be downloaded, locally transcribed, and passed into the engine as normal task context. |
+| **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
+| **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
+| **Agent Bus** | Multiple bot instances can call each other as local workers for delegation, fan-out, chain, verifier, and coordinator-led crew workflows. |
+| **Mini Bus** | Telegram topics or Lark threads can become lightweight named peers, so one group can run planner/writer/reviewer-style workflows without separate bots. |
+| **Board** | Durable Kanban state for tasks, dependencies, WIP, review gates, and execution history, instead of relying on a model to remember project state. |
+| **Search MCP** | Optional Brave/Tavily MCP gives source-traceable `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
+| **Operational visibility** | `status`, `doctor`, `timeline`, `audit`, `dashboard`, usage tracking, service locks, and backups make failures inspectable instead of mysterious. |
+
+## Feature Map
+
+| Feature | Telegram | Feishu/Lark | Local CLI |
+|---|---:|---:|---:|
+| Codex / Claude Code / Antigravity engines | Yes | Yes | Yes |
+| Session resume / detach | Yes | Yes | Yes |
+| Voice, audio, and video ASR | Yes | Yes | Inspect/debug |
+| File and image delivery | Yes | Yes | `telegram send` / `lark send` |
+| Stop and approvals | Inline buttons | Interactive cards | Service controls |
+| Plan Mode-style choices | Limited buttons | Rich choice cards | Tool/debug path |
+| Cron reminders and agent jobs | Yes | Yes | Manage/list/run |
+| Board durable tasks | Yes | Yes | Inspect/export |
+| Agent Bus fan/chain/verify | Yes | Yes | Configure peers |
+| Mini Bus topic/thread workflows | Telegram topics | Lark threads | Inspect state |
+| Docs comments and Sheets workflows | Not applicable | Yes, with `lark-cli` | Provision/auth/doctor |
+| Timeline, audit, dashboard, usage | Yes | Yes | Primary ops surface |
 
 ## Lark Setup
 
