@@ -69,6 +69,7 @@ export type LarkCommandInput = {
   bridge: LarkBridgeLike;
   runtime: LarkServiceRuntime;
   stateDir: string;
+  instanceName?: string;
   requestApproval: RequestLarkApproval;
   requireMentionInGroup?: boolean;
   abortSignal?: AbortSignal;
@@ -319,7 +320,7 @@ async function handleLarkLocalEngineCommand(
         },
       },
       channel: "lark",
-      instanceName: "lark",
+      instanceName: input.instanceName ?? "lark",
       abortSignal: input.abortSignal,
     },
     bridge: input.bridge,
@@ -352,7 +353,7 @@ async function handleLarkSessionCommand(
         },
       },
       channel: "lark",
-      instanceName: "lark",
+      instanceName: input.instanceName ?? "lark",
     },
     sessionStore: new SessionStore(path.join(input.stateDir, "session.json")),
     updateInstanceConfig: async (updater) => await updateInstanceConfig(input.stateDir, updater),

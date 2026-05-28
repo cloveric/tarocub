@@ -48,6 +48,7 @@ export async function deliverLarkResponse(input: {
   bridgeUserId?: number;
   larkThreadId?: string;
   larkMessageId?: string;
+  instanceName?: string;
   sendText?: boolean;
   allowAnyAbsolutePath?: boolean;
 }): Promise<void> {
@@ -303,6 +304,7 @@ async function executeLarkToolTag(input: {
   bridgeUserId?: number;
   larkThreadId?: string;
   larkMessageId?: string;
+  instanceName?: string;
   locale: Locale;
 }): Promise<boolean> {
   const payload = payloadObject(input.payload);
@@ -319,7 +321,7 @@ async function executeLarkToolTag(input: {
       larkThreadId: input.larkThreadId,
       larkMessageId: input.larkMessageId ?? input.replyTo,
       locale: input.locale,
-      instanceName: "lark",
+      instanceName: input.instanceName ?? "lark",
     });
     await sendLarkMarkdown(input.channel, input.chatId, result.message, larkReplyOptions(input.replyTo, input.replyInThread));
     return result.ok;
@@ -341,7 +343,7 @@ async function executeLarkToolTag(input: {
         larkThreadId: input.larkThreadId,
         larkMessageId: input.larkMessageId ?? input.replyTo,
         locale: input.locale,
-        instanceName: "lark",
+        instanceName: input.instanceName ?? "lark",
       },
     });
     await sendLarkMarkdown(input.channel, input.chatId, result.message, larkReplyOptions(input.replyTo, input.replyInThread));

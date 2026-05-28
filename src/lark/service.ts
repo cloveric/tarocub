@@ -129,6 +129,7 @@ export async function runLarkService(
           bridge,
           runtime,
           stateDir,
+          instanceName,
           message,
           requireMentionInGroup: config.requireMentionInGroup,
           reactionSettings,
@@ -156,7 +157,7 @@ export async function runLarkService(
     });
     channel.on("cardAction", async (event) => {
       try {
-        await handleLarkCardAction({ channel: channel!, bridge, runtime, stateDir, event });
+        await handleLarkCardAction({ channel: channel!, bridge, runtime, stateDir, instanceName, event });
       } catch (error) {
         logLarkServiceError(logger, "Lark card action handling failed", error);
         await appendLarkServiceCardActionErrorTimelineEvent(stateDir, event);

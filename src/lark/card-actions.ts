@@ -196,6 +196,7 @@ export async function handleLarkCardAction(input: {
   bridge?: LarkBridgeLike;
   runtime: LarkServiceRuntime;
   stateDir?: string;
+  instanceName?: string;
   event: {
     messageId: string;
     chatId: string;
@@ -495,6 +496,7 @@ export async function handleLarkCardAction(input: {
         bridgeChatType,
         userId,
         text,
+        instanceName: input.instanceName,
       });
       return true;
     }, {
@@ -552,6 +554,7 @@ export async function handleLarkCardAction(input: {
         bridgeChatType,
         uploadId: value.uploadId as string,
         userId,
+        instanceName: input.instanceName,
       });
       return true;
     }, {
@@ -662,6 +665,7 @@ async function runLarkCardChoice(input: {
   bridge: LarkBridgeLike;
   runtime: LarkServiceRuntime;
   stateDir: string;
+  instanceName?: string;
   chatId: string;
   replyTo: string;
   replyInThread?: boolean;
@@ -716,6 +720,7 @@ async function runLarkCardChoice(input: {
           bridgeChatId,
           bridgeUserId: input.userId,
           larkMessageId: input.replyTo,
+          instanceName: input.instanceName,
         });
       } catch (error) {
         await appendLarkCardActionEngineEvent(input, {
@@ -769,6 +774,7 @@ async function runLarkCardChoice(input: {
       bridgeChatId,
       bridgeUserId: input.userId,
       larkMessageId: input.replyTo,
+      instanceName: input.instanceName,
     });
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.completed",
@@ -798,6 +804,7 @@ async function runLarkArchiveContinueCardAction(input: {
   bridge: LarkBridgeLike;
   runtime: LarkServiceRuntime;
   stateDir: string;
+  instanceName?: string;
   chatId: string;
   replyTo: string;
   replyInThread?: boolean;
@@ -872,6 +879,7 @@ async function runLarkArchiveContinueCardAction(input: {
           bridgeChatId,
           bridgeUserId: input.userId,
           larkMessageId: input.replyTo,
+          instanceName: input.instanceName,
         });
       } catch (error) {
         await appendLarkCardActionEngineEvent(input, {
@@ -927,6 +935,7 @@ async function runLarkArchiveContinueCardAction(input: {
       bridgeChatId,
       bridgeUserId: input.userId,
       larkMessageId: input.replyTo,
+      instanceName: input.instanceName,
     });
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.completed",

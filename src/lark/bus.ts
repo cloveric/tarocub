@@ -33,6 +33,7 @@ type LarkBusCommandInput = {
   bridge: LarkBridgeLike;
   runtime: LarkServiceRuntime;
   stateDir: string;
+  instanceName?: string;
   requestApproval: (input: {
     channel: LarkChannelLike;
     runtime: LarkServiceRuntime;
@@ -63,6 +64,7 @@ export async function handleLarkBoardCommand(
       },
     },
     channel: "lark",
+    instanceName: input.instanceName ?? "lark",
     cfg: {
       budgetUsd: cfg.budgetUsd,
       resume: cfg.resume,
@@ -128,7 +130,7 @@ export async function handleLarkMiniBusCommand(
       },
     },
     channel: "lark",
-    instanceName: "lark",
+    instanceName: input.instanceName ?? "lark",
     abortSignal: abortController.signal,
     runQueuedBridgeTurn: input.runtime.miniRuntime?.runQueuedBridgeTurn
       ?? (async (conversationKey, job) => await input.runtime.chatQueue.enqueue(conversationKey, job)),
@@ -205,7 +207,7 @@ export async function handleLarkDelegationCommand(
       },
     },
     channel: "lark",
-    instanceName: "lark",
+    instanceName: input.instanceName ?? "lark",
     onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
       locale,
       source: "delegation",
@@ -262,7 +264,7 @@ export async function handleLarkCrewWorkflow(
       },
     },
     channel: "lark",
-    instanceName: "lark",
+    instanceName: input.instanceName ?? "lark",
     abortSignal: input.abortSignal,
     bridge: {
       handleAuthorizedMessage: async (bridgeInput) => await input.bridge.handleAuthorizedMessage(bridgeInput),
@@ -354,6 +356,7 @@ function createLarkBusEngineEventHandler(
         bridgeUserId: normalized.bridgeUserId,
         larkThreadId: normalized.threadId,
         larkMessageId: normalized.messageId,
+        instanceName: input.instanceName,
       });
     } catch (error) {
       await appendLarkTimelineEvent(input.stateDir, normalized, {

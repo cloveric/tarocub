@@ -3350,6 +3350,7 @@ describe("lark service", () => {
         bridge,
         runtime,
         stateDir,
+        instanceName: "lark-alpha",
         message: fakeLarkMessage({
           messageId: "om_cron_tool",
           content: "10分钟后提醒我查邮件",
@@ -3368,6 +3369,12 @@ describe("lark service", () => {
         prompt: "check inbox",
         deliveryMode: "notify",
       });
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "command.handled",
+        instanceName: "lark-alpha",
+        detail: "cron.add tool accepted",
+      }));
       expect(scheduler.refresh).toHaveBeenCalledOnce();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",

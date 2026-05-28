@@ -57,6 +57,7 @@ export async function handleLarkMessage(input: {
   bridge: LarkBridgeLike;
   runtime: LarkServiceRuntime;
   stateDir: string;
+  instanceName?: string;
   message: LarkIncomingMessage;
   requireMentionInGroup?: boolean;
   workspaceOverride?: string;
@@ -84,6 +85,7 @@ async function runAcceptedLarkMessage(
     bridge: LarkBridgeLike;
     runtime: LarkServiceRuntime;
     stateDir: string;
+    instanceName?: string;
     requireMentionInGroup?: boolean;
     workspaceOverride?: string;
     reactionSettings?: LarkReactionSettings;
@@ -246,6 +248,7 @@ async function runNormalizedLarkMessage(
     bridge: LarkBridgeLike;
     runtime: LarkServiceRuntime;
     stateDir: string;
+    instanceName?: string;
     requireMentionInGroup?: boolean;
     workspaceOverride?: string;
     reactionSettings?: LarkReactionSettings;
@@ -468,6 +471,7 @@ async function runNormalizedLarkMessage(
             bridgeUserId: normalized.bridgeUserId,
             larkThreadId: normalized.threadId,
             larkMessageId: normalized.messageId,
+            instanceName: input.instanceName,
           });
         } catch (error) {
           await appendLarkTimelineEvent(input.stateDir, normalized, {
@@ -526,6 +530,7 @@ async function runNormalizedLarkMessage(
           bridgeUserId: normalized.bridgeUserId,
           larkThreadId: normalized.threadId,
           larkMessageId: normalized.messageId,
+          instanceName: input.instanceName,
         });
         if (workflowRecordId) {
           await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
