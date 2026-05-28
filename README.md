@@ -218,6 +218,8 @@ lark send --chat oc_xxx --message "hello"
 
 ### In-chat slash commands
 
+See the full [Slash Command Index](./docs/slash-commands.md) for command groups, channel support, and examples. The short list below shows the shape of the in-chat surface:
+
 ```text
 # basics
 /help
