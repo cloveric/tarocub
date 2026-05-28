@@ -1,8 +1,8 @@
-# CC Telegram Bridge Instructions
+# TaroCub Instructions
 
 ## Read First
 
-Before modifying Telegram flow, bus flow, state/config handling, usage/budget/audit logic, or file delivery, read:
+Before modifying Telegram flow, Feishu/Lark flow, bus flow, state/config handling, usage/budget/audit logic, or file delivery, read:
 
 - `docs/entrypoint-map.md`
 - `docs/telegram-instance-agent.md` when changing static Telegram transport instructions
@@ -15,7 +15,7 @@ Static Telegram transport rules belong in instance-level `~/.cctb/<instance>/age
 
 This repository is not in maintenance mode. The active objective is:
 
-`recreate Claude Code's Telegram plugin behavior as closely as practical for Codex, and keep improving until parity or better operational stability is reached`
+`make TaroCub a reliable local control surface for Codex, Claude Code, and Antigravity across Telegram and Feishu/Lark, keeping parity where possible and using each platform's native strengths where it is better`
 
 Do not treat "feature implemented" as "work complete" unless the current milestone has been verified end-to-end.
 
@@ -43,7 +43,7 @@ This project should be driven toward:
 - tighter access control
 - better session continuity
 - cleaner operator experience
-- closer Claude-plugin parity
+- closer cross-channel parity with Telegram and Lark-native UX where Lark is stronger
 
 ## Verification Standard
 
@@ -101,6 +101,6 @@ If it matches anything, fix before committing.
 ## Repo Notes
 
 - Cross-platform (macOS / Linux / Windows). Primary development target is macOS; Windows support is maintained.
-- One Telegram bot per instance
+- One Telegram bot per instance; one Lark app/service surface for the Lark channel
 - One instance per process
 - State lives under `~/.cctb/<instance>/` (POSIX) or `%USERPROFILE%\.cctb\<instance>\` (Windows)
