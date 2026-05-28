@@ -230,6 +230,54 @@ describe("updateInstanceConfig", () => {
 });
 
 describe("applyEngineSelection", () => {
+  it("applies the Claude default model and effort when selecting Claude for a fresh config", () => {
+    const config: Record<string, unknown> = {};
+
+    const result = applyEngineSelection(config, "claude");
+
+    expect(result).toEqual({ clearedModel: false, enabledFullAuto: false });
+    expect(config).toMatchObject({
+      engine: "claude",
+      model: "opus[1m]",
+      effort: "xhigh",
+    });
+  });
+
+  it("replaces incompatible model overrides with the Claude defaults when switching to Claude", () => {
+    const config: Record<string, unknown> = {
+      engine: "codex",
+      model: "gpt-5.4",
+      effort: "medium",
+      codexServiceTier: "fast",
+    };
+
+    const result = applyEngineSelection(config, "claude");
+
+    expect(result).toEqual({ clearedModel: true, enabledFullAuto: false });
+    expect(config).toMatchObject({
+      engine: "claude",
+      model: "opus[1m]",
+      effort: "xhigh",
+    });
+    expect(config.codexServiceTier).toBeUndefined();
+  });
+
+  it("preserves an existing Claude model override while filling a missing default effort", () => {
+    const config: Record<string, unknown> = {
+      engine: "claude",
+      model: "sonnet[1m]",
+    };
+
+    const result = applyEngineSelection(config, "claude");
+
+    expect(result).toEqual({ clearedModel: false, enabledFullAuto: false });
+    expect(config).toMatchObject({
+      engine: "claude",
+      model: "sonnet[1m]",
+      effort: "xhigh",
+    });
+  });
+
   it("enables full-auto approval by default when selecting Antigravity", () => {
     const config: Record<string, unknown> = {
       engine: "codex",

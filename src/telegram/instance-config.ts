@@ -13,6 +13,9 @@ import { withFileMutex } from "../state/file-mutex.js";
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 export type InstanceEngine = "codex" | "claude" | "antigravity";
 
+export const DEFAULT_CLAUDE_MODEL = "opus[1m]";
+export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
+
 export interface ResumeState {
   sessionId: string;
   dirName: string;
@@ -44,6 +47,24 @@ export interface GroupModeConfig {
 }
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
+
+function applyClaudeEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
+  const modelOverride = typeof config.model === "string" && config.model.trim().length > 0
+    ? config.model.trim()
+    : undefined;
+  const effortOverride = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel)
+    ? config.effort as EffortLevel
+    : undefined;
+
+  if (previousEngine !== "claude" || modelOverride === undefined) {
+    config.model = DEFAULT_CLAUDE_MODEL;
+  } else {
+    config.model = modelOverride;
+  }
+  if (previousEngine !== "claude" || effortOverride === undefined) {
+    config.effort = DEFAULT_CLAUDE_EFFORT;
+  }
+}
 
 function parseResumeState(raw: unknown): ResumeState | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -113,6 +134,9 @@ export function applyEngineSelection(
   }
   if (engine !== "codex") {
     delete config.codexServiceTier;
+  }
+  if (engine === "claude") {
+    applyClaudeEngineDefaults(config, previousEngine);
   }
   let enabledFullAuto = false;
   if (engine === "antigravity" && config.approvalMode !== "bypass") {
