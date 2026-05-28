@@ -129,6 +129,7 @@ export interface LarkServiceCommandDeps {
   waitUntilRunning?: (input: LarkServiceCommandInput) => Promise<void>;
   readLogs?: (input: { stateDir: string; logPath: string; tail: number }) => Promise<string>;
   findProcessIds?: (input: LarkServiceCommandInput) => Promise<number[]>;
+  findTmuxPanePids?: (sessionName: string) => Promise<number[]>;
   isProcessAlive?: (pid: number) => boolean;
   killProcess?: (pid: number) => void;
   killTmuxSession?: (sessionName: string) => Promise<boolean | void>;
@@ -1575,6 +1576,20 @@ async function defaultFindLarkServiceProcessIds(input: LarkServiceCommandInput):
   }
 }
 
+async function defaultFindTmuxPanePids(sessionName: string): Promise<number[]> {
+  try {
+    const { stdout } = await execFile("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_pid}"], {
+      timeout: 3_000,
+    });
+    return stdout
+      .split(/\r?\n/)
+      .map((line) => Number(line.trim()))
+      .filter((pid) => Number.isInteger(pid) && pid > 0);
+  } catch {
+    return [];
+  }
+}
+
 export function findLarkServiceProcessIdsFromPs(psOutput: string, input: LarkServiceCommandInput, currentPid: number = process.pid): number[] {
   return psOutput
     .split(/\r?\n/)
@@ -1596,7 +1611,17 @@ function isLarkRunProcessCommand(command: string, input: LarkServiceCommandInput
   if (/(?:^|\s)lark\s+service(?:\s|$)/.test(normalized)) {
     return false;
   }
-  return normalized.includes(input.entrypoint);
+  if (!normalized.includes(input.entrypoint)) {
+    return false;
+  }
+  const instanceName = resolveLarkInstanceName(input.env);
+  return normalized.includes(input.stateDir) ||
+    normalized.includes(`CCTB_LARK_INSTANCE=${instanceName}`) ||
+    normalized.includes(`CCTB_LARK_INSTANCE='${instanceName}'`) ||
+    normalized.includes(`CCTB_LARK_INSTANCE="${instanceName}"`) ||
+    normalized.includes(`TAROCUB_INSTANCE=${instanceName}`) ||
+    normalized.includes(`TAROCUB_INSTANCE='${instanceName}'`) ||
+    normalized.includes(`TAROCUB_INSTANCE="${instanceName}"`);
 }
 
 function defaultKillLarkProcess(pid: number): void {
@@ -1612,20 +1637,28 @@ function defaultKillLarkProcess(pid: number): void {
 
 async function defaultStopLarkService(
   input: LarkServiceCommandInput,
-  deps: Pick<LarkServiceCommandDeps, "findProcessIds" | "isProcessAlive" | "killProcess" | "killTmuxSession" | "sleep"> = {},
+  deps: Pick<LarkServiceCommandDeps, "findProcessIds" | "findTmuxPanePids" | "isProcessAlive" | "killProcess" | "killTmuxSession" | "sleep"> = {},
 ): Promise<"stopped" | "not_running"> {
   let stopped = false;
   const findProcessIds = deps.findProcessIds ?? defaultFindLarkServiceProcessIds;
+  const findTmuxPanePids = deps.findTmuxPanePids ?? defaultFindTmuxPanePids;
   const isAlive = deps.isProcessAlive ?? isProcessAlive;
   const killProcess = deps.killProcess ?? defaultKillLarkProcess;
   const killTmuxSession = deps.killTmuxSession ?? defaultKillTmuxSession;
   const sleepProcess = deps.sleep ?? sleep;
 
-  if (await killTmuxSession(buildLarkServiceTmuxSessionName(input.stateDir))) {
+  const sessionName = buildLarkServiceTmuxSessionName(input.stateDir);
+  const tmuxPanePids = await findTmuxPanePids(sessionName);
+  if (await killTmuxSession(sessionName)) {
     stopped = true;
   }
 
   const pidsToStop = new Set<number>();
+  for (const processId of tmuxPanePids) {
+    if (isAlive(processId)) {
+      pidsToStop.add(processId);
+    }
+  }
   const pid = await readLarkLockPid(input.stateDir);
   const lockPidAlive = pid !== null && isAlive(pid);
   if (lockPidAlive && await killTmuxSession(LEGACY_LARK_SERVICE_TMUX_SESSION)) {

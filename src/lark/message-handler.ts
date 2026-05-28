@@ -303,6 +303,7 @@ async function runNormalizedLarkMessage(
     },
   });
   const cfg = await loadInstanceConfig(input.stateDir);
+  const workspaceOverride = input.workspaceOverride ?? cfg.resume?.workspacePath;
   const locale = await resolveLarkLocale(input.stateDir);
   const accessDecision = input.bridge.checkAccess
     ? await input.bridge.checkAccess({
@@ -511,7 +512,7 @@ async function runNormalizedLarkMessage(
             text: notificationText,
             stateDir: input.stateDir,
             requestOutputDir,
-            workspaceOverride: input.workspaceOverride,
+            workspaceOverride,
             conversationKey: normalized.conversationKey,
             bridgeChatType: normalized.bridgeChatType,
             bridgeChatId: normalized.bridgeChatId,
@@ -554,7 +555,7 @@ async function runNormalizedLarkMessage(
             text: waitText,
             stateDir: input.stateDir,
             requestOutputDir,
-            workspaceOverride: input.workspaceOverride,
+            workspaceOverride,
             conversationKey: normalized.conversationKey,
             bridgeChatType: normalized.bridgeChatType,
             bridgeChatId: normalized.bridgeChatId,
@@ -586,7 +587,7 @@ async function runNormalizedLarkMessage(
           conversationKey: normalized.conversationKey,
           files,
           requestOutputDir,
-          workspaceOverride: input.workspaceOverride,
+          workspaceOverride,
           abortSignal: runController.signal,
           onApprovalRequest: async (request) => await requestLarkApproval({
             channel: input.channel,
@@ -614,7 +615,7 @@ async function runNormalizedLarkMessage(
           text: result.text,
           stateDir: input.stateDir,
           requestOutputDir,
-          workspaceOverride: input.workspaceOverride,
+          workspaceOverride,
           conversationKey: normalized.conversationKey,
           bridgeChatType: normalized.bridgeChatType,
           bridgeChatId: normalized.bridgeChatId,

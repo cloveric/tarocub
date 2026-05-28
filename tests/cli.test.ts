@@ -667,7 +667,7 @@ describe("runCli", () => {
     expect(messages).toEqual(["Usage: node dist/src/index.js lark run"]);
   });
 
-  it("does not treat the tmux wrapper command as a duplicate Lark service process", () => {
+  it("does not treat unrelated lockless Lark run commands as duplicate service processes", () => {
     const entrypoint = "/repo/dist/src/index.js";
     const psOutput = [
       `87623 tmux new-session -d -s cctb-lark-service cd '/repo' && CCTB_LARK_STATE_DIR='/tmp/lark' CODEX_TELEGRAM_INSTANCE='lark' '/opt/homebrew/bin/node' '${entrypoint}' lark run >> '/tmp/lark/lark-service.log' 2>&1`,
@@ -681,7 +681,7 @@ describe("runCli", () => {
       logPath: "/tmp/lark/lark-service.log",
       entrypoint,
       cwd: "/repo",
-    }, 99999)).toEqual([87624]);
+    }, 99999)).toEqual([]);
   });
 
   it("prints managed Lark service logs through the lark service command", async () => {

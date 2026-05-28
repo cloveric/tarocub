@@ -34,6 +34,19 @@ describe("classifyFailure specificity", () => {
     expect(classifyFailure(new Error("status page mentions app-server maintenance"))).toBe("unknown");
   });
 
+  it("does not treat engine names inside tool error paths as engine-cli failures", () => {
+    expect(
+      classifyFailure(new Error("lark-cli failed in /tmp/claude-code-sandbox/workspace/input with 500")),
+    ).toBe("unknown");
+  });
+
+  it("classifies explicit engine runtime failures", () => {
+    expect(classifyFailure(new Error("Codex runtime process failed to start"))).toBe("engine-cli");
+    expect(classifyFailure(new Error("claude cli failed"))).toBe("engine-cli");
+    expect(classifyFailure(new Error("engine failed during continuation"))).toBe("engine-cli");
+    expect(classifyFailure(new Error("claude exited with code 1"))).toBe("engine-cli");
+  });
+
   it("does not treat generic archive mentions as file-workflow failures", () => {
     expect(classifyFailure(new Error("archive the previous messages for me"))).toBe("unknown");
   });

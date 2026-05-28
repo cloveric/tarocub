@@ -134,6 +134,52 @@ describe("lark service", () => {
     }
   });
 
+  it("passes the resumed workspace to ordinary Lark messages", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-workspace-"));
+    const workspacePath = path.join(stateDir, "external-workspace");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "ok" })),
+    };
+
+    try {
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+        resume: {
+          sessionId: "claude-session-1",
+          dirName: "-Users-cloveric-projects-cc-telegram-bridge",
+          workspacePath,
+        },
+      }));
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: {
+          messageId: "om_resume",
+          chatId: "oc_chat",
+          chatType: "p2p",
+          senderId: "ou_user",
+          content: "continue",
+          rawContentType: "text",
+          resources: [],
+          mentions: [],
+          mentionAll: false,
+          mentionedBot: false,
+          createTime: Date.now(),
+        },
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        workspaceOverride: workspacePath,
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not add reactions before Lark access allows a message", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-reaction-denied-"));
     const channel = fakeChannel({

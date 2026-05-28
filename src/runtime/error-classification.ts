@@ -36,6 +36,23 @@ function normalizeErrorText(error: unknown): string {
   return String(error);
 }
 
+const NAMED_ENGINE_RE = /(?:^|[^a-z0-9_./-])(?:codex|claude|antigravity|agy)(?=$|[^a-z0-9_./-])/;
+const ENGINE_RUNTIME_RE =
+  /\b(?:runtime|process|spawn|adapter|binary|cli|app-server|startup|start|starting|transport|stream|session|turn|exited|exit code)\b/;
+const ENGINE_FAILURE_RE = /\b(?:failed|failure|error|crash|crashed|timeout|timed out|disconnected)\b/;
+
+function hasEngineCliSignal(text: string): boolean {
+  if (text.includes("turn.failed") || text.includes("engine cli")) {
+    return true;
+  }
+
+  if (/\bengine\b/.test(text) && (ENGINE_RUNTIME_RE.test(text) || ENGINE_FAILURE_RE.test(text))) {
+    return true;
+  }
+
+  return NAMED_ENGINE_RE.test(text) && (ENGINE_RUNTIME_RE.test(text) || ENGINE_FAILURE_RE.test(text));
+}
+
 export function classifyFailure(error: unknown): FailureCategory {
   if (error instanceof FileWorkflowPreparationError) {
     return "file-workflow";
@@ -80,12 +97,7 @@ export function classifyFailure(error: unknown): FailureCategory {
     return "file-workflow";
   }
 
-  if (
-    text.includes("turn.failed") ||
-    text.includes("engine cli") ||
-    (/(codex|claude|antigravity|agy|engine)/.test(text) && /(runtime|process|spawn|adapter|binary|cli|app-server|failed|error|startup|start)/.test(text)) ||
-    (/(runtime|process|spawn|adapter|binary|cli|app-server)/.test(text) && /(codex|claude|antigravity|agy|engine)/.test(text))
-  ) {
+  if (hasEngineCliSignal(text)) {
     return "engine-cli";
   }
 

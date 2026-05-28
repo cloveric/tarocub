@@ -76,7 +76,8 @@ export class SessionStore {
   }
 
   async findByChatId(telegramChatId: number): Promise<SessionRecord | null> {
-    return this.findByConversationKey(getTelegramConversationKey(telegramChatId));
+    const state = await this.load();
+    return state.chats.find((record) => matchesChatId(record, telegramChatId)) ?? null;
   }
 
   async findByConversationKey(conversationKey: string): Promise<SessionRecord | null> {
@@ -89,7 +90,7 @@ export class SessionStore {
   ): Promise<{ record: SessionRecord | null; warning?: string; repairable?: boolean }> {
     const { state, warning, repairable } = await this.inspect();
     return {
-      record: state.chats.find((entry) => recordConversationKey(entry) === getTelegramConversationKey(telegramChatId)) ?? null,
+      record: state.chats.find((entry) => matchesChatId(entry, telegramChatId)) ?? null,
       warning,
       repairable,
     };
@@ -107,16 +108,20 @@ export class SessionStore {
   }
 
   async removeByChatId(telegramChatId: number): Promise<boolean> {
-    return this.removeByConversationKey(getTelegramConversationKey(telegramChatId));
+    return this.removeMatching((record) => matchesChatId(record, telegramChatId));
   }
 
   async removeByConversationKey(conversationKey: string): Promise<boolean> {
+    return this.removeMatching((record) => recordConversationKey(record) === conversationKey);
+  }
+
+  private async removeMatching(predicate: (record: SessionRecord) => boolean): Promise<boolean> {
     let removed = false;
 
     await this.enqueueWrite(async () => {
       const state = await this.load();
       const nextChats = state.chats.filter((record) => {
-        if (recordConversationKey(record) === conversationKey) {
+        if (predicate(record)) {
           removed = true;
           return false;
         }
@@ -153,7 +158,20 @@ export class SessionStore {
   }
 
   async removeByChatIdRecovering(telegramChatId: number): Promise<{ removed: boolean; repaired: boolean }> {
-    return this.removeByConversationKeyRecovering(getTelegramConversationKey(telegramChatId));
+    try {
+      return {
+        removed: await this.removeByChatId(telegramChatId),
+        repaired: false,
+      };
+    } catch (error) {
+      if (!isRepairableSessionStateError(error)) {
+        throw error;
+      }
+
+      await this.store.quarantineCurrentFile("corrupt");
+      await this.reset();
+      return { removed: false, repaired: true };
+    }
   }
 
   async removeByConversationKeyRecovering(conversationKey: string): Promise<{ removed: boolean; repaired: boolean }> {
@@ -186,6 +204,16 @@ export class SessionStore {
 
     return run;
   }
+}
+
+function matchesChatId(record: SessionRecord, telegramChatId: number): boolean {
+  if (record.telegramThreadId !== undefined) {
+    return false;
+  }
+  if (record.conversationKey?.startsWith("lark:")) {
+    return record.telegramChatId === telegramChatId;
+  }
+  return recordConversationKey(record) === getTelegramConversationKey(telegramChatId);
 }
 
 function isUnreadableSessionStateError(error: unknown): boolean {

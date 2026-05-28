@@ -678,6 +678,8 @@ async function runLarkCardChoice(input: {
   const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
   const bridgeChatId = stableLarkNumericId(input.conversationKey);
   const locale = await resolveLarkLocale(input.stateDir);
+  const cfg = await loadInstanceConfig(input.stateDir);
+  const workspaceOverride = cfg.resume?.workspacePath;
   await mkdir(requestOutputDir, { recursive: true });
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {
@@ -715,6 +717,7 @@ async function runLarkCardChoice(input: {
           text: notificationText,
           stateDir: input.stateDir,
           requestOutputDir,
+          workspaceOverride,
           conversationKey: input.conversationKey,
           bridgeChatType: input.bridgeChatType,
           bridgeChatId,
@@ -743,6 +746,7 @@ async function runLarkCardChoice(input: {
       text: input.text,
       files: [],
       requestOutputDir,
+      workspaceOverride,
       abortSignal: abortController.signal,
       onApprovalRequest: async (request) => await requestLarkApproval({
         channel: input.channel,
@@ -769,6 +773,7 @@ async function runLarkCardChoice(input: {
       text: result.text,
       stateDir: input.stateDir,
       requestOutputDir,
+      workspaceOverride,
       conversationKey: input.conversationKey,
       bridgeChatType: input.bridgeChatType,
       bridgeChatId,
@@ -831,6 +836,8 @@ async function runLarkArchiveContinueCardAction(input: {
   const abortController = new AbortController();
   const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
   const locale = await resolveLarkLocale(input.stateDir);
+  const cfg = await loadInstanceConfig(input.stateDir);
+  const workspaceOverride = cfg.resume?.workspacePath;
   await mkdir(requestOutputDir, { recursive: true });
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {
@@ -874,6 +881,7 @@ async function runLarkArchiveContinueCardAction(input: {
           text: notificationText,
           stateDir: input.stateDir,
           requestOutputDir,
+          workspaceOverride,
           conversationKey: input.conversationKey,
           bridgeChatType: input.bridgeChatType,
           bridgeChatId,
@@ -904,6 +912,7 @@ async function runLarkArchiveContinueCardAction(input: {
       text: workflowResult.text,
       files: workflowResult.files,
       requestOutputDir,
+      workspaceOverride,
       abortSignal: abortController.signal,
       onApprovalRequest: async (request) => await requestLarkApproval({
         channel: input.channel,
@@ -930,6 +939,7 @@ async function runLarkArchiveContinueCardAction(input: {
       text: result.text,
       stateDir: input.stateDir,
       requestOutputDir,
+      workspaceOverride,
       conversationKey: input.conversationKey,
       bridgeChatType: input.bridgeChatType,
       bridgeChatId,

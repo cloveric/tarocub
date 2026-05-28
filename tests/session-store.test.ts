@@ -241,6 +241,25 @@ describe("SessionStore", () => {
     }
   });
 
+  it("removeByChatId supports Lark numeric chat aliases without collapsing Telegram topics", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const store = new SessionStore(filePath);
+
+    try {
+      await store.upsert(createRecord({
+        telegramChatId: 1959957305,
+        conversationKey: "lark:oc_fixture",
+        codexSessionId: "lark-thread",
+      }));
+
+      await expect(store.removeByChatId(1959957305)).resolves.toBe(true);
+      await expect(store.load()).resolves.toMatchObject({ chats: [] });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("removeByChatId returns false for a missing chat", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const filePath = path.join(tempDir, "session.json");

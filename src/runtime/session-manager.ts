@@ -78,4 +78,11 @@ export class SessionManager {
       suspendedPrevious: existing?.suspendedPrevious,
     });
   }
+
+  async clearSession(scope: number | { chatId: number; messageThreadId?: number; conversationKey?: string }): Promise<boolean> {
+    const conversationKey = typeof scope === "number"
+      ? getTelegramConversationKey(scope)
+      : scope.conversationKey ?? getTelegramConversationKey(scope.chatId, scope.messageThreadId);
+    return await this.sessionStore.removeByConversationKey(conversationKey);
+  }
 }
