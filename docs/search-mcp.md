@@ -1,6 +1,6 @@
 # Brave/Tavily Search MCP
 
-`cc-telegram-bridge` includes a local stdio MCP server for live web search:
+TaroCub includes a local stdio MCP server for live web search:
 
 ```bash
 node ./dist/src/index.js search-mcp
@@ -69,7 +69,7 @@ export TAVILY_API_KEY="..."
 Build first:
 
 ```bash
-cd /path/to/cc-telegram-bridge
+cd /path/to/tarocub
 npm run build
 ```
 

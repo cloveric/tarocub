@@ -1,6 +1,6 @@
 # State Model
 
-This document describes the persistent on-disk state used by `cc-telegram-bridge`.
+This document describes the persistent on-disk state used by TaroCub.
 
 The goal is to answer five practical questions for each file:
 

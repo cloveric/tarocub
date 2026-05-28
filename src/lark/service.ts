@@ -91,7 +91,7 @@ export async function runLarkService(
       appId: config.appId,
       appSecret: config.appSecret,
       transport: "websocket",
-      source: "cc-telegram-bridge",
+      source: "tarocub",
       policy: {
         dmMode: "open",
         requireMention: false,

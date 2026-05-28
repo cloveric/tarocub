@@ -1,6 +1,6 @@
 # Release Checklist
 
-This is the lightweight release and verification checklist for `cc-telegram-bridge`.
+This is the lightweight release and verification checklist for TaroCub.
 
 Use it before tagging a release, merging a large refactor, or claiming a milestone is done.
 

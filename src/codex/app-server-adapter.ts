@@ -527,8 +527,8 @@ export class CodexAppServerAdapter implements CodexAdapter {
       "initialize",
       {
         clientInfo: {
-          name: "cc-telegram-bridge",
-          title: "cc-telegram-bridge",
+          name: "tarocub",
+          title: "TaroCub",
           version: "0.1.0",
         },
         capabilities: {

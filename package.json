@@ -1,6 +1,6 @@
 {
-  "name": "tarocub-bridge",
-  "version": "4.6.70",
+  "name": "tarocub",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {

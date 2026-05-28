@@ -1,6 +1,6 @@
 # Change Rules
 
-This document defines the engineering rules for changing `cc-telegram-bridge`.
+This document defines the engineering rules for changing TaroCub.
 
 It exists to prevent a repeat of the same failure pattern:
 

@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <img src="./assets/github-banner.png" alt="TaroCub Bridge" width="100%" />
+  <img src="./assets/github-banner.png" alt="TaroCub" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/cloveric/cc-telegram-bridge/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cloveric/cc-telegram-bridge?style=flat-square&color=818cf8" alt="License"></a>
+  <a href="https://github.com/cloveric/tarocub/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cloveric/tarocub?style=flat-square&color=818cf8" alt="License"></a>
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square&logo=node.js&logoColor=white" alt="Windows | macOS | Linux">
@@ -16,7 +16,7 @@
 </p>
 
 <h3 align="center">
-  TaroCub Bridge：本地运行 Codex、Claude Code 和 Antigravity，再从 Telegram 与飞书/Lark 控制它们。<br>
+  TaroCub：本地运行 Codex、Claude Code 和 Antigravity，再从 Telegram 与飞书/Lark 控制它们。<br>
   在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，也可以把同一套 bridge 暴露到团队聊天里。
 </h3>
 
@@ -26,9 +26,9 @@
 
 ## 先从这里开始
 
-**TaroCub Bridge 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code 和 Antigravity CLI，然后给它们补上 Telegram 与飞书/Lark 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
+**TaroCub 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code 和 Antigravity CLI，然后给它们补上 Telegram 与飞书/Lark 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
 
-这个项目原名 `cc-telegram-bridge`。旧仓库 URL、已有状态目录和 `cctb` 简写会继续作为兼容层保留；公开名称从现在起使用 **TaroCub Bridge**。
+这个项目原名 `cc-telegram-bridge`。旧仓库 URL、已有状态目录和 `cctb` 简写会继续作为兼容层保留；公开名称从现在起使用 **TaroCub**。
 
 最简单的安装方式：克隆仓库，用 Codex、Claude Code 或 Antigravity 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
 
@@ -281,7 +281,7 @@ Antigravity 侧如需原生 MCP/plugin，请使用 Antigravity 自己的配置�
 
 ```
           ┌─────────────────────────────────────────────┐
-          │            cc-telegram-bridge                │
+          │                  TaroCub                     │
           └────────────┬──────────────┬─────────────────┘
                        │              │
         ┌──────────────┼──────────────┼──────────────┐
@@ -578,7 +578,7 @@ Bot 列出最近的 session：
 
 ```
 最近的本地 session：
-1. [cc-telegram-bridge] 64c2081c… (5m ago)
+1. [tarocub] 64c2081c… (5m ago)
 2. [my-app] a3f8b21e… (32m ago)
 
 回复 /resume <编号> 继续该 session。
@@ -989,13 +989,13 @@ coordinator 实例上的配置示例：
 
 打开终端的 Codex、Claude Code 或 Antigravity，告诉它：
 
-> *"克隆 https://github.com/cloveric/cc-telegram-bridge 并用这个 token 配置 Telegram bot：`<粘贴你的 token>`"*
+> *"克隆 https://github.com/cloveric/tarocub 并用这个 token 配置 Telegram bot：`<粘贴你的 token>`"*
 
 或者手动操作：
 
 ```bash
-git clone https://github.com/cloveric/cc-telegram-bridge.git
-cd cc-telegram-bridge
+git clone https://github.com/cloveric/tarocub.git
+cd tarocub
 npm install
 npm run build
 
@@ -1048,7 +1048,7 @@ npm run dev -- telegram service start --instance agy-bot
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         cc-telegram-bridge                          │
+│                             TaroCub                                │
 ├─────────────┬──────────────┬──────────────────┬─────────────────────┤
 │  Telegram   │   运行时     │     AI 引擎      │      状态           │
 │  层         │   层         │     层           │      层             │
@@ -1413,11 +1413,11 @@ npm start                    # 启动生产版本
 
 ```bash
 # 构建
-docker build -t cc-telegram-bridge .
+docker build -t tarocub .
 
 # 运行
-docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram configure <token>
-docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram service start
+docker run -v ~/.cctb:/root/.cctb tarocub telegram configure <token>
+docker run -v ~/.cctb:/root/.cctb tarocub telegram service start
 ```
 
 挂载 `~/.cctb` 以在容器重启后保留状态。
@@ -1504,7 +1504,7 @@ Fast Mode 是 Codex CLI 自己的功能，但在无人值守 bridge 实例里，
 你可以把下面这段去敏感化的 brief 给本地守护 agent：
 
 ```text
-你是这台机器上 cc-telegram-bridge 的本地运维守护代理。
+你是这台机器上 TaroCub 的本地运维守护代理。
 
 你的工作是保持 bot 实例健康，并让问题容易诊断。
 

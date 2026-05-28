@@ -30,12 +30,12 @@
     <text x="432" y="117" fill="#B45309" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">3 ENGINES</text>
   </g>
 
-  <text x="80" y="215" fill="#1F2937" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="850" letter-spacing="-2.2">CC Agent</text>
-  <text x="80" y="285" fill="#1F2937" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="850" letter-spacing="-2.2">Bridge</text>
+  <text x="80" y="225" fill="#1F2937" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="72" font-weight="850" letter-spacing="-2.4">TaroCub</text>
+  <text x="80" y="285" fill="#334155" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="760" letter-spacing="-0.8">Local agents, anywhere.</text>
   <rect x="82" y="314" width="182" height="4" rx="2" fill="url(#accent)"/>
 
-  <text x="80" y="360" fill="#334155" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="20" font-weight="600">Real Codex, Claude Code, and Antigravity CLIs.</text>
-  <text x="80" y="391" fill="#64748B" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="500">Operated from Telegram and Feishu/Lark.</text>
+  <text x="80" y="360" fill="#334155" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="20" font-weight="600">Codex, Claude Code, and Antigravity run on your machine.</text>
+  <text x="80" y="391" fill="#64748B" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="500">Telegram and Feishu/Lark keep them close.</text>
 
   <g>
     <rect x="80" y="438" width="138" height="31" rx="15.5" fill="#CCFBF1" fill-opacity="0.86" stroke="#14B8A6" stroke-opacity="0.3"/>

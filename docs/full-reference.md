@@ -5,11 +5,11 @@
 > This is the long-form reference that used to live on the GitHub landing page. The shorter README keeps the repo homepage readable; this file keeps the full operational detail.
 
 <p align="center">
-  <img src="../assets/github-banner.png" alt="TaroCub Bridge for Telegram and Feishu/Lark" width="100%" />
+  <img src="../assets/github-banner.png" alt="TaroCub for Telegram and Feishu/Lark" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/cloveric/cc-telegram-bridge/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cloveric/cc-telegram-bridge?style=flat-square&color=818cf8" alt="License"></a>
+  <a href="https://github.com/cloveric/tarocub/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cloveric/tarocub?style=flat-square&color=818cf8" alt="License"></a>
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square&logo=node.js&logoColor=white" alt="Windows | macOS | Linux">
@@ -18,7 +18,7 @@
 </p>
 
 <h3 align="center">
-  TaroCub Bridge runs Codex, Claude Code, and Antigravity locally, then lets you control them from Telegram and Feishu/Lark.<br>
+  TaroCub runs Codex, Claude Code, and Antigravity locally, then lets you control them from Telegram and Feishu/Lark.<br>
   Resume desktop sessions from your phone, move files both ways, run scheduled work, and expose the same bridge through team chat.
 </h3>
 
@@ -28,9 +28,9 @@
 
 ## Start Here
 
-**TaroCub Bridge is not another hosted agent UI.** It runs the real Codex, Claude Code, and Antigravity CLIs on your machine, then gives them durable Telegram and Feishu/Lark surfaces: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
+**TaroCub is not another hosted agent UI.** It runs the real Codex, Claude Code, and Antigravity CLIs on your machine, then gives them durable Telegram and Feishu/Lark surfaces: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
 
-This project was formerly named `cc-telegram-bridge`. Existing URLs, state directories, and the `cctb` shorthand remain supported as compatibility surfaces while the public product name moves to TaroCub Bridge.
+This project was formerly named `cc-telegram-bridge`. Existing URLs, state directories, and the `cctb` shorthand remain supported as compatibility surfaces while the public product name moves to TaroCub.
 
 The easiest setup path is to clone this repo, open it in Codex, Claude Code, or Antigravity, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
 
@@ -235,7 +235,8 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
-- **v4.6.70** — rebrands the public project surface to **TaroCub Bridge** across the landing README, Chinese README, full reference, package metadata, and static site, while explicitly preserving `cc-telegram-bridge` URLs, state directories, and `cctb` compatibility language.
+- **v0.1.0** — resets the public product to **TaroCub**, renames the GitHub/package surface, adds the product thesis to the banner, and keeps `cctb` plus old state paths as compatibility surfaces.
+- **v4.6.70** — transitional release that introduced the TaroCub family name before the full product reset.
 - **v4.6.69** — makes Lark setup more self-healing after real OAuth smoke testing: missing user identity now prints the exact recommended Docs/Drive/Sheets `lark auth start` command plus `finish <device-code>`, and the lark-cli guidance now matches the safer non-forcing `user-default` behavior.
 - **v4.6.68** — deepens Lark-native reliability: authorized engine turns can show best-effort `OnIt` / `DONE` / `ERROR` reactions, optional native `@name` resolution maps members through `im:chat.members:read`, card sends fall back to redacted plain text with approval command alternatives, `lark setup` ties wizard/preflight/provision/auth/doctor into one flow, and setup/preflight no longer force-rebinds lark-cli in a way that can wipe user OAuth.
 - **v4.6.67** — closes a Lark runtime secret-boundary gap: `lark-cli` child processes launched from document and `/newgroup` workflows now get `LARK_CHANNEL=1` without inheriting `LARK_APP_SECRET`, keeping the runtime path aligned with the bridge secret-provider model.
@@ -379,7 +380,7 @@ Run as many bots as you need. Each instance is fully isolated — its own engine
 
 ```
           ┌─────────────────────────────────────────────┐
-          │          cc-telegram-bridge              │
+          │                 TaroCub                 │
           └────────────┬──────────────┬─────────────────┘
                        │              │
         ┌──────────────┼──────────────┼──────────────┐
@@ -698,7 +699,7 @@ The bot lists recent sessions with project names and timestamps:
 
 ```
 Recent local sessions:
-1. [cc-telegram-bridge] 64c2081c… (5m ago)
+1. [tarocub] 64c2081c… (5m ago)
 2. [my-app] a3f8b21e… (32m ago)
 
 Reply /resume <number> to continue that session.
@@ -1111,13 +1112,13 @@ All bots can talk to all bots. Simplest config, best for small teams (3-5 bots).
 
 Open your terminal with Codex, Claude Code, or Antigravity, and tell it:
 
-> *"Clone https://github.com/cloveric/cc-telegram-bridge and set up a Telegram bot with this token: `<paste your token>`"*
+> *"Clone https://github.com/cloveric/tarocub and set up a Telegram bot with this token: `<paste your token>`"*
 
 Or do it manually:
 
 ```bash
-git clone https://github.com/cloveric/cc-telegram-bridge.git
-cd cc-telegram-bridge
+git clone https://github.com/cloveric/tarocub.git
+cd tarocub
 npm install
 npm run build
 
@@ -1170,7 +1171,7 @@ npm run dev -- telegram service start --instance agy-bot
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        cc-telegram-bridge                       │
+│                              TaroCub                            │
 ├─────────────┬──────────────┬──────────────────┬─────────────────────┤
 │  Telegram   │   Runtime    │     AI Engine    │      State          │
 │  Layer      │   Layer      │     Layer        │      Layer          │
@@ -1552,11 +1553,11 @@ npm start                    # Start production build
 
 ```bash
 # Build
-docker build -t cc-telegram-bridge .
+docker build -t tarocub .
 
 # Run (configure first, then start)
-docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram configure <token>
-docker run -v ~/.cctb:/root/.cctb cc-telegram-bridge telegram service start
+docker run -v ~/.cctb:/root/.cctb tarocub telegram configure <token>
+docker run -v ~/.cctb:/root/.cctb tarocub telegram service start
 ```
 
 Mount `~/.cctb` to persist state across container restarts.
@@ -1643,7 +1644,7 @@ Do **not** use it as a second product agent. Its job should be operations only: 
 You can give a local supervisor agent a brief like this:
 
 ```text
-You are the local operations supervisor for cc-telegram-bridge on this machine.
+You are the local operations supervisor for TaroCub on this machine.
 
 Your job is to keep bot instances healthy and easy to diagnose.
 

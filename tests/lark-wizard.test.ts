@@ -60,7 +60,7 @@ describe("runLarkWizard", () => {
       expect(qrUrls).toEqual(["https://open.feishu.cn/qr"]);
       expect(registerAppImpl).toHaveBeenCalledWith(expect.objectContaining({
         domain: "accounts.feishu.cn",
-        source: "cc-telegram-bridge",
+        source: "tarocub",
       }));
       expect(provisionApp).toHaveBeenCalledWith(expect.objectContaining({
         appId: "cli_personal",

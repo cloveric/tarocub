@@ -1,6 +1,6 @@
 # Security Boundaries
 
-This document explains the trust boundaries in `cc-telegram-bridge`.
+This document explains the trust boundaries in TaroCub.
 
 The goal is not to claim the system is "secure" in the abstract. The goal is to make the current security model explicit enough that future changes do not quietly widen trust, weaken isolation, or reintroduce file- or state-handling bugs.
 

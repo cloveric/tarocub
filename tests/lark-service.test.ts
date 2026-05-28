@@ -1564,7 +1564,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_new_chat",
-        { markdown: expect.stringContaining("这个群已经接入 cc-telegram-bridge") },
+        { markdown: expect.stringContaining("这个群已经接入 TaroCub") },
       );
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",

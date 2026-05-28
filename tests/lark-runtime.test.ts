@@ -92,7 +92,7 @@ describe("runLarkService", () => {
         appId: "cli_a",
         appSecret: "secret",
         transport: "websocket",
-        source: "cc-telegram-bridge",
+        source: "tarocub",
         policy: {
           dmMode: "open",
           requireMention: false,

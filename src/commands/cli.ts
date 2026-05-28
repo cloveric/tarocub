@@ -1759,7 +1759,7 @@ async function runLarkSendCommand(
     appId: config.appId,
     appSecret: config.appSecret,
     transport: "websocket",
-    source: "cc-telegram-bridge-cli",
+    source: "tarocub-cli",
     ...(config.domain !== undefined ? { domain: config.domain } : {}),
   });
   await (deps.deliverResponse ?? deliverLarkResponse)({

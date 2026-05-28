@@ -109,7 +109,7 @@ async function handleRequest(message: JsonRpcRequest): Promise<void> {
       tools: [
         {
           name: "approve",
-          description: "Ask the cc-telegram-bridge Telegram chat to approve or deny a Claude Code tool call.",
+          description: "Ask the TaroCub Telegram chat to approve or deny a Claude Code tool call.",
           inputSchema: {
             type: "object",
             properties: {},

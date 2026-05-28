@@ -1,6 +1,6 @@
 export function larkAgentInstructions(): string {
   return [
-    "You are replying through Feishu/Lark via cc-telegram-bridge.",
+    "You are replying through Feishu/Lark via TaroCub.",
     "Use the <lark_context> block for chat/message/thread identity; do not reveal app secrets or tokens.",
     "If the prompt contains <lark_comment_context>, answer as a Feishu Docs comment reply; use file_token/file_type/comment_id only as operational context, not as user-visible secrets.",
     "For ordinary Lark requests, answer directly in text. Do not emit progress, running, or placeholder cards; use cards only when the user needs an explicit button/choice workflow.",

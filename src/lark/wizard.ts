@@ -45,7 +45,7 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
 
   const result: LarkWizardRegisterAppResult = await register({
     ...resolveLarkRegistrationDomains(env.LARK_DOMAIN),
-    source: "cc-telegram-bridge",
+    source: "tarocub",
     onQRCodeReady: (info) => {
       logger.log("");
       generateQRCode(info.url);

@@ -587,7 +587,7 @@ function renderLarkNewGroupUsage(locale: Locale): string {
 function renderLarkNewGroupWelcome(name: string, mode: "group" | "topic", locale: Locale): string {
   if (locale === "en") {
     return [
-      `**${name}** is connected to cc-telegram-bridge.`,
+      `**${name}** is connected to TaroCub.`,
       "",
       mode === "topic"
         ? "Use each topic as an isolated session, or send `/status` to inspect this conversation."
@@ -595,7 +595,7 @@ function renderLarkNewGroupWelcome(name: string, mode: "group" | "topic", locale
     ].join("\n");
   }
   return [
-    `**${name}** 这个${mode === "topic" ? "话题群" : "群"}已经接入 cc-telegram-bridge。`,
+    `**${name}** 这个${mode === "topic" ? "话题群" : "群"}已经接入 TaroCub。`,
     "",
     mode === "topic"
       ? "每个话题都可以作为独立 session 使用；发送 `/status` 可查看当前会话。"
@@ -701,7 +701,7 @@ export function isStopCommand(text: string): boolean {
 function renderLarkHelpMessage(locale: Locale = "zh"): string {
   if (locale === "en") {
     return [
-      "**cc-telegram-bridge for Feishu/Lark**",
+      "**TaroCub for Feishu/Lark**",
       "",
       "Common commands:",
       "- `/help`: show this help",
@@ -747,7 +747,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
   }
 
   return [
-    "**cc-telegram-bridge for Feishu/Lark**",
+    "**TaroCub for Feishu/Lark**",
     "",
     "常用命令：",
     "- `/help`：显示这份帮助",

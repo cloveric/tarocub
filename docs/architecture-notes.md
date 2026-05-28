@@ -1,12 +1,12 @@
 # Architecture Notes
 
-This document describes the current architecture of `cc-telegram-bridge` as it exists in the codebase today.
+This document describes the current architecture of TaroCub as it exists in the codebase today.
 
 The goal is not to sell an idealized design. The goal is to make the actual system legible enough that future changes land in the right place, cross-cutting behavior stays consistent, and new features do not regress security or state integrity.
 
 ## Purpose
 
-`cc-telegram-bridge` is a local-first bridge that connects Telegram chats to real coding-agent CLIs.
+TaroCub is a local-first bridge that connects Telegram and Feishu/Lark chats to real coding-agent CLIs.
 
 Each running instance is a small service process with:
 
