@@ -166,11 +166,16 @@ Lark has two levels:
 Recommended production flow:
 
 ```bash
+# Optional but recommended for each named Lark bot:
+export CCTB_LARK_INSTANCE=ccfgg1
+
 node dist/src/index.js lark setup --install-cli --identity bot-only
 node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"
 node dist/src/index.js lark auth finish <device-code>
 node dist/src/index.js lark service restart
 ```
+
+`CCTB_LARK_INSTANCE=<name>` is the Lark-specific instance selector. Without an explicit `CCTB_LARK_STATE_DIR`, it stores that bot under `~/.cctb/<name>/lark.env`, so multiple Feishu/Lark bots do not fall back into the shared default `~/.cctb/lark` directory.
 
 `lark setup` wraps the QR wizard, lark-cli preflight/bind, app provisioning, OAuth status check, and `lark doctor`. If you already created the app and only want to re-check the local side, use `node dist/src/index.js lark setup --skip-wizard --install-cli --identity bot-only`.
 
@@ -263,7 +268,7 @@ npm run build
 npm test -- --run
 ```
 
-The project is TypeScript, Node.js >= 20, and Vitest. It stores runtime state under `~/.cctb/<instance>` for Telegram instances and `~/.cctb/lark` for the default Lark state dir.
+The project is TypeScript, Node.js >= 20, and Vitest. It stores runtime state under `~/.cctb/<instance>` for Telegram instances, `~/.cctb/lark` for the default Lark state dir, or `~/.cctb/<CCTB_LARK_INSTANCE>` for named Lark bots.
 
 ## License
 

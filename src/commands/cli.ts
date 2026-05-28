@@ -144,6 +144,7 @@ export interface CliOptions {
     LARK_APP_ID?: string;
     LARK_APP_SECRET?: string;
     LARK_DOMAIN?: string;
+    CCTB_LARK_INSTANCE?: string;
     CCTB_LARK_STATE_DIR?: string;
     LARK_REQUIRE_MENTION_IN_GROUP?: string;
   };
@@ -513,6 +514,7 @@ async function formatLarkStatus(
   const serviceStatus = await describeLarkServiceLock(stateDir);
   const lines = [
     "Lark channel",
+    `Instance: ${resolveLarkInstanceName(env)}`,
     `App ID: ${env.LARK_APP_ID ? "configured" : "missing"}`,
     `App Secret: ${env.LARK_APP_SECRET ? "configured" : "missing"}`,
     `Domain: ${env.LARK_DOMAIN ?? "default"}`,
@@ -1320,6 +1322,7 @@ export function buildLarkServiceStartCommand(input: LarkServiceCommandInput): st
     shellQuote(input.cwd),
     "&&",
     `CCTB_LARK_STATE_DIR=${shellQuote(input.stateDir)}`,
+    `CCTB_LARK_INSTANCE=${shellQuote(resolveLarkInstanceName(input.env))}`,
     `TAROCUB_INSTANCE=${shellQuote(resolveLarkInstanceName(input.env))}`,
     shellQuote(process.execPath),
     shellQuote(input.entrypoint),

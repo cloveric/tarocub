@@ -9,6 +9,7 @@ export interface LarkRuntimeEnv {
   USERPROFILE?: string;
   CODEX_HOME?: string;
   CLAUDE_CONFIG_DIR?: string;
+  CCTB_LARK_INSTANCE?: string;
   TAROCUB_INSTANCE?: string;
   CODEX_TELEGRAM_INSTANCE?: string;
   CODEX_TELEGRAM_STATE_DIR?: string;
@@ -39,8 +40,17 @@ export interface LarkRuntimeConfig {
   requireMentionInGroup: boolean;
 }
 
-export function resolveLarkInstanceName(env: Pick<LarkRuntimeEnv, "TAROCUB_INSTANCE">, fallback = "lark"): string {
-  return normalizeInstanceName(env.TAROCUB_INSTANCE ?? fallback);
+export function resolveLarkInstanceName(env: Pick<LarkRuntimeEnv, "CCTB_LARK_INSTANCE" | "TAROCUB_INSTANCE">, fallback = "lark"): string {
+  return normalizeInstanceName(env.CCTB_LARK_INSTANCE ?? env.TAROCUB_INSTANCE ?? fallback);
+}
+
+export function resolveDefaultLarkStateDir(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE">): string {
+  const homeDir = env.HOME ?? env.USERPROFILE;
+  if (!homeDir) {
+    throw new Error(process.platform === "win32" ? "USERPROFILE or HOME is required" : "HOME or USERPROFILE is required");
+  }
+  const instanceName = normalizeInstanceName(env.CCTB_LARK_INSTANCE ?? "lark");
+  return path.join(homeDir, ".cctb", instanceName);
 }
 
 export function resolveLarkRuntimeConfig(env: LarkRuntimeEnv): LarkRuntimeConfig {
@@ -59,7 +69,9 @@ export function resolveLarkRuntimeConfig(env: LarkRuntimeEnv): LarkRuntimeConfig
     appId: env.LARK_APP_ID,
     appSecret: env.LARK_APP_SECRET,
     ...(env.LARK_DOMAIN ? { domain: resolveLarkClientDomain(env.LARK_DOMAIN) } : {}),
-    stateDir: env.CCTB_LARK_STATE_DIR ?? env.CODEX_TELEGRAM_STATE_DIR ?? path.join(homeDir!, ".cctb", "lark"),
+    stateDir: env.CCTB_LARK_STATE_DIR
+      ?? (env.CCTB_LARK_INSTANCE ? resolveDefaultLarkStateDir(env) : env.CODEX_TELEGRAM_STATE_DIR)
+      ?? resolveDefaultLarkStateDir(env),
     requireMentionInGroup: parseBooleanEnv(env.LARK_REQUIRE_MENTION_IN_GROUP, true),
   };
 }
