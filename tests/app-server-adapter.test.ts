@@ -1319,6 +1319,41 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(1);
   });
 
+  it("includes app-server protocol state in inactivity failures", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter(
+      "codex",
+      process.cwd(),
+      undefined,
+      spawnFn,
+      undefined,
+      undefined,
+      undefined,
+      60 * 60_000,
+      1,
+    );
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    await expect(promise).rejects.toThrow(/\[app-server state\]/);
+    await expect(promise).rejects.toThrow(/pending turn: threadId=thread-123/);
+    await expect(promise).rejects.toThrow(/last request: .* id=3 method=turn\/start threadId=thread-123/);
+    await expect(promise).rejects.toThrow(/last response: .* id=2 method=thread\/start threadId=thread-123/);
+    await expect(promise).rejects.toThrow(/last notification: none/);
+    await expect(promise).rejects.toThrow(/last turn activity: none/);
+    await expect(promise).rejects.toThrow(/pending requests: id=3 method=turn\/start threadId=thread-123/);
+    expect(child.killCalls).toBe(1);
+  });
+
   it("drops oversized non-JSON stdout diagnostics without killing the app-server turn", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

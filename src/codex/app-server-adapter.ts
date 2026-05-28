@@ -65,6 +65,10 @@ type JsonRpcResponse = {
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  method: string;
+  threadId?: string;
+  createdAt: number;
+  childGeneration: number;
 };
 
 class CodexAppServerRequestTimeoutError extends Error {
@@ -92,6 +96,9 @@ type PendingTurn = {
   usage?: AdapterUsage;
   errorMessage?: string;
   turnId?: string;
+  startedAt: number;
+  lastActivityAt?: number;
+  lastActivityMethod?: string;
   onProgress?: (partialText: string) => void;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   timeout?: ReturnType<typeof setTimeout>;
@@ -100,6 +107,15 @@ type PendingTurn = {
   abortCleanup?: () => void;
   resolve: (result: { text: string; usage?: AdapterUsage }) => void;
   reject: (error: Error) => void;
+};
+
+type AppServerProtocolDiagnostic = {
+  at: number;
+  id?: number;
+  method: string;
+  threadId?: string;
+  childGeneration: number;
+  status?: "ok" | "error";
 };
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
@@ -256,6 +272,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private readonly loadedThreads = new Set<string>();
   private completingTurns = 0;
   private readonly idleWaiters = new Set<() => void>();
+  private lastRequestDiagnostic: AppServerProtocolDiagnostic | null = null;
+  private lastResponseDiagnostic: AppServerProtocolDiagnostic | null = null;
+  private lastNotificationDiagnostic: AppServerProtocolDiagnostic | null = null;
+  private lastTurnActivityDiagnostic: AppServerProtocolDiagnostic | null = null;
 
   constructor(
     private readonly codexExecutable: string,
@@ -587,6 +607,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
 
       this.pendingRequests.delete(parsed.id);
+      this.lastResponseDiagnostic = {
+        at: Date.now(),
+        id: parsed.id,
+        method: pending.method,
+        threadId: pending.threadId ?? this.readThreadIdFromResult(parsed.result),
+        childGeneration: pending.childGeneration,
+        status: parsed.error ? "error" : "ok",
+      };
       if (parsed.error) {
         pending.reject(new Error(parsed.error.message ?? "Unknown app-server error"));
       } else {
@@ -596,11 +624,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return;
     }
 
+    if (typeof parsed.method === "string") {
+      this.recordNotificationDiagnostic(parsed.method, parsed.params);
+    }
+
     if (parsed.method === "item/agentMessage/delta") {
       const threadId = this.readString(parsed.params?.threadId);
       const delta = this.readString(parsed.params?.delta);
       if (threadId && delta) {
-        this.noteTurnActivity(threadId);
+        this.noteTurnActivity(threadId, parsed.method);
         const pending = this.pendingTurns.get(threadId);
         if (pending) {
           pending.chunks.push(delta);
@@ -613,7 +645,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     if (parsed.method === "item/completed") {
       const threadId = this.readString(parsed.params?.threadId);
       if (threadId) {
-        this.noteTurnActivity(threadId);
+        this.noteTurnActivity(threadId, parsed.method);
       }
       const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
       const item = parsed.params?.item;
@@ -650,7 +682,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         return;
       }
 
-      this.noteTurnActivity(threadId);
+      this.noteTurnActivity(threadId, parsed.method);
 
       const pending = this.pendingTurns.get(threadId);
       if (!pending) {
@@ -680,7 +712,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     if (parsed.method === "error") {
       const threadId = this.readString(parsed.params?.threadId);
       if (threadId) {
-        this.noteTurnActivity(threadId);
+        this.noteTurnActivity(threadId, parsed.method);
       }
       const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
       const errorMessage = this.readErrorMessage(parsed.params?.error);
@@ -731,6 +763,33 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return null;
   }
 
+  private readThreadIdFromResult(value: unknown): string | undefined {
+    if (typeof value !== "object" || value === null) {
+      return undefined;
+    }
+
+    const result = value as { thread?: unknown; threadId?: unknown };
+    if (typeof result.threadId === "string") {
+      return result.threadId;
+    }
+    if (typeof result.thread === "object" && result.thread !== null) {
+      const thread = result.thread as { id?: unknown };
+      if (typeof thread.id === "string") {
+        return thread.id;
+      }
+    }
+    return undefined;
+  }
+
+  private recordNotificationDiagnostic(method: string, params: Record<string, unknown> | undefined): void {
+    this.lastNotificationDiagnostic = {
+      at: Date.now(),
+      method,
+      threadId: this.readString(params?.threadId) ?? undefined,
+      childGeneration: this.childGeneration,
+    };
+  }
+
   private request(
     method: string,
     params: Record<string, unknown>,
@@ -745,6 +804,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     const id = this.nextRequestId++;
     const requestChildGeneration = this.childGeneration;
+    const requestThreadId = this.readString(params.threadId) ?? undefined;
+    const requestCreatedAt = Date.now();
+    this.lastRequestDiagnostic = {
+      at: requestCreatedAt,
+      id,
+      method,
+      threadId: requestThreadId,
+      childGeneration: requestChildGeneration,
+    };
     return new Promise<unknown>((resolve, reject) => {
       let settled = false;
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -784,6 +852,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
       this.pendingRequests.set(id, {
         resolve: resolveOnce,
         reject: rejectOnce,
+        method,
+        threadId: requestThreadId,
+        createdAt: requestCreatedAt,
+        childGeneration: requestChildGeneration,
       });
       if (typeof options?.timeoutMs === "number" && options.timeoutMs > 0) {
         timeout = setTimeout(() => {
@@ -944,6 +1016,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const pendingTurn: PendingTurn = {
         chunks: [],
         generatedImageTags: [],
+        startedAt: Date.now(),
         onProgress,
         onEngineEvent,
         inactivityTimeoutDisabled: timeoutMs === null,
@@ -971,7 +1044,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
         pendingTurn.timeout = setTimeout(() => {
           abortTurn(
             this.withDiagnostics(
-              `${turnErrorPrefix} timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`,
+              this.withAppServerState(
+                `${turnErrorPrefix} timed out after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`,
+                threadId,
+                pendingTurn,
+              ),
             ),
             { destroyChild: true },
           );
@@ -1022,12 +1099,21 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return pending;
   }
 
-  private noteTurnActivity(threadId: string): void {
+  private noteTurnActivity(threadId: string, method: string): void {
     const pending = this.pendingTurns.get(threadId);
     if (!pending) {
       return;
     }
 
+    const now = Date.now();
+    pending.lastActivityAt = now;
+    pending.lastActivityMethod = method;
+    this.lastTurnActivityDiagnostic = {
+      at: now,
+      method,
+      threadId,
+      childGeneration: this.childGeneration,
+    };
     this.scheduleTurnInactivityTimeout(
       threadId,
       pending,
@@ -1059,7 +1145,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
       pending.reject(
         this.withDiagnostics(
-          `Codex app-server turn became inactive after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`,
+          this.withAppServerState(
+            `Codex app-server turn became inactive after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`,
+            threadId,
+            pending,
+          ),
         ),
       );
       this.destroy();
@@ -1250,6 +1340,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
     this.lineBuffer = "";
     this.stderrTail = "";
     this.stdoutDiagnosticTail = "";
+    this.lastRequestDiagnostic = null;
+    this.lastResponseDiagnostic = null;
+    this.lastNotificationDiagnostic = null;
+    this.lastTurnActivityDiagnostic = null;
   }
 
   private appendDiagnostic(channel: "stderr" | "stdout", chunk: string): void {
@@ -1305,8 +1399,57 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return new Error(`${message}\n\n[engine diagnostics]\n${sections.join("\n\n")}`);
   }
 
+  private withAppServerState(message: string, threadId?: string, pending?: PendingTurn): string {
+    if (message.includes("[app-server state]")) {
+      return message;
+    }
+
+    return `${message}\n\n[app-server state]\n${this.renderAppServerState(threadId, pending)}`;
+  }
+
+  private renderAppServerState(threadId?: string, pending?: PendingTurn): string {
+    const now = Date.now();
+    const pendingRequests = [...this.pendingRequests.entries()]
+      .map(([id, request]) => {
+        const parts = [
+          `id=${id}`,
+          `method=${request.method}`,
+          request.threadId ? `threadId=${request.threadId}` : null,
+          `ageMs=${Math.max(0, now - request.createdAt)}`,
+        ].filter(Boolean);
+        return parts.join(" ");
+      });
+
+    return [
+      pending && threadId
+        ? `pending turn: threadId=${threadId} ageMs=${Math.max(0, now - pending.startedAt)} lastActivity=${pending.lastActivityAt ? `${new Date(pending.lastActivityAt).toISOString()} method=${pending.lastActivityMethod ?? "unknown"}` : "none"}`
+        : "pending turn: none",
+      `last request: ${this.formatProtocolDiagnostic(this.lastRequestDiagnostic)}`,
+      `last response: ${this.formatProtocolDiagnostic(this.lastResponseDiagnostic)}`,
+      `last notification: ${this.formatProtocolDiagnostic(this.lastNotificationDiagnostic)}`,
+      `last turn activity: ${this.formatProtocolDiagnostic(this.lastTurnActivityDiagnostic)}`,
+      `pending requests: ${pendingRequests.length > 0 ? pendingRequests.join(", ") : "none"}`,
+    ].join("\n");
+  }
+
+  private formatProtocolDiagnostic(entry: AppServerProtocolDiagnostic | null): string {
+    if (!entry) {
+      return "none";
+    }
+
+    const parts = [
+      new Date(entry.at).toISOString(),
+      typeof entry.id === "number" ? `id=${entry.id}` : null,
+      `method=${entry.method}`,
+      entry.threadId ? `threadId=${entry.threadId}` : null,
+      entry.status ? `status=${entry.status}` : null,
+      `childGeneration=${entry.childGeneration}`,
+    ].filter(Boolean);
+    return parts.join(" ");
+  }
+
   private createRequestTimeoutError(method: string, message: string, childGeneration: number): Error {
-    const withDiagnostics = this.withDiagnostics(message).message;
+    const withDiagnostics = this.withDiagnostics(this.withAppServerState(message)).message;
     if (method === "thread/start" || method === "thread/resume") {
       return new ThreadReadTimeoutError(withDiagnostics, childGeneration);
     }
