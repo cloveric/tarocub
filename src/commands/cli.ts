@@ -3091,16 +3091,23 @@ async function runInstructionsCommand(
     let instanceNames = [instanceName];
     if (all.enabled) {
       try {
-        const dirents = await readdir(resolveChannelsDirFromEnv(env), { withFileTypes: true });
-        instanceNames = dirents
+        const channelsDir = resolveChannelsDirFromEnv(env);
+        const dirents = await readdir(channelsDir, { withFileTypes: true });
+        const candidateNames = dirents
           .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
           .map((entry) => entry.name)
           .sort();
+        instanceNames = [];
+        for (const name of candidateNames) {
+          if (!await isLarkOnlyStateDir(path.join(channelsDir, name))) {
+            instanceNames.push(name);
+          }
+        }
       } catch {
         instanceNames = [];
       }
       if (instanceNames.length === 0) {
-        logger.log("No instances found.");
+        logger.log("No Telegram instances found.");
         return true;
       }
     }

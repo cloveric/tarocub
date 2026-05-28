@@ -57,8 +57,9 @@ export function renderDefaultInstanceAgentInstructions(): string {
   return [
   "## Telegram Transport",
   "",
-  `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
-  "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
+  `Plain text; ask in chat. Deliver: file/image ${toolExample("send.file")} (\`send.image\` same), batch fenced \`tool-call\` {name:"send.batch",payload:{message?,images?,files?}}, small text fenced \`file:name.ext\`.`,
+  `Reminders only on explicit schedule/remind requests: emit ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; \`at\` ISO timezone. Let bridge confirm; native schedulers only if explicitly asked.`,
+  "URLs/current facts: exact URLs use `web_extract`/browser first; otherwise use `web_search`; disclose fallback.",
   "",
   ].join("\n");
 }
@@ -122,6 +123,12 @@ const GENERATED_SCHEDULED_TASKS_BLOCKS = [
 ];
 
 const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
+  [
+    "## Telegram Transport",
+    "",
+    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
+    "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
+  ].join("\n"),
   [
     "## Telegram Transport",
     "",

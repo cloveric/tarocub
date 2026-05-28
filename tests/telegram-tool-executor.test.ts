@@ -70,14 +70,15 @@ describe("executeTelegramTool", () => {
 
   it("keeps generated agent instructions concise", () => {
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("payload:{message?,images?,files?}");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.list"');
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.remove"');
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"cron.toggle"');
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.list");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.remove");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.toggle");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("list first");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("Only emit reminder tool tags when the user explicitly asks");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("ISO date-time with timezone");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("if URL(s) are provided");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("use `web_search` for discovery");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("explicit schedule/remind requests");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("ISO timezone");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("exact URLs use `web_extract`");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("use `web_search`");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS.length).toBeLessThan(850);
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("```tool-call");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("2026-05-01T09:00:00Z");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain('"cron":"0 9 * * 1"');
