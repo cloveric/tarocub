@@ -1467,6 +1467,29 @@ function withoutDirectLarkAppCredentials(env: LarkRuntimeEnv): LarkRuntimeEnv {
   return rest;
 }
 
+export function resolveLarkSetupTargetEnv(env: LarkRuntimeEnv): LarkRuntimeEnv {
+  const explicitInstance = env.CCTB_LARK_INSTANCE ?? env.TAROCUB_INSTANCE;
+  if (!explicitInstance || !env.CCTB_LARK_STATE_DIR) {
+    return env;
+  }
+  const instanceName = resolveLarkInstanceName({
+    CCTB_LARK_INSTANCE: explicitInstance,
+  });
+  const stateDirBasename = path.basename(path.resolve(env.CCTB_LARK_STATE_DIR));
+  if (stateDirBasename === instanceName) {
+    return env;
+  }
+
+  const {
+    CCTB_LARK_STATE_DIR: _staleLarkStateDir,
+    CODEX_TELEGRAM_STATE_DIR: _staleBridgeStateDir,
+    ...rest
+  } = env;
+  void _staleLarkStateDir;
+  void _staleBridgeStateDir;
+  return rest;
+}
+
 export function buildLarkServiceStartCommand(input: LarkServiceCommandInput): string {
   return [
     "cd",
@@ -2260,13 +2283,14 @@ async function runLarkSetupCommand(
   },
 ): Promise<boolean> {
   const options = parseLarkSetupArgs(args);
+  const targetEnv = resolveLarkSetupTargetEnv(env);
   const summary: string[] = [];
 
   if (options.detached) {
     if (options.skipWizard) {
       throw new Error(`${LARK_SETUP_USAGE}; --detached requires the QR wizard, so remove --skip-wizard.`);
     }
-    const loadedEnv = await loadLarkRuntimeEnv(env);
+    const loadedEnv = await loadLarkRuntimeEnv(targetEnv);
     const stateDir = resolveLarkStateDir(loadedEnv);
     const logPath = resolveLarkSetupLogPath(stateDir);
     const entrypoint = resolveCliEntrypoint();
@@ -2291,12 +2315,12 @@ async function runLarkSetupCommand(
     return true;
   }
 
-  let setupEnv = env;
+  let setupEnv = targetEnv;
   if (options.skipWizard) {
     summary.push("wizard: skipped");
   } else {
-    await runLarkWizard(env, logger);
-    setupEnv = withoutDirectLarkAppCredentials(env);
+    await runLarkWizard(targetEnv, logger);
+    setupEnv = withoutDirectLarkAppCredentials(targetEnv);
     summary.push("wizard: ok");
   }
 

@@ -296,6 +296,12 @@ async function runNormalizedLarkMessage(
   },
   normalized: LarkNormalizedBridgeMessage,
 ): Promise<boolean> {
+  await appendLarkTimelineEvent(input.stateDir, normalized, {
+    type: "turn.started",
+    metadata: {
+      phase: "queued-job",
+    },
+  });
   const cfg = await loadInstanceConfig(input.stateDir);
   const locale = await resolveLarkLocale(input.stateDir);
   const accessDecision = input.bridge.checkAccess

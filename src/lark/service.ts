@@ -7,9 +7,11 @@ import path from "node:path";
 
 import { stripGeneratedTelegramTransportSection } from "../commands/access.js";
 import { createBridgeDependencies } from "../service.js";
+import { appendServiceLifecycleEventSync, type ServiceLifecycleEvent } from "../runtime/service-lifecycle-log.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { CronStore } from "../state/cron-store.js";
+import { parseTimelineEvents, resolveTimelineLogPath, type TimelineEvent } from "../state/timeline-log.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 import { handleLarkComment, normalizeLarkCommentFileType } from "./comment-handler.js";
@@ -72,6 +74,32 @@ export async function runLarkService(
   const instanceName = resolveLarkInstanceName(env);
   const debugLogging = isLarkDebugEnabled(env.CCTB_LARK_DEBUG);
   const reactionSettings = resolveLarkReactionSettings(env);
+  let lifecycleStateDir = config.stateDir;
+  const logLifecycleEvent = (event: Omit<ServiceLifecycleEvent, "instanceName">): void => {
+    appendServiceLifecycleEventSync(lifecycleStateDir, {
+      ...event,
+      instanceName,
+    });
+  };
+  logLifecycleEvent({
+    type: "service.starting",
+    metadata: {
+      channel: "lark",
+      stateDir: config.stateDir,
+    },
+  });
+  const uncaughtExceptionMonitor = (error: Error, origin: string): void => {
+    logLifecycleEvent({
+      type: "process.uncaught_exception",
+      outcome: "error",
+      detail: redactLarkErrorDetail(error),
+      metadata: {
+        origin,
+        stack: error.stack ? redactLarkErrorDetail(error.stack) : undefined,
+      },
+    });
+  };
+  process.on("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
   const bridgeEnv = {
     ...env,
     TAROCUB_INSTANCE: instanceName,
@@ -82,13 +110,35 @@ export async function runLarkService(
   const { stateDir, bridge } = options.createBridge
     ? await options.createBridge(bridgeEnv, config)
     : await createDefaultLarkBridge(bridgeEnv);
+  lifecycleStateDir = stateDir;
   const runtime = options.runtime ?? createLarkServiceRuntime();
   runtime.commentClient ??= createLarkCommentClient(config);
   const serviceLock = await acquireLarkServiceLock(stateDir);
   let channel: LarkRuntimeChannelLike | undefined;
   let connected = false;
   let cronScheduler: CronScheduler | undefined;
+  let stopOutcome: "success" | "error" = "success";
   try {
+    try {
+      const recoveredTurns = await recoverInterruptedLarkTurns(stateDir, instanceName);
+      if (recoveredTurns > 0) {
+        logLifecycleEvent({
+          type: "service.startup_maintenance",
+          outcome: "success",
+          detail: `marked ${recoveredTurns} interrupted Lark turn${recoveredTurns === 1 ? "" : "s"}`,
+          metadata: {
+            recoveredTurns,
+          },
+        });
+      }
+    } catch (error) {
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        outcome: "error",
+        detail: `recover interrupted Lark turns: ${redactLarkErrorDetail(error)}`,
+      });
+    }
+
     const channelOptions: LarkChannelOptions = {
       appId: config.appId,
       appSecret: config.appSecret,
@@ -216,7 +266,26 @@ export async function runLarkService(
       runtime.cronRuntime = { store: cronStore, scheduler: cronScheduler };
     }
     logger.log(`Lark channel connected; stateDir=${stateDir}; lock=${serviceLock.filePath}`);
+    logLifecycleEvent({
+      type: "service.started",
+      outcome: "success",
+      metadata: {
+        channel: "lark",
+        lockPath: serviceLock.filePath,
+      },
+    });
     await waitForAbort(options.signal);
+  } catch (error) {
+    stopOutcome = "error";
+    logLifecycleEvent({
+      type: "service.fatal",
+      outcome: "error",
+      detail: redactLarkErrorDetail(error),
+      metadata: {
+        channel: "lark",
+      },
+    });
+    throw error;
   } finally {
     try {
       if (cronScheduler) {
@@ -227,8 +296,135 @@ export async function runLarkService(
       }
     } finally {
       await serviceLock.release();
+      logLifecycleEvent({
+        type: "service.stopped",
+        outcome: stopOutcome,
+        metadata: {
+          channel: "lark",
+        },
+      });
+      process.removeListener("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
     }
   }
+}
+
+async function recoverInterruptedLarkTurns(stateDir: string, instanceName: string): Promise<number> {
+  let raw: string;
+  try {
+    raw = await readFile(resolveTimelineLogPath(stateDir), "utf8");
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
+
+  const pendingByConversationKey = new Map<string, TimelineEvent[]>();
+  const terminalMessageIds = new Set<string>();
+  const events = parseTimelineEvents(raw);
+  for (const event of events) {
+    if (event.channel !== "lark") {
+      continue;
+    }
+
+    const messageId = getTimelineLarkMessageId(event);
+    if (event.type === "input.received" && messageId) {
+      const conversationKey = event.conversationKey ?? "";
+      const pending = pendingByConversationKey.get(conversationKey) ?? [];
+      pending.push(event);
+      pendingByConversationKey.set(conversationKey, pending);
+      continue;
+    }
+
+    if (!isLarkTerminalTimelineEvent(event)) {
+      continue;
+    }
+
+    if (messageId) {
+      terminalMessageIds.add(messageId);
+      removePendingLarkTimelineEvent(pendingByConversationKey, event.conversationKey, messageId);
+      continue;
+    }
+
+    // Older command timeline events did not include larkMessageId. They still
+    // complete the oldest pending input in the same conversation.
+    const pending = pendingByConversationKey.get(event.conversationKey ?? "");
+    const matched = pending?.shift();
+    const matchedMessageId = matched ? getTimelineLarkMessageId(matched) : undefined;
+    if (matchedMessageId) {
+      terminalMessageIds.add(matchedMessageId);
+    }
+    if (pending && pending.length === 0) {
+      pendingByConversationKey.delete(event.conversationKey ?? "");
+    }
+  }
+
+  let recovered = 0;
+  const recoveredMessageIds = new Set<string>();
+  const interruptedInputs = [...pendingByConversationKey.values()].flat();
+  for (const event of interruptedInputs) {
+    const messageId = getTimelineLarkMessageId(event);
+    if (!messageId || terminalMessageIds.has(messageId) || recoveredMessageIds.has(messageId)) {
+      continue;
+    }
+    recoveredMessageIds.add(messageId);
+    recovered += 1;
+    await appendTimelineEventBestEffort(stateDir, {
+      type: "turn.completed",
+      instanceName,
+      channel: "lark",
+      chatId: event.chatId,
+      userId: event.userId,
+      conversationKey: event.conversationKey,
+      outcome: "interrupted",
+      detail: "service restarted before accepted Lark turn reached a terminal state",
+      metadata: {
+        ...copyLarkTimelineMetadata(event.metadata),
+        phase: "startup-recovery",
+        acceptedAt: event.timestamp,
+      },
+    }, "Lark interrupted turn recovery timeline event");
+  }
+  return recovered;
+}
+
+function isLarkTerminalTimelineEvent(event: TimelineEvent): boolean {
+  return event.type === "turn.completed" || event.type === "command.handled";
+}
+
+function removePendingLarkTimelineEvent(
+  pendingByConversationKey: Map<string, TimelineEvent[]>,
+  conversationKey: string | undefined,
+  messageId: string,
+): void {
+  const key = conversationKey ?? "";
+  const pending = pendingByConversationKey.get(key);
+  if (!pending) {
+    return;
+  }
+  const index = pending.findIndex((event) => getTimelineLarkMessageId(event) === messageId);
+  if (index >= 0) {
+    pending.splice(index, 1);
+  }
+  if (pending.length === 0) {
+    pendingByConversationKey.delete(key);
+  }
+}
+
+function getTimelineLarkMessageId(event: TimelineEvent): string | undefined {
+  const value = event.metadata?.larkMessageId ?? event.metadata?.messageId;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function copyLarkTimelineMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of ["larkChatId", "larkMessageId", "bridgeChatType", "messageId", "attachments"]) {
+    const value = metadata?.[key];
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 function logLarkServiceError(logger: LarkServiceLogger, label: string, error: unknown): void {

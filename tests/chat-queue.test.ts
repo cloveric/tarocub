@@ -50,6 +50,29 @@ describe("ChatQueue", () => {
     expect(events).toEqual(["reject-start", "recover-start"]);
   });
 
+  it("runs an already queued job after the active job rejects", async () => {
+    const queue = new ChatQueue();
+    const events: string[] = [];
+    let rejectFirst!: (error: Error) => void;
+    const first = queue.enqueue("chat:1", async () => {
+      events.push("first-start");
+      await new Promise<never>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+    });
+    const second = queue.enqueue("chat:1", async () => {
+      events.push("second-start");
+      return "second-done";
+    });
+
+    await vi.waitFor(() => expect(rejectFirst).toBeTypeOf("function"));
+    rejectFirst(new Error("first failed"));
+
+    await expect(first).rejects.toThrow("first failed");
+    await expect(second).resolves.toBe("second-done");
+    expect(events).toEqual(["first-start", "second-start"]);
+  });
+
   it("can reject skipped pending jobs after clearPending", async () => {
     const queue = new ChatQueue();
     let release!: () => void;

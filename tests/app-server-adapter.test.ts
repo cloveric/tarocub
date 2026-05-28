@@ -272,6 +272,132 @@ describe("CodexAppServerAdapter", () => {
     }
   });
 
+  it("overrides approval policy when resuming and starting a turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("thread-existing", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const resume = JSON.parse(child.stdin.lines[1] ?? "{}");
+    expect(resume).toMatchObject({
+      method: "thread/resume",
+      params: {
+        threadId: "thread-existing",
+        approvalPolicy: "never",
+      },
+    });
+    child.stdout.emitData(`{"id":${resume.id},"result":{"thread":{"id":"thread-existing"}}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    expect(turnStart).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thread-existing",
+        approvalPolicy: "never",
+      },
+    });
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-existing","item":{"type":"agentMessage","text":"ok"}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-existing","turn":{"id":"turn-1","status":"completed"}}}\n');
+
+    await expect(promise).resolves.toMatchObject({
+      text: "ok",
+    });
+  });
+
+  it("responds to app-server command approval requests instead of leaving the turn hanging", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "allow", scope: "session" });
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+      onApprovalRequest,
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 3);
+    child.stdout.emitData('{"jsonrpc":"2.0","id":99,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-123","turnId":"turn-1","itemId":"item-1","startedAtMs":1,"command":"tmux new-session","cwd":"/tmp/project","reason":"requires unsandboxed command"}}\n');
+
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const approvalResponse = JSON.parse(child.stdin.lines[3] ?? "{}");
+    expect(approvalResponse).toEqual({
+      jsonrpc: "2.0",
+      id: 99,
+      result: {
+        decision: "acceptForSession",
+      },
+    });
+    expect(onApprovalRequest).toHaveBeenCalledWith(expect.objectContaining({
+      engine: "codex",
+      toolName: "Codex command approval",
+      cwd: "/tmp/project",
+      sessionId: "thread-123",
+    }));
+
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"approved ok"}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","status":"completed"}}}\n');
+
+    await expect(promise).resolves.toMatchObject({
+      text: "approved ok",
+    });
+  });
+
+  it("declines app-server approval denials while allowing the turn to continue", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "deny" });
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+      onApprovalRequest,
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 3);
+    child.stdout.emitData('{"jsonrpc":"2.0","id":99,"method":"item/fileChange/requestApproval","params":{"threadId":"thread-123","turnId":"turn-1","itemId":"item-1","cwd":"/tmp/project","reason":"needs write access"}}\n');
+
+    await waitFor(() => child.stdin.lines.length >= 4);
+    expect(JSON.parse(child.stdin.lines[3] ?? "{}")).toEqual({
+      jsonrpc: "2.0",
+      id: 99,
+      result: {
+        decision: "decline",
+      },
+    });
+
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"declined ok"}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","status":"completed"}}}\n');
+
+    await expect(promise).resolves.toMatchObject({
+      text: "declined ok",
+    });
+  });
+
   it("times out and destroys app-server when thread/resume never replies", async () => {
     vi.useFakeTimers();
     try {

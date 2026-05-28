@@ -6875,6 +6875,15 @@ describe("lark service", () => {
           conversationKey: "lark:oc_chat",
         }),
         expect.objectContaining({
+          type: "turn.started",
+          channel: "lark",
+          conversationKey: "lark:oc_chat",
+          metadata: expect.objectContaining({
+            larkMessageId: "om_1",
+            phase: "queued-job",
+          }),
+        }),
+        expect.objectContaining({
           type: "turn.completed",
           channel: "lark",
           conversationKey: "lark:oc_chat",
@@ -6983,6 +6992,67 @@ describe("lark service", () => {
           larkMessageId: "om_waiting",
         }),
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues an already queued Lark message after the active engine turn fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-after-error-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    let rejectFirst!: (error: Error) => void;
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => {
+        if (bridge.handleAuthorizedMessage.mock.calls.length === 1) {
+          await new Promise<never>((_resolve, reject) => {
+            rejectFirst = reject;
+          });
+        }
+        return { text: "second done" };
+      }),
+    };
+
+    try {
+      const first = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_active", content: "first" }),
+      });
+      await vi.waitFor(() => expect(rejectFirst).toBeTypeOf("function"));
+      const second = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_queued", content: "second" }),
+      });
+
+      rejectFirst(new Error("active turn failed"));
+
+      await expect(first).resolves.toBe(true);
+      await expect(second).resolves.toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "second done" },
+        { replyTo: "om_queued" },
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "turn.completed",
+          outcome: "error",
+          metadata: expect.objectContaining({ larkMessageId: "om_active" }),
+        }),
+        expect.objectContaining({
+          type: "turn.completed",
+          outcome: "success",
+          metadata: expect.objectContaining({ larkMessageId: "om_queued" }),
+        }),
+      ]));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

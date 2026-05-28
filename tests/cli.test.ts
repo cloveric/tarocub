@@ -6,7 +6,13 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { AccessStore } from "../src/state/access-store.js";
-import { buildDetachedLarkSetupCommand, buildLarkServiceStartCommand, findLarkServiceProcessIdsFromPs, runCli } from "../src/commands/cli.js";
+import {
+  buildDetachedLarkSetupCommand,
+  buildLarkServiceStartCommand,
+  findLarkServiceProcessIdsFromPs,
+  resolveLarkSetupTargetEnv,
+  runCli,
+} from "../src/commands/cli.js";
 import { SessionStore } from "../src/state/session-store.js";
 import { createArchive } from "../src/state/archive.js";
 import { CronStore } from "../src/state/cron-store.js";
@@ -1419,6 +1425,32 @@ describe("runCli", () => {
     expect(command).toContain("lark setup '--install-cli' '--identity' 'bot-only'");
     expect(command).toContain(`> '${logPath}' 2>&1`);
     expect(command).not.toContain("--detached");
+  });
+
+  it("drops a stale ambient Lark state dir when setup targets a different instance", () => {
+    const env = resolveLarkSetupTargetEnv({
+      HOME: "/Users/tester",
+      CCTB_LARK_INSTANCE: "ccfgg3",
+      CCTB_LARK_STATE_DIR: "/Users/tester/.cctb/ccfgg2",
+      CODEX_TELEGRAM_STATE_DIR: "/Users/tester/.cctb/ccfgg2",
+    });
+
+    expect(env).toMatchObject({
+      HOME: "/Users/tester",
+      CCTB_LARK_INSTANCE: "ccfgg3",
+    });
+    expect(env.CCTB_LARK_STATE_DIR).toBeUndefined();
+    expect(env.CODEX_TELEGRAM_STATE_DIR).toBeUndefined();
+  });
+
+  it("keeps an explicit matching Lark state dir when setup targets the same instance", () => {
+    const env = resolveLarkSetupTargetEnv({
+      HOME: "/Users/tester",
+      CCTB_LARK_INSTANCE: "ccfgg3",
+      CCTB_LARK_STATE_DIR: "/Users/tester/.cctb/ccfgg3",
+    });
+
+    expect(env.CCTB_LARK_STATE_DIR).toBe("/Users/tester/.cctb/ccfgg3");
   });
 
   it("prints the recommended Lark OAuth command when setup finds missing user identity", async () => {

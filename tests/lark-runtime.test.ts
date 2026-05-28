@@ -9,6 +9,7 @@ import { acquireInstanceLock } from "../src/state/instance-lock.js";
 import { DEFAULT_INSTANCE_AGENT_INSTRUCTIONS } from "../src/commands/access.js";
 import { createLarkServiceRuntime, resolveLarkServiceLockDir, runLarkService } from "../src/lark/service.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
+import { SERVICE_LIFECYCLE_LOG_FILE } from "../src/runtime/service-lifecycle-log.js";
 
 describe("runLarkService", () => {
   it("removes generated Telegram transport instructions from Lark agent.md before starting", async () => {
@@ -111,6 +112,132 @@ describe("runLarkService", () => {
       expect(channel.on).toHaveBeenCalledWith("error", expect.any(Function));
       expect(channel.connect).toHaveBeenCalledTimes(1);
       expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks previously accepted Lark messages without a terminal event as interrupted on startup", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-recover-"));
+    const abortController = new AbortController();
+    const channel = {
+      on: vi.fn(() => () => undefined),
+      connect: vi.fn(async () => {
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), `${JSON.stringify({
+        timestamp: "2026-05-28T09:59:04.231Z",
+        type: "input.received",
+        channel: "lark",
+        chatId: 1085422826,
+        userId: 1159253041,
+        conversationKey: "lark:oc_chat",
+        outcome: "accepted",
+        metadata: {
+          larkChatId: "oc_chat",
+          larkMessageId: "om_command",
+          bridgeChatType: "private",
+          messageId: "om_command",
+          attachments: 0,
+        },
+      })}\n${JSON.stringify({
+        timestamp: "2026-05-28T09:59:13.920Z",
+        type: "command.handled",
+        channel: "lark",
+        chatId: 1085422826,
+        userId: 1159253041,
+        conversationKey: "lark:oc_chat",
+        outcome: "success",
+        metadata: {
+          command: "resume",
+        },
+      })}\n${JSON.stringify({
+        timestamp: "2026-05-28T10:23:27.282Z",
+        type: "input.received",
+        channel: "lark",
+        chatId: 1085422826,
+        userId: 1159253041,
+        conversationKey: "lark:oc_chat",
+        outcome: "accepted",
+        metadata: {
+          larkChatId: "oc_chat",
+          larkMessageId: "om_orphan",
+          bridgeChatType: "private",
+          attachments: 0,
+        },
+      })}\n`, "utf8");
+
+      await runLarkService({
+        HOME: os.homedir(),
+        CCTB_LARK_INSTANCE: "ccfgg2",
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+          },
+        }),
+        signal: abortController.signal,
+        logger: silentLogger(),
+      });
+
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        channel: "lark",
+        conversationKey: "lark:oc_chat",
+        outcome: "interrupted",
+        detail: "service restarted before accepted Lark turn reached a terminal state",
+        metadata: expect.objectContaining({
+          larkMessageId: "om_orphan",
+          phase: "startup-recovery",
+          acceptedAt: "2026-05-28T10:23:27.282Z",
+        }),
+      }));
+      expect(timeline).not.toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "interrupted",
+        metadata: expect.objectContaining({
+          larkMessageId: "om_command",
+        }),
+      }));
+
+      const lifecycle = (await readFile(path.join(stateDir, SERVICE_LIFECYCLE_LOG_FILE), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(lifecycle).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "service.startup_maintenance",
+          instanceName: "ccfgg2",
+          outcome: "success",
+          metadata: expect.objectContaining({
+            recoveredTurns: 1,
+          }),
+        }),
+        expect.objectContaining({
+          type: "service.started",
+          instanceName: "ccfgg2",
+          outcome: "success",
+        }),
+        expect.objectContaining({
+          type: "service.stopped",
+          instanceName: "ccfgg2",
+          outcome: "success",
+        }),
+      ]));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

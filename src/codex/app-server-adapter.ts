@@ -9,6 +9,8 @@ import type {
   CodexThreadGoal,
   CodexThreadGoalResponse,
   CodexUserMessageInput,
+  EngineApprovalDecision,
+  EngineApprovalRequest,
   EngineStreamEvent,
 } from "./adapter.js";
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
@@ -52,14 +54,22 @@ export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 180_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 type ApprovalMode = "normal" | "full-auto" | "bypass";
 
+type JsonRpcId = number | string;
+
 type JsonRpcResponse = {
-  id?: number;
+  id?: JsonRpcId;
   result?: unknown;
   error?: {
     message?: string;
+    code?: number;
   };
   method?: string;
   params?: Record<string, unknown>;
+};
+
+type AppServerRequest = JsonRpcResponse & {
+  id: JsonRpcId;
+  method: string;
 };
 
 type PendingRequest = {
@@ -101,6 +111,7 @@ type PendingTurn = {
   lastActivityMethod?: string;
   lastInactivityAt?: number;
   onProgress?: (partialText: string) => void;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   timeout?: ReturnType<typeof setTimeout>;
   inactivityTimeout?: ReturnType<typeof setTimeout>;
@@ -333,6 +344,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       prompt,
       input.onProgress,
       input.onEngineEvent,
+      input.onApprovalRequest,
       input.abortSignal,
       input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
     );
@@ -601,6 +613,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return;
     }
 
+    if ((typeof parsed.id === "number" || typeof parsed.id === "string") && typeof parsed.method === "string") {
+      this.handleServerRequest(parsed as AppServerRequest);
+      return;
+    }
+
     if (typeof parsed.id === "number") {
       const pending = this.pendingRequests.get(parsed.id);
       if (!pending) {
@@ -791,6 +808,135 @@ export class CodexAppServerAdapter implements CodexAdapter {
     };
   }
 
+  private handleServerRequest(request: AppServerRequest): void {
+    this.recordNotificationDiagnostic(request.method, request.params);
+    const threadId = this.readString(request.params?.threadId);
+    if (threadId) {
+      this.noteTurnActivity(threadId, request.method);
+    }
+
+    if (
+      request.method === "item/commandExecution/requestApproval" ||
+      request.method === "execCommandApproval"
+    ) {
+      void this.handleApprovalServerRequest(request, "Codex command approval");
+      return;
+    }
+
+    if (
+      request.method === "item/fileChange/requestApproval" ||
+      request.method === "applyPatchApproval"
+    ) {
+      void this.handleApprovalServerRequest(request, "Codex file change approval");
+      return;
+    }
+
+    const message = `Unsupported Codex app-server request: ${request.method}`;
+    this.rejectServerRequest(request.id, message);
+    if (threadId) {
+      this.failPendingTurn(threadId, message);
+    }
+  }
+
+  private async handleApprovalServerRequest(request: AppServerRequest, toolName: string): Promise<void> {
+    const params = request.params ?? {};
+    const threadId = this.readString(params.threadId);
+    const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
+
+    if (!threadId || !pending) {
+      this.respondToServerRequest(request.id, { decision: "cancel" });
+      return;
+    }
+
+    const toolInput = this.buildApprovalToolInput(request.method, params);
+    void Promise.resolve(pending.onEngineEvent?.({
+      type: "permission_request",
+      toolName,
+      toolInput,
+      sessionId: threadId,
+    })).catch(() => {});
+
+    try {
+      const decision = pending.onApprovalRequest
+        ? await pending.onApprovalRequest({
+          engine: "codex",
+          toolName,
+          toolInput,
+          cwd: this.readString(params.cwd) ?? undefined,
+          sessionId: threadId,
+        })
+        : { behavior: "deny" as const };
+
+      this.respondToServerRequest(request.id, {
+        decision: this.toAppServerApprovalDecision(decision),
+      });
+    } catch (error) {
+      pending.errorMessage = error instanceof Error ? error.message : String(error);
+      this.respondToServerRequest(request.id, { decision: "cancel" });
+    }
+  }
+
+  private buildApprovalToolInput(method: string, params: Record<string, unknown>): Record<string, unknown> {
+    const toolInput: Record<string, unknown> = {
+      method,
+      raw: params,
+    };
+    for (const key of ["command", "reason", "itemId", "turnId", "cwd", "approvalId"]) {
+      const value = this.readString(params[key]);
+      if (value) {
+        toolInput[key] = value;
+      }
+    }
+    return toolInput;
+  }
+
+  private toAppServerApprovalDecision(decision: EngineApprovalDecision): "accept" | "acceptForSession" | "decline" {
+    if (decision.behavior !== "allow") {
+      return "decline";
+    }
+    return decision.scope === "session" ? "acceptForSession" : "accept";
+  }
+
+  private respondToServerRequest(id: JsonRpcId, result: unknown): void {
+    this.writeJsonRpc({
+      jsonrpc: "2.0",
+      id,
+      result,
+    });
+  }
+
+  private rejectServerRequest(id: JsonRpcId, message: string): void {
+    this.writeJsonRpc({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32601,
+        message,
+      },
+    });
+  }
+
+  private writeJsonRpc(payload: Record<string, unknown>): void {
+    try {
+      this.child?.stdin?.write(JSON.stringify(payload) + "\n");
+    } catch {
+      // The existing turn timeout/error path will surface the closed child.
+    }
+  }
+
+  private failPendingTurn(threadId: string, message: string): void {
+    const pending = this.pendingTurns.get(threadId);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingTurns.delete(threadId);
+    this.loadedThreads.delete(threadId);
+    pending.reject(this.withDiagnostics(this.withAppServerState(message, threadId, pending)));
+    this.notifyIdleWaitersIfIdle();
+    this.destroy();
+  }
+
   private request(
     method: string,
     params: Record<string, unknown>,
@@ -927,6 +1073,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       "thread/resume",
       {
         threadId,
+        approvalPolicy: "never",
       },
       {
         timeoutMs: this.threadReadTimeoutMs,
@@ -991,6 +1138,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     prompt: string,
     onProgress?: (partialText: string) => void,
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>,
+    onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>,
     abortSignal?: AbortSignal,
     timeoutMs: number | null = this.turnTimeoutMs,
   ): Promise<{ text: string; usage?: AdapterUsage }> {
@@ -1020,6 +1168,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         startedAt: Date.now(),
         onProgress,
         onEngineEvent,
+        onApprovalRequest,
         inactivityTimeoutDisabled: timeoutMs === null,
         resolve: resolveAndCleanup,
         reject: rejectAndCleanup,
@@ -1076,6 +1225,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
       this.request("turn/start", {
         threadId,
+        approvalPolicy: "never",
         input: [
           {
             type: "text",
