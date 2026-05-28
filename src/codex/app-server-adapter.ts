@@ -15,6 +15,7 @@ import type {
 } from "./adapter.js";
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -52,7 +53,6 @@ export const CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS = 15 * 60_000;
 export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 180_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
-type ApprovalMode = "normal" | "full-auto" | "bypass";
 type AppServerApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 
 type JsonRpcId = number | string;
@@ -432,10 +432,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     const parsed = await readValidatedConfigFile(this.configPath);
-    const approvalMode: ApprovalMode =
-      parsed.approvalMode === "full-auto" || parsed.approvalMode === "bypass"
-        ? parsed.approvalMode
-        : "normal";
+    const approvalMode: ApprovalMode = normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
     const effort = typeof parsed.effort === "string" ? parsed.effort : undefined;
     const model = typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : undefined;
     const codexServiceTier = parsed.codexServiceTier === "fast" ? "fast" : undefined;

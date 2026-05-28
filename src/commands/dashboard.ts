@@ -7,6 +7,7 @@ import { Cron } from "croner";
 
 import type { EnvSource } from "../config.js";
 import { readConfiguredBotToken } from "../service.js";
+import { resolveApprovalMode } from "../state/approval-mode.js";
 import { CrewRunStore } from "../state/crew-run-store.js";
 import { CronStore } from "../state/cron-store.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
@@ -400,7 +401,7 @@ async function ci(
   }, name);
 
   return {
-    name, engine: cfg.engine ?? "codex", approvalMode: cfg.approvalMode ?? "normal", verbosity: cfg.verbosity ?? 1,
+    name, engine: cfg.engine ?? "codex", approvalMode: resolveApprovalMode(cfg.approvalMode), verbosity: cfg.verbosity ?? 1,
     effort: cfg.effort ?? "default", model: cfg.model ?? "default", locale: cfg.locale ?? "en",
     budgetUsd: typeof cfg.budgetUsd === "number" ? cfg.budgetUsd : null,
     bus: cfg.bus?.peers ? (cfg.bus.peers === "*" ? "mesh" : Array.isArray(cfg.bus.peers) ? `${(cfg.bus.peers as unknown[]).length} peers` : "off") : "off",

@@ -13,6 +13,7 @@ import {
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
+import { resolveApprovalMode } from "../state/approval-mode.js";
 import { FileWorkflowStore, type FileWorkflowStatus } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
 import { UsageStore } from "../state/usage-store.js";
@@ -1098,10 +1099,11 @@ function truncateLarkStatusDetail(detail: string): string {
 }
 
 function renderLarkApprovalModeStatus(mode: unknown, locale: Locale): string {
-  if (mode === "bypass") {
+  const resolved = resolveApprovalMode(mode);
+  if (resolved === "bypass") {
     return "YOLO unsafe/bypass";
   }
-  if (mode === "full-auto") {
+  if (resolved === "full-auto") {
     return "YOLO/full-auto";
   }
   return locale === "en" ? "normal approvals" : "普通审批";
@@ -1382,7 +1384,7 @@ async function handleLarkEngineCommand(
 async function handleLarkYoloCommand(stateDir: string, action: string, locale: Locale): Promise<string> {
   const cfg = await loadInstanceConfig(stateDir);
   if (!action || action === "status") {
-    const mode = (await readRawLarkConfig(stateDir)).approvalMode ?? "normal";
+    const mode = resolveApprovalMode((await readRawLarkConfig(stateDir)).approvalMode);
     if (locale === "en") {
       const label = mode === "bypass" ? "unsafe/bypass" : mode === "full-auto" ? "full-auto" : "off";
       return `Current YOLO: ${label}`;

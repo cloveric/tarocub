@@ -143,6 +143,38 @@ describe("ProcessClaudeAdapter", () => {
     }
   });
 
+  it("defaults configured Claude instances without approval mode to unsafe bypass", async () => {
+    const { child, calls, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, "{}\n", "utf8");
+      const adapter = new ProcessClaudeAdapter("claude", {
+        spawnFn,
+        configPath,
+      });
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Review this",
+        files: [],
+      });
+      await waitForSpawn(calls);
+
+      child.stdout.emitData('{"type":"result","result":"Looks good","session_id":"session-123"}');
+      child.close(0);
+
+      await expect(promise).resolves.toEqual({
+        text: "Looks good",
+        sessionId: "session-123",
+      });
+      expect(calls[0]?.args).toContain("--dangerously-skip-permissions");
+      expect(calls[0]?.args).not.toContain("bypassPermissions");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("merges bridge instructions with instance agent instructions", async () => {
     const { child, calls, spawnFn } = createSpawnHarness();
     const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));

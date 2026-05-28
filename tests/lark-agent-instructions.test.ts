@@ -3,13 +3,20 @@ import { describe, expect, it } from "vitest";
 import { larkAgentInstructions } from "../src/lark/agent-instructions.js";
 
 describe("larkAgentInstructions", () => {
+  it("keeps the injected Lark system prompt compact enough for every-turn use", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions.length).toBeLessThan(1200);
+    expect(instructions.split("\n").length).toBeLessThanOrEqual(8);
+  });
+
   it("tells agents to answer ordinary Lark requests directly instead of emitting placeholder cards", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions).toContain("For ordinary Lark requests, answer directly in text");
-    expect(instructions).toContain("Do not emit progress, running, or placeholder cards");
+    expect(instructions).toContain("concise text reply");
+    expect(instructions).toContain("no progress placeholder cards");
     expect(instructions).toContain("send.batch");
-    expect(instructions).toContain("Small text/code files may be delivered as a whole-response fenced `file:name.ext` block");
+    expect(instructions).toContain("fenced `file:name.ext`");
   });
 
   it("does not instruct Lark agents to use Telegram-only side-channel send commands", () => {
@@ -24,38 +31,31 @@ describe("larkAgentInstructions", () => {
   it("keeps Lark scheduling and web-current-facts guidance aligned with the mature Telegram transport rules", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions).toContain("exactly one of `in`, `at`, or `cron`");
-    expect(instructions).toContain("never include `chatId` or `userId`");
-    expect(instructions).toContain("let the bridge confirm");
+    expect(instructions).toContain("one of `in`/`at`/`cron`");
+    expect(instructions).toContain("no `chatId`/`userId`");
+    expect(instructions).toContain("let bridge confirm");
     expect(instructions).toContain("cron.list");
     expect(instructions).toContain("cron.remove");
     expect(instructions).toContain("cron.toggle");
     expect(instructions).toContain("list first");
-    expect(instructions).toContain("Only emit reminder tool tags when the user explicitly asks");
-    expect(instructions).toContain("ISO date-time with timezone");
-    expect(instructions).toContain("if URL(s) are provided, read them directly");
+    expect(instructions).toContain("only explicit reminder/schedule requests");
+    expect(instructions).toContain("ISO timezone");
+    expect(instructions).toContain("Exact URLs: read directly");
     expect(instructions).toContain("use `web_search` for discovery/current facts");
   });
 
   it("prefers bridge-managed choice cards and treats lark-cli as required for full Lark-native functionality", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions).toContain("Prefer `lark.choice` for explicit user selections");
-    expect(instructions).toContain("When planning mode or a tool asks the user to choose");
-    expect(instructions).toContain("render the options as a `lark.choice` card");
-    expect(instructions).toContain("or a `request_user_input` tool-call");
-    expect(instructions).toContain("put long option text in `label`/`description`");
-    expect(instructions).toContain("do not call `lark-cli` just to send a choice card");
-    expect(instructions).toContain("`lark-cli` is required for full Lark-native functionality");
+    expect(instructions).toContain("lark.choice");
+    expect(instructions).toContain("or `request_user_input`");
+    expect(instructions).toContain("Do not call `lark-cli` just to send choice cards");
+    expect(instructions).toContain("Use `lark-cli` for Lark-native work");
     expect(instructions).toContain("basic chat transport can still work without it");
-    expect(instructions).toContain("For Feishu Docs/IM/Calendar/Drive operations, prefer local `lark-cli`");
-    expect(instructions).toContain("For Feishu Sheets spreadsheet URLs");
-    expect(instructions).toContain("prefer `lark-cli sheets` shortcuts");
-    expect(instructions).toContain("use `sheets +info` before editing");
-    expect(instructions).toContain("Do not treat spreadsheets as plain Docs");
-    expect(instructions).toContain("structured lark-cli Sheets value objects");
-    expect(instructions).toContain("For Lark OAuth, only start authorization in private chats");
-    expect(instructions).toContain("use `lark auth start` first");
-    expect(instructions).toContain("never run OAuth login in the background");
+    expect(instructions).toContain("Docs/IM/Calendar/Drive");
+    expect(instructions).toContain("Sheets: start `sheets +info`");
+    expect(instructions).toContain("do not treat Sheets as Docs/Base");
+    expect(instructions).toContain("structured Sheets values");
+    expect(instructions).toContain("OAuth private only");
   });
 });

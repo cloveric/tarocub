@@ -26,6 +26,7 @@ import {
   resolveAuditLogPath,
   type AuditEventFilter,
 } from "../state/audit-log.js";
+import { resolveApprovalMode } from "../state/approval-mode.js";
 import {
   filterTimelineEvents,
   parseTimelineEvents,
@@ -700,10 +701,11 @@ async function readRawLarkCliConfig(stateDir: string): Promise<Record<string, un
 }
 
 function renderLarkCliApprovalModeStatus(mode: unknown): string {
-  if (mode === "bypass") {
+  const resolved = resolveApprovalMode(mode);
+  if (resolved === "bypass") {
     return "YOLO unsafe/bypass";
   }
-  if (mode === "full-auto") {
+  if (resolved === "full-auto") {
     return "YOLO/full-auto";
   }
   return "normal approvals";
@@ -3203,7 +3205,7 @@ async function runYoloCommand(
 
   if (args.length === 0) {
     const config = await readInstanceConfig(configPath);
-    const mode = config.approvalMode ?? "normal";
+    const mode = resolveApprovalMode(config.approvalMode);
     const label =
       mode === "bypass" ? "YOLO UNSAFE (all approvals and sandbox bypassed)"
         : mode === "full-auto" ? "YOLO (full-auto, sandboxed)"

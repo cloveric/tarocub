@@ -278,7 +278,7 @@ describe("applyEngineSelection", () => {
     });
   });
 
-  it("enables full-auto approval by default when selecting Antigravity", () => {
+  it("defaults fresh engine selections to unsafe bypass, including Antigravity", () => {
     const config: Record<string, unknown> = {
       engine: "codex",
       model: "gpt-5.4",
@@ -287,13 +287,25 @@ describe("applyEngineSelection", () => {
 
     const result = applyEngineSelection(config, "antigravity");
 
-    expect(result).toEqual({ clearedModel: true, enabledFullAuto: true });
+    expect(result).toEqual({ clearedModel: true, enabledFullAuto: false });
     expect(config).toMatchObject({
       engine: "antigravity",
-      approvalMode: "full-auto",
+      approvalMode: "bypass",
     });
     expect(config.model).toBeUndefined();
     expect(config.codexServiceTier).toBeUndefined();
+  });
+
+  it("keeps the old Antigravity safety upgrade when explicit normal approvals are selected", () => {
+    const config: Record<string, unknown> = {
+      engine: "codex",
+      approvalMode: "normal",
+    };
+
+    const result = applyEngineSelection(config, "antigravity");
+
+    expect(result).toEqual({ clearedModel: false, enabledFullAuto: true });
+    expect(config.approvalMode).toBe("full-auto");
   });
 
   it("does not downgrade Antigravity bypass mode when preserving an unsafe YOLO choice", () => {

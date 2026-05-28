@@ -26,7 +26,7 @@ import type {
   EngineStreamEvent,
   CodexUserMessageInput,
 } from "./adapter.js";
-import type { ApprovalMode } from "./process-adapter.js";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -413,13 +413,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     try {
       const raw = await readFile(this.configPath, "utf8");
       const parsed = JSON.parse(raw) as { approvalMode?: string };
-      const mode = parsed.approvalMode;
-      if (mode === "full-auto" || mode === "bypass") {
-        return mode;
-      }
-      return "normal";
+      return normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
     } catch {
-      return "normal";
+      return DEFAULT_APPROVAL_MODE;
     }
   }
 

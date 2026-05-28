@@ -417,6 +417,35 @@ describe("ProcessCodexAdapter", () => {
     expect(calls[0]?.args).toEqual(["exec", "--json", "--skip-git-repo-check", "--full-auto", "-"]);
   });
 
+  it("defaults configured Codex process instances without approval mode to unsafe bypass", async () => {
+    const { spawnCodex, child, calls } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, "{}\n", "utf8");
+      const adapter = new ProcessCodexAdapter("codex", spawnCodex, undefined, undefined, configPath);
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+      await waitForSpawn(calls);
+
+      child.stdout.emitData('{"type":"thread.started","thread_id":"thread-123"}\n');
+      child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n');
+      child.close(0);
+
+      await expect(promise).resolves.toEqual({
+        text: "ok",
+        sessionId: "thread-123",
+      });
+      expect(calls[0]?.args).toEqual(["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "-"]);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("does not start Codex when Telegram denies the pre-turn approval", async () => {
     const spawnCodex = vi.fn();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);
@@ -808,6 +837,7 @@ describe("ProcessCodexAdapter", () => {
         "exec",
         "--json",
         "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
         "--enable",
         "fast_mode",
         "-c",

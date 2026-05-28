@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSetting } from "../codex/user-defaults.js";
+import { resolveApprovalMode } from "../state/approval-mode.js";
 import { SessionStore } from "../state/session-store.js";
 import {
   applyEngineSelection,
@@ -55,10 +56,11 @@ export function isLarkConfigCardActionValue(value: Record<string, unknown>): val
 export async function renderLarkConfigCard(input: LarkConfigCardContext): Promise<Record<string, unknown>> {
   const cfg = await loadInstanceConfig(input.stateDir);
   const raw = await readRawLarkConfig(input.stateDir);
+  const resolvedApprovalMode = resolveApprovalMode(raw.approvalMode);
   const groupState = await readLarkConfigGroupState(input, cfg);
   const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const labels = larkConfigLabels(input.locale);
-  const approvalMode = approvalModeLabel(raw.approvalMode, input.locale);
+  const approvalMode = approvalModeLabel(resolvedApprovalMode, input.locale);
   const fastOn = cfg.codexServiceTier === "fast";
   const modelLabel = cfg.engine === "codex"
     ? renderCodexModelSetting(cfg.model, codexDefaults, input.locale)
@@ -86,7 +88,7 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
 
   const elements: unknown[] = [
     markdownElement(summaryLines.join("\n")),
-    configFormSection(input, cfg, raw.approvalMode),
+    configFormSection(input, cfg, resolvedApprovalMode),
     section(labels.engineSection, [
       button(optionLabel(labels.codex, cfg.engine === "codex", labels), "engine", "codex", input, cfg.engine === "codex" ? "primary" : "default"),
       button(optionLabel(labels.claude, cfg.engine === "claude", labels), "engine", "claude", input, cfg.engine === "claude" ? "primary" : "default"),
@@ -97,9 +99,9 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
       button(optionLabel(labels.fastOff, !fastOn, labels), "fast", "off", input, !fastOn ? "primary" : "default"),
     ]),
     section(labels.approvalSection, [
-      button(optionLabel(labels.yoloOn, raw.approvalMode === "full-auto", labels), "yolo", "on", input, raw.approvalMode === "full-auto" ? "primary" : "default"),
-      button(optionLabel(labels.yoloOff, !raw.approvalMode || raw.approvalMode === "normal", labels), "yolo", "off", input, !raw.approvalMode || raw.approvalMode === "normal" ? "primary" : "default"),
-      button(optionLabel(labels.yoloUnsafe, raw.approvalMode === "bypass", labels), "yolo", "unsafe", input, raw.approvalMode === "bypass" ? "danger" : "default"),
+      button(optionLabel(labels.yoloOn, resolvedApprovalMode === "full-auto", labels), "yolo", "on", input, resolvedApprovalMode === "full-auto" ? "primary" : "default"),
+      button(optionLabel(labels.yoloOff, resolvedApprovalMode === "normal", labels), "yolo", "off", input, resolvedApprovalMode === "normal" ? "primary" : "default"),
+      button(optionLabel(labels.yoloUnsafe, resolvedApprovalMode === "bypass", labels), "yolo", "unsafe", input, resolvedApprovalMode === "bypass" ? "danger" : "default"),
     ]),
     section(labels.localeSection, [
       button(optionLabel("中文", input.locale === "zh", labels), "locale", "zh", input, input.locale === "zh" ? "primary" : "default"),
@@ -537,10 +539,11 @@ function isLarkConfigActionName(value: unknown): value is LarkConfigActionName {
 }
 
 function approvalModeLabel(value: unknown, locale: Locale): string {
-  if (value === "bypass") {
+  const resolved = resolveApprovalMode(value);
+  if (resolved === "bypass") {
     return "unsafe/bypass";
   }
-  if (value === "full-auto") {
+  if (resolved === "full-auto") {
     return "full-auto";
   }
   return locale === "en" ? "normal approvals" : "普通审批";

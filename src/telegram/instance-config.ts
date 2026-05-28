@@ -7,6 +7,7 @@ import {
   formatSchemaError,
   type ConfigFile,
 } from "../state/config-file-schema.js";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode } from "../state/approval-mode.js";
 import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron-timezone.js";
 import { withFileMutex } from "../state/file-mutex.js";
 
@@ -138,9 +139,12 @@ export function applyEngineSelection(
   if (engine === "claude") {
     applyClaudeEngineDefaults(config, previousEngine);
   }
+  if (normalizeApprovalMode(config.approvalMode) === undefined) {
+    config.approvalMode = DEFAULT_APPROVAL_MODE;
+  }
   let enabledFullAuto = false;
-  if (engine === "antigravity" && config.approvalMode !== "bypass") {
-    enabledFullAuto = config.approvalMode !== "full-auto";
+  if (engine === "antigravity" && config.approvalMode === "normal") {
+    enabledFullAuto = true;
     config.approvalMode = "full-auto";
   }
 

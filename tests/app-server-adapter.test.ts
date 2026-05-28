@@ -670,6 +670,42 @@ describe("CodexAppServerAdapter", () => {
     }
   });
 
+  it("defaults configured app-server instances without approval mode to danger-full-access", async () => {
+    const { child, calls, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, "{}\n", "utf8");
+      const adapter = new CodexAppServerAdapter(
+        "codex",
+        process.cwd(),
+        undefined,
+        spawnFn,
+        undefined,
+        undefined,
+        configPath,
+      );
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await waitFor(() => child.stdin.lines.length >= 1);
+      expect(calls[0]?.args).toEqual(["app-server", "-c", 'sandbox_mode="danger-full-access"']);
+      child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+      await waitFor(() => child.stdin.lines.length >= 2);
+      child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+      await waitFor(() => child.stdin.lines.length >= 3);
+      child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+      await promise;
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("forwards model, effort, and Codex fast mode into app-server startup config", async () => {
     const { child, calls, spawnFn } = createSpawnHarness();
     const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
@@ -695,6 +731,8 @@ describe("CodexAppServerAdapter", () => {
       await waitFor(() => child.stdin.lines.length >= 1);
       expect(calls[0]?.args).toEqual([
         "app-server",
+        "-c",
+        'sandbox_mode="danger-full-access"',
         "-c",
         'model_reasoning_effort="xhigh"',
         "-c",
@@ -820,7 +858,7 @@ describe("CodexAppServerAdapter", () => {
       });
 
       await waitFor(() => child.stdin.lines.length >= 1);
-      expect(calls[0]?.args).toEqual(["app-server"]);
+      expect(calls[0]?.args).toEqual(["app-server", "-c", 'sandbox_mode="danger-full-access"']);
       expect(consoleErrorSpy).toHaveBeenCalled();
       child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
       await waitFor(() => child.stdin.lines.length >= 2);

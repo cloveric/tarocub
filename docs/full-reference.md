@@ -38,13 +38,13 @@ The easiest setup path is to clone this repo, open it in Codex, Claude Code, or 
 npm install
 npm run build
 npm run dev -- telegram configure <telegram-bot-token>
-npm run dev -- telegram yolo on
+npm run dev -- telegram yolo unsafe
 npm run dev -- telegram service start
 ```
 
 Then send a message to the bot, run the pairing command it gives you, and continue from Telegram. See [Quick Start](#quick-start) for the full walkthrough.
 
-> **Recommended runtime:** enable YOLO mode for hands-free Telegram instances you control: `telegram yolo on --instance <name>`. With YOLO off, the bridge can ask for approval in Telegram instead: Claude approvals are per tool request; Codex approvals are per turn because `codex exec` does not support mid-turn approval callbacks. Use unsafe modes only on a trusted machine and workspace.
+> **Recommended runtime:** use YOLO unsafe/bypass for hands-free personal instances you control: `telegram yolo unsafe --instance <name>`. This maps to `approvalMode: "bypass"` and intentionally bypasses the normal approval prompts and local sandbox. Use it only on a trusted machine and workspace; use `telegram yolo off` if you want approval prompts again.
 
 ## What It Gives You
 
@@ -82,7 +82,7 @@ node dist/src/index.js lark dashboard
 node dist/src/index.js lark instructions path
 node dist/src/index.js lark instructions set ./lark-agent.md
 node dist/src/index.js lark engine claude
-node dist/src/index.js lark yolo on
+node dist/src/index.js lark yolo unsafe
 node dist/src/index.js lark budget set 12.50
 node dist/src/index.js lark locale zh
 node dist/src/index.js lark verbosity 2
@@ -412,8 +412,8 @@ npm run dev -- telegram engine claude --instance reviewer
 # Set personalities
 npm run dev -- telegram instructions set --instance reviewer ./reviewer-instructions.md
 
-# Recommended: enable YOLO for Telegram/mobile use
-npm run dev -- telegram yolo on --instance work
+# Recommended: enable unsafe/bypass for trusted Telegram/mobile use
+npm run dev -- telegram yolo unsafe --instance work
 
 # Start them all
 npm run dev -- telegram service start
@@ -557,12 +557,12 @@ For human operators, the CLI remains available for inspection and debugging, but
 
 ## YOLO Mode
 
-For hands-free Telegram use, `telegram yolo on` is recommended. It keeps Codex/Claude/Antigravity moving without asking on each turn. If you keep YOLO off, the bridge will use Telegram approval buttons where the engine supports a headless path: Claude can approve individual permission prompts; Codex app-server mode maps YOLO settings to the app-server sandbox mode; Antigravity process mode gets a turn-level pre-approval. Keep `unsafe` for fully trusted local environments only.
+For hands-free personal bot use, `telegram yolo unsafe` is recommended. It keeps Codex/Claude/Antigravity moving without asking on each turn by setting `approvalMode: "bypass"`: Codex bypasses approvals and sandboxing, while Claude/Antigravity use unsafe skip-permission flags. If you keep YOLO off, the bridge will use Telegram approval buttons where the engine supports a headless path: Claude can approve individual permission prompts; Codex app-server mode maps YOLO settings to the app-server sandbox mode; Antigravity process mode gets a turn-level pre-approval. Use unsafe/bypass only on fully trusted local environments.
 
 Claude approval buttons use a short-lived localhost MCP bridge with a random URL token. This protects against blind local port scans, but the token is still visible to same-user local processes that can inspect process command lines. Treat YOLO-off approval as a single-user workstation convenience, not a multi-user isolation boundary.
 
 ```powershell
-npm run dev -- telegram yolo on --instance work      # Safe auto-approve
+npm run dev -- telegram yolo on --instance work      # Sandboxed auto-approve
 npm run dev -- telegram yolo unsafe --instance work   # Skip ALL checks
 npm run dev -- telegram yolo off --instance work      # Normal flow
 npm run dev -- telegram yolo --instance work          # Check status
@@ -1130,8 +1130,8 @@ npm run dev -- telegram configure <your-bot-token>
 npm run dev -- telegram engine claude
 npm run dev -- telegram engine antigravity
 
-# Recommended: enable YOLO mode for hands-free Telegram operation
-npm run dev -- telegram yolo on
+# Recommended: enable unsafe/bypass for trusted Telegram operation
+npm run dev -- telegram yolo unsafe
 
 # Start the service
 npm run dev -- telegram service start
@@ -1155,14 +1155,14 @@ npm run dev -- telegram access pair 38J63T
 # Create a second bot with BotFather, then:
 npm run dev -- telegram configure --instance work <second-token>
 npm run dev -- telegram engine claude --instance work
-npm run dev -- telegram yolo on --instance work
+npm run dev -- telegram yolo unsafe --instance work
 npm run dev -- telegram service start --instance work
 # Pair the same way: send a message, get the code, run `telegram access pair <code> --instance work`
 
 # Or create a dedicated Antigravity bot
 npm run dev -- telegram configure --instance agy-bot <third-token>
 npm run dev -- telegram engine antigravity --instance agy-bot
-npm run dev -- telegram yolo on --instance agy-bot
+npm run dev -- telegram yolo unsafe --instance agy-bot
 npm run dev -- telegram service start --instance agy-bot
 ```
 

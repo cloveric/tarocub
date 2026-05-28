@@ -79,11 +79,11 @@ npm install
 npm run build
 
 npm run dev -- telegram configure <telegram-bot-token>
-npm run dev -- telegram yolo on
+npm run dev -- telegram yolo unsafe
 npm run dev -- telegram service start
 ```
 
-`telegram yolo on` is the recommended default for a personal, trusted bot instance. It lets Codex, Claude Code, and Antigravity keep moving without asking for approval on every turn. Use `telegram yolo unsafe` only for fully trusted local workspaces, and use `telegram yolo off` when you explicitly want approval prompts.
+`telegram yolo unsafe` is the recommended default for a personal, trusted bot instance. It maps to `approvalMode: "bypass"`: Codex runs with `--dangerously-bypass-approvals-and-sandbox`, Claude Code/Antigravity run with their unsafe skip-permissions flags, and the bridge will not ask for per-turn approval. Treat it as equivalent to bypassing the normal approval prompts and local sandbox. Use `telegram yolo off` only when you explicitly want approval prompts again.
 
 Send any message to the bot. It will reply with a pairing code:
 
@@ -102,9 +102,12 @@ npm install
 npm run build
 
 node dist/src/index.js lark setup --detached --install-cli --identity bot-only
+node dist/src/index.js lark yolo unsafe
 ```
 
 `--detached` is recommended when you are configuring from Telegram/Lark/Codex: it keeps the QR registration polling alive in tmux, prints one durable registration link, writes progress to `~/.cctb/<lark-instance>/lark-setup.log`, and starts the Lark service when setup completes. Use `--no-start-service` only when you explicitly want to prepare the app without listening yet.
+
+New Telegram and Lark bot configs default to YOLO unsafe/bypass. The explicit `lark yolo unsafe` command is shown so readers understand this means bypassing normal approval prompts and local sandboxing for trusted personal bots.
 
 If `lark doctor` reports missing app scopes, open the permission page URL it prints, bulk-import the JSON it prints, publish the app version, then run:
 
@@ -171,6 +174,7 @@ Recommended production flow:
 export CCTB_LARK_INSTANCE=ccfgg1
 
 node dist/src/index.js lark setup --detached --install-cli --identity bot-only
+node dist/src/index.js lark yolo unsafe
 node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"
 node dist/src/index.js lark auth finish <device-code>
 node dist/src/index.js lark service restart
@@ -203,7 +207,7 @@ telegram service start --instance work
 telegram service restart --all
 telegram service status --all
 telegram engine codex --instance work
-telegram yolo on --instance work
+telegram yolo unsafe --instance work
 telegram usage --instance work
 telegram timeline --instance work
 telegram dashboard --instance work
@@ -242,7 +246,7 @@ The bridge is powerful because it controls local CLIs. Treat it like local autom
 
 - Run it only on machines and workspaces you trust.
 - Use access pairing/allowlists before exposing private or group chats.
-- Use YOLO/full-auto only for trusted instances.
+- Use YOLO unsafe/bypass only for trusted instances; it intentionally bypasses normal approval prompts and sandbox restrictions.
 - Keep app secrets in bridge state, not prompts, argv, or child-process env.
 - Use `doctor`, `timeline`, `audit`, and `dashboard` before guessing at failures.
 

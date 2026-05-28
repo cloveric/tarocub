@@ -12,6 +12,7 @@ import type {
 } from "./adapter.js";
 import { killProcessTree } from "./process-tree.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -43,8 +44,6 @@ const MAX_OUTPUT_BUFFER_BYTES = 4 * 1024 * 1024;
 const MAX_STDERR_DIAGNOSTIC_BYTES = 4 * 1024;
 export const ANTIGRAVITY_PROCESS_TURN_TIMEOUT_MS = 60 * 60_000;
 export const ANTIGRAVITY_PROCESS_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
-
-type ApprovalMode = "normal" | "full-auto" | "bypass";
 
 function normalizeExecutableCommand(command: string): string {
   const trimmed = command.trim();
@@ -256,16 +255,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     try {
       const raw = await readFile(this.configPath, "utf8");
       const parsed = JSON.parse(raw) as { approvalMode?: string; engine?: string };
-      if (
-        parsed.approvalMode === "normal" ||
-        parsed.approvalMode === "full-auto" ||
-        parsed.approvalMode === "bypass"
-      ) {
-        return parsed.approvalMode;
-      }
-      return parsed.engine === "antigravity" ? "full-auto" : "normal";
+      return normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
     } catch {
-      return "normal";
+      return DEFAULT_APPROVAL_MODE;
     }
   }
 

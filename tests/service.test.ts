@@ -187,17 +187,19 @@ describe("createServiceDependenciesForInstance", () => {
     expect(resolveEngineRuntime("codex", "normal", "process")).toBe("process");
   });
 
-  it("defaults Antigravity runtime configs without approval mode to full-auto", async () => {
+  it("defaults configured runtime instances without approval mode to unsafe bypass", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const configPath = path.join(root, "config.json");
 
     try {
-      await writeFile(configPath, JSON.stringify({ engine: "antigravity" }) + "\n", "utf8");
+      for (const engine of ["codex", "claude", "antigravity"] as const) {
+        await writeFile(configPath, JSON.stringify({ engine }) + "\n", "utf8");
 
-      await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
-        engine: "antigravity",
-        approvalMode: "full-auto",
-      });
+        await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
+          engine,
+          approvalMode: "bypass",
+        });
+      }
     } finally {
       await removeTempRoot(root);
     }

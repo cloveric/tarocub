@@ -3800,13 +3800,13 @@ describe("runCli", () => {
       });
 
       expect(handled).toBe(true);
-      expect(messages[0]).toBe('Instance "alpha": engine set to "antigravity". Restart the service to apply. Antigravity YOLO/full-auto enabled.');
+      expect(messages[0]).toBe('Instance "alpha": engine set to "antigravity". Restart the service to apply.');
 
       const configPath = path.join(tempDir, ".cctb", "alpha", "config.json");
       const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
       expect(config).toMatchObject({
         engine: "antigravity",
-        approvalMode: "full-auto",
+        approvalMode: "bypass",
       });
     } finally {
       await removeTempRoot(tempDir);

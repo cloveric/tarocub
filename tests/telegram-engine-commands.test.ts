@@ -149,7 +149,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       const cfg: Record<string, unknown> = { engine: "codex", model: "gpt-5.4", codexServiceTier: "fast" };
       mutate(cfg);
       expect(cfg.engine).toBe("antigravity");
-      expect(cfg.approvalMode).toBe("full-auto");
+      expect(cfg.approvalMode).toBe("bypass");
       expect(cfg.model).toBeUndefined();
       expect(cfg.codexServiceTier).toBeUndefined();
     });
@@ -178,7 +178,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(sessionStore.clearAll).toHaveBeenCalledOnce();
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Engine set to antigravity. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply. Antigravity YOLO/full-auto enabled.",
+        "Engine set to antigravity. Cleared the previous model override and reset this instance's session bindings. Restart this instance to apply.",
       );
     } finally {
       await removeTempRoot(root);

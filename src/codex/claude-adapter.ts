@@ -15,7 +15,7 @@ import {
   type ClaudePermissionHookServer,
 } from "./claude-permission-hook.js";
 import { killProcessTree } from "./process-tree.js";
-import type { ApprovalMode } from "./process-adapter.js";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
 
 type SpawnOptions = {
@@ -278,13 +278,9 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     try {
       const raw = await readFile(this.configPath, "utf8");
       const parsed = JSON.parse(raw) as { approvalMode?: string };
-      const mode = parsed.approvalMode;
-      if (mode === "full-auto" || mode === "bypass") {
-        return mode;
-      }
-      return "normal";
+      return normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
     } catch {
-      return "normal";
+      return DEFAULT_APPROVAL_MODE;
     }
   }
 

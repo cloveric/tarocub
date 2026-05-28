@@ -2420,7 +2420,7 @@ describe("lark service", () => {
       );
       expect(JSON.stringify(channel.send.mock.calls)).toContain("**Lark 会话状态**");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("引擎：codex");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("审批模式：普通审批");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("审批模式：YOLO unsafe/bypass");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2982,7 +2982,7 @@ describe("lark service", () => {
       const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
       expect(config.engine).toBe("antigravity");
       expect(config.model).toBeUndefined();
-      expect(config.approvalMode).toBe("full-auto");
+      expect(config.approvalMode).toBe("bypass");
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",

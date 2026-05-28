@@ -144,6 +144,38 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("defaults configured stream Claude instances without approval mode to unsafe bypass", async () => {
+    const { children, calls, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, "{}\n", "utf8");
+      const adapter = new ClaudeStreamAdapter("claude", {
+        spawnFn,
+        configPath,
+      });
+
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "First",
+        files: [],
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      expect(calls[0]?.args).toContain("--dangerously-skip-permissions");
+      expect(calls[0]?.args).not.toContain("bypassPermissions");
+
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');
+      await expect(turn).resolves.toEqual({
+        text: "ONE",
+        sessionId: "session-123",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("reaps an idle Claude worker after the configured TTL and resumes on the next turn", async () => {
     vi.useFakeTimers();
     const { children, calls, spawnFn } = createSpawnHarness();

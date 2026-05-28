@@ -15,6 +15,7 @@ import { CodexAppServerAdapter, type AppServerSpawnCodex } from "./app-server-ad
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { killProcessTree } from "./process-tree.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -268,7 +269,7 @@ function buildCommandInvocation(command: string, args: string[]): { command: str
   return { command: normalizedCommand, args, shell: false };
 }
 
-export type ApprovalMode = "normal" | "full-auto" | "bypass";
+export type { ApprovalMode };
 
 function combineInstructions(primary: string | null, secondary: string | null): string | null {
   const parts = [primary?.trim(), secondary?.trim()].filter((value): value is string => Boolean(value));
@@ -466,13 +467,9 @@ export class ProcessCodexAdapter implements CodexAdapter {
     try {
       const raw = await readFile(this.configPath, "utf8");
       const parsed = JSON.parse(raw) as { approvalMode?: string };
-      const mode = parsed.approvalMode;
-      if (mode === "full-auto" || mode === "bypass") {
-        return mode;
-      }
-      return "normal";
+      return normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
     } catch {
-      return "normal";
+      return DEFAULT_APPROVAL_MODE;
     }
   }
 

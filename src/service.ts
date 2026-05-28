@@ -15,6 +15,7 @@ import { AccessStore } from "./state/access-store.js";
 import { appendAuditEvent } from "./state/audit-log.js";
 import { SessionStore } from "./state/session-store.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
+import { resolveApprovalMode, type ApprovalMode } from "./state/approval-mode.js";
 import { TelegramApi, withTelegramMessageThread } from "./telegram/api.js";
 import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
 import { handleTelegramApprovalCommand, isTelegramApprovalCommand } from "./telegram/approval-requests.js";
@@ -444,7 +445,6 @@ async function seedIsolatedClaudeConfig(
 }
 
 export type EngineType = "codex" | "claude" | "antigravity";
-type ApprovalMode = "normal" | "full-auto" | "bypass";
 type CodexRuntime = "app-server" | "process";
 
 export async function readInstanceRuntimeConfig(configPath: string): Promise<{
@@ -454,12 +454,7 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
 }> {
   const parsed = await readValidatedConfigFile(configPath);
   const engine = parsed.engine === "claude" || parsed.engine === "antigravity" ? parsed.engine : "codex";
-  const approvalMode =
-    parsed.approvalMode === "normal" ||
-    parsed.approvalMode === "full-auto" ||
-    parsed.approvalMode === "bypass"
-      ? parsed.approvalMode
-      : engine === "antigravity" ? "full-auto" : "normal";
+  const approvalMode = resolveApprovalMode(parsed.approvalMode);
   return {
     engine,
     approvalMode,
