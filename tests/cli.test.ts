@@ -1457,6 +1457,68 @@ describe("runCli", () => {
     }
   });
 
+  it("can start the managed Lark service as part of setup", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-setup-start-service-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async () => ({ stdout: "ok\n", stderr: "" }));
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const inspectApp = vi.fn(async () => ({
+      grantedScopes: ["im:message:send_as_bot"],
+      missingScopes: [],
+      unauthorizedScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+      applied: false,
+      patchedSubscriptions: false,
+    }));
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "setup", "--skip-wizard", "--skip-provision", "--skip-auth", "--start-service"], {
+        env: {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+        larkInspectApp: inspectApp,
+        larkServiceDeps: { start, waitUntilRunning },
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir,
+        logPath: path.join(stateDir, "lark-service.log"),
+      }));
+      expect(waitUntilRunning).toHaveBeenCalled();
+      expect(messages.join("\n")).toContain("service: started");
+      expect(messages.join("\n")).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("finishes Lark OAuth by polling the device code in the foreground", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-auth-finish-"));
     const stateDir = path.join(tempDir, "lark-state");

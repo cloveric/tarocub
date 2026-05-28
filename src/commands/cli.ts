@@ -86,7 +86,7 @@ const LARK_SERVICE_TMUX_SESSION_PREFIX = "cctb-lark-service-";
 const LARK_SETUP_TMUX_SESSION_PREFIX = "cctb-lark-setup-";
 const LARK_SETUP_LOG_FILENAME = "lark-setup.log";
 const TELEGRAM_CONFIGURE_USAGE = "Usage: telegram configure <bot-token> | telegram configure --instance <name> <bot-token>";
-const LARK_SETUP_USAGE = "Usage: lark setup [--detached] [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth]";
+const LARK_SETUP_USAGE = "Usage: lark setup [--detached] [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth] [--start-service|--no-start-service]";
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -1967,6 +1967,7 @@ async function runLarkCommand(
       inspectApp: deps.inspectApp,
       provisionApp: deps.provisionApp,
       runCommand: deps.runCommand ?? runLarkCommandProcess,
+      service: deps.service,
     });
   }
 
@@ -2198,6 +2199,7 @@ async function runLarkSetupCommand(
     inspectApp?: CliOptions["larkInspectApp"];
     provisionApp?: CliOptions["larkProvisionApp"];
     runCommand: LarkRunCommand;
+    service?: LarkServiceCommandDeps;
   },
 ): Promise<boolean> {
   const options = parseLarkSetupArgs(args);
@@ -2227,7 +2229,7 @@ async function runLarkSetupCommand(
       `tmux session: ${sessionName}`,
       `Log: ${logPath}`,
       ...(setupUrl ? [`Open directly: ${setupUrl}`] : ["Open link: pending; tail the log until the QR link appears."]),
-      "The setup process will keep polling after this chat turn ends, so scan this link once and then rerun `lark doctor`.",
+      "The setup process will keep polling after this chat turn ends, then start the Lark service when setup completes.",
     ].join("\n"));
     return true;
   }
@@ -2294,6 +2296,13 @@ async function runLarkSetupCommand(
 
   const doctor = await formatLarkDoctor(loadedEnv, deps.inspectApp ?? inspectLarkAppProvisioning);
   summary.push(hasActionableLarkDoctorProblem(doctor) ? "doctor: attention needed" : "doctor: ok");
+  const shouldStartService = options.startService ?? !options.skipWizard;
+  if (shouldStartService) {
+    const serviceResult = await startLarkServiceFromSetup(loadedEnv, deps.service);
+    summary.push(`service: ${serviceResult === "already_running" ? "already running" : "started"}`);
+  } else {
+    summary.push("service: skipped");
+  }
   logger.log([
     "Lark setup complete.",
     ...summary.map((line) => `- ${line}`),
@@ -2316,6 +2325,26 @@ function hasActionableLarkDoctorProblem(doctor: string): boolean {
     });
 }
 
+async function startLarkServiceFromSetup(
+  env: LarkRuntimeEnv,
+  deps: LarkServiceCommandDeps = {},
+): Promise<"started" | "already_running"> {
+  await prepareLarkServiceStartEnv(env);
+  const stateDir = resolveLarkStateDir(env);
+  const input: LarkServiceCommandInput = {
+    env,
+    stateDir,
+    logPath: resolveLarkServiceLogPath(stateDir),
+    entrypoint: resolveCliEntrypoint(),
+    cwd: process.cwd(),
+  };
+  const result = await (deps.start ?? defaultStartLarkService)(input);
+  if (result === "started") {
+    await (deps.waitUntilRunning ?? defaultWaitUntilLarkServiceRunning)(input);
+  }
+  return result;
+}
+
 function parseLarkSetupArgs(args: string[]): {
   detached: boolean;
   skipWizard: boolean;
@@ -2323,6 +2352,7 @@ function parseLarkSetupArgs(args: string[]): {
   identity: LarkCliBridgeIdentity;
   skipProvision: boolean;
   skipAuth: boolean;
+  startService?: boolean;
 } {
   let detached = false;
   let skipWizard = false;
@@ -2330,6 +2360,7 @@ function parseLarkSetupArgs(args: string[]): {
   let identity: LarkCliBridgeIdentity = "bot-only";
   let skipProvision = false;
   let skipAuth = false;
+  let startService: boolean | undefined;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--detached") {
@@ -2360,9 +2391,17 @@ function parseLarkSetupArgs(args: string[]): {
       skipAuth = true;
       continue;
     }
+    if (arg === "--start-service") {
+      startService = true;
+      continue;
+    }
+    if (arg === "--no-start-service") {
+      startService = false;
+      continue;
+    }
     throw new Error(LARK_SETUP_USAGE);
   }
-  return { detached, skipWizard, installCli, identity, skipProvision, skipAuth };
+  return { detached, skipWizard, installCli, identity, skipProvision, skipAuth, startService };
 }
 
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -3292,7 +3331,7 @@ Commands:
                                               Send files/text through the active turn side-channel or configured Telegram session
   lark <setup|status|doctor|provision|permissions|wizard|run|service|send|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>
                                               Inspect, configure, or run the Feishu/Lark channel
-  lark setup [--detached] [--install-cli]     Run the QR wizard, CLI bind, provision, auth check, and doctor
+  lark setup [--detached] [--install-cli]     Run the QR wizard, CLI bind, provision, auth check, doctor, and service start
   lark permissions [--missing]                Print copyable Feishu/Lark permission JSON
   lark service <start|stop|restart|status|logs|doctor>
                                               Manage the Feishu/Lark service lifecycle

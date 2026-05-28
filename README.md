@@ -102,10 +102,9 @@ npm install
 npm run build
 
 node dist/src/index.js lark setup --detached --install-cli --identity bot-only
-node dist/src/index.js lark service start
 ```
 
-`--detached` is recommended when you are configuring from Telegram/Lark/Codex: it keeps the QR registration polling alive in tmux, prints one durable registration link, and writes progress to `~/.cctb/<lark-instance>/lark-setup.log`.
+`--detached` is recommended when you are configuring from Telegram/Lark/Codex: it keeps the QR registration polling alive in tmux, prints one durable registration link, writes progress to `~/.cctb/<lark-instance>/lark-setup.log`, and starts the Lark service when setup completes. Use `--no-start-service` only when you explicitly want to prepare the app without listening yet.
 
 If `lark doctor` reports missing app scopes, open the permission page URL it prints, bulk-import the JSON it prints, publish the app version, then run:
 
@@ -179,7 +178,7 @@ node dist/src/index.js lark service restart
 
 `CCTB_LARK_INSTANCE=<name>` is the Lark-specific instance selector. Without an explicit `CCTB_LARK_STATE_DIR`, it stores that bot under `~/.cctb/<name>/lark.env`, so multiple Feishu/Lark bots do not fall back into the shared default `~/.cctb/lark` directory.
 
-`lark setup` wraps the QR wizard, lark-cli preflight/bind, app provisioning, OAuth status check, and `lark doctor`. Use `--detached` for chat-driven setup so the QR wizard keeps running after the current agent turn ends. If you already created the app and only want to re-check the local side, use `node dist/src/index.js lark setup --skip-wizard --install-cli --identity bot-only`.
+`lark setup` wraps the QR wizard, lark-cli preflight/bind, app provisioning, OAuth status check, `lark doctor`, and service start for new apps. Use `--detached` for chat-driven setup so the QR wizard keeps running after the current agent turn ends. If you already created the app and only want to re-check the local side, use `node dist/src/index.js lark setup --skip-wizard --install-cli --identity bot-only`. Add `--start-service` to that re-check command if you also want it to start/restart the listener.
 
 Useful Lark commands:
 

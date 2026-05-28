@@ -65,13 +65,13 @@ Telegram remains the deepest-tested channel, but Feishu/Lark is no longer a thin
 ```bash
 npm run build
 node dist/src/index.js lark wizard   # scan to create/bind a PersonalAgent app
-node dist/src/index.js lark setup --detached --install-cli --identity bot-only # durable QR wizard + lark-cli + provision + doctor
+node dist/src/index.js lark setup --detached --install-cli --identity bot-only # durable QR wizard + lark-cli + provision + doctor + service start
 node dist/src/index.js lark provision # re-check/provision an existing app
 node dist/src/index.js lark permissions # print copyable Lark permission JSON
 node dist/src/index.js lark permissions --missing # print only currently missing scopes
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
-node dist/src/index.js lark service start
+node dist/src/index.js lark service start # normally only needed after --no-start-service or manual stop
 node dist/src/index.js lark service logs 80
 node dist/src/index.js lark service restart
 node dist/src/index.js lark send --chat oc_xxx --message "hello from CLI"
