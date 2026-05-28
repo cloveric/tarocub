@@ -1546,6 +1546,72 @@ describe("runCli", () => {
     }
   });
 
+  it("does not start the managed Lark service when setup still needs required Lark permissions", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-setup-missing-permissions-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async () => ({ stdout: "ok\n", stderr: "" }));
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const provisioning = {
+      grantedScopes: ["im:message:send_as_bot"],
+      missingScopes: ["im:message.group_msg"],
+      unauthorizedScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+      applied: false,
+      patchedSubscriptions: false,
+    };
+    const provisionApp = vi.fn(async () => provisioning);
+    const inspectApp = vi.fn(async () => provisioning);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        [
+          'LARK_APP_ID="cli_from_file"',
+          'LARK_APP_SECRET="secret-from-file"',
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          'LARK_DOMAIN="feishu"',
+          "",
+        ].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "setup", "--skip-wizard", "--skip-auth", "--start-service"], {
+        env: {
+          HOME: tempDir,
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+        larkProvisionApp: provisionApp,
+        larkInspectApp: inspectApp,
+        larkServiceDeps: { start, waitUntilRunning },
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; env?: Record<string, string | undefined> }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      expect(start).not.toHaveBeenCalled();
+      expect(waitUntilRunning).not.toHaveBeenCalled();
+      const output = messages.join("\n");
+      expect(output).toContain("provision: attention needed");
+      expect(output).toContain("doctor: attention needed");
+      expect(output).toContain("service: skipped (fix Lark permissions first)");
+      expect(output).toContain('"im:message.group_msg"');
+      expect(output).not.toContain("secret-from-file");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("finishes Lark OAuth by polling the device code in the foreground", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-auth-finish-"));
     const stateDir = path.join(tempDir, "lark-state");

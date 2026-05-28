@@ -2309,6 +2309,7 @@ async function runLarkSetupCommand(
   summary.push("lark-cli: ok");
 
   let loadedEnv = await loadLarkRuntimeEnv(setupEnv);
+  let provisioningNeedsAttention = false;
   if (!options.skipProvision) {
     if (!loadedEnv.LARK_APP_ID) {
       throw new Error("LARK_APP_ID is required");
@@ -2322,7 +2323,8 @@ async function runLarkSetupCommand(
       ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
       logger,
     });
-    summary.push(`provision: ${provisioning.missingScopes.length === 0 && provisioning.unauthorizedScopes.length === 0 ? "ok" : "attention needed"}`);
+    provisioningNeedsAttention = provisioning.missingScopes.length > 0 || provisioning.unauthorizedScopes.length > 0;
+    summary.push(`provision: ${provisioningNeedsAttention ? "attention needed" : "ok"}`);
   } else {
     summary.push("provision: skipped");
   }
@@ -2352,11 +2354,16 @@ async function runLarkSetupCommand(
   summary.push(...authNextSteps);
 
   const doctor = await formatLarkDoctor(loadedEnv, deps.inspectApp ?? inspectLarkAppProvisioning);
-  summary.push(hasActionableLarkDoctorProblem(doctor) ? "doctor: attention needed" : "doctor: ok");
+  const doctorNeedsAttention = hasActionableLarkDoctorProblem(doctor);
+  summary.push(doctorNeedsAttention ? "doctor: attention needed" : "doctor: ok");
   const shouldStartService = options.startService ?? !options.skipWizard;
   if (shouldStartService) {
-    const serviceResult = await startLarkServiceFromSetup(loadedEnv, deps.service);
-    summary.push(`service: ${serviceResult === "already_running" ? "already running" : "started"}`);
+    if (provisioningNeedsAttention || doctorNeedsAttention) {
+      summary.push("service: skipped (fix Lark permissions first)");
+    } else {
+      const serviceResult = await startLarkServiceFromSetup(loadedEnv, deps.service);
+      summary.push(`service: ${serviceResult === "already_running" ? "already running" : "started"}`);
+    }
   } else {
     summary.push("service: skipped");
   }
