@@ -333,6 +333,14 @@ describe("CodexAppServerAdapter", () => {
     child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
 
     await waitFor(() => child.stdin.lines.length >= 3);
+    const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    expect(turnStart).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thread-123",
+        approvalPolicy: "on-request",
+      },
+    });
     child.stdout.emitData('{"jsonrpc":"2.0","id":99,"method":"item/commandExecution/requestApproval","params":{"threadId":"thread-123","turnId":"turn-1","itemId":"item-1","startedAtMs":1,"command":"tmux new-session","cwd":"/tmp/project","reason":"requires unsandboxed command"}}\n');
 
     await waitFor(() => child.stdin.lines.length >= 4);
@@ -602,6 +610,7 @@ describe("CodexAppServerAdapter", () => {
       const promise = adapter.sendUserMessage("telegram-12345", {
         text: "Hello",
         files: [],
+        onApprovalRequest: vi.fn().mockResolvedValue({ behavior: "allow", scope: "once" }),
       });
 
       await waitFor(() => child.stdin.lines.length >= 1);
@@ -610,6 +619,13 @@ describe("CodexAppServerAdapter", () => {
       await waitFor(() => child.stdin.lines.length >= 2);
       child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
       await waitFor(() => child.stdin.lines.length >= 3);
+      const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+      expect(turnStart).toMatchObject({
+        method: "turn/start",
+        params: {
+          approvalPolicy: "on-request",
+        },
+      });
       child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
       await promise;

@@ -53,6 +53,7 @@ export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 180_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 type ApprovalMode = "normal" | "full-auto" | "bypass";
+type AppServerApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 
 type JsonRpcId = number | string;
 
@@ -132,6 +133,12 @@ type AppServerProtocolDiagnostic = {
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
+}
+
+function resolveTurnApprovalPolicy(
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>,
+): AppServerApprovalPolicy {
+  return onApprovalRequest ? "on-request" : "never";
 }
 
 function numberOrNull(value: unknown): number | null {
@@ -1225,7 +1232,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
       this.request("turn/start", {
         threadId,
-        approvalPolicy: "never",
+        approvalPolicy: resolveTurnApprovalPolicy(onApprovalRequest),
         input: [
           {
             type: "text",
