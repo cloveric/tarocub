@@ -39,7 +39,7 @@ This project was formerly named `cc-telegram-bridge`. The canonical repository i
 
 It is built for people who already use CLI agents heavily and want:
 
-- phone-first operation through Telegram;
+- phone-first operation through Telegram and Feishu/Lark;
 - Feishu/Lark-native operation with cards, Docs comments, Sheets, and group workflows;
 - durable state for sessions, cron jobs, file delivery, usage, timelines, audit logs, and multi-agent routing.
 
