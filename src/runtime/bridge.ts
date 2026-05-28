@@ -13,6 +13,7 @@ import {
   renderUnauthorizedMessage,
 } from "../telegram/message-renderer.js";
 import type { GroupModeConfig } from "../telegram/instance-config.js";
+import { withBridgeTurnLock } from "./turn-lock.js";
 
 export interface AccessStoreLike {
   load(): Promise<{
@@ -308,34 +309,38 @@ export class Bridge {
       }
       await input.onEngineEvent?.(event);
     };
-    const response = await this.adapter.sendUserMessage(session.sessionId, {
-      text,
-      files: input.files,
-      instructions: input.instructions,
-      onProgress: input.onProgress,
-      onApprovalRequest: input.onApprovalRequest,
-      onEngineEvent: handleEngineEvent,
-      requestOutputDir: input.requestOutputDir,
-      workspaceOverride: input.workspaceOverride,
-      extraEnv: turnEnvSupported ? input.extraEnv : undefined,
-      abortSignal: input.abortSignal,
-      disableRuntimeTimeout: disableRuntimeTimeout || undefined,
-    });
+    const response = await withBridgeTurnLock(session.sessionId, async () => {
+      const adapterResponse = await this.adapter.sendUserMessage(session.sessionId, {
+        text,
+        files: input.files,
+        instructions: input.instructions,
+        onProgress: input.onProgress,
+        onApprovalRequest: input.onApprovalRequest,
+        onEngineEvent: handleEngineEvent,
+        requestOutputDir: input.requestOutputDir,
+        workspaceOverride: input.workspaceOverride,
+        extraEnv: turnEnvSupported ? input.extraEnv : undefined,
+        abortSignal: input.abortSignal,
+        disableRuntimeTimeout: disableRuntimeTimeout || undefined,
+      });
 
-    if (
-      !input.sessionIdOverride &&
-      response.sessionId &&
-      response.sessionId !== session.sessionId &&
-      response.sessionId !== boundSessionIdFromEvent
-    ) {
-      const pendingBind = pendingSessionBinds.get(response.sessionId);
-      if (pendingBind) {
-        await pendingBind.catch(() => undefined);
+      if (
+        !input.sessionIdOverride &&
+        adapterResponse.sessionId &&
+        adapterResponse.sessionId !== session.sessionId &&
+        adapterResponse.sessionId !== boundSessionIdFromEvent
+      ) {
+        const pendingBind = pendingSessionBinds.get(adapterResponse.sessionId);
+        if (pendingBind) {
+          await pendingBind.catch(() => undefined);
+        }
+        if (adapterResponse.sessionId !== boundSessionIdFromEvent) {
+          await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, adapterResponse.sessionId);
+        }
       }
-      if (response.sessionId !== boundSessionIdFromEvent) {
-        await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, response.sessionId);
-      }
-    }
+
+      return adapterResponse;
+    });
 
     return response;
   }

@@ -60,6 +60,73 @@ describe("Bridge", () => {
     expect(sessionManager.bindSession).not.toHaveBeenCalled();
   });
 
+  it("serializes concurrent turns for the same engine session across bridge instances", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84, 85],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "shared-engine-session" }),
+      bindSession: vi.fn(),
+    };
+    const startedTurns: string[] = [];
+    let releaseFirstTurn!: () => void;
+    const firstCanFinish = new Promise<void>((finish) => {
+      releaseFirstTurn = finish;
+    });
+    const adapterA: CodexAdapter = {
+      sendUserMessage: vi.fn().mockImplementation(async () => {
+        startedTurns.push("first");
+        await firstCanFinish;
+        return { text: "first done" };
+      }),
+      createSession: vi.fn(),
+    };
+    const adapterB: CodexAdapter = {
+      sendUserMessage: vi.fn().mockImplementation(async () => {
+        startedTurns.push("second");
+        return { text: "second done" };
+      }),
+      createSession: vi.fn(),
+    };
+    const firstBridge = new Bridge(accessStore, sessionManager, adapterA);
+    const secondBridge = new Bridge(accessStore, sessionManager, adapterB);
+
+    const first = firstBridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "first",
+      replyContext: undefined,
+      files: [],
+    });
+    await vi.waitFor(() => {
+      expect(startedTurns).toEqual(["first"]);
+    });
+
+    const second = secondBridge.handleAuthorizedMessage({
+      chatId: 85,
+      userId: 43,
+      chatType: "private",
+      text: "second",
+      replyContext: undefined,
+      files: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    try {
+      expect(startedTurns).toEqual(["first"]);
+    } finally {
+      releaseFirstTurn();
+      await Promise.allSettled([first, second]);
+    }
+    expect(startedTurns).toEqual(["first", "second"]);
+  });
+
   it("binds engine session events without starting an extra turn", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

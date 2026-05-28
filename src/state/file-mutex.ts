@@ -7,7 +7,11 @@ interface LockOwnerRecord {
 }
 
 const inProcessQueues = new Map<string, Promise<void>>();
-const STALE_LOCK_MS = 30_000;
+const DEFAULT_STALE_LOCK_MS = 30_000;
+
+interface FileMutexOptions {
+  staleLockMs?: number;
+}
 
 function isFileExistsError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "EEXIST";
@@ -39,7 +43,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function tryRecoverStaleLock(lockPath: string): Promise<boolean> {
+async function tryRecoverStaleLock(lockPath: string, staleLockMs: number): Promise<boolean> {
   const ownerPath = `${lockPath}/owner.json`;
   try {
     const [ownerRaw, lockStats] = await Promise.all([
@@ -54,7 +58,7 @@ async function tryRecoverStaleLock(lockPath: string): Promise<boolean> {
 
     const ageMs = Date.now() - lockStats.mtimeMs;
     if (ownerRaw === null) {
-      if (ageMs > STALE_LOCK_MS) {
+      if (ageMs > staleLockMs) {
         await rm(lockPath, { recursive: true, force: true });
         return true;
       }
@@ -72,7 +76,7 @@ async function tryRecoverStaleLock(lockPath: string): Promise<boolean> {
     }
 
     if (!owner) {
-      if (ageMs > STALE_LOCK_MS) {
+      if (ageMs > staleLockMs) {
         await rm(lockPath, { recursive: true, force: true });
         return true;
       }
@@ -81,7 +85,7 @@ async function tryRecoverStaleLock(lockPath: string): Promise<boolean> {
 
     const ownerDead = !isProcessAlive(owner.pid);
     const ownerAgeMs = Date.now() - new Date(owner.acquiredAt).getTime();
-    if (ownerDead || ownerAgeMs > STALE_LOCK_MS) {
+    if (ownerDead || ownerAgeMs > staleLockMs) {
       await rm(lockPath, { recursive: true, force: true });
       return true;
     }
@@ -94,7 +98,7 @@ async function tryRecoverStaleLock(lockPath: string): Promise<boolean> {
   }
 }
 
-async function acquireFileMutex(lockPath: string): Promise<void> {
+async function acquireFileMutex(lockPath: string, staleLockMs: number): Promise<void> {
   const ownerPath = `${lockPath}/owner.json`;
   await mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
   for (;;) {
@@ -109,7 +113,7 @@ async function acquireFileMutex(lockPath: string): Promise<void> {
       if (!isFileExistsError(error)) {
         throw error;
       }
-      const recovered = await tryRecoverStaleLock(lockPath);
+      const recovered = await tryRecoverStaleLock(lockPath, staleLockMs);
       if (!recovered) {
         await sleep(10);
       }
@@ -121,18 +125,23 @@ async function releaseFileMutex(lockPath: string): Promise<void> {
   await rm(lockPath, { recursive: true, force: true });
 }
 
-export async function withFileMutex<T>(targetPath: string, task: () => Promise<T>): Promise<T> {
+export async function withFileMutex<T>(
+  targetPath: string,
+  task: () => Promise<T>,
+  options: FileMutexOptions = {},
+): Promise<T> {
   const lockPath = `${targetPath}.lock`;
+  const staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
   const previous = inProcessQueues.get(lockPath) ?? Promise.resolve();
   const run = previous.then(async () => {
-    await acquireFileMutex(lockPath);
+    await acquireFileMutex(lockPath, staleLockMs);
     try {
       return await task();
     } finally {
       await releaseFileMutex(lockPath);
     }
   }, async () => {
-    await acquireFileMutex(lockPath);
+    await acquireFileMutex(lockPath, staleLockMs);
     try {
       return await task();
     } finally {
