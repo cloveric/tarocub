@@ -1617,6 +1617,20 @@ describe("runCli", () => {
     }
   });
 
+  it("refuses to mutate default Lark access when no Lark app is configured", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const defaultLarkDir = path.join(tempDir, ".cctb", "lark");
+
+    try {
+      await expect(runCli(["lark", "access", "allow", "1315066031"], {
+        env: { USERPROFILE: tempDir },
+      })).rejects.toThrow("Set CCTB_LARK_INSTANCE=<name> or run lark setup first.");
+      await expect(readFile(path.join(defaultLarkDir, "access.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("updates an existing .env file instead of replacing unrelated lines", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 

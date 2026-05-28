@@ -1604,6 +1604,9 @@ async function runLarkAccessCommand(
   logger: CliLogger,
 ): Promise<boolean> {
   const loadedEnv = await loadLarkRuntimeEnv(env);
+  if (isLarkAccessMutation(args) && !hasExplicitLarkAccessTarget(env, loadedEnv)) {
+    throw new Error("Refusing to modify the implicit default Lark access store. Set CCTB_LARK_INSTANCE=<name> or run lark setup first.");
+  }
   const stateDir = resolveLarkStateDir(loadedEnv);
   const instanceName = resolveLarkInstanceName(loadedEnv);
   return await runAccessCommand(["access", ...args], {
@@ -1617,6 +1620,25 @@ async function runLarkAccessCommand(
     defaultInstanceName: instanceName,
     ensureAgentInstructions: false,
   });
+}
+
+function isLarkAccessMutation(args: string[]): boolean {
+  return args[0] === "pair" ||
+    args[0] === "policy" ||
+    args[0] === "allow" ||
+    args[0] === "revoke" ||
+    args[0] === "multi";
+}
+
+function hasExplicitLarkAccessTarget(env: LarkRuntimeEnv, loadedEnv: LarkRuntimeEnv): boolean {
+  return Boolean(
+    env.CCTB_LARK_INSTANCE ||
+    env.CCTB_LARK_STATE_DIR ||
+    loadedEnv.CCTB_LARK_INSTANCE ||
+    loadedEnv.CCTB_LARK_STATE_DIR ||
+    loadedEnv.LARK_APP_ID ||
+    loadedEnv.LARK_APP_SECRET,
+  );
 }
 
 async function resolveLarkScopedEnv(env: LarkRuntimeEnv): Promise<{ env: InstanceTokenEnv; instanceName: string }> {
