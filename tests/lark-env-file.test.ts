@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -51,6 +51,50 @@ describe("Lark env files", () => {
       expect(loaded.CCTB_LARK_INSTANCE).toBe(instanceName);
       expect(loaded.TAROCUB_INSTANCE).toBe(instanceName);
       expect(loaded.LARK_APP_ID).toBe("cli_lark");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses legacy TAROCUB_INSTANCE as the Lark state directory selector", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    const instanceName = "lark2";
+    const stateDir = path.join(tempDir, ".cctb", instanceName);
+
+    try {
+      const envPath = await writeLarkEnvFile({
+        USERPROFILE: tempDir,
+        TAROCUB_INSTANCE: instanceName,
+      }, {
+        appId: "cli_lark2",
+        appSecret: "secret",
+        domain: "feishu",
+      });
+      expect(envPath).toBe(path.join(stateDir, "lark.env"));
+
+      const legacyOnlyEnv = [
+        "LARK_APP_ID=\"cli_lark2\"",
+        "LARK_APP_SECRET=\"secret\"",
+        `CCTB_LARK_STATE_DIR=\"${stateDir}\"`,
+        `TAROCUB_INSTANCE=\"${instanceName}\"`,
+        "",
+      ].join("\n");
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "lark.env"), legacyOnlyEnv, "utf8");
+
+      expect(resolveLarkStateDir({
+        USERPROFILE: tempDir,
+        TAROCUB_INSTANCE: instanceName,
+      })).toBe(stateDir);
+
+      const loaded = await loadLarkRuntimeEnv({
+        USERPROFILE: tempDir,
+        TAROCUB_INSTANCE: instanceName,
+      });
+      expect(loaded.CCTB_LARK_STATE_DIR).toBe(stateDir);
+      expect(loaded.CCTB_LARK_INSTANCE).toBe(instanceName);
+      expect(loaded.TAROCUB_INSTANCE).toBe(instanceName);
+      expect(loaded.LARK_APP_ID).toBe("cli_lark2");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

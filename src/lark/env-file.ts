@@ -5,11 +5,11 @@ import { resolveDefaultLarkStateDir, resolveLarkInstanceName, type LarkRuntimeEn
 
 export const LARK_ENV_FILE_NAME = "lark.env";
 
-export function resolveLarkStateDir(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">): string {
+export function resolveLarkStateDir(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE" | "TAROCUB_INSTANCE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">): string {
   if (env.CCTB_LARK_STATE_DIR) {
     return env.CCTB_LARK_STATE_DIR;
   }
-  if (env.CCTB_LARK_INSTANCE) {
+  if (env.CCTB_LARK_INSTANCE || env.TAROCUB_INSTANCE) {
     return resolveDefaultLarkStateDir(env);
   }
   if (env.CODEX_TELEGRAM_STATE_DIR) {
@@ -18,7 +18,7 @@ export function resolveLarkStateDir(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROF
   return resolveDefaultLarkStateDir(env);
 }
 
-export function resolveLarkEnvFilePath(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">): string {
+export function resolveLarkEnvFilePath(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE" | "TAROCUB_INSTANCE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">): string {
   return path.join(resolveLarkStateDir(env), LARK_ENV_FILE_NAME);
 }
 
@@ -40,16 +40,22 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
     throw error;
   }
 
+  const larkInstance = env.CCTB_LARK_INSTANCE
+    ?? env.TAROCUB_INSTANCE
+    ?? parsed.CCTB_LARK_INSTANCE
+    ?? parsed.TAROCUB_INSTANCE
+    ?? parsed.CODEX_TELEGRAM_INSTANCE;
+
   return {
     ...env,
     LARK_APP_ID: env.LARK_APP_ID ?? parsed.LARK_APP_ID,
     LARK_APP_SECRET: env.LARK_APP_SECRET ?? parsed.LARK_APP_SECRET,
     LARK_DOMAIN: env.LARK_DOMAIN ?? parsed.LARK_DOMAIN,
     CCTB_LARK_STATE_DIR: env.CCTB_LARK_STATE_DIR ?? parsed.CCTB_LARK_STATE_DIR,
-    CCTB_LARK_INSTANCE: env.CCTB_LARK_INSTANCE ?? parsed.CCTB_LARK_INSTANCE,
+    CCTB_LARK_INSTANCE: larkInstance,
     LARK_REQUIRE_MENTION_IN_GROUP: env.LARK_REQUIRE_MENTION_IN_GROUP ?? parsed.LARK_REQUIRE_MENTION_IN_GROUP,
     CCTB_LARK_DEBUG: env.CCTB_LARK_DEBUG ?? parsed.CCTB_LARK_DEBUG,
-    TAROCUB_INSTANCE: env.TAROCUB_INSTANCE ?? env.CCTB_LARK_INSTANCE ?? parsed.TAROCUB_INSTANCE ?? parsed.CCTB_LARK_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
+    TAROCUB_INSTANCE: env.TAROCUB_INSTANCE ?? larkInstance,
     CODEX_TELEGRAM_INSTANCE: env.CODEX_TELEGRAM_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
   };
 }
