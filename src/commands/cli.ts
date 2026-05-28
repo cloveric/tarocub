@@ -210,6 +210,47 @@ function extractInstanceOption(argv: string[], defaultInstanceName = "default"):
   return { instanceName, args };
 }
 
+function extractOptionalInstanceOption(argv: string[]): { instanceName?: string; args: string[] } {
+  let instanceName: string | undefined;
+  const args: string[] = [];
+
+  for (let index = 0; index < argv.length; index++) {
+    const argument = argv[index];
+
+    if (argument === "--instance") {
+      if (index + 1 >= argv.length) {
+        throw new Error("Invalid instance name");
+      }
+
+      instanceName = normalizeInstanceName(argv[index + 1]);
+      index++;
+      continue;
+    }
+
+    if (argument.startsWith("--instance=")) {
+      instanceName = normalizeInstanceName(argument.slice("--instance=".length));
+      continue;
+    }
+
+    args.push(argument);
+  }
+
+  return { instanceName, args };
+}
+
+function applyLarkInstanceOption(env: LarkRuntimeEnv, instanceName?: string): LarkRuntimeEnv {
+  if (!instanceName) {
+    return env;
+  }
+  const { CCTB_LARK_STATE_DIR: _inheritedStateDir, ...rest } = env;
+  void _inheritedStateDir;
+  return {
+    ...rest,
+    CCTB_LARK_INSTANCE: instanceName,
+    TAROCUB_INSTANCE: instanceName,
+  };
+}
+
 function extractBooleanFlag(argv: string[], flag: string): { enabled: boolean; args: string[] } {
   let enabled = false;
   const args: string[] = [];
@@ -1959,11 +2000,13 @@ async function runLarkCommand(
     stdinText?: CliOptions["stdinText"];
   } = {},
 ): Promise<boolean> {
-  const subcommand = argv[1] ?? "status";
-  const args = argv.slice(2);
+  const scoped = extractOptionalInstanceOption(argv.slice(1));
+  const subcommand = scoped.args[0] ?? "status";
+  const args = scoped.args.slice(1);
+  const larkEnv = applyLarkInstanceOption(env, scoped.instanceName);
 
   if (subcommand === "setup") {
-    return await runLarkSetupCommand(args, env, logger, {
+    return await runLarkSetupCommand(args, larkEnv, logger, {
       inspectApp: deps.inspectApp,
       provisionApp: deps.provisionApp,
       runCommand: deps.runCommand ?? runLarkCommandProcess,
@@ -1972,139 +2015,139 @@ async function runLarkCommand(
   }
 
   if (subcommand === "service") {
-    return await runLarkServiceCommand(args, env, logger, {
+    return await runLarkServiceCommand(args, larkEnv, logger, {
       ...deps.service,
       inspectApp: deps.service?.inspectApp ?? deps.inspectApp,
     });
   }
 
   if (subcommand === "send") {
-    return await runLarkSendCommand(args, env, logger, deps.send);
+    return await runLarkSendCommand(args, larkEnv, logger, deps.send);
   }
 
   if (subcommand === "secrets") {
-    return await runLarkSecretsCommand(args, env, logger, deps.stdinText);
+    return await runLarkSecretsCommand(args, larkEnv, logger, deps.stdinText);
   }
 
   if (subcommand === "cli") {
-    return await runLarkCliBridgeCommand(args, env, logger, deps.runCommand ?? runLarkCommandProcess);
+    return await runLarkCliBridgeCommand(args, larkEnv, logger, deps.runCommand ?? runLarkCommandProcess);
   }
 
   if (subcommand === "auth") {
-    return await runLarkAuthCommand(args, env, logger, deps.runCommand ?? runLarkCommandProcess);
+    return await runLarkAuthCommand(args, larkEnv, logger, deps.runCommand ?? runLarkCommandProcess);
   }
 
   if (subcommand === "access") {
-    return await runLarkAccessCommand(args, env, logger);
+    return await runLarkAccessCommand(args, larkEnv, logger);
   }
 
   if (subcommand === "audit") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runAuditCommand(["audit", "--instance", scoped.instanceName, ...args], scoped.env, logger);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runAuditCommand(["audit", "--instance", runtime.instanceName, ...args], runtime.env, logger);
   }
 
   if (subcommand === "timeline") {
-    const scoped = await resolveLarkScopedEnv(env);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
     const timelineArgs = hasOption(args, "--channel") ? args : ["--channel", "lark", ...args];
-    return await runTimelineCommand(["timeline", "--instance", scoped.instanceName, ...timelineArgs], scoped.env, logger);
+    return await runTimelineCommand(["timeline", "--instance", runtime.instanceName, ...timelineArgs], runtime.env, logger);
   }
 
   if (subcommand === "dashboard") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runDashboardCommand(args, scoped.env, logger, deps.dashboard);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runDashboardCommand(args, runtime.env, logger, deps.dashboard);
   }
 
   if (subcommand === "session") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runSessionCommand(["session", ...args], scoped.env, logger, {
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runSessionCommand(["session", ...args], runtime.env, logger, {
       commandName: "lark session",
-      defaultInstanceName: scoped.instanceName,
+      defaultInstanceName: runtime.instanceName,
       showInstanceOption: false,
     });
   }
 
   if (subcommand === "task") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runTaskCommand(["task", ...args], scoped.env, logger, {
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runTaskCommand(["task", ...args], runtime.env, logger, {
       commandName: "lark task",
-      defaultInstanceName: scoped.instanceName,
+      defaultInstanceName: runtime.instanceName,
       showInstanceOption: false,
     });
   }
 
   if (subcommand === "backup") {
-    await runLarkBackupCommand(args, env, logger);
+    await runLarkBackupCommand(args, larkEnv, logger);
     return true;
   }
 
   if (subcommand === "restore") {
-    await runLarkRestoreCommand(args, env, logger);
+    await runLarkRestoreCommand(args, larkEnv, logger);
     return true;
   }
 
   if (subcommand === "instructions") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runInstructionsCommand(["instructions", ...args], scoped.env, logger, {
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runInstructionsCommand(["instructions", ...args], runtime.env, logger, {
       allowUpgrade: false,
       commandName: "lark instructions",
-      defaultInstanceName: scoped.instanceName,
+      defaultInstanceName: runtime.instanceName,
       showInstanceOption: false,
     });
   }
 
   if (subcommand === "engine") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runEngineCommand(["engine", ...args, "--instance", scoped.instanceName], scoped.env, logger);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runEngineCommand(["engine", ...args, "--instance", runtime.instanceName], runtime.env, logger);
   }
 
   if (subcommand === "yolo") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runYoloCommand(["yolo", ...args, "--instance", scoped.instanceName], scoped.env, logger);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runYoloCommand(["yolo", ...args, "--instance", runtime.instanceName], runtime.env, logger);
   }
 
   if (subcommand === "budget") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runBudgetCommand(["budget", ...args, "--instance", scoped.instanceName], scoped.env, logger);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runBudgetCommand(["budget", ...args, "--instance", runtime.instanceName], runtime.env, logger);
   }
 
   if (subcommand === "locale") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runLocaleCommand(["locale", ...args, "--instance", scoped.instanceName], scoped.env, logger);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runLocaleCommand(["locale", ...args, "--instance", runtime.instanceName], runtime.env, logger);
   }
 
   if (subcommand === "verbosity") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runVerbosityCommand(["verbosity", ...args, "--instance", scoped.instanceName], scoped.env, logger);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runVerbosityCommand(["verbosity", ...args, "--instance", runtime.instanceName], runtime.env, logger);
   }
 
   if (subcommand === "usage") {
-    const scoped = await resolveLarkScopedEnv(env);
-    return await runUsageCommand(["usage", ...args, "--instance", scoped.instanceName], scoped.env, logger);
+    const runtime = await resolveLarkScopedEnv(larkEnv);
+    return await runUsageCommand(["usage", ...args, "--instance", runtime.instanceName], runtime.env, logger);
   }
 
   if (subcommand === "status") {
     if (args.length !== 0) {
-      throw new Error("Usage: lark status");
+      throw new Error("Usage: lark status [--instance <name>]");
     }
-    const loadedEnv = await loadLarkRuntimeEnv(env);
+    const loadedEnv = await loadLarkRuntimeEnv(larkEnv);
     logger.log(await formatLarkStatus(loadedEnv, deps.detectCli ?? detectLarkCliStatus));
     return true;
   }
 
   if (subcommand === "doctor") {
     if (args.length !== 0) {
-      throw new Error("Usage: lark doctor");
+      throw new Error("Usage: lark doctor [--instance <name>]");
     }
-    const loadedEnv = await loadLarkRuntimeEnv(env);
+    const loadedEnv = await loadLarkRuntimeEnv(larkEnv);
     logger.log(await formatLarkDoctor(loadedEnv, deps.inspectApp ?? inspectLarkAppProvisioning));
     return true;
   }
 
   if (subcommand === "provision") {
     if (args.length !== 0) {
-      throw new Error("Usage: lark provision");
+      throw new Error("Usage: lark provision [--instance <name>]");
     }
-    const loadedEnv = await loadLarkRuntimeEnv(env);
+    const loadedEnv = await loadLarkRuntimeEnv(larkEnv);
     if (!loadedEnv.LARK_APP_ID) {
       throw new Error("LARK_APP_ID is required");
     }
@@ -2129,31 +2172,45 @@ async function runLarkCommand(
 
   if (subcommand === "permissions") {
     if (args.length === 1 && args[0] === "--missing") {
-      const loadedEnv = await loadLarkRuntimeEnv(env);
+      const loadedEnv = await loadLarkRuntimeEnv(larkEnv);
       if (!loadedEnv.LARK_APP_ID) {
         throw new Error("LARK_APP_ID is required");
       }
       if (!loadedEnv.LARK_APP_SECRET) {
         throw new Error("LARK_APP_SECRET is required");
       }
-      const inspected = await (deps.inspectApp ?? inspectLarkAppProvisioning)({
-        appId: loadedEnv.LARK_APP_ID,
-        appSecret: loadedEnv.LARK_APP_SECRET,
-        ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
-      });
+      let inspected: LarkProvisioningResult | undefined;
+      let inspectError: string | undefined;
+      try {
+        inspected = await (deps.inspectApp ?? inspectLarkAppProvisioning)({
+          appId: loadedEnv.LARK_APP_ID,
+          appSecret: loadedEnv.LARK_APP_SECRET,
+          ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
+        });
+      } catch (error) {
+        inspectError = redactLarkDoctorError(error, loadedEnv);
+      }
       const lines = [
         "Lark missing scopes JSON",
         "Paste this into Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
         `Permissions page: ${formatLarkPermissionConsoleUrl(loadedEnv.LARK_APP_ID, loadedEnv.LARK_DOMAIN)}`,
-        inspected.missingScopes.length > 0
-          ? formatLarkScopeImportJson(inspected.missingScopes)
-          : "No missing required scopes.",
+        ...(inspected
+          ? [
+              inspected.missingScopes.length > 0
+                ? formatLarkScopeImportJson(inspected.missingScopes)
+                : "No missing required scopes.",
+            ]
+          : [
+              `Could not inspect currently missing scopes: ${inspectError}`,
+              "Fallback full required scopes JSON",
+              formatLarkScopeImportJson(REQUIRED_LARK_SCOPES),
+            ]),
       ];
-      lines.push(...formatLarkScopeImportNextSteps(inspected.missingScopes, {
+      lines.push(...formatLarkScopeImportNextSteps(inspected?.missingScopes ?? REQUIRED_LARK_SCOPES, {
         appId: loadedEnv.LARK_APP_ID,
         ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
       }));
-      if (inspected.unauthorizedScopes.length > 0) {
+      if (inspected && inspected.unauthorizedScopes.length > 0) {
         lines.push(`Already configured but awaiting approval: ${inspected.unauthorizedScopes.join(", ")}`);
       }
       logger.log(lines.join("\n"));

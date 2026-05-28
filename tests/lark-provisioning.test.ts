@@ -13,6 +13,30 @@ import {
 } from "../src/lark/provisioning.js";
 
 describe("provisionLarkApp", () => {
+  it("wraps SDK tenant token failures with the provisioning API label", async () => {
+    const client = {
+      application: {
+        scope: {
+          list: vi.fn(async () => {
+            throw new TypeError("Cannot destructure property 'tenant_access_token' of '(intermediate value)' as it is undefined.");
+          }),
+          apply: vi.fn(async () => ({ code: 0 })),
+        },
+        application: {
+          get: vi.fn(async () => ({
+            code: 0,
+            data: { app: {} },
+          })),
+          patch: vi.fn(async () => ({ code: 0 })),
+        },
+      },
+    } as unknown as LarkProvisioningClient;
+
+    await expect(inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client })).rejects.toThrow(
+      "Lark scope list failed: Cannot destructure property 'tenant_access_token'",
+    );
+  });
+
   it("inspects app surface without applying scopes or patching subscriptions", async () => {
     const client = createProvisioningClientMock({
       scopes: grantAllRequiredScopes(),

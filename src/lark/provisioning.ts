@@ -237,11 +237,11 @@ export function formatLarkScopeImportNextSteps(
 
 async function readLarkAppProvisioning(client: LarkProvisioningClient, appId: string): Promise<Omit<LarkProvisioningResult, "applied">> {
   const [scopeResult, appResult] = await Promise.all([
-    client.application.scope.list(),
-    client.application.application.get({
+    callLarkProvisioningApi(() => client.application.scope.list(), "Lark scope list"),
+    callLarkProvisioningApi(() => client.application.application.get({
       params: { lang: "zh_cn", user_id_type: "open_id" },
       path: { app_id: appId },
-    }),
+    }), "Lark app get"),
   ]);
   if (scopeResult.code !== 0) {
     throw new Error(`Lark scope list failed: ${scopeResult.code ?? "unknown"} ${scopeResult.msg ?? ""}`.trim());
@@ -288,10 +288,10 @@ async function readLarkAppVersionSubscribedEvents(
   if (!versionId || !client.application.applicationAppVersion?.get) {
     return undefined;
   }
-  const versionResult = await client.application.applicationAppVersion.get({
+  const versionResult = await callLarkProvisioningApi(() => client.application.applicationAppVersion!.get({
     params: { lang: "zh_cn", user_id_type: "open_id" },
     path: { app_id: appId, version_id: versionId },
-  });
+  }), "Lark app version get");
   if (versionResult.code !== 0) {
     throw new Error(`Lark app version get failed: ${versionResult.code ?? "unknown"} ${versionResult.msg ?? ""}`.trim());
   }

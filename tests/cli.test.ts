@@ -151,6 +151,33 @@ describe("runCli", () => {
     }
   });
 
+  it("lets explicit Lark --instance override an inherited Lark state dir", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inheritedStateDir = path.join(tempDir, ".cctb", "lark-one");
+    const messages: string[] = [];
+
+    try {
+      const handled = await runCli(["lark", "status", "--instance", "lark-two"], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: inheritedStateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkDetectCli: async () => ({ available: false }),
+      } as Parameters<typeof runCli>[1] & {
+        larkDetectCli: () => Promise<{ available: boolean; version?: string }>;
+      });
+
+      const output = messages.join("\n");
+      expect(handled).toBe(true);
+      expect(output).toContain("Instance: lark-two");
+      expect(output).toContain(`State dir: ${path.join(tempDir, ".cctb", "lark-two")}`);
+      expect(output).not.toContain(inheritedStateDir);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("loads Lark credentials from the generated lark.env file", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
@@ -1639,6 +1666,37 @@ describe("runCli", () => {
       expect(output).not.toContain('"im:message:send_as_bot"');
       expect(output).not.toContain("super-secret");
       expect(output).toContain("Already configured but awaiting approval: docs:document.comment:create");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("falls back to the full Lark permission JSON when missing-scope inspection fails", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const inspectApp = vi.fn(async () => {
+      throw new Error("Lark scope list failed: temporary token fetch failure");
+    });
+
+    try {
+      const handled = await runCli(["lark", "permissions", "--missing"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "super-secret",
+          CCTB_LARK_STATE_DIR: path.join(tempDir, "lark-state"),
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkInspectApp: inspectApp,
+      });
+
+      const output = messages.join("\n");
+      expect(handled).toBe(true);
+      expect(output).toContain("Could not inspect currently missing scopes");
+      expect(output).toContain("temporary token fetch failure");
+      expect(output).toContain("Fallback full required scopes JSON");
+      expect(output).toContain("im:message.reactions:write_only");
+      expect(output).not.toContain("super-secret");
     } finally {
       await removeTempRoot(tempDir);
     }
