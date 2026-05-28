@@ -62,6 +62,7 @@ import { runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps
 import { runCronCli } from "../cron-cli.js";
 import { CronStore } from "../state/cron-store.js";
 import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir, writeLarkEnvFile } from "../lark/env-file.js";
+import { resolveDefaultLarkStateDir } from "../lark/config.js";
 import { LarkGroupModeStore } from "../lark/group-mode-store.js";
 import { createLarkServiceRuntime, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
@@ -1467,7 +1468,7 @@ function withoutDirectLarkAppCredentials(env: LarkRuntimeEnv): LarkRuntimeEnv {
   return rest;
 }
 
-export function resolveLarkSetupTargetEnv(env: LarkRuntimeEnv): LarkRuntimeEnv {
+export function resolveLarkCommandTargetEnv(env: LarkRuntimeEnv): LarkRuntimeEnv {
   const explicitInstance = env.CCTB_LARK_INSTANCE ?? env.TAROCUB_INSTANCE;
   if (!explicitInstance || !env.CCTB_LARK_STATE_DIR) {
     return env;
@@ -1475,8 +1476,17 @@ export function resolveLarkSetupTargetEnv(env: LarkRuntimeEnv): LarkRuntimeEnv {
   const instanceName = resolveLarkInstanceName({
     CCTB_LARK_INSTANCE: explicitInstance,
   });
-  const stateDirBasename = path.basename(path.resolve(env.CCTB_LARK_STATE_DIR));
+  const resolvedStateDir = path.resolve(env.CCTB_LARK_STATE_DIR);
+  const stateDirBasename = path.basename(resolvedStateDir);
   if (stateDirBasename === instanceName) {
+    return env;
+  }
+  const inheritedLooksLikeDefaultInstanceDir = path.resolve(resolveDefaultLarkStateDir({
+    HOME: env.HOME,
+    USERPROFILE: env.USERPROFILE,
+    CCTB_LARK_INSTANCE: stateDirBasename,
+  })) === resolvedStateDir;
+  if (!inheritedLooksLikeDefaultInstanceDir) {
     return env;
   }
 
@@ -1489,6 +1499,8 @@ export function resolveLarkSetupTargetEnv(env: LarkRuntimeEnv): LarkRuntimeEnv {
   void _staleBridgeStateDir;
   return rest;
 }
+
+export const resolveLarkSetupTargetEnv = resolveLarkCommandTargetEnv;
 
 export function buildLarkServiceStartCommand(input: LarkServiceCommandInput): string {
   return [
@@ -2026,7 +2038,7 @@ async function runLarkCommand(
   const scoped = extractOptionalInstanceOption(argv.slice(1));
   const subcommand = scoped.args[0] ?? "status";
   const args = scoped.args.slice(1);
-  const larkEnv = applyLarkInstanceOption(env, scoped.instanceName);
+  const larkEnv = resolveLarkCommandTargetEnv(applyLarkInstanceOption(env, scoped.instanceName));
 
   if (subcommand === "setup") {
     return await runLarkSetupCommand(args, larkEnv, logger, {

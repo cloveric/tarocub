@@ -184,6 +184,35 @@ describe("runCli", () => {
     }
   });
 
+  it("lets explicit Lark env instance override an inherited stale state dir", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inheritedStateDir = path.join(tempDir, ".cctb", "lark-one");
+    const messages: string[] = [];
+
+    try {
+      const handled = await runCli(["lark", "status"], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_LARK_INSTANCE: "lark-two",
+          CCTB_LARK_STATE_DIR: inheritedStateDir,
+          CODEX_TELEGRAM_STATE_DIR: inheritedStateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkDetectCli: async () => ({ available: false }),
+      } as Parameters<typeof runCli>[1] & {
+        larkDetectCli: () => Promise<{ available: boolean; version?: string }>;
+      });
+
+      const output = messages.join("\n");
+      expect(handled).toBe(true);
+      expect(output).toContain("Instance: lark-two");
+      expect(output).toContain(`State dir: ${path.join(tempDir, ".cctb", "lark-two")}`);
+      expect(output).not.toContain(inheritedStateDir);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("loads Lark credentials from the generated lark.env file", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
