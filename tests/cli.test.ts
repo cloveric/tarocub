@@ -1631,6 +1631,29 @@ describe("runCli", () => {
     }
   });
 
+  it("warns when allowing a Lark chat under pairing policy", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+
+    try {
+      await runCli(["lark", "access", "allow", "1315066031"], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(messages).toEqual([
+        'Allowed chat 1315066031 for instance "lark".',
+        "Note: current policy is pairing; private chats still require `lark access pair <code>` to authorize the user.",
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("updates an existing .env file instead of replacing unrelated lines", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 

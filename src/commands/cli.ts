@@ -434,6 +434,10 @@ async function runAccessCommand(
       outcome: "success",
     });
     logger.log(`Allowed chat ${chatId} for instance "${instanceName}".`);
+    const status = await store.getStatus();
+    if (status.policy === "pairing") {
+      logger.log(`Note: current policy is pairing; private chats still require \`${commandName} pair <code>\` to authorize the user.`);
+    }
     return true;
   }
 
