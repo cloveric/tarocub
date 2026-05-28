@@ -54,7 +54,7 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
 }
 
 export async function writeLarkEnvFile(
-  env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">,
+  env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR" | "CODEX_TELEGRAM_INSTANCE">,
   values: {
     appId: string;
     appSecret: string;
@@ -63,6 +63,7 @@ export async function writeLarkEnvFile(
   },
 ): Promise<string> {
   const stateDir = resolveLarkStateDir(env);
+  const instanceName = env.CODEX_TELEGRAM_INSTANCE ?? "lark";
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const envPath = path.join(stateDir, LARK_ENV_FILE_NAME);
   const lines = [
@@ -71,7 +72,7 @@ export async function writeLarkEnvFile(
     `LARK_APP_SECRET=${quoteEnvValue(values.appSecret)}`,
     ...(values.domain ? [`LARK_DOMAIN=${quoteEnvValue(values.domain)}`] : []),
     `CCTB_LARK_STATE_DIR=${quoteEnvValue(stateDir)}`,
-    `CODEX_TELEGRAM_INSTANCE=${quoteEnvValue("lark")}`,
+    `CODEX_TELEGRAM_INSTANCE=${quoteEnvValue(instanceName)}`,
     `LARK_REQUIRE_MENTION_IN_GROUP=${quoteEnvValue(values.requireMentionInGroup === false ? "false" : "true")}`,
     "",
   ];

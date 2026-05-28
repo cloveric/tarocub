@@ -218,57 +218,7 @@ lark send --chat oc_xxx --message "hello"
 
 ### In-chat slash commands
 
-See the full [Slash Command Index](./docs/slash-commands.md) for command groups, channel support, and examples. The short list below shows the shape of the in-chat surface:
-
-```text
-# basics
-/help
-/status
-/usage
-/btw can you sanity-check this without changing the session?
-
-# engine and safety
-/engine codex
-/model gpt-5.5
-/effort xhigh
-/fast off
-/yolo on
-/config
-
-# goals and sessions
-/goal ship this with tests
-/goal status
-/resume
-/resume thread thread_abc123
-/resume conversation fdfc8ab1-7936-4599-98b0-d8ba2593c250
-/detach
-/reset
-/stop
-/continue
-
-# scheduled and durable work
-/cron list
-/cron add 0 9 * * 1 weekly summary
-/board add write launch plan
-/board list
-
-# multi-agent workflows
-/mini here planner
-/mini ask planner break this into tickets
-/fan compare these approaches
-/chain improve this answer step by step
-/verify implement and review this
-
-# groups and Lark-native project spaces
-/group status
-/group all
-/newgroup Project Room
-/newtopic Research Thread
-
-# approvals when cards are unavailable
-/approve
-/deny
-```
+See the full [Slash Command Index](./docs/slash-commands.md) for command groups, Telegram/Lark support, and examples.
 
 ## Current Release
 

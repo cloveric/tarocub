@@ -1319,7 +1319,7 @@ export function buildLarkServiceStartCommand(input: LarkServiceCommandInput): st
     shellQuote(input.cwd),
     "&&",
     `CCTB_LARK_STATE_DIR=${shellQuote(input.stateDir)}`,
-    `CODEX_TELEGRAM_INSTANCE=${shellQuote("lark")}`,
+    `CODEX_TELEGRAM_INSTANCE=${shellQuote(input.env.CODEX_TELEGRAM_INSTANCE ?? "lark")}`,
     shellQuote(process.execPath),
     shellQuote(input.entrypoint),
     "lark",
