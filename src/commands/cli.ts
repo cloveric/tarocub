@@ -70,6 +70,7 @@ import { runLarkWizard } from "../lark/wizard.js";
 import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSetting } from "../codex/user-defaults.js";
 import {
   REQUIRED_LARK_SCOPES,
+  formatLarkPermissionConsoleUrl,
   formatLarkProvisioningResult,
   formatLarkScopeImportJson,
   formatLarkScopeImportNextSteps,
@@ -82,7 +83,10 @@ import { redactLarkSensitiveText } from "../lark/redaction.js";
 const execFile = promisify(execFileCallback);
 const LEGACY_LARK_SERVICE_TMUX_SESSION = "cctb-lark-service";
 const LARK_SERVICE_TMUX_SESSION_PREFIX = "cctb-lark-service-";
+const LARK_SETUP_TMUX_SESSION_PREFIX = "cctb-lark-setup-";
+const LARK_SETUP_LOG_FILENAME = "lark-setup.log";
 const TELEGRAM_CONFIGURE_USAGE = "Usage: telegram configure <bot-token> | telegram configure --instance <name> <bot-token>";
+const LARK_SETUP_USAGE = "Usage: lark setup [--detached] [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth]";
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -106,6 +110,15 @@ export interface LarkServiceCommandInput {
   logPath: string;
   entrypoint: string;
   cwd: string;
+}
+
+export interface LarkDetachedSetupCommandInput {
+  env: LarkRuntimeEnv;
+  stateDir: string;
+  logPath: string;
+  entrypoint: string;
+  cwd: string;
+  args: string[];
 }
 
 export interface LarkServiceCommandDeps {
@@ -808,7 +821,7 @@ async function formatLarkDoctor(
         appSecret: env.LARK_APP_SECRET,
         ...(env.LARK_DOMAIN ? { domain: env.LARK_DOMAIN } : {}),
       });
-      checks.push(...formatLarkProvisioningForDoctor(provisioning));
+      checks.push(...formatLarkProvisioningForDoctor(provisioning, env));
     } catch (error) {
       checks.push(`warn Lark app provisioning check: ${redactLarkDoctorError(error, env)}`);
     }
@@ -822,8 +835,11 @@ async function formatLarkDoctor(
   ].join("\n");
 }
 
-function formatLarkProvisioningForDoctor(result: LarkProvisioningResult): string[] {
-  return formatLarkProvisioningResult(result).map((line) => {
+function formatLarkProvisioningForDoctor(result: LarkProvisioningResult, env: LarkRuntimeEnv): string[] {
+  return formatLarkProvisioningResult(result, {
+    ...(env.LARK_APP_ID ? { appId: env.LARK_APP_ID } : {}),
+    ...(env.LARK_DOMAIN ? { domain: env.LARK_DOMAIN } : {}),
+  }).map((line) => {
     const severity = isOkLarkProvisioningLine(line) ? "ok" : "warn";
     return `${severity} ${line}`;
   });
@@ -1311,6 +1327,11 @@ function buildLarkServiceTmuxSessionName(stateDir: string): string {
   return `${LARK_SERVICE_TMUX_SESSION_PREFIX}${digest}`;
 }
 
+function buildLarkSetupTmuxSessionName(stateDir: string): string {
+  const digest = createHash("sha256").update(path.resolve(stateDir)).digest("hex").slice(0, 12);
+  return `${LARK_SETUP_TMUX_SESSION_PREFIX}${digest}`;
+}
+
 async function defaultKillTmuxSession(sessionName: string): Promise<boolean> {
   try {
     await execFile("tmux", ["kill-session", "-t", sessionName], { timeout: 5_000 });
@@ -1318,6 +1339,91 @@ async function defaultKillTmuxSession(sessionName: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function resolveLarkSetupLogPath(stateDir: string): string {
+  return path.join(stateDir, LARK_SETUP_LOG_FILENAME);
+}
+
+export function buildDetachedLarkSetupCommand(input: LarkDetachedSetupCommandInput): string {
+  const args = input.args.filter((arg) => arg !== "--detached");
+  const instanceName = resolveLarkInstanceName(input.env);
+  return [
+    "cd",
+    shellQuote(input.cwd),
+    "&&",
+    "env",
+    "-u",
+    "LARK_APP_ID",
+    "-u",
+    "LARK_APP_SECRET",
+    "-u",
+    "LARK_DOMAIN",
+    `CCTB_LARK_STATE_DIR=${shellQuote(input.stateDir)}`,
+    `CCTB_LARK_INSTANCE=${shellQuote(instanceName)}`,
+    `TAROCUB_INSTANCE=${shellQuote(instanceName)}`,
+    shellQuote(process.execPath),
+    shellQuote(input.entrypoint),
+    "lark",
+    "setup",
+    ...args.map(shellQuote),
+    ">",
+    shellQuote(input.logPath),
+    "2>&1",
+  ].join(" ");
+}
+
+async function startDetachedLarkSetup(input: LarkDetachedSetupCommandInput): Promise<{ sessionName: string }> {
+  await mkdir(input.stateDir, { recursive: true });
+  await rm(input.logPath, { force: true });
+  const sessionName = buildLarkSetupTmuxSessionName(input.stateDir);
+  if (await tmuxSessionExists(sessionName)) {
+    await defaultKillTmuxSession(sessionName);
+  }
+  const command = buildDetachedLarkSetupCommand(input);
+  try {
+    await execFile("tmux", ["new-session", "-d", "-s", sessionName, command], { timeout: 5_000 });
+  } catch (error) {
+    throw new Error(`Detached Lark setup requires tmux. Start the foreground setup instead or install tmux first. ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { sessionName };
+}
+
+function extractDetachedLarkSetupUrl(logText: string): string | undefined {
+  const match = logText.match(/Open directly:\s*(https?:\/\/\S+)/);
+  return match?.[1];
+}
+
+async function waitForDetachedLarkSetupUrl(logPath: string): Promise<string | undefined> {
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    try {
+      const logText = await readFile(logPath, "utf8");
+      const url = extractDetachedLarkSetupUrl(logText);
+      if (url) {
+        return url;
+      }
+    } catch (error) {
+      if (!(typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT")) {
+        throw error;
+      }
+    }
+    await sleep(200);
+  }
+  return undefined;
+}
+
+function withoutDirectLarkAppCredentials(env: LarkRuntimeEnv): LarkRuntimeEnv {
+  const {
+    LARK_APP_ID: _appId,
+    LARK_APP_SECRET: _appSecret,
+    LARK_DOMAIN: _domain,
+    ...rest
+  } = env;
+  void _appId;
+  void _appSecret;
+  void _domain;
+  return rest;
 }
 
 export function buildLarkServiceStartCommand(input: LarkServiceCommandInput): string {
@@ -2012,7 +2118,10 @@ async function runLarkCommand(
     });
     logger.log([
       "Lark app provisioning",
-      ...formatLarkProvisioningResult(provisioning).map((line) => `- ${line}`),
+      ...formatLarkProvisioningResult(provisioning, {
+        appId: loadedEnv.LARK_APP_ID,
+        ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
+      }).map((line) => `- ${line}`),
     ].join("\n"));
     return true;
   }
@@ -2034,11 +2143,15 @@ async function runLarkCommand(
       const lines = [
         "Lark missing scopes JSON",
         "Paste this into Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
+        `Permissions page: ${formatLarkPermissionConsoleUrl(loadedEnv.LARK_APP_ID, loadedEnv.LARK_DOMAIN)}`,
         inspected.missingScopes.length > 0
           ? formatLarkScopeImportJson(inspected.missingScopes)
           : "No missing required scopes.",
       ];
-      lines.push(...formatLarkScopeImportNextSteps(inspected.missingScopes));
+      lines.push(...formatLarkScopeImportNextSteps(inspected.missingScopes, {
+        appId: loadedEnv.LARK_APP_ID,
+        ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
+      }));
       if (inspected.unauthorizedScopes.length > 0) {
         lines.push(`Already configured but awaiting approval: ${inspected.unauthorizedScopes.join(", ")}`);
       }
@@ -2090,10 +2203,41 @@ async function runLarkSetupCommand(
   const options = parseLarkSetupArgs(args);
   const summary: string[] = [];
 
+  if (options.detached) {
+    if (options.skipWizard) {
+      throw new Error(`${LARK_SETUP_USAGE}; --detached requires the QR wizard, so remove --skip-wizard.`);
+    }
+    const loadedEnv = await loadLarkRuntimeEnv(env);
+    const stateDir = resolveLarkStateDir(loadedEnv);
+    const logPath = resolveLarkSetupLogPath(stateDir);
+    const entrypoint = resolveCliEntrypoint();
+    const { sessionName } = await startDetachedLarkSetup({
+      env: loadedEnv,
+      stateDir,
+      logPath,
+      entrypoint,
+      cwd: process.cwd(),
+      args,
+    });
+    const setupUrl = await waitForDetachedLarkSetupUrl(logPath);
+    logger.log([
+      "Lark setup is running in the background.",
+      `Instance: ${resolveLarkInstanceName(loadedEnv)}`,
+      `State dir: ${stateDir}`,
+      `tmux session: ${sessionName}`,
+      `Log: ${logPath}`,
+      ...(setupUrl ? [`Open directly: ${setupUrl}`] : ["Open link: pending; tail the log until the QR link appears."]),
+      "The setup process will keep polling after this chat turn ends, so scan this link once and then rerun `lark doctor`.",
+    ].join("\n"));
+    return true;
+  }
+
+  let setupEnv = env;
   if (options.skipWizard) {
     summary.push("wizard: skipped");
   } else {
     await runLarkWizard(env, logger);
+    setupEnv = withoutDirectLarkAppCredentials(env);
     summary.push("wizard: ok");
   }
 
@@ -2102,10 +2246,10 @@ async function runLarkSetupCommand(
     logger,
     runCommand: deps.runCommand,
   });
-  await configureLarkCliIdentity(env, deps.runCommand, { identity: options.identity });
+  await configureLarkCliIdentity(setupEnv, deps.runCommand, { identity: options.identity });
   summary.push("lark-cli: ok");
 
-  let loadedEnv = await loadLarkRuntimeEnv(env);
+  let loadedEnv = await loadLarkRuntimeEnv(setupEnv);
   if (!options.skipProvision) {
     if (!loadedEnv.LARK_APP_ID) {
       throw new Error("LARK_APP_ID is required");
@@ -2124,12 +2268,12 @@ async function runLarkSetupCommand(
     summary.push("provision: skipped");
   }
 
-  loadedEnv = await loadLarkRuntimeEnv(env);
+  loadedEnv = await loadLarkRuntimeEnv(setupEnv);
   let authSummary = "auth: skipped";
   const authNextSteps: string[] = [];
   if (!options.skipAuth) {
     try {
-      const context = await prepareLarkCliBridgeContext(env);
+      const context = await prepareLarkCliBridgeContext(loadedEnv);
       await deps.runCommand({
         file: "lark-cli",
         args: ["auth", "status", "--verify"],
@@ -2173,12 +2317,14 @@ function hasActionableLarkDoctorProblem(doctor: string): boolean {
 }
 
 function parseLarkSetupArgs(args: string[]): {
+  detached: boolean;
   skipWizard: boolean;
   installCli: boolean;
   identity: LarkCliBridgeIdentity;
   skipProvision: boolean;
   skipAuth: boolean;
 } {
+  let detached = false;
   let skipWizard = false;
   let installCli = false;
   let identity: LarkCliBridgeIdentity = "bot-only";
@@ -2186,6 +2332,10 @@ function parseLarkSetupArgs(args: string[]): {
   let skipAuth = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
+    if (arg === "--detached") {
+      detached = true;
+      continue;
+    }
     if (arg === "--skip-wizard") {
       skipWizard = true;
       continue;
@@ -2197,7 +2347,7 @@ function parseLarkSetupArgs(args: string[]): {
     if (arg === "--identity") {
       const parsed = parseLarkCliIdentityValue(args[++index]);
       if (!parsed) {
-        throw new Error("Usage: lark setup [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth]");
+        throw new Error(LARK_SETUP_USAGE);
       }
       identity = parsed;
       continue;
@@ -2210,9 +2360,9 @@ function parseLarkSetupArgs(args: string[]): {
       skipAuth = true;
       continue;
     }
-    throw new Error("Usage: lark setup [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth]");
+    throw new Error(LARK_SETUP_USAGE);
   }
-  return { skipWizard, installCli, identity, skipProvision, skipAuth };
+  return { detached, skipWizard, installCli, identity, skipProvision, skipAuth };
 }
 
 async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: CliLogger): Promise<boolean> {
@@ -3140,8 +3290,9 @@ Commands:
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
                                               Send files/text through the active turn side-channel or configured Telegram session
-  lark <status|doctor|provision|permissions|wizard|run|service|send|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>
+  lark <setup|status|doctor|provision|permissions|wizard|run|service|send|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>
                                               Inspect, configure, or run the Feishu/Lark channel
+  lark setup [--detached] [--install-cli]     Run the QR wizard, CLI bind, provision, auth check, and doctor
   lark permissions [--missing]                Print copyable Feishu/Lark permission JSON
   lark service <start|stop|restart|status|logs|doctor>
                                               Manage the Feishu/Lark service lifecycle

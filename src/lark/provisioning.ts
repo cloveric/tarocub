@@ -123,7 +123,10 @@ export async function inspectLarkAppProvisioning(input: {
   };
 }
 
-export function formatLarkProvisioningResult(result: LarkProvisioningResult): string[] {
+export function formatLarkProvisioningResult(
+  result: LarkProvisioningResult,
+  options: { appId?: string; domain?: string } = {},
+): string[] {
   const lines = [
     `Lark required scopes: ${result.missingScopes.length === 0 && result.unauthorizedScopes.length === 0 ? "ok" : "attention needed"}`,
     `Lark message event: ${result.missingEvents.length === 0 ? "ok" : "missing " + result.missingEvents.join(", ")}`,
@@ -144,9 +147,12 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
   }
   if (result.missingScopes.length > 0) {
     lines.push(`Scopes not present in app config: ${result.missingScopes.join(", ")}`);
+    if (options.appId) {
+      lines.push(`Permissions page: ${formatLarkPermissionConsoleUrl(options.appId, options.domain)}`);
+    }
     lines.push(`Bulk import missing scopes JSON: ${formatLarkScopeImportJson(result.missingScopes)}`);
     lines.push("Run `node dist/src/index.js lark permissions --missing` to reprint only the currently missing scopes.");
-    lines.push(...formatLarkScopeImportNextSteps(result.missingScopes));
+    lines.push(...formatLarkScopeImportNextSteps(result.missingScopes, options));
   }
   if (result.missingScopes.includes("im:message")) {
     lines.push("Lark message receive/send needs the base im:message scope; without it, broad group-message delivery may stay filtered even when narrower message scopes are present.");
@@ -186,6 +192,11 @@ export function formatLarkProvisioningResult(result: LarkProvisioningResult): st
   return lines;
 }
 
+export function formatLarkPermissionConsoleUrl(appId: string, domain?: string): string {
+  const host = domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
+  return `${host}/app/${encodeURIComponent(appId)}/auth`;
+}
+
 export function formatLarkTenantScopeImportJson(scopes: readonly string[]): string {
   return JSON.stringify({ scopes: { tenant: [...scopes] } });
 }
@@ -202,13 +213,18 @@ export function formatLarkScopeImportJson(scopes: readonly string[]): string {
   });
 }
 
-export function formatLarkScopeImportNextSteps(scopes: readonly string[]): string[] {
+export function formatLarkScopeImportNextSteps(
+  scopes: readonly string[],
+  options: { appId?: string; domain?: string } = {},
+): string[] {
   if (scopes.length === 0) {
     return [];
   }
   const lines = [
     "Next permission steps:",
-    "1. Open Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
+    options.appId
+      ? `1. Open app permissions page: ${formatLarkPermissionConsoleUrl(options.appId, options.domain)}`
+      : "1. Open Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
     `2. Paste this JSON: ${formatLarkScopeImportJson(scopes)}`,
     "3. Publish the app version and wait for tenant/admin approval if Feishu asks for it.",
     "4. Rerun `node dist/src/index.js lark provision`, then rerun `node dist/src/index.js lark doctor`.",

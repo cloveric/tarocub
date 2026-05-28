@@ -101,11 +101,13 @@ For the full Lark-native setup, let the aggregate setup command install/bind `la
 npm install
 npm run build
 
-node dist/src/index.js lark setup --install-cli --identity bot-only
+node dist/src/index.js lark setup --detached --install-cli --identity bot-only
 node dist/src/index.js lark service start
 ```
 
-If `lark doctor` reports missing app scopes, copy the JSON it prints into the Feishu/Lark app permission page, publish the app version, then run:
+`--detached` is recommended when you are configuring from Telegram/Lark/Codex: it keeps the QR registration polling alive in tmux, prints one durable registration link, and writes progress to `~/.cctb/<lark-instance>/lark-setup.log`.
+
+If `lark doctor` reports missing app scopes, open the permission page URL it prints, bulk-import the JSON it prints, publish the app version, then run:
 
 ```bash
 node dist/src/index.js lark provision
@@ -169,7 +171,7 @@ Recommended production flow:
 # Optional but recommended for each named Lark bot:
 export CCTB_LARK_INSTANCE=ccfgg1
 
-node dist/src/index.js lark setup --install-cli --identity bot-only
+node dist/src/index.js lark setup --detached --install-cli --identity bot-only
 node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"
 node dist/src/index.js lark auth finish <device-code>
 node dist/src/index.js lark service restart
@@ -177,12 +179,12 @@ node dist/src/index.js lark service restart
 
 `CCTB_LARK_INSTANCE=<name>` is the Lark-specific instance selector. Without an explicit `CCTB_LARK_STATE_DIR`, it stores that bot under `~/.cctb/<name>/lark.env`, so multiple Feishu/Lark bots do not fall back into the shared default `~/.cctb/lark` directory.
 
-`lark setup` wraps the QR wizard, lark-cli preflight/bind, app provisioning, OAuth status check, and `lark doctor`. If you already created the app and only want to re-check the local side, use `node dist/src/index.js lark setup --skip-wizard --install-cli --identity bot-only`.
+`lark setup` wraps the QR wizard, lark-cli preflight/bind, app provisioning, OAuth status check, and `lark doctor`. Use `--detached` for chat-driven setup so the QR wizard keeps running after the current agent turn ends. If you already created the app and only want to re-check the local side, use `node dist/src/index.js lark setup --skip-wizard --install-cli --identity bot-only`.
 
 Useful Lark commands:
 
 ```bash
-node dist/src/index.js lark setup --install-cli
+node dist/src/index.js lark setup --detached --install-cli
 node dist/src/index.js lark status
 node dist/src/index.js lark permissions --missing
 node dist/src/index.js lark access pair <code>

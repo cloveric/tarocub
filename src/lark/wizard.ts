@@ -86,7 +86,7 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
       ...(domain ? { domain } : {}),
       logger,
     });
-    for (const line of formatLarkProvisioningResult(provisioning)) {
+    for (const line of formatLarkProvisioningResult(provisioning, { appId: result.client_id, ...(domain ? { domain } : {}) })) {
       logger.log(line);
     }
   } catch (error) {

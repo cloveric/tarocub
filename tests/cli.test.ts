@@ -6,7 +6,7 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { AccessStore } from "../src/state/access-store.js";
-import { buildLarkServiceStartCommand, findLarkServiceProcessIdsFromPs, runCli } from "../src/commands/cli.js";
+import { buildDetachedLarkSetupCommand, buildLarkServiceStartCommand, findLarkServiceProcessIdsFromPs, runCli } from "../src/commands/cli.js";
 import { SessionStore } from "../src/state/session-store.js";
 import { createArchive } from "../src/state/archive.js";
 import { CronStore } from "../src/state/cron-store.js";
@@ -1367,6 +1367,31 @@ describe("runCli", () => {
     } finally {
       await removeTempRoot(tempDir);
     }
+  });
+
+  it("builds a detached Lark setup command that keeps the QR wizard alive", () => {
+    const stateDir = path.join(os.tmpdir(), "tarocub lark detached");
+    const logPath = path.join(stateDir, "lark-setup.log");
+    const command = buildDetachedLarkSetupCommand({
+      cwd: "/repo with spaces",
+      entrypoint: "/repo with spaces/dist/src/index.js",
+      stateDir,
+      logPath,
+      env: {
+        CCTB_LARK_INSTANCE: "ccfgg2",
+        CCTB_LARK_STATE_DIR: stateDir,
+      },
+      args: ["--detached", "--install-cli", "--identity", "bot-only"],
+    });
+
+    expect(command).toContain("cd '/repo with spaces'");
+    expect(command).toContain(`CCTB_LARK_STATE_DIR='${stateDir}'`);
+    expect(command).toContain("CCTB_LARK_INSTANCE='ccfgg2'");
+    expect(command).toContain("TAROCUB_INSTANCE='ccfgg2'");
+    expect(command).toContain("env -u LARK_APP_ID -u LARK_APP_SECRET -u LARK_DOMAIN");
+    expect(command).toContain("lark setup '--install-cli' '--identity' 'bot-only'");
+    expect(command).toContain(`> '${logPath}' 2>&1`);
+    expect(command).not.toContain("--detached");
   });
 
   it("prints the recommended Lark OAuth command when setup finds missing user identity", async () => {

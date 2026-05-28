@@ -265,6 +265,25 @@ describe("provisionLarkApp", () => {
     expect(formatted).not.toContain("recreate the app with the QR wizard");
   });
 
+  it("prints a direct app permission console link when app id is available", async () => {
+    const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message.group_msg");
+    const client = createProvisioningClientMock({
+      scopes,
+      apps: [
+        appProvisioning({
+          callbacks: [...REQUIRED_LARK_CALLBACKS],
+          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
+        }),
+      ],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result, { appId: "cli_app" }).join("\n");
+
+    expect(formatted).toContain("Permissions page: https://open.feishu.cn/app/cli_app/auth");
+    expect(formatted).toContain('Bulk import missing scopes JSON: {"scopes":{"tenant":["im:message.group_msg"]}}');
+  });
+
   it("explains that Lark running feedback reactions need reaction write scope", async () => {
     const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message.reactions:write_only");
     const client = createProvisioningClientMock({
