@@ -561,7 +561,7 @@ describe("runCli", () => {
         LARK_APP_ID: "cli_a",
         LARK_APP_SECRET: "super-secret",
         CCTB_LARK_STATE_DIR: "/tmp/cctb lark",
-        CODEX_TELEGRAM_INSTANCE: "ccfcc1",
+        CODEX_TELEGRAM_INSTANCE: "lark-alpha",
       },
       stateDir: "/tmp/cctb lark",
       logPath: "/tmp/cctb lark/lark-service.log",
@@ -570,7 +570,7 @@ describe("runCli", () => {
     });
 
     expect(command).toContain("CCTB_LARK_STATE_DIR=");
-    expect(command).toContain("CODEX_TELEGRAM_INSTANCE='ccfcc1'");
+    expect(command).toContain("CODEX_TELEGRAM_INSTANCE='lark-alpha'");
     expect(command).toContain("/tmp/cctb lark");
     expect(command).toContain(" lark run ");
     expect(command).not.toContain("super-secret");
