@@ -89,4 +89,33 @@ describe("ChatQueue", () => {
     await second;
     await vi.waitFor(() => expect(queue.isBusy("chat:1")).toBe(false));
   });
+
+  it("notifies once when a job waits behind an active job", async () => {
+    const queue = new ChatQueue();
+    let release!: () => void;
+    const onWait = vi.fn();
+    const first = queue.enqueue("chat:1", async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const second = queue.enqueue("chat:1", async () => "done", {
+      waitNotifyAfterMs: 1,
+      onWait,
+    });
+
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    await vi.waitFor(() => expect(onWait).toHaveBeenCalledTimes(1));
+    expect(onWait).toHaveBeenCalledWith(expect.objectContaining({
+      chatId: "chat:1",
+      reason: "conversation_queue",
+      waitedMs: expect.any(Number),
+    }));
+
+    release();
+    await first;
+    await expect(second).resolves.toBe("done");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(onWait).toHaveBeenCalledTimes(1);
+  });
 });

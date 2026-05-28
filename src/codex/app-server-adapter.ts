@@ -1143,6 +1143,19 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
       if (pendingTurnState === pending) {
         pending.lastInactivityAt = Date.now();
+        this.pendingTurns.delete(threadId);
+        this.loadedThreads.delete(threadId);
+        pending.reject(
+          this.withDiagnostics(
+            this.withAppServerState(
+              `Codex app-server turn became inactive after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`,
+              threadId,
+              pending,
+            ),
+          ),
+        );
+        this.notifyIdleWaitersIfIdle();
+        this.destroy();
       }
     }, timeoutMs);
   }

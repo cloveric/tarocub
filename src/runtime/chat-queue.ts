@@ -1,3 +1,9 @@
+export interface ChatQueueWaitEvent {
+  chatId: string | number;
+  waitedMs: number;
+  reason: "conversation_queue";
+}
+
 export class ChatQueue {
   private readonly queues = new Map<string | number, Promise<unknown>>();
   private readonly generations = new Map<string | number, number>();
@@ -6,12 +12,32 @@ export class ChatQueue {
   enqueue<T>(
     chatId: string | number,
     job: () => Promise<T>,
-    options: { onSkipped?: () => T | Promise<T> } = {},
+    options: {
+      onSkipped?: () => T | Promise<T>;
+      waitNotifyAfterMs?: number;
+      onWait?: (event: ChatQueueWaitEvent) => void | Promise<void>;
+    } = {},
   ): Promise<T> {
-    const previous = this.queues.get(chatId) ?? Promise.resolve();
+    const queuedAt = Date.now();
+    const existing = this.queues.get(chatId);
+    const previous = existing ?? Promise.resolve();
     const generation = this.generations.get(chatId) ?? 0;
+    let waitTimer: ReturnType<typeof setTimeout> | undefined;
+    if (existing && options.onWait && options.waitNotifyAfterMs !== undefined && options.waitNotifyAfterMs >= 0) {
+      waitTimer = setTimeout(() => {
+        void Promise.resolve(options.onWait?.({
+          chatId,
+          waitedMs: Math.max(0, Date.now() - queuedAt),
+          reason: "conversation_queue",
+        })).catch(() => undefined);
+      }, options.waitNotifyAfterMs);
+    }
     this.pendingCounts.set(chatId, (this.pendingCounts.get(chatId) ?? 0) + 1);
     const run = previous.catch(() => undefined).then(async () => {
+      if (waitTimer) {
+        clearTimeout(waitTimer);
+        waitTimer = undefined;
+      }
       const remainingPending = Math.max(0, (this.pendingCounts.get(chatId) ?? 1) - 1);
       if (remainingPending > 0) {
         this.pendingCounts.set(chatId, remainingPending);

@@ -32,6 +32,12 @@ export function renderLarkQueuedTaskSkipped(locale: Locale): string {
   return locale === "en" ? "Queued task skipped." : "已跳过排队中的任务。";
 }
 
+export function renderLarkConversationQueueWait(locale: Locale): string {
+  return locale === "en"
+    ? "Another task is still running in this conversation. This message is queued; send `/stop` if the previous task is stuck."
+    : "同一个会话里还有任务在运行，这条消息已排队；如果前一个任务卡住，请发送 `/stop` 取消。";
+}
+
 export function renderLarkMediaTranscriptionFailure(locale: Locale): string {
   return locale === "en"
     ? "Audio/video transcription failed. Please send text or a shorter audio/video file."

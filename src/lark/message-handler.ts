@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
 import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
+import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
@@ -25,6 +26,7 @@ import { LarkGroupModeStore } from "./group-mode-store.js";
 import {
   renderLarkBackgroundTaskHeader,
   renderLarkChatAccessDenied,
+  renderLarkConversationQueueWait,
   renderLarkMediaTranscriptionFailure,
   renderLarkQueuedTaskSkipped,
   renderLarkStopResult,
@@ -48,10 +50,17 @@ import { redactLarkErrorDetail } from "./redaction.js";
 import { verifyLarkNumericIds } from "./id-map.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import { type LarkReactionSettings, withLarkMessageReactions } from "./reactions.js";
-import type { LarkBridgeLike, LarkChannelLike, LarkFetchedMessage } from "./types.js";
+import type { LarkBridgeLike, LarkChannelLike, LarkFetchedMessage, LarkSendOptions } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
 const defaultTranscribeLarkMedia = createDefaultTranscribeVoice();
+
+function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | undefined): LarkSendOptions | undefined {
+  if (!replyTo) {
+    return undefined;
+  }
+  return replyInThread ? { replyTo, replyInThread: true } : { replyTo };
+}
 
 export async function handleLarkMessage(input: {
   channel: LarkChannelLike;
@@ -201,9 +210,40 @@ async function runAcceptedLarkMessage(
     return approvalResult.handled;
   }
 
+  const handleConversationQueueWait = async (event: ChatQueueWaitEvent): Promise<void> => {
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "engine.lock.waiting",
+      detail: "waiting for Lark conversation queue",
+      metadata: {
+        waitedMs: event.waitedMs,
+        reason: event.reason,
+      },
+    });
+    try {
+      await sendLarkMarkdown(
+        input.channel,
+        normalized.chatId,
+        renderLarkConversationQueueWait(messageLocale),
+        larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
+      );
+    } catch (error) {
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "engine.event.delivery_failed",
+        outcome: "error",
+        detail: redactLarkErrorDetail(error),
+        metadata: {
+          eventType: "engine.lock.waiting",
+          phase: "queue",
+        },
+      });
+    }
+  };
+
   return await input.runtime.chatQueue.enqueue(normalized.conversationKey, async () => {
     return await runNormalizedLarkMessage(input, normalized);
   }, {
+    waitNotifyAfterMs: 10_000,
+    onWait: handleConversationQueueWait,
     onSkipped: async () => {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "turn.completed",

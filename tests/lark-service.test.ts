@@ -6934,6 +6934,60 @@ describe("lark service", () => {
     }
   });
 
+  it("notifies Lark users when a message waits in the conversation queue", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-message-queue-wait-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: string }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({
+          chatId: "lark:oc_chat",
+          waitedMs: 10_500,
+          reason: "conversation_queue",
+        });
+        return await job();
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "Done after queue" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_waiting", content: "hello" }),
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("/stop") },
+        { replyTo: "om_waiting" },
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.lock.waiting",
+        channel: "lark",
+        conversationKey: "lark:oc_chat",
+        detail: "waiting for Lark conversation queue",
+        metadata: expect.objectContaining({
+          waitedMs: 10_500,
+          reason: "conversation_queue",
+          larkChatId: "oc_chat",
+          larkMessageId: "om_waiting",
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders skipped queued Lark messages in English when Lark locale is English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-message-skipped-en-"));
     const runtime = createLarkServiceRuntime();
