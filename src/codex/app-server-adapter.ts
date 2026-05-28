@@ -99,6 +99,7 @@ type PendingTurn = {
   startedAt: number;
   lastActivityAt?: number;
   lastActivityMethod?: string;
+  lastInactivityAt?: number;
   onProgress?: (partialText: string) => void;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   timeout?: ReturnType<typeof setTimeout>;
@@ -1134,25 +1135,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     pending.inactivityTimeout = setTimeout(() => {
+      pending.inactivityTimeout = undefined;
       const pendingTurnState = this.pendingTurns.get(threadId);
       if (pendingTurnState && pendingTurnState !== pending) {
         return;
       }
 
       if (pendingTurnState === pending) {
-        this.pendingTurns.delete(threadId);
+        pending.lastInactivityAt = Date.now();
       }
-
-      pending.reject(
-        this.withDiagnostics(
-          this.withAppServerState(
-            `Codex app-server turn became inactive after ${Math.max(1, Math.round(timeoutMs / 60_000))} minutes`,
-            threadId,
-            pending,
-          ),
-        ),
-      );
-      this.destroy();
     }, timeoutMs);
   }
 
@@ -1422,7 +1413,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     return [
       pending && threadId
-        ? `pending turn: threadId=${threadId} ageMs=${Math.max(0, now - pending.startedAt)} lastActivity=${pending.lastActivityAt ? `${new Date(pending.lastActivityAt).toISOString()} method=${pending.lastActivityMethod ?? "unknown"}` : "none"}`
+        ? `pending turn: threadId=${threadId} ageMs=${Math.max(0, now - pending.startedAt)} lastActivity=${pending.lastActivityAt ? `${new Date(pending.lastActivityAt).toISOString()} method=${pending.lastActivityMethod ?? "unknown"}` : "none"} lastInactivity=${pending.lastInactivityAt ? new Date(pending.lastInactivityAt).toISOString() : "none"}`
         : "pending turn: none",
       `last request: ${this.formatProtocolDiagnostic(this.lastRequestDiagnostic)}`,
       `last response: ${this.formatProtocolDiagnostic(this.lastResponseDiagnostic)}`,

@@ -101,7 +101,7 @@ describe("CodexAppServerAdapter", () => {
     expect(CODEX_APP_SERVER_TURN_TIMEOUT_MS).toBe(60 * 60_000);
   });
 
-  it("defaults the inactivity watchdog to fifteen minutes", () => {
+  it("defaults the inactivity diagnostic interval to fifteen minutes", () => {
     expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(15 * 60_000);
   });
 
@@ -1132,7 +1132,7 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(1);
   });
 
-  it("aborts a turn that goes completely idle even when the hard timeout is long", async () => {
+  it("keeps an idle app-server turn alive after the inactivity interval", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter(
       "codex",
@@ -1157,8 +1157,13 @@ describe("CodexAppServerAdapter", () => {
     child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
     await waitFor(() => child.stdin.lines.length >= 3);
 
-    await expect(promise).rejects.toThrow("Codex app-server turn became inactive");
-    expect(child.killCalls).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(child.killCalls).toBe(0);
+
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(promise).resolves.toMatchObject({ text: "ok" });
   });
 
   it("uses a dedicated thread/read timeout after turn/completed instead of the inactivity watchdog", async () => {
@@ -1286,7 +1291,7 @@ describe("CodexAppServerAdapter", () => {
     expect(adapter.stdoutDiagnosticTail).toBe("");
   });
 
-  it("includes stderr and non-JSON stdout diagnostics in inactivity failures", async () => {
+  it("includes stderr and non-JSON stdout diagnostics in hard timeout failures after idle intervals", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter(
       "codex",
@@ -1296,7 +1301,7 @@ describe("CodexAppServerAdapter", () => {
       undefined,
       undefined,
       undefined,
-      60 * 60_000,
+      5,
       1,
     );
 
@@ -1319,7 +1324,7 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(1);
   });
 
-  it("includes app-server protocol state in inactivity failures", async () => {
+  it("includes app-server protocol state in hard timeout failures after idle intervals", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter(
       "codex",
@@ -1329,7 +1334,7 @@ describe("CodexAppServerAdapter", () => {
       undefined,
       undefined,
       undefined,
-      60 * 60_000,
+      5,
       1,
     );
 
