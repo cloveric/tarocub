@@ -35,7 +35,7 @@
 
 `TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface across Telegram and Feishu/Lark.
 
-This project was formerly named `cc-telegram-bridge`; the old repository URL, state directories, and `cctb` shorthand remain useful for compatibility while the public name moves to TaroCub.
+This project was formerly named `cc-telegram-bridge`. The canonical repository is now `cloveric/tarocub`; GitHub redirects the old URL, and existing state directories plus the `cctb` shorthand remain supported for compatibility.
 
 It is built for people who already use CLI agents heavily and want:
 

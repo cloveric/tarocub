@@ -28,7 +28,7 @@
 
 **TaroCub 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code 和 Antigravity CLI，然后给它们补上 Telegram 与飞书/Lark 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
 
-这个项目原名 `cc-telegram-bridge`。旧仓库 URL、已有状态目录和 `cctb` 简写会继续作为兼容层保留；公开名称从现在起使用 **TaroCub**。
+这个项目原名 `cc-telegram-bridge`。现在的规范仓库是 `cloveric/tarocub`；GitHub 会把旧 URL 重定向过来，已有状态目录和 `cctb` 简写也会继续作为兼容层保留。
 
 最简单的安装方式：克隆仓库，用 Codex、Claude Code 或 Antigravity 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
 
