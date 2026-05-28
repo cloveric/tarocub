@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/github-banner.png" alt="CC Telegram Bridge" width="100%" />
+  <img src="./assets/github-banner.png" alt="TaroCub Bridge" width="100%" />
 </p>
 
 <p align="center">
@@ -16,8 +16,8 @@
 </p>
 
 <h3 align="center">
-  给本地 Codex、Claude Code 和 Antigravity CLI 接一个 Telegram-first 控制台。<br>
-  在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，也可以把同一套 bridge 暴露到飞书/Lark。
+  TaroCub Bridge：本地运行 Codex、Claude Code 和 Antigravity，再从 Telegram 与飞书/Lark 控制它们。<br>
+  在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，也可以把同一套 bridge 暴露到团队聊天里。
 </h3>
 
 <p align="center">
@@ -26,7 +26,9 @@
 
 ## 先从这里开始
 
-**cc-telegram-bridge 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code 和 Antigravity CLI，然后给它们补上 Telegram 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
+**TaroCub Bridge 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code 和 Antigravity CLI，然后给它们补上 Telegram 与飞书/Lark 入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态。
+
+这个项目原名 `cc-telegram-bridge`。旧仓库 URL、已有状态目录和 `cctb` 简写会继续作为兼容层保留；公开名称从现在起使用 **TaroCub Bridge**。
 
 最简单的安装方式：克隆仓库，用 Codex、Claude Code 或 Antigravity 打开它，然后直接对 agent 说：*"读一下 README，帮我配置一个 Telegram bot"*。这个项目本来就是给 CLI agent 自己安装和运维的。
 

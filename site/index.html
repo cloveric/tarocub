@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CC Telegram Bridge</title>
+    <title>TaroCub Bridge</title>
     <meta
       name="description"
-      content="Run Codex through Telegram with isolated bot instances, pairing controls, attachment ingestion, and resumable coding threads."
+      content="Run Codex, Claude Code, and Antigravity locally, then control them from Telegram and Feishu/Lark."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -20,11 +20,11 @@
     <div class="page-shell">
       <header class="hero">
         <div class="hero-copy">
-          <div class="eyebrow">Codex + Telegram + Real Threads</div>
-          <h1>Operate Codex like a private field console from your phone.</h1>
+          <div class="eyebrow">Codex + Claude Code + Antigravity</div>
+          <h1>TaroCub Bridge connects local AI agents to Telegram and Feishu/Lark.</h1>
           <p class="hero-text">
-            CC Telegram Bridge turns each Telegram bot into an isolated Codex instance with access control,
-            resumable thread bindings, attachment ingestion, and service-level operations for real day-to-day use.
+            Run real CLI agents on your own machine, then control durable sessions, files, tasks, cron,
+            approvals, and multi-agent workflows from your phone or team chat.
           </p>
           <div class="hero-actions">
             <a class="primary-action" href="../README.md">Read The Docs</a>
@@ -59,7 +59,7 @@
         <section class="feature-strip">
           <article>
             <h2>One Bot, One Instance</h2>
-            <p>Every instance keeps its own token, access model, lock, inbox, logs, update watermark, and Codex threads.</p>
+            <p>Every instance keeps its own token, access model, lock, inbox, logs, update watermark, and engine sessions.</p>
           </article>
           <article>
             <h2>Private-Chat Control</h2>
@@ -67,7 +67,7 @@
           </article>
           <article>
             <h2>Resumable Coding Threads</h2>
-            <p>The first real user message creates a Codex thread, and later messages resume that exact thread instead of starting cold.</p>
+            <p>Resume Claude sessions, Codex threads, or Antigravity conversations instead of starting cold.</p>
           </article>
         </section>
 
@@ -85,8 +85,8 @@
             <div class="detail-label">Human Factors</div>
             <h3>Looks like chat. Behaves like tooling.</h3>
             <p>
-              The Telegram side stays simple: pairing codes, placeholder messages, edited final responses, and uploaded
-              files. The Codex side keeps service control, state, and reviewability where operators actually need it.
+              Telegram stays phone-first. Feishu/Lark adds cards, comments, Docs, Sheets, and group workflows.
+              The local side keeps service control, state, and reviewability where operators actually need it.
             </p>
           </div>
 
@@ -100,7 +100,7 @@
               <div>Per-chat serialized execution</div>
               <div>Update dedupe and retry-aware offset handling</div>
               <div>Typed Telegram API boundary checks</div>
-              <div>Codex thread persistence with resume</div>
+              <div>Codex / Claude / Antigravity session resume</div>
             </div>
           </div>
         </section>
@@ -124,12 +124,12 @@
             <article>
               <span>03</span>
               <h3>Pair</h3>
-              <p>Approve a private chat explicitly before any real Codex work is allowed through.</p>
+              <p>Approve a private chat explicitly before any real engine work is allowed through.</p>
             </article>
             <article>
               <span>04</span>
               <h3>Resume</h3>
-              <p>Keep chat-to-thread bindings so later instructions continue the same Codex conversation.</p>
+              <p>Keep chat-to-session bindings so later instructions continue the same local agent conversation.</p>
             </article>
           </div>
         </section>

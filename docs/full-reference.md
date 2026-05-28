@@ -5,7 +5,7 @@
 > This is the long-form reference that used to live on the GitHub landing page. The shorter README keeps the repo homepage readable; this file keeps the full operational detail.
 
 <p align="center">
-  <img src="../assets/github-banner.png" alt="CC Agent Bridge for Telegram and Feishu/Lark" width="100%" />
+  <img src="../assets/github-banner.png" alt="TaroCub Bridge for Telegram and Feishu/Lark" width="100%" />
 </p>
 
 <p align="center">
@@ -18,8 +18,8 @@
 </p>
 
 <h3 align="center">
-  A Telegram-first control plane for your local Codex, Claude Code, and Antigravity CLIs.<br>
-  Resume desktop sessions from your phone, move files both ways, run scheduled work, and optionally expose the same bridge through Feishu/Lark.
+  TaroCub Bridge runs Codex, Claude Code, and Antigravity locally, then lets you control them from Telegram and Feishu/Lark.<br>
+  Resume desktop sessions from your phone, move files both ways, run scheduled work, and expose the same bridge through team chat.
 </h3>
 
 <p align="center">
@@ -28,7 +28,9 @@
 
 ## Start Here
 
-**cc-telegram-bridge is not another hosted agent UI.** It runs the real Codex, Claude Code, and Antigravity CLIs on your machine, then gives them a durable Telegram interface: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
+**TaroCub Bridge is not another hosted agent UI.** It runs the real Codex, Claude Code, and Antigravity CLIs on your machine, then gives them durable Telegram and Feishu/Lark surfaces: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
+
+This project was formerly named `cc-telegram-bridge`. Existing URLs, state directories, and the `cctb` shorthand remain supported as compatibility surfaces while the public product name moves to TaroCub Bridge.
 
 The easiest setup path is to clone this repo, open it in Codex, Claude Code, or Antigravity, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
 
@@ -233,6 +235,7 @@ Before calling a Lark app production-ready, run these checks against the real ap
 
 ## Release Highlights
 
+- **v4.6.70** — rebrands the public project surface to **TaroCub Bridge** across the landing README, Chinese README, full reference, package metadata, and static site, while explicitly preserving `cc-telegram-bridge` URLs, state directories, and `cctb` compatibility language.
 - **v4.6.69** — makes Lark setup more self-healing after real OAuth smoke testing: missing user identity now prints the exact recommended Docs/Drive/Sheets `lark auth start` command plus `finish <device-code>`, and the lark-cli guidance now matches the safer non-forcing `user-default` behavior.
 - **v4.6.68** — deepens Lark-native reliability: authorized engine turns can show best-effort `OnIt` / `DONE` / `ERROR` reactions, optional native `@name` resolution maps members through `im:chat.members:read`, card sends fall back to redacted plain text with approval command alternatives, `lark setup` ties wizard/preflight/provision/auth/doctor into one flow, and setup/preflight no longer force-rebinds lark-cli in a way that can wipe user OAuth.
 - **v4.6.67** — closes a Lark runtime secret-boundary gap: `lark-cli` child processes launched from document and `/newgroup` workflows now get `LARK_CHANNEL=1` without inheriting `LARK_APP_SECRET`, keeping the runtime path aligned with the bridge secret-provider model.
