@@ -254,6 +254,66 @@ describe("lark service", () => {
     }
   });
 
+  it("notifies Lark users and records a timeline event when a turn waits on the shared engine lock", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-lock-wait-"));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onTurnLockWait?: (event: {
+          sessionId: string;
+          waitedMs: number;
+          reason: "in_process_queue" | "file_lock";
+          lockPath: string;
+        }) => void | Promise<void>;
+      }) => {
+        await input.onTurnLockWait?.({
+          sessionId: "codex-thread-1",
+          waitedMs: 10_250,
+          reason: "file_lock",
+          lockPath: "/tmp/tarocub-turn-locks/test.lock",
+        });
+        return { text: "Done from bridge" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_1",
+          chatId: "oc_chat",
+          chatType: "p2p",
+          senderId: "ou_user",
+          content: "hello",
+        }),
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("排队") },
+        { replyTo: "om_1" },
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.lock.waiting",
+        channel: "lark",
+        conversationKey: "lark:oc_chat",
+        metadata: expect.objectContaining({
+          sessionId: "codex-thread-1",
+          waitedMs: 10_250,
+          reason: "file_lock",
+          larkChatId: "oc_chat",
+          larkMessageId: "om_1",
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("expands merged forwarded Lark messages before running the bridge", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-merge-forward-"));
     const channel = fakeChannel({

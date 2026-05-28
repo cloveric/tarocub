@@ -13,7 +13,7 @@ import {
   renderUnauthorizedMessage,
 } from "../telegram/message-renderer.js";
 import type { GroupModeConfig } from "../telegram/instance-config.js";
-import { withBridgeTurnLock } from "./turn-lock.js";
+import { type BridgeTurnLockWaitEvent, withBridgeTurnLock } from "./turn-lock.js";
 
 export interface AccessStoreLike {
   load(): Promise<{
@@ -249,6 +249,8 @@ export class Bridge {
     extraEnv?: Record<string, string>;
     abortSignal?: AbortSignal;
     sessionIdOverride?: string;
+    turnLockWaitNotifyAfterMs?: number;
+    onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
   }) {
     const decision = await this.checkAccess(input);
     if (decision.kind === "deny") {
@@ -340,6 +342,9 @@ export class Bridge {
       }
 
       return adapterResponse;
+    }, {
+      waitNotifyAfterMs: input.turnLockWaitNotifyAfterMs,
+      onWait: input.onTurnLockWait,
     });
 
     return response;

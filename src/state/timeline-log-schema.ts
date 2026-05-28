@@ -25,6 +25,7 @@ export const TimelineEventSchema = z.object({
     "workflow.completed",
     "engine.event",
     "engine.event.delivery_failed",
+    "engine.lock.waiting",
     "tool.executed",
     "service.error",
     "delivery.ledger_mismatch",

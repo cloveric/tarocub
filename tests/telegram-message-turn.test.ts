@@ -120,6 +120,77 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("notifies Telegram users and records a timeline event when a turn waits on the shared engine lock", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onTurnLockWait?: (event: { sessionId: string; waitedMs: number; reason: string }) => Promise<void>;
+      }) => {
+        await input.onTurnLockWait?.({
+          sessionId: "codex-thread-1",
+          waitedMs: 10_250,
+          reason: "in_process_queue",
+        });
+        return { text: "final response" };
+      }),
+    };
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1 });
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(0);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "zh",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("hello"),
+        context: {
+          api: {
+            sendMessage,
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          } as never,
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 77,
+        },
+        workflowStore: {
+          update: vi.fn(),
+        } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("排队"),
+        expect.objectContaining({ disableNotification: true }),
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.lock.waiting",
+        channel: "telegram",
+        chatId: 123,
+        userId: 456,
+        metadata: expect.objectContaining({
+          sessionId: "codex-thread-1",
+          waitedMs: 10_250,
+          reason: "in_process_queue",
+        }),
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("uses unique telegram-out request ids for parallel topics in the same chat", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const stateFor = () => ({

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
 import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
+import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
@@ -484,6 +485,49 @@ async function runNormalizedLarkMessage(
           });
         }
       };
+      const handleTurnLockWait = async (event: BridgeTurnLockWaitEvent): Promise<void> => {
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "engine.lock.waiting",
+          detail: "waiting for shared engine session lock",
+          metadata: {
+            sessionId: event.sessionId,
+            waitedMs: event.waitedMs,
+            reason: event.reason,
+          },
+        });
+        const waitText = locale === "zh"
+          ? "另一个入口正在使用同一个 AI session，这条消息已排队等待。前一个任务完成后会继续处理。"
+          : "Another entry is using the same AI session. This message is queued and will continue after the active turn finishes.";
+        try {
+          await deliverLarkResponse({
+            channel: input.channel,
+            runtime: input.runtime,
+            chatId: normalized.chatId,
+            replyTo: normalized.messageId,
+            replyInThread: Boolean(normalized.threadId),
+            text: waitText,
+            stateDir: input.stateDir,
+            requestOutputDir,
+            workspaceOverride: input.workspaceOverride,
+            conversationKey: normalized.conversationKey,
+            bridgeChatType: normalized.bridgeChatType,
+            bridgeChatId: normalized.bridgeChatId,
+            bridgeUserId: normalized.bridgeUserId,
+            larkThreadId: normalized.threadId,
+            larkMessageId: normalized.messageId,
+            instanceName: input.instanceName,
+          });
+        } catch (error) {
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event.delivery_failed",
+            outcome: "error",
+            detail: redactLarkErrorDetail(error),
+            metadata: {
+              eventType: "engine.lock.waiting",
+            },
+          });
+        }
+      };
 
       return await runAuthorizedLarkTurnWithReactions(input, normalized, async () => {
         const result = await input.bridge.handleAuthorizedMessage({
@@ -511,6 +555,7 @@ async function runNormalizedLarkMessage(
             abortSignal: request.abortSignal ?? runController.signal,
           }),
           onEngineEvent: handleEngineEvent,
+          onTurnLockWait: handleTurnLockWait,
           instructions: larkAgentInstructions(),
         });
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);

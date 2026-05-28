@@ -31,6 +31,7 @@ import {
 } from "./delivery-ledger.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
+import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import {
   createStableCctbCommandHelper as defaultCreateStableCctbCommandHelper,
   createSideChannelSendHelper as defaultCreateSideChannelSendHelper,
@@ -89,6 +90,8 @@ export interface WorkflowAwareTurnContext {
       extraEnv?: Record<string, string>;
       abortSignal?: AbortSignal;
       sessionIdOverride?: string;
+      turnLockWaitNotifyAfterMs?: number;
+      onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
     }): Promise<{
       text: string;
       usage?: {
@@ -727,6 +730,46 @@ export async function executeWorkflowAwareTelegramTurn(input: {
 
   let turnError: unknown;
   try {
+    const handleTurnLockWait = async (event: BridgeTurnLockWaitEvent): Promise<void> => {
+      await appendTimelineEventBestEffort(stateDir, {
+        type: "engine.lock.waiting",
+        instanceName: context.instanceName,
+        channel: "telegram",
+        chatId: normalized.chatId,
+        ...logScope,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        detail: "waiting for shared engine session lock",
+        metadata: {
+          sessionId: event.sessionId,
+          waitedMs: event.waitedMs,
+          reason: event.reason,
+        },
+      }, "engine lock wait timeline event");
+      const waitText = locale === "zh"
+        ? "另一个入口正在使用同一个 AI session，这条消息已排队等待。前一个任务完成后会继续处理。"
+        : "Another entry is using the same AI session. This message is queued and will continue after the active turn finishes.";
+      try {
+        await context.api.sendMessage(normalized.chatId, waitText, {
+          disableNotification: true,
+          ...(typeof normalized.messageThreadId === "number" ? { messageThreadId: normalized.messageThreadId } : {}),
+        });
+      } catch (error) {
+        await appendTimelineEventBestEffort(stateDir, {
+          type: "engine.event.delivery_failed",
+          instanceName: context.instanceName,
+          channel: "telegram",
+          chatId: normalized.chatId,
+          ...logScope,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          detail: error instanceof Error ? error.message : String(error),
+          metadata: {
+            eventType: "engine.lock.waiting",
+          },
+        }, "engine lock wait delivery failure timeline event");
+      }
+    };
     const runEngineTurn = async (input: {
       text: string;
       files: string[];
@@ -749,6 +792,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       extraEnv: sideChannelEnv,
       abortSignal: context.abortSignal,
       sessionIdOverride: context.sessionIdOverride,
+      onTurnLockWait: handleTurnLockWait,
     });
 
     result = await runEngineTurn({

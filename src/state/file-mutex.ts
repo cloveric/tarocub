@@ -11,6 +11,14 @@ const DEFAULT_STALE_LOCK_MS = 30_000;
 
 interface FileMutexOptions {
   staleLockMs?: number;
+  waitNotifyAfterMs?: number;
+  onWait?: (event: FileMutexWaitEvent) => void | Promise<void>;
+}
+
+export interface FileMutexWaitEvent {
+  lockPath: string;
+  waitedMs: number;
+  reason: "in_process_queue" | "file_lock";
 }
 
 function isFileExistsError(error: unknown): boolean {
@@ -98,7 +106,11 @@ async function tryRecoverStaleLock(lockPath: string, staleLockMs: number): Promi
   }
 }
 
-async function acquireFileMutex(lockPath: string, staleLockMs: number): Promise<void> {
+async function acquireFileMutex(
+  lockPath: string,
+  staleLockMs: number,
+  notifyWait?: (reason: FileMutexWaitEvent["reason"]) => void,
+): Promise<void> {
   const ownerPath = `${lockPath}/owner.json`;
   await mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
   for (;;) {
@@ -113,12 +125,34 @@ async function acquireFileMutex(lockPath: string, staleLockMs: number): Promise<
       if (!isFileExistsError(error)) {
         throw error;
       }
+      notifyWait?.("file_lock");
       const recovered = await tryRecoverStaleLock(lockPath, staleLockMs);
       if (!recovered) {
         await sleep(10);
       }
     }
   }
+}
+
+function scheduleFileMutexWaitNotification(
+  input: {
+    lockPath: string;
+    waitStartedAt: number;
+    waitNotifyAfterMs: number;
+    notify: (reason: FileMutexWaitEvent["reason"]) => void;
+    reason: FileMutexWaitEvent["reason"];
+  },
+): NodeJS.Timeout | undefined {
+  if (input.waitNotifyAfterMs <= 0) {
+    input.notify(input.reason);
+    return undefined;
+  }
+
+  const timer = setTimeout(() => {
+    input.notify(input.reason);
+  }, input.waitNotifyAfterMs);
+  timer.unref?.();
+  return timer;
 }
 
 async function releaseFileMutex(lockPath: string): Promise<void> {
@@ -132,16 +166,51 @@ export async function withFileMutex<T>(
 ): Promise<T> {
   const lockPath = `${targetPath}.lock`;
   const staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
-  const previous = inProcessQueues.get(lockPath) ?? Promise.resolve();
-  const run = previous.then(async () => {
-    await acquireFileMutex(lockPath, staleLockMs);
+  const waitNotifyAfterMs = options.waitNotifyAfterMs ?? 0;
+  const waitStartedAt = Date.now();
+  let waitNotified = false;
+  const notifyWait = (reason: FileMutexWaitEvent["reason"]): void => {
+    if (waitNotified || !options.onWait) {
+      return;
+    }
+    const waitedMs = Math.max(0, Date.now() - waitStartedAt);
+    if (waitedMs < waitNotifyAfterMs) {
+      return;
+    }
+    waitNotified = true;
+    void Promise.resolve(options.onWait({ lockPath, waitedMs, reason })).catch((error: unknown) => {
+      console.error("Failed to notify file mutex wait:", error instanceof Error ? error.message : error);
+    });
+  };
+  const previous = inProcessQueues.get(lockPath);
+  const waitForPrevious = async (): Promise<void> => {
+    if (!previous) {
+      return;
+    }
+    const timer = scheduleFileMutexWaitNotification({
+      lockPath,
+      waitStartedAt,
+      waitNotifyAfterMs,
+      notify: notifyWait,
+      reason: "in_process_queue",
+    });
+    try {
+      await previous.catch(() => undefined);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  };
+  const run = waitForPrevious().then(async () => {
+    await acquireFileMutex(lockPath, staleLockMs, notifyWait);
     try {
       return await task();
     } finally {
       await releaseFileMutex(lockPath);
     }
   }, async () => {
-    await acquireFileMutex(lockPath, staleLockMs);
+    await acquireFileMutex(lockPath, staleLockMs, notifyWait);
     try {
       return await task();
     } finally {

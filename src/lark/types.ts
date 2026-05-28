@@ -12,6 +12,7 @@ import type {
   EngineStreamEvent,
 } from "../codex/adapter.js";
 import type { BridgeAccessDecision } from "../runtime/bridge.js";
+import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 
 export interface LarkSendOptions {
   replyTo?: string;
@@ -120,6 +121,7 @@ export interface LarkBridgeLike {
     workspaceOverride?: string;
     instructions?: string;
     abortSignal?: AbortSignal;
+    onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
   }): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number; cachedTokens?: number; costUsd?: number } }>;
   validateCodexThread?(threadId: string): Promise<void>;
   getThreadGoal?(input: {
