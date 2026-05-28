@@ -82,6 +82,7 @@ import { redactLarkSensitiveText } from "../lark/redaction.js";
 const execFile = promisify(execFileCallback);
 const LEGACY_LARK_SERVICE_TMUX_SESSION = "cctb-lark-service";
 const LARK_SERVICE_TMUX_SESSION_PREFIX = "cctb-lark-service-";
+const TELEGRAM_CONFIGURE_USAGE = "Usage: telegram configure <bot-token> | telegram configure --instance <name> <bot-token>";
 
 export interface CliLogger {
   log: (message: string) => void;
@@ -220,7 +221,7 @@ function parseConfigureCommand(argv: string[]): { instanceName: string; botToken
     };
   }
 
-  throw new Error("Usage: telegram configure <bot-token> | telegram configure --instance <name> <bot-token>");
+  throw new Error(TELEGRAM_CONFIGURE_USAGE);
 }
 
 function parseChatId(value: string): number {
@@ -3579,6 +3580,10 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   }
 
   if (normalized[0] === "configure") {
+    if (normalized.length === 2 && (normalized[1] === "--help" || normalized[1] === "-h")) {
+      logger.log(TELEGRAM_CONFIGURE_USAGE);
+      return true;
+    }
     const { instanceName, botToken } = parseConfigureCommand(normalized);
     const persisted = await writeInstanceBotToken(env, instanceName, botToken);
 

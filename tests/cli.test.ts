@@ -94,6 +94,24 @@ describe("runCli", () => {
     );
   });
 
+  it("prints configure help without writing a default token", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      const handled = await runCli(["telegram", "configure", "--help"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual(["Usage: telegram configure <bot-token> | telegram configure --instance <name> <bot-token>"]);
+      await expect(readFile(path.join(tempDir, ".cctb", "default", ".env"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("returns false for non-CLI invocation", async () => {
     await expect(runCli(["ping"], { env: { USERPROFILE: "C:\\Users\\hangw" } })).resolves.toBe(false);
   });
