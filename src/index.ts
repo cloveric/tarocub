@@ -81,6 +81,7 @@ async function main(): Promise<void> {
         USERPROFILE: process.env.USERPROFILE,
         CODEX_HOME: process.env.CODEX_HOME,
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+        TAROCUB_INSTANCE: process.env.TAROCUB_INSTANCE,
         CODEX_TELEGRAM_STATE_DIR: process.env.CODEX_TELEGRAM_STATE_DIR,
         CODEX_EXECUTABLE: process.env.CODEX_EXECUTABLE,
         CLAUDE_EXECUTABLE: process.env.CLAUDE_EXECUTABLE,

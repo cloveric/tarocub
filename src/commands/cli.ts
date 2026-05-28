@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 import { createLarkChannel, type LarkChannelOptions } from "@larksuiteoapi/node-sdk";
 
-import { resolveInstanceStateDir, type EnvSource } from "../config.js";
+import { resolveInstanceName, resolveInstanceStateDir, type EnvSource } from "../config.js";
 import { AccessStore } from "../state/access-store.js";
 import { normalizeInstanceName } from "../instance.js";
 import {
@@ -63,7 +63,7 @@ import { runCronCli } from "../cron-cli.js";
 import { CronStore } from "../state/cron-store.js";
 import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir, writeLarkEnvFile } from "../lark/env-file.js";
 import { LarkGroupModeStore } from "../lark/group-mode-store.js";
-import { createLarkServiceRuntime, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
+import { createLarkServiceRuntime, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
@@ -121,7 +121,7 @@ export interface LarkServiceCommandDeps {
   inspectApp?: CliOptions["larkInspectApp"];
 }
 
-interface DashboardCommandEnv extends Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "CODEX_TELEGRAM_INSTANCE"> {}
+interface DashboardCommandEnv extends Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE"> {}
 
 export interface DashboardCommandDeps {
   generateDashboard?: (env: DashboardCommandEnv) => Promise<string>;
@@ -137,7 +137,7 @@ export interface LarkSendCommandDeps {
 export interface CliOptions {
   env?: Pick<
     EnvSource,
-    "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
+    "HOME" | "USERPROFILE" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
   > & {
     CCTB_SEND_URL?: string;
     CCTB_SEND_TOKEN?: string;
@@ -1320,7 +1320,7 @@ export function buildLarkServiceStartCommand(input: LarkServiceCommandInput): st
     shellQuote(input.cwd),
     "&&",
     `CCTB_LARK_STATE_DIR=${shellQuote(input.stateDir)}`,
-    `CODEX_TELEGRAM_INSTANCE=${shellQuote(input.env.CODEX_TELEGRAM_INSTANCE ?? "lark")}`,
+    `TAROCUB_INSTANCE=${shellQuote(resolveLarkInstanceName(input.env))}`,
     shellQuote(process.execPath),
     shellQuote(input.entrypoint),
     "lark",
@@ -1602,10 +1602,11 @@ async function runLarkAccessCommand(
 ): Promise<boolean> {
   const loadedEnv = await loadLarkRuntimeEnv(env);
   const stateDir = resolveLarkStateDir(loadedEnv);
-  const instanceName = "lark";
+  const instanceName = resolveLarkInstanceName(loadedEnv);
   return await runAccessCommand(["access", ...args], {
     HOME: loadedEnv.HOME,
     USERPROFILE: loadedEnv.USERPROFILE,
+    TAROCUB_INSTANCE: instanceName,
     CODEX_TELEGRAM_STATE_DIR: stateDir,
     CODEX_TELEGRAM_INSTANCE: instanceName,
   }, logger, {
@@ -1618,12 +1619,13 @@ async function runLarkAccessCommand(
 async function resolveLarkScopedEnv(env: LarkRuntimeEnv): Promise<{ env: InstanceTokenEnv; instanceName: string }> {
   const loadedEnv = await loadLarkRuntimeEnv(env);
   const stateDir = resolveLarkStateDir(loadedEnv);
-  const instanceName = "lark";
+  const instanceName = resolveLarkInstanceName(loadedEnv);
   return {
     instanceName,
     env: {
       HOME: loadedEnv.HOME,
       USERPROFILE: loadedEnv.USERPROFILE,
+      TAROCUB_INSTANCE: instanceName,
       CODEX_TELEGRAM_STATE_DIR: stateDir,
       CODEX_TELEGRAM_INSTANCE: instanceName,
     },
@@ -2593,8 +2595,8 @@ async function runServiceCommand(
       return true;
     }
 
-    const currentServiceInstanceName = env.CODEX_TELEGRAM_INSTANCE
-      ? normalizeInstanceName(env.CODEX_TELEGRAM_INSTANCE)
+    const currentServiceInstanceName = env.TAROCUB_INSTANCE ?? env.CODEX_TELEGRAM_INSTANCE
+      ? resolveInstanceName(env)
       : null;
     const shouldSkipCurrentStop = currentServiceInstanceName !== null && subcommand === "stop";
     let deferredCurrentRestartInstance: string | null = null;

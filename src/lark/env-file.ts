@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { LarkRuntimeEnv } from "./config.js";
+import { resolveLarkInstanceName, type LarkRuntimeEnv } from "./config.js";
 
 export const LARK_ENV_FILE_NAME = "lark.env";
 
@@ -49,12 +49,13 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
     CCTB_LARK_STATE_DIR: env.CCTB_LARK_STATE_DIR ?? parsed.CCTB_LARK_STATE_DIR,
     LARK_REQUIRE_MENTION_IN_GROUP: env.LARK_REQUIRE_MENTION_IN_GROUP ?? parsed.LARK_REQUIRE_MENTION_IN_GROUP,
     CCTB_LARK_DEBUG: env.CCTB_LARK_DEBUG ?? parsed.CCTB_LARK_DEBUG,
+    TAROCUB_INSTANCE: env.TAROCUB_INSTANCE ?? parsed.TAROCUB_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
     CODEX_TELEGRAM_INSTANCE: env.CODEX_TELEGRAM_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
   };
 }
 
 export async function writeLarkEnvFile(
-  env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR" | "CODEX_TELEGRAM_INSTANCE">,
+  env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE">,
   values: {
     appId: string;
     appSecret: string;
@@ -63,7 +64,7 @@ export async function writeLarkEnvFile(
   },
 ): Promise<string> {
   const stateDir = resolveLarkStateDir(env);
-  const instanceName = env.CODEX_TELEGRAM_INSTANCE ?? "lark";
+  const instanceName = resolveLarkInstanceName(env);
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const envPath = path.join(stateDir, LARK_ENV_FILE_NAME);
   const lines = [
@@ -72,7 +73,7 @@ export async function writeLarkEnvFile(
     `LARK_APP_SECRET=${quoteEnvValue(values.appSecret)}`,
     ...(values.domain ? [`LARK_DOMAIN=${quoteEnvValue(values.domain)}`] : []),
     `CCTB_LARK_STATE_DIR=${quoteEnvValue(stateDir)}`,
-    `CODEX_TELEGRAM_INSTANCE=${quoteEnvValue(instanceName)}`,
+    `TAROCUB_INSTANCE=${quoteEnvValue(instanceName)}`,
     `LARK_REQUIRE_MENTION_IN_GROUP=${quoteEnvValue(values.requireMentionInGroup === false ? "false" : "true")}`,
     "",
   ];
@@ -102,7 +103,7 @@ function parseLarkEnvFile(content: string): Partial<LarkRuntimeEnv> {
 
 function isSupportedLarkEnvKey(key: string): key is keyof Pick<
   LarkRuntimeEnv,
-  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "CODEX_TELEGRAM_INSTANCE"
+  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE"
 > {
   return key === "LARK_APP_ID" ||
     key === "LARK_APP_SECRET" ||
@@ -110,6 +111,7 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "CCTB_LARK_STATE_DIR" ||
     key === "LARK_REQUIRE_MENTION_IN_GROUP" ||
     key === "CCTB_LARK_DEBUG" ||
+    key === "TAROCUB_INSTANCE" ||
     key === "CODEX_TELEGRAM_INSTANCE";
 }
 

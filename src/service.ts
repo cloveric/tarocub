@@ -45,6 +45,7 @@ export interface PollTelegramUpdatesOptions {
 export interface ResolvedInstanceEnv extends EnvSource {
   HOME?: string;
   USERPROFILE?: string;
+  TAROCUB_INSTANCE: string;
   CODEX_TELEGRAM_INSTANCE: string;
   TELEGRAM_BOT_TOKEN: string;
 }
@@ -149,7 +150,7 @@ function parseDotEnvValue(rawLine: string): string | null {
   return entry.value;
 }
 
-export async function readInstanceBotTokenFromEnvFile(env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR">): Promise<string | null> {
+export async function readInstanceBotTokenFromEnvFile(env: Pick<EnvSource, "HOME" | "USERPROFILE" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR">): Promise<string | null> {
   const stateDir = resolveInstanceStateDir(env);
   const envPath = path.join(stateDir, ".env");
 
@@ -172,7 +173,7 @@ export async function readInstanceBotTokenFromEnvFile(env: Pick<EnvSource, "HOME
 }
 
 export async function readInstanceServiceEnvFromEnvFile(
-  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR">,
+  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR">,
 ): Promise<NodeJS.ProcessEnv> {
   const stateDir = resolveInstanceStateDir(env);
   const envPath = path.join(stateDir, ".env");
@@ -197,7 +198,7 @@ export async function readInstanceServiceEnvFromEnvFile(
 }
 
 export async function readConfiguredBotToken(
-  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN">,
+  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN">,
   instanceName: string,
 ): Promise<string | null> {
   if (env.TELEGRAM_BOT_TOKEN) {
@@ -207,6 +208,7 @@ export async function readConfiguredBotToken(
   return readInstanceBotTokenFromEnvFile({
     HOME: env.HOME,
     USERPROFILE: env.USERPROFILE,
+    TAROCUB_INSTANCE: normalizeInstanceName(instanceName),
     CODEX_TELEGRAM_INSTANCE: normalizeInstanceName(instanceName),
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
   });
@@ -220,6 +222,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     USERPROFILE?: string;
     CODEX_HOME?: string;
     CLAUDE_CONFIG_DIR?: string;
+    TAROCUB_INSTANCE: string;
     CODEX_TELEGRAM_INSTANCE: string;
     CODEX_TELEGRAM_STATE_DIR?: string;
     CODEX_EXECUTABLE?: string;
@@ -231,6 +234,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     USERPROFILE: env.USERPROFILE,
     CODEX_HOME: env.CODEX_HOME,
     CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+    TAROCUB_INSTANCE: normalizedInstanceName,
     CODEX_TELEGRAM_INSTANCE: normalizedInstanceName,
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
@@ -242,6 +246,7 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     {
       HOME: env.HOME,
       USERPROFILE: env.USERPROFILE,
+      TAROCUB_INSTANCE: normalizedInstanceName,
       CODEX_TELEGRAM_INSTANCE: normalizedInstanceName,
       CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
       TELEGRAM_BOT_TOKEN: env.TELEGRAM_BOT_TOKEN,
@@ -633,6 +638,7 @@ function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
     ["USERPROFILE", "USERPROFILE"],
     ["CODEX_HOME", "CODEX_HOME"],
     ["CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"],
+    ["TAROCUB_INSTANCE", "TAROCUB_INSTANCE"],
     ["CODEX_TELEGRAM_INSTANCE", "CODEX_TELEGRAM_INSTANCE"],
     ["ANTIGRAVITY_EXECUTABLE", "ANTIGRAVITY_EXECUTABLE"],
   ];

@@ -561,7 +561,7 @@ describe("runCli", () => {
         LARK_APP_ID: "cli_a",
         LARK_APP_SECRET: "super-secret",
         CCTB_LARK_STATE_DIR: "/tmp/cctb lark",
-        CODEX_TELEGRAM_INSTANCE: "lark-alpha",
+        TAROCUB_INSTANCE: "lark-alpha",
       },
       stateDir: "/tmp/cctb lark",
       logPath: "/tmp/cctb lark/lark-service.log",
@@ -570,7 +570,8 @@ describe("runCli", () => {
     });
 
     expect(command).toContain("CCTB_LARK_STATE_DIR=");
-    expect(command).toContain("CODEX_TELEGRAM_INSTANCE='lark-alpha'");
+    expect(command).toContain("TAROCUB_INSTANCE='lark-alpha'");
+    expect(command).not.toContain("CODEX_TELEGRAM_INSTANCE");
     expect(command).toContain("/tmp/cctb lark");
     expect(command).toContain(" lark run ");
     expect(command).not.toContain("super-secret");
@@ -2777,7 +2778,7 @@ describe("runCli", () => {
 
     try {
       const handled = await runCli(["lark", "dashboard"], {
-        env: { USERPROFILE: tempDir, CODEX_TELEGRAM_INSTANCE: "bot6", CCTB_LARK_STATE_DIR: stateDir },
+        env: { USERPROFILE: tempDir, TAROCUB_INSTANCE: "lark-alpha", CODEX_TELEGRAM_INSTANCE: "bot6", CCTB_LARK_STATE_DIR: stateDir },
         logger: { log: (message) => messages.push(message) },
         dashboardDeps: { generateDashboard },
       });
@@ -2785,7 +2786,8 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(generateDashboard).toHaveBeenCalledWith(expect.objectContaining({
         CODEX_TELEGRAM_STATE_DIR: stateDir,
-        CODEX_TELEGRAM_INSTANCE: "lark",
+        TAROCUB_INSTANCE: "lark-alpha",
+        CODEX_TELEGRAM_INSTANCE: "lark-alpha",
       }));
       expect(messages).toEqual([`Dashboard generated: ${dashboardPath}`]);
     } finally {
@@ -2941,37 +2943,37 @@ describe("runCli", () => {
 
     try {
       await runCli(["lark", "engine", "claude"], {
-        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, TAROCUB_INSTANCE: "lark-alpha" },
         logger: { log: (message) => messages.push(message) },
       });
       await runCli(["lark", "yolo", "on"], {
-        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, TAROCUB_INSTANCE: "lark-alpha" },
         logger: { log: (message) => messages.push(message) },
       });
       await runCli(["lark", "budget", "set", "12.5"], {
-        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, TAROCUB_INSTANCE: "lark-alpha" },
         logger: { log: (message) => messages.push(message) },
       });
       await runCli(["lark", "locale", "zh"], {
-        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, TAROCUB_INSTANCE: "lark-alpha" },
         logger: { log: (message) => messages.push(message) },
       });
       await runCli(["lark", "verbosity", "2"], {
-        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, TAROCUB_INSTANCE: "lark-alpha" },
         logger: { log: (message) => messages.push(message) },
       });
       await runCli(["lark", "usage"], {
-        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, TAROCUB_INSTANCE: "lark-alpha" },
         logger: { log: (message) => messages.push(message) },
       });
 
       expect(messages).toEqual(expect.arrayContaining([
-        'Instance "lark": engine set to "claude". Restart the service to apply.',
-        'Instance "lark": YOLO mode ON (full-auto, sandboxed). Codex will auto-approve within workspace.',
-        'Instance "lark": budget set to $12.50. Bot will block new requests when the budget is exhausted.',
-        'Instance "lark": locale set to "zh".',
-        'Instance "lark": verbosity set to 2 (detailed (1s updates)).',
-        'Instance "lark": no usage recorded yet.',
+        'Instance "lark-alpha": engine set to "claude". Restart the service to apply.',
+        'Instance "lark-alpha": YOLO mode ON (full-auto, sandboxed). Codex will auto-approve within workspace.',
+        'Instance "lark-alpha": budget set to $12.50. Bot will block new requests when the budget is exhausted.',
+        'Instance "lark-alpha": locale set to "zh".',
+        'Instance "lark-alpha": verbosity set to 2 (detailed (1s updates)).',
+        'Instance "lark-alpha": no usage recorded yet.',
       ]));
       const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as {
         approvalMode?: string;

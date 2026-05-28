@@ -10,6 +10,7 @@ export interface EnvSource {
   USERPROFILE?: string;
   CODEX_HOME?: string;
   CLAUDE_CONFIG_DIR?: string;
+  TAROCUB_INSTANCE?: string;
   TELEGRAM_BOT_TOKEN?: string;
   CODEX_TELEGRAM_INSTANCE?: string;
   CODEX_TELEGRAM_STATE_DIR?: string;
@@ -95,9 +96,9 @@ export function joinStatePath(base: string, segment: string): string {
 }
 
 export function resolveInstanceStateDir(
-  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR"> = process.env,
+  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR"> = process.env,
 ): string {
-  const instanceName = normalizeInstanceName(env.CODEX_TELEGRAM_INSTANCE);
+  const instanceName = resolveInstanceName(env);
 
   if (env.CODEX_TELEGRAM_STATE_DIR) {
     return env.CODEX_TELEGRAM_STATE_DIR;
@@ -109,6 +110,13 @@ export function resolveInstanceStateDir(
   }
 
   return path.join(homeDir, ".cctb", instanceName);
+}
+
+export function resolveInstanceName(
+  env: Pick<EnvSource, "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE">,
+  fallback = "default",
+): string {
+  return normalizeInstanceName(env.TAROCUB_INSTANCE ?? env.CODEX_TELEGRAM_INSTANCE ?? fallback);
 }
 
 export function resolveConfig(env: EnvSource = process.env): AppConfig {
@@ -125,7 +133,7 @@ export function resolveBridgeConfig(env: EnvSource = process.env): AppConfig {
 }
 
 function resolveBaseConfig(env: EnvSource, telegramBotToken: string): AppConfig {
-  const instanceName = normalizeInstanceName(env.CODEX_TELEGRAM_INSTANCE);
+  const instanceName = resolveInstanceName(env);
   const stateDir = resolveInstanceStateDir(env);
 
   return {

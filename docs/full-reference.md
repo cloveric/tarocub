@@ -104,7 +104,7 @@ Optional environment:
 | Variable | Meaning |
 |---|---|
 | `CCTB_LARK_STATE_DIR` | State/workspace directory for the Lark service. Defaults to `~/.cctb/lark`. |
-| `CODEX_TELEGRAM_INSTANCE` | Instance name used by the shared engine config. Defaults to `lark`. |
+| `TAROCUB_INSTANCE` | Lark runtime instance name used by shared engine config. Defaults to `lark`; old `lark.env` files with `CODEX_TELEGRAM_INSTANCE` are read and rewritten on the next service start. |
 | `LARK_DOMAIN` | Override Lark/Feishu API domain when needed. |
 | `LARK_REQUIRE_MENTION_IN_GROUP` | Defaults to `true`; group messages must mention the bot unless the specific chat is switched with `/group all`. |
 | `CCTB_LARK_DOC_CREATE_AS` / `LARK_DOC_CREATE_AS` | Optional `user`/`bot` override for `lark.doc.create`; default is `bot`. |

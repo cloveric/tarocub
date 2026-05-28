@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { Domain, type LarkChannelOptions } from "@larksuiteoapi/node-sdk";
+import { normalizeInstanceName } from "../instance.js";
 
 export interface LarkRuntimeEnv {
   HOME?: string;
@@ -8,6 +9,7 @@ export interface LarkRuntimeEnv {
   USERPROFILE?: string;
   CODEX_HOME?: string;
   CLAUDE_CONFIG_DIR?: string;
+  TAROCUB_INSTANCE?: string;
   CODEX_TELEGRAM_INSTANCE?: string;
   CODEX_TELEGRAM_STATE_DIR?: string;
   CODEX_EXECUTABLE?: string;
@@ -35,6 +37,10 @@ export interface LarkRuntimeConfig {
   domain?: LarkChannelOptions["domain"];
   stateDir: string;
   requireMentionInGroup: boolean;
+}
+
+export function resolveLarkInstanceName(env: Pick<LarkRuntimeEnv, "TAROCUB_INSTANCE">, fallback = "lark"): string {
+  return normalizeInstanceName(env.TAROCUB_INSTANCE ?? fallback);
 }
 
 export function resolveLarkRuntimeConfig(env: LarkRuntimeEnv): LarkRuntimeConfig {

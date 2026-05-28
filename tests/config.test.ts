@@ -82,6 +82,16 @@ describe("resolveConfig", () => {
     expect(config.accessStatePath).toBe(path.join(HOME_DIR, ".cctb", "alpha", "access.json"));
   });
 
+  it("prefers the neutral TaroCub instance name over the legacy Telegram name", () => {
+    const env = process.platform === "win32"
+      ? { USERPROFILE: HOME_DIR, TELEGRAM_BOT_TOKEN: "abc123", TAROCUB_INSTANCE: "lark-alpha", CODEX_TELEGRAM_INSTANCE: "legacy" }
+      : { HOME: HOME_DIR, TELEGRAM_BOT_TOKEN: "abc123", TAROCUB_INSTANCE: "lark-alpha", CODEX_TELEGRAM_INSTANCE: "legacy" };
+    const config = resolveConfig(env);
+
+    expect(config.instanceName).toBe("lark-alpha");
+    expect(config.stateDir).toBe(path.join(HOME_DIR, ".cctb", "lark-alpha"));
+  });
+
   it("rejects unsafe instance names", () => {
     expect(() =>
       resolveConfig({

@@ -46,7 +46,7 @@ describe("runLarkWizard", () => {
 
     try {
       const envPath = await runLarkWizard(
-        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, LARK_DOMAIN: "feishu", CODEX_TELEGRAM_INSTANCE: "lark-alpha" },
+        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, LARK_DOMAIN: "feishu", TAROCUB_INSTANCE: "lark-alpha" },
         { log: (message) => messages.push(String(message ?? "")) },
         {
           registerAppImpl,
@@ -79,7 +79,8 @@ describe("runLarkWizard", () => {
       expect(saved).toContain('LARK_APP_SECRET="secret-personal"');
       expect(saved).toContain('LARK_DOMAIN="feishu"');
       expect(saved).toContain(`CCTB_LARK_STATE_DIR="${stateDir}"`);
-      expect(saved).toContain('CODEX_TELEGRAM_INSTANCE="lark-alpha"');
+      expect(saved).toContain('TAROCUB_INSTANCE="lark-alpha"');
+      expect(saved).not.toContain("CODEX_TELEGRAM_INSTANCE");
       expect(messages.join("\n")).toContain("Operator open_id: ou_operator");
       expect(messages.join("\n")).toContain("Lark required scopes: ok");
       expect(messages.join("\n")).toContain("lark-cli bound to bridge credentials through the lark-channel source.");

@@ -14,7 +14,7 @@ import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 import { handleLarkComment, normalizeLarkCommentFileType } from "./comment-handler.js";
 import { createLarkCommentClient } from "./comment-client.js";
-import { resolveLarkRuntimeConfig, type LarkRuntimeConfig, type LarkRuntimeEnv } from "./config.js";
+import { resolveLarkInstanceName, resolveLarkRuntimeConfig, type LarkRuntimeConfig, type LarkRuntimeEnv } from "./config.js";
 import { buildLarkCronExecutor, sendLarkCronFailureNotification } from "./cron.js";
 import { deliverLarkResponse } from "./delivery.js";
 import { larkOperatorRawId } from "./identity.js";
@@ -43,7 +43,7 @@ export { buildLarkCronExecutor, sendLarkCronFailureNotification } from "./cron.j
 export { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 export { handleLarkComment } from "./comment-handler.js";
 export { handleLarkMessage } from "./message-handler.js";
-export { resolveLarkRuntimeConfig } from "./config.js";
+export { resolveLarkInstanceName, resolveLarkRuntimeConfig } from "./config.js";
 export type { LarkRuntimeConfig, LarkRuntimeEnv } from "./config.js";
 export { createLarkServiceRuntime } from "./runtime.js";
 export { resolveLarkServiceLockDir, resolveLarkServiceLockPath } from "./service-lifecycle.js";
@@ -69,12 +69,14 @@ export async function runLarkService(
 ): Promise<void> {
   const logger = options.logger ?? console;
   const config = resolveLarkRuntimeConfig(env);
+  const instanceName = resolveLarkInstanceName(env);
   const debugLogging = isLarkDebugEnabled(env.CCTB_LARK_DEBUG);
   const reactionSettings = resolveLarkReactionSettings(env);
   const bridgeEnv = {
     ...env,
+    TAROCUB_INSTANCE: instanceName,
     CODEX_TELEGRAM_STATE_DIR: config.stateDir,
-    CODEX_TELEGRAM_INSTANCE: "lark",
+    CODEX_TELEGRAM_INSTANCE: instanceName,
   };
   await removeGeneratedTelegramTransportFromLarkAgent(config.stateDir, logger);
   const { stateDir, bridge } = options.createBridge
@@ -204,7 +206,7 @@ export async function runLarkService(
           deliverResponse: deliverLarkResponse,
         }),
         stateDir,
-        instanceName: bridgeEnv.CODEX_TELEGRAM_INSTANCE,
+        instanceName,
         onJobFailure: async (job, detail) => {
           await sendLarkCronFailureNotification(channel!, job, detail);
         },
@@ -398,6 +400,7 @@ async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir:
     USERPROFILE: env.USERPROFILE,
     CODEX_HOME: env.CODEX_HOME,
     CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR,
+    TAROCUB_INSTANCE: env.TAROCUB_INSTANCE,
     CODEX_TELEGRAM_INSTANCE: env.CODEX_TELEGRAM_INSTANCE,
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
