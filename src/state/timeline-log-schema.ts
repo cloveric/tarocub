@@ -28,6 +28,7 @@ export const TimelineEventSchema = z.object({
     "engine.lock.waiting",
     "tool.executed",
     "service.error",
+    "service.health",
     "delivery.ledger_mismatch",
     "file.accepted",
     "file.rejected",

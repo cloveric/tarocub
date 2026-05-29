@@ -16,6 +16,7 @@ import {
   handleLarkComment,
   handleLarkMessage,
   sendLarkCronFailureNotification,
+  type LarkBridgeLike,
   type LarkStreamControllerLike,
   requestLarkApproval,
 } from "../src/lark/service.js";
@@ -26,6 +27,7 @@ import { CronStore } from "../src/state/cron-store.js";
 import { FileWorkflowStore } from "../src/state/file-workflow-store.js";
 import { MiniBusStore } from "../src/state/mini-bus-store.js";
 import { SessionStore } from "../src/state/session-store.js";
+import { AccessStore } from "../src/state/access-store.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import { UsageStore } from "../src/state/usage-store.js";
 import { loadInstanceConfig } from "../src/telegram/instance-config.js";
@@ -171,6 +173,59 @@ describe("lark service", () => {
         { markdown: "done" },
         { replyTo: "om_group_thread", replyInThread: true },
       );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces shared turn pool waits in Lark timeline and chat", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-turn-pool-wait-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+        await input.onTurnPoolWait?.({
+          waitedMs: 12_000,
+          activeCount: 2,
+          maxActive: 2,
+          reason: "turn_pool",
+        });
+        return { text: "done" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_pool_wait",
+          content: "do work",
+        }),
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        expect.objectContaining({
+          markdown: expect.stringContaining("AI worker"),
+        }),
+        { replyTo: "om_pool_wait" },
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.lock.waiting",
+        channel: "lark",
+        conversationKey: "lark:oc_chat",
+        detail: "waiting for shared AI worker capacity",
+        metadata: expect.objectContaining({
+          waitedMs: 12_000,
+          activeCount: 2,
+          maxActive: 2,
+          reason: "turn_pool",
+        }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1520,6 +1575,125 @@ describe("lark service", () => {
     }
   });
 
+  it("invites and removes the current Lark group with friendly access commands", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-invite-group-"));
+    const channel = fakeChannel({
+      getChatMode: vi.fn(async () => "group"),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_invite_group",
+          chatType: "group",
+          content: "/invite group",
+          mentionedBot: false,
+        }),
+      });
+
+      let cfg = await loadInstanceConfig(stateDir);
+      expect(cfg.groupMode.allowedChatIds).toContain(stableLarkNumericId("lark:oc_chat"));
+      expect(channel.send).toHaveBeenLastCalledWith(
+        "oc_chat",
+        expect.objectContaining({ markdown: expect.stringContaining("已允许当前飞书群") }),
+        { replyTo: "om_invite_group" },
+      );
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_remove_group",
+          chatType: "group",
+          content: "/remove group",
+          mentionedBot: false,
+        }),
+      });
+
+      cfg = await loadInstanceConfig(stateDir);
+      expect(cfg.groupMode.allowedChatIds).not.toContain(stableLarkNumericId("lark:oc_chat"));
+      expect(channel.send).toHaveBeenLastCalledWith(
+        "oc_chat",
+        expect.objectContaining({ markdown: expect.stringContaining("已移除当前飞书群") }),
+        { replyTo: "om_remove_group" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("invites and removes mentioned Lark users for group access without changing fail-open defaults", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-invite-user-"));
+    const channel = fakeChannel({
+      getChatMode: vi.fn(async () => "group"),
+    });
+    const targetUserId = stableLarkNumericId("user:ou_target");
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_invite_user",
+          chatType: "group",
+          content: "/invite user @Target",
+          mentionedBot: false,
+          mentions: [{ id: { openId: "ou_target" }, name: "Target" }],
+        }),
+      });
+
+      await expect(new AccessStore(path.join(stateDir, "access.json")).load()).resolves.toEqual(expect.objectContaining({
+        allowlist: expect.arrayContaining([targetUserId]),
+      }));
+      expect(channel.send).toHaveBeenLastCalledWith(
+        "oc_chat",
+        expect.objectContaining({ markdown: expect.stringContaining("已邀请用户 Target") }),
+        { replyTo: "om_invite_user" },
+      );
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_remove_user",
+          chatType: "group",
+          content: "/remove user @Target",
+          mentionedBot: false,
+          mentions: [{ id: { openId: "ou_target" }, name: "Target" }],
+        }),
+      });
+
+      await expect(new AccessStore(path.join(stateDir, "access.json")).load()).resolves.toEqual(expect.objectContaining({
+        allowlist: expect.not.arrayContaining([targetUserId]),
+      }));
+      expect(channel.send).toHaveBeenLastCalledWith(
+        "oc_chat",
+        expect.objectContaining({ markdown: expect.stringContaining("已移除用户 Target") }),
+        { replyTo: "om_remove_user" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("lets an authorized Lark user allow the current group before the group itself is allowed", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-allow-"));
     const channel = fakeChannel();
@@ -2492,6 +2666,43 @@ describe("lark service", () => {
     }
   });
 
+  it("records known Lark chat labels and shows them in status", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-known-status-"));
+    const channel = fakeChannel({ getChatMode: vi.fn(async () => "group") });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_known_status",
+          chatId: "oc_known_group",
+          chatType: "group",
+          chatName: "研发群",
+          senderName: "Alice",
+          content: "/status",
+        }),
+      });
+
+      const known = JSON.parse(await readFile(path.join(stateDir, "known-chats.json"), "utf8")) as {
+        chats: Array<{ chatId: string; label: string }>;
+      };
+      expect(known.chats).toContainEqual(expect.objectContaining({
+        chatId: "oc_known_group",
+        label: "研发群",
+      }));
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("当前聊天：研发群");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers the Lark status command in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-en-"));
     const codexHome = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-codex-home-"));
@@ -3068,7 +3279,7 @@ describe("lark service", () => {
         bridge,
         runtime: createLarkServiceRuntime(),
         stateDir,
-        message: fakeLarkMessage({ messageId: "om_config", content: "/config" }),
+        message: fakeLarkMessage({ messageId: "om_config", chatName: "配置私聊", senderName: "Alice", content: "/config" }),
       });
 
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
@@ -3079,6 +3290,7 @@ describe("lark service", () => {
       );
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).toContain("飞书配置面板");
+      expect(rendered).toContain("聊天: 配置私聊");
       expect(rendered).toContain('"tag":"form"');
       expect(rendered).toContain('"tag":"select_static"');
       expect(rendered).toContain('"form_action_type":"submit"');
@@ -9602,25 +9814,32 @@ function fakeLarkMessage(overrides: Partial<{
   messageId: string;
   chatId: string;
   chatType: string;
+  chatMode: "p2p" | "group" | "topic";
+  chatName: string;
   senderId: string;
+  senderName: string;
   content: string;
   rawContentType: string;
   threadId: string;
   mentionedBot: boolean;
   resources: Array<{ type: string; fileKey: string; fileName?: string }>;
   replyToMessageId: string;
+  mentions: unknown[];
 }> = {}) {
   return {
     messageId: overrides.messageId ?? "om_1",
     chatId: overrides.chatId ?? "oc_chat",
     chatType: overrides.chatType ?? "p2p",
+    ...(overrides.chatMode ? { chatMode: overrides.chatMode } : {}),
+    ...(overrides.chatName ? { chatName: overrides.chatName } : {}),
     senderId: overrides.senderId ?? "ou_user",
+    ...(overrides.senderName ? { senderName: overrides.senderName } : {}),
     ...(overrides.threadId ? { threadId: overrides.threadId } : {}),
     ...(overrides.replyToMessageId ? { replyToMessageId: overrides.replyToMessageId } : {}),
     content: overrides.content ?? "hello",
     rawContentType: overrides.rawContentType ?? "text",
     resources: overrides.resources ?? [],
-    mentions: [],
+    mentions: overrides.mentions ?? [],
     mentionAll: false,
     mentionedBot: overrides.mentionedBot ?? false,
     createTime: Date.now(),

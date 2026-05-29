@@ -14,6 +14,8 @@ import {
 } from "../telegram/message-renderer.js";
 import type { GroupModeConfig } from "../telegram/instance-config.js";
 import { type BridgeTurnLockWaitEvent, withBridgeTurnLock } from "./turn-lock.js";
+import type { TelemetryAdapter, TelemetryTags } from "./telemetry.js";
+import type { TurnPoolLike, TurnPoolWaitEvent } from "./turn-pool.js";
 
 export interface AccessStoreLike {
   load(): Promise<{
@@ -89,7 +91,8 @@ function isAuthorizedGroupUser(
   if (accessState.policy === "allowlist") {
     return accessState.allowlist.includes(input.userId);
   }
-  return accessState.pairedUsers.some((user) => user.telegramUserId === input.userId);
+  return accessState.allowlist.includes(input.userId) ||
+    accessState.pairedUsers.some((user) => user.telegramUserId === input.userId);
 }
 
 function isAllowedGroupChat(groupMode: GroupModeConfig, input: BridgeAccessInput): boolean {
@@ -107,6 +110,13 @@ export class Bridge {
     private readonly adapter: CodexAdapter,
     private readonly options: {
       loadGroupMode?: () => Promise<GroupModeConfig>;
+      turnPool?: TurnPoolLike;
+      turnPoolMetadata?: {
+        channel?: string;
+        instanceName?: string;
+      };
+      telemetry?: TelemetryAdapter;
+      telemetryTags?: TelemetryTags;
     } = {},
   ) {
     this.supportsTurnScopedEnv = adapter.supportsTurnScopedEnv !== false;
@@ -258,7 +268,10 @@ export class Bridge {
     sessionIdOverride?: string;
     turnLockWaitNotifyAfterMs?: number;
     onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
+    turnPoolWaitNotifyAfterMs?: number;
+    onTurnPoolWait?: (event: TurnPoolWaitEvent) => void | Promise<void>;
   }) {
+    const turnStartedAt = Date.now();
     const decision = await this.checkAccess(input);
     if (decision.kind === "deny") {
       throw new Error(decision.text ?? renderUnauthorizedMessage(input.locale));
@@ -318,43 +331,125 @@ export class Bridge {
       }
       await input.onEngineEvent?.(event);
     };
-    const response = await withBridgeTurnLock(session.sessionId, async () => {
-      const adapterResponse = await this.adapter.sendUserMessage(session.sessionId, {
-        text,
-        files: input.files,
-        instructions: input.instructions,
-        onProgress: input.onProgress,
-        onApprovalRequest: input.onApprovalRequest,
-        onEngineEvent: handleEngineEvent,
-        requestOutputDir: input.requestOutputDir,
-        workspaceOverride: input.workspaceOverride,
-        extraEnv: turnEnvSupported ? input.extraEnv : undefined,
-        abortSignal: input.abortSignal,
-        disableRuntimeTimeout: disableRuntimeTimeout || undefined,
+    try {
+      const response = await withBridgeTurnLock(session.sessionId, async () => {
+        const sendMessage = async () => {
+          const adapterResponse = await this.adapter.sendUserMessage(session.sessionId, {
+            text,
+            files: input.files,
+            instructions: input.instructions,
+            onProgress: input.onProgress,
+            onApprovalRequest: input.onApprovalRequest,
+            onEngineEvent: handleEngineEvent,
+            requestOutputDir: input.requestOutputDir,
+            workspaceOverride: input.workspaceOverride,
+            extraEnv: turnEnvSupported ? input.extraEnv : undefined,
+            abortSignal: input.abortSignal,
+            disableRuntimeTimeout: disableRuntimeTimeout || undefined,
+          });
+
+          if (
+            !input.sessionIdOverride &&
+            adapterResponse.sessionId &&
+            adapterResponse.sessionId !== session.sessionId &&
+            adapterResponse.sessionId !== boundSessionIdFromEvent
+          ) {
+            const pendingBind = pendingSessionBinds.get(adapterResponse.sessionId);
+            if (pendingBind) {
+              await pendingBind.catch(() => undefined);
+            }
+            if (adapterResponse.sessionId !== boundSessionIdFromEvent) {
+              await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, adapterResponse.sessionId);
+            }
+          }
+
+          return adapterResponse;
+        };
+
+        if (this.options.turnPool) {
+          return await this.options.turnPool.run(sendMessage, {
+            signal: input.abortSignal,
+            waitNotifyAfterMs: input.turnPoolWaitNotifyAfterMs,
+            onWait: input.onTurnPoolWait,
+            metadata: {
+              ...this.options.turnPoolMetadata,
+              conversationKey: input.conversationKey,
+              sessionId: session.sessionId,
+            },
+          });
+        }
+
+        return await sendMessage();
+      }, {
+        waitNotifyAfterMs: input.turnLockWaitNotifyAfterMs,
+        onWait: input.onTurnLockWait,
       });
 
-      if (
-        !input.sessionIdOverride &&
-        adapterResponse.sessionId &&
-        adapterResponse.sessionId !== session.sessionId &&
-        adapterResponse.sessionId !== boundSessionIdFromEvent
-      ) {
-        const pendingBind = pendingSessionBinds.get(adapterResponse.sessionId);
-        if (pendingBind) {
-          await pendingBind.catch(() => undefined);
-        }
-        if (adapterResponse.sessionId !== boundSessionIdFromEvent) {
-          await this.sessionManager.bindSession(useConversationScope ? sessionScope : input.chatId, adapterResponse.sessionId);
-        }
-      }
+      await this.recordTurnTelemetry(response, turnStartedAt, {
+        outcome: "success",
+        chatType: input.chatType,
+      });
+      return response;
+    } catch (error) {
+      await this.recordTurnErrorTelemetry(error, turnStartedAt, {
+        outcome: "error",
+        phase: "turn",
+        chatType: input.chatType,
+      });
+      throw error;
+    }
+  }
 
-      return adapterResponse;
-    }, {
-      waitNotifyAfterMs: input.turnLockWaitNotifyAfterMs,
-      onWait: input.onTurnLockWait,
-    });
+  private async recordTurnTelemetry(
+    response: { usage?: { inputTokens: number; outputTokens: number; cachedTokens?: number; costUsd?: number } },
+    startedAt: number,
+    tags: TelemetryTags,
+  ): Promise<void> {
+    const telemetryTags = this.telemetryTags(tags);
+    await this.recordMetric("run_e2e_ms", Math.max(0, Date.now() - startedAt), telemetryTags);
+    if (!response.usage) {
+      return;
+    }
+    await this.recordMetric("tokens_in", response.usage.inputTokens, telemetryTags);
+    await this.recordMetric("tokens_out", response.usage.outputTokens, telemetryTags);
+    if (typeof response.usage.cachedTokens === "number") {
+      await this.recordMetric("tokens_cached", response.usage.cachedTokens, telemetryTags);
+    }
+    if (typeof response.usage.costUsd === "number") {
+      await this.recordMetric("cost_usd", response.usage.costUsd, telemetryTags);
+    }
+  }
 
-    return response;
+  private async recordTurnErrorTelemetry(error: unknown, startedAt: number, tags: TelemetryTags): Promise<void> {
+    const telemetryTags = this.telemetryTags(tags);
+    await this.recordMetric("run_e2e_ms", Math.max(0, Date.now() - startedAt), telemetryTags);
+    await this.recordError(error, telemetryTags);
+  }
+
+  private telemetryTags(tags: TelemetryTags = {}): TelemetryTags {
+    return {
+      ...this.options.telemetryTags,
+      ...tags,
+    };
+  }
+
+  private async recordMetric(name: string, value: number, tags: TelemetryTags): Promise<void> {
+    try {
+      await this.options.telemetry?.recordMetric?.(name, value, tags);
+    } catch {
+      // Telemetry is best-effort and must never affect the bridge turn.
+    }
+  }
+
+  private async recordError(error: unknown, tags: TelemetryTags): Promise<void> {
+    try {
+      await this.options.telemetry?.recordError?.(
+        error instanceof Error ? error : new Error(String(error)),
+        tags,
+      );
+    } catch {
+      // Telemetry is best-effort and must never affect the bridge turn.
+    }
   }
 
   private conversationScope(input: {

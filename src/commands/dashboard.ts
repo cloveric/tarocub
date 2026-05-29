@@ -64,6 +64,14 @@ export interface CurrentTaskSnapshot {
   cronJobId: string | null;
 }
 
+export interface KnownChatSnapshot {
+  label: string;
+  chatId: string;
+  conversationKey: string;
+  bridgeChatId: number;
+  lastSeenAt: string;
+}
+
 export interface LiveLogEntry {
   timestamp: string;
   type: string;
@@ -90,6 +98,9 @@ export interface InstanceSnapshot {
   pairedUsers: number;
   allowlistCount: number;
   sessionBindings: number;
+  knownChatCount: number;
+  knownChats: KnownChatSnapshot[];
+  currentTaskChatLabel: string | null;
   lastHandledUpdateId: number | null;
   botTokenConfigured: boolean;
   agentMdPreview: string;
@@ -105,8 +116,13 @@ export interface InstanceSnapshot {
   retryCount: number;
   budgetBlockedCount: number;
   serviceErrorCount: number;
+  serviceHealthCount: number;
+  lastServiceHealthAt?: string;
+  lastServiceHealthOutcome?: string;
   fileRejectedCount: number;
   workflowFailedCount: number;
+  turnPoolWaitCount: number;
+  lastTurnPoolWaitAt?: string;
   currentTask: CurrentTaskSnapshot;
   liveLogs: LiveLogEntry[];
   crewLatestRunId: string | null;
@@ -346,6 +362,37 @@ function toCronJobSnapshot(job: CronJobRecord): CronJobSnapshot {
   };
 }
 
+function parseDashboardKnownChats(value: unknown): KnownChatSnapshot[] {
+  const chats = value && typeof value === "object" && Array.isArray((value as { chats?: unknown }).chats)
+    ? (value as { chats: unknown[] }).chats
+    : [];
+  return chats
+    .map((entry): KnownChatSnapshot | null => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return null;
+      }
+      const raw = entry as Record<string, unknown>;
+      if (
+        typeof raw.label !== "string" ||
+        typeof raw.chatId !== "string" ||
+        typeof raw.conversationKey !== "string" ||
+        typeof raw.bridgeChatId !== "number" ||
+        typeof raw.lastSeenAt !== "string"
+      ) {
+        return null;
+      }
+      return {
+        label: raw.label,
+        chatId: raw.chatId,
+        conversationKey: raw.conversationKey,
+        bridgeChatId: raw.bridgeChatId,
+        lastSeenAt: raw.lastSeenAt,
+      };
+    })
+    .filter((entry): entry is KnownChatSnapshot => entry !== null)
+    .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+}
+
 async function readCronSnapshots(stateDir: string): Promise<CronJobSnapshot[]> {
   try {
     const jobs = await new CronStore(stateDir).list();
@@ -376,6 +423,7 @@ async function ci(
   const cfg = await rj<{ engine?: string; approvalMode?: string; verbosity?: number; effort?: string; model?: string; locale?: string; budgetUsd?: number; bus?: { peers?: unknown } }>(path.join(d, "config.json"), {});
   const ac = await rj<{ policy?: string; pairedUsers?: unknown[]; allowlist?: unknown[] }>(path.join(d, "access.json"), {});
   const ss = await rj<{ chats?: unknown[] }>(path.join(d, "session.json"), {});
+  const knownChats = parseDashboardKnownChats(await rj(path.join(d, "known-chats.json"), {}));
   const runtimeState = await rj<RuntimeStateSnapshot>(path.join(d, "runtime-state.json"), {});
   const us = await rj<InstanceSnapshot["usage"]>(path.join(d, "usage.json"), { requestCount: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCachedTokens: 0, totalCostUsd: 0, lastUpdatedAt: "" });
   const aa = await aal(path.join(d, "audit.log.jsonl"));
@@ -387,6 +435,9 @@ async function ci(
   const recentTimeline = timelineEvents.slice(-8).map(pt);
   const liveLogs = timelineEvents.slice(-LIVE_LOG_LIMIT).map(toLiveLogEntry);
   const currentTask = deriveCurrentTask(runtimeState, timelineEvents);
+  const currentTaskChatLabel = currentTask.chatId !== null
+    ? knownChats.find((chat) => chat.bridgeChatId === currentTask.chatId)?.label ?? null
+    : null;
   const latestCrewRun = await new CrewRunStore(d).inspectLatest();
   let ls = "", lf = "";
   for (let i = aa.length - 1; i >= 0; i--) { const e = pa(aa[i]); if (!e) continue; if (!ls && e.outcome === "success") ls = e.timestamp; if (!lf && e.outcome === "error") lf = e.timestamp; if (ls && lf) break; }
@@ -409,6 +460,9 @@ async function ci(
     pairedUsers: Array.isArray(ac.pairedUsers) ? ac.pairedUsers.length : 0,
     allowlistCount: Array.isArray(ac.allowlist) ? ac.allowlist.length : 0,
     sessionBindings: Array.isArray(ss.chats) ? ss.chats.length : 0,
+    knownChatCount: knownChats.length,
+    knownChats: knownChats.slice(0, 8),
+    currentTaskChatLabel,
     lastHandledUpdateId: runtimeState.lastHandledUpdateId ?? null,
     botTokenConfigured: botToken !== null,
     agentMdPreview: await tp(path.join(d, "agent.md"), 160),
@@ -418,8 +472,13 @@ async function ci(
     retryCount: timelineSummary.retryCount,
     budgetBlockedCount: timelineSummary.budgetBlockedCount,
     serviceErrorCount: timelineSummary.serviceErrorCount,
+    serviceHealthCount: timelineSummary.serviceHealthCount,
+    lastServiceHealthAt: timelineSummary.lastServiceHealthAt,
+    lastServiceHealthOutcome: timelineSummary.lastServiceHealthOutcome,
     fileRejectedCount: timelineSummary.fileRejectedCount,
     workflowFailedCount: timelineSummary.workflowFailedCount,
+    turnPoolWaitCount: timelineSummary.turnPoolWaitCount,
+    lastTurnPoolWaitAt: timelineSummary.lastTurnPoolWaitAt,
     currentTask,
     liveLogs,
     crewLatestRunId: latestCrewRun.run?.runId ?? null,
@@ -616,7 +675,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
     const taskColor = task.status === "running" ? "#2D8B46" : task.status === "stale" ? "#C1392B" : "#6B7280";
     const taskBits = [
       task.source !== "unknown" ? task.source : undefined,
-      task.chatId !== null ? `chat ${task.chatId}` : undefined,
+      inst.currentTaskChatLabel ?? (task.chatId !== null ? `chat ${task.chatId}` : undefined),
       task.updateId !== null ? `update ${task.updateId}` : undefined,
       task.cronJobId ? `cron ${task.cronJobId}` : undefined,
       task.activeTurnCount > 0 ? `${task.activeTurnCount} active` : undefined,
@@ -630,15 +689,23 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
     const incidentCounts = [
       ["Retries", inst.retryCount],
       ["Service errors", inst.serviceErrorCount],
+      ["Health probes", inst.serviceHealthCount],
       ["File rejects", inst.fileRejectedCount],
       ["Budget blocks", inst.budgetBlockedCount],
       ["Workflow fails", inst.workflowFailedCount],
+      ["Worker waits", inst.turnPoolWaitCount],
     ] as const;
     const incidentTotal = incidentCounts.reduce((sum, [, value]) => sum + value, 0);
     const incidentRows = incidentCounts.map(([label, value]) => {
       const color = value > 0 ? "#C1392B" : "#6B7280";
       return `<div><span>${label}</span><strong style="color:${color}">${value}</strong></div>`;
     }).join("");
+    const knownChatRows = inst.knownChats.map((chat) => `
+      <div class="known-row">
+        <strong>${esc(chat.label)}</strong>
+        <span>${esc(chat.chatId)} · ${esc(chat.conversationKey)}</span>
+      </div>
+    `).join("");
     const liveLogRows = inst.liveLogs.map(ev => {
       const c = ev.outcome === "error" || ev.outcome === "rejected" ? "#C1392B" : ev.outcome === "success" || ev.outcome === "accepted" ? "#2D8B46" : "#6B7280";
       const scope = [ev.channel, ev.chatId !== null ? `chat ${ev.chatId}` : "", ev.updateId !== null ? `update ${ev.updateId}` : ""].filter(Boolean).join(" · ");
@@ -740,6 +807,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
         <div class="details">
           <div>Sessions <strong>${inst.sessionBindings}</strong></div>
           <div>Paired <strong>${inst.pairedUsers}</strong></div>
+          <div>Known chats <strong>${inst.knownChatCount}</strong></div>
           <div>Policy <strong>${inst.policy}</strong></div>
           <div>Locale <strong>${inst.locale}</strong></div>
           <div>Bus <strong>${inst.bus}</strong></div>
@@ -757,6 +825,12 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
         <details class="cron" data-panel="${panelPrefix}:cron" open>
           <summary>Scheduled Tasks <span class="au-count">${inst.cronJobs.length}</span></summary>
           ${cronRows}
+        </details>` : ""}
+
+        ${inst.knownChats.length > 0 ? `
+        <details class="known" data-panel="${panelPrefix}:known-chats">
+          <summary>Known Chats <span class="au-count">${inst.knownChatCount}</span></summary>
+          ${knownChatRows}
         </details>` : ""}
 
         ${inst.recentAudit.length > 0 ? `
@@ -873,7 +947,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:#EFEDEA;color:#1A1A1A;m
 .incidents{border:1px solid #FECACA;border-radius:8px;padding:12px;margin-bottom:16px;background:#FFF7F7}
 .incident-head{display:flex;justify-content:space-between;align-items:center;font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#991B1B}
 .incident-head strong{font-family:'JetBrains Mono',monospace;font-size:12px}
-.incident-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}
+.incident-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(86px,1fr));gap:8px;margin-top:10px}
 .incident-grid div{border-top:1px solid #FEE2E2;padding-top:6px}
 .incident-grid span{display:block;font-size:9px;color:#6B7280;text-transform:uppercase;letter-spacing:1px}
 .incident-grid strong{display:block;margin-top:2px;font-family:'JetBrains Mono',monospace;font-size:13px}
@@ -890,6 +964,14 @@ body{font-family:'Inter',system-ui,sans-serif;background:#EFEDEA;color:#1A1A1A;m
 .cron-prompt{font-size:12px;color:#1A1A1A;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cron-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;font-family:'JetBrains Mono',monospace;font-size:9px;color:#6B7280}
 .cron-err{margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:9px;color:#C1392B;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Known chats */
+.known{margin-bottom:12px;border:1px solid #E7E1DA;border-radius:8px;padding:10px 12px;background:#FCFBF8}
+.known summary{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:#6B7280;cursor:pointer;user-select:none;margin-bottom:8px}
+.known-row{border-top:1px solid #EFEDEA;padding:8px 0}
+.known-row:first-of-type{border-top:0}
+.known-row strong{display:block;font-size:12px;color:#1A1A1A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.known-row span{display:block;margin-top:3px;font-family:'JetBrains Mono',monospace;font-size:9px;color:#6B7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* Audit */
 .audit{margin-bottom:8px}

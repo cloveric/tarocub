@@ -30,6 +30,13 @@ export interface LarkRuntimeEnv {
   LARK_FAILURE_EMOJI?: string;
   CCTB_LARK_RESOLVE_MENTIONS?: string;
   LARK_RESOLVE_MENTIONS?: string;
+  TAROCUB_MAX_CONCURRENT_TURNS?: string;
+  CODEX_TELEGRAM_MAX_CONCURRENT_TURNS?: string;
+  TAROCUB_TURN_POOL_PATH?: string;
+  TAROCUB_TELEMETRY_MODULE?: string;
+  LARK_CHANNEL_TELEMETRY_MODULE?: string;
+  CCTB_LARK_HEALTH_INTERVAL_MS?: string;
+  CCTB_LARK_HEALTH_FAILURE_THRESHOLD?: string;
 }
 
 export interface LarkRuntimeConfig {

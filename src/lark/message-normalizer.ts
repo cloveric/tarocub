@@ -14,6 +14,7 @@ export interface LarkIncomingMessage {
   chatId: string;
   chatType: string;
   chatMode?: LarkChatMode;
+  chatName?: string;
   senderId: string;
   senderName?: string;
   threadId?: string;
@@ -41,6 +42,8 @@ export interface LarkNormalizedAttachment {
 export interface LarkNormalizedBridgeMessage {
   messageId: string;
   chatId: string;
+  chatMode?: LarkChatMode;
+  chatName?: string;
   threadId?: string;
   replyToMessageId?: string;
   senderId: string;
@@ -56,6 +59,7 @@ export interface LarkNormalizedBridgeMessage {
     messageId: string;
     text: string;
   };
+  mentions: unknown[];
   attachments: LarkNormalizedAttachment[];
 }
 
@@ -93,6 +97,8 @@ export function normalizeLarkMessage(
   return {
     messageId: message.messageId,
     chatId: message.chatId,
+    ...(message.chatMode ? { chatMode: message.chatMode } : {}),
+    ...(message.chatName ? { chatName: message.chatName } : {}),
     ...(message.threadId ? { threadId: message.threadId } : {}),
     ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}),
     senderId: message.senderId,
@@ -104,6 +110,7 @@ export function normalizeLarkMessage(
     conversationKey,
     accessConversationKey,
     text,
+    mentions: message.mentions ?? [],
     attachments,
   };
 }

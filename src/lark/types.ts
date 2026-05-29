@@ -13,6 +13,7 @@ import type {
 } from "../codex/adapter.js";
 import type { BridgeAccessDecision } from "../runtime/bridge.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
+import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import type { LarkChatMode } from "./message-normalizer.js";
 
 export interface LarkSendOptions {
@@ -125,6 +126,8 @@ export interface LarkBridgeLike {
     instructions?: string;
     abortSignal?: AbortSignal;
     onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
+    turnPoolWaitNotifyAfterMs?: number;
+    onTurnPoolWait?: (event: TurnPoolWaitEvent) => void | Promise<void>;
   }): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number; cachedTokens?: number; costUsd?: number } }>;
   validateCodexThread?(threadId: string): Promise<void>;
   getThreadGoal?(input: {

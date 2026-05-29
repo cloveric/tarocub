@@ -13,6 +13,7 @@ import {
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
+import { AccessStore } from "../state/access-store.js";
 import { resolveApprovalMode } from "../state/approval-mode.js";
 import { FileWorkflowStore, type FileWorkflowStatus } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
@@ -42,8 +43,9 @@ import { renderLarkResumeScanCard, renderLarkStatusCard } from "./command-cards.
 import { isLarkConfigCommand, renderLarkConfigCard } from "./config-card.js";
 import { sendLarkMarkdown } from "./delivery.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
+import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig, renderLarkCronRuntimeMissing, renderLarkUserAccessDenied, resolveLarkLocale } from "./locale.js";
-import type { LarkNormalizedBridgeMessage } from "./message-normalizer.js";
+import { stableLarkNumericId, type LarkNormalizedBridgeMessage } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
@@ -148,6 +150,11 @@ export async function handleLarkSimpleCommand(
     return true;
   }
 
+  if (isLarkInviteRemoveCommand(commandText)) {
+    await handleLarkInviteRemoveCommand(input, normalized, commandText, commandLocale);
+    return true;
+  }
+
   if (isCronCommand(commandText)) {
     await handleLarkCronCommand(input, normalized, commandText, commandLocale);
     return true;
@@ -233,34 +240,41 @@ export async function handleLarkGroupCommandBeforeAccess(
   commandText: string,
   locale: Locale = "zh",
 ): Promise<boolean> {
-  if (!isGroupCommand(commandText) || normalized.bridgeChatType !== "group" || !input.bridge.checkUserAuthorization) {
+  const isAccessCommand = isGroupCommand(commandText) || isLarkInviteRemoveCommand(commandText);
+  if (!isAccessCommand || normalized.bridgeChatType !== "group") {
     return false;
   }
 
-  const auth = await input.bridge.checkUserAuthorization({
-    chatId: normalized.bridgeAccessChatId,
-    userId: normalized.bridgeUserId,
-    chatType: normalized.bridgeChatType,
-    conversationKey: normalized.conversationKey,
-    locale,
-  });
-  if (auth.kind !== "allow") {
-    await input.channel.send(normalized.chatId, {
-      text: formatLarkAccessReply(auth.text ?? renderLarkUserAccessDenied(locale)),
-    }, {
-      replyTo: normalized.messageId,
-      replyInThread: Boolean(normalized.threadId),
+  if (input.bridge.checkUserAuthorization) {
+    const auth = await input.bridge.checkUserAuthorization({
+      chatId: normalized.bridgeAccessChatId,
+      userId: normalized.bridgeUserId,
+      chatType: normalized.bridgeChatType,
+      conversationKey: normalized.conversationKey,
+      locale,
     });
-    await appendLarkTimelineEvent(input.stateDir, normalized, {
-      type: "command.handled",
-      outcome: "denied",
-      detail: "/group",
-      metadata: { rejected: "unauthorized-user" },
-    });
-    return true;
+    if (auth.kind !== "allow") {
+      await input.channel.send(normalized.chatId, {
+        text: formatLarkAccessReply(auth.text ?? renderLarkUserAccessDenied(locale)),
+      }, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "command.handled",
+        outcome: "denied",
+        detail: isGroupCommand(commandText) ? "/group" : extractLarkInviteRemoveCommandName(commandText),
+        metadata: { rejected: "unauthorized-user" },
+      });
+      return true;
+    }
   }
 
-  await sendLarkCommandMarkdown(input, normalized, "/group", await renderAndApplyLarkGroupCommand(input, normalized, commandText, locale));
+  if (isGroupCommand(commandText)) {
+    await sendLarkCommandMarkdown(input, normalized, "/group", await renderAndApplyLarkGroupCommand(input, normalized, commandText, locale));
+  } else {
+    await handleLarkInviteRemoveCommand(input, normalized, commandText, locale);
+  }
   return true;
 }
 
@@ -726,6 +740,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "- `/newgroup <name>` / `/newgroup topic <name>`: create a new Lark group or topic chat for a fresh project/session space",
       "- `/cron ...`: manage Lark-side reminders and scheduled tasks",
       "- `/group [status|allow|deny|on|off|all|at]`: manage the current Lark group and mention requirement",
+      "- `/invite group` / `/remove group`: allow or remove this Lark group; `/invite user @person` / `/remove user @person` manage users allowed in groups",
       "- `/board ...`: manage the durable Kanban board",
       "- `/mini ...`: register Lark group threads as lightweight peers for thread-to-thread collaboration",
       "- `/ask <instance> <prompt>`: delegate to a peer bot and return the result inline",
@@ -772,6 +787,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "- `/newgroup <名称>` / `/newgroup topic <名称>`：创建新的飞书群/话题群，作为新的项目或 session 空间",
     "- `/cron ...`：管理飞书侧定时提醒和任务",
     "- `/group [status|allow|deny|on|off|all|at]`：管理当前飞书群授权和是否需要 @bot 才响应",
+    "- `/invite group` / `/remove group`：允许或移除当前飞书群；`/invite user @某人` / `/remove user @某人` 管理群内可用用户",
     "- `/board ...`：管理持久任务板",
     "- `/mini ...`：把飞书群 thread 注册成轻量 peer，做 thread-to-thread 协作",
     "- `/ask <实例> <提示>`：委托给指定 peer bot 并内联返回结果",
@@ -796,6 +812,191 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
 
 function isGroupCommand(text: string): boolean {
   return /^\/group(?:\s|$)/i.test(text.trim());
+}
+
+function isLarkInviteRemoveCommand(text: string): boolean {
+  return /^\/(?:invite|remove)(?:\s|$)/i.test(text.trim());
+}
+
+function extractLarkInviteRemoveCommandName(text: string): "/invite" | "/remove" {
+  return /^\/remove(?:\s|$)/i.test(text.trim()) ? "/remove" : "/invite";
+}
+
+async function handleLarkInviteRemoveCommand(
+  input: LarkCommandInput,
+  normalized: LarkNormalizedBridgeMessage,
+  commandText: string,
+  locale: Locale,
+): Promise<void> {
+  const words = commandText.trim().split(/\s+/);
+  const command = words[0]?.toLowerCase() === "/remove" ? "remove" : "invite";
+  const targetKind = words[1]?.toLowerCase() ?? "group";
+  const detail = command === "remove" ? "/remove" : "/invite";
+
+  if (targetKind === "group") {
+    const groupCommand = command === "remove" ? "/group deny" : "/group allow";
+    await sendLarkMarkdown(
+      input.channel,
+      normalized.chatId,
+      await renderAndApplyLarkGroupCommand(input, normalized, groupCommand, locale),
+      larkAccessCommandReplyOptions(normalized),
+    );
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "success",
+      detail,
+      metadata: { target: "group" },
+    });
+    return;
+  }
+
+  if (targetKind !== "user") {
+    await sendLarkMarkdown(
+      input.channel,
+      normalized.chatId,
+      renderLarkInviteRemoveUsage(command, locale),
+      larkAccessCommandReplyOptions(normalized),
+    );
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "error",
+      detail,
+      metadata: { reason: "unsupported-target", target: targetKind },
+    });
+    return;
+  }
+
+  const target = extractFirstLarkMentionTarget(normalized.mentions);
+  if (!target) {
+    await sendLarkMarkdown(
+      input.channel,
+      normalized.chatId,
+      renderLarkInviteRemoveMissingMention(command, locale),
+      larkAccessCommandReplyOptions(normalized),
+    );
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "error",
+      detail,
+      metadata: { reason: "missing-user-mention" },
+    });
+    return;
+  }
+
+  const accessStore = new AccessStore(path.join(input.stateDir, "access.json"));
+  if (command === "remove") {
+    await accessStore.revokeUser(target.bridgeUserId);
+  } else {
+    await accessStore.allowUser(target.bridgeUserId);
+  }
+
+  await sendLarkMarkdown(
+    input.channel,
+    normalized.chatId,
+    renderLarkInviteRemoveUserResult(command, target.label, target.bridgeUserId, locale),
+    larkAccessCommandReplyOptions(normalized),
+  );
+  await appendLarkTimelineEvent(input.stateDir, normalized, {
+    type: "command.handled",
+    outcome: "success",
+    detail,
+    metadata: {
+      target: "user",
+      userId: target.bridgeUserId,
+    },
+  });
+}
+
+function larkAccessCommandReplyOptions(normalized: LarkNormalizedBridgeMessage): { replyTo: string; replyInThread?: true } {
+  return normalized.threadId
+    ? { replyTo: normalized.messageId, replyInThread: true }
+    : { replyTo: normalized.messageId };
+}
+
+function renderLarkInviteRemoveUsage(command: "invite" | "remove", locale: Locale): string {
+  if (locale === "en") {
+    return command === "invite"
+      ? "Usage: `/invite group` or `/invite user @person`."
+      : "Usage: `/remove group` or `/remove user @person`.";
+  }
+  return command === "invite"
+    ? "用法：`/invite group` 或 `/invite user @某人`。"
+    : "用法：`/remove group` 或 `/remove user @某人`。";
+}
+
+function renderLarkInviteRemoveMissingMention(command: "invite" | "remove", locale: Locale): string {
+  if (locale === "en") {
+    return command === "invite"
+      ? "Mention the user to invite: `/invite user @person`."
+      : "Mention the user to remove: `/remove user @person`.";
+  }
+  return command === "invite"
+    ? "请 @ 要邀请的用户：`/invite user @某人`。"
+    : "请 @ 要移除的用户：`/remove user @某人`。";
+}
+
+function renderLarkInviteRemoveUserResult(
+  command: "invite" | "remove",
+  label: string,
+  userId: number,
+  locale: Locale,
+): string {
+  if (locale === "en") {
+    return command === "invite"
+      ? `Invited user ${label} (${userId}).`
+      : `Removed user ${label} (${userId}).`;
+  }
+  return command === "invite"
+    ? `已邀请用户 ${label} (${userId})。`
+    : `已移除用户 ${label} (${userId})。`;
+}
+
+function extractFirstLarkMentionTarget(mentions: unknown[]): { label: string; bridgeUserId: number } | null {
+  for (const mention of mentions) {
+    const record = isRecord(mention) ? mention : {};
+    const idRecord = isRecord(record.id) ? record.id : {};
+    const rawId = firstString(
+      idRecord.openId,
+      idRecord.open_id,
+      idRecord.userId,
+      idRecord.user_id,
+      idRecord.id,
+      record.openId,
+      record.open_id,
+      record.userId,
+      record.user_id,
+      record.key,
+    );
+    if (!rawId) {
+      continue;
+    }
+    const label = firstString(
+      record.name,
+      record.nameCn,
+      record.name_cn,
+      record.nameEn,
+      record.name_en,
+      record.text,
+    ) ?? rawId;
+    return {
+      label,
+      bridgeUserId: stableLarkNumericId(`user:${rawId}`),
+    };
+  }
+  return null;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 async function renderAndApplyLarkGroupCommand(
@@ -1020,6 +1221,7 @@ async function renderLarkStatusMessage(
   const cfg = await loadInstanceConfig(stateDir);
   const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const rawConfig = await readRawLarkConfig(stateDir);
+  const knownChat = await new LarkKnownChatStore(stateDir).get(normalized.conversationKey).catch(() => null);
   const session = await new SessionStore(path.join(stateDir, "session.json"))
     .findByConversationKeySafe(normalized.conversationKey);
   const currentSession = session.record;
@@ -1054,6 +1256,7 @@ async function renderLarkStatusMessage(
       `Verbosity: ${cfg.verbosity}`,
       `Timezone: ${cfg.timezone}`,
       `Lark CLI: ${renderLarkCliStatus(larkCliStatus, locale)}`,
+      `Current chat: ${knownChat?.label ?? normalized.chatId}`,
       `Conversation: ${normalized.conversationKey}`,
       `Chat type: ${normalized.bridgeChatType}`,
       ...groupModeLines,
@@ -1081,6 +1284,7 @@ async function renderLarkStatusMessage(
     `详细度：${cfg.verbosity}`,
     `时区：${cfg.timezone}`,
     `Lark CLI：${renderLarkCliStatus(larkCliStatus, locale)}`,
+    `当前聊天：${knownChat?.label ?? normalized.chatId}`,
     `会话：${normalized.conversationKey}`,
     `聊天类型：${normalized.bridgeChatType}`,
     ...groupModeLines,

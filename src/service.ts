@@ -25,6 +25,8 @@ import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
 import { ChatQueue } from "./runtime/chat-queue.js";
 import { classifyFailure } from "./runtime/error-classification.js";
+import { loadTelemetryAdapterFromEnv } from "./runtime/telemetry.js";
+import { FileTurnPool } from "./runtime/turn-pool.js";
 import { loadInstanceConfig, readValidatedConfigFile } from "./telegram/instance-config.js";
 
 export interface ServiceDependencies {
@@ -229,6 +231,11 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_EXECUTABLE?: string;
     CLAUDE_EXECUTABLE?: string;
     ANTIGRAVITY_EXECUTABLE?: string;
+    TAROCUB_MAX_CONCURRENT_TURNS?: string;
+    CODEX_TELEGRAM_MAX_CONCURRENT_TURNS?: string;
+    TAROCUB_TURN_POOL_PATH?: string;
+    TAROCUB_TELEMETRY_MODULE?: string;
+    LARK_CHANNEL_TELEMETRY_MODULE?: string;
   } = {
     HOME: env.HOME,
     APPDATA: env.APPDATA,
@@ -241,6 +248,11 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
     CLAUDE_EXECUTABLE: env.CLAUDE_EXECUTABLE,
     ANTIGRAVITY_EXECUTABLE: env.ANTIGRAVITY_EXECUTABLE,
+    TAROCUB_MAX_CONCURRENT_TURNS: env.TAROCUB_MAX_CONCURRENT_TURNS,
+    CODEX_TELEGRAM_MAX_CONCURRENT_TURNS: env.CODEX_TELEGRAM_MAX_CONCURRENT_TURNS,
+    TAROCUB_TURN_POOL_PATH: env.TAROCUB_TURN_POOL_PATH,
+    TAROCUB_TELEMETRY_MODULE: env.TAROCUB_TELEMETRY_MODULE,
+    LARK_CHANNEL_TELEMETRY_MODULE: env.LARK_CHANNEL_TELEMETRY_MODULE,
   };
 
   const telegramBotToken = await readConfiguredBotToken(
@@ -647,6 +659,19 @@ function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
   return childEnv;
 }
 
+function resolveMaxConcurrentTurns(env: EnvSource): number {
+  const raw = env.TAROCUB_MAX_CONCURRENT_TURNS ?? env.CODEX_TELEGRAM_MAX_CONCURRENT_TURNS;
+  if (raw === undefined || raw.trim() === "") {
+    return 0;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "0" || normalized === "off" || normalized === "none" || normalized === "disabled") {
+    return 0;
+  }
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 async function createAdapter(
   env: EnvSource,
   config: ReturnType<typeof resolveConfig>,
@@ -736,8 +761,25 @@ async function createBridgeDependenciesForConfig(
   const configPath = path.join(config.stateDir, "config.json");
   const adapter = await createAdapter(env, config, instructionsPath, configPath, options);
   const sessionManager = new SessionManager(sessionStore, adapter);
+  const maxConcurrentTurns = resolveMaxConcurrentTurns(env);
+  const telemetry = await loadTelemetryAdapterFromEnv(env);
   const bridge = new Bridge(accessStore, sessionManager, adapter, {
     loadGroupMode: async () => (await loadInstanceConfig(config.stateDir)).groupMode,
+    turnPool: maxConcurrentTurns > 0
+      ? new FileTurnPool({
+        maxActive: maxConcurrentTurns,
+        ...(env.TAROCUB_TURN_POOL_PATH ? { poolPath: env.TAROCUB_TURN_POOL_PATH } : {}),
+      })
+      : undefined,
+    turnPoolMetadata: {
+      channel: options.transport ?? "telegram",
+      instanceName: config.instanceName,
+    },
+    telemetry,
+    telemetryTags: {
+      channel: options.transport ?? "telegram",
+      instanceName: config.instanceName,
+    },
   });
 
   return { config, bridge };

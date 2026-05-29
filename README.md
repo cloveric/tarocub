@@ -196,7 +196,7 @@ node dist/src/index.js lark timeline 20
 node dist/src/index.js lark dashboard
 ```
 
-Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/newgroup`, `/newtopic`, and `/continue`.
+Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/newgroup`, `/newtopic`, and `/continue`.
 
 ## Operator Commands
 
@@ -232,6 +232,7 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
+- **v0.1.34** — adds Lark observability and control UX: optional telemetry adapters, Lark health/reconnect events, opt-in shared worker pooling, `/invite`/`/remove` access helpers, and known chat names in `/status`, `/config`, and `dashboard`.
 - **v0.1.0** — resets the public product to **TaroCub**, renames the GitHub/package surface, adds the product thesis to the banner, and keeps `cctb` plus old state paths as compatibility surfaces.
 - **v4.6.70** — transitional release that introduced the TaroCub family name before the full product reset.
 - **v4.6.69** — makes Lark setup more self-healing: when user OAuth is missing, setup now prints the recommended Docs/Drive/Sheets auth command, and the docs clarify that `user-default` no longer force-rebinds existing lark-cli sessions.
@@ -249,6 +250,9 @@ The bridge is powerful because it controls local CLIs. Treat it like local autom
 - Use YOLO unsafe/bypass only for trusted instances; it intentionally bypasses normal approval prompts and sandbox restrictions.
 - Keep app secrets in bridge state, not prompts, argv, or child-process env.
 - Use `doctor`, `timeline`, `audit`, and `dashboard` before guessing at failures.
+- Telegram/Lark can share an optional machine-wide AI worker pool when you set `TAROCUB_MAX_CONCURRENT_TURNS=<n>`; it is off by default, and `0`/`off` keeps it disabled. Lark also records `service.health` events and reconnect attempts when health probes fail.
+- Lark keeps a local `known-chats.json` cache so `/status`, `/config`, and `dashboard` can show friendly chat names instead of only opaque chat IDs.
+- Optional local observability can be loaded with `TAROCUB_TELEMETRY_MODULE=/abs/path/adapter.mjs`; the adapter receives metrics such as `run_e2e_ms`, token counts, `cost_usd`, and turn errors, but telemetry failures are swallowed so they cannot break user turns.
 
 More detail: [Security Boundaries](./docs/security-boundaries.md), [State Model](./docs/state-model.md), and [Full Reference](./docs/full-reference.md).
 

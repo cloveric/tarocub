@@ -112,8 +112,13 @@ export interface ServiceStatus {
   retryCount: number | null;
   budgetBlockedCount: number | null;
   serviceErrorCount: number | null;
+  serviceHealthCount: number | null;
+  lastServiceHealthAt?: string;
+  lastServiceHealthOutcome?: string;
   fileRejectedCount: number | null;
   workflowFailedCount: number | null;
+  turnPoolWaitCount: number | null;
+  lastTurnPoolWaitAt?: string;
   crewRunsStartedCount: number | null;
   crewRunsCompletedCount: number | null;
   crewRunsFailedCount: number | null;
@@ -912,8 +917,10 @@ export async function getServiceStatus(
     retryCount: 0,
     budgetBlockedCount: 0,
     serviceErrorCount: 0,
+    serviceHealthCount: 0,
     fileRejectedCount: 0,
     workflowFailedCount: 0,
+    turnPoolWaitCount: 0,
     crewRunsStartedCount: 0,
     crewRunsCompletedCount: 0,
     crewRunsFailedCount: 0,
@@ -999,8 +1006,13 @@ export async function getServiceStatus(
     retryCount: timelineWarning === undefined ? timelineSummary.retryCount : null,
     budgetBlockedCount: timelineWarning === undefined ? timelineSummary.budgetBlockedCount : null,
     serviceErrorCount: timelineWarning === undefined ? timelineSummary.serviceErrorCount : null,
+    serviceHealthCount: timelineWarning === undefined ? timelineSummary.serviceHealthCount : null,
+    lastServiceHealthAt: timelineSummary.lastServiceHealthAt,
+    lastServiceHealthOutcome: timelineSummary.lastServiceHealthOutcome,
     fileRejectedCount: timelineWarning === undefined ? timelineSummary.fileRejectedCount : null,
     workflowFailedCount: timelineWarning === undefined ? timelineSummary.workflowFailedCount : null,
+    turnPoolWaitCount: timelineWarning === undefined ? timelineSummary.turnPoolWaitCount : null,
+    lastTurnPoolWaitAt: timelineSummary.lastTurnPoolWaitAt,
     crewRunsStartedCount: timelineWarning === undefined ? timelineSummary.crewRunsStartedCount : null,
     crewRunsCompletedCount: timelineWarning === undefined ? timelineSummary.crewRunsCompletedCount : null,
     crewRunsFailedCount: timelineWarning === undefined ? timelineSummary.crewRunsFailedCount : null,
@@ -1172,7 +1184,7 @@ export async function runServiceDoctor(
         ? `Timeline events: unknown (${status.timelineWarning}).`
         : status.crewRunStateWarning !== undefined
           ? `Timeline events: ${status.timelineEvents}. Crew runs: unknown (${status.crewRunStateWarning}).`
-          : `Timeline events: ${status.timelineEvents}. Last turn completion: ${status.lastTurnCompletionAt ?? "none"}. Last retry: ${status.lastRetryAt ?? "none"}. Last budget block: ${status.lastBudgetBlockedAt ?? "none"}. Last crew run: ${status.lastCrewRunAt ?? "none"}. Incident counts: retries=${status.retryCount}, budget blocks=${status.budgetBlockedCount}, service errors=${status.serviceErrorCount}, file rejections=${status.fileRejectedCount}, workflow failures=${status.workflowFailedCount}, crew runs started=${status.crewRunsStartedCount}, crew runs completed=${status.crewRunsCompletedCount}, crew runs failed=${status.crewRunsFailedCount}. Latest crew run: ${status.latestCrewRunId ? `${status.latestCrewRunId} (${status.latestCrewRunWorkflow ?? "unknown"}, ${status.latestCrewRunStatus ?? "unknown"}/${status.latestCrewRunStage ?? "unknown"}, updated ${status.latestCrewRunUpdatedAt ?? "unknown"})` : "none"}.`,
+          : `Timeline events: ${status.timelineEvents}. Last turn completion: ${status.lastTurnCompletionAt ?? "none"}. Last retry: ${status.lastRetryAt ?? "none"}. Last budget block: ${status.lastBudgetBlockedAt ?? "none"}. Last crew run: ${status.lastCrewRunAt ?? "none"}. Incident counts: retries=${status.retryCount}, budget blocks=${status.budgetBlockedCount}, service errors=${status.serviceErrorCount}, file rejections=${status.fileRejectedCount}, workflow failures=${status.workflowFailedCount}, crew runs started=${status.crewRunsStartedCount}, crew runs completed=${status.crewRunsCompletedCount}, crew runs failed=${status.crewRunsFailedCount}. Service health events=${status.serviceHealthCount}, last health=${status.lastServiceHealthOutcome ?? "none"} at ${status.lastServiceHealthAt ?? "none"}. Shared worker waits=${status.turnPoolWaitCount}, last wait=${status.lastTurnPoolWaitAt ?? "none"}. Latest crew run: ${status.latestCrewRunId ? `${status.latestCrewRunId} (${status.latestCrewRunWorkflow ?? "unknown"}, ${status.latestCrewRunStatus ?? "unknown"}/${status.latestCrewRunStage ?? "unknown"}, updated ${status.latestCrewRunUpdatedAt ?? "unknown"})` : "none"}.`,
   });
   checks.push({
     name: "tasks",

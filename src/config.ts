@@ -17,6 +17,11 @@ export interface EnvSource {
   CODEX_EXECUTABLE?: string;
   CLAUDE_EXECUTABLE?: string;
   ANTIGRAVITY_EXECUTABLE?: string;
+  TAROCUB_MAX_CONCURRENT_TURNS?: string;
+  CODEX_TELEGRAM_MAX_CONCURRENT_TURNS?: string;
+  TAROCUB_TURN_POOL_PATH?: string;
+  TAROCUB_TELEMETRY_MODULE?: string;
+  LARK_CHANNEL_TELEMETRY_MODULE?: string;
 }
 
 function resolveHomeDir(env: Pick<EnvSource, "HOME" | "USERPROFILE">): string | undefined {

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Bridge, type AccessStoreLike, type SessionManagerLike } from "../src/runtime/bridge.js";
 import type { CodexAdapter } from "../src/codex/adapter.js";
 import { AccessStore } from "../src/state/access-store.js";
+import { FileTurnPool } from "../src/runtime/turn-pool.js";
 
 function groupMode(allowedChatIds: number[]) {
   return {
@@ -202,6 +203,167 @@ describe("Bridge", () => {
       expect.objectContaining({ text: "first done" }),
       expect.objectContaining({ text: "second done" }),
     ]);
+  });
+
+  it("limits concurrent turns across different engine sessions with a shared turn pool", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-turn-pool-"));
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84, 85],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockImplementation(async (scope: number) => ({ sessionId: `session-${scope}` })),
+      bindSession: vi.fn(),
+    };
+    const startedTurns: string[] = [];
+    let releaseFirstTurn!: () => void;
+    const firstCanFinish = new Promise<void>((finish) => {
+      releaseFirstTurn = finish;
+    });
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockImplementation(async (sessionId: string) => {
+        startedTurns.push(sessionId);
+        if (sessionId === "session-84") {
+          await firstCanFinish;
+          return { text: "first done" };
+        }
+        return { text: "second done" };
+      }),
+      createSession: vi.fn(),
+    };
+    const turnPool = new FileTurnPool({
+      maxActive: 1,
+      poolPath: path.join(tempDir, "turn-pool.json"),
+      pollIntervalMs: 5,
+    });
+    const bridge = new Bridge(accessStore, sessionManager, adapter, { turnPool });
+    const waitEvents: unknown[] = [];
+
+    try {
+      const first = bridge.handleAuthorizedMessage({
+        chatId: 84,
+        userId: 42,
+        chatType: "private",
+        text: "first",
+        replyContext: undefined,
+        files: [],
+      });
+      await vi.waitFor(() => {
+        expect(startedTurns).toEqual(["session-84"]);
+      });
+
+      const second = bridge.handleAuthorizedMessage({
+        chatId: 85,
+        userId: 43,
+        chatType: "private",
+        text: "second",
+        replyContext: undefined,
+        files: [],
+        turnPoolWaitNotifyAfterMs: 0,
+        onTurnPoolWait: async (event) => {
+          waitEvents.push(event);
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(waitEvents).toContainEqual(expect.objectContaining({
+          reason: "turn_pool",
+          activeCount: 1,
+          maxActive: 1,
+          waitedMs: expect.any(Number),
+        }));
+      });
+      expect(startedTurns).toEqual(["session-84"]);
+
+      releaseFirstTurn();
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        expect.objectContaining({ text: "first done" }),
+        expect.objectContaining({ text: "second done" }),
+      ]);
+      expect(startedTurns).toEqual(["session-84", "session-85"]);
+    } finally {
+      releaseFirstTurn?.();
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("records telemetry metrics and errors for authorized turns", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn()
+        .mockResolvedValueOnce({
+          text: "done",
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedTokens: 2,
+            costUsd: 0.03,
+          },
+        })
+        .mockRejectedValueOnce(new Error("engine failed")),
+      createSession: vi.fn(),
+    };
+    const telemetry = {
+      recordMetric: vi.fn(async () => undefined),
+      recordError: vi.fn(async () => undefined),
+    };
+    const bridge = new Bridge(accessStore, sessionManager, adapter, {
+      telemetry,
+      telemetryTags: {
+        channel: "telegram",
+        instanceName: "alpha",
+      },
+    });
+
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+    });
+
+    expect(telemetry.recordMetric).toHaveBeenCalledWith("run_e2e_ms", expect.any(Number), expect.objectContaining({
+      channel: "telegram",
+      instanceName: "alpha",
+      outcome: "success",
+    }));
+    expect(telemetry.recordMetric).toHaveBeenCalledWith("tokens_in", 10, expect.any(Object));
+    expect(telemetry.recordMetric).toHaveBeenCalledWith("tokens_out", 5, expect.any(Object));
+    expect(telemetry.recordMetric).toHaveBeenCalledWith("tokens_cached", 2, expect.any(Object));
+    expect(telemetry.recordMetric).toHaveBeenCalledWith("cost_usd", 0.03, expect.any(Object));
+
+    await expect(bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "fail",
+      replyContext: undefined,
+      files: [],
+    })).rejects.toThrow("engine failed");
+    expect(telemetry.recordError).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({
+      channel: "telegram",
+      instanceName: "alpha",
+      phase: "turn",
+    }));
   });
 
   it("binds engine session events without starting an extra turn", async () => {

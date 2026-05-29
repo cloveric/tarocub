@@ -19,6 +19,7 @@ import { createLarkCommentClient } from "./comment-client.js";
 import { resolveLarkInstanceName, resolveLarkRuntimeConfig, type LarkRuntimeConfig, type LarkRuntimeEnv } from "./config.js";
 import { buildLarkCronExecutor, sendLarkCronFailureNotification } from "./cron.js";
 import { deliverLarkResponse } from "./delivery.js";
+import { startLarkHealthMonitor, type LarkHealthMonitor } from "./health.js";
 import { larkOperatorRawId } from "./identity.js";
 import { resolveLarkLocale } from "./locale.js";
 import { handleLarkMessage } from "./message-handler.js";
@@ -117,6 +118,7 @@ export async function runLarkService(
   let channel: LarkRuntimeChannelLike | undefined;
   let connected = false;
   let cronScheduler: CronScheduler | undefined;
+  let healthMonitor: LarkHealthMonitor | undefined;
   let stopOutcome: "success" | "error" = "success";
   try {
     try {
@@ -244,6 +246,14 @@ export async function runLarkService(
 
     await channel.connect();
     connected = true;
+    healthMonitor = startLarkHealthMonitor({
+      stateDir,
+      instanceName,
+      channel,
+      domain: config.domain,
+      intervalMs: parsePositiveIntegerEnv(env.CCTB_LARK_HEALTH_INTERVAL_MS),
+      failureThreshold: parsePositiveIntegerEnv(env.CCTB_LARK_HEALTH_FAILURE_THRESHOLD),
+    });
     if (!runtime.cronRuntime) {
       const cronStore = new CronStore(stateDir);
       cronScheduler = new CronScheduler({
@@ -288,6 +298,7 @@ export async function runLarkService(
     throw error;
   } finally {
     try {
+      healthMonitor?.stop();
       if (cronScheduler) {
         await cronScheduler.stop();
       }
@@ -573,6 +584,14 @@ function isLarkDebugEnabled(value: unknown): boolean {
   return /^(?:1|true|yes|on)$/i.test(value.trim());
 }
 
+function parsePositiveIntegerEnv(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 async function removeGeneratedTelegramTransportFromLarkAgent(
   stateDir: string,
   logger: LarkServiceLogger,
@@ -607,6 +626,11 @@ async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir:
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
     CLAUDE_EXECUTABLE: env.CLAUDE_EXECUTABLE,
     ANTIGRAVITY_EXECUTABLE: env.ANTIGRAVITY_EXECUTABLE,
+    TAROCUB_MAX_CONCURRENT_TURNS: env.TAROCUB_MAX_CONCURRENT_TURNS,
+    CODEX_TELEGRAM_MAX_CONCURRENT_TURNS: env.CODEX_TELEGRAM_MAX_CONCURRENT_TURNS,
+    TAROCUB_TURN_POOL_PATH: env.TAROCUB_TURN_POOL_PATH,
+    TAROCUB_TELEMETRY_MODULE: env.TAROCUB_TELEMETRY_MODULE,
+    LARK_CHANNEL_TELEMETRY_MODULE: env.LARK_CHANNEL_TELEMETRY_MODULE,
   }, { transport: "lark" });
   return {
     stateDir: config.stateDir,

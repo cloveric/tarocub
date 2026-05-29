@@ -5,6 +5,7 @@ import type { EngineStreamEvent } from "../codex/adapter.js";
 import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
+import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
@@ -23,6 +24,7 @@ import {
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
+import { LarkKnownChatStore } from "./known-chats.js";
 import {
   renderLarkBackgroundTaskHeader,
   renderLarkChatAccessDenied,
@@ -30,6 +32,7 @@ import {
   renderLarkMediaTranscriptionFailure,
   renderLarkQueuedTaskSkipped,
   renderLarkStopResult,
+  renderLarkTurnPoolWait,
   resolveLarkLocale,
 } from "./locale.js";
 import {
@@ -158,6 +161,7 @@ async function runAcceptedLarkMessage(
   },
   normalized: LarkNormalizedBridgeMessage,
 ): Promise<boolean> {
+  await recordKnownLarkChat(input.stateDir, normalized);
   await appendLarkTimelineEvent(input.stateDir, normalized, {
     type: "input.received",
     outcome: "accepted",
@@ -318,6 +322,14 @@ async function runAcceptedLarkMessage(
       return true;
     },
   });
+}
+
+async function recordKnownLarkChat(stateDir: string, normalized: LarkNormalizedBridgeMessage): Promise<void> {
+  try {
+    await new LarkKnownChatStore(stateDir).record(normalized);
+  } catch {
+    // Chat labels are diagnostic metadata; never let them block message handling.
+  }
 }
 
 async function resolveLarkMessageMentionRequirement(input: {
@@ -639,6 +651,36 @@ async function runNormalizedLarkMessage(
           });
         }
       };
+      const handleTurnPoolWait = async (event: TurnPoolWaitEvent): Promise<void> => {
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "engine.lock.waiting",
+          detail: "waiting for shared AI worker capacity",
+          metadata: {
+            waitedMs: event.waitedMs,
+            activeCount: event.activeCount,
+            maxActive: event.maxActive,
+            reason: event.reason,
+          },
+        });
+        try {
+          await sendLarkMarkdown(
+            input.channel,
+            normalized.chatId,
+            renderLarkTurnPoolWait(locale),
+            larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
+          );
+        } catch (error) {
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event.delivery_failed",
+            outcome: "error",
+            detail: redactLarkErrorDetail(error),
+            metadata: {
+              eventType: "engine.lock.waiting",
+              phase: "turn-pool",
+            },
+          });
+        }
+      };
 
       return await runAuthorizedLarkTurnWithReactions(input, normalized, async () => {
         const result = await input.bridge.handleAuthorizedMessage({
@@ -667,6 +709,8 @@ async function runNormalizedLarkMessage(
           }),
           onEngineEvent: handleEngineEvent,
           onTurnLockWait: handleTurnLockWait,
+          turnPoolWaitNotifyAfterMs: 10_000,
+          onTurnPoolWait: handleTurnPoolWait,
           instructions: larkAgentInstructions(),
         });
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);

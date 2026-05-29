@@ -129,6 +129,24 @@ export class AccessStore {
     });
   }
 
+  async allowUser(userId: number): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const state = await this.load();
+      state.allowlist = [...new Set([...state.allowlist, userId])];
+      await this.store.write(state);
+    });
+  }
+
+  async revokeUser(userId: number): Promise<void> {
+    await this.enqueueWrite(async () => {
+      const state = await this.load();
+      state.allowlist = state.allowlist.filter((entry) => entry !== userId);
+      state.pairedUsers = state.pairedUsers.filter((entry) => entry.telegramUserId !== userId);
+      state.pendingPairs = state.pendingPairs.filter((entry) => entry.telegramUserId !== userId);
+      await this.store.write(state);
+    });
+  }
+
   async getStatus(): Promise<{
     multiChat: boolean;
     policy: AccessPolicy;

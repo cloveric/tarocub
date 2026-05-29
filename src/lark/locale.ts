@@ -38,6 +38,12 @@ export function renderLarkConversationQueueWait(locale: Locale): string {
     : "同一个会话里还有任务在运行，这条消息已排队；如果前一个任务卡住，请发送 `/stop` 取消。";
 }
 
+export function renderLarkTurnPoolWait(locale: Locale): string {
+  return locale === "en"
+    ? "All AI worker slots are busy. This message is queued and will continue when capacity frees up."
+    : "当前 AI worker 名额已满，这条消息已排队；有空位后会继续处理。";
+}
+
 export function renderLarkMediaTranscriptionFailure(locale: Locale): string {
   return locale === "en"
     ? "Audio/video transcription failed. Please send text or a shorter audio/video file."

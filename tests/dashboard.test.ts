@@ -29,6 +29,9 @@ function baseSnapshot() {
     pairedUsers: 1,
     allowlistCount: 1,
     sessionBindings: 1,
+    knownChatCount: 0,
+    knownChats: [],
+    currentTaskChatLabel: null,
     lastHandledUpdateId: 10,
     botTokenConfigured: true,
     agentMdPreview: "",
@@ -44,8 +47,10 @@ function baseSnapshot() {
     retryCount: 0,
     budgetBlockedCount: 0,
     serviceErrorCount: 0,
+    serviceHealthCount: 0,
     fileRejectedCount: 0,
     workflowFailedCount: 0,
+    turnPoolWaitCount: 0,
     liveLogs: [],
     currentTask: {
       status: "idle" as const,
@@ -313,7 +318,6 @@ describe("collectInstanceSnapshots", () => {
         ].join("\n") + "\n",
         "utf8",
       );
-
       const snapshots = await collectInstanceSnapshots({
         USERPROFILE: tempDir,
         CODEX_TELEGRAM_STATE_DIR: customStateDir,
@@ -369,6 +373,21 @@ describe("collectInstanceSnapshots", () => {
         ].join("\n") + "\n",
         "utf8",
       );
+      await writeFile(
+        path.join(customStateDir, "known-chats.json"),
+        JSON.stringify({
+          chats: [{
+            chatId: "oc_lark_chat",
+            conversationKey: "lark:oc_lark_chat",
+            bridgeChatId: 100,
+            bridgeAccessChatId: 100,
+            chatType: "group",
+            label: "研发群",
+            lastSeenAt: engineAt,
+          }],
+        }),
+        "utf8",
+      );
 
       const snapshots = await collectInstanceSnapshots({
         USERPROFILE: tempDir,
@@ -382,9 +401,12 @@ describe("collectInstanceSnapshots", () => {
         userId: 200,
         lastEventType: "engine.event",
       });
+      expect(snapshots[0]!.knownChatCount).toBe(1);
+      expect(snapshots[0]!.currentTaskChatLabel).toBe("研发群");
 
       const html = renderHtml(snapshots);
-      expect(html).toContain("lark · chat 100");
+      expect(html).toContain("lark · 研发群");
+      expect(html).toContain("Known Chats");
     } finally {
       await removeTempRoot(tempDir);
     }

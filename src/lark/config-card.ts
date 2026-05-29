@@ -13,6 +13,7 @@ import {
 } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
+import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig } from "./locale.js";
 import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 
@@ -58,6 +59,7 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
   const raw = await readRawLarkConfig(input.stateDir);
   const resolvedApprovalMode = resolveApprovalMode(raw.approvalMode);
   const groupState = await readLarkConfigGroupState(input, cfg);
+  const knownChat = await new LarkKnownChatStore(input.stateDir).get(input.conversationKey).catch(() => null);
   const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const labels = larkConfigLabels(input.locale);
   const approvalMode = approvalModeLabel(resolvedApprovalMode, input.locale);
@@ -75,6 +77,7 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
     `**${labels.title}**`,
     "",
     input.notice ? `**${labels.updated}** ${input.notice}` : undefined,
+    `- ${labels.chat}: ${knownChat?.label ?? input.larkChatId}`,
     `- ${labels.engine}: ${cfg.engine}`,
     `- ${labels.model}: ${modelLabel}`,
     `- ${labels.effort}: ${effortLabel}`,
@@ -577,6 +580,7 @@ function larkConfigLabels(locale: Locale): {
   yolo: string;
   locale: string;
   group: string;
+  chat: string;
   defaultValue: string;
   on: string;
   off: string;
@@ -618,6 +622,7 @@ function larkConfigLabels(locale: Locale): {
       yolo: "YOLO",
       locale: "Locale",
       group: "Group",
+      chat: "Chat",
       defaultValue: "default",
       on: "on",
       off: "off",
@@ -659,6 +664,7 @@ function larkConfigLabels(locale: Locale): {
     yolo: "YOLO",
     locale: "语言",
     group: "群聊",
+    chat: "聊天",
     defaultValue: "默认",
     on: "开启",
     off: "关闭",

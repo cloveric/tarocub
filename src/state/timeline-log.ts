@@ -24,6 +24,7 @@ export interface TimelineEvent {
     | "engine.lock.waiting"
     | "tool.executed"
     | "service.error"
+    | "service.health"
     | "delivery.ledger_mismatch"
     | "file.accepted"
     | "file.rejected"
@@ -55,8 +56,13 @@ export interface TimelineSummary {
   retryCount: number;
   budgetBlockedCount: number;
   serviceErrorCount: number;
+  serviceHealthCount: number;
+  lastServiceHealthAt?: string;
+  lastServiceHealthOutcome?: string;
   fileRejectedCount: number;
   workflowFailedCount: number;
+  turnPoolWaitCount: number;
+  lastTurnPoolWaitAt?: string;
   crewRunsStartedCount: number;
   crewRunsCompletedCount: number;
   crewRunsFailedCount: number;
@@ -129,8 +135,10 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
     retryCount: 0,
     budgetBlockedCount: 0,
     serviceErrorCount: 0,
+    serviceHealthCount: 0,
     fileRejectedCount: 0,
     workflowFailedCount: 0,
+    turnPoolWaitCount: 0,
     crewRunsStartedCount: 0,
     crewRunsCompletedCount: 0,
     crewRunsFailedCount: 0,
@@ -147,6 +155,10 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
 
     if (event.type === "service.error") {
       summary.serviceErrorCount += 1;
+    }
+
+    if (event.type === "service.health") {
+      summary.serviceHealthCount += 1;
     }
 
     if (event.type === "file.rejected") {
@@ -169,6 +181,10 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
       summary.crewRunsFailedCount += 1;
     }
 
+    if (event.type === "engine.lock.waiting" && event.metadata?.reason === "turn_pool") {
+      summary.turnPoolWaitCount += 1;
+    }
+
     if (!event.timestamp) {
       continue;
     }
@@ -187,6 +203,15 @@ export function summarizeTimelineEvents(events: TimelineEvent[]): TimelineSummar
 
     if (event.type === "crew.run.started" || event.type === "crew.run.completed" || event.type === "crew.run.failed") {
       summary.lastCrewRunAt = event.timestamp;
+    }
+
+    if (event.type === "service.health") {
+      summary.lastServiceHealthAt = event.timestamp;
+      summary.lastServiceHealthOutcome = event.outcome;
+    }
+
+    if (event.type === "engine.lock.waiting" && event.metadata?.reason === "turn_pool") {
+      summary.lastTurnPoolWaitAt = event.timestamp;
     }
   }
 

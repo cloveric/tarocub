@@ -260,6 +260,51 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
+  it("keeps the shared turn pool disabled by default", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CODEX_EXECUTABLE: "codex",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).options.turnPool).toBeUndefined();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("enables the shared turn pool only when explicitly configured", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(envPath, 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+
+      const result = await createServiceDependenciesForInstance(
+        {
+          USERPROFILE: root,
+          CODEX_EXECUTABLE: "codex",
+          TAROCUB_MAX_CONCURRENT_TURNS: "2",
+        },
+        "alpha",
+      );
+
+      expect((result.bridge as any).options.turnPool).toBeDefined();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("honours CODEX_HOME injected through the EnvSource", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const envPath = path.join(root, ".cctb", "alpha", ".env");
