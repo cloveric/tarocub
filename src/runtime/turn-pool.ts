@@ -49,12 +49,17 @@ export interface FileTurnPoolOptions {
   poolPath?: string;
   staleLeaseMs?: number;
   pollIntervalMs?: number;
+  heartbeatIntervalMs?: number;
   telemetry?: TelemetryAdapter;
   telemetryTags?: TelemetryTags;
 }
 
 const DEFAULT_STALE_LEASE_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
+// Refresh a held lease's updatedAt well within DEFAULT_STALE_LEASE_MS so a
+// legitimately long-running turn (e.g. a "no timeout" task) is never mistaken
+// for a dead/abandoned lease and evicted, which would over-admit past maxActive.
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 
 export function resolveDefaultTurnPoolPath(): string {
   return path.join(os.tmpdir(), "tarocub-turn-pool", "turns.json");
@@ -65,6 +70,7 @@ export class FileTurnPool implements TurnPoolLike {
   private readonly poolPath: string;
   private readonly staleLeaseMs: number;
   private readonly pollIntervalMs: number;
+  private readonly heartbeatIntervalMs: number;
   private readonly telemetry?: TelemetryAdapter;
   private readonly telemetryTags?: TelemetryTags;
 
@@ -73,6 +79,7 @@ export class FileTurnPool implements TurnPoolLike {
     this.poolPath = options.poolPath ?? resolveDefaultTurnPoolPath();
     this.staleLeaseMs = options.staleLeaseMs ?? DEFAULT_STALE_LEASE_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.telemetry = options.telemetry;
     this.telemetryTags = options.telemetryTags;
   }
@@ -87,6 +94,7 @@ export class FileTurnPool implements TurnPoolLike {
     let waitNotified = false;
     let waitMetricRecorded = false;
     let acquired = false;
+    let heartbeat: NodeJS.Timeout | undefined;
     try {
       for (;;) {
         throwIfAborted(options.signal);
@@ -116,8 +124,16 @@ export class FileTurnPool implements TurnPoolLike {
         await sleep(this.pollIntervalMs, options.signal);
       }
 
+      heartbeat = setInterval(() => {
+        void this.renewLease(leaseId).catch(() => undefined);
+      }, this.heartbeatIntervalMs);
+      heartbeat.unref?.();
+
       return await task();
     } finally {
+      if (heartbeat) {
+        clearInterval(heartbeat);
+      }
       if (acquired) {
         const activeAfterRelease = await this.release(leaseId).catch(() => undefined);
         if (typeof activeAfterRelease === "number") {
@@ -125,6 +141,24 @@ export class FileTurnPool implements TurnPoolLike {
         }
       }
     }
+  }
+
+  private async renewLease(leaseId: string): Promise<void> {
+    await withFileMutex(this.poolPath, async () => {
+      const state = await this.readState();
+      let changed = false;
+      const now = new Date().toISOString();
+      const leases = state.leases.map((lease) => {
+        if (lease.id === leaseId) {
+          changed = true;
+          return { ...lease, updatedAt: now };
+        }
+        return lease;
+      });
+      if (changed) {
+        await this.writeState({ leases });
+      }
+    });
   }
 
   private async tryAcquire(leaseId: string, options: TurnPoolRunOptions): Promise<number> {

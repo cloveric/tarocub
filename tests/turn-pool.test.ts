@@ -58,4 +58,50 @@ describe("turn pool telemetry", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("keeps a long-running lease alive via heartbeat so the concurrency cap holds", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-turn-pool-hb-"));
+    // staleLeaseMs is short; without a heartbeat the still-running first lease
+    // would be judged stale after 120ms and the cap would be breached.
+    const pool = new FileTurnPool({
+      maxActive: 1,
+      poolPath: path.join(stateDir, "pool.json"),
+      pollIntervalMs: 10,
+      staleLeaseMs: 120,
+      heartbeatIntervalMs: 25,
+    });
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted = false;
+    let secondStarted = false;
+
+    try {
+      const first = pool.run(async () => {
+        firstStarted = true;
+        await firstCanFinish;
+        return "first";
+      });
+      await vi.waitFor(() => expect(firstStarted).toBe(true));
+
+      // Hold well past staleLeaseMs — the heartbeat must keep the lease fresh.
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      const second = pool.run(async () => {
+        secondStarted = true;
+        return "second";
+      });
+      // Window in which a wrongly-evicted lease would let the second turn start.
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(secondStarted).toBe(false);
+
+      releaseFirst();
+      await expect(Promise.all([first, second])).resolves.toEqual(["first", "second"]);
+      expect(secondStarted).toBe(true);
+    } finally {
+      releaseFirst?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
