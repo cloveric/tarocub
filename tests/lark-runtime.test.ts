@@ -118,7 +118,7 @@ describe("runLarkService", () => {
     }
   });
 
-  it("routes private Lark messages to the sibling instance that owns the chat", async () => {
+  it("keeps private Lark messages on the current instance even when a sibling owns the chat", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-owner-route-"));
     const currentStateDir = path.join(rootDir, "ccfcc1");
     const ownerStateDir = path.join(rootDir, "ccfgg2");
@@ -212,15 +212,15 @@ describe("runLarkService", () => {
         logger: silentLogger(),
       });
 
-      expect(currentBridge.checkAccess).not.toHaveBeenCalled();
+      expect(currentBridge.checkAccess).toHaveBeenCalledOnce();
       expect(currentBridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(ownerBridge.checkAccess).toHaveBeenCalledOnce();
-      expect(ownerBridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
-        chatId: stableLarkNumericId("lark:oc_owner"),
-        userId: stableLarkNumericId("user:ou_owner"),
-        text: expect.stringContaining("hello"),
-      }));
-      expect(channel.send).toHaveBeenCalledWith("oc_owner", { markdown: "owner handled" }, { replyTo: "om_owner_route" });
+      expect(ownerBridge.checkAccess).not.toHaveBeenCalled();
+      expect(ownerBridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_owner",
+        { text: "locked by current" },
+        { replyTo: "om_owner_route", replyInThread: false },
+      );
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

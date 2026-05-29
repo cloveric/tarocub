@@ -16,10 +16,6 @@ import { SessionStore } from "../state/session-store.js";
 import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
 import { loadInstanceConfig, resolveInstanceWorkspacePath, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
-import {
-  LARK_SINGLE_CHAT_LOCK_IGNORED_DETAIL,
-  shouldSilentlyIgnoreLarkAccessDecision,
-} from "./access-decisions.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkApprovalCard } from "./card-renderer.js";
@@ -972,24 +968,6 @@ async function ensureLarkCardActionAccess(input: {
   });
   if (decision.kind === "allow") {
     return true;
-  }
-
-  if (shouldSilentlyIgnoreLarkAccessDecision(decision, input)) {
-    await appendLarkCardActionTurnEvent({
-      stateDir: input.stateDir,
-      chatId: input.event.chatId,
-      replyTo: input.event.messageId,
-      conversationKey: input.conversationKey,
-      bridgeChatType: input.bridgeChatType,
-      userId,
-    }, {
-      type: "turn.completed",
-      action: input.action,
-      outcome: "ignored",
-      detail: LARK_SINGLE_CHAT_LOCK_IGNORED_DETAIL,
-      metadata: { phase: "access", reason: "single_chat_locked" },
-    });
-    return false;
   }
 
   await input.channel.send(input.event.chatId, {

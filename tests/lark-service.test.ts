@@ -138,7 +138,7 @@ describe("lark service", () => {
     }
   });
 
-  it("silently ignores single-chat lock replies for Lark private sibling instances", async () => {
+  it("replies with single-chat lock messages for Lark private chats", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-single-chat-sibling-"));
     const channel = fakeChannel();
     const bridge = {
@@ -165,7 +165,11 @@ describe("lark service", () => {
 
       expect(handled).toBe(true);
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(channel.send).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "此实例已锁定到另一个聊天。" },
+        { replyTo: "om_sibling_lock", replyInThread: false },
+      );
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "turn.completed",
@@ -173,8 +177,8 @@ describe("lark service", () => {
         chatId: stableLarkNumericId("lark:oc_chat"),
         userId: stableLarkNumericId("user:ou_user"),
         conversationKey: "lark:oc_chat",
-        outcome: "ignored",
-        detail: "single-chat lock owned by another Lark instance",
+        outcome: "denied",
+        detail: "access denied",
       }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -8856,7 +8860,7 @@ describe("lark service", () => {
     }
   });
 
-  it("silently ignores single-chat lock card actions for Lark private sibling instances", async () => {
+  it("replies with single-chat lock card-action access denials for Lark private chats", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-choice-single-chat-sibling-"));
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
@@ -8893,7 +8897,11 @@ describe("lark service", () => {
 
       expect(handled).toBe(true);
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(channel.send).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "此实例已锁定到另一个聊天。" },
+        { replyTo: "card_sibling_lock" },
+      );
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "turn.completed",
@@ -8901,8 +8909,8 @@ describe("lark service", () => {
         chatId: stableLarkNumericId("lark:oc_chat"),
         userId: stableLarkNumericId("user:ou_user"),
         conversationKey: "lark:oc_chat",
-        outcome: "ignored",
-        detail: "single-chat lock owned by another Lark instance",
+        outcome: "denied",
+        detail: "access denied",
       }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });

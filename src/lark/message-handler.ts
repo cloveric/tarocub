@@ -11,10 +11,6 @@ import { SessionStore } from "../state/session-store.js";
 import { loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { handleLarkCrewWorkflow } from "./bus.js";
-import {
-  LARK_SINGLE_CHAT_LOCK_IGNORED_DETAIL,
-  shouldSilentlyIgnoreLarkAccessDecision,
-} from "./access-decisions.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
@@ -90,10 +86,6 @@ export async function handleLarkMessage(input: {
   requireMentionInGroup?: boolean;
   workspaceOverride?: string;
   reactionSettings?: LarkReactionSettings;
-  routePrivateMessageToOwner?: (input: {
-    message: LarkIncomingMessage;
-    normalized: LarkNormalizedBridgeMessage;
-  }) => Promise<boolean>;
 }): Promise<boolean> {
   const requireMentionInGroup = await resolveLarkMessageMentionRequirement({
     stateDir: input.stateDir,
@@ -116,9 +108,6 @@ export async function handleLarkMessage(input: {
   }
   const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, message);
   const normalized = await enrichLarkReplyContext(input.channel, expandedNormalized);
-  if (input.routePrivateMessageToOwner && await input.routePrivateMessageToOwner({ message, normalized })) {
-    return true;
-  }
   return await runAcceptedLarkMessage(input, normalized);
 }
 
@@ -223,15 +212,6 @@ async function runAcceptedLarkMessage(
       })
       : { kind: "allow" as const };
     if (accessDecision.kind !== "allow") {
-      if (shouldSilentlyIgnoreLarkAccessDecision(accessDecision, normalized)) {
-        await appendLarkTimelineEvent(input.stateDir, normalized, {
-          type: "command.handled",
-          outcome: "ignored",
-          detail: "/stop",
-          metadata: { rejected: "single-chat-lock" },
-        });
-        return true;
-      }
       await input.channel.send(normalized.chatId, {
         text: formatLarkDeniedAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale), normalized, messageLocale),
       }, {
@@ -277,15 +257,6 @@ async function runAcceptedLarkMessage(
       })
       : { kind: "allow" as const };
     if (accessDecision.kind !== "allow") {
-      if (shouldSilentlyIgnoreLarkAccessDecision(accessDecision, normalized)) {
-        await appendLarkTimelineEvent(input.stateDir, normalized, {
-          type: "command.handled",
-          outcome: "ignored",
-          detail: "approval",
-          metadata: { rejected: "single-chat-lock" },
-        });
-        return true;
-      }
       await input.channel.send(normalized.chatId, {
         text: formatLarkDeniedAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale), normalized, messageLocale),
       }, {
@@ -608,15 +579,6 @@ async function runNormalizedLarkMessage(
     })
     : { kind: "allow" as const };
   if (accessDecision.kind !== "allow") {
-    if (shouldSilentlyIgnoreLarkAccessDecision(accessDecision, normalized)) {
-      await appendLarkTimelineEvent(input.stateDir, normalized, {
-        type: "turn.completed",
-        outcome: "ignored",
-        detail: LARK_SINGLE_CHAT_LOCK_IGNORED_DETAIL,
-        metadata: { rejected: "single-chat-lock" },
-      });
-      return true;
-    }
     await input.channel.send(normalized.chatId, { text: formatLarkDeniedAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(locale), normalized, locale) }, {
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
