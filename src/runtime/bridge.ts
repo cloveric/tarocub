@@ -69,6 +69,7 @@ export interface BridgeGroupJoinInput {
 export interface BridgeAccessDecision {
   kind: "allow" | "reply" | "deny";
   text?: string;
+  reason?: "single_chat_locked";
 }
 
 function shouldDisableRuntimeTimeout(text: string): boolean {
@@ -177,6 +178,7 @@ export class Bridge {
           conflictingChatId === null
             ? renderUnauthorizedMessage(input.locale)
             : renderSingleChatLockedMessage(input.locale),
+        ...(conflictingChatId === null ? {} : { reason: "single_chat_locked" as const }),
       };
     }
 
@@ -185,6 +187,7 @@ export class Bridge {
         return {
           kind: "reply",
           text: renderSingleChatLockedMessage(input.locale),
+          reason: "single_chat_locked",
         };
       }
 

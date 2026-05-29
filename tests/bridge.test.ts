@@ -957,6 +957,43 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("marks single-chat lock access decisions with an explicit reason", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "pairing",
+        pairedUsers: [
+          {
+            telegramUserId: 42,
+            telegramChatId: 84,
+            pairedAt: "2026-04-08T00:00:00.000Z",
+          },
+        ],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn(),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn(),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await expect(bridge.checkAccess({
+      chatId: 99,
+      userId: 99,
+      chatType: "private",
+    })).resolves.toMatchObject({
+      kind: "reply",
+      reason: "single_chat_locked",
+    });
+  });
+
   it("allows the same paired user from another private Lark conversation without multi-chat", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

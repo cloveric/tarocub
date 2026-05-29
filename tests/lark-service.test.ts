@@ -138,6 +138,49 @@ describe("lark service", () => {
     }
   });
 
+  it("silently ignores single-chat lock replies for Lark private sibling instances", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-single-chat-sibling-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({
+        kind: "reply" as const,
+        text: "此实例已锁定到另一个聊天。",
+        reason: "single_chat_locked" as const,
+      })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_sibling_lock",
+          chatType: "p2p",
+          content: "hello from the target bot chat",
+        }),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).not.toHaveBeenCalled();
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        channel: "lark",
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_user"),
+        conversationKey: "lark:oc_chat",
+        outcome: "ignored",
+        detail: "single-chat lock owned by another Lark instance",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps ordinary Lark group threads on the parent group session when chat mode resolves to group", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-thread-session-"));
     const channel = fakeChannel({
@@ -8807,6 +8850,59 @@ describe("lark service", () => {
           larkChatId: "oc_chat",
           larkMessageId: "card_1",
         }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("silently ignores single-chat lock card actions for Lark private sibling instances", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-choice-single-chat-sibling-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({
+        kind: "reply" as const,
+        text: "此实例已锁定到另一个聊天。",
+        reason: "single_chat_locked" as const,
+      })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_sibling_lock",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "choice",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              label: "继续",
+              value: "continue",
+            },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).not.toHaveBeenCalled();
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        channel: "lark",
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_user"),
+        conversationKey: "lark:oc_chat",
+        outcome: "ignored",
+        detail: "single-chat lock owned by another Lark instance",
       }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
