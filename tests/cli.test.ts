@@ -458,12 +458,13 @@ describe("runCli", () => {
     }
   });
 
-  it("defers Lark service restart when invoked from the current Lark turn", async () => {
+  it("does not treat inherited Telegram side-channel env as an active Lark turn", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
     const messages: string[] = [];
     const stop = vi.fn(async () => "stopped" as const);
     const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
     const scheduleDeferredRestart = vi.fn(async () => 'Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.');
 
     try {
@@ -477,16 +478,77 @@ describe("runCli", () => {
           CCTB_SEND_URL: "http://127.0.0.1:1/send/redacted",
         },
         logger: { log: (message) => messages.push(message) },
-        larkServiceDeps: { start, stop, scheduleDeferredRestart },
+        larkServiceDeps: { start, stop, waitUntilRunning, scheduleDeferredRestart },
       });
 
       expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+      expect(waitUntilRunning).toHaveBeenCalled();
+      expect(scheduleDeferredRestart).not.toHaveBeenCalled();
+      expect(messages.join("\n")).toContain("Stopped Lark service.");
+      expect(messages.join("\n")).toContain("Started Lark service.");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("refuses to restart a Lark service with accepted turns unless forced", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "input.received",
+          channel: "lark",
+          chatId: 123,
+          conversationKey: "lark:oc_chat",
+          userId: 456,
+          metadata: { larkMessageId: "om_active" },
+        })}\n`,
+      );
+
+      await expect(runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+
       expect(stop).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
-      expect(scheduleDeferredRestart).toHaveBeenCalledWith(expect.objectContaining({
-        stateDir,
-      }), { current: true });
-      expect(messages).toEqual(['Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.']);
+
+      const handled = await runCli(["lark", "service", "restart", "--force"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+      expect(waitUntilRunning).toHaveBeenCalled();
+      expect(messages.join("\n")).toContain("Stopped Lark service.");
+      expect(messages.join("\n")).toContain("Started Lark service.");
     } finally {
       await removeTempRoot(tempDir);
     }
@@ -556,6 +618,46 @@ describe("runCli", () => {
     }
   });
 
+  it("force kills Lark service processes that ignore the graceful stop signal", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const operations: string[] = [];
+    let alive = true;
+
+    try {
+      const handled = await runCli(["lark", "service", "stop"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: () => undefined },
+        larkServiceDeps: {
+          findProcessIds: async () => [54321],
+          isProcessAlive: (pid: number) => pid === 54321 && alive,
+          killProcess: (pid: number, signal = "SIGTERM") => {
+            operations.push(`${signal}:${pid}`);
+            if (signal === "SIGKILL") {
+              alive = false;
+            }
+          },
+          sleep: async () => undefined,
+          stopGraceMs: 0,
+          forceStopGraceMs: 0,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(operations).toEqual([
+        "SIGTERM:54321",
+        "SIGKILL:54321",
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("removes a stale Lark service lock when stopping a non-running service", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
@@ -592,37 +694,6 @@ describe("runCli", () => {
     }
   });
 
-  it("does not kill an unrelated legacy Lark tmux session when stopping an empty state dir", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
-    const stateDir = path.join(tempDir, "lark-state");
-    const messages: string[] = [];
-    const killTmuxSession = vi.fn(async () => undefined);
-
-    try {
-      const handled = await runCli(["lark", "service", "stop"], {
-        env: {
-          USERPROFILE: tempDir,
-          LARK_APP_ID: "cli_a",
-          LARK_APP_SECRET: "secret",
-          CCTB_LARK_STATE_DIR: stateDir,
-        },
-        logger: { log: (message) => messages.push(message) },
-        larkServiceDeps: {
-          findProcessIds: async () => [],
-          isProcessAlive: () => false,
-          killTmuxSession,
-        },
-      });
-
-      expect(handled).toBe(true);
-      expect(messages).toEqual(["Lark service is not running."]);
-      expect(killTmuxSession).toHaveBeenCalledWith(expect.stringMatching(/^cctb-lark-service-/));
-      expect(killTmuxSession).not.toHaveBeenCalledWith("cctb-lark-service");
-    } finally {
-      await removeTempRoot(tempDir);
-    }
-  });
-
   it("removes the Lark service lock after stopping the locked process", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
@@ -652,7 +723,6 @@ describe("runCli", () => {
           killProcess: (pid: number) => {
             killed.add(pid);
           },
-          killTmuxSession: async () => undefined,
           sleep: async () => undefined,
         },
       });
@@ -665,7 +735,7 @@ describe("runCli", () => {
     }
   });
 
-  it("signals Lark run processes before cleaning up tmux sessions", async () => {
+  it("signals Lark run processes without coupling stop to tmux sessions", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
     const lockPath = resolveLarkServiceLockPath(stateDir);
@@ -688,29 +758,19 @@ describe("runCli", () => {
           CCTB_LARK_STATE_DIR: stateDir,
         },
         larkServiceDeps: {
-          findTmuxPanePids: async () => [22222],
           findProcessIds: async () => [33333],
-          isProcessAlive: (pid: number) => [22222, 33333, 54321].includes(pid) && !killed.has(pid),
+          isProcessAlive: (pid: number) => [33333, 54321].includes(pid) && !killed.has(pid),
           killProcess: (pid: number) => {
             operations.push(`kill:${pid}`);
             killed.add(pid);
-          },
-          killTmuxSession: async (sessionName: string) => {
-            operations.push(`tmux:${sessionName}`);
-            return true;
           },
           sleep: async () => undefined,
         },
       });
 
-      expect(operations.slice(0, 3)).toEqual([
-        "kill:22222",
+      expect(operations).toEqual([
         "kill:54321",
         "kill:33333",
-      ]);
-      expect(operations.slice(3)).toEqual([
-        expect.stringMatching(/^tmux:cctb-lark-service-/),
-        "tmux:cctb-lark-service",
       ]);
     } finally {
       await removeTempRoot(tempDir);

@@ -32,6 +32,7 @@ import {
   filterTimelineEvents,
   parseTimelineEvents,
   resolveTimelineLogPath,
+  type TimelineEvent,
   type TimelineEventFilter,
 } from "../state/timeline-log.js";
 import {
@@ -84,10 +85,11 @@ import {
 import { redactLarkSensitiveText } from "../lark/redaction.js";
 
 const execFile = promisify(execFileCallback);
-const LEGACY_LARK_SERVICE_TMUX_SESSION = "cctb-lark-service";
-const LARK_SERVICE_TMUX_SESSION_PREFIX = "cctb-lark-service-";
 const LARK_SETUP_TMUX_SESSION_PREFIX = "cctb-lark-setup-";
 const LARK_SETUP_LOG_FILENAME = "lark-setup.log";
+const ACTIVE_LARK_TURN_STALE_MS = 6 * 60 * 60_000;
+const LARK_SERVICE_STOP_GRACE_MS = 5_000;
+const LARK_SERVICE_FORCE_STOP_GRACE_MS = 2_000;
 const TELEGRAM_CONFIGURE_USAGE = "Usage: telegram configure <bot-token> | telegram configure --instance <name> <bot-token>";
 const LARK_SETUP_USAGE = "Usage: lark setup [--detached] [--skip-wizard] [--install-cli] [--identity bot-only|user-default] [--skip-provision] [--skip-auth] [--start-service|--no-start-service]";
 
@@ -130,10 +132,10 @@ export interface LarkServiceCommandDeps {
   waitUntilRunning?: (input: LarkServiceCommandInput) => Promise<void>;
   readLogs?: (input: { stateDir: string; logPath: string; tail: number }) => Promise<string>;
   findProcessIds?: (input: LarkServiceCommandInput) => Promise<number[]>;
-  findTmuxPanePids?: (sessionName: string) => Promise<number[]>;
   isProcessAlive?: (pid: number) => boolean;
-  killProcess?: (pid: number) => void;
-  killTmuxSession?: (sessionName: string) => Promise<boolean | void>;
+  killProcess?: (pid: number, signal?: NodeJS.Signals) => void;
+  stopGraceMs?: number;
+  forceStopGraceMs?: number;
   scheduleDeferredRestart?: (input: LarkServiceCommandInput, options?: { current?: boolean }) => Promise<string>;
   spawnDetached?: (
     command: string,
@@ -1380,11 +1382,6 @@ async function tmuxSessionExists(sessionName: string): Promise<boolean> {
   }
 }
 
-function buildLarkServiceTmuxSessionName(stateDir: string): string {
-  const digest = createHash("sha256").update(path.resolve(stateDir)).digest("hex").slice(0, 12);
-  return `${LARK_SERVICE_TMUX_SESSION_PREFIX}${digest}`;
-}
-
 function buildLarkSetupTmuxSessionName(stateDir: string): string {
   const digest = createHash("sha256").update(path.resolve(stateDir)).digest("hex").slice(0, 12);
   return `${LARK_SETUP_TMUX_SESSION_PREFIX}${digest}`;
@@ -1582,20 +1579,6 @@ async function defaultFindLarkServiceProcessIds(input: LarkServiceCommandInput):
   }
 }
 
-async function defaultFindTmuxPanePids(sessionName: string): Promise<number[]> {
-  try {
-    const { stdout } = await execFile("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_pid}"], {
-      timeout: 3_000,
-    });
-    return stdout
-      .split(/\r?\n/)
-      .map((line) => Number(line.trim()))
-      .filter((pid) => Number.isInteger(pid) && pid > 0);
-  } catch {
-    return [];
-  }
-}
-
 export function findLarkServiceProcessIdsFromPs(psOutput: string, input: LarkServiceCommandInput, currentPid: number = process.pid): number[] {
   return psOutput
     .split(/\r?\n/)
@@ -1631,9 +1614,9 @@ function isLarkRunProcessCommand(command: string, input: LarkServiceCommandInput
     new RegExp(`(?:^|\\s)--instance(?:=|\\s+)${escapeRegExp(instanceName)}(?:\\s|$)`).test(normalized);
 }
 
-function defaultKillLarkProcess(pid: number): void {
+function defaultKillLarkProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): void {
   try {
-    process.kill(pid, "SIGTERM");
+    process.kill(pid, signal);
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ESRCH") {
       return;
@@ -1644,24 +1627,17 @@ function defaultKillLarkProcess(pid: number): void {
 
 async function defaultStopLarkService(
   input: LarkServiceCommandInput,
-  deps: Pick<LarkServiceCommandDeps, "findProcessIds" | "findTmuxPanePids" | "isProcessAlive" | "killProcess" | "killTmuxSession" | "sleep"> = {},
+  deps: Pick<LarkServiceCommandDeps, "findProcessIds" | "isProcessAlive" | "killProcess" | "sleep" | "stopGraceMs" | "forceStopGraceMs"> = {},
 ): Promise<"stopped" | "not_running"> {
   let stopped = false;
   const findProcessIds = deps.findProcessIds ?? defaultFindLarkServiceProcessIds;
-  const findTmuxPanePids = deps.findTmuxPanePids ?? defaultFindTmuxPanePids;
   const isAlive = deps.isProcessAlive ?? isProcessAlive;
   const killProcess = deps.killProcess ?? defaultKillLarkProcess;
-  const killTmuxSession = deps.killTmuxSession ?? defaultKillTmuxSession;
   const sleepProcess = deps.sleep ?? sleep;
+  const stopGraceMs = deps.stopGraceMs ?? LARK_SERVICE_STOP_GRACE_MS;
+  const forceStopGraceMs = deps.forceStopGraceMs ?? LARK_SERVICE_FORCE_STOP_GRACE_MS;
 
-  const sessionName = buildLarkServiceTmuxSessionName(input.stateDir);
-  const tmuxPanePids = await findTmuxPanePids(sessionName);
   const pidsToStop = new Set<number>();
-  for (const processId of tmuxPanePids) {
-    if (isAlive(processId)) {
-      pidsToStop.add(processId);
-    }
-  }
   const pid = await readLarkLockPid(input.stateDir);
   const lockPidAlive = pid !== null && isAlive(pid);
   if (lockPidAlive && pid !== null) {
@@ -1680,19 +1656,24 @@ async function defaultStopLarkService(
     killProcess(processId);
     stopped = true;
   }
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + stopGraceMs;
   while (Date.now() < deadline && [...pidsToStop].some((processId) => isAlive(processId))) {
     await sleepProcess(100);
   }
-  if (pid !== null && !isAlive(pid)) {
-    await rm(resolveLarkServiceLockPath(input.stateDir), { force: true });
+
+  const lingeringProcessIds = [...pidsToStop].filter((processId) => isAlive(processId));
+  for (const processId of lingeringProcessIds) {
+    killProcess(processId, "SIGKILL");
   }
-  if (await killTmuxSession(sessionName)) {
-    stopped = true;
+  const forceDeadline = Date.now() + forceStopGraceMs;
+  while (Date.now() < forceDeadline && lingeringProcessIds.some((processId) => isAlive(processId))) {
+    await sleepProcess(100);
   }
-  if (lockPidAlive && await killTmuxSession(LEGACY_LARK_SERVICE_TMUX_SESSION)) {
-    stopped = true;
+  const stillAliveProcessIds = lingeringProcessIds.filter((processId) => isAlive(processId));
+  if (stillAliveProcessIds.length > 0) {
+    throw new Error(`Lark service process(es) did not exit: ${stillAliveProcessIds.join(", ")}`);
   }
+
   if (pid !== null && !isAlive(pid)) {
     await rm(resolveLarkServiceLockPath(input.stateDir), { force: true });
   }
@@ -1793,16 +1774,110 @@ async function defaultScheduleDeferredLarkServiceRestart(
   return `Scheduled one-shot deferred restart for ${target} "${instanceName}" in ${Math.ceil(delayMs / 1000)}s.`;
 }
 
-function isCurrentLarkTurnTarget(env: LarkRuntimeEnv, stateDir: string): boolean {
-  const sideChannelEnv = env as LarkRuntimeEnv & {
-    CCTB_SEND_URL?: string;
-    CCTB_SEND_TOKEN?: string;
-    CCTB_SEND_COMMAND?: string;
-  };
-  if (!sideChannelEnv.CCTB_SEND_URL && !sideChannelEnv.CCTB_SEND_TOKEN && !sideChannelEnv.CCTB_SEND_COMMAND) {
-    return false;
+function getLarkTimelineMessageId(event: TimelineEvent): string | undefined {
+  const metadata = event.metadata;
+  const value = metadata?.larkMessageId ?? metadata?.messageId;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function removePendingLarkTimelineEvent(
+  pendingByConversationKey: Map<string, TimelineEvent[]>,
+  conversationKey: string,
+  messageId: string,
+): void {
+  const pending = pendingByConversationKey.get(conversationKey);
+  if (!pending) {
+    return;
   }
-  return env.CCTB_LARK_STATE_DIR !== undefined && path.resolve(env.CCTB_LARK_STATE_DIR) === path.resolve(stateDir);
+
+  const index = pending.findIndex((event) => getLarkTimelineMessageId(event) === messageId);
+  if (index >= 0) {
+    pending.splice(index, 1);
+  }
+  if (pending.length === 0) {
+    pendingByConversationKey.delete(conversationKey);
+  }
+}
+
+async function readLarkPendingTurnActivity(stateDir: string): Promise<{
+  activeTurnCount: number;
+  oldestAcceptedAt?: string;
+}> {
+  let raw: string;
+  try {
+    raw = await readFile(resolveTimelineLogPath(stateDir), "utf8");
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return { activeTurnCount: 0 };
+    }
+    throw error;
+  }
+
+  const pendingByConversationKey = new Map<string, TimelineEvent[]>();
+  for (const event of parseTimelineEvents(raw)) {
+    if (event.channel !== "lark") {
+      continue;
+    }
+
+    const conversationKey = event.conversationKey ?? "";
+    if (event.type === "input.received") {
+      const pending = pendingByConversationKey.get(conversationKey) ?? [];
+      pending.push(event);
+      pendingByConversationKey.set(conversationKey, pending);
+      continue;
+    }
+
+    if (event.type !== "turn.completed" && event.type !== "command.handled") {
+      continue;
+    }
+
+    const messageId = getLarkTimelineMessageId(event);
+    if (messageId) {
+      removePendingLarkTimelineEvent(pendingByConversationKey, conversationKey, messageId);
+      continue;
+    }
+
+    const pending = pendingByConversationKey.get(conversationKey);
+    pending?.shift();
+    if (pending && pending.length === 0) {
+      pendingByConversationKey.delete(conversationKey);
+    }
+  }
+
+  const freshPending = [...pendingByConversationKey.values()]
+    .flat()
+    .filter((event) => {
+      const timestampMs = event.timestamp ? new Date(event.timestamp).getTime() : Number.NaN;
+      return !Number.isFinite(timestampMs) || Date.now() - timestampMs <= ACTIVE_LARK_TURN_STALE_MS;
+    });
+
+  const oldestAcceptedAt = freshPending
+    .map((event) => event.timestamp)
+    .filter((timestamp): timestamp is string => Boolean(timestamp))
+    .sort()[0];
+
+  return {
+    activeTurnCount: freshPending.length,
+    ...(oldestAcceptedAt ? { oldestAcceptedAt } : {}),
+  };
+}
+
+async function assertNoActiveLarkTurnsBeforeRestart(stateDir: string, instanceName: string): Promise<void> {
+  const activity = await readLarkPendingTurnActivity(stateDir);
+  if (activity.activeTurnCount <= 0) {
+    return;
+  }
+
+  const acceptedAt = activity.oldestAcceptedAt ? ` Oldest accepted at ${activity.oldestAcceptedAt}.` : "";
+  throw new Error(
+    `Lark instance "${instanceName}" has ${activity.activeTurnCount} active or queued Lark turn(s).` +
+      `${acceptedAt} Refusing to restart without --force.`,
+  );
 }
 
 async function defaultReadLarkServiceLogs(input: { logPath: string; tail: number }): Promise<string> {
@@ -1912,9 +1987,10 @@ async function runLarkServiceCommand(
   }
 
   if (subcommand === "restart") {
-    const { enabled: defer, args: restartArgs } = extractBooleanFlag(args.slice(1), "--defer");
+    const { enabled: defer, args: afterDefer } = extractBooleanFlag(args.slice(1), "--defer");
+    const { enabled: force, args: restartArgs } = extractBooleanFlag(afterDefer, "--force");
     if (restartArgs.length !== 0) {
-      throw new Error("Usage: lark service restart [--defer]");
+      throw new Error("Usage: lark service restart [--defer] [--force]");
     }
     const scheduleDeferredRestart = deps.scheduleDeferredRestart
       ?? ((deferredInput, options) => defaultScheduleDeferredLarkServiceRestart(deferredInput, deps, options));
@@ -1922,9 +1998,8 @@ async function runLarkServiceCommand(
       logger.log(await scheduleDeferredRestart(commandInput, {}));
       return true;
     }
-    if (isCurrentLarkTurnTarget(env, stateDir)) {
-      logger.log(await scheduleDeferredRestart(commandInput, { current: true }));
-      return true;
+    if (!force) {
+      await assertNoActiveLarkTurnsBeforeRestart(stateDir, resolveLarkInstanceName(env));
     }
     await prepareLarkServiceStartEnv(loadedEnv);
     const stopResult = deps.stop ? await deps.stop(commandInput) : await defaultStopLarkService(commandInput, deps);
@@ -3596,7 +3671,7 @@ Commands:
                                               Inspect, configure, or run the Feishu/Lark channel
   lark setup [--detached] [--install-cli]     Run the QR wizard, CLI bind, provision, auth check, doctor, and service start
   lark permissions [--missing]                Print copyable Feishu/Lark permission JSON
-  lark service <start|stop|restart|status|logs|doctor>
+  lark service <start|stop|restart|status|logs|doctor> [--force]
                                               Manage the Feishu/Lark service lifecycle
   lark send --chat <oc_xxx> [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin]
                                               Send files/text to a Lark chat using saved app credentials
