@@ -8783,6 +8783,34 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
+  it("answers unsupported Lark card actions instead of silently ignoring them", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+
+    const handled = await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: {
+          value: {
+            cctb_lark: "ask_user_question_smoke",
+            answer: "Continue",
+          },
+        },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(channel.send).toHaveBeenCalledWith(
+      "oc_chat",
+      { text: expect.stringContaining("不再有效") },
+      { replyTo: "om_card" },
+    );
+  });
+
   it("renders Lark approval timeout replies in English when Lark locale is English", async () => {
     vi.useFakeTimers();
     const runtime = createLarkServiceRuntime();

@@ -895,6 +895,15 @@ export async function handleLarkCardAction(input: {
     return true;
   }
 
+  if (typeof value.cctb_lark === "string") {
+    await input.channel.send(
+      input.event.chatId,
+      { text: renderUnsupportedLarkCardAction(locale) },
+      larkReplyOptions(input.event.messageId, replyInThread),
+    );
+    return true;
+  }
+
   return false;
 }
 
@@ -1498,6 +1507,12 @@ function renderApprovalDifferentConversation(locale: Locale): string {
   return locale === "en"
     ? "This approval request belongs to another Lark conversation."
     : "这个审批请求属于另一个飞书会话。";
+}
+
+function renderUnsupportedLarkCardAction(locale: Locale): string {
+  return locale === "en"
+    ? "This card action is no longer active or is not supported by the current bot version. Please send a new message to continue."
+    : "这张卡片的操作已不再有效，或当前机器人版本不支持。请发送新消息继续。";
 }
 
 function renderTextApprovalResolution(choice: LarkApprovalChoice, locale: Locale = "zh"): string {
