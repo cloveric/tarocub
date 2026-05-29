@@ -239,25 +239,40 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     markdownElement(`**${runCardStatusLabel(state.status, labels)}**`),
   ];
 
-  if (state.reasoning.content.trim()) {
-    elements.push(collapsiblePanel({
-      title: state.reasoning.active ? labels.thinkingActive : labels.thinkingDone,
-      expanded: state.reasoning.active,
-      color: "grey",
-      body: state.reasoning.content,
-    }));
-  }
-
-  for (const group of groupBlocks(state.blocks)) {
-    if (group.kind === "text") {
-      const cleaned = cleanCardText(group.content);
-      if (cleaned) {
-        elements.push(markdownElement(cleaned));
+  if (state.status === "running") {
+    // While the task runs, show the live process in full: thinking, every text
+    // span, and tool panels interleaved as they happen.
+    if (state.reasoning.content.trim()) {
+      elements.push(collapsiblePanel({
+        title: state.reasoning.active ? labels.thinkingActive : labels.thinkingDone,
+        expanded: state.reasoning.active,
+        color: "grey",
+        body: state.reasoning.content,
+      }));
+    }
+    for (const group of groupBlocks(state.blocks)) {
+      if (group.kind === "text") {
+        const cleaned = cleanCardText(group.content);
+        if (cleaned) {
+          elements.push(markdownElement(cleaned));
+        }
+      } else {
+        for (const element of renderToolGroup(group.tools, false, labels)) {
+          elements.push(element);
+        }
       }
-    } else {
-      for (const element of renderToolGroup(group.tools, state.status !== "running", labels)) {
-        elements.push(element);
-      }
+    }
+  } else {
+    // Once finished, condense: show the final answer prominently and fold the
+    // whole process (thinking + every tool call) into one collapsed panel, so
+    // the card doesn't become a giant scroll of intermediate steps.
+    const answer = cleanCardText(finalAnswerText(state));
+    if (answer) {
+      elements.push(markdownElement(truncate(answer, COMPACT_ANSWER_MAX)));
+    }
+    const processPanel = condensedProcessPanel(state, labels);
+    if (processPanel) {
+      elements.push(processPanel);
     }
   }
 
@@ -309,6 +324,43 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
 }
 
 const COMPACT_ANSWER_MAX = 8000;
+const PROCESS_PANEL_MAX = 3000;
+
+/** The canonical final answer: the engine's result text, or the last non-empty text block. */
+function finalAnswerText(state: LarkRunState): string {
+  if (state.resultText.trim()) {
+    return state.resultText;
+  }
+  const lastText = [...state.blocks].reverse().find(
+    (block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0,
+  );
+  return lastText?.content ?? "";
+}
+
+/** A single collapsed panel summarizing a finished turn's process (thinking + tool calls). */
+function condensedProcessPanel(
+  state: LarkRunState,
+  labels: ReturnType<typeof runCardLabels>,
+): Record<string, unknown> | undefined {
+  const tools = state.blocks.flatMap((block) => (block.kind === "tool" ? [block.tool] : []));
+  const hasReasoning = state.reasoning.content.trim().length > 0;
+  if (tools.length === 0 && !hasReasoning) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  if (hasReasoning) {
+    parts.push(`🧠 ${truncate(state.reasoning.content.trim(), 600)}`);
+  }
+  if (tools.length > 0) {
+    parts.push(tools.map((tool) => `- ${toolHeaderText(tool)}`).join("\n"));
+  }
+  return collapsiblePanel({
+    title: `${labels.process} · ${labels.processSteps(tools.length)}`,
+    expanded: false,
+    color: "grey",
+    body: truncate(parts.join("\n\n"), PROCESS_PANEL_MAX),
+  });
+}
 
 /**
  * A minimal terminal card: status + final answer (+ terminal marker), with no
@@ -323,10 +375,7 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
   const elements: unknown[] = [
     markdownElement(`**${runCardStatusLabel(state.status, labels)}**`),
   ];
-  const lastText = [...state.blocks].reverse().find(
-    (block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0,
-  );
-  const answer = cleanCardText(state.resultText.trim() ? state.resultText : (lastText?.content ?? ""));
+  const answer = cleanCardText(finalAnswerText(state));
   if (answer) {
     elements.push(markdownElement(truncate(answer, COMPACT_ANSWER_MAX)));
   }
@@ -579,6 +628,8 @@ function runCardLabels(locale: Locale): {
   thinkingActive: string;
   thinkingDone: string;
   tools: string;
+  process: string;
+  processSteps: (n: number) => string;
   noOutput: string;
   toolRunning: string;
   background: string;
@@ -600,6 +651,8 @@ function runCardLabels(locale: Locale): {
       thinkingActive: "🧠 Thinking",
       thinkingDone: "🧠 Thinking complete · tap to view",
       tools: "Tool calls",
+      process: "Process",
+      processSteps: (n) => `${n} step${n === 1 ? "" : "s"}`,
       noOutput: "no output",
       toolRunning: "running…",
       background: "Background",
@@ -620,6 +673,8 @@ function runCardLabels(locale: Locale): {
       thinkingActive: "🧠 思考中",
       thinkingDone: "🧠 思考完成 · 点击查看",
       tools: "工具调用",
+      process: "过程",
+      processSteps: (n) => `${n} 步`,
       noOutput: "无输出",
       toolRunning: "运行中…",
       background: "后台任务",

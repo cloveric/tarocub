@@ -14,6 +14,13 @@ describe("lark card renderer", () => {
     state = applyLarkEngineEvent(state, { type: "thinking", text: "thinking..." });
     state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file: "README.md" }, toolUseId: "t1" });
     state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t1", output: "file contents here" });
+
+    // While running, the full live process renders inline (incl. tool output).
+    const running = JSON.stringify(renderLarkRunCard(state));
+    expect(running).toContain("thinking...");
+    expect(running).toContain("Read");
+    expect(running).toContain("file contents here");
+
     state = applyLarkEngineEvent(state, { type: "assistant_text", text: "Hello world" });
     state = applyLarkEngineEvent(state, { type: "result", text: "Hello world" });
 
@@ -22,12 +29,13 @@ describe("lark card renderer", () => {
 
     expect(card.schema).toBe("2.0");
     expect(card.config.streaming_mode).toBe(false);
-    expect(serialized).toContain("thinking...");
-    expect(serialized).toContain("Read");
     // The streamed answer is the canonical body of the single card.
     expect(serialized).toContain("Hello world");
-    // tool_result output is rendered now that the engine emits it.
-    expect(serialized).toContain("file contents here");
+    // Finished cards condense the process into one collapsed panel (tool name
+    // kept, verbose output dropped) so they don't become a giant scroll.
+    expect(serialized).toContain("过程");
+    expect(serialized).toContain("Read");
+    expect(serialized).not.toContain("file contents here");
     expect(serialized).not.toContain("停止");
   });
 
@@ -177,7 +185,7 @@ describe("lark card renderer", () => {
     expect(serialized).toContain("我正在整理结果。");
   });
 
-  it("collapses three or more tool calls into a single summary panel", () => {
+  it("folds a finished run's tools into one collapsed process panel", () => {
     let state = initialLarkRunState("lark:oc_chat", "group");
     state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file_path: "a.ts" }, toolUseId: "t1" });
     state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t1", output: "ok" });
@@ -188,8 +196,13 @@ describe("lark card renderer", () => {
     state = applyLarkEngineEvent(state, { type: "result", text: "done" });
 
     const serialized = JSON.stringify(renderLarkRunCard(state));
-    // Finalized run with >=3 tools → one collapsed summary listing all tools.
-    expect(serialized).toContain("工具调用 (3)");
+    // Finished run → one collapsed "过程 · N 步" panel listing the tool calls.
+    expect(serialized).toContain("过程");
+    expect(serialized).toContain("3 步");
+    expect(serialized).toContain("Read");
+    expect(serialized).toContain("Grep");
+    expect(serialized).toContain("Bash");
+    expect(serialized).toContain("done"); // the final answer
   });
 
   it("renders active run cards in English when locale is English", () => {
