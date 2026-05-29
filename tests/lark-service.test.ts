@@ -178,6 +178,49 @@ describe("lark service", () => {
     }
   });
 
+  it("preserves an existing Lark thread session even when chat mode later resolves to group", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-existing-thread-session-"));
+    const threadConversationKey = "lark:oc_chat:omt_existing_thread";
+    await new SessionStore(path.join(stateDir, "session.json")).upsert({
+      telegramChatId: stableLarkNumericId(threadConversationKey),
+      conversationKey: threadConversationKey,
+      codexSessionId: "claude-existing-thread",
+      status: "idle",
+      updatedAt: new Date("2026-05-29T06:20:00.000Z").toISOString(),
+    });
+    const channel = fakeChannel({
+      getChatMode: vi.fn(async () => "group"),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_existing_thread",
+          chatType: "group",
+          threadId: "omt_existing_thread",
+          mentionedBot: true,
+          content: "继续",
+        }),
+      });
+
+      expect(channel.getChatMode).toHaveBeenCalledWith("oc_chat");
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chatType: "group",
+        conversationKey: threadConversationKey,
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces shared turn pool waits in Lark timeline and chat", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-turn-pool-wait-"));
     const channel = fakeChannel();

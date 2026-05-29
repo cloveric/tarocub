@@ -7,6 +7,7 @@ import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
+import { SessionStore } from "../state/session-store.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { handleLarkCrewWorkflow } from "./bus.js";
@@ -91,7 +92,7 @@ export async function handleLarkMessage(input: {
     return false;
   }
 
-  const message = await resolveLarkMessageChatMode(input.channel, input.runtime, input.message);
+  const message = await resolveLarkMessageChatMode(input.channel, input.runtime, input.stateDir, input.message);
   const baseNormalized = normalizeLarkMessage(message, {
     requireMentionInGroup,
   });
@@ -106,11 +107,12 @@ export async function handleLarkMessage(input: {
 async function resolveLarkMessageChatMode(
   channel: LarkChannelLike,
   runtime: LarkServiceRuntime,
+  stateDir: string,
   message: LarkIncomingMessage,
 ): Promise<LarkIncomingMessage> {
   if (message.chatMode) {
     runtime.chatModeCache.set(message.chatId, message.chatMode);
-    return message;
+    return await preserveExistingLarkThreadSession(stateDir, message, message.chatMode);
   }
   if (message.chatType === "p2p") {
     return { ...message, chatMode: "p2p" };
@@ -118,7 +120,7 @@ async function resolveLarkMessageChatMode(
 
   const cached = runtime.chatModeCache.get(message.chatId);
   if (cached) {
-    return { ...message, chatMode: cached };
+    return await preserveExistingLarkThreadSession(stateDir, message, cached);
   }
 
   const resolved = await resolveLarkChannelChatMode(channel, message.chatId);
@@ -126,7 +128,24 @@ async function resolveLarkMessageChatMode(
     return { ...message, chatMode: message.threadId ? "topic" : "group" };
   }
   runtime.chatModeCache.set(message.chatId, resolved);
-  return { ...message, chatMode: resolved };
+  return await preserveExistingLarkThreadSession(stateDir, message, resolved);
+}
+
+async function preserveExistingLarkThreadSession(
+  stateDir: string,
+  message: LarkIncomingMessage,
+  chatMode: LarkChatMode,
+): Promise<LarkIncomingMessage> {
+  if (chatMode !== "group" || !message.threadId || message.chatType === "p2p") {
+    return { ...message, chatMode };
+  }
+
+  const threadConversationKey = buildLarkConversationKey(message.chatId, message.threadId);
+  const existingSession = await new SessionStore(path.join(stateDir, "session.json"))
+    .findByConversationKeySafe(threadConversationKey);
+  return existingSession.record
+    ? { ...message, chatMode: "topic" }
+    : { ...message, chatMode };
 }
 
 async function resolveLarkChannelChatMode(

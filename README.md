@@ -232,6 +232,8 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
+- **v0.1.36** — preserves existing Lark thread/topic sessions even when the platform later reports the chat mode as a plain group, preventing active group topics from appearing to forget prior context after restarts.
+- **v0.1.35** — hardens Lark service shutdown/restart handling so direct Node process stops happen before tmux cleanup and stale locks are less likely after interrupted service turns.
 - **v0.1.34** — adds Lark observability and control UX: optional telemetry adapters, Lark health/reconnect events, opt-in shared worker pooling, `/invite`/`/remove` access helpers, and known chat names in `/status`, `/config`, and `dashboard`.
 - **v0.1.0** — resets the public product to **TaroCub**, renames the GitHub/package surface, adds the product thesis to the banner, and keeps `cctb` plus old state paths as compatibility surfaces.
 - **v4.6.70** — transitional release that introduced the TaroCub family name before the full product reset.
