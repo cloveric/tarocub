@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, mkdir, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,6 @@ import { describe, expect, it, vi } from "vitest";
 import { AccessStore } from "../src/state/access-store.js";
 import {
   buildDetachedLarkSetupCommand,
-  buildLarkServiceStartCommand,
   findLarkServiceProcessIdsFromPs,
   resolveLarkSetupTargetEnv,
   runCli,
@@ -746,28 +746,64 @@ describe("runCli", () => {
     }
   });
 
-  it("builds managed Lark service commands with explicit state dir but no secrets", () => {
-    const command = buildLarkServiceStartCommand({
-      env: {
-        USERPROFILE: "/Users/tester",
-        LARK_APP_ID: "cli_a",
-        LARK_APP_SECRET: "super-secret",
-        CCTB_LARK_STATE_DIR: "/tmp/cctb lark",
-        TAROCUB_INSTANCE: "lark-alpha",
-      },
-      stateDir: "/tmp/cctb lark",
-      logPath: "/tmp/cctb lark/lark-service.log",
-      entrypoint: "/repo/dist/src/index.js",
-      cwd: "/repo",
-    });
+  it("starts the managed Lark service as a detached process without tmux", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const lockPath = resolveLarkServiceLockPath(stateDir);
+    const messages: string[] = [];
+    const spawnDetached = vi.fn();
+    const previousPath = process.env.PATH;
 
-    expect(command).toContain("CCTB_LARK_STATE_DIR=");
-    expect(command).toContain("TAROCUB_INSTANCE='lark-alpha'");
-    expect(command).not.toContain("CODEX_TELEGRAM_INSTANCE");
-    expect(command).toContain("/tmp/cctb lark");
-    expect(command).toContain(" lark run ");
-    expect(command).not.toContain("super-secret");
-    expect(command).not.toContain("LARK_APP_SECRET");
+    try {
+      process.env.PATH = "";
+      const handled = await runCli(["lark", "service", "start"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_direct",
+          LARK_APP_SECRET: "direct-secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: {
+          spawnDetached: (command, args, options) => {
+            mkdirSync(path.dirname(lockPath), { recursive: true });
+            writeFileSync(lockPath, JSON.stringify({
+              pid: process.pid,
+              token: "token",
+              acquiredAt: new Date().toISOString(),
+            }), "utf8");
+            spawnDetached(command, args, options);
+          },
+          isProcessAlive: (pid: number) => pid === process.pid,
+          sleep: async () => undefined,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages).toEqual(["Started Lark service."]);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(spawnDetached).toHaveBeenCalledWith(
+        process.execPath,
+        [expect.stringContaining(path.join("dist", "src", "index.js")), "lark", "run"],
+        expect.objectContaining({
+          cwd: process.cwd(),
+          stdoutPath: path.join(stateDir, "lark-service.log"),
+          stderrPath: path.join(stateDir, "lark-service.log"),
+          env: expect.objectContaining({
+            CCTB_LARK_STATE_DIR: stateDir,
+            CCTB_LARK_INSTANCE: "lark",
+            TAROCUB_INSTANCE: "lark",
+          }),
+        }),
+      );
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      await removeTempRoot(tempDir);
+    }
   });
 
   it("prints Lark run help instead of starting the service from the CLI parser", async () => {

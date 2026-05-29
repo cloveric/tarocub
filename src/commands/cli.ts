@@ -1514,40 +1514,33 @@ export function resolveLarkCommandTargetEnv(env: LarkRuntimeEnv): LarkRuntimeEnv
 
 export const resolveLarkSetupTargetEnv = resolveLarkCommandTargetEnv;
 
-export function buildLarkServiceStartCommand(input: LarkServiceCommandInput): string {
-  return [
-    "cd",
-    shellQuote(input.cwd),
-    "&&",
-    `CCTB_LARK_STATE_DIR=${shellQuote(input.stateDir)}`,
-    `CCTB_LARK_INSTANCE=${shellQuote(resolveLarkInstanceName(input.env))}`,
-    `TAROCUB_INSTANCE=${shellQuote(resolveLarkInstanceName(input.env))}`,
-    shellQuote(process.execPath),
-    shellQuote(input.entrypoint),
-    "lark",
-    "run",
-    ">>",
-    shellQuote(input.logPath),
-    "2>&1",
-  ].join(" ");
-}
-
 async function defaultStartLarkService(
   input: LarkServiceCommandInput,
-  deps: Pick<LarkServiceCommandDeps, "killTmuxSession"> = {},
+  deps: Pick<LarkServiceCommandDeps, "spawnDetached"> = {},
 ): Promise<"started" | "already_running"> {
   await mkdir(input.stateDir, { recursive: true });
   if ((await describeLarkServiceLock(input.stateDir)).startsWith("running ")) {
     return "already_running";
   }
-  const sessionName = buildLarkServiceTmuxSessionName(input.stateDir);
-  const killTmuxSession = deps.killTmuxSession ?? defaultKillTmuxSession;
-  if (await tmuxSessionExists(sessionName)) {
-    await killTmuxSession(sessionName);
-  }
 
-  const command = buildLarkServiceStartCommand(input);
-  await execFile("tmux", ["new-session", "-d", "-s", sessionName, command], { timeout: 5_000 });
+  const instanceName = resolveLarkInstanceName(input.env);
+  const serviceEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    CCTB_LARK_STATE_DIR: input.stateDir,
+    CCTB_LARK_INSTANCE: instanceName,
+    TAROCUB_INSTANCE: instanceName,
+  };
+  delete serviceEnv.CCTB_SEND_URL;
+  delete serviceEnv.CCTB_SEND_TOKEN;
+  delete serviceEnv.CCTB_SEND_COMMAND;
+  delete serviceEnv.CODEX_THREAD_ID;
+
+  (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [input.entrypoint, "lark", "run"], {
+    cwd: input.cwd,
+    stdoutPath: input.logPath,
+    stderrPath: input.logPath,
+    env: serviceEnv,
+  });
   return "started";
 }
 
