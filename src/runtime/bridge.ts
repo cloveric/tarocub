@@ -101,6 +101,13 @@ function isAllowedGroupChat(groupMode: GroupModeConfig, input: BridgeAccessInput
     .some((chatId) => groupMode.allowedChatIds.includes(chatId));
 }
 
+function hasPairedPrivateUser(
+  accessState: Awaited<ReturnType<AccessStoreLike["load"]>>,
+  input: BridgeAccessInput,
+): boolean {
+  return accessState.pairedUsers.some((user) => user.telegramUserId === input.userId);
+}
+
 export class Bridge {
   readonly supportsTurnScopedEnv: boolean;
 
@@ -173,12 +180,7 @@ export class Bridge {
       };
     }
 
-    if (
-      accessState.policy === "pairing" &&
-      !accessState.pairedUsers.some(
-        (user) => user.telegramChatId === input.chatId && user.telegramUserId === input.userId,
-      )
-    ) {
+    if (accessState.policy === "pairing" && !hasPairedPrivateUser(accessState, input)) {
       if (conflictingChatId !== null) {
         return {
           kind: "reply",

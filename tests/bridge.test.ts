@@ -957,6 +957,51 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).not.toHaveBeenCalled();
   });
 
+  it("allows the same paired user from another private Lark conversation without multi-chat", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "pairing",
+        pairedUsers: [
+          {
+            telegramUserId: 42,
+            telegramChatId: 84,
+            pairedAt: "2026-04-08T00:00:00.000Z",
+          },
+        ],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "lark-p2p-alt" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await expect(
+      bridge.handleAuthorizedMessage({
+        chatId: 99,
+        userId: 42,
+        chatType: "private",
+        text: "hello from another p2p surface",
+        replyContext: undefined,
+        files: [],
+      }),
+    ).resolves.toEqual({ text: "done" });
+
+    expect(accessStore.issuePairingCode).not.toHaveBeenCalled();
+    expect(sessionManager.getOrCreateSession).toHaveBeenCalledWith(99);
+    expect(adapter.sendUserMessage).toHaveBeenCalledWith("lark-p2p-alt", expect.objectContaining({
+      text: "hello from another p2p surface",
+    }));
+  });
+
   it("blocks a different private chat when another chat already has a pending pairing code", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
