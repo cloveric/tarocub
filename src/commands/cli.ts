@@ -1888,7 +1888,11 @@ async function readLarkPendingTurnActivity(stateDir: string): Promise<{
   };
 }
 
-async function assertNoActiveLarkTurnsBeforeRestart(stateDir: string, instanceName: string): Promise<void> {
+async function assertNoActiveLarkTurnsBeforeServiceAction(
+  stateDir: string,
+  instanceName: string,
+  action: "restart" | "stop",
+): Promise<void> {
   const activity = await readLarkPendingTurnActivity(stateDir);
   if (activity.activeTurnCount <= 0) {
     return;
@@ -1897,7 +1901,7 @@ async function assertNoActiveLarkTurnsBeforeRestart(stateDir: string, instanceNa
   const acceptedAt = activity.oldestAcceptedAt ? ` Oldest accepted at ${activity.oldestAcceptedAt}.` : "";
   throw new Error(
     `Lark instance "${instanceName}" has ${activity.activeTurnCount} active or queued Lark turn(s).` +
-      `${acceptedAt} Refusing to restart without --force.`,
+      `${acceptedAt} Refusing to ${action} without --force.`,
   );
 }
 
@@ -1999,8 +2003,12 @@ async function runLarkServiceCommand(
   }
 
   if (subcommand === "stop") {
-    if (args.length !== 1) {
-      throw new Error("Usage: lark service stop");
+    const { enabled: force, args: stopArgs } = extractBooleanFlag(args.slice(1), "--force");
+    if (stopArgs.length !== 0) {
+      throw new Error("Usage: lark service stop [--force]");
+    }
+    if (!force) {
+      await assertNoActiveLarkTurnsBeforeServiceAction(stateDir, resolveLarkInstanceName(loadedEnv), "stop");
     }
     const result = deps.stop ? await deps.stop(commandInput) : await defaultStopLarkService(commandInput, deps);
     logger.log(formatLarkServiceAction("stop", result));
@@ -2020,7 +2028,7 @@ async function runLarkServiceCommand(
       return true;
     }
     if (!force) {
-      await assertNoActiveLarkTurnsBeforeRestart(stateDir, resolveLarkInstanceName(env));
+      await assertNoActiveLarkTurnsBeforeServiceAction(stateDir, resolveLarkInstanceName(loadedEnv), "restart");
     }
     await prepareLarkServiceStartEnv(loadedEnv);
     const stopResult = deps.stop ? await deps.stop(commandInput) : await defaultStopLarkService(commandInput, deps);

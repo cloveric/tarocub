@@ -310,12 +310,37 @@ export async function runLarkService(
       logLifecycleEvent({
         type: "service.stopped",
         outcome: stopOutcome,
-        metadata: {
-          channel: "lark",
-        },
+        metadata: buildLarkServiceStoppedMetadata(options.signal),
       });
       process.removeListener("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
     }
+  }
+}
+
+function buildLarkServiceStoppedMetadata(signal: AbortSignal | undefined): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    channel: "lark",
+  };
+  if (signal?.aborted) {
+    metadata.abortReason = formatLarkAbortReason(signal.reason);
+  }
+  return metadata;
+}
+
+function formatLarkAbortReason(reason: unknown): string {
+  if (typeof reason === "string") {
+    return reason;
+  }
+  if (reason instanceof Error) {
+    return redactLarkErrorDetail(reason);
+  }
+  if (reason === undefined) {
+    return "abort";
+  }
+  try {
+    return JSON.stringify(reason) ?? String(reason);
+  } catch {
+    return String(reason);
   }
 }
 

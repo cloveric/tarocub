@@ -56,9 +56,9 @@ async function main(): Promise<void> {
     if (argv[0] === "lark" && argv[1] === "run" && !hasHelpFlag(argv.slice(2))) {
       const larkEnv = await loadLarkRuntimeEnv(process.env);
       const abortController = new AbortController();
-      const shutdownSigterm = () => abortController.abort();
-      const shutdownSigint = () => abortController.abort();
-      const shutdownSighup = () => abortController.abort();
+      const shutdownSigterm = () => abortController.abort("SIGTERM");
+      const shutdownSigint = () => abortController.abort("SIGINT");
+      const shutdownSighup = () => abortController.abort("SIGHUP");
       process.once("SIGTERM", shutdownSigterm);
       process.once("SIGINT", shutdownSigint);
       process.once("SIGHUP", shutdownSighup);

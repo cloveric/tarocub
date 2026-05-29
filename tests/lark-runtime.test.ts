@@ -117,6 +117,57 @@ describe("runLarkService", () => {
     }
   });
 
+  it("records the abort reason when a Lark service is signaled to stop", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-abort-reason-"));
+    const abortController = new AbortController();
+    const channel = {
+      on: vi.fn(() => () => undefined),
+      connect: vi.fn(async () => {
+        abortController.abort("SIGTERM");
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_INSTANCE: "ccfgg2",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+          },
+        }),
+        signal: abortController.signal,
+        logger: silentLogger(),
+      });
+
+      const lifecycle = (await readFile(path.join(stateDir, SERVICE_LIFECYCLE_LOG_FILE), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      expect(lifecycle).toContainEqual(expect.objectContaining({
+        type: "service.stopped",
+        instanceName: "ccfgg2",
+        metadata: expect.objectContaining({
+          abortReason: "SIGTERM",
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("marks previously accepted Lark messages without a terminal event as interrupted on startup", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-recover-"));
     const abortController = new AbortController();

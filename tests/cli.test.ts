@@ -555,6 +555,61 @@ describe("runCli", () => {
     }
   });
 
+  it("refuses to stop a Lark service with accepted turns unless forced", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "input.received",
+          channel: "lark",
+          chatId: 123,
+          conversationKey: "lark:oc_chat",
+          userId: 456,
+          metadata: { larkMessageId: "om_active" },
+        })}\n`,
+      );
+
+      await expect(runCli(["lark", "service", "stop"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { stop },
+      })).rejects.toThrow(/Lark instance "alpha" has 1 active or queued Lark turn\(s\)\..*Refusing to stop without --force\./);
+
+      expect(stop).not.toHaveBeenCalled();
+
+      const handled = await runCli(["lark", "service", "stop", "--force"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { stop },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(messages).toEqual(["Stopped Lark service."]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("supports explicitly deferring a Lark service restart", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
