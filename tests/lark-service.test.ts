@@ -9472,6 +9472,129 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
+  it("walks through every AskUserQuestion question before resolving", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel,
+      runtime,
+      chatId: "oc_chat",
+      replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [
+            {
+              question: "Which mode?",
+              header: "Mode",
+              multiSelect: false,
+              options: [{ label: "Fast" }, { label: "Careful" }],
+            },
+            {
+              question: "Which target?",
+              header: "Target",
+              multiSelect: false,
+              options: [{ label: "Local" }, { label: "Remote" }],
+            },
+          ],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    // Answer the first question — should NOT resolve, but advance the card to Q2.
+    await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", requestId, questionIndex: 0, action: "select", label: "Fast", answer: "Fast" } },
+      },
+    });
+    expect(runtime.pendingApprovals.size).toBe(1);
+    expect(channel.updateCard).toHaveBeenCalled();
+    expect(JSON.stringify(channel.updateCard.mock.calls)).toContain("Which target?");
+
+    // Answer the second (last) question — now it resolves with BOTH answers.
+    await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", requestId, questionIndex: 1, action: "select", label: "Remote", answer: "Remote" } },
+      },
+    });
+
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({
+      "Which mode?": "Fast",
+      "Which target?": "Remote",
+    });
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
+  it("collects multiple selections for a multiSelect AskUserQuestion before submit", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel,
+      runtime,
+      chatId: "oc_chat",
+      replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [
+            {
+              question: "Pick features",
+              header: "Features",
+              multiSelect: true,
+              options: [{ label: "A" }, { label: "B" }, { label: "C" }],
+            },
+          ],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    const toggle = async (label: string) =>
+      handleLarkCardAction({
+        channel,
+        runtime,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_card",
+          operator: { openId: "ou_user" },
+          action: { value: { cctb_lark: "ask_user_question", requestId, questionIndex: 0, action: "toggle", label } },
+        },
+      });
+
+    await toggle("A");
+    await toggle("B");
+    expect(runtime.pendingApprovals.size).toBe(1); // not resolved by toggles
+
+    await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", requestId, questionIndex: 0, action: "submit" } },
+      },
+    });
+
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Pick features": "A, B" });
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
   it("answers unsupported Lark card actions instead of silently ignoring them", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();

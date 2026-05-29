@@ -46,6 +46,21 @@ describe("lark card renderer", () => {
     expect(occurrences).toBe(1);
   });
 
+  it("does not render a duplicate permission_request block for AskUserQuestion", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    // Claude emits the assistant tool_use block (carries an id, resolves via
+    // tool_result) AND a permission_request control event for AskUserQuestion.
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "AskUserQuestion", toolInput: {}, toolUseId: "a1" });
+    state = applyLarkEngineEvent(state, { type: "permission_request", toolName: "AskUserQuestion", toolInput: {} });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "a1", output: "ok" });
+    state = applyLarkEngineEvent(state, { type: "result", text: "done" });
+    // Only one AskUserQuestion tool block exists, and it is resolved (no
+    // orphan stuck "running" panel).
+    const toolBlocks = state.blocks.filter((block) => block.kind === "tool");
+    expect(toolBlocks).toHaveLength(1);
+    expect(toolBlocks[0]).toMatchObject({ kind: "tool", tool: { status: "done" } });
+  });
+
   it("concatenates Codex app-server token deltas without inserting newlines", () => {
     let state = initialLarkRunState("lark:oc_chat");
     // Codex app-server emits one assistant_text per token fragment (delta:true).

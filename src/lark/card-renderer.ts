@@ -93,6 +93,13 @@ export function applyLarkEngineEvent(
       return appendAssistantText(state, event.text, event.delta === true);
     case "tool_use":
     case "permission_request":
+      if (event.type === "permission_request" && event.toolName === "AskUserQuestion") {
+        // AskUserQuestion is surfaced as its own interactive choice card and is
+        // already represented by the assistant tool_use block (which resolves
+        // via tool_result). Skip the duplicate permission_request block, which
+        // carries no toolUseId and would otherwise spin "running" forever.
+        return { ...state, reasoning: { ...state.reasoning, active: false } };
+      }
       return {
         ...state,
         blocks: capBlocks([

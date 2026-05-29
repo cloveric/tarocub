@@ -187,13 +187,23 @@ function renderLarkApprovalFallbackText(requestId: string, request: EngineApprov
 function renderLarkAskUserQuestionCard(input: {
   requestId: string;
   toolInput: unknown;
+  questionIndex?: number;
+  selectedLabels?: string[];
   replyInThread?: boolean;
   locale?: Locale;
 }): Record<string, unknown> {
   const locale = input.locale ?? "zh";
   const questions = normalizeAskUserQuestions(input.toolInput);
-  const question = questions[0];
-  const title = question?.header || (locale === "en" ? "Question" : "请选择");
+  const total = Math.max(questions.length, 1);
+  const questionIndex = Math.min(Math.max(input.questionIndex ?? 0, 0), total - 1);
+  const question = questions[questionIndex];
+  const selected = input.selectedLabels ?? [];
+  const isMulti = question?.multiSelect === true;
+  const progress = questions.length > 1
+    ? (locale === "en" ? ` (${questionIndex + 1}/${questions.length})` : `（${questionIndex + 1}/${questions.length}）`)
+    : "";
+  const baseTitle = question?.header || (locale === "en" ? "Question" : "请选择");
+  const title = `${baseTitle}${progress}`;
   const prompt = question?.question || (locale === "en" ? "Claude is asking for your choice." : "Claude 需要你选择。");
   const elements: unknown[] = [
     {
@@ -201,6 +211,13 @@ function renderLarkAskUserQuestionCard(input: {
       content: `**${title}**\n${prompt}`,
     },
   ];
+  if (isMulti) {
+    elements.push({
+      tag: "markdown",
+      content: locale === "en" ? "_Select all that apply, then confirm._" : "_可多选，选好后点确认。_",
+      text_size: "notation",
+    });
+  }
 
   const options = question?.options ?? [];
   if (options.length === 0) {
@@ -212,13 +229,35 @@ function renderLarkAskUserQuestionCard(input: {
     options.forEach((option, index) => {
       elements.push(renderLarkAskUserQuestionOption({
         requestId: input.requestId,
-        questionIndex: 0,
+        questionIndex,
         optionIndex: index,
         option,
+        multiSelect: isMulti,
+        selected: selected.includes(option.label),
         replyInThread: input.replyInThread,
         locale,
       }));
     });
+    if (isMulti) {
+      const isLast = questionIndex + 1 >= questions.length;
+      const baseLabel = isLast
+        ? (locale === "en" ? "Submit" : "提交")
+        : (locale === "en" ? "Next question" : "下一题");
+      const count = selected.length ? (locale === "en" ? ` (${selected.length})` : `（已选 ${selected.length}）`) : "";
+      elements.push({
+        tag: "button",
+        text: { tag: "plain_text", content: `${baseLabel}${count}` },
+        width: "fill",
+        type: "primary",
+        behaviors: [callbackBehavior({
+          cctb_lark: "ask_user_question",
+          action: "submit",
+          requestId: input.requestId,
+          questionIndex,
+          ...(input.replyInThread ? { replyInThread: true } : {}),
+        })],
+      });
+    }
   }
 
   return {
@@ -248,22 +287,31 @@ function renderLarkAskUserQuestionOption(input: {
   questionIndex: number;
   optionIndex: number;
   option: AskUserQuestionOption;
+  multiSelect: boolean;
+  selected: boolean;
   replyInThread?: boolean;
   locale: Locale;
 }): Record<string, unknown> {
   const marker = optionMarker(input.optionIndex);
   const description = input.option.description?.trim();
+  const checkbox = input.multiSelect ? (input.selected ? "✅ " : "⬜ ") : "";
+  const buttonContent = input.multiSelect
+    ? (input.selected
+      ? (input.locale === "en" ? "Unselect" : "取消选择")
+      : (input.locale === "en" ? "Select" : "选择"))
+    : (input.locale === "en" ? "Choose" : "选择");
+  const highlight = input.selected || (!input.multiSelect && input.optionIndex === 0);
   return {
     tag: "collapsible_panel",
-    expanded: input.optionIndex === 0,
+    expanded: input.optionIndex === 0 || input.selected,
     header: {
-      title: { tag: "markdown", content: `**${marker}. ${input.option.label}**` },
+      title: { tag: "markdown", content: `**${checkbox}${marker}. ${input.option.label}**` },
       vertical_align: "center",
       icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
       icon_position: "follow_text",
       icon_expanded_angle: -180,
     },
-    border: { color: input.optionIndex === 0 ? "blue" : "grey", corner_radius: "5px" },
+    border: { color: highlight ? "blue" : "grey", corner_radius: "5px" },
     vertical_spacing: "8px",
     padding: "8px 8px 8px 8px",
     elements: [
@@ -276,12 +324,13 @@ function renderLarkAskUserQuestionOption(input: {
         tag: "button",
         text: {
           tag: "plain_text",
-          content: input.locale === "en" ? "Choose" : "选择",
+          content: buttonContent,
         },
         width: "fill",
-        type: input.optionIndex === 0 ? "primary" : "default",
+        type: highlight ? "primary" : "default",
         behaviors: [callbackBehavior({
           cctb_lark: "ask_user_question",
+          action: input.multiSelect ? "toggle" : "select",
           requestId: input.requestId,
           questionIndex: input.questionIndex,
           label: input.option.label,
@@ -294,8 +343,9 @@ function renderLarkAskUserQuestionOption(input: {
   };
 }
 
-function renderLarkAskUserQuestionFallbackText(toolInput: unknown, locale: Locale): string {
-  const question = normalizeAskUserQuestions(toolInput)[0];
+function renderLarkAskUserQuestionFallbackText(toolInput: unknown, locale: Locale, questionIndex = 0): string {
+  const questions = normalizeAskUserQuestions(toolInput);
+  const question = questions[questionIndex] ?? questions[0];
   if (!question) {
     return locale === "en" ? "Claude is asking a question." : "Claude 需要你选择。";
   }
@@ -668,29 +718,120 @@ export async function handleLarkCardAction(input: {
       return true;
     }
 
-    const answer = stringValue(value.answer) ?? stringValue(value.label) ?? stringValue(value.value);
-    if (!answer) {
-      await input.channel.send(
-        input.event.chatId,
-        { text: locale === "en" ? "No answer was selected." : "没有收到选择。" },
-        larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread),
+    const replyOpts = larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread);
+    const questions = normalizeAskUserQuestions(pending.askUserQuestionInput);
+    const total = questions.length;
+    const questionIndex = typeof value.questionIndex === "number"
+      ? Math.min(Math.max(value.questionIndex, 0), Math.max(total - 1, 0))
+      : 0;
+    const question = questions[questionIndex];
+    const action = stringValue(value.action) ?? "select";
+    const isMulti = question?.multiSelect === true;
+    const optionLabel = stringValue(value.label) ?? stringValue(value.answer) ?? stringValue(value.value);
+
+    const updateChoiceCard = async (card: Record<string, unknown>, fallback: string): Promise<void> => {
+      if (input.channel.updateCard) {
+        try {
+          await input.channel.updateCard(input.event.messageId, card);
+          return;
+        } catch {
+          // Fall through to posting a fresh card if the in-place update fails.
+        }
+      }
+      await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: input.event.chatId,
+        card,
+        fallbackText: fallback,
+        options: replyOpts,
+        locale,
+      });
+    };
+
+    // Multi-select toggle: flip this option in the in-progress selection and
+    // re-render the SAME question; do not advance or resolve yet.
+    if (isMulti && action === "toggle") {
+      if (!optionLabel) {
+        return true;
+      }
+      const current = pending.askUserQuestionSelections ?? [];
+      pending.askUserQuestionSelections = current.includes(optionLabel)
+        ? current.filter((label) => label !== optionLabel)
+        : [...current, optionLabel];
+      await updateChoiceCard(
+        renderLarkAskUserQuestionCard({
+          requestId: value.requestId,
+          toolInput: pending.askUserQuestionInput,
+          questionIndex,
+          selectedLabels: pending.askUserQuestionSelections,
+          replyInThread: pending.replyInThread ?? replyInThread,
+          locale,
+        }),
+        renderLarkAskUserQuestionFallbackText(pending.askUserQuestionInput, locale, questionIndex),
       );
       return true;
     }
 
+    // Resolve the answer for this question (single-select label, or the joined
+    // multi-select set on submit).
+    let questionAnswer: string;
+    if (isMulti) {
+      questionAnswer = (pending.askUserQuestionSelections ?? []).join(", ");
+    } else {
+      if (!optionLabel) {
+        await input.channel.send(
+          input.event.chatId,
+          { text: locale === "en" ? "No answer was selected." : "没有收到选择。" },
+          replyOpts,
+        );
+        return true;
+      }
+      questionAnswer = optionLabel;
+    }
+
+    // Accumulate into the running tool response keyed by question text.
+    pending.askUserQuestionCollected = buildAskUserQuestionUpdatedInput(
+      pending.askUserQuestionCollected ?? pending.askUserQuestionInput,
+      {
+        questionIndex,
+        answer: questionAnswer,
+        preview: stringValue(value.preview),
+      },
+    );
+    pending.askUserQuestionSelections = [];
+
+    const ackLabel = questionAnswer || (locale === "en" ? "(none)" : "（未选）");
+    const nextIndex = questionIndex + 1;
+    if (nextIndex < total) {
+      // More questions remain — advance the card in place.
+      await updateChoiceCard(
+        renderLarkAskUserQuestionCard({
+          requestId: value.requestId,
+          toolInput: pending.askUserQuestionInput,
+          questionIndex: nextIndex,
+          replyInThread: pending.replyInThread ?? replyInThread,
+          locale,
+        }),
+        renderLarkAskUserQuestionFallbackText(pending.askUserQuestionInput, locale, nextIndex),
+      );
+      await input.channel.send(
+        input.event.chatId,
+        { text: locale === "en" ? `Recorded: ${ackLabel}` : `已记录：${ackLabel}` },
+        replyOpts,
+      );
+      return true;
+    }
+
+    // Last question answered — resolve the whole AskUserQuestion with every answer.
     cleanupPendingApproval(input.runtime, value.requestId);
     pending.resolve({
       behavior: "allow",
-      updatedInput: buildAskUserQuestionUpdatedInput(pending.askUserQuestionInput, {
-        questionIndex: typeof value.questionIndex === "number" ? value.questionIndex : 0,
-        answer,
-        preview: stringValue(value.preview),
-      }),
+      updatedInput: pending.askUserQuestionCollected,
     });
     await input.channel.send(
       input.event.chatId,
-      { text: locale === "en" ? `Selected: ${answer}` : `已选择：${answer}` },
-      larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread),
+      { text: locale === "en" ? `Selected: ${ackLabel}` : `已选择：${ackLabel}` },
+      replyOpts,
     );
     return true;
   }
