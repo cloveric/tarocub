@@ -470,7 +470,26 @@ function renderToolInput(tool: LarkToolEntry): string {
 }
 
 function cleanCardText(content: string): string {
-  return stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content))).trim();
+  const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
+  return collapseBlankLines(downgradeMarkdownHeadings(stripped)).trim();
+}
+
+/**
+ * Feishu renders markdown ATX headings (`#`–`######`) at large heading sizes,
+ * which looks oversized and noisy inside a chat card — especially for answers
+ * with many `##` sections. Downgrade headings to bold so they keep their
+ * structure at normal body size.
+ */
+function downgradeMarkdownHeadings(text: string): string {
+  return text.replace(/^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*$/gm, (_match, title: string) => {
+    const trimmed = title.trim();
+    // Avoid double-bolding a title that is already fully bold.
+    return /^\*\*.*\*\*$/.test(trimmed) ? trimmed : `**${trimmed}**`;
+  });
+}
+
+function collapseBlankLines(text: string): string {
+  return text.replace(/\n{3,}/g, "\n\n");
 }
 
 function runCardStatusLabel(

@@ -46,6 +46,19 @@ describe("lark card renderer", () => {
     expect(occurrences).toBe(1);
   });
 
+  it("downgrades markdown headings to bold so the card font is not oversized", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "## 已发布 v0.1.47\n\n正文内容\n\n### 子标题\nmore" });
+    state = applyLarkEngineEvent(state, { type: "result", text: "## 已发布 v0.1.47\n\n正文内容\n\n### 子标题\nmore" });
+    const body = JSON.stringify((renderLarkRunCard(state) as any).body);
+    // Headings become bold (normal size), the raw "## " markdown is gone.
+    expect(body).toContain("**已发布 v0.1.47**");
+    expect(body).toContain("**子标题**");
+    expect(body).not.toContain("## 已发布");
+    expect(body).not.toContain("### 子标题");
+    expect(body).toContain("正文内容");
+  });
+
   it("renders an interrupted terminal marker without a stop button", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, { type: "assistant_text", text: "partial" });
