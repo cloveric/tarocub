@@ -7714,10 +7714,15 @@ describe("lark service", () => {
       );
       expect(channel.updateCard).toHaveBeenCalledWith("sent_1", expect.any(Object));
       const updates = JSON.stringify(channel.updateCard.mock.calls);
+      // Live updates are throttled (coalesced), so a fast synchronous burst lands
+      // as the finalized card: answer prominent, process (thinking + tool names)
+      // folded into the condensed panel; verbose tool output is dropped.
+      expect(updates).toContain("final answer");
       expect(updates).toContain("checking the repo");
       expect(updates).toContain("Read");
-      expect(updates).toContain("readme body");
-      expect(updates).toContain("final answer");
+      expect(updates).not.toContain("readme body");
+      // Throttling coalesces the burst: far fewer patches than engine events.
+      expect(channel.updateCard.mock.calls.length).toBeLessThanOrEqual(2);
       // Card is canonical: the final answer must NOT also be sent as a separate
       // markdown message when the run card is active.
       const markdownSends = channel.send.mock.calls.filter((call: unknown[]) => {

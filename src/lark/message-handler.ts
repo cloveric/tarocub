@@ -1142,6 +1142,37 @@ async function createLarkRunCardController(input: {
     }
     await tryUpdate(renderLarkRunCardCompact(state, input.locale));
   };
+  // Coalesce live updates to at most one patch per THROTTLE_MS, and run every
+  // patch through a single serial chain so they never race — same idea as the
+  // SDK's streaming throttle + patch queue. Engine events fire-and-forget into
+  // this, so it never adds reply latency; it just avoids hammering Feishu's
+  // card API on fast token streams, and guarantees the terminal patch lands
+  // last (a late "running" patch can't revert a finished card).
+  const THROTTLE_MS = 400;
+  let updateTimer: ReturnType<typeof setTimeout> | undefined;
+  let patchChain: Promise<void> = Promise.resolve();
+  const enqueuePatch = (fn: () => Promise<void>): Promise<void> => {
+    const next = patchChain.then(fn, fn);
+    patchChain = next.catch(() => undefined);
+    return next;
+  };
+  const flushUpdate = (): void => {
+    updateTimer = undefined;
+    void enqueuePatch(update);
+  };
+  const scheduleUpdate = (): void => {
+    if (updateTimer) {
+      return;
+    }
+    updateTimer = setTimeout(flushUpdate, THROTTLE_MS);
+    updateTimer.unref?.();
+  };
+  const cancelScheduledUpdate = (): void => {
+    if (updateTimer) {
+      clearTimeout(updateTimer);
+      updateTimer = undefined;
+    }
+  };
   // Terminal update: guarantee the card leaves the "running" state and the
   // answer is not lost. Try the full card, then the compact card, and as a
   // last resort deliver the text directly so a failed patch never swallows it.
@@ -1164,13 +1195,15 @@ async function createLarkRunCardController(input: {
   return {
     apply: async (event) => {
       state = applyLarkEngineEvent(state, event);
-      await update().catch(() => undefined);
+      // Coalesced, non-blocking: never await the live patch.
+      scheduleUpdate();
     },
     finish: async (text) => {
       // Reuse the reducer so non-streaming engines (which emit no incremental
       // assistant_text) still get the final answer seeded into the block stream.
       state = applyLarkEngineEvent(state, { type: "result", text });
-      await finalize(text);
+      cancelScheduledUpdate();
+      await enqueuePatch(() => finalize(text));
     },
     fail: async (text) => {
       state = {
@@ -1179,15 +1212,18 @@ async function createLarkRunCardController(input: {
         errorText: text,
         footer: null,
       };
-      await finalize();
+      cancelScheduledUpdate();
+      await enqueuePatch(() => finalize());
     },
     interrupt: async () => {
       state = { ...state, status: "interrupted", footer: null };
-      await finalize();
+      cancelScheduledUpdate();
+      await enqueuePatch(() => finalize());
     },
     idleTimeout: async (minutes) => {
       state = { ...state, status: "idle_timeout", idleTimeoutMinutes: minutes, footer: null };
-      await finalize();
+      cancelScheduledUpdate();
+      await enqueuePatch(() => finalize());
     },
   };
 }
