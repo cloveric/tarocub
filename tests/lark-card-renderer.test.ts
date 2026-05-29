@@ -26,6 +26,24 @@ describe("lark card renderer", () => {
     expect(serialized).not.toContain("停止");
   });
 
+  it("does not repeat the final answer in the done card body (markdown delivery is canonical)", () => {
+    const answer = "This is the full final answer body that must not be duplicated.";
+    let running = initialLarkRunState("lark:oc_chat");
+    running = applyLarkEngineEvent(running, { type: "assistant_text", text: answer });
+
+    // While running, the streaming preview shows the assistant text in the body.
+    const runningBody = JSON.stringify((renderLarkRunCard(running) as any).body);
+    expect(runningBody).toContain(answer);
+
+    // Once done, the canonical answer is delivered as a separate markdown message,
+    // so the card body must NOT include the full answer again (only the short
+    // summary chrome may reference it).
+    const done = applyLarkEngineEvent(running, { type: "result", text: answer });
+    const doneCard = renderLarkRunCard(done) as any;
+    expect(JSON.stringify(doneCard.body)).not.toContain(answer);
+    expect(done.status).toBe("done");
+  });
+
   it("renders a stop button while a run is active", () => {
     const card = renderLarkRunCard(initialLarkRunState("lark:oc_chat", "group")) as any;
     const serialized = JSON.stringify(card);

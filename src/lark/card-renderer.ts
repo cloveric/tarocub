@@ -115,7 +115,14 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     }));
   }
 
-  const bodyText = state.resultText || state.assistantText;
+  // While the turn is running, show the streaming preview so the card feels live.
+  // Once it completes, the canonical answer is delivered as a separate markdown
+  // message, so the card omits the body to avoid duplicating the final answer.
+  const bodyText = state.status === "running"
+    ? state.assistantText
+    : state.status === "error"
+      ? state.resultText
+      : "";
   if (bodyText) {
     elements.push(markdownElement(bodyText));
   }
