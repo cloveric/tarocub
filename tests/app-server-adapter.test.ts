@@ -13,7 +13,47 @@ import {
   CODEX_APP_SERVER_TURN_TIMEOUT_MS,
   CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS,
   CodexAppServerAdapter,
+  extractCodexToolItem,
 } from "../src/codex/app-server-adapter.js";
+
+describe("extractCodexToolItem", () => {
+  it("maps a command execution item to a Bash tool event", () => {
+    expect(extractCodexToolItem({
+      id: "c1",
+      type: "commandExecution",
+      command: "npm test",
+      aggregatedOutput: "ok",
+      exitCode: 0,
+      status: "completed",
+    })).toEqual({
+      toolName: "Bash",
+      toolInput: { command: "npm test" },
+      toolUseId: "c1",
+      output: "ok",
+      isError: false,
+    });
+  });
+
+  it("flags a non-zero command exit as a tool error", () => {
+    expect(extractCodexToolItem({ type: "command_execution", command: "false", exit_code: 1 }))
+      .toMatchObject({ toolName: "Bash", isError: true });
+  });
+
+  it("maps file change, mcp tool call, and web search items", () => {
+    expect(extractCodexToolItem({ type: "fileChange", path: "/a/b.ts", status: "completed" }))
+      .toMatchObject({ toolName: "Edit", toolInput: { file_path: "/a/b.ts" }, isError: false });
+    expect(extractCodexToolItem({ type: "mcpToolCall", server: "web", tool: "search", arguments: { q: "x" } }))
+      .toMatchObject({ toolName: "web.search", toolInput: { q: "x" } });
+    expect(extractCodexToolItem({ type: "webSearch", query: "tarocub" }))
+      .toMatchObject({ toolName: "WebSearch", toolInput: { query: "tarocub" } });
+  });
+
+  it("returns null for non-tool items", () => {
+    expect(extractCodexToolItem({ type: "agentMessage", text: "hi" })).toBeNull();
+    expect(extractCodexToolItem(null)).toBeNull();
+    expect(extractCodexToolItem("nope")).toBeNull();
+  });
+});
 
 async function waitFor(condition: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt++) {

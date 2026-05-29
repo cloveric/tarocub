@@ -135,6 +135,100 @@ function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
 }
 
+export interface CodexToolItemEvent {
+  toolName: string;
+  toolInput?: unknown;
+  toolUseId?: string;
+  output?: string;
+  isError: boolean;
+}
+
+/**
+ * Map a completed Codex app-server item to a tool event for the Lark run card.
+ * Codex reports tool work as typed items (commandExecution / fileChange /
+ * mcpToolCall / webSearch). Field names vary across Codex versions, so every
+ * extraction is best-effort and guarded; unknown items return null.
+ */
+export function extractCodexToolItem(item: unknown): CodexToolItemEvent | null {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const rec = item as Record<string, unknown>;
+  const type = typeof rec.type === "string" ? rec.type : "";
+  const id = typeof rec.id === "string" ? rec.id : undefined;
+  const str = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = rec[key];
+      if (typeof value === "string" && value.trim()) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+  const num = (...keys: string[]): number | undefined => {
+    for (const key of keys) {
+      const value = rec[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+    }
+    return undefined;
+  };
+  const statusText = str("status");
+  const isErrorStatus = statusText === "failed" || statusText === "error";
+
+  switch (type) {
+    case "commandExecution":
+    case "command_execution": {
+      const command = str("command", "cmd");
+      const exitCode = num("exitCode", "exit_code");
+      return {
+        toolName: "Bash",
+        ...(command !== undefined ? { toolInput: { command } } : {}),
+        ...(id ? { toolUseId: id } : {}),
+        output: str("aggregatedOutput", "aggregated_output", "output", "stdout"),
+        isError: isErrorStatus || (exitCode !== undefined && exitCode !== 0),
+      };
+    }
+    case "fileChange":
+    case "file_change": {
+      const path = str("path", "file_path");
+      return {
+        toolName: "Edit",
+        ...(path !== undefined ? { toolInput: { file_path: path } } : {}),
+        ...(id ? { toolUseId: id } : {}),
+        output: str("summary", "output"),
+        isError: isErrorStatus,
+      };
+    }
+    case "mcpToolCall":
+    case "mcp_tool_call": {
+      const server = str("server");
+      const tool = str("tool", "name");
+      return {
+        toolName: tool ? (server ? `${server}.${tool}` : tool) : "MCP tool",
+        toolInput: rec.arguments ?? rec.input ?? undefined,
+        ...(id ? { toolUseId: id } : {}),
+        output: str("output", "result"),
+        isError: isErrorStatus,
+      };
+    }
+    case "webSearch":
+    case "web_search": {
+      const query = str("query");
+      return {
+        toolName: "WebSearch",
+        ...(query !== undefined ? { toolInput: { query } } : {}),
+        ...(id ? { toolUseId: id } : {}),
+        output: str("output", "result"),
+        isError: isErrorStatus,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
 function resolveTurnApprovalPolicy(
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>,
 ): AppServerApprovalPolicy {
@@ -659,7 +753,27 @@ export class CodexAppServerAdapter implements CodexAdapter {
         if (pending) {
           pending.chunks.push(delta);
           pending.onProgress?.(pending.chunks.join(""));
+          void Promise.resolve(pending.onEngineEvent?.({
+            type: "assistant_text",
+            text: delta,
+            sessionId: threadId,
+          })).catch(() => {});
         }
+      }
+      return;
+    }
+
+    if (parsed.method === "item/reasoning/delta") {
+      const threadId = this.readString(parsed.params?.threadId);
+      const delta = this.readString(parsed.params?.delta);
+      if (threadId && delta) {
+        this.noteTurnActivity(threadId, parsed.method);
+        const pending = this.pendingTurns.get(threadId);
+        void Promise.resolve(pending?.onEngineEvent?.({
+          type: "thinking",
+          text: delta,
+          sessionId: threadId,
+        })).catch(() => {});
       }
       return;
     }
@@ -687,6 +801,28 @@ export class CodexAppServerAdapter implements CodexAdapter {
         typeof (item as { text?: unknown }).text === "string"
       ) {
         pending.finalText = (item as { text: string }).text;
+      } else if (pending && threadId) {
+        const toolEvent = extractCodexToolItem(item);
+        if (toolEvent) {
+          // Codex app-server reports a completed tool item in one shot. Emit the
+          // tool_use + tool_result pair so the Lark run card renders a finished
+          // tool panel with output and status, matching the Claude path.
+          void Promise.resolve(pending.onEngineEvent?.({
+            type: "tool_use",
+            toolName: toolEvent.toolName,
+            ...(toolEvent.toolInput === undefined ? {} : { toolInput: toolEvent.toolInput }),
+            ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
+            sessionId: threadId,
+          })).catch(() => {});
+          void Promise.resolve(pending.onEngineEvent?.({
+            type: "tool_result",
+            ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
+            toolName: toolEvent.toolName,
+            ...(toolEvent.output !== undefined ? { output: toolEvent.output } : {}),
+            isError: toolEvent.isError,
+            sessionId: threadId,
+          })).catch(() => {});
+        }
       }
       return;
     }

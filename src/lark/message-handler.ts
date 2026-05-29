@@ -926,6 +926,11 @@ async function runNormalizedLarkMessage(
           replyTo: normalized.messageId,
           replyInThread: Boolean(normalized.threadId),
           text: result.text,
+          // The run card is the single canonical reply: it renders the full
+          // answer in its block stream. Only fall back to a separate markdown
+          // message when the card failed to create (runCard undefined).
+          // deliverLarkResponse still processes tool tags / files / images.
+          sendText: runCard === undefined,
           stateDir: input.stateDir,
           requestOutputDir,
           workspaceOverride,
@@ -1023,18 +1028,17 @@ async function createLarkRunCardController(input: {
       await update().catch(() => undefined);
     },
     finish: async (text) => {
-      state = {
-        ...state,
-        status: "done",
-        resultText: text,
-      };
+      // Reuse the reducer so non-streaming engines (which emit no incremental
+      // assistant_text) still get the final answer seeded into the block stream.
+      state = applyLarkEngineEvent(state, { type: "result", text });
       await update().catch(() => undefined);
     },
     fail: async (text) => {
       state = {
         ...state,
         status: "error",
-        resultText: text,
+        errorText: text,
+        footer: null,
       };
       await update().catch(() => undefined);
     },

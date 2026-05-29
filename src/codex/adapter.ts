@@ -70,6 +70,17 @@ export type EngineStreamEvent =
       type: "tool_use";
       toolName: string;
       toolInput?: unknown;
+      /** Engine-assigned tool call id, used to match a later tool_result. */
+      toolUseId?: string;
+      sessionId?: string;
+    }
+  | {
+      type: "tool_result";
+      /** Matches the toolUseId of the originating tool_use event. */
+      toolUseId?: string;
+      toolName?: string;
+      output?: string;
+      isError?: boolean;
       sessionId?: string;
     }
   | {

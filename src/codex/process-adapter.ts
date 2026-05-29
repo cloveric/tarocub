@@ -11,7 +11,7 @@ import type {
   CodexUserMessageInput,
   EngineStreamEvent,
 } from "./adapter.js";
-import { CodexAppServerAdapter, type AppServerSpawnCodex } from "./app-server-adapter.js";
+import { CodexAppServerAdapter, extractCodexToolItem, type AppServerSpawnCodex } from "./app-server-adapter.js";
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { killProcessTree } from "./process-tree.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
@@ -151,6 +151,39 @@ function updateTurnStateFromLine(state: CodexTurnState, line: string, emitEngine
       text: event.item.text,
       sessionId: state.threadId ?? undefined,
     });
+    return;
+  }
+
+  if (event.type === "item.completed" && event.item?.type === "reasoning") {
+    const reasoning = (event.item as { text?: unknown }).text;
+    if (typeof reasoning === "string" && reasoning.trim()) {
+      emitEngineEvent?.({ type: "thinking", text: reasoning, sessionId: state.threadId ?? undefined });
+    }
+    return;
+  }
+
+  if (event.type === "item.completed" && event.item) {
+    const toolEvent = extractCodexToolItem(event.item);
+    if (toolEvent) {
+      // Codex exec --json reports each completed tool as one item; emit the
+      // tool_use + tool_result pair so the Lark run card renders a finished
+      // tool panel with output, matching the Claude path.
+      emitEngineEvent?.({
+        type: "tool_use",
+        toolName: toolEvent.toolName,
+        ...(toolEvent.toolInput === undefined ? {} : { toolInput: toolEvent.toolInput }),
+        ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
+        sessionId: state.threadId ?? undefined,
+      });
+      emitEngineEvent?.({
+        type: "tool_result",
+        ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
+        toolName: toolEvent.toolName,
+        ...(toolEvent.output !== undefined ? { output: toolEvent.output } : {}),
+        isError: toolEvent.isError,
+        sessionId: state.threadId ?? undefined,
+      });
+    }
     return;
   }
 

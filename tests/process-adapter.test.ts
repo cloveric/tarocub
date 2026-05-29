@@ -283,6 +283,68 @@ describe("ProcessCodexAdapter", () => {
     ]);
   });
 
+  it("emits tool_use + tool_result for completed Codex command items", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const engineEvents: unknown[] = [];
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "run it",
+      files: [],
+      onEngineEvent: (event) => {
+        engineEvents.push(event);
+      },
+    });
+
+    child.stdout.emitData('{"type":"thread.started","thread_id":"thread-tool"}\n');
+    child.stdout.emitData('{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls -la","aggregated_output":"total 4\\nfile.txt","exit_code":0,"status":"completed"}}\n');
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"all set"}}\n');
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text: "all set", sessionId: "thread-tool" });
+    expect(engineEvents).toContainEqual({
+      type: "tool_use",
+      toolName: "Bash",
+      toolInput: { command: "ls -la" },
+      toolUseId: "item_1",
+      sessionId: "thread-tool",
+    });
+    expect(engineEvents).toContainEqual({
+      type: "tool_result",
+      toolUseId: "item_1",
+      toolName: "Bash",
+      output: "total 4\nfile.txt",
+      isError: false,
+      sessionId: "thread-tool",
+    });
+  });
+
+  it("flags failed Codex command items as tool errors", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const engineEvents: unknown[] = [];
+
+    const promise = adapter.sendUserMessage("thread-123", {
+      text: "run it",
+      files: [],
+      onEngineEvent: (event) => {
+        engineEvents.push(event);
+      },
+    });
+
+    child.stdout.emitData('{"type":"thread.started","thread_id":"thread-toolerr"}\n');
+    child.stdout.emitData('{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"false","exit_code":1,"status":"completed"}}\n');
+    child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"done"}}\n');
+    child.close(0);
+
+    await promise;
+    expect(engineEvents).toContainEqual(expect.objectContaining({
+      type: "tool_result",
+      toolUseId: "item_2",
+      isError: true,
+    }));
+  });
+
   it("turns Codex image generation events into send-image stream output", async () => {
     const { spawnCodex, child } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);

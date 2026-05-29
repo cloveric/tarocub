@@ -90,6 +90,10 @@ type ClaudeStreamEvent = {
       thinking?: string;
       name?: string;
       input?: unknown;
+      id?: string;
+      tool_use_id?: string;
+      is_error?: boolean;
+      content?: unknown;
     }>;
   };
   usage?: {
@@ -197,6 +201,32 @@ function appendAssistantText(existing: string, next: string): string {
   }
 
   return existing ? `${existing}\n${next}` : next;
+}
+
+/**
+ * Claude stream-json tool_result `content` is either a plain string or an array
+ * of `{ type: "text", text }` (and occasionally other typed) blocks. Flatten it
+ * into a single string so the Lark card can render the tool output.
+ */
+function flattenClaudeToolResultContent(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content.trim() || undefined;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (const item of content) {
+    if (typeof item === "string") {
+      parts.push(item);
+      continue;
+    }
+    if (item && typeof item === "object" && typeof (item as { text?: unknown }).text === "string") {
+      parts.push((item as { text: string }).text);
+    }
+  }
+  const joined = parts.join("\n").trim();
+  return joined || undefined;
 }
 
 function extractDeliveryTags(text: string): string[] {
@@ -711,6 +741,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
             type: "tool_use",
             toolName: typeof item.name === "string" && item.name ? item.name : "Unknown tool",
             toolInput: item.input,
+            ...(typeof item.id === "string" && item.id ? { toolUseId: item.id } : {}),
             sessionId: worker.currentSessionId ?? undefined,
           });
           continue;
@@ -730,6 +761,22 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         this.emitEngineEvent(worker, {
           type: "assistant_text",
           text,
+          sessionId: worker.currentSessionId ?? undefined,
+        });
+      }
+      return;
+    }
+
+    if (parsed.type === "user" && worker.pendingTurn) {
+      for (const item of parsed.message?.content ?? []) {
+        if (item.type !== "tool_result") {
+          continue;
+        }
+        this.emitEngineEvent(worker, {
+          type: "tool_result",
+          ...(typeof item.tool_use_id === "string" && item.tool_use_id ? { toolUseId: item.tool_use_id } : {}),
+          output: flattenClaudeToolResultContent(item.content),
+          isError: item.is_error === true,
           sessionId: worker.currentSessionId ?? undefined,
         });
       }

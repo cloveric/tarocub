@@ -324,7 +324,14 @@ describe("runLarkService", () => {
         userId: stableLarkNumericId("user:ou_owner"),
         text: expect.stringContaining("hello"),
       }));
-      expect(channel.send).toHaveBeenCalledWith("oc_owner", { markdown: "current handled" }, { replyTo: "om_different_app" });
+      // The run card is the canonical reply: the final answer is rendered into
+      // the card (send({card}) + updateCard) rather than a separate markdown send.
+      const ownerCardCalls = JSON.stringify([
+        ...(channel.send.mock.calls as unknown[][]),
+        ...((channel.updateCard?.mock?.calls as unknown[][] | undefined) ?? []),
+      ]);
+      expect(ownerCardCalls).toContain("current handled");
+      expect(channel.send).toHaveBeenCalledWith("oc_owner", expect.objectContaining({ card: expect.any(Object) }), { replyTo: "om_different_app" });
     } finally {
       await rm(rootDir, { recursive: true, force: true });
     }

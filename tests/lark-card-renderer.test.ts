@@ -11,8 +11,9 @@ describe("lark card renderer", () => {
   it("renders streaming engine events into one interactive run card", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, { type: "thinking", text: "thinking..." });
-    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file: "README.md" } });
-    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "Hello" });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file: "README.md" }, toolUseId: "t1" });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t1", output: "file contents here" });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "Hello world" });
     state = applyLarkEngineEvent(state, { type: "result", text: "Hello world" });
 
     const card = renderLarkRunCard(state) as any;
@@ -22,26 +23,35 @@ describe("lark card renderer", () => {
     expect(card.config.streaming_mode).toBe(false);
     expect(serialized).toContain("thinking...");
     expect(serialized).toContain("Read");
+    // The streamed answer is the canonical body of the single card.
     expect(serialized).toContain("Hello world");
+    // tool_result output is rendered now that the engine emits it.
+    expect(serialized).toContain("file contents here");
     expect(serialized).not.toContain("停止");
   });
 
-  it("does not repeat the final answer in the done card body (markdown delivery is canonical)", () => {
-    const answer = "This is the full final answer body that must not be duplicated.";
-    let running = initialLarkRunState("lark:oc_chat");
-    running = applyLarkEngineEvent(running, { type: "assistant_text", text: answer });
+  it("renders the final answer exactly once in the done card body (card is canonical)", () => {
+    const answer = "This is the full final answer body shown in the single canonical card.";
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: answer });
+    state = applyLarkEngineEvent(state, { type: "result", text: answer });
 
-    // While running, the streaming preview shows the assistant text in the body.
-    const runningBody = JSON.stringify((renderLarkRunCard(running) as any).body);
-    expect(runningBody).toContain(answer);
+    const doneCard = renderLarkRunCard(state) as any;
+    const body = JSON.stringify(doneCard.body);
+    expect(state.status).toBe("done");
+    // The answer is shown in the card body (the card is the single reply).
+    expect(body).toContain(answer);
+    // ...and it appears exactly once (no streamed-vs-result duplication).
+    const occurrences = body.split(answer).length - 1;
+    expect(occurrences).toBe(1);
+  });
 
-    // Once done, the canonical answer is delivered as a separate markdown message,
-    // so the card body must NOT include the full answer again (only the short
-    // summary chrome may reference it).
-    const done = applyLarkEngineEvent(running, { type: "result", text: answer });
-    const doneCard = renderLarkRunCard(done) as any;
-    expect(JSON.stringify(doneCard.body)).not.toContain(answer);
-    expect(done.status).toBe("done");
+  it("seeds the final answer for non-streaming engines that only emit a result", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    // No assistant_text events (e.g. Codex process) — only the final result.
+    state = applyLarkEngineEvent(state, { type: "result", text: "codex final output" });
+    const card = renderLarkRunCard(state) as any;
+    expect(JSON.stringify(card.body)).toContain("codex final output");
   });
 
   it("renders a stop button while a run is active", () => {
@@ -70,10 +80,28 @@ describe("lark card renderer", () => {
 
     expect(card.config.streaming_mode).toBe(true);
     expect(serialized).toContain("collapsible_panel");
-    expect(serialized).toContain("思考中");
-    expect(serialized).toContain("工具调用");
+    // Reasoning is captured in its own collapsible panel.
+    expect(serialized).toContain("先分析问题边界");
+    // Interleaved tool blocks render their own panels (Read, Bash).
+    expect(serialized).toContain("Read");
+    expect(serialized).toContain("Bash");
     expect(serialized).toContain("正在输出");
     expect(serialized).toContain("我正在整理结果。");
+  });
+
+  it("collapses three or more tool calls into a single summary panel", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file_path: "a.ts" }, toolUseId: "t1" });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t1", output: "ok" });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Grep", toolInput: { pattern: "foo" }, toolUseId: "t2" });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t2", output: "ok" });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolInput: { command: "ls" }, toolUseId: "t3" });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t3", output: "ok" });
+    state = applyLarkEngineEvent(state, { type: "result", text: "done" });
+
+    const serialized = JSON.stringify(renderLarkRunCard(state));
+    // Finalized run with >=3 tools → one collapsed summary listing all tools.
+    expect(serialized).toContain("工具调用 (3)");
   });
 
   it("renders active run cards in English when locale is English", () => {

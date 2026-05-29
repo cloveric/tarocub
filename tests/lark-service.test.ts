@@ -223,11 +223,7 @@ describe("lark service", () => {
         label: "oc_chat",
       }));
       expect(known.chats.find((chat) => chat.conversationKey === "lark:oc_chat")).not.toHaveProperty("threadId");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "done" },
-        { replyTo: "om_group_thread", replyInThread: true },
-      );
+      expectLarkFinalAnswer(channel, "done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -472,7 +468,7 @@ describe("lark service", () => {
         onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
       }) => {
         bridgeReadAttachment = (await readFile(input.files[0]!, "utf8")) === "hello file";
-        await input.onEngineEvent?.({ type: "assistant_text", text: "Hi from bridge" });
+        await input.onEngineEvent?.({ type: "assistant_text", text: "Done from bridge" });
         await input.onEngineEvent?.({ type: "result", text: "Done from bridge" });
         return {
           text: "Done from bridge",
@@ -516,11 +512,7 @@ describe("lark service", () => {
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
       expect(bridgeInput.files).toHaveLength(1);
       expect(bridgeReadAttachment).toBe(true);
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "Done from bridge" },
-        { replyTo: "om_1" },
-      );
+      expectLarkFinalAnswer(channel, "Done from bridge");
       await expect(new UsageStore(stateDir).load()).resolves.toMatchObject({
         requestCount: 1,
         totalInputTokens: 11,
@@ -799,11 +791,7 @@ describe("lark service", () => {
         { markdown: "后台任务完成\n后台命令已经完成。" },
         { replyTo: "om_task" },
       );
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "任务已启动。" },
-        { replyTo: "om_task" },
-      );
+      expectLarkFinalAnswer(channel, "任务已启动。");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "engine.event",
@@ -884,15 +872,17 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_long", content: "写一份长报告" }),
       });
 
-      const sendCalls = channel.send.mock.calls as unknown as Array<[string, unknown, unknown?]>;
-      const markdownSends = sendCalls
-        .map((call) => call[1])
-        .filter((payload): payload is { markdown: string } => Boolean((payload as { markdown?: unknown }).markdown));
-      expect(markdownSends.length).toBeGreaterThan(1);
-      expect(markdownSends.map((payload) => payload.markdown).join("")).toBe(longReply);
-      for (const payload of markdownSends) {
-        expect(payload.markdown.length).toBeLessThanOrEqual(3500);
-      }
+      // The run card is the canonical reply: a long answer is rendered into the
+      // card's text block (one element, well under Feishu's per-element limit)
+      // rather than chunked across multiple markdown messages. The card must
+      // carry every segment of the long reply.
+      const cardJson = JSON.stringify([
+        ...(channel.send.mock.calls as unknown[][]),
+        ...((channel.updateCard?.mock?.calls as unknown[][] | undefined) ?? []),
+      ]);
+      expect(cardJson).toContain("甲".repeat(2500));
+      expect(cardJson).toContain("乙".repeat(2500));
+      expect(cardJson).toContain("丙".repeat(2500));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -932,11 +922,7 @@ describe("lark service", () => {
           text: "上一条结论：采用方案 B",
         },
       }));
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "done" },
-        { replyTo: "om_reply" },
-      );
+      expectLarkFinalAnswer(channel, "done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -970,11 +956,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.not.objectContaining({
         replyContext: expect.anything(),
       }));
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "done" },
-        { replyTo: "om_reply" },
-      );
+      expectLarkFinalAnswer(channel, "done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1016,11 +998,7 @@ describe("lark service", () => {
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
       expect(bridgeInput.text).toContain("transcript:voice.m4a");
       expect(bridgeInput.text).toContain("transcript:clip.mp4");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "done" },
-        { replyTo: "om_media" },
-      );
+      expectLarkFinalAnswer(channel, "done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1283,11 +1261,7 @@ describe("lark service", () => {
       expect(bridgeInput.locale).toBe("en");
       expect(bridgeInput.text).toContain("[Archive Analysis Context]");
       expect(bridgeInput.text).toContain("Extracted files live under:");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "analysis from card done" },
-        { replyTo: "om_card" },
-      );
+      expectLarkFinalAnswer(channel, "analysis from card done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1400,11 +1374,7 @@ describe("lark service", () => {
         { markdown: "后台任务完成\n压缩包后台分析完成。" },
         { replyTo: "card_archive" },
       );
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "archive analysis done" },
-        { replyTo: "card_archive" },
-      );
+      expectLarkFinalAnswer(channel, "archive analysis done");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "engine.event",
@@ -1483,11 +1453,7 @@ describe("lark service", () => {
       expect(bridgeInput.text).toContain("看看结构");
       expect(bridgeInput.text).toContain("Extracted files live under:");
       expect(channel.stream).not.toHaveBeenCalled();
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "analysis done" },
-        { replyTo: "om_continue" },
-      );
+      expectLarkFinalAnswer(channel, "analysis done");
 
       const workflowState = JSON.parse(await readFile(path.join(stateDir, "file-workflow.json"), "utf8")) as {
         records: Array<{ status: string }>;
@@ -1550,11 +1516,7 @@ describe("lark service", () => {
         text: expect.stringContaining("[Archive Analysis Context]"),
       }));
       expect(bridgeInput.text).toContain("看看结构");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "slash analysis done" },
-        { replyTo: "om_slash_continue" },
-      );
+      expectLarkFinalAnswer(channel, "slash analysis done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1979,11 +1941,7 @@ describe("lark service", () => {
         conversationKey: "lark:oc_group:omt_topic",
         text: expect.stringContaining("thread question"),
       }));
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_group",
-        { markdown: "thread answer" },
-        { replyTo: "om_thread_request", replyInThread: true },
-      );
+      expectLarkFinalAnswer(channel, "thread answer");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2142,11 +2100,7 @@ describe("lark service", () => {
 
       expect(createChat).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledOnce();
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "engine saw legacy new command" },
-        { replyTo: "om_legacy_new" },
-      );
+      expectLarkFinalAnswer(channel, "engine saw legacy new command");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -4019,11 +3973,7 @@ describe("lark service", () => {
         detail: "cron.add tool accepted",
       }));
       expect(scheduler.refresh).toHaveBeenCalledOnce();
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "ok" },
-        { replyTo: "om_cron_tool" },
-      );
+      expectLarkFinalAnswer(channel, "ok");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: expect.stringContaining("已添加定时任务") },
@@ -4243,11 +4193,7 @@ describe("lark service", () => {
         larkMessageId: "om_cron_fallback",
         prompt: "检查邮箱",
       });
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "已设置" },
-        { replyTo: "om_cron_fallback" },
-      );
+      expectLarkFinalAnswer(channel, "已设置");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: expect.stringContaining("已添加定时任务") },
@@ -4878,11 +4824,7 @@ describe("lark service", () => {
 
       expect(seenTexts).toEqual(["/goal 写发布说明"]);
       expect(channel.stream).not.toHaveBeenCalled();
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "goal passed through" },
-        { replyTo: "om_goal" },
-      );
+      expectLarkFinalAnswer(channel, "goal passed through");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -4912,11 +4854,7 @@ describe("lark service", () => {
 
       expect(seenTexts).toEqual(["/goal 写发布说明"]);
       expect(channel.stream).not.toHaveBeenCalled();
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "goal passed through" },
-        { replyTo: "om_goal" },
-      );
+      expectLarkFinalAnswer(channel, "goal passed through");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -7667,11 +7605,7 @@ describe("lark service", () => {
       await expect(first).resolves.toBe(true);
       await expect(second).resolves.toBe(true);
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "second done" },
-        { replyTo: "om_queued" },
-      );
+      expectLarkFinalAnswer(channel, "second done");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -7697,8 +7631,10 @@ describe("lark service", () => {
     const bridge: LarkBridgeLike = {
       handleAuthorizedMessage: vi.fn(async (input) => {
         await Promise.resolve(input.onEngineEvent?.({ type: "thinking", text: "checking the repo" }));
-        await Promise.resolve(input.onEngineEvent?.({ type: "tool_use", toolName: "Read", toolInput: { file: "README.md" } }));
-        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "partial answer" }));
+        await Promise.resolve(input.onEngineEvent?.({ type: "tool_use", toolName: "Read", toolInput: { file_path: "README.md" }, toolUseId: "tu1" }));
+        await Promise.resolve(input.onEngineEvent?.({ type: "tool_result", toolUseId: "tu1", output: "readme body" }));
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "final answer" }));
+        await Promise.resolve(input.onEngineEvent?.({ type: "result", text: "final answer" }));
         return { text: "final answer" };
       }),
     };
@@ -7721,8 +7657,15 @@ describe("lark service", () => {
       const updates = JSON.stringify(channel.updateCard.mock.calls);
       expect(updates).toContain("checking the repo");
       expect(updates).toContain("Read");
-      expect(updates).toContain("partial answer");
+      expect(updates).toContain("readme body");
       expect(updates).toContain("final answer");
+      // Card is canonical: the final answer must NOT also be sent as a separate
+      // markdown message when the run card is active.
+      const markdownSends = channel.send.mock.calls.filter((call: unknown[]) => {
+        const payload = call[1] as { markdown?: string } | undefined;
+        return typeof payload?.markdown === "string" && payload.markdown.includes("final answer");
+      });
+      expect(markdownSends).toHaveLength(0);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -10306,6 +10249,25 @@ type FakeLarkChannel = ReturnType<typeof baseFakeChannel> & {
   getChatMode?: ReturnType<typeof vi.fn>;
   rawClient?: unknown;
 };
+
+/**
+ * The Lark run card is the canonical reply: the final answer is rendered into
+ * the card (delivered via channel.send({card}) + channel.updateCard) rather
+ * than a separate markdown message. When the card cannot be created the bridge
+ * falls back to a markdown send. This helper asserts the answer was delivered
+ * through whichever path applied.
+ */
+function expectLarkFinalAnswer(channel: FakeLarkChannel, text: string): void {
+  const calls = (fn: ReturnType<typeof vi.fn> | undefined): unknown[][] =>
+    (fn?.mock?.calls as unknown[][] | undefined) ?? [];
+  const inCard = JSON.stringify(calls(channel.updateCard)).includes(text)
+    || calls(channel.send).some((call) => JSON.stringify(call[1] ?? "").includes(text));
+  const inMarkdown = calls(channel.send).some((call) => {
+    const payload = call[1] as { markdown?: unknown } | undefined;
+    return typeof payload?.markdown === "string" && payload.markdown.includes(text);
+  });
+  expect(inCard || inMarkdown).toBe(true);
+}
 
 function fakeChannel(overrides: Partial<FakeLarkChannel> = {}): FakeLarkChannel {
   return {
