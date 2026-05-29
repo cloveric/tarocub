@@ -20,6 +20,7 @@ import { createLarkCommentClient } from "./comment-client.js";
 import { resolveLarkInstanceName, resolveLarkRuntimeConfig, type LarkRuntimeConfig, type LarkRuntimeEnv } from "./config.js";
 import { buildLarkCronExecutor, sendLarkCronFailureNotification } from "./cron.js";
 import { deliverLarkResponse } from "./delivery.js";
+import { findPrivateLarkMessageOwnerRoute } from "./event-router.js";
 import { startLarkHealthMonitor, type LarkHealthMonitor } from "./health.js";
 import { larkOperatorRawId } from "./identity.js";
 import { resolveLarkLocale } from "./locale.js";
@@ -165,6 +166,11 @@ export async function runLarkService(
     channel = options.createChannel
       ? options.createChannel(channelOptions)
       : createLarkChannel(channelOptions) as LarkRuntimeChannelLike;
+    const createBridgeForRoute = async (routeEnv: LarkRuntimeEnv, routeConfig: LarkRuntimeConfig): Promise<{ stateDir: string; bridge: LarkBridgeLike }> => {
+      return options.createBridge
+        ? await options.createBridge(routeEnv, routeConfig)
+        : await createDefaultLarkBridge(routeEnv);
+    };
 
     channel.on("message", async (message) => {
       try {
@@ -189,6 +195,39 @@ export async function runLarkService(
           message,
           requireMentionInGroup: config.requireMentionInGroup,
           reactionSettings,
+          routePrivateMessageToOwner: async ({ message: routeMessage, normalized }) => {
+            const route = await findPrivateLarkMessageOwnerRoute({
+              env: bridgeEnv,
+              currentStateDir: stateDir,
+              normalized,
+            });
+            if (!route) {
+              return false;
+            }
+
+            const routedEnv = {
+              ...route.env,
+              TAROCUB_INSTANCE: route.instanceName,
+              CODEX_TELEGRAM_INSTANCE: route.instanceName,
+              CODEX_TELEGRAM_STATE_DIR: route.config.stateDir,
+            };
+            const routedRuntime = createLarkServiceRuntime({
+              queuePolicy: resolveLarkQueuePolicy(route.env),
+            });
+            routedRuntime.commentClient ??= createLarkCommentClient(route.config);
+            const routedBridge = await createBridgeForRoute(routedEnv, route.config);
+            await handleLarkMessage({
+              channel: channel!,
+              bridge: routedBridge.bridge,
+              runtime: routedRuntime,
+              stateDir: routedBridge.stateDir,
+              instanceName: route.instanceName,
+              message: routeMessage,
+              requireMentionInGroup: route.config.requireMentionInGroup,
+              reactionSettings: resolveLarkReactionSettings(route.env),
+            });
+            return true;
+          },
         });
       } catch (error) {
         logLarkServiceError(logger, "Lark message handling failed", error);

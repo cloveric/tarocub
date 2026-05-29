@@ -90,6 +90,10 @@ export async function handleLarkMessage(input: {
   requireMentionInGroup?: boolean;
   workspaceOverride?: string;
   reactionSettings?: LarkReactionSettings;
+  routePrivateMessageToOwner?: (input: {
+    message: LarkIncomingMessage;
+    normalized: LarkNormalizedBridgeMessage;
+  }) => Promise<boolean>;
 }): Promise<boolean> {
   const requireMentionInGroup = await resolveLarkMessageMentionRequirement({
     stateDir: input.stateDir,
@@ -112,6 +116,9 @@ export async function handleLarkMessage(input: {
   }
   const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, message);
   const normalized = await enrichLarkReplyContext(input.channel, expandedNormalized);
+  if (input.routePrivateMessageToOwner && await input.routePrivateMessageToOwner({ message, normalized })) {
+    return true;
+  }
   return await runAcceptedLarkMessage(input, normalized);
 }
 
