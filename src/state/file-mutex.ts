@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 interface LockOwnerRecord {
   pid: number;
   acquiredAt: string;
+  /** Unique per acquisition, used so release only removes the lock it still holds. */
+  token?: string;
 }
 
 const inProcessQueues = new Map<string, Promise<void>>();
@@ -110,17 +113,19 @@ async function acquireFileMutex(
   lockPath: string,
   staleLockMs: number,
   notifyWait?: (reason: FileMutexWaitEvent["reason"]) => void,
-): Promise<void> {
+): Promise<string> {
   const ownerPath = `${lockPath}/owner.json`;
   await mkdir(path.dirname(lockPath), { recursive: true, mode: 0o700 });
   for (;;) {
     try {
       await mkdir(lockPath, { recursive: false, mode: 0o700 });
+      const token = randomUUID();
       await writeFile(ownerPath, JSON.stringify({
         pid: process.pid,
         acquiredAt: new Date().toISOString(),
+        token,
       }), { encoding: "utf8", mode: 0o600 });
-      return;
+      return token;
     } catch (error) {
       if (!isFileExistsError(error)) {
         throw error;
@@ -155,7 +160,22 @@ function scheduleFileMutexWaitNotification(
   return timer;
 }
 
-async function releaseFileMutex(lockPath: string): Promise<void> {
+async function releaseFileMutex(lockPath: string, token: string): Promise<void> {
+  const ownerPath = `${lockPath}/owner.json`;
+  try {
+    const raw = await readFile(ownerPath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<LockOwnerRecord>;
+    if (typeof parsed.token === "string" && parsed.token !== token) {
+      // The lock was recovered and re-acquired by another owner while we
+      // stalled past staleLockMs; do not delete a lock we no longer hold.
+      return;
+    }
+  } catch (error) {
+    // Missing owner record (already recovered) or corrupt JSON: fall through and
+    // remove the lock we believe we hold rather than leaking it. A *different*
+    // owner is only proven by a readable, mismatched token (handled above).
+    void error;
+  }
   await rm(lockPath, { recursive: true, force: true });
 }
 
@@ -202,21 +222,15 @@ export async function withFileMutex<T>(
       }
     }
   };
-  const run = waitForPrevious().then(async () => {
-    await acquireFileMutex(lockPath, staleLockMs, notifyWait);
+  const acquireRunRelease = async (): Promise<T> => {
+    const token = await acquireFileMutex(lockPath, staleLockMs, notifyWait);
     try {
       return await task();
     } finally {
-      await releaseFileMutex(lockPath);
+      await releaseFileMutex(lockPath, token);
     }
-  }, async () => {
-    await acquireFileMutex(lockPath, staleLockMs, notifyWait);
-    try {
-      return await task();
-    } finally {
-      await releaseFileMutex(lockPath);
-    }
-  });
+  };
+  const run = waitForPrevious().then(acquireRunRelease, acquireRunRelease);
 
   const queued = run.then(
     () => undefined,
