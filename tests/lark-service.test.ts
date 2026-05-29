@@ -7801,6 +7801,48 @@ describe("lark service", () => {
     }
   });
 
+  it("reuses the queued card as the run card instead of leaving it stale", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-reuse-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: "conversation_queue" }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({ chatId: "lark:oc_chat", waitedMs: 10_000, reason: "conversation_queue" });
+        return await job();
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "answer text" }));
+        return { text: "answer text" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_reuse", content: "go" }),
+      });
+
+      // The queued card (sent as "sent_1") is taken over by the run card via
+      // updateCard — not orphaned, and no second card is sent.
+      expect(channel.updateCard).toHaveBeenCalledWith("sent_1", expect.any(Object));
+      expect(JSON.stringify(channel.updateCard.mock.calls)).toContain("answer text");
+      const cardSends = channel.send.mock.calls.filter((call: unknown[]) => Boolean((call[1] as { card?: unknown } | undefined)?.card));
+      expect(cardSends).toHaveLength(1); // only the queued card was *sent*
+      expect(runtime.queueCards.size).toBe(0); // no stale queued-card id left behind
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("preempts an active Lark turn only when the optional queue policy enables it", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-preempt-"));
     const channel = fakeChannel();

@@ -331,20 +331,36 @@ async function runAcceptedLarkMessage(
       },
     });
     try {
-      await sendLarkCardWithFallback({
+      const card = renderLarkQueueWaitCard({
+        conversationKey: normalized.conversationKey,
+        bridgeChatType: normalized.bridgeChatType,
+        waitedMs: event.waitedMs,
+        replyInThread: Boolean(normalized.threadId),
+        locale: messageLocale,
+      });
+      // Reuse a single card across repeated wait notifications, and remember its
+      // id so the run card can take it over (queued → running → done) instead of
+      // leaving a stale "queued" card behind once the task starts.
+      const existing = input.runtime.queueCards.get(normalized.conversationKey);
+      if (existing && input.channel.updateCard) {
+        try {
+          await input.channel.updateCard(existing, card);
+          return;
+        } catch {
+          // fall through to sending a fresh card
+        }
+      }
+      const sent = await sendLarkCardWithFallback({
         channel: input.channel,
         chatId: normalized.chatId,
-        card: renderLarkQueueWaitCard({
-          conversationKey: normalized.conversationKey,
-          bridgeChatType: normalized.bridgeChatType,
-          waitedMs: event.waitedMs,
-          replyInThread: Boolean(normalized.threadId),
-          locale: messageLocale,
-        }),
+        card,
         fallbackText: renderLarkConversationQueueWait(messageLocale),
         options: larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
         locale: messageLocale,
       });
+      if (!sent.fallback) {
+        input.runtime.queueCards.set(normalized.conversationKey, sent.messageId);
+      }
     } catch (error) {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "engine.event.delivery_failed",
@@ -396,7 +412,27 @@ async function enqueueLarkTurn(
           phase: "queue",
         },
       });
-      await input.channel.send(normalized.chatId, { text: renderLarkQueuedTaskSkipped(locale) }, {
+      // A skipped turn must not leave its "queued" card spinning forever.
+      const queuedCardId = input.runtime.queueCards.get(normalized.conversationKey);
+      input.runtime.queueCards.delete(normalized.conversationKey);
+      const skippedText = renderLarkQueuedTaskSkipped(locale);
+      if (queuedCardId && input.channel.updateCard) {
+        try {
+          await input.channel.updateCard(queuedCardId, {
+            schema: "2.0",
+            config: { update_multi: true },
+            body: {
+              direction: "vertical",
+              padding: "12px 12px 12px 12px",
+              elements: [{ tag: "markdown", content: skippedText }],
+            },
+          });
+          return true;
+        } catch {
+          // fall through to a plain-text notice
+        }
+      }
+      await input.channel.send(normalized.chatId, { text: skippedText }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
       });
@@ -771,6 +807,10 @@ async function runNormalizedLarkMessage(
 
     let runCard: LarkRunCardController | undefined;
     try {
+      // If a "queued" card was already shown for this conversation, take it over
+      // as the run card so it transitions in place instead of being orphaned.
+      const queuedCardId = input.runtime.queueCards.get(normalized.conversationKey);
+      input.runtime.queueCards.delete(normalized.conversationKey);
       runCard = await createLarkRunCardController({
         channel: input.channel,
         chatId: normalized.chatId,
@@ -779,6 +819,7 @@ async function runNormalizedLarkMessage(
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
         locale,
+        ...(queuedCardId ? { existingMessageId: queuedCardId } : {}),
       });
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
         await runCard?.apply(event);
@@ -1043,21 +1084,37 @@ async function createLarkRunCardController(input: {
   replyTo: string;
   replyInThread: boolean;
   locale: "zh" | "en";
+  /** Reuse an existing card (e.g. the "queued" card) instead of sending a new one. */
+  existingMessageId?: string;
 }): Promise<LarkRunCardController | undefined> {
   if (!input.channel.updateCard) {
     return undefined;
   }
   let state: LarkRunState = initialLarkRunState(input.conversationKey, input.bridgeChatType);
-  const sent = await sendLarkCardWithFallback({
-    channel: input.channel,
-    chatId: input.chatId,
-    card: renderLarkRunCard(state, input.locale),
-    fallbackText: input.locale === "en"
-      ? "Task is running. Send /stop to cancel it."
-      : "任务处理中，可发送 /stop 停止。",
-    options: larkReplyOptions(input.replyTo, input.replyInThread),
-    locale: input.locale,
-  });
+  let sent: { messageId: string; fallback: boolean };
+  if (input.existingMessageId) {
+    // Take over the queued card: turn it into the run card in place.
+    try {
+      await input.channel.updateCard(input.existingMessageId, renderLarkRunCard(state, input.locale));
+      sent = { messageId: input.existingMessageId, fallback: false };
+    } catch {
+      sent = { messageId: input.existingMessageId, fallback: true };
+    }
+  } else {
+    sent = { messageId: "", fallback: true };
+  }
+  if (sent.fallback) {
+    sent = await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.chatId,
+      card: renderLarkRunCard(state, input.locale),
+      fallbackText: input.locale === "en"
+        ? "Task is running. Send /stop to cancel it."
+        : "任务处理中，可发送 /stop 停止。",
+      options: larkReplyOptions(input.replyTo, input.replyInThread),
+      locale: input.locale,
+    });
+  }
   if (sent.fallback) {
     return undefined;
   }

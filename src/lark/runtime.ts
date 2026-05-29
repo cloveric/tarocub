@@ -78,6 +78,8 @@ export interface LarkServiceRuntime {
   queuePolicy: LarkQueuePolicy;
   pendingBatches: Map<string, PendingLarkBatch>;
   chatModeCache: Map<string, LarkChatMode>;
+  /** conversationKey → message id of the "queued" card, so the run card can reuse it. */
+  queueCards: Map<string, string>;
   appInfo?: { appId: string; domain?: string };
   cronRuntime?: LarkCronRuntime;
   busRuntime?: LarkBusRuntime;
@@ -112,6 +114,7 @@ export function createLarkServiceRuntime(options: {
     },
     pendingBatches: new Map(),
     chatModeCache: new Map(),
+    queueCards: new Map(),
     ...(options.cronRuntime ? { cronRuntime: options.cronRuntime } : {}),
     ...(options.busRuntime ? { busRuntime: options.busRuntime } : {}),
     ...(options.miniRuntime ? { miniRuntime: options.miniRuntime } : {}),
