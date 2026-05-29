@@ -8811,6 +8811,35 @@ describe("lark service", () => {
     );
   });
 
+  it("accepts stringified Lark card action values from callback payloads", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+
+    const handled = await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: {
+          value: JSON.stringify({
+            cctb_lark: "ask_user_question_smoke",
+            answer: "Continue",
+            replyInThread: true,
+          }),
+        },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(channel.send).toHaveBeenCalledWith(
+      "oc_chat",
+      { text: expect.stringContaining("不再有效") },
+      { replyTo: "om_card", replyInThread: true },
+    );
+  });
+
   it("renders Lark approval timeout replies in English when Lark locale is English", async () => {
     vi.useFakeTimers();
     const runtime = createLarkServiceRuntime();
