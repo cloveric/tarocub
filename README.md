@@ -233,12 +233,16 @@ telegram backup --instance work --out ./work.cctb.gz
 ```bash
 lark service start
 lark service restart
+lark service restart --all
 lark doctor
+lark service status --all
 lark access status
 lark cli identity status
 lark auth status --verify
 lark send --chat oc_xxx --message "hello"
 ```
+
+When `lark service restart --all` is run from inside an active Lark turn, the current Lark instance is deferred and restarted last so the reply can finish before the bot stops its own process. Avoid hand-rolled shell loops that restart Lark instances from inside a Lark bot.
 
 ### In-chat slash commands
 

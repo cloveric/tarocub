@@ -69,10 +69,14 @@ node dist/src/index.js lark doctor
 node dist/src/index.js lark service start
 node dist/src/index.js lark service logs 80
 node dist/src/index.js lark service restart
+node dist/src/index.js lark service restart --all
+node dist/src/index.js lark service status --all
 node dist/src/index.js lark timeline 20
 node dist/src/index.js lark audit 20
 node dist/src/index.js lark dashboard
 ```
+
+在活跃的 Lark bot turn 里执行 `lark service restart --all` 时，当前 Lark 实例会自动改成延迟重启，等回复完成后再重启自己。不要在 Lark bot 里手写 shell 循环逐个 restart Lark 实例，否则容易先杀掉当前执行链。
 
 `lark wizard` 会走官方 Lark SDK 的 PersonalAgent 注册流程，在终端打印二维码，把凭据保存到 `~/.cctb/lark/lark.env`（或 `CCTB_LARK_STATE_DIR/lark.env`），然后检查 bridge 需要的能力：接收消息事件、卡片回调、bot 发消息/资源权限、飞书文档权限。如果 app 有管理权限，wizard 会补齐事件/回调订阅；如果没有，会明确告诉你缺哪个管理 scope。如果你更想手动填凭据，环境变量仍然优先：
 

@@ -41,6 +41,9 @@ export interface LarkRuntimeEnv {
   TAROCUB_LARK_QUEUE_MODE?: string;
   CCTB_LARK_BATCH_WINDOW_MS?: string;
   TAROCUB_LARK_BATCH_WINDOW_MS?: string;
+  CCTB_LARK_ACTIVE_TURN?: string;
+  CCTB_LARK_ACTIVE_INSTANCE?: string;
+  CCTB_LARK_ACTIVE_STATE_DIR?: string;
 }
 
 export interface LarkRuntimeConfig {

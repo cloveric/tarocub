@@ -911,6 +911,11 @@ async function runNormalizedLarkMessage(
           turnPoolWaitNotifyAfterMs: 10_000,
           onTurnPoolWait: handleTurnPoolWait,
           instructions: larkAgentInstructions(),
+          extraEnv: {
+            CCTB_LARK_ACTIVE_TURN: "1",
+            CCTB_LARK_ACTIVE_INSTANCE: input.instanceName ?? path.basename(input.stateDir),
+            CCTB_LARK_ACTIVE_STATE_DIR: input.stateDir,
+          },
         });
         await runCard?.finish(result.text);
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);

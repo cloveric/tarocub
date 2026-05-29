@@ -494,6 +494,111 @@ describe("runCli", () => {
     }
   });
 
+  it("defers restarting the current Lark service when called from an active Lark turn", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const scheduleDeferredRestart = vi.fn(async () => 'Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.');
+
+    try {
+      const handled = await runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+          CCTB_LARK_ACTIVE_TURN: "1",
+          CCTB_LARK_ACTIVE_INSTANCE: "alpha",
+          CCTB_LARK_ACTIVE_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning, scheduleDeferredRestart },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+      expect(scheduleDeferredRestart).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir,
+      }), { current: true });
+      expect(messages).toEqual(['Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.']);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("restarts all Lark services while deferring the current active Lark turn instance", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const alphaDir = path.join(tempDir, ".cctb", "alpha");
+    const betaDir = path.join(tempDir, ".cctb", "beta");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const scheduleDeferredRestart = vi.fn(async () => 'Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.');
+
+    try {
+      await mkdir(alphaDir, { recursive: true });
+      await mkdir(betaDir, { recursive: true });
+      await writeFile(path.join(alphaDir, "lark.env"), [
+        `CCTB_LARK_STATE_DIR="${alphaDir}"`,
+        'CCTB_LARK_INSTANCE="alpha"',
+        'LARK_APP_ID="cli_a"',
+        'LARK_APP_SECRET="secret"',
+        "",
+      ].join("\n"));
+      await writeFile(path.join(betaDir, "lark.env"), [
+        `CCTB_LARK_STATE_DIR="${betaDir}"`,
+        'CCTB_LARK_INSTANCE="beta"',
+        'LARK_APP_ID="cli_b"',
+        'LARK_APP_SECRET="secret"',
+        "",
+      ].join("\n"));
+
+      const handled = await runCli(["lark", "service", "restart", "--all"], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_LARK_ACTIVE_TURN: "1",
+          CCTB_LARK_ACTIVE_INSTANCE: "alpha",
+          CCTB_LARK_ACTIVE_STATE_DIR: alphaDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning, scheduleDeferredRestart },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir: betaDir,
+        env: expect.objectContaining({
+          CCTB_LARK_INSTANCE: "beta",
+          CCTB_LARK_STATE_DIR: betaDir,
+        }),
+      }));
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledWith(expect.objectContaining({ stateDir: betaDir }));
+      expect(waitUntilRunning).toHaveBeenCalledWith(expect.objectContaining({ stateDir: betaDir }));
+      expect(scheduleDeferredRestart).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir: alphaDir,
+        env: expect.objectContaining({
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: alphaDir,
+        }),
+      }), { current: true });
+      expect(messages).toEqual([
+        "Stopped Lark service.",
+        "Started Lark service.",
+        'Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.',
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("refuses to restart a Lark service with accepted turns unless forced", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

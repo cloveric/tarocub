@@ -1,6 +1,6 @@
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, openSync, type Dirent } from "node:fs";
 import { readFile, readdir, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,6 +173,9 @@ export interface CliOptions {
     LARK_DOMAIN?: string;
     CCTB_LARK_INSTANCE?: string;
     CCTB_LARK_STATE_DIR?: string;
+    CCTB_LARK_ACTIVE_TURN?: string;
+    CCTB_LARK_ACTIVE_INSTANCE?: string;
+    CCTB_LARK_ACTIVE_STATE_DIR?: string;
     LARK_REQUIRE_MENTION_IN_GROUP?: string;
   };
   logger?: CliLogger;
@@ -1535,6 +1538,7 @@ async function defaultStartLarkService(
   delete serviceEnv.CCTB_SEND_TOKEN;
   delete serviceEnv.CCTB_SEND_COMMAND;
   delete serviceEnv.CODEX_THREAD_ID;
+  clearLarkActiveTurnEnv(serviceEnv);
 
   (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [input.entrypoint, "lark", "run", "--instance", instanceName], {
     cwd: input.cwd,
@@ -1706,6 +1710,9 @@ function runRestart() {
   delete env.CCTB_SEND_TOKEN;
   delete env.CCTB_SEND_COMMAND;
   delete env.CODEX_THREAD_ID;
+  delete env.CCTB_LARK_ACTIVE_TURN;
+  delete env.CCTB_LARK_ACTIVE_INSTANCE;
+  delete env.CCTB_LARK_ACTIVE_STATE_DIR;
 
   const result = spawnSync(process.execPath, [entrypoint, "lark", "service", "restart"], {
     env,
@@ -1776,6 +1783,7 @@ async function defaultScheduleDeferredLarkServiceRestart(
   delete env.CCTB_SEND_TOKEN;
   delete env.CCTB_SEND_COMMAND;
   delete env.CODEX_THREAD_ID;
+  clearLarkActiveTurnEnv(env);
 
   (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [
     "-e",
@@ -1941,6 +1949,86 @@ async function prepareLarkServiceStartEnv(env: LarkRuntimeEnv): Promise<void> {
   });
 }
 
+interface LarkServiceTarget {
+  instanceName: string;
+  stateDir: string;
+}
+
+async function listConfiguredLarkServiceTargets(env: LarkRuntimeEnv): Promise<LarkServiceTarget[]> {
+  const homeDir = env.HOME ?? env.USERPROFILE;
+  if (!homeDir) {
+    return [];
+  }
+  const channelsDir = path.join(homeDir, ".cctb");
+  let dirents: Dirent[];
+  try {
+    dirents = await readdir(channelsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const targets: LarkServiceTarget[] = [];
+  for (const entry of dirents) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
+      continue;
+    }
+    const stateDir = path.join(channelsDir, entry.name);
+    try {
+      await readFile(path.join(stateDir, "lark.env"), "utf8");
+    } catch {
+      continue;
+    }
+    targets.push({
+      instanceName: normalizeInstanceName(entry.name),
+      stateDir,
+    });
+  }
+  return targets.sort((left, right) => left.instanceName.localeCompare(right.instanceName));
+}
+
+async function loadLarkServiceTargetEnv(baseEnv: LarkRuntimeEnv, target: LarkServiceTarget): Promise<LarkRuntimeEnv> {
+  const {
+    CODEX_TELEGRAM_STATE_DIR: _telegramStateDir,
+    ...rest
+  } = baseEnv;
+  void _telegramStateDir;
+  return await loadLarkRuntimeEnv({
+    ...rest,
+    CCTB_LARK_INSTANCE: target.instanceName,
+    TAROCUB_INSTANCE: target.instanceName,
+    CCTB_LARK_STATE_DIR: target.stateDir,
+  });
+}
+
+function buildLarkServiceCommandInput(env: LarkRuntimeEnv): LarkServiceCommandInput {
+  const stateDir = resolveLarkStateDir(env);
+  return {
+    env,
+    stateDir,
+    logPath: resolveLarkServiceLogPath(stateDir),
+    entrypoint: resolveCliEntrypoint(),
+    cwd: process.cwd(),
+  };
+}
+
+function isCurrentActiveLarkTurnTarget(env: LarkRuntimeEnv, targetEnv: LarkRuntimeEnv, targetStateDir: string): boolean {
+  if (env.CCTB_LARK_ACTIVE_TURN !== "1") {
+    return false;
+  }
+  const activeStateDir = env.CCTB_LARK_ACTIVE_STATE_DIR?.trim();
+  if (activeStateDir && path.resolve(activeStateDir) === path.resolve(targetStateDir)) {
+    return true;
+  }
+  const activeInstance = env.CCTB_LARK_ACTIVE_INSTANCE?.trim();
+  return Boolean(activeInstance) && normalizeInstanceName(activeInstance) === resolveLarkInstanceName(targetEnv);
+}
+
+function clearLarkActiveTurnEnv(env: NodeJS.ProcessEnv): void {
+  delete env.CCTB_LARK_ACTIVE_TURN;
+  delete env.CCTB_LARK_ACTIVE_INSTANCE;
+  delete env.CCTB_LARK_ACTIVE_STATE_DIR;
+}
+
 async function runLarkServiceCommand(
   args: string[],
   env: LarkRuntimeEnv,
@@ -1953,45 +2041,90 @@ async function runLarkServiceCommand(
 
   const subcommand = args[0];
   const loadedEnv = await loadLarkRuntimeEnv(env);
+  const { enabled: all, args: argsWithoutAll } = extractBooleanFlag(args.slice(1), "--all");
 
   if (subcommand === "status") {
+    if (all) {
+      if (argsWithoutAll.length !== 0) {
+        throw new Error("Usage: lark service status [--all]");
+      }
+      const targets = await listConfiguredLarkServiceTargets(loadedEnv);
+      if (targets.length === 0) {
+        logger.log("No Lark instances found.");
+        return true;
+      }
+      for (const target of targets) {
+        logger.log(await formatLarkStatus(await loadLarkServiceTargetEnv(loadedEnv, target)));
+      }
+      return true;
+    }
     if (args.length !== 1) {
-      throw new Error("Usage: lark service status");
+      throw new Error("Usage: lark service status [--all]");
     }
     logger.log(await formatLarkStatus(loadedEnv));
     return true;
   }
 
   if (subcommand === "doctor") {
+    if (all) {
+      if (argsWithoutAll.length !== 0) {
+        throw new Error("Usage: lark service doctor [--all]");
+      }
+      const targets = await listConfiguredLarkServiceTargets(loadedEnv);
+      if (targets.length === 0) {
+        logger.log("No Lark instances found.");
+        return true;
+      }
+      for (const target of targets) {
+        logger.log(await formatLarkDoctor(await loadLarkServiceTargetEnv(loadedEnv, target), deps.inspectApp ?? inspectLarkAppProvisioning));
+      }
+      return true;
+    }
     if (args.length !== 1) {
-      throw new Error("Usage: lark service doctor");
+      throw new Error("Usage: lark service doctor [--all]");
     }
     logger.log(await formatLarkDoctor(loadedEnv, deps.inspectApp ?? inspectLarkAppProvisioning));
     return true;
   }
 
-  const stateDir = resolveLarkStateDir(loadedEnv);
-  const logPath = resolveLarkServiceLogPath(stateDir);
-  const commandInput: LarkServiceCommandInput = {
-    env: loadedEnv,
-    stateDir,
-    logPath,
-    entrypoint: resolveCliEntrypoint(),
-    cwd: process.cwd(),
-  };
+  const commandInput = buildLarkServiceCommandInput(loadedEnv);
+  const stateDir = commandInput.stateDir;
 
   if (subcommand === "logs") {
+    if (all) {
+      throw new Error("Usage: lark service logs [tail-count]");
+    }
     if (args.length > 2) {
       throw new Error("Usage: lark service logs [tail-count]");
     }
     const tail = args[1] ? parsePositiveInteger(args[1], "tail count") : 80;
-    logger.log(await (deps.readLogs ?? defaultReadLarkServiceLogs)({ stateDir, logPath, tail }));
+    logger.log(await (deps.readLogs ?? defaultReadLarkServiceLogs)({ stateDir, logPath: commandInput.logPath, tail }));
     return true;
   }
 
   if (subcommand === "start") {
+    if (all) {
+      if (argsWithoutAll.length !== 0) {
+        throw new Error("Usage: lark service start [--all]");
+      }
+      const targets = await listConfiguredLarkServiceTargets(loadedEnv);
+      if (targets.length === 0) {
+        logger.log("No Lark instances found.");
+        return true;
+      }
+      for (const target of targets) {
+        const targetInput = buildLarkServiceCommandInput(await loadLarkServiceTargetEnv(loadedEnv, target));
+        await prepareLarkServiceStartEnv(targetInput.env);
+        const result = deps.start ? await deps.start(targetInput) : await defaultStartLarkService(targetInput, deps);
+        if (result === "started") {
+          await (deps.waitUntilRunning ?? defaultWaitUntilLarkServiceRunning)(targetInput);
+        }
+        logger.log(formatLarkServiceAction("start", result));
+      }
+      return true;
+    }
     if (args.length !== 1) {
-      throw new Error("Usage: lark service start");
+      throw new Error("Usage: lark service start [--all]");
     }
     await prepareLarkServiceStartEnv(loadedEnv);
     const result = deps.start ? await deps.start(commandInput) : await defaultStartLarkService(commandInput, deps);
@@ -2003,9 +2136,33 @@ async function runLarkServiceCommand(
   }
 
   if (subcommand === "stop") {
-    const { enabled: force, args: stopArgs } = extractBooleanFlag(args.slice(1), "--force");
+    const { enabled: force, args: stopArgs } = extractBooleanFlag(argsWithoutAll, "--force");
     if (stopArgs.length !== 0) {
-      throw new Error("Usage: lark service stop [--force]");
+      throw new Error("Usage: lark service stop [--all] [--force]");
+    }
+    if (all) {
+      const targets = await listConfiguredLarkServiceTargets(loadedEnv);
+      if (targets.length === 0) {
+        logger.log("No Lark instances found.");
+        return true;
+      }
+      for (const target of targets) {
+        const targetEnv = await loadLarkServiceTargetEnv(loadedEnv, target);
+        const targetInput = buildLarkServiceCommandInput(targetEnv);
+        if (isCurrentActiveLarkTurnTarget(env, targetEnv, targetInput.stateDir)) {
+          logger.log(`Skipped current Lark instance "${target.instanceName}"; run lark service stop from a terminal if you need to stop it too.`);
+          continue;
+        }
+        if (!force) {
+          await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "stop");
+        }
+        const result = deps.stop ? await deps.stop(targetInput) : await defaultStopLarkService(targetInput, deps);
+        logger.log(formatLarkServiceAction("stop", result));
+      }
+      return true;
+    }
+    if (isCurrentActiveLarkTurnTarget(env, loadedEnv, stateDir)) {
+      throw new Error(`Refusing to stop current Lark instance "${resolveLarkInstanceName(loadedEnv)}" from inside an active Lark turn; run it from a terminal if you need to stop it.`);
     }
     if (!force) {
       await assertNoActiveLarkTurnsBeforeServiceAction(stateDir, resolveLarkInstanceName(loadedEnv), "stop");
@@ -2016,15 +2173,54 @@ async function runLarkServiceCommand(
   }
 
   if (subcommand === "restart") {
-    const { enabled: defer, args: afterDefer } = extractBooleanFlag(args.slice(1), "--defer");
+    const { enabled: defer, args: afterDefer } = extractBooleanFlag(argsWithoutAll, "--defer");
     const { enabled: force, args: restartArgs } = extractBooleanFlag(afterDefer, "--force");
     if (restartArgs.length !== 0) {
-      throw new Error("Usage: lark service restart [--defer] [--force]");
+      throw new Error("Usage: lark service restart [--all] [--defer] [--force]");
     }
     const scheduleDeferredRestart = deps.scheduleDeferredRestart
       ?? ((deferredInput, options) => defaultScheduleDeferredLarkServiceRestart(deferredInput, deps, options));
+    if (all) {
+      const targets = await listConfiguredLarkServiceTargets(loadedEnv);
+      if (targets.length === 0) {
+        logger.log("No Lark instances found.");
+        return true;
+      }
+      let deferredCurrentInput: LarkServiceCommandInput | null = null;
+      for (const target of targets) {
+        const targetEnv = await loadLarkServiceTargetEnv(loadedEnv, target);
+        const targetInput = buildLarkServiceCommandInput(targetEnv);
+        if (isCurrentActiveLarkTurnTarget(env, targetEnv, targetInput.stateDir)) {
+          deferredCurrentInput = targetInput;
+          continue;
+        }
+        if (defer) {
+          logger.log(await scheduleDeferredRestart(targetInput, {}));
+          continue;
+        }
+        if (!force) {
+          await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "restart");
+        }
+        await prepareLarkServiceStartEnv(targetEnv);
+        const stopResult = deps.stop ? await deps.stop(targetInput) : await defaultStopLarkService(targetInput, deps);
+        logger.log(formatLarkServiceAction("stop", stopResult));
+        const result = deps.start ? await deps.start(targetInput) : await defaultStartLarkService(targetInput, deps);
+        if (result === "started") {
+          await (deps.waitUntilRunning ?? defaultWaitUntilLarkServiceRunning)(targetInput);
+        }
+        logger.log(formatLarkServiceAction("start", result));
+      }
+      if (deferredCurrentInput) {
+        logger.log(await scheduleDeferredRestart(deferredCurrentInput, { current: true }));
+      }
+      return true;
+    }
     if (defer) {
       logger.log(await scheduleDeferredRestart(commandInput, {}));
+      return true;
+    }
+    if (isCurrentActiveLarkTurnTarget(env, loadedEnv, stateDir)) {
+      logger.log(await scheduleDeferredRestart(commandInput, { current: true }));
       return true;
     }
     if (!force) {

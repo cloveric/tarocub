@@ -14,6 +14,9 @@ export interface EnvSource {
   TELEGRAM_BOT_TOKEN?: string;
   CODEX_TELEGRAM_INSTANCE?: string;
   CODEX_TELEGRAM_STATE_DIR?: string;
+  CCTB_LARK_ACTIVE_TURN?: string;
+  CCTB_LARK_ACTIVE_INSTANCE?: string;
+  CCTB_LARK_ACTIVE_STATE_DIR?: string;
   CODEX_EXECUTABLE?: string;
   CLAUDE_EXECUTABLE?: string;
   ANTIGRAVITY_EXECUTABLE?: string;

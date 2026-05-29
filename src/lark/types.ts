@@ -124,6 +124,7 @@ export interface LarkBridgeLike {
     requestOutputDir?: string;
     workspaceOverride?: string;
     instructions?: string;
+    extraEnv?: Record<string, string>;
     abortSignal?: AbortSignal;
     onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
     turnPoolWaitNotifyAfterMs?: number;

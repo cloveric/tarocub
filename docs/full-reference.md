@@ -1329,6 +1329,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 | `telegram service restart --instance <name> --defer` | Schedule a one-shot detached restart after the current reply, useful when a bot needs to restart itself |
 | `telegram service logs` | Tail stdout/stderr logs |
 | `telegram service doctor` | Health check across all subsystems, including timeline, crew state, shared engine env, and stale launchd leftovers |
+| `lark service restart --all` | Restart every configured Lark instance; when run inside an active Lark turn, defer the current instance until after the reply |
 | `telegram engine [codex\|claude\|antigravity]` | Switch AI engine per instance |
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
 | `telegram usage` | Show token usage and estimated cost |
@@ -1345,6 +1346,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 All commands accept `--instance <name>` to target a specific bot.
 
 When `telegram service restart --all` is run from inside an active bot turn, the current instance is restarted last through a one-shot detached helper so the reply can finish before the bot kills its own process. `telegram service stop --all` still skips the current instance; stop it from a terminal if needed.
+
+For Lark fleets, use `lark service restart --all` instead of hand-written restart loops. The Lark command applies the same self-safe pattern: non-current Lark instances restart immediately, while the Lark instance handling the active turn is scheduled through the deferred helper.
 
 ## Stable Beta Commands
 
