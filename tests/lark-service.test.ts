@@ -9503,6 +9503,7 @@ describe("lark service", () => {
     expect(payload).toContain('"select_static"');       // single-select question
     expect(payload).toContain('"multi_select_static"');  // multiSelect question
     expect(payload).toContain('"action":"form_submit"');
+    expect(payload).toContain('"required":true'); // single-select must be answered
     expect(payload).not.toContain("collapsible_panel");
     expect(payload).not.toContain('"action":"toggle"');
 
@@ -9578,6 +9579,68 @@ describe("lark service", () => {
 
     const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
     expect(resolved.updatedInput.answers).toEqual({ "Pick": "A, C" });
+  });
+
+  it("replaces the AskUserQuestion form with a read-only submitted card", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "Fast" } } },
+    });
+
+    await pending;
+    const updates = JSON.stringify(channel.updateCard.mock.calls);
+    expect(updates).toContain("已提交");
+    expect(updates).toContain("Fast");
+    // The submitted card is read-only: no inputs or submit button remain.
+    expect(updates).not.toContain("select_static");
+    expect(updates).not.toContain("form_submit");
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
+  it("re-prompts instead of resolving when a required single-select answer is missing", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    // Submit with nothing selected → must NOT resolve; should re-prompt.
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: {} } },
+    });
+    expect(runtime.pendingApprovals.size).toBe(1);
+    expect(JSON.stringify(channel.send.mock.calls)).toContain("请先选择");
+
+    // A real selection then resolves.
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "Careful" } } },
+    });
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Careful" });
+    expect(runtime.pendingApprovals.size).toBe(0);
   });
 
   it("answers unsupported Lark card actions instead of silently ignoring them", async () => {

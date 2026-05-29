@@ -228,6 +228,9 @@ function renderLarkAskUserQuestionCard(input: {
     formElements.push({
       tag: question.multiSelect ? "multi_select_static" : "select_static",
       name: askFormFieldName(index),
+      // Single-select questions must be answered; Feishu blocks submit until a
+      // value is chosen. Multi-select stays optional (selecting none is valid).
+      ...(question.multiSelect ? {} : { required: true }),
       placeholder: {
         tag: "plain_text",
         content: question.multiSelect
@@ -280,6 +283,33 @@ function renderLarkAskUserQuestionCard(input: {
           elements: formElements,
         },
       ],
+    },
+  };
+}
+
+/** Read-only terminal card shown after the form is submitted (no inputs/buttons). */
+function renderLarkAskUserQuestionSubmittedCard(
+  toolInput: unknown,
+  answers: Record<string, string>,
+  locale: Locale,
+): Record<string, unknown> {
+  const questions = normalizeAskUserQuestions(toolInput);
+  const none = locale === "en" ? "(none)" : "（未选）";
+  const lines = questions
+    .map((question) => {
+      const answer = (answers[question.question] ?? "").trim();
+      return `**${question.header}**: ${answer || none}`;
+    })
+    .join("\n");
+  const title = locale === "en" ? "Submitted" : "已提交";
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: title } },
+    header: { title: { tag: "plain_text", content: `✅ ${title}` } },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [{ tag: "markdown", content: lines || none }],
     },
   };
 }
@@ -662,6 +692,22 @@ export async function handleLarkCardAction(input: {
       answers[question.question] = answer;
     });
 
+    // Backstop for clients that don't enforce the form's `required`: a
+    // single-select question must have an answer. Re-prompt without resolving,
+    // leaving the form (and the user's other picks) intact.
+    const missingRequired = questions.filter(
+      (question) => !question.multiSelect && !(answers[question.question] ?? "").trim(),
+    );
+    if (missingRequired.length > 0) {
+      const names = missingRequired.map((question) => question.header).join(locale === "en" ? ", " : "、");
+      await input.channel.send(
+        input.event.chatId,
+        { text: locale === "en" ? `Please choose an answer for: ${names}` : `请先选择：${names}` },
+        replyOpts,
+      );
+      return true;
+    }
+
     const root = objectValue(pending.askUserQuestionInput) ?? {};
     cleanupPendingApproval(input.runtime, value.requestId);
     pending.resolve({
@@ -673,14 +719,30 @@ export async function handleLarkCardAction(input: {
       },
     });
 
+    // Turn the form into a read-only "submitted" card so it no longer looks
+    // actionable; fall back to a text summary if the update fails.
     const summary = questions
       .map((question) => `${question.header}: ${answers[question.question] || (locale === "en" ? "—" : "（未选）")}`)
       .join("\n");
-    await input.channel.send(
-      input.event.chatId,
-      { text: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary },
-      replyOpts,
-    );
+    let cardUpdated = false;
+    if (input.channel.updateCard) {
+      try {
+        await input.channel.updateCard(
+          input.event.messageId,
+          renderLarkAskUserQuestionSubmittedCard(pending.askUserQuestionInput, answers, locale),
+        );
+        cardUpdated = true;
+      } catch {
+        // fall through to a text summary
+      }
+    }
+    if (!cardUpdated) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary },
+        replyOpts,
+      );
+    }
     return true;
   }
 

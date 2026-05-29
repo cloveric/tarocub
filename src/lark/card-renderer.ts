@@ -337,25 +337,47 @@ function finalAnswerText(state: LarkRunState): string {
   return lastText?.content ?? "";
 }
 
-/** A single collapsed panel summarizing a finished turn's process (thinking + tool calls). */
+/**
+ * A single collapsed panel summarizing a finished turn's process — thinking,
+ * intermediate narration, and tool calls in order. The final answer is shown
+ * above the panel, so the matching text block is skipped here (no duplication);
+ * any earlier narration is preserved (foldable) rather than dropped.
+ */
 function condensedProcessPanel(
   state: LarkRunState,
   labels: ReturnType<typeof runCardLabels>,
 ): Record<string, unknown> | undefined {
-  const tools = state.blocks.flatMap((block) => (block.kind === "tool" ? [block.tool] : []));
-  const hasReasoning = state.reasoning.content.trim().length > 0;
-  if (tools.length === 0 && !hasReasoning) {
-    return undefined;
-  }
+  const answer = cleanCardText(finalAnswerText(state)).trim();
   const parts: string[] = [];
-  if (hasReasoning) {
+  if (state.reasoning.content.trim()) {
     parts.push(`🧠 ${truncate(state.reasoning.content.trim(), 600)}`);
   }
-  if (tools.length > 0) {
-    parts.push(tools.map((tool) => `- ${toolHeaderText(tool)}`).join("\n"));
+  let toolCount = 0;
+  let answerSkipped = false;
+  for (const block of state.blocks) {
+    if (block.kind === "tool") {
+      toolCount += 1;
+      parts.push(`- ${toolHeaderText(block.tool)}`);
+      continue;
+    }
+    const text = cleanCardText(block.content).trim();
+    if (!text) {
+      continue;
+    }
+    // Skip the one block that is the final answer (shown above), but keep any
+    // earlier intermediate narration.
+    if (!answerSkipped && answer && text === answer) {
+      answerSkipped = true;
+      continue;
+    }
+    parts.push(truncate(text, 400));
   }
+  if (parts.length === 0) {
+    return undefined;
+  }
+  const title = toolCount > 0 ? `${labels.process} · ${labels.processSteps(toolCount)}` : labels.process;
   return collapsiblePanel({
-    title: `${labels.process} · ${labels.processSteps(tools.length)}`,
+    title,
     expanded: false,
     color: "grey",
     body: truncate(parts.join("\n\n"), PROCESS_PANEL_MAX),

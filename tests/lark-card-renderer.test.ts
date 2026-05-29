@@ -74,6 +74,23 @@ describe("lark card renderer", () => {
     expect(compact.length).toBeLessThan(full.length / 2);
   });
 
+  it("keeps intermediate narration in the finished process panel without duplicating the answer", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "Let me check the config first." });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file_path: "cfg.ts" }, toolUseId: "t1" });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t1", output: "ok" });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "The answer is 42." });
+    state = applyLarkEngineEvent(state, { type: "result", text: "The answer is 42." });
+
+    const body = JSON.stringify((renderLarkRunCard(state) as any).body);
+    // Final answer shown exactly once (not duplicated into the process panel).
+    expect(body.split("The answer is 42.").length - 1).toBe(1);
+    // Earlier narration is preserved (folded), not dropped.
+    expect(body).toContain("Let me check the config first.");
+    expect(body).toContain("过程");
+    expect(body).toContain("Read");
+  });
+
   it("does not render a duplicate permission_request block for AskUserQuestion", () => {
     let state = initialLarkRunState("lark:oc_chat");
     // Claude emits the assistant tool_use block (carries an id, resolves via
