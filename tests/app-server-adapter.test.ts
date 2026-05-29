@@ -101,8 +101,8 @@ describe("CodexAppServerAdapter", () => {
     expect(CODEX_APP_SERVER_TURN_TIMEOUT_MS).toBe(60 * 60_000);
   });
 
-  it("defaults the inactivity diagnostic interval to fifteen minutes", () => {
-    expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(15 * 60_000);
+  it("defaults the inactivity diagnostic interval to thirty minutes", () => {
+    expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(30 * 60_000);
   });
 
   it("sets a Codex thread goal through the app-server protocol", async () => {

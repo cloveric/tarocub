@@ -620,6 +620,7 @@ async function ensureLarkCardActionAccess(input: {
 
   const operatorRawId = larkOperatorRawId(input.event.operator);
   const chatId = larkAccessChatIdFromConversationKey(input.conversationKey);
+  const conversationChatId = stableLarkNumericId(input.conversationKey);
   const userId = stableLarkNumericId(`user:${operatorRawId}`);
   const accessConversationKey = larkAccessConversationKeyFromConversationKey(input.conversationKey);
   const locale = await resolveLarkLocale(input.stateDir);
@@ -631,6 +632,7 @@ async function ensureLarkCardActionAccess(input: {
 
   const decision = await input.bridge.checkAccess({
     chatId,
+    conversationChatId,
     userId,
     chatType: input.bridgeChatType,
     conversationKey: input.conversationKey,

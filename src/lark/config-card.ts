@@ -14,7 +14,7 @@ import {
 import type { Locale } from "../telegram/message-renderer.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
 import { readRawLarkConfig } from "./locale.js";
-import { larkAccessChatIdFromConversationKey } from "./message-normalizer.js";
+import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 
 const LARK_CONFIG_ENGINES: InstanceEngine[] = ["codex", "claude", "antigravity"];
 
@@ -198,7 +198,7 @@ async function applySubmitAction(
   }
   if (value.bridgeChatType === "group") {
     const groupAction = stringFormValue(formValue.group);
-    if (groupAction) {
+    if (groupAction && groupAction !== "keep") {
       notices.push(await applyGroupAction(stateDir, { ...value, action: "group", value: groupAction }, noticeLocale));
     }
   }
@@ -311,6 +311,7 @@ async function applyGroupAction(
   const groupAction = value.value;
   const store = new LarkGroupModeStore(stateDir);
   const bridgeChatId = larkAccessChatIdFromConversationKey(value.conversationKey);
+  const conversationChatId = stableLarkNumericId(value.conversationKey);
   if (groupAction === "allow") {
     await updateGroupMode(stateDir, (groupMode) => {
       allowGroup(groupMode, bridgeChatId);
@@ -330,7 +331,7 @@ async function applyGroupAction(
   if (groupAction === "at") {
     await updateGroupMode(stateDir, (groupMode) => {
       allowGroup(groupMode, bridgeChatId);
-      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== bridgeChatId);
+      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== bridgeChatId && chatId !== conversationChatId);
     });
     await store.setListenAll(value.larkChatId, false);
     return locale === "en" ? "Current group now requires @bot / mention." : "当前群已切回需要 @bot / mention。";
@@ -345,11 +346,26 @@ async function readLarkConfigGroupState(input: LarkConfigCardContext, cfg: Insta
   if (input.bridgeChatType !== "group") {
     return { allowed: false, listenAll: false };
   }
-  const listenAll = await new LarkGroupModeStore(input.stateDir).isListenAll(input.larkChatId);
+  const rawListenAll = await new LarkGroupModeStore(input.stateDir).isListenAll(input.larkChatId);
+  const candidateChatIds = larkConfigGroupCandidateIds(input);
   return {
-    allowed: cfg.groupMode.enabled && cfg.groupMode.allowedChatIds.includes(input.bridgeChatId),
-    listenAll: cfg.groupMode.enabled && listenAll,
+    allowed: cfg.groupMode.enabled && hasAnyConfiguredLarkGroupId(cfg.groupMode.allowedChatIds, candidateChatIds),
+    listenAll: cfg.groupMode.enabled && (
+      rawListenAll || hasAnyConfiguredLarkGroupId(cfg.groupMode.listenAllChatIds, candidateChatIds)
+    ),
   };
+}
+
+function larkConfigGroupCandidateIds(input: LarkConfigCardContext): number[] {
+  return [...new Set([
+    input.bridgeChatId,
+    larkAccessChatIdFromConversationKey(input.conversationKey),
+    stableLarkNumericId(input.conversationKey),
+  ])];
+}
+
+function hasAnyConfiguredLarkGroupId(configuredIds: number[], candidateIds: number[]): boolean {
+  return candidateIds.some((chatId) => configuredIds.includes(chatId));
 }
 
 async function updateGroupMode(stateDir: string, updater: (groupMode: GroupModeConfig) => void): Promise<void> {
@@ -394,6 +410,7 @@ function configFormSection(
   approvalMode: unknown,
 ): Record<string, unknown> {
   const isEn = context.locale === "en";
+  const labels = larkConfigLabels(context.locale);
   const yoloValue = approvalMode === "bypass" ? "unsafe" : approvalMode === "full-auto" ? "on" : "off";
   const formElements: unknown[] = [
     markdownElement(isEn
@@ -420,7 +437,8 @@ function configFormSection(
   ];
 
   if (context.bridgeChatType === "group") {
-    formElements.push(selectStatic("group", "at", [
+    formElements.push(selectStatic("group", "keep", [
+      ["keep", labels.groupKeep],
       ["allow", isEn ? "Allow this group" : "允许本群"],
       ["all", isEn ? "Listen to ordinary messages" : "监听普通消息"],
       ["at", isEn ? "Require @bot" : "仅 @bot"],
@@ -581,6 +599,7 @@ function larkConfigLabels(locale: Locale): {
   localeSection: string;
   groupSection: string;
   groupAllow: string;
+  groupKeep: string;
   groupAllButton: string;
   groupAtButton: string;
   utilitySection: string;
@@ -621,6 +640,7 @@ function larkConfigLabels(locale: Locale): {
       localeSection: "Language",
       groupSection: "Group Mode",
       groupAllow: "Allow Group",
+      groupKeep: "Keep current group setting",
       groupAllButton: "Listen All",
       groupAtButton: "@ Only",
       utilitySection: "Utility",
@@ -661,6 +681,7 @@ function larkConfigLabels(locale: Locale): {
     localeSection: "语言",
     groupSection: "群聊模式",
     groupAllow: "允许本群",
+    groupKeep: "保持当前群聊设置",
     groupAllButton: "全量监听",
     groupAtButton: "仅 @",
     utilitySection: "工具",

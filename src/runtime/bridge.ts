@@ -49,6 +49,7 @@ export interface BridgeConversationScope {
 
 export interface BridgeAccessInput {
   chatId: number;
+  conversationChatId?: number;
   userId: number;
   chatType: string;
   messageThreadId?: number;
@@ -89,6 +90,12 @@ function isAuthorizedGroupUser(
     return accessState.allowlist.includes(input.userId);
   }
   return accessState.pairedUsers.some((user) => user.telegramUserId === input.userId);
+}
+
+function isAllowedGroupChat(groupMode: GroupModeConfig, input: BridgeAccessInput): boolean {
+  return [input.chatId, input.conversationChatId]
+    .filter((chatId): chatId is number => Number.isInteger(chatId))
+    .some((chatId) => groupMode.allowedChatIds.includes(chatId));
 }
 
 export class Bridge {
@@ -133,7 +140,7 @@ export class Bridge {
       const groupMode = await this.loadGroupMode();
       if (
         groupMode.enabled &&
-        groupMode.allowedChatIds.includes(input.chatId) &&
+        isAllowedGroupChat(groupMode, input) &&
         isAuthorizedGroupUser(accessState, input)
       ) {
         return { kind: "allow" };

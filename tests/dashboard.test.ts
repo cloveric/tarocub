@@ -6,7 +6,7 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
-import { collectInstanceSnapshots, renderHtml, serveDashboard } from "../src/commands/dashboard.js";
+import { collectInstanceSnapshots, renderHtml, resolveOpenBrowserCommand, serveDashboard } from "../src/commands/dashboard.js";
 import { CronStore } from "../src/state/cron-store.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -73,6 +73,23 @@ function baseSnapshot() {
 }
 
 describe("collectInstanceSnapshots", () => {
+  it("opens dashboard targets without interpolating paths into shell commands", () => {
+    const target = '/tmp/cctb-dashboard-"quoted".html';
+
+    expect(resolveOpenBrowserCommand(target, "darwin")).toEqual({
+      command: "open",
+      args: [target],
+    });
+    expect(resolveOpenBrowserCommand(target, "linux")).toEqual({
+      command: "xdg-open",
+      args: [target],
+    });
+    expect(resolveOpenBrowserCommand(target, "win32")).toEqual({
+      command: "cmd",
+      args: ["/c", "start", "", target],
+    });
+  });
+
   it("uses channel-neutral dashboard branding and empty-state guidance", () => {
     const html = renderHtml([]);
 

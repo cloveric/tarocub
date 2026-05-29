@@ -813,8 +813,8 @@ async function renderAndApplyLarkGroupCommand(
     });
   } else if (isGroup && (action === "deny" || action === "remove" || action === "rm")) {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
-      groupMode.allowedChatIds = groupMode.allowedChatIds.filter((chatId) => chatId !== normalized.bridgeAccessChatId);
-      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== normalized.bridgeAccessChatId);
+      groupMode.allowedChatIds = groupMode.allowedChatIds.filter((chatId) => !isCurrentLarkGroupNumericId(chatId, normalized));
+      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => !isCurrentLarkGroupNumericId(chatId, normalized));
     });
     await store.setListenAll(normalized.chatId, false);
   } else if (action === "on" || action === "enable") {
@@ -841,14 +841,18 @@ async function renderAndApplyLarkGroupCommand(
   ) {
     await updateLarkGroupMode(input.stateDir, (groupMode) => {
       allowLarkGroup(groupMode, normalized.bridgeAccessChatId);
-      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => chatId !== normalized.bridgeAccessChatId);
+      groupMode.listenAllChatIds = groupMode.listenAllChatIds.filter((chatId) => !isCurrentLarkGroupNumericId(chatId, normalized));
     });
     await store.setListenAll(normalized.chatId, false);
   }
-  const listenAll = normalized.bridgeChatType === "group" ? await store.isListenAll(normalized.chatId) : false;
+  const storedListenAll = normalized.bridgeChatType === "group" ? await store.isListenAll(normalized.chatId) : false;
   const countListenAll = await store.countListenAll();
   const groupMode = (await loadInstanceConfig(input.stateDir)).groupMode;
-  const groupAllowed = normalized.bridgeChatType === "group" && groupMode.allowedChatIds.includes(normalized.bridgeAccessChatId);
+  const groupAllowed = normalized.bridgeChatType === "group" &&
+    isConfiguredLarkGroupAllowed(groupMode, normalized.bridgeChatId, normalized.bridgeAccessChatId);
+  const listenAll = normalized.bridgeChatType === "group" && groupMode.enabled && (
+    storedListenAll || isConfiguredLarkListenAll(groupMode, normalized.bridgeChatId, normalized.bridgeAccessChatId)
+  );
   const requiresMention = !groupMode.enabled || (input.requireMentionInGroup !== false && !listenAll);
   const status = renderLarkGroupModeStatus({
     locale,
@@ -1021,7 +1025,15 @@ async function renderLarkStatusMessage(
   const currentSession = session.record;
   const workflowLines = await renderLarkWorkflowStatusLines(stateDir, normalized.bridgeChatId, locale);
   const groupModeLines = normalized.bridgeChatType === "group"
-    ? await renderLarkGroupModeStatusLines(stateDir, normalized.chatId, cfg.groupMode.enabled, locale, requireMentionInGroup)
+    ? await renderLarkGroupModeStatusLines({
+      stateDir,
+      chatId: normalized.chatId,
+      bridgeChatId: normalized.bridgeChatId,
+      bridgeAccessChatId: normalized.bridgeAccessChatId,
+      groupMode: cfg.groupMode,
+      locale,
+      requireMentionInGroup,
+    })
     : [];
   const larkCliStatus = await runtime.detectLarkCli().catch((error): LarkCliStatus => ({
     available: false,
@@ -1134,22 +1146,27 @@ async function renderLarkWorkflowStatusLines(stateDir: string, chatId: number, l
       ];
 }
 
-async function renderLarkGroupModeStatusLines(
-  stateDir: string,
-  chatId: string,
-  groupModeEnabled: boolean,
-  locale: Locale,
-  requireMentionInGroup?: boolean,
-): Promise<string[]> {
-  const store = new LarkGroupModeStore(stateDir);
-  const listenAll = groupModeEnabled && await store.isListenAll(chatId);
-  const requiresMention = !groupModeEnabled || (requireMentionInGroup !== false && !listenAll);
-  if (locale === "en") {
-    const source = !groupModeEnabled
+async function renderLarkGroupModeStatusLines(input: {
+  stateDir: string;
+  chatId: string;
+  bridgeChatId: number;
+  bridgeAccessChatId: number;
+  groupMode: GroupModeConfig;
+  locale: Locale;
+  requireMentionInGroup?: boolean;
+}): Promise<string[]> {
+  const store = new LarkGroupModeStore(input.stateDir);
+  const listenAll = input.groupMode.enabled && (
+    await store.isListenAll(input.chatId) ||
+    isConfiguredLarkListenAll(input.groupMode, input.bridgeChatId, input.bridgeAccessChatId)
+  );
+  const requiresMention = !input.groupMode.enabled || (input.requireMentionInGroup !== false && !listenAll);
+  if (input.locale === "en") {
+    const source = !input.groupMode.enabled
       ? "group mode disabled"
       : listenAll
       ? "/group all override"
-      : requireMentionInGroup === false
+      : input.requireMentionInGroup === false
         ? "global mention requirement disabled"
         : "default mention mode";
     return [
@@ -1157,17 +1174,29 @@ async function renderLarkGroupModeStatusLines(
       `Group mode source: ${source}`,
     ];
   }
-  const source = !groupModeEnabled
+  const source = !input.groupMode.enabled
     ? "群聊模式已关闭"
     : listenAll
     ? "/group all override"
-    : requireMentionInGroup === false
+    : input.requireMentionInGroup === false
       ? "全局已关闭 @bot 要求"
       : "默认 @bot 模式";
   return [
     `群聊触发：${requiresMention ? "需要 @bot / mention" : "接受普通群消息"}`,
     `群聊模式来源：${source}`,
   ];
+}
+
+function isConfiguredLarkListenAll(groupMode: GroupModeConfig, bridgeChatId: number, bridgeAccessChatId: number): boolean {
+  return groupMode.listenAllChatIds.includes(bridgeAccessChatId) || groupMode.listenAllChatIds.includes(bridgeChatId);
+}
+
+function isConfiguredLarkGroupAllowed(groupMode: GroupModeConfig, bridgeChatId: number, bridgeAccessChatId: number): boolean {
+  return groupMode.allowedChatIds.includes(bridgeAccessChatId) || groupMode.allowedChatIds.includes(bridgeChatId);
+}
+
+function isCurrentLarkGroupNumericId(chatId: number, normalized: LarkNormalizedBridgeMessage): boolean {
+  return chatId === normalized.bridgeAccessChatId || chatId === normalized.bridgeChatId;
 }
 
 function isSingleTokenLarkModelName(model: string): boolean {

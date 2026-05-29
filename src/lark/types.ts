@@ -88,6 +88,7 @@ export interface LarkRuntimeChannelLike extends LarkChannelLike {
 export interface LarkBridgeLike {
   checkAccess?(input: {
     chatId: number;
+    conversationChatId?: number;
     userId: number;
     chatType: string;
     messageThreadId?: number;

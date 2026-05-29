@@ -1,6 +1,6 @@
 import { readdir, readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Cron } from "croner";
@@ -1001,9 +1001,22 @@ function extractBodyFragment(html: string): string {
     .trim();
 }
 
+export function resolveOpenBrowserCommand(
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (platform === "win32") {
+    return { command: "cmd", args: ["/c", "start", "", target] };
+  }
+  if (platform === "darwin") {
+    return { command: "open", args: [target] };
+  }
+  return { command: "xdg-open", args: [target] };
+}
+
 function openBrowser(fp: string): void {
-  const cmd = process.platform === "win32" ? `start "" "${fp}"` : process.platform === "darwin" ? `open "${fp}"` : `xdg-open "${fp}"`;
-  exec(cmd, () => {});
+  const { command, args } = resolveOpenBrowserCommand(fp);
+  execFile(command, args, () => {});
 }
 
 function closeServer(server: Server): Promise<void> {

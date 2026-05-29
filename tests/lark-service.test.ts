@@ -2126,6 +2126,109 @@ describe("lark service", () => {
     }
   });
 
+  it("honors numeric Lark listen-all state when the raw group-mode store is missing", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-mode-legacy-"));
+    const channel = fakeChannel();
+    const threadChatId = stableLarkNumericId("lark:oc_group:omt_topic");
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "legacy group answer" })),
+    };
+
+    try {
+      await writeFile(
+        path.join(stateDir, "config.json"),
+        JSON.stringify({
+          groupMode: {
+            enabled: true,
+            allowedChatIds: [threadChatId],
+            listenAllChatIds: [threadChatId],
+          },
+        }),
+        "utf8",
+      );
+
+      const handled = await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_legacy_plain",
+          chatId: "oc_group",
+          chatType: "group",
+          threadId: "omt_topic",
+          mentionedBot: false,
+          content: "历史 numeric listen-all 状态也应该响应",
+        }),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining("历史 numeric listen-all 状态也应该响应"),
+      }));
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_legacy_status",
+          chatId: "oc_group",
+          chatType: "group",
+          threadId: "omt_topic",
+          mentionedBot: false,
+          content: "/status",
+        }),
+      });
+
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("群聊触发：接受普通群消息");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("群聊模式来源：/group all override");
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_legacy_at",
+          chatId: "oc_group",
+          chatType: "group",
+          threadId: "omt_topic",
+          mentionedBot: true,
+          content: "/group at",
+        }),
+      });
+      expect((await loadInstanceConfig(stateDir)).groupMode.listenAllChatIds).not.toContain(threadChatId);
+      bridge.handleAuthorizedMessage.mockClear();
+
+      const handledAfterAt = await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_legacy_after_at",
+          chatId: "oc_group",
+          chatType: "group",
+          threadId: "omt_topic",
+          mentionedBot: false,
+          content: "切回 @ 后这条不应该响应",
+        }),
+      });
+
+      expect(handledAfterAt).toBe(false);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("makes Lark /group off stop ordinary group messages even after /group all", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-off-"));
     const channel = fakeChannel();
@@ -2940,6 +3043,50 @@ describe("lark service", () => {
       expect(rendered).toContain('"cctb_lark":"config"');
       expect(rendered).toContain('"action":"engine"');
       expect(rendered).toContain('"action":"yolo"');
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders legacy numeric Lark group state in topic config cards", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-card-legacy-group-"));
+    const threadChatId = stableLarkNumericId("lark:oc_group:omt_topic");
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "codex",
+      locale: "zh",
+      groupMode: {
+        enabled: true,
+        allowedChatIds: [threadChatId],
+        listenAllChatIds: [threadChatId],
+      },
+    }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_config_legacy_group",
+          chatId: "oc_group",
+          chatType: "group",
+          threadId: "omt_topic",
+          mentionedBot: true,
+          content: "/config",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("已允许; 监听普通消息");
+      expect(rendered).toContain("✓ 全量监听");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -8250,6 +8397,84 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.updateCard).toHaveBeenCalledWith("card_config_form", expect.any(Object));
       expect(JSON.stringify(channel.updateCard.mock.calls)).toContain("Saved");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Lark group config unchanged when submitting the config form without a group change", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-form-group-keep-"));
+    const groupChatId = stableLarkNumericId("lark:oc_group");
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "codex",
+      locale: "zh",
+      groupMode: {
+        enabled: true,
+        allowedChatIds: [groupChatId],
+        listenAllChatIds: [groupChatId],
+      },
+    }) + "\n");
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_config_group_keep",
+          chatId: "oc_group",
+          chatType: "group",
+          mentionedBot: true,
+          content: "/config",
+        }),
+      });
+
+      let rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain('"name":"group","initial_option":"keep"');
+      expect(rendered).toContain("保持当前群聊设置");
+
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_group",
+          messageId: "card_config_group_keep",
+          operator: { openId: "ou_user", name: "User" },
+          action: {
+            value: {
+              cctb_lark: "config",
+              action: "submit",
+              conversationKey: "lark:oc_group",
+              bridgeChatType: "group",
+              larkChatId: "oc_group",
+            },
+            form_value: {
+              engine: "codex",
+              fast: "off",
+              yolo: "unsafe",
+              locale: "zh",
+              group: "keep",
+            },
+          },
+        },
+      });
+
+      const config = await loadInstanceConfig(stateDir);
+      expect(handled).toBe(true);
+      expect(config.groupMode.allowedChatIds).toContain(groupChatId);
+      expect(config.groupMode.listenAllChatIds).toContain(groupChatId);
+      rendered = JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).not.toContain("无效的群聊设置");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

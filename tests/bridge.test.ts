@@ -14,6 +14,7 @@ function groupMode(allowedChatIds: number[]) {
     loadGroupMode: vi.fn().mockResolvedValue({
       enabled: true,
       allowedChatIds,
+      listenAllChatIds: [],
     }),
   };
 }
@@ -1117,6 +1118,47 @@ describe("Bridge", () => {
       replyContext: undefined,
       files: [],
     })).resolves.toEqual({ text: "This chat is not authorized for this instance." });
+  });
+
+  it("accepts legacy conversation-scoped group allow ids for the matching conversation", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [42],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "topic-session" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter, groupMode([777]));
+
+    await expect(bridge.checkAccess({
+      chatId: 84,
+      conversationChatId: 777,
+      userId: 42,
+      chatType: "group",
+      conversationKey: "lark:oc_group:omt_topic",
+    })).resolves.toEqual({ kind: "allow" });
+
+    await expect(bridge.checkAccess({
+      chatId: 84,
+      conversationChatId: 778,
+      userId: 42,
+      chatType: "group",
+      conversationKey: "lark:oc_group:omt_other",
+    })).resolves.toEqual({
+      kind: "reply",
+      text: "This chat is not authorized for this instance.",
+    });
   });
 
   it("localizes private-chat-required and pairing replies when locale is zh", async () => {

@@ -42,7 +42,9 @@ import {
   type DownloadedLarkAttachment,
 } from "./files.js";
 import {
+  buildLarkConversationKey,
   normalizeLarkMessage,
+  stableLarkNumericId,
   type LarkIncomingMessage,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
@@ -118,6 +120,7 @@ async function runAcceptedLarkMessage(
     const accessDecision = input.bridge.checkAccess
       ? await input.bridge.checkAccess({
         chatId: normalized.bridgeAccessChatId,
+        conversationChatId: normalized.bridgeChatId,
         userId: normalized.bridgeUserId,
         chatType: normalized.bridgeChatType,
         conversationKey: normalized.conversationKey,
@@ -162,6 +165,7 @@ async function runAcceptedLarkMessage(
     const accessDecision = input.bridge.checkAccess
       ? await input.bridge.checkAccess({
         chatId: normalized.bridgeAccessChatId,
+        conversationChatId: normalized.bridgeChatId,
         userId: normalized.bridgeUserId,
         chatType: normalized.bridgeChatType,
         conversationKey: normalized.conversationKey,
@@ -280,6 +284,11 @@ async function resolveLarkMessageMentionRequirement(input: {
   if (await new LarkGroupModeStore(input.stateDir).isListenAll(input.message.chatId)) {
     return false;
   }
+  const accessChatId = stableLarkNumericId(buildLarkConversationKey(input.message.chatId));
+  const conversationChatId = stableLarkNumericId(buildLarkConversationKey(input.message.chatId, input.message.threadId));
+  if (groupMode.listenAllChatIds.includes(accessChatId) || groupMode.listenAllChatIds.includes(conversationChatId)) {
+    return false;
+  }
   return true;
 }
 
@@ -308,6 +317,7 @@ async function runNormalizedLarkMessage(
   const accessDecision = input.bridge.checkAccess
     ? await input.bridge.checkAccess({
       chatId: normalized.bridgeAccessChatId,
+      conversationChatId: normalized.bridgeChatId,
       userId: normalized.bridgeUserId,
       chatType: normalized.bridgeChatType,
       conversationKey: normalized.conversationKey,
