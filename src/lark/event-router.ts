@@ -90,8 +90,17 @@ export async function findPrivateLarkMessageOwnerRoute(input: {
 }
 
 async function loadCandidateLarkEnv(baseEnv: LarkRuntimeEnv, stateDir: string): Promise<LarkRuntimeEnv> {
+  const {
+    LARK_APP_ID: _appId,
+    LARK_APP_SECRET: _appSecret,
+    LARK_DOMAIN: _domain,
+    ...rest
+  } = baseEnv;
+  void _appId;
+  void _appSecret;
+  void _domain;
   return await loadLarkRuntimeEnv({
-    ...baseEnv,
+    ...rest,
     CCTB_LARK_STATE_DIR: stateDir,
     CCTB_LARK_INSTANCE: undefined,
     TAROCUB_INSTANCE: undefined,

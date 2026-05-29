@@ -599,6 +599,66 @@ describe("runCli", () => {
     }
   });
 
+  it("starts all Lark services with each target's own app credentials", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const alphaDir = path.join(tempDir, ".cctb", "alpha");
+    const betaDir = path.join(tempDir, ".cctb", "beta");
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+
+    try {
+      await mkdir(alphaDir, { recursive: true });
+      await mkdir(betaDir, { recursive: true });
+      await writeFile(path.join(alphaDir, "lark.env"), [
+        `CCTB_LARK_STATE_DIR="${alphaDir}"`,
+        'CCTB_LARK_INSTANCE="alpha"',
+        'LARK_APP_ID="cli_alpha"',
+        'LARK_APP_SECRET="secret-alpha"',
+        "",
+      ].join("\n"));
+      await writeFile(path.join(betaDir, "lark.env"), [
+        `CCTB_LARK_STATE_DIR="${betaDir}"`,
+        'CCTB_LARK_INSTANCE="beta"',
+        'LARK_APP_ID="cli_beta"',
+        'LARK_APP_SECRET="secret-beta"',
+        "",
+      ].join("\n"));
+
+      const handled = await runCli(["lark", "service", "start", "--all"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "ambient_app",
+          LARK_APP_SECRET: "ambient-secret",
+          LARK_DOMAIN: "lark",
+        },
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, waitUntilRunning },
+      });
+
+      expect(handled).toBe(true);
+      expect(start).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        stateDir: alphaDir,
+        env: expect.objectContaining({
+          CCTB_LARK_INSTANCE: "alpha",
+          LARK_APP_ID: "cli_alpha",
+          LARK_APP_SECRET: "secret-alpha",
+        }),
+      }));
+      expect(start).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        stateDir: betaDir,
+        env: expect.objectContaining({
+          CCTB_LARK_INSTANCE: "beta",
+          LARK_APP_ID: "cli_beta",
+          LARK_APP_SECRET: "secret-beta",
+        }),
+      }));
+      await expect(readFile(path.join(alphaDir, "lark.env"), "utf8")).resolves.toContain('LARK_APP_ID="cli_alpha"');
+      await expect(readFile(path.join(betaDir, "lark.env"), "utf8")).resolves.toContain('LARK_APP_ID="cli_beta"');
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("refuses to restart a Lark service with accepted turns unless forced", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
@@ -749,8 +809,14 @@ describe("runCli", () => {
     const stateDir = path.join(tempDir, "lark-state");
     const messages: string[] = [];
     const spawnDetached = vi.fn();
+    const previousLarkAppId = process.env.LARK_APP_ID;
+    const previousLarkAppSecret = process.env.LARK_APP_SECRET;
+    const previousLarkDomain = process.env.LARK_DOMAIN;
 
     try {
+      process.env.LARK_APP_ID = "ambient_app";
+      process.env.LARK_APP_SECRET = "ambient-secret";
+      process.env.LARK_DOMAIN = "lark";
       const handled = await runCli(["lark", "service", "restart", "--defer"], {
         env: {
           USERPROFILE: tempDir,
@@ -786,8 +852,27 @@ describe("runCli", () => {
       const helperScript = spawnDetached.mock.calls[0]?.[1]?.[1];
       expect(helperScript).toContain("active or queued Lark turn");
       expect(helperScript).toContain("retrying in");
+      const spawnedEnv = spawnDetached.mock.calls[0]?.[2]?.env;
+      expect(spawnedEnv?.LARK_APP_ID).toBeUndefined();
+      expect(spawnedEnv?.LARK_APP_SECRET).toBeUndefined();
+      expect(spawnedEnv?.LARK_DOMAIN).toBeUndefined();
       expect(messages).toEqual(['Scheduled deferred restart for Lark instance "alpha" in 5s; it will retry until the Lark turn queue is idle.']);
     } finally {
+      if (previousLarkAppId === undefined) {
+        delete process.env.LARK_APP_ID;
+      } else {
+        process.env.LARK_APP_ID = previousLarkAppId;
+      }
+      if (previousLarkAppSecret === undefined) {
+        delete process.env.LARK_APP_SECRET;
+      } else {
+        process.env.LARK_APP_SECRET = previousLarkAppSecret;
+      }
+      if (previousLarkDomain === undefined) {
+        delete process.env.LARK_DOMAIN;
+      } else {
+        process.env.LARK_DOMAIN = previousLarkDomain;
+      }
       await removeTempRoot(tempDir);
     }
   });
@@ -1022,9 +1107,15 @@ describe("runCli", () => {
     const messages: string[] = [];
     const spawnDetached = vi.fn();
     const previousPath = process.env.PATH;
+    const previousLarkAppId = process.env.LARK_APP_ID;
+    const previousLarkAppSecret = process.env.LARK_APP_SECRET;
+    const previousLarkDomain = process.env.LARK_DOMAIN;
 
     try {
       process.env.PATH = "";
+      process.env.LARK_APP_ID = "ambient_app";
+      process.env.LARK_APP_SECRET = "ambient-secret";
+      process.env.LARK_DOMAIN = "lark";
       const handled = await runCli(["lark", "service", "start"], {
         env: {
           USERPROFILE: tempDir,
@@ -1065,11 +1156,30 @@ describe("runCli", () => {
           }),
         }),
       );
+      const spawnedEnv = spawnDetached.mock.calls[0]?.[2]?.env;
+      expect(spawnedEnv?.LARK_APP_ID).toBeUndefined();
+      expect(spawnedEnv?.LARK_APP_SECRET).toBeUndefined();
+      expect(spawnedEnv?.LARK_DOMAIN).toBeUndefined();
     } finally {
       if (previousPath === undefined) {
         delete process.env.PATH;
       } else {
         process.env.PATH = previousPath;
+      }
+      if (previousLarkAppId === undefined) {
+        delete process.env.LARK_APP_ID;
+      } else {
+        process.env.LARK_APP_ID = previousLarkAppId;
+      }
+      if (previousLarkAppSecret === undefined) {
+        delete process.env.LARK_APP_SECRET;
+      } else {
+        process.env.LARK_APP_SECRET = previousLarkAppSecret;
+      }
+      if (previousLarkDomain === undefined) {
+        delete process.env.LARK_DOMAIN;
+      } else {
+        process.env.LARK_DOMAIN = previousLarkDomain;
       }
       await removeTempRoot(tempDir);
     }

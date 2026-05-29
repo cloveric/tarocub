@@ -1484,6 +1484,12 @@ function withoutDirectLarkAppCredentials(env: LarkRuntimeEnv): LarkRuntimeEnv {
   return rest;
 }
 
+function clearDirectLarkAppCredentials(env: NodeJS.ProcessEnv): void {
+  delete env.LARK_APP_ID;
+  delete env.LARK_APP_SECRET;
+  delete env.LARK_DOMAIN;
+}
+
 export function resolveLarkCommandTargetEnv(env: LarkRuntimeEnv): LarkRuntimeEnv {
   const explicitInstance = env.CCTB_LARK_INSTANCE ?? env.TAROCUB_INSTANCE;
   if (!explicitInstance || !env.CCTB_LARK_STATE_DIR) {
@@ -1534,6 +1540,7 @@ async function defaultStartLarkService(
     CCTB_LARK_INSTANCE: instanceName,
     TAROCUB_INSTANCE: instanceName,
   };
+  clearDirectLarkAppCredentials(serviceEnv);
   delete serviceEnv.CCTB_SEND_URL;
   delete serviceEnv.CCTB_SEND_TOKEN;
   delete serviceEnv.CCTB_SEND_COMMAND;
@@ -1713,6 +1720,9 @@ function runRestart() {
   delete env.CCTB_LARK_ACTIVE_TURN;
   delete env.CCTB_LARK_ACTIVE_INSTANCE;
   delete env.CCTB_LARK_ACTIVE_STATE_DIR;
+  delete env.LARK_APP_ID;
+  delete env.LARK_APP_SECRET;
+  delete env.LARK_DOMAIN;
 
   const result = spawnSync(process.execPath, [entrypoint, "lark", "service", "restart"], {
     env,
@@ -1779,6 +1789,7 @@ async function defaultScheduleDeferredLarkServiceRestart(
     CCTB_LARK_INSTANCE: instanceName,
     TAROCUB_INSTANCE: instanceName,
   };
+  clearDirectLarkAppCredentials(env);
   delete env.CCTB_SEND_URL;
   delete env.CCTB_SEND_TOKEN;
   delete env.CCTB_SEND_COMMAND;
@@ -1987,10 +1998,11 @@ async function listConfiguredLarkServiceTargets(env: LarkRuntimeEnv): Promise<La
 }
 
 async function loadLarkServiceTargetEnv(baseEnv: LarkRuntimeEnv, target: LarkServiceTarget): Promise<LarkRuntimeEnv> {
+  const targetBaseEnv = withoutDirectLarkAppCredentials(baseEnv);
   const {
     CODEX_TELEGRAM_STATE_DIR: _telegramStateDir,
     ...rest
-  } = baseEnv;
+  } = targetBaseEnv;
   void _telegramStateDir;
   return await loadLarkRuntimeEnv({
     ...rest,

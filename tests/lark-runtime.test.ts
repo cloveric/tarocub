@@ -226,6 +226,110 @@ describe("runLarkService", () => {
     }
   });
 
+  it("does not route private Lark messages to a sibling configured with a different app", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-owner-route-app-scope-"));
+    const currentStateDir = path.join(rootDir, "ccfcc1");
+    const ownerStateDir = path.join(rootDir, "ccfgg2");
+    const abortController = new AbortController();
+    const handlers = new Map<string, (payload: any) => Promise<void> | void>();
+    const ownerBridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "owner handled" })),
+    };
+    const currentBridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "current handled" })),
+    };
+    const channel = {
+      on: vi.fn((name: string, handler: (payload: any) => Promise<void> | void) => {
+        handlers.set(name, handler);
+        return () => undefined;
+      }),
+      connect: vi.fn(async () => {
+        await handlers.get("message")?.({
+          messageId: "om_different_app",
+          chatId: "oc_owner",
+          chatType: "p2p",
+          senderId: "ou_owner",
+          content: "hello",
+          rawContentType: "text",
+          resources: [],
+          mentions: [],
+          mentionAll: false,
+          mentionedBot: false,
+          createTime: Date.now(),
+        });
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await mkdir(currentStateDir, { recursive: true, mode: 0o700 });
+      await mkdir(ownerStateDir, { recursive: true, mode: 0o700 });
+      await writeFile(path.join(currentStateDir, "lark.env"), [
+        "LARK_APP_ID=cli_current",
+        "LARK_APP_SECRET=secret-current",
+        `CCTB_LARK_STATE_DIR=${currentStateDir}`,
+        "CCTB_LARK_INSTANCE=ccfcc1",
+        "TAROCUB_INSTANCE=ccfcc1",
+        "",
+      ].join("\n"), { encoding: "utf8", mode: 0o600 });
+      await writeFile(path.join(ownerStateDir, "lark.env"), [
+        "LARK_APP_ID=cli_owner",
+        "LARK_APP_SECRET=secret-owner",
+        `CCTB_LARK_STATE_DIR=${ownerStateDir}`,
+        "CCTB_LARK_INSTANCE=ccfgg2",
+        "TAROCUB_INSTANCE=ccfgg2",
+        "",
+      ].join("\n"), { encoding: "utf8", mode: 0o600 });
+      await writeFile(path.join(ownerStateDir, "access.json"), JSON.stringify({
+        schemaVersion: 1,
+        multiChat: false,
+        policy: "pairing",
+        pairedUsers: [{
+          telegramUserId: stableLarkNumericId("user:ou_owner"),
+          telegramChatId: stableLarkNumericId("lark:oc_owner"),
+          pairedAt: "2026-05-29T00:00:00.000Z",
+        }],
+        allowlist: [stableLarkNumericId("lark:oc_owner")],
+        pendingPairs: [],
+      }) + "\n", { encoding: "utf8", mode: 0o600 });
+
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_current",
+        LARK_APP_SECRET: "secret-current",
+        CCTB_LARK_STATE_DIR: currentStateDir,
+        CCTB_LARK_INSTANCE: "ccfcc1",
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async (_env, config) => ({
+          stateDir: config.stateDir,
+          bridge: config.stateDir === ownerStateDir ? ownerBridge : currentBridge,
+        }),
+        signal: abortController.signal,
+        logger: silentLogger(),
+      });
+
+      expect(ownerBridge.checkAccess).not.toHaveBeenCalled();
+      expect(ownerBridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(currentBridge.checkAccess).toHaveBeenCalledOnce();
+      expect(currentBridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: stableLarkNumericId("lark:oc_owner"),
+        userId: stableLarkNumericId("user:ou_owner"),
+        text: expect.stringContaining("hello"),
+      }));
+      expect(channel.send).toHaveBeenCalledWith("oc_owner", { markdown: "current handled" }, { replyTo: "om_different_app" });
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("records the abort reason when a Lark service is signaled to stop", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-abort-reason-"));
     const abortController = new AbortController();
