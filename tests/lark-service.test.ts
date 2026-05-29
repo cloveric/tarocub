@@ -2671,6 +2671,32 @@ describe("lark service", () => {
     }
   });
 
+  it("answers the Lark account command with a read-only app card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-account-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.appInfo = { appId: "cli_zzzz1111aaaa", domain: "feishu" };
+    const channel = fakeChannel();
+    const bridge = { handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })) };
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        instanceName: "ccfcc2",
+        message: fakeLarkMessage({ messageId: "om_account", content: "/account" }),
+      });
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("cli_zzzz****aaaa");
+      expect(rendered).not.toContain("cli_zzzz1111aaaa");
+      expect(rendered).toContain("lark wizard");
+      expect(rendered).not.toContain("app_secret");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers the Lark status command without running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-"));
     const runtime = createLarkServiceRuntime();

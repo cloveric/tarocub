@@ -118,6 +118,7 @@ export async function runLarkService(
   });
   const telemetry = await loadTelemetryAdapterFromEnv(bridgeEnv);
   runtime.commentClient ??= createLarkCommentClient(config);
+  runtime.appInfo ??= { appId: config.appId, ...(config.domain !== undefined ? { domain: String(config.domain) } : {}) };
   const serviceLock = await acquireLarkServiceLock(stateDir);
   let channel: LarkRuntimeChannelLike | undefined;
   let connected = false;

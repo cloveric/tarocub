@@ -42,6 +42,7 @@ import {
 } from "./bus.js";
 import type { LarkCliStatus } from "./cli.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
+import { isLarkAccountCommand, renderLarkAccountCard } from "./account-card.js";
 import { renderLarkResumeScanCard, renderLarkStatusCard } from "./command-cards.js";
 import { isLarkConfigCommand, renderLarkConfigCard } from "./config-card.js";
 import { sendLarkMarkdown } from "./delivery.js";
@@ -170,6 +171,32 @@ export async function handleLarkSimpleCommand(
 
   if (isCronCommand(commandText)) {
     await handleLarkCronCommand(input, normalized, commandText, commandLocale);
+    return true;
+  }
+
+  if (isLarkAccountCommand(commandText)) {
+    const card = renderLarkAccountCard({
+      ...(input.runtime.appInfo?.appId ? { appId: input.runtime.appInfo.appId } : {}),
+      ...(input.runtime.appInfo?.domain ? { domain: input.runtime.appInfo.domain } : {}),
+      ...(input.instanceName ? { instanceName: input.instanceName } : {}),
+      stateDir: input.stateDir,
+      locale: commandLocale,
+    });
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: normalized.chatId,
+      card,
+      fallbackText: commandLocale === "en"
+        ? "Current Lark app status (run `lark wizard` to switch apps)."
+        : "当前飞书应用状态（更换 app 请运行 `lark wizard`）。",
+      options: larkCommandReplyOptions(normalized),
+      locale: commandLocale,
+    });
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "success",
+      detail: "/account",
+    });
     return true;
   }
 
@@ -735,6 +762,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "Common commands:",
       "- `/help`: show this help",
       "- `/status`: inspect the current conversation",
+      "- `/account`: show the bound Feishu app (run `lark wizard` to switch apps)",
       "- `/usage`: show cumulative usage for this instance",
       "- `/model [name|off]`: inspect or set the model",
       "- `/effort [low|medium|high|xhigh|max|off]`: inspect or set reasoning effort",
@@ -783,6 +811,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "常用命令：",
     "- `/help`：显示这份帮助",
     "- `/status`：查看当前会话状态",
+    "- `/account`：查看当前绑定的飞书应用（更换 app 请运行 `lark wizard`）",
     "- `/usage`：查看本实例累计用量",
     "- `/model [名称|off]`：查看或设置模型",
     "- `/effort [low|medium|high|xhigh|max|off]`：查看或设置推理强度",

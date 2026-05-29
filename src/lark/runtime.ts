@@ -78,6 +78,7 @@ export interface LarkServiceRuntime {
   queuePolicy: LarkQueuePolicy;
   pendingBatches: Map<string, PendingLarkBatch>;
   chatModeCache: Map<string, LarkChatMode>;
+  appInfo?: { appId: string; domain?: string };
   cronRuntime?: LarkCronRuntime;
   busRuntime?: LarkBusRuntime;
   miniRuntime?: LarkMiniRuntime;
