@@ -64,10 +64,6 @@ export interface PendingLarkApproval {
   replyTo?: string;
   replyInThread?: boolean;
   askUserQuestionInput?: unknown;
-  /** Accumulated AskUserQuestion answers (the growing tool response) across a multi-question flow. */
-  askUserQuestionCollected?: Record<string, unknown>;
-  /** In-progress selections for the current multiSelect question (reset when advancing). */
-  askUserQuestionSelections?: string[];
   resolve: (decision: EngineApprovalDecision) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;

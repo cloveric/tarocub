@@ -184,91 +184,77 @@ function renderLarkApprovalFallbackText(requestId: string, request: EngineApprov
   ].join("\n\n");
 }
 
+function askFormFieldName(index: number): string {
+  return `q${index}`;
+}
+
 function renderLarkAskUserQuestionCard(input: {
   requestId: string;
   toolInput: unknown;
-  questionIndex?: number;
-  selectedLabels?: string[];
   replyInThread?: boolean;
   locale?: Locale;
 }): Record<string, unknown> {
   const locale = input.locale ?? "zh";
   const questions = normalizeAskUserQuestions(input.toolInput);
-  const total = Math.max(questions.length, 1);
-  const questionIndex = Math.min(Math.max(input.questionIndex ?? 0, 0), total - 1);
-  const question = questions[questionIndex];
-  const selected = input.selectedLabels ?? [];
-  const isMulti = question?.multiSelect === true;
-  const progress = questions.length > 1
-    ? (locale === "en" ? ` (${questionIndex + 1}/${questions.length})` : `（${questionIndex + 1}/${questions.length}）`)
-    : "";
-  const baseTitle = question?.header || (locale === "en" ? "Question" : "请选择");
-  const title = `${baseTitle}${progress}`;
-  const prompt = question?.question || (locale === "en" ? "Claude is asking for your choice." : "Claude 需要你选择。");
-  const elements: unknown[] = [
-    {
+  // One card, one form: every question is a native select component whose
+  // selection lives client-side, so picking/unpicking never round-trips to the
+  // server (no card re-render, no collapse, no lag). Changing a choice before
+  // submit is the built-in "undo". Everything resolves on a single Submit.
+  const formElements: unknown[] = [];
+  questions.forEach((question, index) => {
+    if (index > 0) {
+      formElements.push({ tag: "hr" });
+    }
+    const multiHint = question.multiSelect ? (locale === "en" ? " (multi-select)" : "（多选）") : "";
+    formElements.push({
       tag: "markdown",
-      content: `**${title}**\n${prompt}`,
-    },
-  ];
-  if (isMulti) {
-    elements.push({
-      tag: "markdown",
-      content: locale === "en" ? "_Select all that apply, then confirm._" : "_可多选，选好后点确认。_",
-      text_size: "notation",
+      content: `**${question.header}${multiHint}**\n${question.question}`,
     });
-  }
+    const lines = question.options
+      .map((option, optionIndex) => {
+        const marker = optionMarker(optionIndex);
+        return option.description
+          ? `${marker}. **${option.label}** — ${option.description}`
+          : `${marker}. **${option.label}**`;
+      })
+      .join("\n");
+    if (lines) {
+      formElements.push({ tag: "markdown", content: lines, text_size: "notation" });
+    }
+    const selectOptions = question.options.map((option) => ({
+      text: { tag: "plain_text", content: option.label },
+      value: option.label,
+    }));
+    formElements.push({
+      tag: question.multiSelect ? "multi_select_static" : "select_static",
+      name: askFormFieldName(index),
+      placeholder: {
+        tag: "plain_text",
+        content: question.multiSelect
+          ? (locale === "en" ? "Select one or more" : "可多选")
+          : (locale === "en" ? "Select one" : "请选择"),
+      },
+      options: selectOptions,
+    });
+  });
 
-  const options = question?.options ?? [];
-  if (options.length === 0) {
-    elements.push({
-      tag: "markdown",
-      content: locale === "en" ? "_No valid options were provided._" : "_没有可用选项。_",
-    });
-  } else {
-    options.forEach((option, index) => {
-      elements.push(renderLarkAskUserQuestionOption({
-        requestId: input.requestId,
-        questionIndex,
-        optionIndex: index,
-        option,
-        multiSelect: isMulti,
-        selected: selected.includes(option.label),
-        replyInThread: input.replyInThread,
-        locale,
-      }));
-    });
-    // Action row: optional "back" (when not on the first question) plus, for
-    // multiSelect, an explicit submit/next button (single-select advances on
-    // the option tap itself).
-    const actionColumns: unknown[] = [];
-    if (questionIndex > 0) {
-      actionColumns.push(askActionColumn(locale === "en" ? "← Back" : "← 上一题", {
-        cctb_lark: "ask_user_question",
-        action: "back",
-        requestId: input.requestId,
-        questionIndex,
-        ...(input.replyInThread ? { replyInThread: true } : {}),
-      }, "default"));
-    }
-    if (isMulti) {
-      const isLast = questionIndex + 1 >= questions.length;
-      const baseLabel = isLast
-        ? (locale === "en" ? "Submit" : "提交")
-        : (locale === "en" ? "Next question" : "下一题");
-      const count = selected.length ? (locale === "en" ? ` (${selected.length})` : `（已选 ${selected.length}）`) : "";
-      actionColumns.push(askActionColumn(`${baseLabel}${count}`, {
-        cctb_lark: "ask_user_question",
-        action: "submit",
-        requestId: input.requestId,
-        questionIndex,
-        ...(input.replyInThread ? { replyInThread: true } : {}),
-      }, "primary"));
-    }
-    if (actionColumns.length > 0) {
-      elements.push({ tag: "column_set", flex_mode: "flow", horizontal_spacing: "8px", columns: actionColumns });
-    }
-  }
+  formElements.push({
+    tag: "button",
+    text: { tag: "plain_text", content: locale === "en" ? "Submit" : "提交" },
+    type: "primary",
+    width: "fill",
+    form_action_type: "submit",
+    behaviors: [callbackBehavior({
+      cctb_lark: "ask_user_question",
+      action: "form_submit",
+      requestId: input.requestId,
+      ...(input.replyInThread ? { replyInThread: true } : {}),
+    })],
+  });
+
+  const title = questions.length > 1
+    ? (locale === "en" ? `${questions.length} questions` : `${questions.length} 个问题`)
+    : (questions[0]?.header || (locale === "en" ? "Question" : "请选择"));
 
   return {
     schema: "2.0",
@@ -287,90 +273,14 @@ function renderLarkAskUserQuestionCard(input: {
     body: {
       direction: "vertical",
       padding: "12px 12px 12px 12px",
-      elements,
+      elements: [
+        {
+          tag: "form",
+          name: "askq_form",
+          elements: formElements,
+        },
+      ],
     },
-  };
-}
-
-function renderLarkAskUserQuestionOption(input: {
-  requestId: string;
-  questionIndex: number;
-  optionIndex: number;
-  option: AskUserQuestionOption;
-  multiSelect: boolean;
-  selected: boolean;
-  replyInThread?: boolean;
-  locale: Locale;
-}): Record<string, unknown> {
-  const marker = optionMarker(input.optionIndex);
-  const description = input.option.description?.trim();
-  const checkbox = input.multiSelect ? (input.selected ? "✅ " : "⬜ ") : "";
-  const buttonContent = input.multiSelect
-    ? (input.selected
-      ? (input.locale === "en" ? "Unselect" : "取消")
-      : (input.locale === "en" ? "Select" : "选择"))
-    : (input.locale === "en" ? "Choose" : "选择");
-  const highlight = input.selected;
-  const label = `**${checkbox}${marker}. ${input.option.label}**`;
-  const text = description ? `${label}\n${description}` : label;
-  // Always-visible row (label + description on the left, a tappable button on
-  // the right). No collapsible_panel: every tap re-renders the card, and a
-  // collapsible would snap shut on each render, making options impossible to
-  // select. A plain row stays put.
-  return {
-    tag: "column_set",
-    flex_mode: "none",
-    horizontal_spacing: "8px",
-    margin: "0px 0px 8px 0px",
-    columns: [
-      {
-        tag: "column",
-        width: "weighted",
-        weight: 1,
-        vertical_align: "center",
-        elements: [{ tag: "markdown", content: text, text_size: "notation" }],
-      },
-      {
-        tag: "column",
-        width: "auto",
-        vertical_align: "center",
-        elements: [
-          {
-            tag: "button",
-            text: { tag: "plain_text", content: buttonContent },
-            size: "small",
-            type: highlight ? "primary" : "default",
-            behaviors: [callbackBehavior({
-              cctb_lark: "ask_user_question",
-              action: input.multiSelect ? "toggle" : "select",
-              requestId: input.requestId,
-              questionIndex: input.questionIndex,
-              label: input.option.label,
-              answer: input.option.label,
-              ...(input.option.preview ? { preview: input.option.preview } : {}),
-              ...(input.replyInThread ? { replyInThread: true } : {}),
-            })],
-          },
-        ],
-      },
-    ],
-  };
-}
-
-function askActionColumn(label: string, value: Record<string, unknown>, type: "primary" | "default"): Record<string, unknown> {
-  return {
-    tag: "column",
-    width: "weighted",
-    weight: 1,
-    elements: [
-      {
-        tag: "button",
-        text: { tag: "plain_text", content: label },
-        type,
-        width: "fill",
-        behaviors: [callbackBehavior(value)],
-      },
-    ],
   };
 }
 
@@ -424,44 +334,13 @@ function normalizeAskUserQuestions(toolInput: unknown): AskUserQuestionCardQuest
       return {
         question: text,
         header: stringValue(question.header) ?? "Question",
-        multiSelect: question.multiSelect === true,
+        // The live can_use_tool payload may snake_case the flag; accept both so
+        // multi-select questions are not silently rendered as single-select.
+        multiSelect: question.multiSelect === true || question.multi_select === true,
         options,
       };
     })
     .filter((question): question is AskUserQuestionCardQuestion => question !== null);
-}
-
-function buildAskUserQuestionUpdatedInput(toolInput: unknown, input: {
-  questionIndex: number;
-  answer: string;
-  preview?: string;
-}): Record<string, unknown> {
-  const root = objectValue(toolInput) ?? {};
-  const questions = normalizeAskUserQuestions(toolInput);
-  const question = questions[input.questionIndex] ?? questions[0];
-  const questionText = question?.question ?? `Question ${input.questionIndex + 1}`;
-  const answers = objectValue(root.answers) ?? {};
-  const updated: Record<string, unknown> = {
-    ...root,
-    questions: Array.isArray(root.questions) ? root.questions : questions,
-    answers: {
-      ...answers,
-      [questionText]: input.answer,
-    },
-  };
-
-  if (input.preview) {
-    const annotations = objectValue(root.annotations) ?? {};
-    updated.annotations = {
-      ...annotations,
-      [questionText]: {
-        ...(objectValue(annotations[questionText]) ?? {}),
-        preview: input.preview,
-      },
-    };
-  }
-
-  return updated;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | null {
@@ -751,144 +630,55 @@ export async function handleLarkCardAction(input: {
 
     const replyOpts = larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread);
     const questions = normalizeAskUserQuestions(pending.askUserQuestionInput);
-    const total = questions.length;
-    const questionIndex = typeof value.questionIndex === "number"
-      ? Math.min(Math.max(value.questionIndex, 0), Math.max(total - 1, 0))
-      : 0;
-    const question = questions[questionIndex];
-    const action = stringValue(value.action) ?? "select";
-    const isMulti = question?.multiSelect === true;
-    const optionLabel = stringValue(value.label) ?? stringValue(value.answer) ?? stringValue(value.value);
+    const formValue = actionFormValue(input.event.action) ?? {};
 
-    const updateChoiceCard = async (card: Record<string, unknown>, fallback: string): Promise<void> => {
-      if (input.channel.updateCard) {
-        try {
-          await input.channel.updateCard(input.event.messageId, card);
-          return;
-        } catch {
-          // Fall through to posting a fresh card if the in-place update fails.
+    // The whole form arrives in one submit. Map each question's selected
+    // value(s) back to an answer string (single = label, multi = joined labels).
+    const joinLabels = (arr: unknown[]): string =>
+      arr.filter((entry): entry is string => typeof entry === "string").join(", ");
+    const answers: Record<string, string> = {};
+    questions.forEach((question, index) => {
+      const raw = formValue[askFormFieldName(index)];
+      let answer = "";
+      if (Array.isArray(raw)) {
+        // multi_select_static → array of selected option values.
+        answer = joinLabels(raw);
+      } else if (typeof raw === "string") {
+        const trimmed = raw.trim();
+        if (trimmed.startsWith("[")) {
+          // Some Feishu clients deliver a multi-select value as a JSON string.
+          try {
+            const parsed = JSON.parse(trimmed) as unknown;
+            answer = Array.isArray(parsed) ? joinLabels(parsed) : trimmed;
+          } catch {
+            answer = trimmed;
+          }
+        } else {
+          answer = trimmed;
         }
+      } else {
+        answer = stringValue(raw) ?? "";
       }
-      await sendLarkCardWithFallback({
-        channel: input.channel,
-        chatId: input.event.chatId,
-        card,
-        fallbackText: fallback,
-        options: replyOpts,
-        locale,
-      });
-    };
+      answers[question.question] = answer;
+    });
 
-    // Go back to the previous question so the user can change an earlier answer.
-    if (action === "back") {
-      const prevIndex = Math.max(questionIndex - 1, 0);
-      const prevQuestion = questions[prevIndex];
-      let restored: string[] = [];
-      if (prevQuestion?.multiSelect && pending.askUserQuestionCollected) {
-        const answers = objectValue(pending.askUserQuestionCollected.answers) ?? {};
-        const prevAnswer = stringValue(answers[prevQuestion.question]);
-        if (prevAnswer) {
-          restored = prevAnswer.split(",").map((part) => part.trim()).filter(Boolean);
-        }
-      }
-      pending.askUserQuestionSelections = restored;
-      await updateChoiceCard(
-        renderLarkAskUserQuestionCard({
-          requestId: value.requestId,
-          toolInput: pending.askUserQuestionInput,
-          questionIndex: prevIndex,
-          selectedLabels: restored,
-          replyInThread: pending.replyInThread ?? replyInThread,
-          locale,
-        }),
-        renderLarkAskUserQuestionFallbackText(pending.askUserQuestionInput, locale, prevIndex),
-      );
-      return true;
-    }
-
-    // Multi-select toggle: flip this option in the in-progress selection and
-    // re-render the SAME question; do not advance or resolve yet.
-    if (isMulti && action === "toggle") {
-      if (!optionLabel) {
-        return true;
-      }
-      const current = pending.askUserQuestionSelections ?? [];
-      pending.askUserQuestionSelections = current.includes(optionLabel)
-        ? current.filter((label) => label !== optionLabel)
-        : [...current, optionLabel];
-      await updateChoiceCard(
-        renderLarkAskUserQuestionCard({
-          requestId: value.requestId,
-          toolInput: pending.askUserQuestionInput,
-          questionIndex,
-          selectedLabels: pending.askUserQuestionSelections,
-          replyInThread: pending.replyInThread ?? replyInThread,
-          locale,
-        }),
-        renderLarkAskUserQuestionFallbackText(pending.askUserQuestionInput, locale, questionIndex),
-      );
-      return true;
-    }
-
-    // Resolve the answer for this question (single-select label, or the joined
-    // multi-select set on submit).
-    let questionAnswer: string;
-    if (isMulti) {
-      questionAnswer = (pending.askUserQuestionSelections ?? []).join(", ");
-    } else {
-      if (!optionLabel) {
-        await input.channel.send(
-          input.event.chatId,
-          { text: locale === "en" ? "No answer was selected." : "没有收到选择。" },
-          replyOpts,
-        );
-        return true;
-      }
-      questionAnswer = optionLabel;
-    }
-
-    // Accumulate into the running tool response keyed by question text.
-    pending.askUserQuestionCollected = buildAskUserQuestionUpdatedInput(
-      pending.askUserQuestionCollected ?? pending.askUserQuestionInput,
-      {
-        questionIndex,
-        answer: questionAnswer,
-        preview: stringValue(value.preview),
-      },
-    );
-    pending.askUserQuestionSelections = [];
-
-    const ackLabel = questionAnswer || (locale === "en" ? "(none)" : "（未选）");
-    const nextIndex = questionIndex + 1;
-    if (nextIndex < total) {
-      // More questions remain — advance the card in place.
-      await updateChoiceCard(
-        renderLarkAskUserQuestionCard({
-          requestId: value.requestId,
-          toolInput: pending.askUserQuestionInput,
-          questionIndex: nextIndex,
-          replyInThread: pending.replyInThread ?? replyInThread,
-          locale,
-        }),
-        renderLarkAskUserQuestionFallbackText(pending.askUserQuestionInput, locale, nextIndex),
-      );
-      await input.channel.send(
-        input.event.chatId,
-        { text: locale === "en" ? `Recorded: ${ackLabel}` : `已记录：${ackLabel}` },
-        replyOpts,
-      );
-      return true;
-    }
-
-    // Last question answered — resolve the whole AskUserQuestion with every answer.
+    const root = objectValue(pending.askUserQuestionInput) ?? {};
     cleanupPendingApproval(input.runtime, value.requestId);
     pending.resolve({
       behavior: "allow",
-      updatedInput: pending.askUserQuestionCollected,
+      updatedInput: {
+        ...root,
+        questions: Array.isArray(root.questions) ? root.questions : questions,
+        answers,
+      },
     });
+
+    const summary = questions
+      .map((question) => `${question.header}: ${answers[question.question] || (locale === "en" ? "—" : "（未选）")}`)
+      .join("\n");
     await input.channel.send(
       input.event.chatId,
-      { text: locale === "en" ? `Selected: ${ackLabel}` : `已选择：${ackLabel}` },
+      { text: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary },
       replyOpts,
     );
     return true;
