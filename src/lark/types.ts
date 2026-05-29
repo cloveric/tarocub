@@ -13,6 +13,7 @@ import type {
 } from "../codex/adapter.js";
 import type { BridgeAccessDecision } from "../runtime/bridge.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
+import type { LarkChatMode } from "./message-normalizer.js";
 
 export interface LarkSendOptions {
   replyTo?: string;
@@ -63,6 +64,7 @@ export interface LarkChannelLike {
   removeReactionByEmoji?(messageId: string, emojiType: string): Promise<boolean>;
   downloadResource(fileKey: string, type: "image" | "file"): Promise<Buffer>;
   fetchMessage?(messageId: string): Promise<LarkFetchedMessage | null>;
+  getChatMode?(chatId: string): Promise<LarkChatMode>;
 }
 
 export interface LarkFetchedMessage {

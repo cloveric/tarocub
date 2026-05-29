@@ -22,7 +22,7 @@ import { deliverLarkResponse } from "./delivery.js";
 import { larkOperatorRawId } from "./identity.js";
 import { resolveLarkLocale } from "./locale.js";
 import { handleLarkMessage } from "./message-handler.js";
-import { stableLarkNumericId } from "./message-normalizer.js";
+import { buildLarkConversationKey, larkSessionThreadIdForMessage, stableLarkNumericId } from "./message-normalizer.js";
 import { resolveLarkReactionSettings } from "./reactions.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { renderLarkUserFacingError } from "./errors.js";
@@ -520,11 +520,15 @@ async function appendLarkServiceMessageErrorTimelineEvent(
     messageId: string;
     chatId: string;
     chatType: string;
+    chatMode?: "p2p" | "group" | "topic";
     senderId?: string;
     threadId?: string;
   },
 ): Promise<void> {
-  const conversationKey = message.threadId ? `lark:${message.chatId}:${message.threadId}` : `lark:${message.chatId}`;
+  const conversationKey = buildLarkConversationKey(
+    message.chatId,
+    larkSessionThreadIdForMessage(message.chatType, message.threadId, message.chatMode),
+  );
   await appendTimelineEventBestEffort(stateDir, {
     type: "turn.completed",
     channel: "lark",

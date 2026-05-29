@@ -45,6 +45,7 @@ import {
   buildLarkConversationKey,
   normalizeLarkMessage,
   stableLarkNumericId,
+  type LarkChatMode,
   type LarkIncomingMessage,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
@@ -80,15 +81,68 @@ export async function handleLarkMessage(input: {
     message: input.message,
     defaultRequireMentionInGroup: input.requireMentionInGroup,
   });
-  const baseNormalized = normalizeLarkMessage(input.message, {
+  const preflightNormalized = normalizeLarkMessage(input.message, {
+    requireMentionInGroup,
+  });
+  if (!preflightNormalized) {
+    return false;
+  }
+
+  const message = await resolveLarkMessageChatMode(input.channel, input.runtime, input.message);
+  const baseNormalized = normalizeLarkMessage(message, {
     requireMentionInGroup,
   });
   if (!baseNormalized) {
     return false;
   }
-  const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, input.message);
+  const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, message);
   const normalized = await enrichLarkReplyContext(input.channel, expandedNormalized);
   return await runAcceptedLarkMessage(input, normalized);
+}
+
+async function resolveLarkMessageChatMode(
+  channel: LarkChannelLike,
+  runtime: LarkServiceRuntime,
+  message: LarkIncomingMessage,
+): Promise<LarkIncomingMessage> {
+  if (message.chatMode) {
+    runtime.chatModeCache.set(message.chatId, message.chatMode);
+    return message;
+  }
+  if (message.chatType === "p2p") {
+    return { ...message, chatMode: "p2p" };
+  }
+
+  const cached = runtime.chatModeCache.get(message.chatId);
+  if (cached) {
+    return { ...message, chatMode: cached };
+  }
+
+  const resolved = await resolveLarkChannelChatMode(channel, message.chatId);
+  if (!resolved) {
+    return { ...message, chatMode: message.threadId ? "topic" : "group" };
+  }
+  runtime.chatModeCache.set(message.chatId, resolved);
+  return { ...message, chatMode: resolved };
+}
+
+async function resolveLarkChannelChatMode(
+  channel: LarkChannelLike,
+  chatId: string,
+): Promise<LarkChatMode | undefined> {
+  if (!channel.getChatMode) {
+    return undefined;
+  }
+  try {
+    const mode = await channel.getChatMode(chatId);
+    return isLarkChatMode(mode) ? mode : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isLarkChatMode(value: unknown): value is LarkChatMode {
+  return value === "p2p" || value === "group" || value === "topic";
 }
 
 async function runAcceptedLarkMessage(

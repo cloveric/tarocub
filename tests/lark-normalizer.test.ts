@@ -38,6 +38,7 @@ describe("normalizeLarkMessage", () => {
       messageId: "om_123",
       chatId: "oc_topic",
       chatType: "group",
+      chatMode: "topic",
       threadId: "omt_thread",
       rootId: "om_root",
       replyToMessageId: "om_parent",
@@ -55,6 +56,53 @@ describe("normalizeLarkMessage", () => {
     expect(normalized?.text).toContain("thread_id: omt_thread");
     expect(normalized?.text).toContain("root_id: om_root");
     expect(normalized?.text).toContain("reply_to_message_id: om_parent");
+  });
+
+  it("keeps ordinary group message threads in the parent group session when chat mode is known", () => {
+    const normalized = normalizeLarkMessage({
+      messageId: "om_123",
+      chatId: "oc_group",
+      chatType: "group",
+      chatMode: "group",
+      threadId: "omt_group_thread",
+      senderId: "ou_user",
+      content: "ordinary group reply",
+      rawContentType: "text",
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: true,
+      createTime: 123,
+    });
+
+    expect(normalized?.conversationKey).toBe("lark:oc_group");
+    expect(normalized?.bridgeChatType).toBe("group");
+    expect(normalized?.threadId).toBe("omt_group_thread");
+    expect(normalized?.text).toContain("thread_id: omt_group_thread");
+  });
+
+  it("keeps p2p message threads in the parent private session", () => {
+    const normalized = normalizeLarkMessage({
+      messageId: "om_123",
+      chatId: "oc_chat",
+      chatType: "p2p",
+      threadId: "omt_private_thread",
+      rootId: "om_root",
+      replyToMessageId: "om_parent",
+      senderId: "ou_user",
+      content: "continue in private thread",
+      rawContentType: "text",
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: false,
+      createTime: 123,
+    });
+
+    expect(normalized?.conversationKey).toBe("lark:oc_chat");
+    expect(normalized?.bridgeChatType).toBe("private");
+    expect(normalized?.threadId).toBe("omt_private_thread");
+    expect(normalized?.text).toContain("thread_id: omt_private_thread");
   });
 
   it("drops unmentioned group messages when mention is required", () => {

@@ -1,4 +1,5 @@
 export type LarkBridgeChatType = "private" | "group";
+export type LarkChatMode = "p2p" | "group" | "topic";
 
 export interface LarkResourceDescriptor {
   type: string;
@@ -12,6 +13,7 @@ export interface LarkIncomingMessage {
   messageId: string;
   chatId: string;
   chatType: string;
+  chatMode?: LarkChatMode;
   senderId: string;
   senderName?: string;
   threadId?: string;
@@ -80,7 +82,10 @@ export function normalizeLarkMessage(
     return null;
   }
 
-  const conversationKey = buildLarkConversationKey(message.chatId, message.threadId);
+  const conversationKey = buildLarkConversationKey(
+    message.chatId,
+    larkSessionThreadIdForMessage(message.chatType, message.threadId, message.chatMode),
+  );
   const accessConversationKey = buildLarkConversationKey(message.chatId);
   const attachments = normalizeLarkResources(message.resources ?? []);
   const text = buildLarkText(message, attachments);
@@ -109,6 +114,15 @@ function isLarkSlashCommand(content: string | undefined): boolean {
 
 export function buildLarkConversationKey(chatId: string, threadId?: string): string {
   return threadId ? `lark:${chatId}:${threadId}` : `lark:${chatId}`;
+}
+
+export function larkSessionThreadIdForMessage(
+  chatType: string,
+  threadId?: string,
+  chatMode?: LarkChatMode,
+): string | undefined {
+  const effectiveMode = chatMode ?? (chatType === "p2p" ? "p2p" : "topic");
+  return effectiveMode === "topic" ? threadId : undefined;
 }
 
 export function larkAccessConversationKeyFromConversationKey(conversationKey: string): string {

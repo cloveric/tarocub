@@ -13,6 +13,7 @@ import {
   type LarkChatCreateResult,
 } from "./chat-client.js";
 import type { LarkCommentClientLike } from "./comment-client.js";
+import type { LarkChatMode } from "./message-normalizer.js";
 import {
   createLarkDocumentWithCli,
   type LarkDocumentCreateInput,
@@ -61,6 +62,7 @@ export interface LarkServiceRuntime {
   activeRuns: Map<string, LarkActiveRun>;
   pendingApprovals: Map<string, PendingLarkApproval>;
   chatQueue: ChatQueue;
+  chatModeCache: Map<string, LarkChatMode>;
   cronRuntime?: LarkCronRuntime;
   busRuntime?: LarkBusRuntime;
   miniRuntime?: LarkMiniRuntime;
@@ -87,6 +89,7 @@ export function createLarkServiceRuntime(options: {
     activeRuns: new Map(),
     pendingApprovals: new Map(),
     chatQueue: new ChatQueue(),
+    chatModeCache: new Map(),
     ...(options.cronRuntime ? { cronRuntime: options.cronRuntime } : {}),
     ...(options.busRuntime ? { busRuntime: options.busRuntime } : {}),
     ...(options.miniRuntime ? { miniRuntime: options.miniRuntime } : {}),

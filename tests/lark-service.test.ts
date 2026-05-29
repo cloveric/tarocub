@@ -44,6 +44,7 @@ describe("lark service", () => {
     const channel = fakeChannel({
       addReaction: vi.fn(async () => "reaction_1"),
       removeReaction: vi.fn(async () => undefined),
+      getChatMode: vi.fn(async () => "group"),
     });
     const bridge = {
       handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
@@ -77,6 +78,7 @@ describe("lark service", () => {
       });
 
       expect(handled).toBe(false);
+      expect(channel.getChatMode).not.toHaveBeenCalled();
       expect(channel.addReaction).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
@@ -129,6 +131,46 @@ describe("lark service", () => {
         outcome: "denied",
         detail: "access denied",
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps ordinary Lark group threads on the parent group session when chat mode resolves to group", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-thread-session-"));
+    const channel = fakeChannel({
+      getChatMode: vi.fn(async () => "group"),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_group_thread",
+          chatType: "group",
+          threadId: "omt_group_reply",
+          mentionedBot: true,
+          content: "继续",
+        }),
+      });
+
+      expect(channel.getChatMode).toHaveBeenCalledWith("oc_chat");
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chatType: "group",
+        conversationKey: "lark:oc_chat",
+      }));
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "done" },
+        { replyTo: "om_group_thread", replyInThread: true },
+      );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -9609,6 +9651,7 @@ type FakeLarkChannel = ReturnType<typeof baseFakeChannel> & {
   addReaction?: ReturnType<typeof vi.fn>;
   removeReaction?: ReturnType<typeof vi.fn>;
   removeReactionByEmoji?: ReturnType<typeof vi.fn>;
+  getChatMode?: ReturnType<typeof vi.fn>;
   rawClient?: unknown;
 };
 
