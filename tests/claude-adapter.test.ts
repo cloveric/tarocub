@@ -409,6 +409,36 @@ describe("ProcessClaudeAdapter", () => {
     });
   });
 
+  it("preserves intermediate Claude send-image tags when the final result only summarizes delivery", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Generate a cover image",
+      files: [],
+    });
+
+    child.stdout.emitData([
+      {
+        type: "assistant",
+        message: {
+          content: [{
+            type: "text",
+            text: "Cover ready:\n[send-image:/tmp/workspace/01-cover.png]",
+          }],
+        },
+        session_id: "session-images",
+      },
+      { type: "result", result: "Cover image sent.", session_id: "session-images" },
+    ].map((event) => JSON.stringify(event)).join("\n"));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({
+      text: "Cover ready:\n[send-image:/tmp/workspace/01-cover.png]\nCover image sent.",
+      sessionId: "session-images",
+    });
+  });
+
   it("preserves intermediate send-file tags that are not repeated in the final result", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new ProcessClaudeAdapter("claude", { spawnFn });

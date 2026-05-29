@@ -130,12 +130,12 @@ function appendAssistantText(existing: string, next: string): string {
   return existing ? `${existing}\n${next}` : next;
 }
 
-function hasSendFileTag(text: string): boolean {
-  return /\[send-file:[^\]]+\]/.test(text);
+function hasDeliveryTag(text: string): boolean {
+  return /\[send-(?:file|image):[^\]]+\]/.test(text);
 }
 
-function extractSendFileTags(text: string): string[] {
-  return Array.from(text.matchAll(/\[send-file:[^\]]+\]/g), (match) => match[0]);
+function extractDeliveryTags(text: string): string[] {
+  return Array.from(text.matchAll(/\[send-(?:file|image):[^\]]+\]/g), (match) => match[0]);
 }
 
 function mergeIntermediateDeliveryText(finalResult: string, intermediateDeliveryText: string): string {
@@ -155,11 +155,11 @@ function mergeIntermediateDeliveryText(finalResult: string, intermediateDelivery
     return intermediateDeliveryText;
   }
 
-  const finalSendFileTags = new Set(extractSendFileTags(finalResult));
-  const intermediateSendFileTags = extractSendFileTags(intermediateDeliveryText);
+  const finalDeliveryTags = new Set(extractDeliveryTags(finalResult));
+  const intermediateDeliveryTags = extractDeliveryTags(intermediateDeliveryText);
   if (
-    intermediateSendFileTags.length > 0 &&
-    intermediateSendFileTags.every((tag) => finalSendFileTags.has(tag))
+    intermediateDeliveryTags.length > 0 &&
+    intermediateDeliveryTags.every((tag) => finalDeliveryTags.has(tag))
   ) {
     return finalResult;
   }
@@ -435,7 +435,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
           const text = getAssistantText(item);
           if (text) {
             assistantText = appendAssistantText(assistantText, text);
-            if (hasSendFileTag(text)) {
+            if (hasDeliveryTag(text)) {
               intermediateDeliveryText = appendAssistantText(intermediateDeliveryText, text);
             }
           }

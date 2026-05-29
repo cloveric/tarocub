@@ -199,12 +199,12 @@ function appendAssistantText(existing: string, next: string): string {
   return existing ? `${existing}\n${next}` : next;
 }
 
-function extractSendFileTags(text: string): string[] {
-  return Array.from(text.matchAll(/\[send-file:[^\]]+\]/g), (match) => match[0]);
+function extractDeliveryTags(text: string): string[] {
+  return Array.from(text.matchAll(/\[send-(?:file|image):[^\]]+\]/g), (match) => match[0]);
 }
 
-function hasSendFileTag(text: string): boolean {
-  return /\[send-file:[^\]]+\]/.test(text);
+function hasDeliveryTag(text: string): boolean {
+  return /\[send-(?:file|image):[^\]]+\]/.test(text);
 }
 
 function isTaskNotificationResult(event: ClaudeStreamEvent): boolean {
@@ -237,11 +237,11 @@ function mergeIntermediateDeliveryText(finalResult: string, intermediateDelivery
     return intermediateDeliveryText;
   }
 
-  const finalSendFileTags = new Set(extractSendFileTags(finalResult));
-  const intermediateSendFileTags = extractSendFileTags(intermediateDeliveryText);
+  const finalDeliveryTags = new Set(extractDeliveryTags(finalResult));
+  const intermediateDeliveryTags = extractDeliveryTags(intermediateDeliveryText);
   if (
-    intermediateSendFileTags.length > 0 &&
-    intermediateSendFileTags.every((tag) => finalSendFileTags.has(tag))
+    intermediateDeliveryTags.length > 0 &&
+    intermediateDeliveryTags.every((tag) => finalDeliveryTags.has(tag))
   ) {
     return finalResult;
   }
@@ -723,7 +723,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       const text = textParts.join("");
       if (text) {
         worker.pendingTurn.assistantText = appendAssistantText(worker.pendingTurn.assistantText, text);
-        if (hasSendFileTag(text)) {
+        if (hasDeliveryTag(text)) {
           worker.pendingTurn.intermediateDeliveryText = appendAssistantText(worker.pendingTurn.intermediateDeliveryText, text);
         }
         worker.pendingTurn.onProgress?.(worker.pendingTurn.assistantText);

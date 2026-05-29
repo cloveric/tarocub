@@ -155,7 +155,12 @@ export async function deliverLarkResponse(input: {
         }
         const body = await readFile(real);
         if (match.preferPhoto) {
-          await input.channel.send(input.chatId, { image: { source: body } }, replyOptions);
+          await sendLarkImageWithFileFallback({
+            ...input,
+            body,
+            realPath: real,
+            originalPath: filePath,
+          });
         } else {
           await input.channel.send(input.chatId, {
             file: {
@@ -163,12 +168,12 @@ export async function deliverLarkResponse(input: {
               fileName: path.basename(real),
             },
           }, replyOptions);
+          await appendLarkFileAcceptedTimeline(input, {
+            fileName: path.basename(real),
+            bytes: body.length,
+            kind: "file",
+          });
         }
-        await appendLarkFileAcceptedTimeline(input, {
-          fileName: path.basename(real),
-          bytes: body.length,
-          kind: match.preferPhoto ? "image" : "file",
-        });
       } catch (error) {
         hadRejectedTool = true;
         await appendLarkFileRejectedTimeline(input, {
@@ -559,11 +564,11 @@ async function sendLarkPath(input: {
     return false;
   }
   if (input.kind === "image") {
-    await input.channel.send(input.chatId, { image: { source: body } }, larkReplyOptions(input.replyTo, input.replyInThread));
-    await appendLarkFileAcceptedTimeline(input, {
-      fileName: path.basename(real),
-      bytes: body.length,
-      kind: input.kind,
+    await sendLarkImageWithFileFallback({
+      ...input,
+      body,
+      realPath: real,
+      originalPath: input.filePath,
     });
     return true;
   }
@@ -609,6 +614,54 @@ async function sendLarkPath(input: {
   return true;
 }
 
+async function sendLarkImageWithFileFallback(input: {
+  channel: LarkChannelLike;
+  chatId: string;
+  replyTo?: string;
+  replyInThread?: boolean;
+  stateDir: string;
+  conversationKey?: string;
+  bridgeChatId?: number;
+  bridgeUserId?: number;
+  bridgeChatType?: "private" | "group";
+  larkMessageId?: string;
+  body: Buffer;
+  realPath: string;
+  originalPath: string;
+}): Promise<void> {
+  const replyOptions = larkReplyOptions(input.replyTo, input.replyInThread);
+  try {
+    await input.channel.send(input.chatId, { image: { source: input.body } }, replyOptions);
+    await appendLarkFileAcceptedTimeline(input, {
+      fileName: path.basename(input.realPath),
+      bytes: input.body.length,
+      kind: "image",
+    });
+    return;
+  } catch (error) {
+    await appendLarkFileRejectedTimeline(input, {
+      path: input.originalPath,
+      realPath: input.realPath,
+      reason: larkFileRejectReasonFromError(error),
+      detail: `image delivery failed; falling back to file: ${errorDetail(error)}`,
+      kind: "image",
+    });
+  }
+
+  await input.channel.send(input.chatId, {
+    file: {
+      source: input.body,
+      fileName: path.basename(input.realPath),
+    },
+  }, replyOptions);
+  await appendLarkFileAcceptedTimeline(input, {
+    fileName: path.basename(input.realPath),
+    bytes: input.body.length,
+    kind: "file",
+    fallbackFrom: "image",
+  });
+}
+
 function renderLarkFileDeliveryError(reason: "outside-workspace" | "read-error", locale: Locale): string {
   if (locale === "en") {
     return reason === "outside-workspace"
@@ -635,6 +688,7 @@ async function appendLarkFileAcceptedTimeline(
     fileName: string;
     bytes: number;
     kind: LarkSendPathKind;
+    fallbackFrom?: LarkSendPathKind;
   },
 ): Promise<void> {
   const conversationKey = input.conversationKey ?? `lark:${input.chatId}`;
@@ -650,6 +704,7 @@ async function appendLarkFileAcceptedTimeline(
       bytes: file.bytes,
       kind: file.kind,
       via: "post-turn",
+      ...(file.fallbackFrom ? { fallbackFrom: file.fallbackFrom } : {}),
       larkChatId: input.chatId,
       larkMessageId: input.larkMessageId ?? input.replyTo,
       ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),

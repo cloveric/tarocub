@@ -1088,6 +1088,28 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("keeps intermediate send-image tags when the final Claude result only summarizes delivery", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Generate a cover image",
+      files: [],
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"assistant","message":{"content":[{"type":"text","text":"Ready. [send-image:/tmp/cover.png]"}]},"session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"I sent the image.","session_id":"session-123"}\n');
+
+    await expect(promise).resolves.toEqual({
+      text: "Ready. [send-image:/tmp/cover.png]\nI sent the image.",
+      sessionId: "session-123",
+    });
+  });
+
   it("does not time out — engine runs until completion", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {

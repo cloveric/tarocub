@@ -6380,6 +6380,54 @@ describe("lark service", () => {
     }
   });
 
+  it("falls back to file delivery when Lark image delivery fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-fallback-"));
+    const outputDir = path.join(stateDir, "workspace", "out");
+    const imagePath = path.join(outputDir, "cover.png");
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(imagePath, "image body");
+    const channel = fakeChannel({
+      send: vi.fn(async (_chatId: string, payload: unknown) => {
+        if (payload && typeof payload === "object" && "image" in payload) {
+          throw new Error("image upload failed");
+        }
+        return { messageId: "sent_1" };
+      }),
+    });
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: `Cover ready [send-image:${imagePath}]`,
+        stateDir,
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { image: { source: Buffer.from("image body") } },
+        undefined,
+      );
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { file: { source: Buffer.from("image body"), fileName: "cover.png" } },
+        undefined,
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.accepted",
+        metadata: expect.objectContaining({
+          fileName: "cover.png",
+          kind: "file",
+          fallbackFrom: "image",
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("records rejected Lark file delivery tags in the timeline", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-reject-"));
     const outsideDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-outside-"));

@@ -246,6 +246,7 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
+- **v0.1.40** — fixes Claude-generated image delivery for Lark by preserving intermediate `[send-image:...]` tags through both Claude adapters and falling back to file delivery if Feishu image sending fails.
 - **v0.1.39** — deepens Lark-native UX: streaming run cards, stop-capable queue wait cards, optional preempt/batch queue mode (off by default), richer telemetry metrics, `/config` access/workspace guidance, and `/ws` workspace profiles.
 - **v0.1.38** — sanitizes historical Lark `known-chats.json` entries on read so stale parent-group labels recorded from reply threads no longer mislead `/status`, `/config`, or dashboard.
 - **v0.1.37** — tightens Lark group/topic UX: ordinary group reply threads no longer pollute known-chat labels as topic sessions, and unauthorized Lark group replies now include `/invite group` / `/group allow` guidance.
