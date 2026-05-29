@@ -784,7 +784,7 @@ describe("runCli", () => {
       expect(spawnDetached).toHaveBeenCalledTimes(1);
       expect(spawnDetached).toHaveBeenCalledWith(
         process.execPath,
-        [expect.stringContaining(path.join("dist", "src", "index.js")), "lark", "run"],
+        [expect.stringContaining(path.join("dist", "src", "index.js")), "lark", "run", "--instance", "lark"],
         expect.objectContaining({
           cwd: process.cwd(),
           stdoutPath: path.join(stateDir, "lark-service.log"),
@@ -833,6 +833,22 @@ describe("runCli", () => {
       entrypoint,
       cwd: "/repo",
     }, 99999)).toEqual([]);
+  });
+
+  it("detects detached managed Lark run processes by instance argument", () => {
+    const entrypoint = "/repo/dist/src/index.js";
+    const psOutput = [
+      `87624 /opt/homebrew/bin/node ${entrypoint} lark run --instance lark-alpha`,
+      `87625 /opt/homebrew/bin/node ${entrypoint} lark run --instance lark-beta`,
+    ].join("\n");
+
+    expect(findLarkServiceProcessIdsFromPs(psOutput, {
+      env: { CCTB_LARK_INSTANCE: "lark-alpha" },
+      stateDir: "/tmp/lark-alpha",
+      logPath: "/tmp/lark-alpha/lark-service.log",
+      entrypoint,
+      cwd: "/repo",
+    }, 99999)).toEqual([87624]);
   });
 
   it("prints managed Lark service logs through the lark service command", async () => {

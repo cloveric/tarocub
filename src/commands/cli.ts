@@ -1367,6 +1367,10 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function tmuxSessionExists(sessionName: string): Promise<boolean> {
   try {
     await execFile("tmux", ["has-session", "-t", sessionName], { timeout: 3_000 });
@@ -1535,7 +1539,7 @@ async function defaultStartLarkService(
   delete serviceEnv.CCTB_SEND_COMMAND;
   delete serviceEnv.CODEX_THREAD_ID;
 
-  (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [input.entrypoint, "lark", "run"], {
+  (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [input.entrypoint, "lark", "run", "--instance", instanceName], {
     cwd: input.cwd,
     stdoutPath: input.logPath,
     stderrPath: input.logPath,
@@ -1623,7 +1627,8 @@ function isLarkRunProcessCommand(command: string, input: LarkServiceCommandInput
     normalized.includes(`CCTB_LARK_INSTANCE="${instanceName}"`) ||
     normalized.includes(`TAROCUB_INSTANCE=${instanceName}`) ||
     normalized.includes(`TAROCUB_INSTANCE='${instanceName}'`) ||
-    normalized.includes(`TAROCUB_INSTANCE="${instanceName}"`);
+    normalized.includes(`TAROCUB_INSTANCE="${instanceName}"`) ||
+    new RegExp(`(?:^|\\s)--instance(?:=|\\s+)${escapeRegExp(instanceName)}(?:\\s|$)`).test(normalized);
 }
 
 function defaultKillLarkProcess(pid: number): void {
