@@ -46,6 +46,28 @@ describe("lark card renderer", () => {
     expect(occurrences).toBe(1);
   });
 
+  it("concatenates Codex app-server token deltas without inserting newlines", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    // Codex app-server emits one assistant_text per token fragment (delta:true).
+    for (const part of ["Hello", " world", "!", "\n\nSecond paragraph."]) {
+      state = applyLarkEngineEvent(state, { type: "assistant_text", text: part, delta: true });
+    }
+    state = applyLarkEngineEvent(state, { type: "result", text: "Hello world!\n\nSecond paragraph." });
+    const body = JSON.stringify((renderLarkRunCard(state) as any).body);
+    // Fragments join exactly (no spurious "\n" between every token).
+    expect(body).toContain("Hello world!");
+    expect(body).not.toContain("Hello\\n world");
+  });
+
+  it("keeps non-delta (complete-message) engine texts on separate lines", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    // Claude / Codex process emit one complete message per event (no delta flag).
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "First message." });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "Second message." });
+    const body = JSON.stringify((renderLarkRunCard(state) as any).body);
+    expect(body).toContain("First message.\\nSecond message.");
+  });
+
   it("downgrades markdown headings to bold so the card font is not oversized", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, { type: "assistant_text", text: "## 已发布 v0.1.47\n\n正文内容\n\n### 子标题\nmore" });

@@ -90,7 +90,7 @@ export function applyLarkEngineEvent(
         footer: "thinking",
       };
     case "assistant_text":
-      return appendAssistantText(state, event.text);
+      return appendAssistantText(state, event.text, event.delta === true);
     case "tool_use":
     case "permission_request":
       return {
@@ -127,13 +127,17 @@ export function applyLarkEngineEvent(
   }
 }
 
-function appendAssistantText(state: LarkRunState, delta: string): LarkRunState {
-  if (!delta) {
+function appendAssistantText(state: LarkRunState, text: string, isDelta: boolean): LarkRunState {
+  if (!text) {
     return { ...state, reasoning: { ...state.reasoning, active: false }, footer: "streaming" };
   }
   const last = state.blocks[state.blocks.length - 1];
   if (last && last.kind === "text" && last.streaming) {
-    const next: LarkRunBlock = { ...last, content: last.content + "\n" + delta };
+    // Token fragments (Codex app-server) concatenate with no separator so the
+    // model's own spacing/newlines survive. Complete messages (Claude, Codex
+    // process) stay on their own line.
+    const joiner = isDelta ? "" : "\n";
+    const next: LarkRunBlock = { ...last, content: last.content + joiner + text };
     return {
       ...state,
       blocks: [...state.blocks.slice(0, -1), next],
@@ -143,7 +147,7 @@ function appendAssistantText(state: LarkRunState, delta: string): LarkRunState {
   }
   return {
     ...state,
-    blocks: capBlocks([...state.blocks, { kind: "text", content: delta, streaming: true }]),
+    blocks: capBlocks([...state.blocks, { kind: "text", content: text, streaming: true }]),
     reasoning: { ...state.reasoning, active: false },
     footer: "streaming",
   };

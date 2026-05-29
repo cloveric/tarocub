@@ -59,6 +59,14 @@ export type EngineStreamEvent =
   | {
       type: "assistant_text";
       text: string;
+      /**
+       * True when `text` is a streaming token fragment that must be concatenated
+       * to the previous fragment with no separator (Codex app-server emits one
+       * event per `item/agentMessage/delta`). Engines that emit a complete
+       * message per event (Claude, Codex process) leave this unset so the run
+       * card keeps them on separate lines.
+       */
+      delta?: boolean;
       sessionId?: string;
     }
   | {

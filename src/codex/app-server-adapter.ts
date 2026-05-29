@@ -756,6 +756,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           void Promise.resolve(pending.onEngineEvent?.({
             type: "assistant_text",
             text: delta,
+            delta: true,
             sessionId: threadId,
           })).catch(() => {});
         }
