@@ -15,6 +15,12 @@ export const GroupModeFileSchema = z.object({
   listenAllChatIds: z.array(z.number()).optional(),
 }).passthrough();
 
+export const WorkspaceProfileFileSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  updatedAt: z.string().optional(),
+}).passthrough();
+
 export const ConfigFileSchema = z.object({
   engine: z.enum(["codex", "claude", "antigravity"]).optional(),
   approvalMode: z.enum(["normal", "full-auto", "bypass"]).optional(),
@@ -27,6 +33,8 @@ export const ConfigFileSchema = z.object({
   codexServiceTier: z.literal("fast").optional(),
   timezone: z.string().optional(),
   resume: ResumeStateFileSchema.optional(),
+  workspacePath: z.string().optional(),
+  workspaceProfiles: z.array(WorkspaceProfileFileSchema).optional(),
   groupMode: GroupModeFileSchema.optional(),
   bus: z.unknown().optional(),
 }).passthrough();

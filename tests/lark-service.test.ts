@@ -7512,9 +7512,10 @@ describe("lark service", () => {
 
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("/stop") },
+        expect.objectContaining({ card: expect.any(Object) }),
         { replyTo: "om_waiting" },
       );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("停止当前任务");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "engine.lock.waiting",
@@ -7589,6 +7590,197 @@ describe("lark service", () => {
           metadata: expect.objectContaining({ larkMessageId: "om_queued" }),
         }),
       ]));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("updates a native Lark run card while the engine is streaming events", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-run-card-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "thinking", text: "checking the repo" }));
+        await Promise.resolve(input.onEngineEvent?.({ type: "tool_use", toolName: "Read", toolInput: { file: "README.md" } }));
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "partial answer" }));
+        return { text: "final answer" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_run_card", content: "please work" }),
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        expect.objectContaining({ card: expect.any(Object) }),
+        { replyTo: "om_run_card" },
+      );
+      expect(channel.updateCard).toHaveBeenCalledWith("sent_1", expect.any(Object));
+      const updates = JSON.stringify(channel.updateCard.mock.calls);
+      expect(updates).toContain("checking the repo");
+      expect(updates).toContain("Read");
+      expect(updates).toContain("partial answer");
+      expect(updates).toContain("final answer");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders Lark conversation queue waits as stop-capable cards", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-card-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: "conversation_queue" }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({ chatId: "lark:oc_chat", waitedMs: 10_000, reason: "conversation_queue" });
+        return await job();
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_wait_card", content: "second" }),
+      });
+
+      const sent = JSON.stringify(channel.send.mock.calls);
+      expect(sent).toContain("正在排队");
+      expect(sent).toContain("stop");
+      expect(sent).toContain("conversationKey");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preempts an active Lark turn only when the optional queue policy enables it", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-preempt-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime({
+      queuePolicy: { preempt: true, batchWindowMs: 0 },
+    });
+    const activeController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: activeController });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "new answer" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_preempt", content: "replace the active run" }),
+      });
+
+      expect(activeController.signal.aborted).toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the default Lark queue policy conservative", async () => {
+    const runtime = createLarkServiceRuntime();
+    expect(runtime.queuePolicy).toEqual({ preempt: false, batchWindowMs: 0 });
+  });
+
+  it("optionally batches dense Lark text messages before entering the conservative queue", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime({
+      queuePolicy: { preempt: false, batchWindowMs: 25 },
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "batched answer" })),
+    };
+
+    try {
+      const first = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_batch_1", content: "first dense message" }),
+      });
+      const second = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_batch_2", content: "second dense message" }),
+      });
+
+      await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const batchText = (bridge.handleAuthorizedMessage.mock.calls[0] as unknown as [{ text: string }])[0].text;
+      expect(batchText).toContain("#1");
+      expect(batchText).toContain("first dense message");
+      expect(batchText).toContain("#2");
+      expect(batchText).toContain("second dense message");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("manages Lark workspace profiles with /ws commands", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-ws-"));
+    const workspacePath = path.join(stateDir, "workspaces", "demo");
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_ws_save", content: `/ws save demo ${workspacePath}` }),
+      });
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_ws_use", content: "/ws use demo" }),
+      });
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_ws_list", content: "/ws list" }),
+      });
+
+      const cfg = await loadInstanceConfig(stateDir);
+      expect(cfg.workspacePath).toBe(workspacePath);
+      expect(cfg.workspaceProfiles).toEqual([
+        expect.objectContaining({ name: "demo", path: workspacePath }),
+      ]);
+      const replies = JSON.stringify(channel.send.mock.calls);
+      expect(replies).toContain("demo");
+      expect(replies).toContain(workspacePath);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

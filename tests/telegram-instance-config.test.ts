@@ -31,6 +31,8 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        workspacePath: undefined,
+        workspaceProfiles: [],
         groupMode: {
           enabled: true,
           allowedChatIds: [],
@@ -59,6 +61,8 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        workspacePath: undefined,
+        workspaceProfiles: [],
         groupMode: {
           enabled: true,
           allowedChatIds: [],
@@ -88,6 +92,8 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        workspacePath: undefined,
+        workspaceProfiles: [],
         groupMode: {
           enabled: true,
           allowedChatIds: [],
@@ -120,6 +126,12 @@ describe("loadInstanceConfig", () => {
             dirName: "project-dir",
             workspacePath: "/tmp/workspace",
           },
+          workspacePath: " /tmp/current-workspace ",
+          workspaceProfiles: [
+            { name: "demo", path: "/tmp/demo", updatedAt: "2026-01-01T00:00:00.000Z" },
+            { name: "demo", path: "/tmp/demo-new", updatedAt: "2026-01-02T00:00:00.000Z" },
+            { name: "", path: "/tmp/ignored" },
+          ],
           groupMode: {
             enabled: false,
             allowedChatIds: [-100123, -100123, 42.5],
@@ -144,6 +156,10 @@ describe("loadInstanceConfig", () => {
           workspacePath: "/tmp/workspace",
           symlinkPath: undefined,
         },
+        workspacePath: "/tmp/current-workspace",
+        workspaceProfiles: [
+          { name: "demo", path: "/tmp/demo-new", updatedAt: "2026-01-02T00:00:00.000Z" },
+        ],
         groupMode: {
           enabled: false,
           allowedChatIds: [-100123],
@@ -172,6 +188,8 @@ describe("loadInstanceConfig", () => {
         codexServiceTier: undefined,
         timezone: resolveDefaultCronTimezone(),
         resume: undefined,
+        workspacePath: undefined,
+        workspaceProfiles: [],
         groupMode: {
           enabled: true,
           allowedChatIds: [],

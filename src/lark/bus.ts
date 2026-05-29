@@ -9,7 +9,7 @@ import {
   type DelegationCommandBridge,
   type DelegationCommandContext,
 } from "../telegram/delegation-commands.js";
-import { loadInstanceConfig } from "../telegram/instance-config.js";
+import { loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
 import {
   handleMiniBusTelegramCommand,
   type MiniBusCommandBridge,
@@ -87,7 +87,7 @@ export async function handleLarkBoardCommand(
     onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
       locale,
       source: "board",
-      workspaceOverride: cfg.resume?.workspacePath,
+      workspaceOverride: resolveInstanceWorkspacePath(cfg),
     }),
   };
 
@@ -149,7 +149,7 @@ export async function handleLarkMiniBusCommand(
     onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
       locale,
       source: "mini",
-      workspaceOverride: cfg.resume?.workspacePath,
+      workspaceOverride: resolveInstanceWorkspacePath(cfg),
     }),
   };
   const bridge: MiniBusCommandBridge = {
@@ -211,7 +211,7 @@ export async function handleLarkDelegationCommand(
     onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
       locale,
       source: "delegation",
-      workspaceOverride: cfg.resume?.workspacePath,
+      workspaceOverride: resolveInstanceWorkspacePath(cfg),
     }),
   };
   const bridge: DelegationCommandBridge = {
@@ -284,7 +284,7 @@ export async function handleLarkCrewWorkflow(
     onEngineEvent: createLarkBusEngineEventHandler(input, normalized, {
       locale,
       source: "crew",
-      workspaceOverride: cfg.resume?.workspacePath,
+      workspaceOverride: resolveInstanceWorkspacePath(cfg),
     }),
   };
 

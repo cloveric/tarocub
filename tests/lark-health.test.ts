@@ -20,6 +20,9 @@ describe("Lark health monitor", () => {
       disconnect: vi.fn(async () => undefined),
     };
     const probe = vi.fn(async () => false);
+    const telemetry = {
+      recordMetric: vi.fn(async () => undefined),
+    };
 
     try {
       const monitor = startLarkHealthMonitor({
@@ -29,6 +32,7 @@ describe("Lark health monitor", () => {
         intervalMs: 1_000,
         failureThreshold: 2,
         probe,
+        telemetry,
       });
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -67,6 +71,11 @@ describe("Lark health monitor", () => {
           failureThreshold: 2,
         }),
       }));
+      expect(telemetry.recordMetric).toHaveBeenCalledWith("ws_reconnect", 1, {
+        channel: "lark",
+        instanceName: "lark-alpha",
+        outcome: "success",
+      });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

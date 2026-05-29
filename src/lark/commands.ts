@@ -1,4 +1,5 @@
 import path from "node:path";
+import { mkdir } from "node:fs/promises";
 
 import type {
   CodexThreadGoal,
@@ -23,11 +24,13 @@ import { handleLocalEngineTelegramCommand } from "../telegram/engine-commands.js
 import {
   applyEngineSelection,
   loadInstanceConfig,
+  resolveInstanceWorkspacePath,
   updateInstanceConfig,
   type EffortLevel,
   type GroupModeConfig,
   type InstanceConfig,
   type InstanceEngine,
+  type WorkspaceProfile,
 } from "../telegram/instance-config.js";
 import { renderUsageMessage, type Locale } from "../telegram/message-renderer.js";
 import { handleLocalSessionTelegramCommand } from "../telegram/session-commands.js";
@@ -107,6 +110,16 @@ export async function handleLarkSimpleCommand(
       outcome: "success",
       detail: "/config",
     });
+    return true;
+  }
+
+  if (isWorkspaceCommand(commandText)) {
+    await sendLarkCommandMarkdown(input, normalized, "/ws", await renderAndApplyLarkWorkspaceCommand(
+      input,
+      normalized,
+      commandText,
+      commandLocale,
+    ));
     return true;
   }
 
@@ -737,6 +750,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "- `/resume` / `/resume <number>`: scan and select local Claude sessions; Antigravity scans recent conversations",
       "- `/resume thread <thread-id>`: bind a Codex thread",
       "- `/resume conversation <conversation-id>`: bind an Antigravity conversation explicitly",
+      "- `/ws list|save|use|remove`: manage saved workspace directories for this Lark bot",
       "- `/newgroup <name>` / `/newgroup topic <name>`: create a new Lark group or topic chat for a fresh project/session space",
       "- `/cron ...`: manage Lark-side reminders and scheduled tasks",
       "- `/group [status|allow|deny|on|off|all|at]`: manage the current Lark group and mention requirement",
@@ -784,6 +798,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "- `/resume` / `/resume <编号>`：Claude 扫描并选择本地 session；Antigravity 扫描 recent conversation",
     "- `/resume thread <thread-id>`：绑定 Codex thread",
     "- `/resume conversation <conversation-id>`：显式绑定 Antigravity conversation",
+    "- `/ws list|save|use|remove`：管理当前 Lark bot 的工作区目录",
     "- `/newgroup <名称>` / `/newgroup topic <名称>`：创建新的飞书群/话题群，作为新的项目或 session 空间",
     "- `/cron ...`：管理飞书侧定时提醒和任务",
     "- `/group [status|allow|deny|on|off|all|at]`：管理当前飞书群授权和是否需要 @bot 才响应",
@@ -814,12 +829,186 @@ function isGroupCommand(text: string): boolean {
   return /^\/group(?:\s|$)/i.test(text.trim());
 }
 
+function isWorkspaceCommand(text: string): boolean {
+  return /^\/ws(?:\s|$)/i.test(text.trim());
+}
+
 function isLarkInviteRemoveCommand(text: string): boolean {
   return /^\/(?:invite|remove)(?:\s|$)/i.test(text.trim());
 }
 
 function extractLarkInviteRemoveCommandName(text: string): "/invite" | "/remove" {
   return /^\/remove(?:\s|$)/i.test(text.trim()) ? "/remove" : "/invite";
+}
+
+async function renderAndApplyLarkWorkspaceCommand(
+  input: LarkCommandInput,
+  normalized: LarkNormalizedBridgeMessage,
+  commandText: string,
+  locale: Locale,
+): Promise<string> {
+  const words = commandText.trim().split(/\s+/);
+  const action = (words[1] ?? "list").toLowerCase();
+  const name = words[2];
+  const cfg = await loadInstanceConfig(input.stateDir);
+  const currentWorkspace = resolveInstanceWorkspacePath(cfg) ?? path.join(input.stateDir, "workspace");
+
+  if (action === "list" || action === "status") {
+    return renderLarkWorkspaceList(cfg.workspaceProfiles, currentWorkspace, locale);
+  }
+
+  if (action === "save") {
+    const validation = validateWorkspaceProfileName(name, locale);
+    if (validation) {
+      return validation;
+    }
+    const rawProfilePath = words[3] ? words.slice(3).join(" ") : "";
+    if (rawProfilePath && !path.isAbsolute(rawProfilePath)) {
+      return locale === "en" ? "Workspace path must be absolute." : "工作区路径必须是绝对路径。";
+    }
+    const profilePath = rawProfilePath || currentWorkspace;
+    await mkdir(profilePath, { recursive: true });
+    await updateInstanceConfig(input.stateDir, (config) => {
+      const profiles = normalizeWorkspaceProfiles(config.workspaceProfiles);
+      upsertWorkspaceProfile(profiles, { name, path: profilePath, updatedAt: new Date().toISOString() });
+      config.workspaceProfiles = profiles;
+    });
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "success",
+      detail: "/ws save",
+      metadata: { workspaceName: name },
+    });
+    return locale === "en"
+      ? `Saved workspace \`${name}\`:\n${profilePath}`
+      : `已保存工作区 \`${name}\`：\n${profilePath}`;
+  }
+
+  if (action === "use") {
+    const validation = validateWorkspaceProfileName(name, locale);
+    if (validation) {
+      return validation;
+    }
+    const profile = cfg.workspaceProfiles.find((item) => item.name === name);
+    if (!profile) {
+      return locale === "en" ? `Workspace \`${name}\` is not saved. Use \`/ws list\`.` : `工作区 \`${name}\` 尚未保存。可先用 \`/ws list\` 查看。`;
+    }
+    await mkdir(profile.path, { recursive: true });
+    const removedSession = await new SessionStore(path.join(input.stateDir, "session.json"))
+      .removeByConversationKeyRecovering(normalized.conversationKey)
+      .then((result) => result.removed || result.repaired)
+      .catch(() => false);
+    await updateInstanceConfig(input.stateDir, (config) => {
+      config.workspacePath = profile.path;
+    });
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "success",
+      detail: "/ws use",
+      metadata: { workspaceName: name, removedSession },
+    });
+    const resetNote = removedSession
+      ? (locale === "en" ? "The current session binding was reset to avoid stale project context." : "已重置当前会话绑定，避免新工作区沿用旧上下文。")
+      : (locale === "en" ? "The next turn will use this workspace." : "下一轮会使用这个工作区。");
+    return locale === "en"
+      ? `Using workspace \`${name}\`:\n${profile.path}\n\n${resetNote}`
+      : `已切换到工作区 \`${name}\`：\n${profile.path}\n\n${resetNote}`;
+  }
+
+  if (action === "remove" || action === "rm") {
+    const validation = validateWorkspaceProfileName(name, locale);
+    if (validation) {
+      return validation;
+    }
+    let removed: WorkspaceProfile | undefined;
+    await updateInstanceConfig(input.stateDir, (config) => {
+      const profiles = normalizeWorkspaceProfiles(config.workspaceProfiles);
+      removed = profiles.find((item) => item.name === name);
+      config.workspaceProfiles = profiles.filter((item) => item.name !== name);
+      if (removed && config.workspacePath === removed.path) {
+        delete config.workspacePath;
+      }
+    });
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: removed ? "success" : "noop",
+      detail: "/ws remove",
+      metadata: { workspaceName: name },
+    });
+    if (!removed) {
+      return locale === "en" ? `Workspace \`${name}\` was not saved.` : `工作区 \`${name}\` 不存在。`;
+    }
+    return locale === "en" ? `Removed workspace \`${name}\`.` : `已移除工作区 \`${name}\`。`;
+  }
+
+  return locale === "en"
+    ? "Usage: `/ws list`, `/ws save <name> [absolute-path]`, `/ws use <name>`, or `/ws remove <name>`."
+    : "用法：`/ws list`、`/ws save <名称> [绝对路径]`、`/ws use <名称>`、`/ws remove <名称>`。";
+}
+
+function validateWorkspaceProfileName(name: string | undefined, locale: Locale): string | undefined {
+  if (!name || !/^[A-Za-z0-9_.-]{1,64}$/.test(name)) {
+    return locale === "en"
+      ? "Workspace names must use 1-64 letters, numbers, dots, underscores, or dashes, for example `/ws save demo /abs/path`."
+      : "工作区名称只能使用 1-64 位字母、数字、点、下划线或短横线，例如 `/ws save demo /abs/path`。";
+  }
+  return undefined;
+}
+
+function normalizeWorkspaceProfiles(raw: unknown): WorkspaceProfile[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter((item): item is WorkspaceProfile => {
+      if (typeof item !== "object" || item === null) {
+        return false;
+      }
+      const record = item as Record<string, unknown>;
+      return typeof record.name === "string" && typeof record.path === "string";
+    })
+    .map((item) => ({
+      name: item.name,
+      path: item.path,
+      updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : new Date(0).toISOString(),
+    }));
+}
+
+function upsertWorkspaceProfile(profiles: WorkspaceProfile[], next: WorkspaceProfile): void {
+  const index = profiles.findIndex((item) => item.name === next.name);
+  if (index === -1) {
+    profiles.push(next);
+  } else {
+    profiles[index] = next;
+  }
+  profiles.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function renderLarkWorkspaceList(profiles: WorkspaceProfile[], currentWorkspace: string, locale: Locale): string {
+  const lines = profiles.length > 0
+    ? profiles.map((profile) => {
+      const marker = profile.path === currentWorkspace ? " *" : "";
+      return `- ${profile.name}${marker}: ${profile.path}`;
+    })
+    : [locale === "en" ? "- No saved workspaces." : "- 暂无已保存工作区。"];
+  if (locale === "en") {
+    return [
+      `Current workspace: ${currentWorkspace}`,
+      "",
+      "Saved workspaces:",
+      ...lines,
+      "",
+      "Commands: `/ws save <name> [absolute-path]`, `/ws use <name>`, `/ws remove <name>`.",
+    ].join("\n");
+  }
+  return [
+    `当前工作区：${currentWorkspace}`,
+    "",
+    "已保存工作区：",
+    ...lines,
+    "",
+    "命令：`/ws save <名称> [绝对路径]`、`/ws use <名称>`、`/ws remove <名称>`。",
+  ].join("\n");
 }
 
 async function handleLarkInviteRemoveCommand(
@@ -1732,7 +1921,7 @@ async function handleLarkGoalCommand(
     userId: normalized.bridgeUserId,
     chatType: normalized.bridgeChatType,
     conversationKey: normalized.conversationKey,
-    workspaceOverride: cfg.resume?.workspacePath,
+    workspaceOverride: resolveInstanceWorkspacePath(cfg),
   };
 
   if (action.kind === "status") {

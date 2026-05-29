@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { withFileMutex } from "../state/file-mutex.js";
+import type { TelemetryAdapter, TelemetryTags } from "./telemetry.js";
 
 export interface TurnPoolWaitEvent {
   waitedMs: number;
@@ -48,6 +49,8 @@ export interface FileTurnPoolOptions {
   poolPath?: string;
   staleLeaseMs?: number;
   pollIntervalMs?: number;
+  telemetry?: TelemetryAdapter;
+  telemetryTags?: TelemetryTags;
 }
 
 const DEFAULT_STALE_LEASE_MS = 2 * 60 * 60 * 1000;
@@ -62,12 +65,16 @@ export class FileTurnPool implements TurnPoolLike {
   private readonly poolPath: string;
   private readonly staleLeaseMs: number;
   private readonly pollIntervalMs: number;
+  private readonly telemetry?: TelemetryAdapter;
+  private readonly telemetryTags?: TelemetryTags;
 
   constructor(options: FileTurnPoolOptions) {
     this.maxActive = Math.max(0, Math.floor(options.maxActive));
     this.poolPath = options.poolPath ?? resolveDefaultTurnPoolPath();
     this.staleLeaseMs = options.staleLeaseMs ?? DEFAULT_STALE_LEASE_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.telemetry = options.telemetry;
+    this.telemetryTags = options.telemetryTags;
   }
 
   async run<T>(task: () => Promise<T>, options: TurnPoolRunOptions = {}): Promise<T> {
@@ -78,6 +85,7 @@ export class FileTurnPool implements TurnPoolLike {
     const leaseId = `${process.pid}-${Date.now()}-${randomUUID()}`;
     const waitStartedAt = Date.now();
     let waitNotified = false;
+    let waitMetricRecorded = false;
     let acquired = false;
     try {
       for (;;) {
@@ -85,9 +93,16 @@ export class FileTurnPool implements TurnPoolLike {
         const activeCount = await this.tryAcquire(leaseId, options);
         if (activeCount < this.maxActive) {
           acquired = true;
+          await this.recordPoolMetric("pool_active", activeCount + 1, options);
+          await this.recordPoolMetric("pool_waiting", 0, options);
           break;
         }
 
+        if (!waitMetricRecorded) {
+          waitMetricRecorded = true;
+          await this.recordPoolMetric("pool_active", activeCount, options);
+          await this.recordPoolMetric("pool_waiting", 1, options);
+        }
         const waitedMs = Math.max(0, Date.now() - waitStartedAt);
         if (!waitNotified && options.onWait && waitedMs >= (options.waitNotifyAfterMs ?? 0)) {
           waitNotified = true;
@@ -104,7 +119,10 @@ export class FileTurnPool implements TurnPoolLike {
       return await task();
     } finally {
       if (acquired) {
-        await this.release(leaseId).catch(() => undefined);
+        const activeAfterRelease = await this.release(leaseId).catch(() => undefined);
+        if (typeof activeAfterRelease === "number") {
+          await this.recordPoolMetric("pool_active", activeAfterRelease, options);
+        }
       }
     }
   }
@@ -133,13 +151,25 @@ export class FileTurnPool implements TurnPoolLike {
     return activeCount;
   }
 
-  private async release(leaseId: string): Promise<void> {
+  private async release(leaseId: string): Promise<number> {
+    let activeCount = 0;
     await withFileMutex(this.poolPath, async () => {
       const state = await this.readState();
-      await this.writeState({
-        leases: state.leases.filter((lease) => lease.id !== leaseId),
-      });
+      const leases = state.leases.filter((lease) => lease.id !== leaseId);
+      activeCount = leases.length;
+      await this.writeState({ leases });
     });
+    return activeCount;
+  }
+
+  private async recordPoolMetric(name: "pool_active" | "pool_waiting", value: number, options: TurnPoolRunOptions): Promise<void> {
+    await Promise.resolve(this.telemetry?.recordMetric?.(name, value, {
+      ...this.telemetryTags,
+      ...(options.metadata?.channel ? { channel: options.metadata.channel } : {}),
+      ...(options.metadata?.instanceName ? { instanceName: options.metadata.instanceName } : {}),
+      ...(options.metadata?.conversationKey ? { conversationKey: options.metadata.conversationKey } : {}),
+      ...(options.metadata?.sessionId ? { sessionId: options.metadata.sessionId } : {}),
+    })).catch(() => undefined);
   }
 
   private async readState(): Promise<TurnPoolState> {

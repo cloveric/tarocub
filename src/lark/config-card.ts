@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSetting } from "../codex/user-defaults.js";
 import { resolveApprovalMode } from "../state/approval-mode.js";
+import { AccessStore } from "../state/access-store.js";
 import { SessionStore } from "../state/session-store.js";
 import {
   applyEngineSelection,
@@ -59,6 +60,7 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
   const raw = await readRawLarkConfig(input.stateDir);
   const resolvedApprovalMode = resolveApprovalMode(raw.approvalMode);
   const groupState = await readLarkConfigGroupState(input, cfg);
+  const accessState = await new AccessStore(path.join(input.stateDir, "access.json")).load().catch(() => null);
   const knownChat = await new LarkKnownChatStore(input.stateDir).get(input.conversationKey).catch(() => null);
   const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const labels = larkConfigLabels(input.locale);
@@ -84,6 +86,8 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
     `- ${labels.fast}: ${fastOn ? labels.on : labels.off}`,
     `- ${labels.yolo}: ${approvalMode}`,
     `- ${labels.locale}: ${input.locale}`,
+    `- ${labels.access}: ${accessState ? labels.accessSummary(accessState.pairedUsers.length, accessState.allowlist.length) : labels.defaultValue}`,
+    `- ${labels.workspace}: ${cfg.workspacePath ?? cfg.resume?.workspacePath ?? path.join(input.stateDir, "workspace")}`,
     input.bridgeChatType === "group"
       ? `- ${labels.group}: ${groupState.allowed ? labels.groupAllowed : labels.groupNotAllowed}; ${requiresMention ? labels.groupAt : labels.groupAll}`
       : `- ${labels.group}: ${labels.privateChat}`,
@@ -110,6 +114,19 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
       button(optionLabel("中文", input.locale === "zh", labels), "locale", "zh", input, input.locale === "zh" ? "primary" : "default"),
       button(optionLabel("English", input.locale === "en", labels), "locale", "en", input, input.locale === "en" ? "primary" : "default"),
     ]),
+    markdownElement(input.locale === "en"
+      ? [
+        `**${labels.accessSection}**`,
+        "- `/invite group` / `/remove group`: allow or remove the current group.",
+        "- `/invite user @person` / `/remove user @person`: manage who can operate the bot inside groups.",
+        "- `/ws list|save|use|remove`: manage saved workspace directories.",
+      ].join("\n")
+      : [
+        `**${labels.accessSection}**`,
+        "- `/invite group` / `/remove group`：允许或移除当前群。",
+        "- `/invite user @某人` / `/remove user @某人`：管理群内可操作用户。",
+        "- `/ws list|save|use|remove`：管理已保存工作区目录。",
+      ].join("\n")),
   ];
 
   if (input.bridgeChatType === "group") {
@@ -581,6 +598,8 @@ function larkConfigLabels(locale: Locale): {
   locale: string;
   group: string;
   chat: string;
+  access: string;
+  workspace: string;
   defaultValue: string;
   on: string;
   off: string;
@@ -601,6 +620,7 @@ function larkConfigLabels(locale: Locale): {
   yoloOff: string;
   yoloUnsafe: string;
   localeSection: string;
+  accessSection: string;
   groupSection: string;
   groupAllow: string;
   groupKeep: string;
@@ -610,6 +630,7 @@ function larkConfigLabels(locale: Locale): {
   refresh: string;
   refreshed: string;
   selectedPrefix: string;
+  accessSummary(pairedUsers: number, allowlistedUsers: number): string;
 } {
   if (locale === "en") {
     return {
@@ -623,6 +644,8 @@ function larkConfigLabels(locale: Locale): {
       locale: "Locale",
       group: "Group",
       chat: "Chat",
+      access: "Access",
+      workspace: "Workspace",
       defaultValue: "default",
       on: "on",
       off: "off",
@@ -643,6 +666,7 @@ function larkConfigLabels(locale: Locale): {
       yoloOff: "YOLO Off",
       yoloUnsafe: "Unsafe",
       localeSection: "Language",
+      accessSection: "Access and workspace",
       groupSection: "Group Mode",
       groupAllow: "Allow Group",
       groupKeep: "Keep current group setting",
@@ -652,6 +676,7 @@ function larkConfigLabels(locale: Locale): {
       refresh: "Refresh",
       refreshed: "Refreshed.",
       selectedPrefix: "✓ ",
+      accessSummary: (pairedUsers, allowlistedUsers) => `${pairedUsers} paired, ${allowlistedUsers} allowlisted`,
     };
   }
   return {
@@ -665,6 +690,8 @@ function larkConfigLabels(locale: Locale): {
     locale: "语言",
     group: "群聊",
     chat: "聊天",
+    access: "访问",
+    workspace: "工作区",
     defaultValue: "默认",
     on: "开启",
     off: "关闭",
@@ -685,6 +712,7 @@ function larkConfigLabels(locale: Locale): {
     yoloOff: "YOLO 关",
     yoloUnsafe: "Unsafe",
     localeSection: "语言",
+    accessSection: "访问和工作区",
     groupSection: "群聊模式",
     groupAllow: "允许本群",
     groupKeep: "保持当前群聊设置",
@@ -694,5 +722,6 @@ function larkConfigLabels(locale: Locale): {
     refresh: "刷新",
     refreshed: "已刷新。",
     selectedPrefix: "✓ ",
+    accessSummary: (pairedUsers, allowlistedUsers) => `${pairedUsers} 个配对用户，${allowlistedUsers} 个白名单用户`,
   };
 }

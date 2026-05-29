@@ -40,6 +40,7 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/reset` | Reset the current chat/session binding. | Telegram, Lark |
 | `/stop` | Stop the current running or queued task. | Telegram, Lark |
 | `/continue` | Continue the latest waiting archive analysis. | Telegram, Lark |
+| `/ws list\|save\|use\|remove` | Manage saved Lark workspace directories; `/ws use` resets the current Lark session binding to avoid stale context. | Lark |
 
 ## Claude-Specific Utilities
 

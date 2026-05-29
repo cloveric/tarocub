@@ -37,6 +37,10 @@ export interface LarkRuntimeEnv {
   LARK_CHANNEL_TELEMETRY_MODULE?: string;
   CCTB_LARK_HEALTH_INTERVAL_MS?: string;
   CCTB_LARK_HEALTH_FAILURE_THRESHOLD?: string;
+  CCTB_LARK_QUEUE_MODE?: string;
+  TAROCUB_LARK_QUEUE_MODE?: string;
+  CCTB_LARK_BATCH_WINDOW_MS?: string;
+  TAROCUB_LARK_BATCH_WINDOW_MS?: string;
 }
 
 export interface LarkRuntimeConfig {

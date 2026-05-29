@@ -10,6 +10,7 @@ import { createBridgeDependencies } from "../service.js";
 import { appendServiceLifecycleEventSync, type ServiceLifecycleEvent } from "../runtime/service-lifecycle-log.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { loadTelemetryAdapterFromEnv } from "../runtime/telemetry.js";
 import { CronStore } from "../state/cron-store.js";
 import { parseTimelineEvents, resolveTimelineLogPath, type TimelineEvent } from "../state/timeline-log.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
@@ -112,7 +113,10 @@ export async function runLarkService(
     ? await options.createBridge(bridgeEnv, config)
     : await createDefaultLarkBridge(bridgeEnv);
   lifecycleStateDir = stateDir;
-  const runtime = options.runtime ?? createLarkServiceRuntime();
+  const runtime = options.runtime ?? createLarkServiceRuntime({
+    queuePolicy: resolveLarkQueuePolicy(env),
+  });
+  const telemetry = await loadTelemetryAdapterFromEnv(bridgeEnv);
   runtime.commentClient ??= createLarkCommentClient(config);
   const serviceLock = await acquireLarkServiceLock(stateDir);
   let channel: LarkRuntimeChannelLike | undefined;
@@ -253,6 +257,7 @@ export async function runLarkService(
       domain: config.domain,
       intervalMs: parsePositiveIntegerEnv(env.CCTB_LARK_HEALTH_INTERVAL_MS),
       failureThreshold: parsePositiveIntegerEnv(env.CCTB_LARK_HEALTH_FAILURE_THRESHOLD),
+      telemetry,
     });
     if (!runtime.cronRuntime) {
       const cronStore = new CronStore(stateDir);
@@ -342,6 +347,28 @@ function formatLarkAbortReason(reason: unknown): string {
   } catch {
     return String(reason);
   }
+}
+
+function resolveLarkQueuePolicy(env: LarkRuntimeEnv): { preempt: boolean; batchWindowMs: number } {
+  const mode = (env.CCTB_LARK_QUEUE_MODE ?? env.TAROCUB_LARK_QUEUE_MODE ?? "queue").trim().toLowerCase();
+  const batchWindowMs = parseNonNegativeIntegerEnv(env.CCTB_LARK_BATCH_WINDOW_MS ?? env.TAROCUB_LARK_BATCH_WINDOW_MS);
+  return {
+    preempt: mode === "preempt" || mode === "preempt-batch" || mode === "preempt_batch",
+    batchWindowMs: mode === "batch" || mode === "preempt-batch" || mode === "preempt_batch"
+      ? batchWindowMs ?? 750
+      : batchWindowMs ?? 0,
+  };
+}
+
+function parseNonNegativeIntegerEnv(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  if (/^(?:off|false|no)$/i.test(value.trim())) {
+    return 0;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 async function recoverInterruptedLarkTurns(stateDir: string, instanceName: string): Promise<number> {

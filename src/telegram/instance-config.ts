@@ -38,7 +38,15 @@ export interface InstanceConfig {
   codexServiceTier: "fast" | undefined;
   timezone: string;
   resume: ResumeState | undefined;
+  workspacePath: string | undefined;
+  workspaceProfiles: WorkspaceProfile[];
   groupMode: GroupModeConfig;
+}
+
+export interface WorkspaceProfile {
+  name: string;
+  path: string;
+  updatedAt: string;
 }
 
 export interface GroupModeConfig {
@@ -91,6 +99,8 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   codexServiceTier: undefined,
   timezone: resolveDefaultCronTimezone(),
   resume: undefined,
+  workspacePath: undefined,
+  workspaceProfiles: [],
   groupMode: {
     enabled: true,
     allowedChatIds: [],
@@ -115,6 +125,39 @@ function parseGroupMode(raw: unknown): GroupModeConfig {
     allowedChatIds,
     listenAllChatIds,
   };
+}
+
+function parseWorkspaceProfiles(raw: unknown): WorkspaceProfile[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const profiles = new Map<string, WorkspaceProfile>();
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.name !== "string" || typeof record.path !== "string") {
+      continue;
+    }
+    const name = record.name.trim();
+    const profilePath = record.path.trim();
+    if (!name || !profilePath) {
+      continue;
+    }
+    profiles.set(name, {
+      name,
+      path: profilePath,
+      updatedAt: typeof record.updatedAt === "string" && record.updatedAt.trim()
+        ? record.updatedAt
+        : new Date(0).toISOString(),
+    });
+  }
+  return [...profiles.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export function resolveInstanceWorkspacePath(config: Pick<InstanceConfig, "workspacePath" | "resume">): string | undefined {
+  return config.workspacePath ?? config.resume?.workspacePath;
 }
 
 export function applyEngineSelection(
@@ -202,6 +245,10 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     codexServiceTier: config.codexServiceTier === "fast" ? "fast" : undefined,
     timezone: normalizeCronTimezone(config.timezone) ?? DEFAULT_INSTANCE_CONFIG.timezone,
     resume: parseResumeState(config.resume),
+    workspacePath: typeof config.workspacePath === "string" && config.workspacePath.trim()
+      ? config.workspacePath.trim()
+      : undefined,
+    workspaceProfiles: parseWorkspaceProfiles(config.workspaceProfiles),
     groupMode: parseGroupMode(config.groupMode),
   };
 }

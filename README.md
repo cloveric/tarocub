@@ -196,7 +196,7 @@ node dist/src/index.js lark timeline 20
 node dist/src/index.js lark dashboard
 ```
 
-Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/newgroup`, `/newtopic`, and `/continue`.
+Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/ws`, `/newgroup`, `/newtopic`, and `/continue`.
 
 Lark group/session semantics:
 
@@ -204,6 +204,13 @@ Lark group/session semantics:
 - Topic-style Lark groups use one session per topic. A topic conversation key is `lark:<chat_id>:<thread_id>`, while the parent group key is `lark:<chat_id>`.
 - `/invite group` and `/group allow` authorize the current group, not only the current thread. `/remove group` and `/group deny` remove the current group authorization.
 - `known-chats.json` is diagnostic metadata for `/status`, `/config`, and dashboard labels. It never decides routing or access by itself.
+
+Lark-native controls:
+
+- Long-running Lark turns now send a native progress card and update it with thinking, tool calls, background notifications, and final result. The final plain reply is still delivered, so existing workflows do not depend on cards.
+- Same-conversation messages still use conservative FIFO queueing by default. Optional preempt/batch behavior is off unless explicitly enabled with `CCTB_LARK_QUEUE_MODE=preempt`, `batch`, or `preempt-batch`; batch windows can be tuned with `CCTB_LARK_BATCH_WINDOW_MS=<ms>`.
+- `/config` shows access and workspace guidance in the card. `/invite group`, `/remove group`, `/invite user @person`, and `/remove user @person` remain the safe in-chat access controls.
+- `/ws list`, `/ws save <name> [absolute-path]`, `/ws use <name>`, and `/ws remove <name>` manage saved Lark workspace directories. `/ws use` resets the current conversation binding so a workspace switch does not silently keep stale project context.
 
 ## Operator Commands
 
@@ -239,6 +246,7 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
+- **v0.1.39** — deepens Lark-native UX: streaming run cards, stop-capable queue wait cards, optional preempt/batch queue mode (off by default), richer telemetry metrics, `/config` access/workspace guidance, and `/ws` workspace profiles.
 - **v0.1.38** — sanitizes historical Lark `known-chats.json` entries on read so stale parent-group labels recorded from reply threads no longer mislead `/status`, `/config`, or dashboard.
 - **v0.1.37** — tightens Lark group/topic UX: ordinary group reply threads no longer pollute known-chat labels as topic sessions, and unauthorized Lark group replies now include `/invite group` / `/group allow` guidance.
 - **v0.1.36** — preserves existing Lark thread/topic sessions even when the platform later reports the chat mode as a plain group, preventing active group topics from appearing to forget prior context after restarts.
@@ -261,9 +269,10 @@ The bridge is powerful because it controls local CLIs. Treat it like local autom
 - Use YOLO unsafe/bypass only for trusted instances; it intentionally bypasses normal approval prompts and sandbox restrictions.
 - Keep app secrets in bridge state, not prompts, argv, or child-process env.
 - Use `doctor`, `timeline`, `audit`, and `dashboard` before guessing at failures.
-- Telegram/Lark can share an optional machine-wide AI worker pool when you set `TAROCUB_MAX_CONCURRENT_TURNS=<n>`; it is off by default, and `0`/`off` keeps it disabled. Lark also records `service.health` events and reconnect attempts when health probes fail.
+- Telegram/Lark can share an optional machine-wide AI worker pool when you set `TAROCUB_MAX_CONCURRENT_TURNS=<n>`; it is off by default, and `0`/`off` keeps it disabled. Lark same-conversation preempt/batch is also off by default; opt in with `CCTB_LARK_QUEUE_MODE=preempt|batch|preempt-batch`.
+- Lark records `service.health` events and reconnect attempts when health probes fail; telemetry adapters receive `ws_reconnect`, `pool_active`, `pool_waiting`, `run_e2e_ms`, token, cost, and error metrics when configured.
 - Lark keeps a local `known-chats.json` cache so `/status`, `/config`, and `dashboard` can show friendly chat names instead of only opaque chat IDs.
-- Optional local observability can be loaded with `TAROCUB_TELEMETRY_MODULE=/abs/path/adapter.mjs`; the adapter receives metrics such as `run_e2e_ms`, token counts, `cost_usd`, and turn errors, but telemetry failures are swallowed so they cannot break user turns.
+- Optional local observability can be loaded with `TAROCUB_TELEMETRY_MODULE=/abs/path/adapter.mjs`; telemetry failures are swallowed so they cannot break user turns.
 
 More detail: [Security Boundaries](./docs/security-boundaries.md), [State Model](./docs/state-model.md), and [Full Reference](./docs/full-reference.md).
 

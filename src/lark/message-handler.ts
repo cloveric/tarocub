@@ -8,12 +8,19 @@ import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
-import { loadInstanceConfig } from "../telegram/instance-config.js";
+import { loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { handleLarkCrewWorkflow } from "./bus.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
+import {
+  applyLarkEngineEvent,
+  initialLarkRunState,
+  renderLarkQueueWaitCard,
+  renderLarkRunCard,
+  type LarkRunState,
+} from "./card-renderer.js";
 import {
   extractLarkMessageBody,
   formatLarkAccessReply,
@@ -301,12 +308,20 @@ async function runAcceptedLarkMessage(
       },
     });
     try {
-      await sendLarkMarkdown(
-        input.channel,
-        normalized.chatId,
-        renderLarkConversationQueueWait(messageLocale),
-        larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
-      );
+      await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: normalized.chatId,
+        card: renderLarkQueueWaitCard({
+          conversationKey: normalized.conversationKey,
+          bridgeChatType: normalized.bridgeChatType,
+          waitedMs: event.waitedMs,
+          replyInThread: Boolean(normalized.threadId),
+          locale: messageLocale,
+        }),
+        fallbackText: renderLarkConversationQueueWait(messageLocale),
+        options: larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
+        locale: messageLocale,
+      });
     } catch (error) {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "engine.event.delivery_failed",
@@ -320,11 +335,35 @@ async function runAcceptedLarkMessage(
     }
   };
 
+  if (shouldBatchLarkMessage(input.runtime, normalized, commandText)) {
+    return await scheduleBatchedLarkTurn(input, normalized, messageLocale, handleConversationQueueWait);
+  }
+
+  preemptActiveLarkTurnIfEnabled(input, normalized, commandText);
+
+  return await enqueueLarkTurn(input, normalized, messageLocale, handleConversationQueueWait);
+}
+
+async function enqueueLarkTurn(
+  input: {
+    channel: LarkChannelLike;
+    bridge: LarkBridgeLike;
+    runtime: LarkServiceRuntime;
+    stateDir: string;
+    instanceName?: string;
+    requireMentionInGroup?: boolean;
+    workspaceOverride?: string;
+    reactionSettings?: LarkReactionSettings;
+  },
+  normalized: LarkNormalizedBridgeMessage,
+  locale: "zh" | "en",
+  onWait: (event: ChatQueueWaitEvent) => Promise<void>,
+): Promise<boolean> {
   return await input.runtime.chatQueue.enqueue(normalized.conversationKey, async () => {
     return await runNormalizedLarkMessage(input, normalized);
   }, {
     waitNotifyAfterMs: 10_000,
-    onWait: handleConversationQueueWait,
+    onWait,
     onSkipped: async () => {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "turn.completed",
@@ -334,13 +373,128 @@ async function runAcceptedLarkMessage(
           phase: "queue",
         },
       });
-      await input.channel.send(normalized.chatId, { text: renderLarkQueuedTaskSkipped(messageLocale) }, {
+      await input.channel.send(normalized.chatId, { text: renderLarkQueuedTaskSkipped(locale) }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
       });
       return true;
     },
   });
+}
+
+function shouldBatchLarkMessage(
+  runtime: LarkServiceRuntime,
+  normalized: LarkNormalizedBridgeMessage,
+  commandText: string,
+): boolean {
+  return runtime.queuePolicy.batchWindowMs > 0 &&
+    !isSlashCommand(commandText) &&
+    normalized.attachments.length === 0;
+}
+
+function preemptActiveLarkTurnIfEnabled(
+  input: { runtime: LarkServiceRuntime },
+  normalized: LarkNormalizedBridgeMessage,
+  commandText: string,
+): void {
+  if (!input.runtime.queuePolicy.preempt || isSlashCommand(commandText)) {
+    return;
+  }
+  const active = input.runtime.activeRuns.get(normalized.conversationKey);
+  active?.abortController.abort();
+  input.runtime.chatQueue.clearPending(normalized.conversationKey);
+}
+
+function isSlashCommand(text: string): boolean {
+  return text.trim().startsWith("/");
+}
+
+function scheduleBatchedLarkTurn(
+  input: {
+    channel: LarkChannelLike;
+    bridge: LarkBridgeLike;
+    runtime: LarkServiceRuntime;
+    stateDir: string;
+    instanceName?: string;
+    requireMentionInGroup?: boolean;
+    workspaceOverride?: string;
+    reactionSettings?: LarkReactionSettings;
+  },
+  normalized: LarkNormalizedBridgeMessage,
+  locale: "zh" | "en",
+  onWait: (event: ChatQueueWaitEvent) => Promise<void>,
+): Promise<boolean> {
+  const existing = input.runtime.pendingBatches.get(normalized.conversationKey);
+  if (existing) {
+    clearTimeout(existing.timer);
+    existing.normalized = {
+      ...existing.normalized,
+      messageId: normalized.messageId,
+      text: mergeBatchedTexts([...existing.texts, normalized.text]),
+    };
+    existing.texts.push(normalized.text);
+    return new Promise<boolean>((resolve, reject) => {
+      existing.resolve.push(resolve);
+      existing.reject.push(reject);
+      existing.timer = setTimeout(() => {
+        void flushBatchedLarkTurn(input, normalized.conversationKey, locale, onWait);
+      }, input.runtime.queuePolicy.batchWindowMs);
+      existing.timer.unref?.();
+    });
+  }
+
+  return new Promise<boolean>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      void flushBatchedLarkTurn(input, normalized.conversationKey, locale, onWait);
+    }, input.runtime.queuePolicy.batchWindowMs);
+    timer.unref?.();
+    input.runtime.pendingBatches.set(normalized.conversationKey, {
+      normalized: { ...normalized },
+      texts: [normalized.text],
+      timer,
+      resolve: [resolve],
+      reject: [reject],
+    });
+  });
+}
+
+async function flushBatchedLarkTurn(
+  input: {
+    channel: LarkChannelLike;
+    bridge: LarkBridgeLike;
+    runtime: LarkServiceRuntime;
+    stateDir: string;
+    instanceName?: string;
+    requireMentionInGroup?: boolean;
+    workspaceOverride?: string;
+    reactionSettings?: LarkReactionSettings;
+  },
+  conversationKey: string,
+  locale: "zh" | "en",
+  onWait: (event: ChatQueueWaitEvent) => Promise<void>,
+): Promise<void> {
+  const batch = input.runtime.pendingBatches.get(conversationKey);
+  if (!batch) {
+    return;
+  }
+  input.runtime.pendingBatches.delete(conversationKey);
+  try {
+    preemptActiveLarkTurnIfEnabled(input, batch.normalized, batch.normalized.text);
+    const result = await enqueueLarkTurn(input, batch.normalized, locale, onWait);
+    for (const resolve of batch.resolve) {
+      resolve(result);
+    }
+  } catch (error) {
+    for (const reject of batch.reject) {
+      reject(error);
+    }
+  }
+}
+
+function mergeBatchedTexts(texts: string[]): string {
+  return texts
+    .map((text, index) => `#${index + 1}\n${text.trim()}`)
+    .join("\n\n");
 }
 
 function formatLarkDeniedAccessReply(
@@ -412,7 +566,7 @@ async function runNormalizedLarkMessage(
     },
   });
   const cfg = await loadInstanceConfig(input.stateDir);
-  const workspaceOverride = input.workspaceOverride ?? cfg.resume?.workspacePath;
+  const workspaceOverride = input.workspaceOverride ?? resolveInstanceWorkspacePath(cfg);
   const locale = await resolveLarkLocale(input.stateDir);
   const accessDecision = input.bridge.checkAccess
     ? await input.bridge.checkAccess({
@@ -592,8 +746,19 @@ async function runNormalizedLarkMessage(
       return true;
     }
 
+    let runCard: LarkRunCardController | undefined;
     try {
+      runCard = await createLarkRunCardController({
+        channel: input.channel,
+        chatId: normalized.chatId,
+        conversationKey: normalized.conversationKey,
+        bridgeChatType: normalized.bridgeChatType,
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+        locale,
+      });
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
+        await runCard?.apply(event);
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "engine.event",
           detail: event.type,
@@ -747,6 +912,7 @@ async function runNormalizedLarkMessage(
           onTurnPoolWait: handleTurnPoolWait,
           instructions: larkAgentInstructions(),
         });
+        await runCard?.finish(result.text);
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
         await deliverLarkResponse({
           channel: input.channel,
@@ -789,6 +955,7 @@ async function runNormalizedLarkMessage(
         return true;
       });
     } catch (error) {
+      await runCard?.fail(renderLarkUserFacingError(error, "engine", locale));
       await input.channel.send(normalized.chatId, {
         text: renderLarkUserFacingError(error, "engine", locale),
       }, {
@@ -808,6 +975,65 @@ async function runNormalizedLarkMessage(
     }
     await cleanupLarkMessageArtifacts(input.stateDir, normalized.messageId).catch(() => undefined);
   }
+}
+
+interface LarkRunCardController {
+  apply(event: EngineStreamEvent): Promise<void>;
+  finish(text: string): Promise<void>;
+  fail(text: string): Promise<void>;
+}
+
+async function createLarkRunCardController(input: {
+  channel: LarkChannelLike;
+  chatId: string;
+  conversationKey: string;
+  bridgeChatType: "private" | "group";
+  replyTo: string;
+  replyInThread: boolean;
+  locale: "zh" | "en";
+}): Promise<LarkRunCardController | undefined> {
+  if (!input.channel.updateCard) {
+    return undefined;
+  }
+  let state: LarkRunState = initialLarkRunState(input.conversationKey, input.bridgeChatType);
+  const sent = await sendLarkCardWithFallback({
+    channel: input.channel,
+    chatId: input.chatId,
+    card: renderLarkRunCard(state, input.locale),
+    fallbackText: input.locale === "en"
+      ? "Task is running. Send /stop to cancel it."
+      : "任务处理中，可发送 /stop 停止。",
+    options: larkReplyOptions(input.replyTo, input.replyInThread),
+    locale: input.locale,
+  });
+  if (sent.fallback) {
+    return undefined;
+  }
+  const update = async (): Promise<void> => {
+    await input.channel.updateCard?.(sent.messageId, renderLarkRunCard(state, input.locale));
+  };
+  return {
+    apply: async (event) => {
+      state = applyLarkEngineEvent(state, event);
+      await update().catch(() => undefined);
+    },
+    finish: async (text) => {
+      state = {
+        ...state,
+        status: "done",
+        resultText: text,
+      };
+      await update().catch(() => undefined);
+    },
+    fail: async (text) => {
+      state = {
+        ...state,
+        status: "error",
+        resultText: text,
+      };
+      await update().catch(() => undefined);
+    },
+  };
 }
 
 async function runAuthorizedLarkTurnWithReactions<T>(

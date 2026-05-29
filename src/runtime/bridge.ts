@@ -423,6 +423,7 @@ export class Bridge {
   private async recordTurnErrorTelemetry(error: unknown, startedAt: number, tags: TelemetryTags): Promise<void> {
     const telemetryTags = this.telemetryTags(tags);
     await this.recordMetric("run_e2e_ms", Math.max(0, Date.now() - startedAt), telemetryTags);
+    await this.recordMetric("command_fail", 1, telemetryTags);
     await this.recordError(error, telemetryTags);
   }
 

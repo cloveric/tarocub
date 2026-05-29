@@ -1,6 +1,7 @@
 import { Domain } from "@larksuiteoapi/node-sdk";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import type { TelemetryAdapter } from "../runtime/telemetry.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 
@@ -19,6 +20,7 @@ export interface LarkHealthMonitorOptions {
   intervalMs?: number;
   failureThreshold?: number;
   probe?: LarkHealthProbe;
+  telemetry?: TelemetryAdapter;
 }
 
 export interface LarkHealthMonitor {
@@ -73,6 +75,11 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
           detail: "Lark channel reconnected after health failures",
           metadata: { consecutiveFailures, failureThreshold },
         });
+        await Promise.resolve(options.telemetry?.recordMetric?.("ws_reconnect", 1, {
+          channel: "lark",
+          instanceName: options.instanceName,
+          outcome: "success",
+        })).catch(() => undefined);
         consecutiveFailures = 0;
       } catch (error) {
         await appendLarkHealthTimelineEvent(options, {
@@ -80,6 +87,11 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
           detail: redactLarkErrorDetail(error),
           metadata: { consecutiveFailures, failureThreshold },
         });
+        await Promise.resolve(options.telemetry?.recordMetric?.("ws_reconnect", 1, {
+          channel: "lark",
+          instanceName: options.instanceName,
+          outcome: "error",
+        })).catch(() => undefined);
       }
     } finally {
       running = false;

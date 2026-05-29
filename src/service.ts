@@ -769,6 +769,11 @@ async function createBridgeDependenciesForConfig(
       ? new FileTurnPool({
         maxActive: maxConcurrentTurns,
         ...(env.TAROCUB_TURN_POOL_PATH ? { poolPath: env.TAROCUB_TURN_POOL_PATH } : {}),
+        telemetry,
+        telemetryTags: {
+          channel: options.transport ?? "telegram",
+          instanceName: config.instanceName,
+        },
       })
       : undefined,
     turnPoolMetadata: {

@@ -23,6 +23,14 @@ export interface LarkApprovalCardInput {
   locale?: Locale;
 }
 
+export interface LarkQueueWaitCardInput {
+  conversationKey: string;
+  bridgeChatType?: "private" | "group";
+  waitedMs: number;
+  replyInThread?: boolean;
+  locale?: Locale;
+}
+
 export function initialLarkRunState(conversationKey: string, bridgeChatType?: "private" | "group"): LarkRunState {
   return {
     conversationKey,
@@ -79,7 +87,7 @@ export function applyLarkEngineEvent(
 export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): Record<string, unknown> {
   const labels = runCardLabels(locale);
   const elements: unknown[] = [
-    markdownElement(state.status === "running" ? `**${labels.running}**` : `**${labels.done}**`),
+    markdownElement(`**${runCardStatusLabel(state.status, labels)}**`),
   ];
 
   if (state.thinking.length > 0) {
@@ -153,6 +161,15 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   };
 }
 
+function runCardStatusLabel(
+  status: LarkRunState["status"],
+  labels: ReturnType<typeof runCardLabels>,
+): string {
+  if (status === "running") return labels.running;
+  if (status === "error") return labels.error;
+  return labels.done;
+}
+
 function runCardLabels(locale: Locale): {
   running: string;
   done: string;
@@ -161,11 +178,13 @@ function runCardLabels(locale: Locale): {
   thinkingDone: string;
   tools: string;
   outputting: string;
+  error: string;
 } {
   return locale === "en"
     ? {
       running: "Task is running...",
       done: "Done",
+      error: "Failed",
       stop: "Stop",
       thinkingActive: "Thinking",
       thinkingDone: "Thinking complete",
@@ -175,6 +194,7 @@ function runCardLabels(locale: Locale): {
     : {
       running: "任务处理中...",
       done: "已完成",
+      error: "执行失败",
       stop: "停止",
       thinkingActive: "思考中",
       thinkingDone: "思考完成",
@@ -206,6 +226,73 @@ export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<str
             approvalButtonColumn(input.requestId, "allow_once", labels.allowOnce, "primary", input.replyInThread),
             approvalButtonColumn(input.requestId, "allow_session", labels.allowSession, "default", input.replyInThread),
             approvalButtonColumn(input.requestId, "deny", labels.deny, "danger", input.replyInThread),
+          ],
+        },
+      ],
+    },
+  };
+}
+
+export function renderLarkQueueWaitCard(input: LarkQueueWaitCardInput): Record<string, unknown> {
+  const locale = input.locale ?? "zh";
+  const seconds = Math.max(1, Math.round(input.waitedMs / 1000));
+  const title = locale === "en" ? "Queued behind the active turn" : "正在排队等待当前任务";
+  const body = locale === "en"
+    ? `This conversation already has a running task. This message has waited about ${seconds}s and will continue automatically.\n\nIf the active task is stuck, stop it here or send \`/stop\`.`
+    : `同一个会话里还有任务在运行。这条消息已等待约 ${seconds} 秒，前一个任务结束后会自动继续。\n\n如果前一个任务卡住，可以点下面按钮或发送 \`/stop\` 停止。`;
+  const stop = locale === "en" ? "Stop active task" : "停止当前任务";
+  const keepWaiting = locale === "en" ? "Keep waiting" : "继续等待";
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: {
+        content: title,
+      },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [
+        markdownElement(`**${title}**\n${body}`),
+        {
+          tag: "column_set",
+          columns: [
+            {
+              tag: "column",
+              width: "weighted",
+              weight: 1,
+              elements: [
+                {
+                  tag: "button",
+                  text: { tag: "plain_text", content: stop },
+                  type: "danger",
+                  width: "fill",
+                  behaviors: [callbackBehavior({
+                    cctb_lark: "stop",
+                    conversationKey: input.conversationKey,
+                    ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
+                    ...(input.replyInThread ? { replyInThread: true } : {}),
+                  })],
+                },
+              ],
+            },
+            {
+              tag: "column",
+              width: "weighted",
+              weight: 1,
+              elements: [
+                {
+                  tag: "button",
+                  text: { tag: "plain_text", content: keepWaiting },
+                  type: "default",
+                  width: "fill",
+                  behaviors: [callbackBehavior({
+                    cctb_lark: "noop",
+                  })],
+                },
+              ],
+            },
           ],
         },
       ],

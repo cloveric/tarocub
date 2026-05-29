@@ -14,7 +14,7 @@ import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
 import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
-import { loadInstanceConfig, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
+import { loadInstanceConfig, resolveInstanceWorkspacePath, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
@@ -498,6 +498,10 @@ export async function handleLarkCardAction(input: {
       replyTo: input.event.messageId,
       ...(replyInThread ? { replyInThread: true } : {}),
     });
+    return true;
+  }
+
+  if (value.cctb_lark === "noop") {
     return true;
   }
 
@@ -1005,7 +1009,7 @@ async function runLarkCardChoice(input: {
   const bridgeChatId = stableLarkNumericId(input.conversationKey);
   const locale = await resolveLarkLocale(input.stateDir);
   const cfg = await loadInstanceConfig(input.stateDir);
-  const workspaceOverride = cfg.resume?.workspacePath;
+  const workspaceOverride = resolveInstanceWorkspacePath(cfg);
   await mkdir(requestOutputDir, { recursive: true });
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {
@@ -1163,7 +1167,7 @@ async function runLarkArchiveContinueCardAction(input: {
   const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
   const locale = await resolveLarkLocale(input.stateDir);
   const cfg = await loadInstanceConfig(input.stateDir);
-  const workspaceOverride = cfg.resume?.workspacePath;
+  const workspaceOverride = resolveInstanceWorkspacePath(cfg);
   await mkdir(requestOutputDir, { recursive: true });
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {
