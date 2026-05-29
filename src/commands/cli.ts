@@ -1693,8 +1693,11 @@ const entrypoint = process.argv[1];
 const stateDir = process.argv[2];
 const instanceName = process.argv[3];
 const delayMs = Number.parseInt(process.argv[4] ?? "5000", 10);
+const retryDelayMs = 30_000;
+const maxWaitMs = 2 * 60 * 60 * 1000;
+const deadline = Date.now() + maxWaitMs;
 
-setTimeout(() => {
+function runRestart() {
   const env = { ...process.env };
   env.CCTB_LARK_STATE_DIR = stateDir;
   env.CCTB_LARK_INSTANCE = instanceName;
@@ -1706,11 +1709,29 @@ setTimeout(() => {
 
   const result = spawnSync(process.execPath, [entrypoint, "lark", "service", "restart"], {
     env,
-    stdio: "inherit",
+    encoding: "utf8",
   });
 
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if ((result.status ?? 1) === 0) {
+    process.exit(0);
+  }
+
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\\n");
+  const queueBusy = /active or queued Lark turn\\(s\\)|Refusing to restart without --force/.test(output);
+  if (queueBusy && Date.now() + retryDelayMs <= deadline) {
+    process.stderr.write(
+      \`Deferred Lark restart for "\${instanceName}" is waiting for the turn queue to drain; retrying in \${Math.ceil(retryDelayMs / 1000)}s.\\n\`,
+    );
+    setTimeout(runRestart, retryDelayMs);
+    return;
+  }
+
   process.exit(result.status ?? 1);
-}, Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 5000);
+}
+
+setTimeout(runRestart, Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 5000);
 `;
 
 function defaultSpawnDetached(
@@ -1771,7 +1792,7 @@ async function defaultScheduleDeferredLarkServiceRestart(
   });
 
   const target = options.current ? "current Lark instance" : "Lark instance";
-  return `Scheduled one-shot deferred restart for ${target} "${instanceName}" in ${Math.ceil(delayMs / 1000)}s.`;
+  return `Scheduled deferred restart for ${target} "${instanceName}" in ${Math.ceil(delayMs / 1000)}s; it will retry until the Lark turn queue is idle.`;
 }
 
 function getLarkTimelineMessageId(event: TimelineEvent): string | undefined {

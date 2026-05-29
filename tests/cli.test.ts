@@ -559,7 +559,7 @@ describe("runCli", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
     const messages: string[] = [];
-    const scheduleDeferredRestart = vi.fn(async () => 'Scheduled one-shot deferred restart for Lark instance "alpha" in 5s.');
+    const scheduleDeferredRestart = vi.fn(async () => 'Scheduled deferred restart for Lark instance "alpha" in 5s; it will retry until the Lark turn queue is idle.');
 
     try {
       const handled = await runCli(["lark", "service", "restart", "--defer"], {
@@ -578,7 +578,55 @@ describe("runCli", () => {
       expect(scheduleDeferredRestart).toHaveBeenCalledWith(expect.objectContaining({
         stateDir,
       }), {});
-      expect(messages).toEqual(['Scheduled one-shot deferred restart for Lark instance "alpha" in 5s.']);
+      expect(messages).toEqual(['Scheduled deferred restart for Lark instance "alpha" in 5s; it will retry until the Lark turn queue is idle.']);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("schedules Lark deferred restart with a queue-drain retry helper", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const spawnDetached = vi.fn();
+
+    try {
+      const handled = await runCli(["lark", "service", "restart", "--defer"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: {
+          spawnDetached,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(spawnDetached).toHaveBeenCalledWith(
+        process.execPath,
+        [
+          "-e",
+          expect.stringContaining("Deferred Lark restart for"),
+          expect.stringContaining(path.join("dist", "src", "index.js")),
+          stateDir,
+          "alpha",
+          "5000",
+        ],
+        expect.objectContaining({
+          cwd: process.cwd(),
+          stdoutPath: path.join(stateDir, "deferred-restart.log"),
+          stderrPath: path.join(stateDir, "deferred-restart.log"),
+        }),
+      );
+      const helperScript = spawnDetached.mock.calls[0]?.[1]?.[1];
+      expect(helperScript).toContain("active or queued Lark turn");
+      expect(helperScript).toContain("retrying in");
+      expect(messages).toEqual(['Scheduled deferred restart for Lark instance "alpha" in 5s; it will retry until the Lark turn queue is idle.']);
     } finally {
       await removeTempRoot(tempDir);
     }
