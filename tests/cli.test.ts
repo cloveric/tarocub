@@ -665,6 +665,58 @@ describe("runCli", () => {
     }
   });
 
+  it("signals Lark run processes before cleaning up tmux sessions", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const lockPath = resolveLarkServiceLockPath(stateDir);
+    const killed = new Set<number>();
+    const operations: string[] = [];
+
+    try {
+      await mkdir(path.dirname(lockPath), { recursive: true });
+      await writeFile(lockPath, JSON.stringify({
+        pid: 54321,
+        token: "locked-token",
+        acquiredAt: new Date().toISOString(),
+      }));
+
+      await runCli(["lark", "service", "stop"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        larkServiceDeps: {
+          findTmuxPanePids: async () => [22222],
+          findProcessIds: async () => [33333],
+          isProcessAlive: (pid: number) => [22222, 33333, 54321].includes(pid) && !killed.has(pid),
+          killProcess: (pid: number) => {
+            operations.push(`kill:${pid}`);
+            killed.add(pid);
+          },
+          killTmuxSession: async (sessionName: string) => {
+            operations.push(`tmux:${sessionName}`);
+            return true;
+          },
+          sleep: async () => undefined,
+        },
+      });
+
+      expect(operations.slice(0, 3)).toEqual([
+        "kill:22222",
+        "kill:54321",
+        "kill:33333",
+      ]);
+      expect(operations.slice(3)).toEqual([
+        expect.stringMatching(/^tmux:cctb-lark-service-/),
+        "tmux:cctb-lark-service",
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("persists direct Lark credentials before starting the managed service", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

@@ -58,13 +58,16 @@ async function main(): Promise<void> {
       const abortController = new AbortController();
       const shutdownSigterm = () => abortController.abort();
       const shutdownSigint = () => abortController.abort();
+      const shutdownSighup = () => abortController.abort();
       process.once("SIGTERM", shutdownSigterm);
       process.once("SIGINT", shutdownSigint);
+      process.once("SIGHUP", shutdownSighup);
       try {
         await runLarkService(larkEnv, { signal: abortController.signal });
       } finally {
         process.removeListener("SIGTERM", shutdownSigterm);
         process.removeListener("SIGINT", shutdownSigint);
+        process.removeListener("SIGHUP", shutdownSighup);
       }
       return;
     }

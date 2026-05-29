@@ -1658,10 +1658,6 @@ async function defaultStopLarkService(
 
   const sessionName = buildLarkServiceTmuxSessionName(input.stateDir);
   const tmuxPanePids = await findTmuxPanePids(sessionName);
-  if (await killTmuxSession(sessionName)) {
-    stopped = true;
-  }
-
   const pidsToStop = new Set<number>();
   for (const processId of tmuxPanePids) {
     if (isAlive(processId)) {
@@ -1670,9 +1666,6 @@ async function defaultStopLarkService(
   }
   const pid = await readLarkLockPid(input.stateDir);
   const lockPidAlive = pid !== null && isAlive(pid);
-  if (lockPidAlive && await killTmuxSession(LEGACY_LARK_SERVICE_TMUX_SESSION)) {
-    stopped = true;
-  }
   if (lockPidAlive && pid !== null) {
     pidsToStop.add(pid);
   }
@@ -1692,6 +1685,15 @@ async function defaultStopLarkService(
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline && [...pidsToStop].some((processId) => isAlive(processId))) {
     await sleepProcess(100);
+  }
+  if (pid !== null && !isAlive(pid)) {
+    await rm(resolveLarkServiceLockPath(input.stateDir), { force: true });
+  }
+  if (await killTmuxSession(sessionName)) {
+    stopped = true;
+  }
+  if (lockPidAlive && await killTmuxSession(LEGACY_LARK_SERVICE_TMUX_SESSION)) {
+    stopped = true;
   }
   if (pid !== null && !isAlive(pid)) {
     await rm(resolveLarkServiceLockPath(input.stateDir), { force: true });
