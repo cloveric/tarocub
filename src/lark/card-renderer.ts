@@ -27,13 +27,14 @@ export type LarkRunBlock =
 export interface LarkRunState {
   conversationKey: string;
   bridgeChatType?: "private" | "group";
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "interrupted" | "idle_timeout";
   blocks: LarkRunBlock[];
   reasoning: { content: string; active: boolean };
   footer: "thinking" | "tool_running" | "streaming" | null;
   taskNotifications: string[];
   resultText: string;
   errorText: string;
+  idleTimeoutMinutes?: number;
 }
 
 export interface LarkApprovalCardInput {
@@ -249,7 +250,12 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     }
   }
 
-  if (state.status === "error" && state.errorText.trim()) {
+  if (state.status === "interrupted") {
+    elements.push(noteElement(`_⏹ ${labels.interrupted}_`));
+  } else if (state.status === "idle_timeout") {
+    const mins = state.idleTimeoutMinutes ?? 0;
+    elements.push(noteElement(`_⏱ ${labels.idleTimeout(mins)}_`));
+  } else if (state.status === "error" && state.errorText.trim()) {
     elements.push(markdownElement(`⚠️ ${state.errorText.trim()}`));
   } else if (state.status === "done" && elements.length === 1) {
     elements.push(markdownElement(`_${labels.empty}_`));
@@ -473,6 +479,8 @@ function runCardStatusLabel(
 ): string {
   if (status === "running") return labels.running;
   if (status === "error") return labels.error;
+  if (status === "interrupted") return labels.interruptedTitle;
+  if (status === "idle_timeout") return labels.idleTimeoutTitle;
   return labels.done;
 }
 
@@ -497,6 +505,10 @@ function runCardLabels(locale: Locale): {
   toolRunning: string;
   background: string;
   empty: string;
+  interrupted: string;
+  interruptedTitle: string;
+  idleTimeoutTitle: string;
+  idleTimeout: (mins: number) => string;
   footerThinking: string;
   footerTool: string;
   footerStreaming: string;
@@ -514,6 +526,10 @@ function runCardLabels(locale: Locale): {
       toolRunning: "running…",
       background: "Background",
       empty: "(no content returned)",
+      interrupted: "Interrupted",
+      interruptedTitle: "Interrupted",
+      idleTimeoutTitle: "Auto-stopped (no response)",
+      idleTimeout: (mins) => `No response for ${mins} minute(s); auto-stopped`,
       footerThinking: "🧠 Thinking",
       footerTool: "🧰 Running tool",
       footerStreaming: "✍️ Streaming output",
@@ -530,6 +546,10 @@ function runCardLabels(locale: Locale): {
       toolRunning: "运行中…",
       background: "后台任务",
       empty: "（未返回内容）",
+      interrupted: "已被中断",
+      interruptedTitle: "已中断",
+      idleTimeoutTitle: "无响应已自动终止",
+      idleTimeout: (mins) => `${mins} 分钟无响应，已自动终止`,
       footerThinking: "🧠 正在思考",
       footerTool: "🧰 正在调用工具",
       footerStreaming: "✍️ 正在输出",
@@ -743,6 +763,12 @@ function cardSummary(state: LarkRunState, locale: Locale): string {
   }
   if (state.status === "error") {
     return locale === "en" ? "Failed" : "执行失败";
+  }
+  if (state.status === "interrupted") {
+    return locale === "en" ? "Interrupted" : "已中断";
+  }
+  if (state.status === "idle_timeout") {
+    return locale === "en" ? "Auto-stopped" : "无响应已终止";
   }
   const lastText = [...state.blocks].reverse().find((block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0);
   const text = cleanCardText(lastText?.content ?? state.resultText);

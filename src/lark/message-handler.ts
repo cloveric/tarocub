@@ -76,6 +76,28 @@ function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | 
   return replyInThread ? { replyTo, replyInThread: true } : { replyTo };
 }
 
+type LarkTurnTermination =
+  | { kind: "interrupted" }
+  | { kind: "idle_timeout"; minutes: number }
+  | { kind: "error" };
+
+/**
+ * Classify why an engine turn ended in error so the run card can show the
+ * right terminal marker: user/stop interruption, an idle-timeout auto-stop
+ * (the adapter kills a turn that goes silent for N minutes), or a real error.
+ */
+function classifyLarkTurnTermination(error: unknown, signal: AbortSignal | undefined): LarkTurnTermination {
+  const text = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
+  const idleMatch = text.match(/inactive after (\d+)\s*minute/);
+  if (idleMatch) {
+    return { kind: "idle_timeout", minutes: Number.parseInt(idleMatch[1] ?? "0", 10) || 0 };
+  }
+  if (signal?.aborted || /\b(stopped by user|task was stopped|aborted)\b/.test(text)) {
+    return { kind: "interrupted" };
+  }
+  return { kind: "error" };
+}
+
 export async function handleLarkMessage(input: {
   channel: LarkChannelLike;
   bridge: LarkBridgeLike;
@@ -965,16 +987,33 @@ async function runNormalizedLarkMessage(
         return true;
       });
     } catch (error) {
-      await runCard?.fail(renderLarkUserFacingError(error, "engine", locale));
-      await input.channel.send(normalized.chatId, {
-        text: renderLarkUserFacingError(error, "engine", locale),
-      }, {
-        replyTo: normalized.messageId,
-        replyInThread: Boolean(normalized.threadId),
-      });
+      const terminal = classifyLarkTurnTermination(error, runController.signal);
+      if (terminal.kind === "interrupted") {
+        await runCard?.interrupt();
+      } else if (terminal.kind === "idle_timeout") {
+        await runCard?.idleTimeout(terminal.minutes);
+      } else {
+        await runCard?.fail(renderLarkUserFacingError(error, "engine", locale));
+      }
+      // The run card already surfaces the terminal state; only send a separate
+      // message when no card is present (fallback) so we don't duplicate it.
+      if (!runCard) {
+        await input.channel.send(normalized.chatId, {
+          text: terminal.kind === "interrupted"
+            ? (locale === "en" ? "Stopped." : "已停止。")
+            : terminal.kind === "idle_timeout"
+              ? (locale === "en"
+                ? `No response for ${terminal.minutes} minute(s); the task was auto-stopped. Restart the instance if it keeps happening.`
+                : `${terminal.minutes} 分钟无响应，任务已自动终止。若反复出现，请重启实例。`)
+              : renderLarkUserFacingError(error, "engine", locale),
+        }, {
+          replyTo: normalized.messageId,
+          replyInThread: Boolean(normalized.threadId),
+        });
+      }
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "turn.completed",
-        outcome: "error",
+        outcome: terminal.kind === "interrupted" ? "interrupted" : terminal.kind === "idle_timeout" ? "idle_timeout" : "error",
         detail: redactLarkErrorDetail(error),
       });
       return true;
@@ -991,6 +1030,8 @@ interface LarkRunCardController {
   apply(event: EngineStreamEvent): Promise<void>;
   finish(text: string): Promise<void>;
   fail(text: string): Promise<void>;
+  interrupt(): Promise<void>;
+  idleTimeout(minutes: number): Promise<void>;
 }
 
 async function createLarkRunCardController(input: {
@@ -1040,6 +1081,14 @@ async function createLarkRunCardController(input: {
         errorText: text,
         footer: null,
       };
+      await update().catch(() => undefined);
+    },
+    interrupt: async () => {
+      state = { ...state, status: "interrupted", footer: null };
+      await update().catch(() => undefined);
+    },
+    idleTimeout: async (minutes) => {
+      state = { ...state, status: "idle_timeout", idleTimeoutMinutes: minutes, footer: null };
       await update().catch(() => undefined);
     },
   };

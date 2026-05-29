@@ -46,6 +46,24 @@ describe("lark card renderer", () => {
     expect(occurrences).toBe(1);
   });
 
+  it("renders an interrupted terminal marker without a stop button", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "partial" });
+    state = { ...state, status: "interrupted", footer: null };
+    const card = renderLarkRunCard(state) as any;
+    const serialized = JSON.stringify(card);
+    expect(card.config.streaming_mode).toBe(false);
+    expect(serialized).toContain("已被中断");
+    expect(serialized).not.toContain("停止");
+  });
+
+  it("renders an idle-timeout terminal marker with the minute count", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = { ...state, status: "idle_timeout", idleTimeoutMinutes: 15, footer: null };
+    const serialized = JSON.stringify(renderLarkRunCard(state));
+    expect(serialized).toContain("15 分钟无响应");
+  });
+
   it("seeds the final answer for non-streaming engines that only emit a result", () => {
     let state = initialLarkRunState("lark:oc_chat");
     // No assistant_text events (e.g. Codex process) — only the final result.

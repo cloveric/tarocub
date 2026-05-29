@@ -6918,10 +6918,43 @@ describe("lark service", () => {
         },
       });
 
-      const rendered = JSON.stringify(channel.send.mock.calls);
+      // The sanitized error is shown to the user (in the run card or, when the
+      // card is unavailable, as a markdown message) and never leaks raw details.
+      const rendered = JSON.stringify([
+        ...(channel.send.mock.calls as unknown[][]),
+        ...((channel.updateCard?.mock?.calls as unknown[][] | undefined) ?? []),
+      ]);
       expect(rendered).toContain("引擎运行失败");
       expect(rendered).not.toContain("/Users/tester");
       expect(rendered).not.toContain("engine exploded");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks the Lark card as an idle timeout when the engine turn goes silent", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-idle-"));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => {
+        throw new Error("Codex app-server turn became inactive after 15 minutes");
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_idle", content: "do a long task" }),
+      });
+
+      const rendered = JSON.stringify([
+        ...(channel.send.mock.calls as unknown[][]),
+        ...((channel.updateCard?.mock?.calls as unknown[][] | undefined) ?? []),
+      ]);
+      expect(rendered).toContain("15 分钟无响应");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
