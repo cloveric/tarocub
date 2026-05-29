@@ -42,10 +42,34 @@ describe("Claude permission prompt MCP tool", () => {
     });
   });
 
+  it("allows with decision-updated input for interactive tools", () => {
+    expect(renderClaudePermissionPromptToolResponse(
+      {
+        behavior: "allow",
+        scope: "once",
+        updatedInput: {
+          questions: [{ question: "Continue?", header: "Next", options: [] }],
+          answers: { "Continue?": "Yes" },
+        },
+      },
+      {
+        input: {
+          questions: [{ question: "Continue?", header: "Next", options: [] }],
+        },
+      },
+    )).toEqual({
+      behavior: "allow",
+      updatedInput: {
+        questions: [{ question: "Continue?", header: "Next", options: [] }],
+        answers: { "Continue?": "Yes" },
+      },
+    });
+  });
+
   it("renders a denial decision", () => {
     expect(renderClaudePermissionPromptToolResponse({ behavior: "deny" }, {})).toEqual({
       behavior: "deny",
-      message: "Denied from Telegram.",
+      message: "Denied by the user.",
     });
   });
 

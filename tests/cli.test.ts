@@ -30,6 +30,7 @@ describe("runCli", () => {
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain('"name":"send.file"');
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("send.image");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("send.batch");
+    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("Never use `AskUserQuestion`");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.add");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.list");
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.remove");

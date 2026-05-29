@@ -8709,6 +8709,80 @@ describe("lark service", () => {
     await expect(pending).resolves.toEqual({ behavior: "allow", scope: "session" });
   });
 
+  it("renders Claude AskUserQuestion as a Lark card and resolves the selected answer", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel,
+      runtime,
+      chatId: "oc_chat",
+      replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [
+            {
+              question: "Which mode should we use?",
+              header: "Mode",
+              multiSelect: false,
+              options: [
+                { label: "Fast", description: "Finish quickly" },
+                { label: "Careful", description: "Spend more time checking" },
+              ],
+            },
+          ],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    const firstSendCall = channel.send.mock.calls[0] as unknown[] | undefined;
+    const firstSendPayload = JSON.stringify(firstSendCall?.[1]);
+    expect(firstSendPayload).toContain('"cctb_lark":"ask_user_question"');
+    expect(firstSendPayload).toContain("Which mode should we use?");
+
+    await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: {
+          value: {
+            cctb_lark: "ask_user_question",
+            requestId,
+            questionIndex: 0,
+            label: "Fast",
+            answer: "Fast",
+          },
+        },
+      },
+    });
+
+    await expect(pending).resolves.toEqual({
+      behavior: "allow",
+      updatedInput: {
+        questions: [
+          {
+            question: "Which mode should we use?",
+            header: "Mode",
+            multiSelect: false,
+            options: [
+              { label: "Fast", description: "Finish quickly" },
+              { label: "Careful", description: "Spend more time checking" },
+            ],
+          },
+        ],
+        answers: {
+          "Which mode should we use?": "Fast",
+        },
+      },
+    });
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
   it("renders Lark approval timeout replies in English when Lark locale is English", async () => {
     vi.useFakeTimers();
     const runtime = createLarkServiceRuntime();

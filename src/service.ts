@@ -652,6 +652,7 @@ async function createAdapter(
   config: ReturnType<typeof resolveConfig>,
   instructionsPath: string,
   configPath: string,
+  options: { transport?: "telegram" | "lark" } = {},
 ): Promise<CodexAdapter> {
   const runtimeConfig = await readInstanceRuntimeConfig(configPath);
   const engine = runtimeConfig.engine;
@@ -687,6 +688,7 @@ async function createAdapter(
       instructionsPath,
       configPath,
       workspacePath,
+      disallowedTools: options.transport === "lark" ? [] : ["AskUserQuestion"],
     });
   }
 
@@ -726,12 +728,13 @@ async function createAdapter(
 async function createBridgeDependenciesForConfig(
   env: EnvSource,
   config: ReturnType<typeof resolveConfig>,
+  options: { transport?: "telegram" | "lark" } = {},
 ): Promise<{ config: ReturnType<typeof resolveConfig>; bridge: Bridge }> {
   const accessStore = new AccessStore(config.accessStatePath);
   const sessionStore = new SessionStore(config.sessionStatePath);
   const instructionsPath = path.join(config.stateDir, "agent.md");
   const configPath = path.join(config.stateDir, "config.json");
-  const adapter = await createAdapter(env, config, instructionsPath, configPath);
+  const adapter = await createAdapter(env, config, instructionsPath, configPath, options);
   const sessionManager = new SessionManager(sessionStore, adapter);
   const bridge = new Bridge(accessStore, sessionManager, adapter, {
     loadGroupMode: async () => (await loadInstanceConfig(config.stateDir)).groupMode,
@@ -740,8 +743,11 @@ async function createBridgeDependenciesForConfig(
   return { config, bridge };
 }
 
-export async function createBridgeDependencies(env: EnvSource): Promise<{ config: ReturnType<typeof resolveConfig>; bridge: Bridge }> {
-  return createBridgeDependenciesForConfig(env, resolveBridgeConfig(env));
+export async function createBridgeDependencies(
+  env: EnvSource,
+  options: { transport?: "telegram" | "lark" } = {},
+): Promise<{ config: ReturnType<typeof resolveConfig>; bridge: Bridge }> {
+  return createBridgeDependenciesForConfig(env, resolveBridgeConfig(env), options);
 }
 
 export async function createServiceDependencies(env: EnvSource): Promise<{ config: ReturnType<typeof resolveConfig>; api: TelegramApi; bridge: Bridge }> {

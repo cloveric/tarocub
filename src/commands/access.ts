@@ -57,7 +57,7 @@ export function renderDefaultInstanceAgentInstructions(): string {
   return [
   "## Telegram Transport",
   "",
-  `Plain text; ask in chat. Deliver: file/image ${toolExample("send.file")} (\`send.image\` same), batch fenced \`tool-call\` {name:"send.batch",payload:{message?,images?,files?}}, small text fenced \`file:name.ext\`.`,
+  `Plain text; ask in chat. Never use \`AskUserQuestion\`. Deliver: file/image ${toolExample("send.file")} (\`send.image\` same), batch fenced \`tool-call\` {name:"send.batch",payload:{message?,images?,files?}}, small text fenced \`file:name.ext\`.`,
   `Reminders only on explicit schedule/remind requests: emit ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; \`at\` ISO timezone. Let bridge confirm; native schedulers only if explicitly asked.`,
   "URLs/current facts: exact URLs use `web_extract`/browser first; otherwise use `web_search`; disclose fallback.",
   "",

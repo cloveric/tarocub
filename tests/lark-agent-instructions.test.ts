@@ -49,6 +49,8 @@ describe("larkAgentInstructions", () => {
 
     expect(instructions).toContain("lark.choice");
     expect(instructions).toContain("or `request_user_input`");
+    expect(instructions).toContain("AskUserQuestion");
+    expect(instructions).not.toContain("Never use `AskUserQuestion`");
     expect(instructions).toContain("Do not call `lark-cli` just to send choice cards");
     expect(instructions).toContain("Use `lark-cli` for Lark-native work");
     expect(instructions).toContain("basic chat transport can still work without it");

@@ -286,14 +286,18 @@ function renderPermissionResponse(decision: EngineApprovalDecision, originalInpu
   if (decision.behavior === "deny") {
     return {
       behavior: "deny",
-      message: "Denied from Telegram.",
+      message: "Denied by the user.",
     };
   }
 
   return {
     behavior: "allow",
-    updatedInput: originalInput ?? {},
+    updatedInput: decision.updatedInput ?? originalInput ?? {},
   };
+}
+
+function isAskUserQuestionRequest(request: EngineApprovalRequest): boolean {
+  return request.toolName === "AskUserQuestion";
 }
 
 function renderClaudeStreamError(parsed: ClaudeStreamEvent, stderrTail: string): string {
@@ -337,6 +341,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly workspacePath: string | undefined;
   private readonly idleWorkerTtlMs: number;
   private readonly backgroundTaskMaxAgeMs: number;
+  private readonly disallowedTools: string[];
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
 
@@ -352,6 +357,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
       backgroundTaskMaxAgeMs?: number;
+      disallowedTools?: string[];
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -369,6 +375,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     this.workspacePath = options?.workspacePath;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
+    this.disallowedTools = options?.disallowedTools ?? [];
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -495,7 +502,19 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       sessionId = resumedSessionId;
     }
 
-    const args = ["-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-prompt-tool", "stdio"];
+    const args = [
+      "-p",
+      "--verbose",
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--permission-prompt-tool",
+      "stdio",
+    ];
+    for (const toolName of this.disallowedTools) {
+      args.push("--disallowedTools", toolName);
+    }
     if (agentInstructions) {
       args.push("--system-prompt", agentInstructions);
     }
@@ -789,7 +808,17 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       sessionId: worker.currentSessionId ?? undefined,
     });
     let decision: EngineApprovalDecision;
-    if (worker.approvalMode !== "normal") {
+    if (isAskUserQuestionRequest(request)) {
+      if (!pending?.onApprovalRequest) {
+        decision = { behavior: "deny" };
+      } else {
+        try {
+          decision = await pending.onApprovalRequest(request);
+        } catch {
+          decision = { behavior: "deny" };
+        }
+      }
+    } else if (worker.approvalMode !== "normal") {
       decision = { behavior: "allow", scope: "session" };
     } else if (!pending?.onApprovalRequest) {
       decision = { behavior: "deny" };

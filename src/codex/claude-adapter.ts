@@ -213,6 +213,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
   private readonly instructionsPath: string | undefined;
   private readonly configPath: string | undefined;
   private readonly workspacePath: string | undefined;
+  private readonly disallowedTools: string[];
 
   constructor(
     private readonly claudeExecutable: string,
@@ -223,6 +224,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       configPath?: string;
       workspacePath?: string;
       engineHomePath?: string;
+      disallowedTools?: string[];
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -242,6 +244,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     this.instructionsPath = options?.instructionsPath;
     this.configPath = options?.configPath;
     this.workspacePath = options?.workspacePath;
+    this.disallowedTools = options?.disallowedTools ?? [];
   }
 
   async createSession(chatId: number): Promise<CodexSessionHandle> {
@@ -338,6 +341,9 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       args.push("--dangerously-skip-permissions");
     } else if (approvalMode === "full-auto") {
       args.push("--permission-mode", "bypassPermissions");
+    }
+    for (const toolName of this.disallowedTools) {
+      args.push("--disallowedTools", toolName);
     }
 
     // Effort level

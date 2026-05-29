@@ -45,6 +45,23 @@ import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.j
 
 type LarkApprovalChoice = "once" | "session" | "deny";
 
+type AskUserQuestionOption = {
+  label: string;
+  description?: string;
+  preview?: string;
+};
+
+type AskUserQuestionCardQuestion = {
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: AskUserQuestionOption[];
+};
+
+function isAskUserQuestionRequest(request: EngineApprovalRequest): boolean {
+  return request.engine === "claude" && request.toolName === "AskUserQuestion";
+}
+
 export type LarkApprovalTextCommandResult =
   | { handled: false }
   | {
@@ -95,6 +112,7 @@ export async function requestLarkApproval(input: {
       ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       ...(input.replyInThread ? { replyInThread: true } : {}),
+      ...(isAskUserQuestionRequest(input.request) ? { askUserQuestionInput: input.request.toolInput } : {}),
       resolve,
       reject,
       timer,
@@ -110,6 +128,26 @@ export async function requestLarkApproval(input: {
     }
 
     input.runtime.pendingApprovals.set(requestId, pending);
+    if (isAskUserQuestionRequest(input.request)) {
+      sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: input.chatId,
+        card: renderLarkAskUserQuestionCard({
+          requestId,
+          toolInput: input.request.toolInput,
+          replyInThread: input.replyInThread,
+          locale: input.locale,
+        }),
+        fallbackText: renderLarkAskUserQuestionFallbackText(input.request.toolInput, input.locale ?? "zh"),
+        options: larkReplyOptions(input.replyTo, input.replyInThread),
+        locale: input.locale ?? "zh",
+      }).catch((error) => {
+        cleanup();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
+      return;
+    }
+
     sendLarkCardWithFallback({
       channel: input.channel,
       chatId: input.chatId,
@@ -144,6 +182,229 @@ function renderLarkApprovalFallbackText(requestId: string, request: EngineApprov
     toolInput,
     `请回复 /approve ${requestId}、/approve-session ${requestId} 或 /deny ${requestId}。`,
   ].join("\n\n");
+}
+
+function renderLarkAskUserQuestionCard(input: {
+  requestId: string;
+  toolInput: unknown;
+  replyInThread?: boolean;
+  locale?: Locale;
+}): Record<string, unknown> {
+  const locale = input.locale ?? "zh";
+  const questions = normalizeAskUserQuestions(input.toolInput);
+  const question = questions[0];
+  const title = question?.header || (locale === "en" ? "Question" : "请选择");
+  const prompt = question?.question || (locale === "en" ? "Claude is asking for your choice." : "Claude 需要你选择。");
+  const elements: unknown[] = [
+    {
+      tag: "markdown",
+      content: `**${title}**\n${prompt}`,
+    },
+  ];
+
+  const options = question?.options ?? [];
+  if (options.length === 0) {
+    elements.push({
+      tag: "markdown",
+      content: locale === "en" ? "_No valid options were provided._" : "_没有可用选项。_",
+    });
+  } else {
+    options.forEach((option, index) => {
+      elements.push(renderLarkAskUserQuestionOption({
+        requestId: input.requestId,
+        questionIndex: 0,
+        optionIndex: index,
+        option,
+        replyInThread: input.replyInThread,
+        locale,
+      }));
+    });
+  }
+
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: {
+        content: locale === "en" ? "Claude is asking a question" : "Claude 请求选择",
+      },
+    },
+    header: {
+      title: {
+        tag: "plain_text",
+        content: title,
+      },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements,
+    },
+  };
+}
+
+function renderLarkAskUserQuestionOption(input: {
+  requestId: string;
+  questionIndex: number;
+  optionIndex: number;
+  option: AskUserQuestionOption;
+  replyInThread?: boolean;
+  locale: Locale;
+}): Record<string, unknown> {
+  const marker = optionMarker(input.optionIndex);
+  const description = input.option.description?.trim();
+  return {
+    tag: "collapsible_panel",
+    expanded: input.optionIndex === 0,
+    header: {
+      title: { tag: "markdown", content: `**${marker}. ${input.option.label}**` },
+      vertical_align: "center",
+      icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
+      icon_position: "follow_text",
+      icon_expanded_angle: -180,
+    },
+    border: { color: input.optionIndex === 0 ? "blue" : "grey", corner_radius: "5px" },
+    vertical_spacing: "8px",
+    padding: "8px 8px 8px 8px",
+    elements: [
+      {
+        tag: "markdown",
+        content: description || (input.locale === "en" ? "_Choose this option._" : "_选择此项。_"),
+        text_size: "notation",
+      },
+      {
+        tag: "button",
+        text: {
+          tag: "plain_text",
+          content: input.locale === "en" ? "Choose" : "选择",
+        },
+        width: "fill",
+        type: input.optionIndex === 0 ? "primary" : "default",
+        behaviors: [callbackBehavior({
+          cctb_lark: "ask_user_question",
+          requestId: input.requestId,
+          questionIndex: input.questionIndex,
+          label: input.option.label,
+          answer: input.option.label,
+          ...(input.option.preview ? { preview: input.option.preview } : {}),
+          ...(input.replyInThread ? { replyInThread: true } : {}),
+        })],
+      },
+    ],
+  };
+}
+
+function renderLarkAskUserQuestionFallbackText(toolInput: unknown, locale: Locale): string {
+  const question = normalizeAskUserQuestions(toolInput)[0];
+  if (!question) {
+    return locale === "en" ? "Claude is asking a question." : "Claude 需要你选择。";
+  }
+  const options = question.options
+    .map((option, index) => {
+      const description = option.description ? ` — ${option.description}` : "";
+      return `${optionMarker(index)}. ${option.label}${description}`;
+    })
+    .join("\n");
+  return [`**${question.header}**`, question.question, options].filter(Boolean).join("\n");
+}
+
+function normalizeAskUserQuestions(toolInput: unknown): AskUserQuestionCardQuestion[] {
+  const root = objectValue(toolInput);
+  const rawQuestions = Array.isArray(root?.questions) ? root.questions : [];
+  return rawQuestions
+    .map((entry): AskUserQuestionCardQuestion | null => {
+      const question = objectValue(entry);
+      if (!question) {
+        return null;
+      }
+      const text = stringValue(question.question);
+      const options = Array.isArray(question.options)
+        ? question.options
+          .map((option): AskUserQuestionOption | null => {
+            const optionObject = objectValue(option);
+            if (!optionObject && typeof option !== "string") {
+              return null;
+            }
+            const label = typeof option === "string" ? option : stringValue(optionObject?.label) ?? stringValue(optionObject?.value);
+            if (!label) {
+              return null;
+            }
+            return {
+              label,
+              ...(stringValue(optionObject?.description) ? { description: stringValue(optionObject?.description) } : {}),
+              ...(stringValue(optionObject?.preview) ? { preview: stringValue(optionObject?.preview) } : {}),
+            };
+          })
+          .filter((option): option is AskUserQuestionOption => option !== null)
+        : [];
+      if (!text || options.length === 0) {
+        return null;
+      }
+      return {
+        question: text,
+        header: stringValue(question.header) ?? "Question",
+        multiSelect: question.multiSelect === true,
+        options,
+      };
+    })
+    .filter((question): question is AskUserQuestionCardQuestion => question !== null);
+}
+
+function buildAskUserQuestionUpdatedInput(toolInput: unknown, input: {
+  questionIndex: number;
+  answer: string;
+  preview?: string;
+}): Record<string, unknown> {
+  const root = objectValue(toolInput) ?? {};
+  const questions = normalizeAskUserQuestions(toolInput);
+  const question = questions[input.questionIndex] ?? questions[0];
+  const questionText = question?.question ?? `Question ${input.questionIndex + 1}`;
+  const answers = objectValue(root.answers) ?? {};
+  const updated: Record<string, unknown> = {
+    ...root,
+    questions: Array.isArray(root.questions) ? root.questions : questions,
+    answers: {
+      ...answers,
+      [questionText]: input.answer,
+    },
+  };
+
+  if (input.preview) {
+    const annotations = objectValue(root.annotations) ?? {};
+    updated.annotations = {
+      ...annotations,
+      [questionText]: {
+        ...(objectValue(annotations[questionText]) ?? {}),
+        preview: input.preview,
+      },
+    };
+  }
+
+  return updated;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function optionMarker(index: number): string {
+  if (index >= 0 && index < 26) {
+    return String.fromCharCode("A".charCodeAt(0) + index);
+  }
+  return String(index + 1);
+}
+
+function callbackBehavior(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: "callback",
+    value,
+  };
 }
 
 export function isLarkApprovalTextCommand(text: string): boolean {
@@ -373,6 +634,60 @@ export async function handleLarkCardAction(input: {
     }
     const result = await applyLarkResumeCardAction(input.stateDir, value, locale);
     await input.channel.send(input.event.chatId, { text: result }, larkReplyOptions(input.event.messageId, replyInThread));
+    return true;
+  }
+
+  if (
+    value.cctb_lark === "ask_user_question" &&
+    typeof value.requestId === "string"
+  ) {
+    const pending = input.runtime.pendingApprovals.get(value.requestId);
+    if (!pending) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: renderApprovalNoPending(locale) },
+        larkReplyOptions(input.event.messageId, replyInThread),
+      );
+      return true;
+    }
+    const approvalConversationKey = pending.conversationKey ?? `lark:${pending.chatId}`;
+    const approvalBridgeChatType = pending.bridgeChatType ?? "private";
+    if (
+      !await ensureLarkCardActionAccess({
+        ...input,
+        conversationKey: approvalConversationKey,
+        bridgeChatType: approvalBridgeChatType,
+        replyInThread: pending.replyInThread ?? replyInThread,
+        action: "approval",
+      })
+    ) {
+      return true;
+    }
+
+    const answer = stringValue(value.answer) ?? stringValue(value.label) ?? stringValue(value.value);
+    if (!answer) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: locale === "en" ? "No answer was selected." : "没有收到选择。" },
+        larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread),
+      );
+      return true;
+    }
+
+    cleanupPendingApproval(input.runtime, value.requestId);
+    pending.resolve({
+      behavior: "allow",
+      updatedInput: buildAskUserQuestionUpdatedInput(pending.askUserQuestionInput, {
+        questionIndex: typeof value.questionIndex === "number" ? value.questionIndex : 0,
+        answer,
+        preview: stringValue(value.preview),
+      }),
+    });
+    await input.channel.send(
+      input.event.chatId,
+      { text: locale === "en" ? `Selected: ${answer}` : `已选择：${answer}` },
+      larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread),
+    );
     return true;
   }
 

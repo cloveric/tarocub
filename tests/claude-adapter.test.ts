@@ -169,10 +169,36 @@ describe("ProcessClaudeAdapter", () => {
         sessionId: "session-123",
       });
       expect(calls[0]?.args).toContain("--dangerously-skip-permissions");
+      expect(calls[0]?.args).not.toContain("--disallowedTools");
+      expect(calls[0]?.args).not.toContain("AskUserQuestion");
       expect(calls[0]?.args).not.toContain("bypassPermissions");
     } finally {
       await removeTempRoot(root);
     }
+  });
+
+  it("can disallow AskUserQuestion for plain transports", async () => {
+    const { child, calls, spawnFn } = createSpawnHarness();
+    const adapter = new ProcessClaudeAdapter("claude", {
+      spawnFn,
+      disallowedTools: ["AskUserQuestion"],
+    });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Review this",
+      files: [],
+    });
+    await waitForSpawn(calls);
+
+    child.stdout.emitData('{"type":"result","result":"Looks good","session_id":"session-123"}');
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({
+      text: "Looks good",
+      sessionId: "session-123",
+    });
+    expect(calls[0]?.args).toContain("--disallowedTools");
+    expect(calls[0]?.args).toContain("AskUserQuestion");
   });
 
   it("merges bridge instructions with instance agent instructions", async () => {

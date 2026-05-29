@@ -603,7 +603,7 @@ async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir:
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
     CLAUDE_EXECUTABLE: env.CLAUDE_EXECUTABLE,
     ANTIGRAVITY_EXECUTABLE: env.ANTIGRAVITY_EXECUTABLE,
-  });
+  }, { transport: "lark" });
   return {
     stateDir: config.stateDir,
     bridge,

@@ -105,13 +105,13 @@ export function renderClaudePermissionPromptToolResponse(
   if (decision.behavior === "deny") {
     return {
       behavior: "deny",
-      message: "Denied from Telegram.",
+      message: "Denied by the user.",
     };
   }
 
   return {
     behavior: "allow",
-    updatedInput: input.input ?? input.tool_input ?? input.toolInput ?? {},
+    updatedInput: decision.updatedInput ?? input.input ?? input.tool_input ?? input.toolInput ?? {},
   };
 }
 

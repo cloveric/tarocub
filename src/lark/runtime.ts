@@ -49,6 +49,7 @@ export interface PendingLarkApproval {
   bridgeChatType?: "private" | "group";
   replyTo?: string;
   replyInThread?: boolean;
+  askUserQuestionInput?: unknown;
   resolve: (decision: EngineApprovalDecision) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;

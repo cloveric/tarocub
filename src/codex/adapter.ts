@@ -45,6 +45,7 @@ export type EngineApprovalDecision =
   | {
       behavior: "allow";
       scope?: "once" | "session";
+      updatedInput?: unknown;
     }
   | {
       behavior: "deny";

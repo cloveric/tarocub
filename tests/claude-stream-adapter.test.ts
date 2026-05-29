@@ -298,6 +298,30 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("can opt out of Claude AskUserQuestion for plain transports", async () => {
+    const { children, calls, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      disallowedTools: ["AskUserQuestion"],
+    });
+
+    const resultPromise = adapter.sendUserMessage("telegram-12345", {
+      text: "Do not ask interactively",
+      files: [],
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    expect(calls[0]?.args).toContain("--disallowedTools");
+    expect(calls[0]?.args).toContain("AskUserQuestion");
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"OK","session_id":"session-123"}\n');
+
+    await expect(resultPromise).resolves.toEqual({
+      text: "OK",
+      sessionId: "session-123",
+    });
+  });
+
   it("runs resumed Claude sessions in the selected workspace override", async () => {
     const { children, calls, spawnFn } = createSpawnHarness();
     const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
@@ -526,6 +550,91 @@ describe("ClaudeStreamAdapter", () => {
       text: "DONE",
       sessionId: "session-123",
     });
+  });
+
+  it("routes AskUserQuestion through the callback even in full-auto mode", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+    const answeredInput = {
+      questions: [
+        {
+          question: "Choose one?",
+          header: "Choice",
+          multiSelect: false,
+          options: [
+            { label: "A", description: "First" },
+            { label: "B", description: "Second" },
+          ],
+        },
+      ],
+      answers: {
+        "Choose one?": "A",
+      },
+    };
+    const approvalRequest = vi.fn().mockResolvedValue({
+      behavior: "allow",
+      updatedInput: answeredInput,
+    });
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      configPath,
+    });
+
+    try {
+      await writeFile(configPath, JSON.stringify({ approvalMode: "full-auto" }) + "\n", "utf8");
+      const resultPromise = adapter.sendUserMessage("telegram-12345", {
+        text: "Ask me",
+        files: [],
+        onApprovalRequest: approvalRequest,
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "control_request",
+        request_id: "question-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "AskUserQuestion",
+          input: {
+            questions: [
+              {
+                question: "Choose one?",
+                header: "Choice",
+                multiSelect: false,
+                options: [
+                  { label: "A", description: "First" },
+                  { label: "B", description: "Second" },
+                ],
+              },
+            ],
+          },
+        },
+      }) + "\n");
+
+      await waitFor(() => children[0].stdin.lines.length === 2);
+      expect(approvalRequest).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(children[0].stdin.lines[1] ?? "{}")).toEqual({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: "question-1",
+          response: {
+            behavior: "allow",
+            updatedInput: answeredInput,
+          },
+        },
+      });
+
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"DONE","session_id":"session-123"}\n');
+      await expect(resultPromise).resolves.toEqual({
+        text: "DONE",
+        sessionId: "session-123",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
   });
 
   it("emits structured Claude stream events for tools, text, permission, and result", async () => {
