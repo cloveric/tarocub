@@ -55,17 +55,29 @@ function parseKnownChat(value: unknown): LarkKnownChat | null {
     return null;
   }
 
+  const topicScoped = isTopicScopedConversationKey(raw.conversationKey, raw.chatId);
+  const threadId = typeof raw.threadId === "string" && raw.threadId.length > 0 && topicScoped
+    ? raw.threadId
+    : undefined;
+  const label = sanitizedKnownChatLabel({
+    rawLabel: raw.label,
+    chatId: raw.chatId,
+    chatName: typeof raw.chatName === "string" ? raw.chatName : undefined,
+    threadId: typeof raw.threadId === "string" ? raw.threadId : undefined,
+    topicScoped,
+  });
+
   const entry: LarkKnownChat = {
     chatId: raw.chatId,
     conversationKey: raw.conversationKey,
     bridgeChatId: raw.bridgeChatId,
     bridgeAccessChatId: raw.bridgeAccessChatId,
     chatType: raw.chatType,
-    label: raw.label,
+    label,
     lastSeenAt: raw.lastSeenAt,
   };
   if (isLarkChatMode(raw.chatMode)) entry.chatMode = raw.chatMode;
-  if (typeof raw.threadId === "string" && raw.threadId.length > 0) entry.threadId = raw.threadId;
+  if (threadId) entry.threadId = threadId;
   if (typeof raw.chatName === "string" && raw.chatName.length > 0) entry.chatName = raw.chatName;
   if (typeof raw.senderName === "string" && raw.senderName.length > 0) entry.senderName = raw.senderName;
   return entry;
@@ -149,6 +161,26 @@ function labelForKnownChat(normalized: LarkNormalizedBridgeMessage): string {
     return `${normalized.chatId} / ${normalized.threadId}`;
   }
   return normalized.chatId;
+}
+
+function sanitizedKnownChatLabel(input: {
+  rawLabel: string;
+  chatId: string;
+  chatName?: string;
+  threadId?: string;
+  topicScoped: boolean;
+}): string {
+  if (input.topicScoped || !input.threadId) {
+    return input.rawLabel;
+  }
+  if (input.rawLabel === `${input.chatId} / ${input.threadId}`) {
+    return input.chatName?.trim() || input.chatId;
+  }
+  return input.rawLabel;
+}
+
+function isTopicScopedConversationKey(conversationKey: string, chatId: string): boolean {
+  return conversationKey.startsWith(`lark:${chatId}:`);
 }
 
 function dedupeKnownChats(chats: LarkKnownChat[]): LarkKnownChat[] {

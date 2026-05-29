@@ -239,6 +239,7 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
+- **v0.1.38** — sanitizes historical Lark `known-chats.json` entries on read so stale parent-group labels recorded from reply threads no longer mislead `/status`, `/config`, or dashboard.
 - **v0.1.37** — tightens Lark group/topic UX: ordinary group reply threads no longer pollute known-chat labels as topic sessions, and unauthorized Lark group replies now include `/invite group` / `/group allow` guidance.
 - **v0.1.36** — preserves existing Lark thread/topic sessions even when the platform later reports the chat mode as a plain group, preventing active group topics from appearing to forget prior context after restarts.
 - **v0.1.35** — hardens Lark service shutdown/restart handling so direct Node process stops happen before tmux cleanup and stale locks are less likely after interrupted service turns.
