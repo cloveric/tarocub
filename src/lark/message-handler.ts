@@ -19,6 +19,7 @@ import {
   initialLarkRunState,
   renderLarkQueueWaitCard,
   renderLarkRunCard,
+  renderLarkRunCardCompact,
   type LarkRunState,
 } from "./card-renderer.js";
 import {
@@ -1060,8 +1061,48 @@ async function createLarkRunCardController(input: {
   if (sent.fallback) {
     return undefined;
   }
+  // Once the full card is too large for Feishu's patch limit, every update
+  // fails; switch to the compact render so live progress (and finalization)
+  // keep landing instead of freezing the card in its "running" state.
+  let degraded = false;
+  const tryUpdate = async (card: Record<string, unknown>): Promise<boolean> => {
+    if (!input.channel.updateCard) {
+      return false;
+    }
+    try {
+      await input.channel.updateCard(sent.messageId, card);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const update = async (): Promise<void> => {
-    await input.channel.updateCard?.(sent.messageId, renderLarkRunCard(state, input.locale));
+    if (!degraded) {
+      if (await tryUpdate(renderLarkRunCard(state, input.locale))) {
+        return;
+      }
+      degraded = true;
+    }
+    await tryUpdate(renderLarkRunCardCompact(state, input.locale));
+  };
+  // Terminal update: guarantee the card leaves the "running" state and the
+  // answer is not lost. Try the full card, then the compact card, and as a
+  // last resort deliver the text directly so a failed patch never swallows it.
+  const finalize = async (text?: string): Promise<void> => {
+    if (!degraded && await tryUpdate(renderLarkRunCard(state, input.locale))) {
+      return;
+    }
+    degraded = true;
+    if (await tryUpdate(renderLarkRunCardCompact(state, input.locale))) {
+      return;
+    }
+    if (text && text.trim()) {
+      await input.channel.send(
+        input.chatId,
+        { text },
+        larkReplyOptions(input.replyTo, input.replyInThread),
+      ).catch(() => undefined);
+    }
   };
   return {
     apply: async (event) => {
@@ -1072,7 +1113,7 @@ async function createLarkRunCardController(input: {
       // Reuse the reducer so non-streaming engines (which emit no incremental
       // assistant_text) still get the final answer seeded into the block stream.
       state = applyLarkEngineEvent(state, { type: "result", text });
-      await update().catch(() => undefined);
+      await finalize(text);
     },
     fail: async (text) => {
       state = {
@@ -1081,15 +1122,15 @@ async function createLarkRunCardController(input: {
         errorText: text,
         footer: null,
       };
-      await update().catch(() => undefined);
+      await finalize();
     },
     interrupt: async () => {
       state = { ...state, status: "interrupted", footer: null };
-      await update().catch(() => undefined);
+      await finalize();
     },
     idleTimeout: async (minutes) => {
       state = { ...state, status: "idle_timeout", idleTimeoutMinutes: minutes, footer: null };
-      await update().catch(() => undefined);
+      await finalize();
     },
   };
 }

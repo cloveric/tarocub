@@ -308,6 +308,54 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   };
 }
 
+const COMPACT_ANSWER_MAX = 8000;
+
+/**
+ * A minimal terminal card: status + final answer (+ terminal marker), with no
+ * tool/reasoning history. The full run card can grow past Feishu's card-patch
+ * size limit on long, tool-heavy turns, which makes every updateCard fail and
+ * leaves the card frozen in its "running" state. This compact variant stays
+ * small enough to always patch, so finalization (done/error/interrupted) is
+ * guaranteed to land and the card never stays spinning.
+ */
+export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "zh"): Record<string, unknown> {
+  const labels = runCardLabels(locale);
+  const elements: unknown[] = [
+    markdownElement(`**${runCardStatusLabel(state.status, labels)}**`),
+  ];
+  const lastText = [...state.blocks].reverse().find(
+    (block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0,
+  );
+  const answer = cleanCardText(state.resultText.trim() ? state.resultText : (lastText?.content ?? ""));
+  if (answer) {
+    elements.push(markdownElement(truncate(answer, COMPACT_ANSWER_MAX)));
+  }
+
+  if (state.status === "interrupted") {
+    elements.push(noteElement(`_⏹ ${labels.interrupted}_`));
+  } else if (state.status === "idle_timeout") {
+    elements.push(noteElement(`_⏱ ${labels.idleTimeout(state.idleTimeoutMinutes ?? 0)}_`));
+  } else if (state.status === "error" && state.errorText.trim()) {
+    elements.push(markdownElement(`⚠️ ${truncate(state.errorText.trim(), 600)}`));
+  } else if (!answer) {
+    elements.push(markdownElement(`_${labels.empty}_`));
+  }
+
+  return {
+    schema: "2.0",
+    config: {
+      streaming_mode: false,
+      update_multi: true,
+      summary: { content: cardSummary(state, locale) },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements,
+    },
+  };
+}
+
 type ToolGroup = { kind: "tools"; tools: LarkToolEntry[] };
 type TextGroup = { kind: "text"; content: string };
 

@@ -7730,6 +7730,41 @@ describe("lark service", () => {
     }
   });
 
+  it("delivers the answer even when run-card updates always fail (no frozen card)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-run-card-fail-"));
+    // Simulate Feishu rejecting every patch (e.g. an oversized card): the final
+    // answer must NOT be swallowed — it should arrive as a text fallback.
+    const channel = fakeChannel({
+      updateCard: vi.fn(async () => { throw new Error("card too large"); }),
+    });
+    const runtime = createLarkServiceRuntime();
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "the final answer" }));
+        return { text: "the final answer" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_fail_card", content: "do work" }),
+      });
+
+      // The answer reached the user as a plain-text message (last-resort fallback).
+      const textSends = channel.send.mock.calls.filter((call: unknown[]) => {
+        const payload = call[1] as { text?: string } | undefined;
+        return typeof payload?.text === "string" && payload.text.includes("the final answer");
+      });
+      expect(textSends.length).toBeGreaterThan(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders Lark conversation queue waits as stop-capable cards", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-card-"));
     const channel = fakeChannel();

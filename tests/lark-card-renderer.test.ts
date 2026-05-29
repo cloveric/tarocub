@@ -5,6 +5,7 @@ import {
   initialLarkRunState,
   renderLarkApprovalCard,
   renderLarkRunCard,
+  renderLarkRunCardCompact,
 } from "../src/lark/card-renderer.js";
 
 describe("lark card renderer", () => {
@@ -44,6 +45,25 @@ describe("lark card renderer", () => {
     // ...and it appears exactly once (no streamed-vs-result duplication).
     const occurrences = body.split(answer).length - 1;
     expect(occurrences).toBe(1);
+  });
+
+  it("renders a compact terminal card with the answer and no stop button, smaller than the full card", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    // A long, tool-heavy turn whose full card would be huge.
+    for (let i = 0; i < 60; i++) {
+      state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolInput: { command: `cmd ${i}` }, toolUseId: `t${i}` });
+      state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: `t${i}`, output: "x".repeat(400) });
+    }
+    state = applyLarkEngineEvent(state, { type: "result", text: "The final answer." });
+
+    const full = JSON.stringify(renderLarkRunCard(state));
+    const compact = JSON.stringify(renderLarkRunCardCompact(state));
+
+    expect(compact).toContain("The final answer.");
+    expect(compact).not.toContain("停止");            // terminal: no stop button
+    expect((renderLarkRunCardCompact(state) as any).config.streaming_mode).toBe(false);
+    // The compact card is dramatically smaller (no tool history).
+    expect(compact.length).toBeLessThan(full.length / 2);
   });
 
   it("does not render a duplicate permission_request block for AskUserQuestion", () => {
