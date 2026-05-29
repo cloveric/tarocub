@@ -9538,6 +9538,82 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
+  it("lets the user go back to change an earlier AskUserQuestion answer", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel,
+      runtime,
+      chatId: "oc_chat",
+      replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [
+            { question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] },
+            { question: "Target?", header: "Target", multiSelect: false, options: [{ label: "Local" }, { label: "Remote" }] },
+          ],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    const answer = async (questionIndex: number, action: string, label?: string) =>
+      handleLarkCardAction({
+        channel, runtime,
+        event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+          action: { value: { cctb_lark: "ask_user_question", requestId, questionIndex, action, ...(label ? { label } : {}) } } },
+      });
+
+    await answer(0, "select", "Fast");      // Q1 → advances to Q2
+    channel.updateCard.mockClear();
+    await answer(1, "back");                 // back → re-renders Q1
+    expect(runtime.pendingApprovals.size).toBe(1);
+    expect(JSON.stringify(channel.updateCard.mock.calls)).toContain("Mode?");
+
+    await answer(0, "select", "Careful");    // change the earlier answer → Q2
+    await answer(1, "select", "Remote");     // last → resolves
+
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    // The changed Q1 answer ("Careful") wins, proving back actually re-recorded it.
+    expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Careful", "Target?": "Remote" });
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
+  it("renders multiSelect options without collapsible panels so taps cannot collapse them", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Pick", header: "Pick", multiSelect: true, options: [{ label: "A" }, { label: "B" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const firstSendPayload = JSON.stringify((channel.send.mock.calls[0] as unknown[])?.[1]);
+    // The bug was a collapsible_panel snapping shut on every re-render.
+    expect(firstSendPayload).not.toContain("collapsible_panel");
+    expect(firstSendPayload).toContain('"action":"toggle"');
+    expect(firstSendPayload).toContain('"action":"submit"');
+
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+    // Complete the flow so the pending promise resolves (toggle A, then submit).
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", requestId, questionIndex: 0, action: "toggle", label: "A" } } },
+    });
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", requestId, questionIndex: 0, action: "submit" } } },
+    });
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Pick": "A" });
+  });
+
   it("collects multiple selections for a multiSelect AskUserQuestion before submit", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();

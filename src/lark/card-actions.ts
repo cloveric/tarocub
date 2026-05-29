@@ -238,25 +238,35 @@ function renderLarkAskUserQuestionCard(input: {
         locale,
       }));
     });
+    // Action row: optional "back" (when not on the first question) plus, for
+    // multiSelect, an explicit submit/next button (single-select advances on
+    // the option tap itself).
+    const actionColumns: unknown[] = [];
+    if (questionIndex > 0) {
+      actionColumns.push(askActionColumn(locale === "en" ? "← Back" : "← 上一题", {
+        cctb_lark: "ask_user_question",
+        action: "back",
+        requestId: input.requestId,
+        questionIndex,
+        ...(input.replyInThread ? { replyInThread: true } : {}),
+      }, "default"));
+    }
     if (isMulti) {
       const isLast = questionIndex + 1 >= questions.length;
       const baseLabel = isLast
         ? (locale === "en" ? "Submit" : "提交")
         : (locale === "en" ? "Next question" : "下一题");
       const count = selected.length ? (locale === "en" ? ` (${selected.length})` : `（已选 ${selected.length}）`) : "";
-      elements.push({
-        tag: "button",
-        text: { tag: "plain_text", content: `${baseLabel}${count}` },
-        width: "fill",
-        type: "primary",
-        behaviors: [callbackBehavior({
-          cctb_lark: "ask_user_question",
-          action: "submit",
-          requestId: input.requestId,
-          questionIndex,
-          ...(input.replyInThread ? { replyInThread: true } : {}),
-        })],
-      });
+      actionColumns.push(askActionColumn(`${baseLabel}${count}`, {
+        cctb_lark: "ask_user_question",
+        action: "submit",
+        requestId: input.requestId,
+        questionIndex,
+        ...(input.replyInThread ? { replyInThread: true } : {}),
+      }, "primary"));
+    }
+    if (actionColumns.length > 0) {
+      elements.push({ tag: "column_set", flex_mode: "flow", horizontal_spacing: "8px", columns: actionColumns });
     }
   }
 
@@ -297,47 +307,68 @@ function renderLarkAskUserQuestionOption(input: {
   const checkbox = input.multiSelect ? (input.selected ? "✅ " : "⬜ ") : "";
   const buttonContent = input.multiSelect
     ? (input.selected
-      ? (input.locale === "en" ? "Unselect" : "取消选择")
+      ? (input.locale === "en" ? "Unselect" : "取消")
       : (input.locale === "en" ? "Select" : "选择"))
     : (input.locale === "en" ? "Choose" : "选择");
-  const highlight = input.selected || (!input.multiSelect && input.optionIndex === 0);
+  const highlight = input.selected;
+  const label = `**${checkbox}${marker}. ${input.option.label}**`;
+  const text = description ? `${label}\n${description}` : label;
+  // Always-visible row (label + description on the left, a tappable button on
+  // the right). No collapsible_panel: every tap re-renders the card, and a
+  // collapsible would snap shut on each render, making options impossible to
+  // select. A plain row stays put.
   return {
-    tag: "collapsible_panel",
-    expanded: input.optionIndex === 0 || input.selected,
-    header: {
-      title: { tag: "markdown", content: `**${checkbox}${marker}. ${input.option.label}**` },
-      vertical_align: "center",
-      icon: { tag: "standard_icon", token: "down-small-ccm_outlined", size: "16px 16px" },
-      icon_position: "follow_text",
-      icon_expanded_angle: -180,
-    },
-    border: { color: highlight ? "blue" : "grey", corner_radius: "5px" },
-    vertical_spacing: "8px",
-    padding: "8px 8px 8px 8px",
-    elements: [
+    tag: "column_set",
+    flex_mode: "none",
+    horizontal_spacing: "8px",
+    margin: "0px 0px 8px 0px",
+    columns: [
       {
-        tag: "markdown",
-        content: description || (input.locale === "en" ? "_Choose this option._" : "_选择此项。_"),
-        text_size: "notation",
+        tag: "column",
+        width: "weighted",
+        weight: 1,
+        vertical_align: "center",
+        elements: [{ tag: "markdown", content: text, text_size: "notation" }],
       },
       {
+        tag: "column",
+        width: "auto",
+        vertical_align: "center",
+        elements: [
+          {
+            tag: "button",
+            text: { tag: "plain_text", content: buttonContent },
+            size: "small",
+            type: highlight ? "primary" : "default",
+            behaviors: [callbackBehavior({
+              cctb_lark: "ask_user_question",
+              action: input.multiSelect ? "toggle" : "select",
+              requestId: input.requestId,
+              questionIndex: input.questionIndex,
+              label: input.option.label,
+              answer: input.option.label,
+              ...(input.option.preview ? { preview: input.option.preview } : {}),
+              ...(input.replyInThread ? { replyInThread: true } : {}),
+            })],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function askActionColumn(label: string, value: Record<string, unknown>, type: "primary" | "default"): Record<string, unknown> {
+  return {
+    tag: "column",
+    width: "weighted",
+    weight: 1,
+    elements: [
+      {
         tag: "button",
-        text: {
-          tag: "plain_text",
-          content: buttonContent,
-        },
+        text: { tag: "plain_text", content: label },
+        type,
         width: "fill",
-        type: highlight ? "primary" : "default",
-        behaviors: [callbackBehavior({
-          cctb_lark: "ask_user_question",
-          action: input.multiSelect ? "toggle" : "select",
-          requestId: input.requestId,
-          questionIndex: input.questionIndex,
-          label: input.option.label,
-          answer: input.option.label,
-          ...(input.option.preview ? { preview: input.option.preview } : {}),
-          ...(input.replyInThread ? { replyInThread: true } : {}),
-        })],
+        behaviors: [callbackBehavior(value)],
       },
     ],
   };
@@ -747,6 +778,33 @@ export async function handleLarkCardAction(input: {
         locale,
       });
     };
+
+    // Go back to the previous question so the user can change an earlier answer.
+    if (action === "back") {
+      const prevIndex = Math.max(questionIndex - 1, 0);
+      const prevQuestion = questions[prevIndex];
+      let restored: string[] = [];
+      if (prevQuestion?.multiSelect && pending.askUserQuestionCollected) {
+        const answers = objectValue(pending.askUserQuestionCollected.answers) ?? {};
+        const prevAnswer = stringValue(answers[prevQuestion.question]);
+        if (prevAnswer) {
+          restored = prevAnswer.split(",").map((part) => part.trim()).filter(Boolean);
+        }
+      }
+      pending.askUserQuestionSelections = restored;
+      await updateChoiceCard(
+        renderLarkAskUserQuestionCard({
+          requestId: value.requestId,
+          toolInput: pending.askUserQuestionInput,
+          questionIndex: prevIndex,
+          selectedLabels: restored,
+          replyInThread: pending.replyInThread ?? replyInThread,
+          locale,
+        }),
+        renderLarkAskUserQuestionFallbackText(pending.askUserQuestionInput, locale, prevIndex),
+      );
+      return true;
+    }
 
     // Multi-select toggle: flip this option in the in-progress selection and
     // re-render the SAME question; do not advance or resolve yet.
