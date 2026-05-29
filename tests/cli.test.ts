@@ -458,6 +458,69 @@ describe("runCli", () => {
     }
   });
 
+  it("defers Lark service restart when invoked from the current Lark turn", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const scheduleDeferredRestart = vi.fn(async () => 'Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.');
+
+    try {
+      const handled = await runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+          CCTB_SEND_URL: "http://127.0.0.1:1/send/redacted",
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, scheduleDeferredRestart },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+      expect(scheduleDeferredRestart).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir,
+      }), { current: true });
+      expect(messages).toEqual(['Scheduled one-shot deferred restart for current Lark instance "alpha" in 5s.']);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("supports explicitly deferring a Lark service restart", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const scheduleDeferredRestart = vi.fn(async () => 'Scheduled one-shot deferred restart for Lark instance "alpha" in 5s.');
+
+    try {
+      const handled = await runCli(["lark", "service", "restart", "--defer"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { scheduleDeferredRestart },
+      });
+
+      expect(handled).toBe(true);
+      expect(scheduleDeferredRestart).toHaveBeenCalledWith(expect.objectContaining({
+        stateDir,
+      }), {});
+      expect(messages).toEqual(['Scheduled one-shot deferred restart for Lark instance "alpha" in 5s.']);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("stops duplicate lockless Lark service processes", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

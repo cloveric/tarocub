@@ -1,5 +1,6 @@
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { closeSync, openSync } from "node:fs";
 import { readFile, readdir, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -133,6 +134,12 @@ export interface LarkServiceCommandDeps {
   isProcessAlive?: (pid: number) => boolean;
   killProcess?: (pid: number) => void;
   killTmuxSession?: (sessionName: string) => Promise<boolean | void>;
+  scheduleDeferredRestart?: (input: LarkServiceCommandInput, options?: { current?: boolean }) => Promise<string>;
+  spawnDetached?: (
+    command: string,
+    args: string[],
+    options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
+  ) => void;
   sleep?: (ms: number) => Promise<void>;
   inspectApp?: CliOptions["larkInspectApp"];
 }
@@ -157,6 +164,8 @@ export interface CliOptions {
   > & {
     CCTB_SEND_URL?: string;
     CCTB_SEND_TOKEN?: string;
+    CCTB_SEND_COMMAND?: string;
+    CODEX_THREAD_ID?: string;
     LARK_APP_ID?: string;
     LARK_APP_SECRET?: string;
     LARK_DOMAIN?: string;
@@ -1695,6 +1704,107 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const DEFAULT_LARK_DEFERRED_RESTART_DELAY_MS = 5_000;
+const DEFERRED_LARK_RESTART_HELPER_SCRIPT = `
+const { spawnSync } = require("node:child_process");
+
+const entrypoint = process.argv[1];
+const stateDir = process.argv[2];
+const instanceName = process.argv[3];
+const delayMs = Number.parseInt(process.argv[4] ?? "5000", 10);
+
+setTimeout(() => {
+  const env = { ...process.env };
+  env.CCTB_LARK_STATE_DIR = stateDir;
+  env.CCTB_LARK_INSTANCE = instanceName;
+  env.TAROCUB_INSTANCE = instanceName;
+  delete env.CCTB_SEND_URL;
+  delete env.CCTB_SEND_TOKEN;
+  delete env.CCTB_SEND_COMMAND;
+  delete env.CODEX_THREAD_ID;
+
+  const result = spawnSync(process.execPath, [entrypoint, "lark", "service", "restart"], {
+    env,
+    stdio: "inherit",
+  });
+
+  process.exit(result.status ?? 1);
+}, Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 5000);
+`;
+
+function defaultSpawnDetached(
+  command: string,
+  args: string[],
+  options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
+): void {
+  const stdoutFd = openSync(options.stdoutPath, "a");
+  const stderrFd = options.stderrPath === options.stdoutPath ? stdoutFd : openSync(options.stderrPath, "a");
+  try {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      detached: true,
+      env: options.env ?? process.env,
+      stdio: ["ignore", stdoutFd, stderrFd],
+    });
+    child.unref();
+  } finally {
+    closeSync(stdoutFd);
+    if (stderrFd !== stdoutFd) {
+      closeSync(stderrFd);
+    }
+  }
+}
+
+async function defaultScheduleDeferredLarkServiceRestart(
+  input: LarkServiceCommandInput,
+  deps: Pick<LarkServiceCommandDeps, "spawnDetached"> = {},
+  options: { current?: boolean; delayMs?: number } = {},
+): Promise<string> {
+  await mkdir(input.stateDir, { recursive: true });
+  const instanceName = resolveLarkInstanceName(input.env);
+  const delayMs = Math.max(1, Math.trunc(options.delayMs ?? DEFAULT_LARK_DEFERRED_RESTART_DELAY_MS));
+  const logPath = path.join(input.stateDir, "deferred-restart.log");
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CCTB_LARK_STATE_DIR: input.stateDir,
+    CCTB_LARK_INSTANCE: instanceName,
+    TAROCUB_INSTANCE: instanceName,
+  };
+  delete env.CCTB_SEND_URL;
+  delete env.CCTB_SEND_TOKEN;
+  delete env.CCTB_SEND_COMMAND;
+  delete env.CODEX_THREAD_ID;
+
+  (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [
+    "-e",
+    DEFERRED_LARK_RESTART_HELPER_SCRIPT,
+    input.entrypoint,
+    input.stateDir,
+    instanceName,
+    String(delayMs),
+  ], {
+    cwd: input.cwd,
+    stdoutPath: logPath,
+    stderrPath: logPath,
+    env,
+  });
+
+  const target = options.current ? "current Lark instance" : "Lark instance";
+  return `Scheduled one-shot deferred restart for ${target} "${instanceName}" in ${Math.ceil(delayMs / 1000)}s.`;
+}
+
+function isCurrentLarkTurnTarget(env: LarkRuntimeEnv, stateDir: string): boolean {
+  const sideChannelEnv = env as LarkRuntimeEnv & {
+    CCTB_SEND_URL?: string;
+    CCTB_SEND_TOKEN?: string;
+    CCTB_SEND_COMMAND?: string;
+  };
+  if (!sideChannelEnv.CCTB_SEND_URL && !sideChannelEnv.CCTB_SEND_TOKEN && !sideChannelEnv.CCTB_SEND_COMMAND) {
+    return false;
+  }
+  return env.CCTB_LARK_STATE_DIR !== undefined && path.resolve(env.CCTB_LARK_STATE_DIR) === path.resolve(stateDir);
+}
+
 async function defaultReadLarkServiceLogs(input: { logPath: string; tail: number }): Promise<string> {
   try {
     const raw = await readFile(input.logPath, "utf8");
@@ -1802,8 +1912,19 @@ async function runLarkServiceCommand(
   }
 
   if (subcommand === "restart") {
-    if (args.length !== 1) {
-      throw new Error("Usage: lark service restart");
+    const { enabled: defer, args: restartArgs } = extractBooleanFlag(args.slice(1), "--defer");
+    if (restartArgs.length !== 0) {
+      throw new Error("Usage: lark service restart [--defer]");
+    }
+    const scheduleDeferredRestart = deps.scheduleDeferredRestart
+      ?? ((deferredInput, options) => defaultScheduleDeferredLarkServiceRestart(deferredInput, deps, options));
+    if (defer) {
+      logger.log(await scheduleDeferredRestart(commandInput, {}));
+      return true;
+    }
+    if (isCurrentLarkTurnTarget(env, stateDir)) {
+      logger.log(await scheduleDeferredRestart(commandInput, { current: true }));
+      return true;
     }
     await prepareLarkServiceStartEnv(loadedEnv);
     const stopResult = deps.stop ? await deps.stop(commandInput) : await defaultStopLarkService(commandInput, deps);
