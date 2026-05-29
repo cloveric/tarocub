@@ -198,6 +198,13 @@ node dist/src/index.js lark dashboard
 
 Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/newgroup`, `/newtopic`, and `/continue`.
 
+Lark group/session semantics:
+
+- Normal group chats share one parent-group session. Reply threads created inside a normal group stay on the parent group session unless that thread already has an explicit historical session binding.
+- Topic-style Lark groups use one session per topic. A topic conversation key is `lark:<chat_id>:<thread_id>`, while the parent group key is `lark:<chat_id>`.
+- `/invite group` and `/group allow` authorize the current group, not only the current thread. `/remove group` and `/group deny` remove the current group authorization.
+- `known-chats.json` is diagnostic metadata for `/status`, `/config`, and dashboard labels. It never decides routing or access by itself.
+
 ## Operator Commands
 
 ### Telegram
@@ -232,6 +239,7 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
+- **v0.1.37** — tightens Lark group/topic UX: ordinary group reply threads no longer pollute known-chat labels as topic sessions, and unauthorized Lark group replies now include `/invite group` / `/group allow` guidance.
 - **v0.1.36** — preserves existing Lark thread/topic sessions even when the platform later reports the chat mode as a plain group, preventing active group topics from appearing to forget prior context after restarts.
 - **v0.1.35** — hardens Lark service shutdown/restart handling so direct Node process stops happen before tmux cleanup and stale locks are less likely after interrupted service turns.
 - **v0.1.34** — adds Lark observability and control UX: optional telemetry adapters, Lark health/reconnect events, opt-in shared worker pooling, `/invite`/`/remove` access helpers, and known chat names in `/status`, `/config`, and `dashboard`.

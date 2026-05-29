@@ -168,6 +168,14 @@ describe("lark service", () => {
         chatType: "group",
         conversationKey: "lark:oc_chat",
       }));
+      const known = JSON.parse(await readFile(path.join(stateDir, "known-chats.json"), "utf8")) as {
+        chats: Array<{ conversationKey: string; label: string; threadId?: string }>;
+      };
+      expect(known.chats).toContainEqual(expect.objectContaining({
+        conversationKey: "lark:oc_chat",
+        label: "oc_chat",
+      }));
+      expect(known.chats.find((chat) => chat.conversationKey === "lark:oc_chat")).not.toHaveProperty("threadId");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: "done" },
@@ -216,6 +224,44 @@ describe("lark service", () => {
         chatType: "group",
         conversationKey: threadConversationKey,
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("guides unauthorized Lark groups to invite or allow the group without running the engine", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-denied-help-"));
+    const channel = fakeChannel({
+      getChatMode: vi.fn(async () => "group"),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "reply" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_group_denied_help",
+          chatType: "group",
+          mentionedBot: true,
+          content: "帮我看一下",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        {
+          text: expect.stringContaining("/invite group"),
+        },
+        { replyTo: "om_group_denied_help", replyInThread: false },
+      );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("/group allow");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

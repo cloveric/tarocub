@@ -121,6 +121,7 @@ export class LarkKnownChatStore {
 }
 
 function knownChatFromNormalized(normalized: LarkNormalizedBridgeMessage, now: Date): LarkKnownChat {
+  const threadId = normalized.chatMode === "topic" ? normalized.threadId : undefined;
   const entry: LarkKnownChat = {
     chatId: normalized.chatId,
     conversationKey: normalized.conversationKey,
@@ -131,7 +132,7 @@ function knownChatFromNormalized(normalized: LarkNormalizedBridgeMessage, now: D
     lastSeenAt: now.toISOString(),
   };
   if (normalized.chatMode) entry.chatMode = normalized.chatMode;
-  if (normalized.threadId) entry.threadId = normalized.threadId;
+  if (threadId) entry.threadId = threadId;
   if (normalized.chatName) entry.chatName = normalized.chatName;
   if (normalized.senderName) entry.senderName = normalized.senderName;
   return entry;
@@ -144,7 +145,7 @@ function labelForKnownChat(normalized: LarkNormalizedBridgeMessage): string {
   if (normalized.bridgeChatType === "private" && normalized.senderName?.trim()) {
     return normalized.senderName.trim();
   }
-  if (normalized.threadId) {
+  if (normalized.chatMode === "topic" && normalized.threadId) {
     return `${normalized.chatId} / ${normalized.threadId}`;
   }
   return normalized.chatId;

@@ -206,7 +206,7 @@ async function runAcceptedLarkMessage(
       : { kind: "allow" as const };
     if (accessDecision.kind !== "allow") {
       await input.channel.send(normalized.chatId, {
-        text: formatLarkAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale)),
+        text: formatLarkDeniedAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale), normalized, messageLocale),
       }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
@@ -251,7 +251,7 @@ async function runAcceptedLarkMessage(
       : { kind: "allow" as const };
     if (accessDecision.kind !== "allow") {
       await input.channel.send(normalized.chatId, {
-        text: formatLarkAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale)),
+        text: formatLarkDeniedAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale), normalized, messageLocale),
       }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
@@ -343,6 +343,21 @@ async function runAcceptedLarkMessage(
   });
 }
 
+function formatLarkDeniedAccessReply(
+  text: string,
+  normalized: LarkNormalizedBridgeMessage,
+  locale: "zh" | "en",
+): string {
+  const base = formatLarkAccessReply(text);
+  if (normalized.bridgeChatType !== "group" || base.includes("/invite group") || base.includes("/group allow")) {
+    return base;
+  }
+  const hint = locale === "en"
+    ? "If you are an authorized user, send `/invite group` or `/group allow` in this group. Otherwise, pair with the bot in private chat first."
+    : "如果你是已授权用户，可在本群发送 `/invite group` 或 `/group allow` 允许当前群；否则请先私聊 bot 完成配对。";
+  return `${base}\n\n${hint}`;
+}
+
 async function recordKnownLarkChat(stateDir: string, normalized: LarkNormalizedBridgeMessage): Promise<void> {
   try {
     await new LarkKnownChatStore(stateDir).record(normalized);
@@ -410,7 +425,7 @@ async function runNormalizedLarkMessage(
     })
     : { kind: "allow" as const };
   if (accessDecision.kind !== "allow") {
-    await input.channel.send(normalized.chatId, { text: formatLarkAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(locale)) }, {
+    await input.channel.send(normalized.chatId, { text: formatLarkDeniedAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(locale), normalized, locale) }, {
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
     });
