@@ -88,6 +88,22 @@ export async function runLarkService(
       instanceName,
     });
   };
+  // The `lark run` bootstrap returns before index.ts installs its global
+  // unhandledRejection handler, so register one here too: a stray rejection must
+  // not silently kill the long-running Lark service.
+  const unhandledRejectionHandler = (reason: unknown): void => {
+    const error = reason instanceof Error ? reason : new Error(String(reason));
+    logLifecycleEvent({
+      type: "process.unhandled_rejection",
+      outcome: "error",
+      detail: error.message,
+      metadata: { channel: "lark", stack: error.stack },
+    });
+  };
+  process.on("unhandledRejection", unhandledRejectionHandler);
+  options.signal?.addEventListener("abort", () => {
+    process.removeListener("unhandledRejection", unhandledRejectionHandler);
+  }, { once: true });
   logLifecycleEvent({
     type: "service.starting",
     metadata: {

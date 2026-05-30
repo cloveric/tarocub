@@ -265,8 +265,17 @@ export async function updateInstanceConfig(
       config = JSON.parse(existing) as Record<string, unknown>;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        throw error;
+      if (code === "ENOENT") {
+        // Missing file — start fresh.
+      } else if (error instanceof SyntaxError) {
+        // Corrupt JSON: loadInstanceConfig already tolerates this on the read
+        // path (falls back to defaults), but throwing here would brick every
+        // config-mutating command (/engine, /model, /budget, ...). Quarantine the
+        // bad file and start fresh so commands work; the original is kept as .bak.
+        await rename(configPath, `${configPath}.corrupt.${Date.now()}.bak`).catch(() => {});
+        console.error(`Corrupt ${configPath}; quarantined and reset:`, error.message);
+      } else {
+        throw error; // transient I/O — don't clobber the intact file
       }
     }
     updater(config);

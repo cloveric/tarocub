@@ -12,7 +12,8 @@ export interface ServiceLifecycleEvent {
     | "service.fatal"
     | "process.signal"
     | "process.exit"
-    | "process.uncaught_exception";
+    | "process.uncaught_exception"
+    | "process.unhandled_rejection";
   instanceName: string;
   outcome?: "success" | "error";
   detail?: string;

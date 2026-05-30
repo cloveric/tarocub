@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import http from "node:http";
 
 import { isPeerAllowed, loadBusConfig } from "./bus-config.js";
@@ -7,6 +8,18 @@ import {
   parseBusTalkRequest,
   parseBusTalkResponse,
 } from "./bus-protocol.js";
+
+/** Constant-time comparison of the `Authorization: Bearer <secret>` header
+ * against the expected secret, so the bus secret can't be recovered byte-by-byte
+ * via response timing. */
+function bearerSecretMatches(authHeader: string | undefined, expectedSecret: string): boolean {
+  if (!authHeader) {
+    return false;
+  }
+  const expected = Buffer.from(`Bearer ${expectedSecret}`, "utf8");
+  const actual = Buffer.from(authHeader, "utf8");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
 
 export interface BusTalkRequest {
   fromInstance: string;
@@ -96,7 +109,7 @@ export function createBusServer(
 
         const authHeader = req.headers.authorization;
         const expectedSecret = startupSecret ?? busConfig.secret;
-        if (expectedSecret && authHeader !== `Bearer ${expectedSecret}`) {
+        if (expectedSecret && !bearerSecretMatches(authHeader, expectedSecret)) {
           sendJson(res, 401, createBusErrorResponse({
             fromInstance: instanceName,
             error: "Invalid or missing bus secret",

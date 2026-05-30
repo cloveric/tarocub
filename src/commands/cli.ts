@@ -2251,31 +2251,44 @@ async function runLarkServiceCommand(
         return true;
       }
       let deferredCurrentInput: LarkServiceCommandInput | null = null;
+      const restartFailures: string[] = [];
       for (const target of targets) {
-        const targetEnv = await loadLarkServiceTargetEnv(loadedEnv, target);
-        const targetInput = buildLarkServiceCommandInput(targetEnv);
-        if (isCurrentActiveLarkTurnTarget(env, targetEnv, targetInput.stateDir)) {
-          deferredCurrentInput = targetInput;
-          continue;
+        // Per-target try/catch: one busy or misconfigured instance must not abort
+        // the whole fleet restart and (crucially) skip the deferred current-instance
+        // restart at the end. Collect failures and keep going.
+        try {
+          const targetEnv = await loadLarkServiceTargetEnv(loadedEnv, target);
+          const targetInput = buildLarkServiceCommandInput(targetEnv);
+          if (isCurrentActiveLarkTurnTarget(env, targetEnv, targetInput.stateDir)) {
+            deferredCurrentInput = targetInput;
+            continue;
+          }
+          if (defer) {
+            logger.log(await scheduleDeferredRestart(targetInput, {}));
+            continue;
+          }
+          if (!force) {
+            await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "restart");
+          }
+          await prepareLarkServiceStartEnv(targetEnv);
+          const stopResult = deps.stop ? await deps.stop(targetInput) : await defaultStopLarkService(targetInput, deps);
+          logger.log(formatLarkServiceAction("stop", stopResult));
+          const result = deps.start ? await deps.start(targetInput) : await defaultStartLarkService(targetInput, deps);
+          if (result === "started") {
+            await (deps.waitUntilRunning ?? defaultWaitUntilLarkServiceRunning)(targetInput);
+          }
+          logger.log(formatLarkServiceAction("start", result));
+        } catch (error) {
+          const name = typeof target === "string" ? target : String(target);
+          restartFailures.push(name);
+          logger.log(`Skipped Lark instance "${name}": ${error instanceof Error ? error.message : String(error)}`);
         }
-        if (defer) {
-          logger.log(await scheduleDeferredRestart(targetInput, {}));
-          continue;
-        }
-        if (!force) {
-          await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "restart");
-        }
-        await prepareLarkServiceStartEnv(targetEnv);
-        const stopResult = deps.stop ? await deps.stop(targetInput) : await defaultStopLarkService(targetInput, deps);
-        logger.log(formatLarkServiceAction("stop", stopResult));
-        const result = deps.start ? await deps.start(targetInput) : await defaultStartLarkService(targetInput, deps);
-        if (result === "started") {
-          await (deps.waitUntilRunning ?? defaultWaitUntilLarkServiceRunning)(targetInput);
-        }
-        logger.log(formatLarkServiceAction("start", result));
       }
       if (deferredCurrentInput) {
         logger.log(await scheduleDeferredRestart(deferredCurrentInput, { current: true }));
+      }
+      if (restartFailures.length > 0) {
+        logger.log(`${restartFailures.length} Lark instance(s) skipped (busy or misconfigured): ${restartFailures.join(", ")}. Re-run after resolving, or pass --force.`);
       }
       return true;
     }

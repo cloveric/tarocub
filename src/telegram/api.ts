@@ -1,6 +1,17 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+/**
+ * Sanitize a filename before interpolating it into a multipart
+ * `Content-Disposition: form-data; ...; filename="..."` header. Filenames derive
+ * from engine output / analyzed content / user-chosen names, so a `"` or CR/LF
+ * could break the multipart part boundary and forge/override other form fields.
+ */
+function sanitizeMultipartFilename(filename: string): string {
+  const cleaned = filename.replace(/[\r\n"\\]/g, "_").trim();
+  return cleaned || "file";
+}
+
 type TelegramOkResponse<T> = {
   ok: true;
   result: T;
@@ -246,7 +257,7 @@ export class TelegramApi {
       notificationPart +
       threadPart +
       `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="document"; filename="${filename}"\r\n` +
+      `Content-Disposition: form-data; name="document"; filename="${sanitizeMultipartFilename(filename)}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`;
     const tail = `\r\n--${boundary}--\r\n`;
     const body = new Uint8Array(
@@ -297,7 +308,7 @@ export class TelegramApi {
       notificationPart +
       threadPart +
       `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="voice"; filename="${filename}"\r\n` +
+      `Content-Disposition: form-data; name="voice"; filename="${sanitizeMultipartFilename(filename)}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`;
     const tail = `\r\n--${boundary}--\r\n`;
     const body = new Uint8Array(
@@ -349,7 +360,7 @@ export class TelegramApi {
       notificationPart +
       threadPart +
       `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="photo"; filename="${filename}"\r\n` +
+      `Content-Disposition: form-data; name="photo"; filename="${sanitizeMultipartFilename(filename)}"\r\n` +
       `Content-Type: application/octet-stream\r\n\r\n`;
     if (caption) {
       head =
@@ -360,7 +371,7 @@ export class TelegramApi {
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` +
         `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="photo"; filename="${filename}"\r\n` +
+        `Content-Disposition: form-data; name="photo"; filename="${sanitizeMultipartFilename(filename)}"\r\n` +
         `Content-Type: application/octet-stream\r\n\r\n`;
     }
     const tail = `\r\n--${boundary}--\r\n`;
@@ -519,7 +530,7 @@ export class TelegramApi {
 
     for (let i = 0; i < photos.length; i++) {
       parts.push(Buffer.from(
-        `--${boundary}\r\nContent-Disposition: form-data; name="photo${i}"; filename="${photos[i]!.filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="photo${i}"; filename="${sanitizeMultipartFilename(photos[i]!.filename)}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
         "utf8",
       ));
       parts.push(Buffer.from(photos[i]!.contents));

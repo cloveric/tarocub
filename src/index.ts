@@ -117,8 +117,24 @@ async function main(): Promise<void> {
       });
     };
     process.on("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
+    // A stray promise rejection would otherwise terminate the long-running
+    // service (Node's default) with only an "exit" event recorded. Log it and
+    // keep running — losing one background task beats the whole bot dying,
+    // especially with no autostart to respawn it.
+    const unhandledRejectionHandler = (reason: unknown) => {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      logLifecycleEvent({
+        type: "process.unhandled_rejection",
+        instanceName,
+        outcome: "error",
+        detail: error.message,
+        metadata: { stack: error.stack },
+      });
+    };
+    process.on("unhandledRejection", unhandledRejectionHandler);
     removeUncaughtExceptionMonitor = () => {
       process.removeListener("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
+      process.removeListener("unhandledRejection", unhandledRejectionHandler);
     };
 
     const instanceLock = await acquireInstanceLock(serviceConfig.stateDir);
