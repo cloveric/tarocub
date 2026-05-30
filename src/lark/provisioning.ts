@@ -84,7 +84,7 @@ export async function provisionLarkApp(input: {
 
   if (before.unauthorizedScopes.length > 0) {
     input.logger?.log(`Requesting Lark admin approval for ${before.unauthorizedScopes.length} unauthorized scope(s).`);
-    const applyResult = await client.application.scope.apply();
+    const applyResult = await withLarkProvisioningTimeout(client.application.scope.apply());
     if (applyResult.code !== 0 && applyResult.code !== 212002 && applyResult.code !== 212004) {
       throw new Error(`Lark scope apply failed: ${applyResult.code ?? "unknown"} ${applyResult.msg ?? ""}`.trim());
     }
@@ -359,9 +359,34 @@ function uniqueSorted(values: string[]): string[] {
   return [...new Set(values)].sort();
 }
 
+/**
+ * The Lark SDK's default axios instance has no socket timeout, so a stalled
+ * network leaves provisioning/doctor hanging forever with no output. Bound every
+ * call so setup fails fast with an actionable message instead of appearing stuck.
+ */
+const PROVISIONING_API_TIMEOUT_MS = 20_000;
+
+export async function withLarkProvisioningTimeout<T>(promise: Promise<T>, timeoutMs = PROVISIONING_API_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s (Feishu API unreachable — check your network/VPN and retry)`)),
+      timeoutMs,
+    );
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 async function callLarkProvisioningApi<T extends { code?: number; msg?: string }>(call: () => Promise<T>, label: string): Promise<T> {
   try {
-    return await call();
+    return await withLarkProvisioningTimeout(call());
   } catch (error) {
     throw new Error(`${label} failed: ${describeLarkProvisioningError(error)}`);
   }

@@ -8,6 +8,9 @@ import { resolveLarkStateDir, writeLarkEnvFile } from "./env-file.js";
 import { formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "./provisioning.js";
 import type { LarkRuntimeEnv } from "./config.js";
 
+/** Max wait for the registration server to return a QR before failing fast. */
+const QR_HANDSHAKE_TIMEOUT_MS = 30_000;
+
 export interface LarkWizardLogger {
   log(message?: unknown, ...optionalParams: unknown[]): void;
 }
@@ -43,14 +46,26 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
   logger.log("Starting Feishu/Lark PersonalAgent registration wizard.");
   logger.log("Scan the QR code with the Feishu/Lark mobile app, then choose or create a PersonalAgent app.");
 
-  const result: LarkWizardRegisterAppResult = await register({
+  // The SDK's registration HTTP call has no socket timeout, so a blocked network
+  // hangs here forever before the QR ever appears. Guard only the handshake: if
+  // no QR within QR_HANDSHAKE_TIMEOUT_MS, abort and fail fast. Once the QR is up,
+  // let the scan wait run (bounded by the SDK's own ~10min QR expiry).
+  let qrReady = false;
+  const controller = new AbortController();
+  let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+  const registration = register({
     ...resolveLarkRegistrationDomains(env.LARK_DOMAIN),
     source: "tarocub",
+    signal: controller.signal,
     onQRCodeReady: (info) => {
+      qrReady = true;
+      if (handshakeTimer) {
+        clearTimeout(handshakeTimer);
+      }
       logger.log("");
       generateQRCode(info.url);
       logger.log("");
-      logger.log(`QR expires in about ${Math.max(1, Math.round(info.expireIn / 60))} minute(s).`);
+      logger.log(`QR expires in about ${Math.max(1, Math.round(info.expireIn / 60))} minute(s). Scan it with the Feishu/Lark app, or Ctrl-C to cancel.`);
       logger.log(`Open directly: ${info.url}`);
       logger.log("");
     },
@@ -62,6 +77,24 @@ export async function runLarkWizard(env: LarkRuntimeEnv, logger: LarkWizardLogge
       }
     },
   });
+  const handshakeGuard = new Promise<never>((_, reject) => {
+    handshakeTimer = setTimeout(() => {
+      if (!qrReady) {
+        controller.abort();
+        reject(new Error("Could not reach the Lark registration server (no QR within 30s). Check your network/VPN/proxy, then rerun the wizard."));
+      }
+    }, QR_HANDSHAKE_TIMEOUT_MS);
+    handshakeTimer.unref?.();
+  });
+
+  let result: LarkWizardRegisterAppResult;
+  try {
+    result = await Promise.race([registration, handshakeGuard]);
+  } finally {
+    if (handshakeTimer) {
+      clearTimeout(handshakeTimer);
+    }
+  }
 
   const tenantBrand = result.user_info?.tenant_brand;
   const domain = tenantBrand === "lark" ? "lark" : tenantBrand === "feishu" ? "feishu" : env.LARK_DOMAIN;

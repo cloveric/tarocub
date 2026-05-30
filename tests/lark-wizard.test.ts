@@ -95,6 +95,24 @@ describe("runLarkWizard", () => {
     }
   });
 
+  it("fails fast when the registration server never returns a QR (no infinite hang)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Registration that never resolves and never produces a QR (timeoutless socket).
+      const registerAppImpl = vi.fn(() => new Promise<never>(() => {}));
+      const promise = runLarkWizard(
+        { LARK_DOMAIN: "feishu" },
+        { log: () => undefined },
+        { registerAppImpl, generateQRCode: () => undefined, provisionApp: vi.fn(), initLarkCli: vi.fn() },
+      );
+      promise.catch(() => undefined); // avoid unhandled-rejection noise before we assert
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(promise).rejects.toThrow(/Could not reach the Lark registration server/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("prints lark-cli install guidance when wizard CLI binding cannot run", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-wizard-cli-missing-"));
     const stateDir = path.join(tempDir, "lark-state");

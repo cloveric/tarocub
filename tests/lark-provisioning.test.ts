@@ -9,8 +9,20 @@ import {
   formatLarkTenantScopeImportJson,
   inspectLarkAppProvisioning,
   provisionLarkApp,
+  withLarkProvisioningTimeout,
   type LarkProvisioningClient,
 } from "../src/lark/provisioning.js";
+
+describe("withLarkProvisioningTimeout", () => {
+  it("rejects a stalled Feishu call with an actionable message instead of hanging", async () => {
+    const stalled = new Promise<never>(() => {}); // never settles (timeoutless SDK socket)
+    await expect(withLarkProvisioningTimeout(stalled, 20)).rejects.toThrow(/timed out.*network/i);
+  });
+
+  it("passes a fast call straight through", async () => {
+    await expect(withLarkProvisioningTimeout(Promise.resolve("ok"), 1000)).resolves.toBe("ok");
+  });
+});
 
 describe("provisionLarkApp", () => {
   it("wraps SDK tenant token failures with the provisioning API label", async () => {
