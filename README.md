@@ -260,18 +260,11 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
-- **v0.1.40** — fixes Claude-generated image delivery for Lark by preserving intermediate `[send-image:...]` tags through both Claude adapters and falling back to file delivery if Feishu image sending fails.
-- **v0.1.39** — deepens Lark-native UX: streaming run cards, stop-capable queue wait cards, optional preempt/batch queue mode (off by default), richer telemetry metrics, `/config` access/workspace guidance, and `/ws` workspace profiles.
-- **v0.1.38** — sanitizes historical Lark `known-chats.json` entries on read so stale parent-group labels recorded from reply threads no longer mislead `/status`, `/config`, or dashboard.
-- **v0.1.37** — tightens Lark group/topic UX: ordinary group reply threads no longer pollute known-chat labels as topic sessions, and unauthorized Lark group replies now include `/invite group` / `/group allow` guidance.
-- **v0.1.36** — preserves existing Lark thread/topic sessions even when the platform later reports the chat mode as a plain group, preventing active group topics from appearing to forget prior context after restarts.
-- **v0.1.35** — hardens Lark service shutdown/restart handling so direct Node process stops happen before tmux cleanup and stale locks are less likely after interrupted service turns.
-- **v0.1.34** — adds Lark observability and control UX: optional telemetry adapters, Lark health/reconnect events, opt-in shared worker pooling, `/invite`/`/remove` access helpers, and known chat names in `/status`, `/config`, and `dashboard`.
-- **v0.1.0** — resets the public product to **TaroCub**, renames the GitHub/package surface, adds the product thesis to the banner, and keeps `cctb` plus old state paths as compatibility surfaces.
-- **v4.6.70** — transitional release that introduced the TaroCub family name before the full product reset.
-- **v4.6.69** — makes Lark setup more self-healing: when user OAuth is missing, setup now prints the recommended Docs/Drive/Sheets auth command, and the docs clarify that `user-default` no longer force-rebinds existing lark-cli sessions.
-- **v4.6.68** — deepens Lark-native reliability: safe running reactions, native @name resolution, card-to-text fallback, one-shot `lark setup`, clearer permission repair, and safer lark-cli binding that will not wipe user OAuth.
-- **v4.6.67** — closes a Lark runtime secret-boundary gap: runtime `lark-cli` child processes now get `LARK_CHANNEL=1` without inheriting `LARK_APP_SECRET`.
+- **v0.1.64** (current) — Lark topic isolation follows the group message form: 话题消息 isolates each topic into its own session, 对话消息 shares one group session. Switching the form takes effect within ~30s, no restart.
+- **Lark queue controls (v0.1.59–v0.1.61)** — stop the running task without cancelling the rest of the queue, and cancel an individual queued task from its own card.
+- **Lark run cards (v0.1.47–v0.1.58)** — one rich card interleaving streamed text and tools, throttled so fast tokens don't lag, a condensed panel when finished, and a Codex plan panel matching Claude's; oversized cards fall back to text instead of freezing.
+- **AskUserQuestion (v0.1.50–v0.1.55)** — rendered as a native Feishu form (single/multi-select, required fields) that becomes a read-only submitted card.
+- **v0.1.0** — public reset to **TaroCub**, with `cctb` and old state paths kept as compatibility surfaces.
 
 See [GitHub Releases](https://github.com/cloveric/tarocub/releases) for the full changelog.
 
