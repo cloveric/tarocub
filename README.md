@@ -213,6 +213,8 @@ Whether a Lark group isolates each topic into its own session follows the group'
 - A topic conversation key is `lark:<chat_id>:<thread_id>`; the shared group / 1:1 key is `lark:<chat_id>`. Isolation needs both the topic form **and** a `thread_id` on the message.
 - `chat_mode` alone cannot tell a toggled topic group (`chat_mode = group` + `group_message_type = thread`) from a plain conversation group, so `group_message_type` is the decisive signal.
 - `/invite group` and `/group allow` authorize the current group, not only the current thread. `/remove group` and `/group deny` remove the current group authorization.
+- **Group reply mode is per-group.** By default the bot replies in a group only when it is **@-mentioned**. `/group all` opts a single group into replying to ordinary (non-`@`) messages too — handy for a private, you-only project group — and needs the app's `im:message` + `im:message.group_msg` scopes. `/group at` returns that one group to mention-required, and `/group status` shows its current mode. These switches are per-group and never affect other groups.
+- **Access is still enforced per user** in groups: even under `/group all`, only an authorized user (paired, or on the allowlist) can drive the bot — a newly added member cannot. So when a private group gains other people, `/group at` is the clean lock: the bot then silently ignores every non-`@` message instead of replying.
 - `known-chats.json` is diagnostic metadata for `/status`, `/config`, and dashboard labels. It never decides routing or access by itself.
 
 Lark-native controls:
