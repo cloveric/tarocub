@@ -89,9 +89,30 @@ export class AccessStore {
     return this.store.read(createDefaultAccessState());
   }
 
+  /**
+   * Load for a mutation. If access.json is genuinely CORRUPT (bad JSON / invalid
+   * shape — not a transient I/O error), quarantine it and start from the safe
+   * default (pairing policy + empty allowlist = deny everyone, fail-closed) so a
+   * single bad write can't permanently brick both access AND the admin commands
+   * needed to repair it. Transient errors rethrow so the intact file is retried.
+   * The caller's own write persists the recovered state.
+   */
+  private async loadForWrite(): Promise<AccessState> {
+    try {
+      return await this.load();
+    } catch (error) {
+      if (!isRepairableAccessStateError(error)) {
+        throw error;
+      }
+      console.error(`Corrupt ${this.filePath}; quarantining and resetting access to deny-all (re-pair to restore):`, error instanceof Error ? error.message : error);
+      await this.store.quarantineCurrentFile("corrupt");
+      return createDefaultAccessState();
+    }
+  }
+
   async setPolicy(policy: AccessPolicy): Promise<void> {
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       state.policy = policy;
       await this.store.write(state);
     });
@@ -99,7 +120,7 @@ export class AccessStore {
 
   async setMultiChat(enabled: boolean): Promise<void> {
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       if (!enabled && countAuthorizedChats(state) > 1) {
         throw new Error("cannot disable multi-chat while multiple chats are authorized or pending pairing");
       }
@@ -110,7 +131,7 @@ export class AccessStore {
 
   async allowChat(chatId: number): Promise<void> {
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       if (findConflictingAuthorizedChatId(state, chatId) !== null) {
         throw new Error("instance is locked to another chat until multi-chat is enabled");
       }
@@ -121,7 +142,7 @@ export class AccessStore {
 
   async revokeChat(chatId: number): Promise<void> {
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       state.allowlist = state.allowlist.filter((entry) => entry !== chatId);
       state.pairedUsers = state.pairedUsers.filter((entry) => entry.telegramChatId !== chatId);
       state.pendingPairs = state.pendingPairs.filter((entry) => entry.telegramChatId !== chatId);
@@ -131,7 +152,7 @@ export class AccessStore {
 
   async allowUser(userId: number): Promise<void> {
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       state.allowlist = [...new Set([...state.allowlist, userId])];
       await this.store.write(state);
     });
@@ -139,7 +160,7 @@ export class AccessStore {
 
   async revokeUser(userId: number): Promise<void> {
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       state.allowlist = state.allowlist.filter((entry) => entry !== userId);
       state.pairedUsers = state.pairedUsers.filter((entry) => entry.telegramUserId !== userId);
       state.pendingPairs = state.pendingPairs.filter((entry) => entry.telegramUserId !== userId);
@@ -154,7 +175,7 @@ export class AccessStore {
     allowlist: number[];
     pendingPairs: { code: string; telegramChatId: number; expiresAt: string }[];
   }> {
-    const state = await this.load();
+    const state = await this.loadForWrite();
 
     return {
       multiChat: state.multiChat,
@@ -180,7 +201,7 @@ export class AccessStore {
   }): Promise<PendingPair> {
     let issued!: PendingPair;
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       const nowTime = now.getTime();
       state.pendingPairs = state.pendingPairs.filter(
         (pair) => new Date(pair.expiresAt).getTime() > nowTime,
@@ -228,7 +249,7 @@ export class AccessStore {
   async redeemPairingCode(code: string, now: Date): Promise<PairedUser | null> {
     let pairedUser: PairedUser | null = null;
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadForWrite();
       const pendingPair = state.pendingPairs.find((pair) => pair.code === code);
 
       if (!pendingPair) {
@@ -276,4 +297,13 @@ export class AccessStore {
     );
     return run;
   }
+}
+
+/** Corrupt-content errors (bad JSON / invalid shape) that quarantine-and-reset
+ * can recover from — as opposed to transient I/O errors, which must rethrow. */
+function isRepairableAccessStateError(error: unknown): boolean {
+  return (
+    error instanceof SyntaxError ||
+    (error instanceof Error && error.message === "invalid access state")
+  );
 }

@@ -106,7 +106,16 @@ function hasPairedPrivateUser(
   accessState: Awaited<ReturnType<AccessStoreLike["load"]>>,
   input: BridgeAccessInput,
 ): boolean {
-  return accessState.pairedUsers.some((user) => user.telegramUserId === input.userId);
+  // A pairing record binds (user, chat). Honor both dimensions so a paired user
+  // is authorized only in the chat they paired from. When multiChat is off there
+  // is at most one authorized chat (enforced by the chat lock), so matching only
+  // the user is already safe there; the chat match closes the gap once multiChat
+  // is enabled, without changing behavior for the default single-chat setup.
+  return accessState.pairedUsers.some(
+    (user) =>
+      user.telegramUserId === input.userId &&
+      (!accessState.multiChat || user.telegramChatId === input.chatId),
+  );
 }
 
 export class Bridge {

@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -43,19 +43,25 @@ describe("UsageStore", () => {
     }
   });
 
-  it("rejects non-object persisted usage state", async () => {
+  it("rejects (quarantines + resets) non-object persisted usage state", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new UsageStore(stateDir);
 
     try {
       await writeFile(path.join(stateDir, "usage.json"), "null\n", "utf8");
-      await expect(store.load()).rejects.toThrow("invalid usage state");
+      // Corrupt content is not accepted; it is quarantined and counters reset to
+      // zero so budget checks / recording keep working instead of throwing.
+      const recovered = await store.load();
+      expect(recovered.totalCostUsd).toBe(0);
+      expect(recovered.requestCount).toBe(0);
+      const files = await readdir(stateDir);
+      expect(files.some((f) => f.includes("usage.json.corrupt.") && f.endsWith(".bak"))).toBe(true);
     } finally {
       await removeTempRoot(stateDir);
     }
   });
 
-  it("rejects non-integer usage counters", async () => {
+  it("rejects (quarantines + resets) non-integer usage counters", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new UsageStore(stateDir);
 
@@ -73,7 +79,11 @@ describe("UsageStore", () => {
         "utf8",
       );
 
-      await expect(store.load()).rejects.toThrow("invalid usage state");
+      const recovered = await store.load();
+      expect(recovered.totalInputTokens).toBe(0); // bad fractional counter rejected, not accepted
+      expect(recovered.totalCostUsd).toBe(0);
+      const files = await readdir(stateDir);
+      expect(files.some((f) => f.includes("usage.json.corrupt.") && f.endsWith(".bak"))).toBe(true);
     } finally {
       await removeTempRoot(stateDir);
     }

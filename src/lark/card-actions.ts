@@ -7,7 +7,7 @@ import type {
   EngineApprovalRequest,
   EngineStreamEvent,
 } from "../codex/adapter.js";
-import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
+import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { prepareArchiveContinueWorkflow } from "../runtime/file-workflow.js";
 import { scanRecentAntigravityConversations, scanRecentClaudeSessions } from "../runtime/session-scanner.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
@@ -1157,6 +1157,19 @@ async function runLarkCardChoice(input: {
   const locale = await resolveLarkLocale(input.stateDir);
   const cfg = await loadInstanceConfig(input.stateDir);
   const workspaceOverride = resolveInstanceWorkspacePath(cfg);
+  // Enforce the spend budget before running the engine (parity with the
+  // message-turn and bus entry points).
+  const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+  if (budgetExhausted) {
+    await input.channel.send(input.chatId, { text: budgetExhausted.message }, larkReplyOptions(input.replyTo, input.replyInThread));
+    await appendLarkCardActionTurnEvent(input, {
+      type: "turn.completed",
+      action: "choice",
+      outcome: "noop",
+      detail: "budget exhausted",
+    });
+    return;
+  }
   await mkdir(requestOutputDir, { recursive: true });
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {
@@ -1315,6 +1328,19 @@ async function runLarkArchiveContinueCardAction(input: {
   const locale = await resolveLarkLocale(input.stateDir);
   const cfg = await loadInstanceConfig(input.stateDir);
   const workspaceOverride = resolveInstanceWorkspacePath(cfg);
+  // Enforce the spend budget before running the engine (parity with the
+  // message-turn and bus entry points).
+  const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+  if (budgetExhausted) {
+    await input.channel.send(input.chatId, { text: budgetExhausted.message }, larkReplyOptions(input.replyTo, input.replyInThread));
+    await appendLarkCardActionTurnEvent(input, {
+      type: "turn.completed",
+      action: "continue_archive",
+      outcome: "noop",
+      detail: "budget exhausted",
+    });
+    return;
+  }
   await mkdir(requestOutputDir, { recursive: true });
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {

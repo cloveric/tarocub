@@ -67,6 +67,14 @@ function addUnmeteredUsage(target: UsageRecord | UsageBucket, timestamp: string)
   target.lastUpdatedAt = timestamp;
 }
 
+/** Corrupt-content errors recoverable by quarantine+reset (vs transient I/O). */
+function isRepairableUsageStateError(error: unknown): boolean {
+  return (
+    error instanceof SyntaxError ||
+    (error instanceof Error && error.message === "invalid usage state")
+  );
+}
+
 export class UsageStore {
   private readonly store: JsonStore<UsageRecord>;
   private static pendingWrites = new Map<string, Promise<void>>();
@@ -85,7 +93,21 @@ export class UsageStore {
   }
 
   async load(): Promise<UsageRecord> {
-    return await this.store.read({ ...defaultUsage });
+    try {
+      return await this.store.read({ ...defaultUsage });
+    } catch (error) {
+      if (!isRepairableUsageStateError(error)) {
+        // Transient I/O error — rethrow so the intact file is retried rather
+        // than silently losing usage history.
+        throw error;
+      }
+      // Genuine corruption: quarantine and reset to zero so a single bad write
+      // doesn't crash every turn (checkBudgetAvailability calls load()) or wedge
+      // usage recording. Counters reset (history is lost — logged loudly).
+      console.error(`Corrupt ${this.filePath}; quarantining and resetting usage counters to zero:`, error instanceof Error ? error.message : error);
+      await this.store.quarantineCurrentFile("corrupt");
+      return { ...defaultUsage };
+    }
   }
 
   async record(turn: TurnUsage, now = new Date()): Promise<void> {

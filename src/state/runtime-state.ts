@@ -31,7 +31,22 @@ export class RuntimeStateStore {
   }
 
   async load(): Promise<RuntimeState> {
-    return this.store.read(createDefaultRuntimeState());
+    try {
+      return await this.store.read(createDefaultRuntimeState());
+    } catch (error) {
+      if (
+        !(error instanceof SyntaxError) &&
+        !(error instanceof Error && error.message === "invalid runtime state")
+      ) {
+        throw error; // transient I/O — retry the intact file
+      }
+      // Corruption: quarantine and reset so polling/turn-tracking can't wedge on
+      // a bad write. The update watermark resets (a few recent updates may be
+      // re-fetched; in-memory dedup guards against double-processing).
+      console.error(`Corrupt runtime state file; quarantining and resetting:`, error instanceof Error ? error.message : error);
+      await this.store.quarantineCurrentFile("corrupt");
+      return createDefaultRuntimeState();
+    }
   }
 
   async markHandledUpdateId(updateId: number): Promise<void> {

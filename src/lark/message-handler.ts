@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
-import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
+import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
@@ -862,6 +862,25 @@ async function runNormalizedLarkMessage(
       }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
+      });
+      return true;
+    }
+
+    // Enforce the spend budget before running the engine — parity with the
+    // Telegram and bus entry points, which both gate here. Without this the
+    // Lark channel only recorded usage after the fact and silently ignored the
+    // configured budgetUsd. Slash commands (handled above) are not gated.
+    const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+    if (budgetExhausted) {
+      await input.channel.send(normalized.chatId, { text: budgetExhausted.message }, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "turn.completed",
+        outcome: "noop",
+        detail: "budget exhausted",
+        metadata: { phase: "budget", budgetUsd: budgetExhausted.budgetUsd, totalCostUsd: budgetExhausted.usage.totalCostUsd },
       });
       return true;
     }
