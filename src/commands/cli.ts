@@ -73,6 +73,7 @@ import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
 import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSetting } from "../codex/user-defaults.js";
 import {
+  LARK_OPTIONAL_SCOPE_GROUPS,
   OPTIONAL_LARK_SCOPES,
   REQUIRED_LARK_SCOPES,
   formatLarkPermissionConsoleUrl,
@@ -2778,9 +2779,12 @@ async function runLarkCommand(
       "Lark required scopes JSON (core — auto-granted by the PersonalAgent QR registration; import only to recover a missing one):",
       formatLarkScopeImportJson(REQUIRED_LARK_SCOPES),
       "",
-      "Lark optional scopes JSON (advanced — import + publish ONLY to enable Sheets / ordinary group messages / doc auto-grant):",
-      formatLarkScopeImportJson(OPTIONAL_LARK_SCOPES),
-      "Paste either into Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
+      "Lark optional scopes (advanced — the QR registration auto-grants NONE of these; import a group + publish the app version ONLY to enable it):",
+      ...LARK_OPTIONAL_SCOPE_GROUPS.flatMap((group) => [
+        `  • ${group.label}:`,
+        `    ${formatLarkScopeImportJson(group.scopes)}`,
+      ]),
+      "Paste a group's JSON into Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
       ...formatLarkScopeImportNextSteps([...REQUIRED_LARK_SCOPES, ...OPTIONAL_LARK_SCOPES]),
     ].join("\n"));
     return true;

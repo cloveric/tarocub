@@ -25,21 +25,35 @@ export const REQUIRED_LARK_SCOPES = [
   "docs:document.comment:create",
 ] as const;
 
-// Advanced scopes that the PersonalAgent QR registration does NOT auto-grant.
-// They power opt-in features (ordinary group messages, Sheets, doc permission
-// granting, full chat management). Surfaced as optional — they do NOT block
-// setup; add them in the console only when you enable those features.
-export const OPTIONAL_LARK_SCOPES = [
-  "im:message",
-  "im:message.group_msg",
-  "im:chat",
-  "im:chat.members:read",
-  "docs:permission.member:create",
-  "sheets:spreadsheet:create",
-  "sheets:spreadsheet:read",
-  "sheets:spreadsheet:write_only",
-  "sheets:spreadsheet.meta:read",
-] as const;
+export interface LarkOptionalScopeGroup {
+  /** Stable id for the feature group. */
+  key: string;
+  /** Human label used in setup/doctor guidance. */
+  label: string;
+  /** Scopes to import (in the console) to enable the feature. */
+  scopes: readonly string[];
+}
+
+// Opt-in feature groups. Verified (2026-05-30) that the PersonalAgent QR
+// registration auto-grants NONE of these — each needs a one-time console scope
+// import + app-version publish. They never block setup; setup/doctor surface
+// each group with its own bulk-import JSON so you enable only what you want.
+export const LARK_OPTIONAL_SCOPE_GROUPS: readonly LarkOptionalScopeGroup[] = [
+  { key: "group-messages", label: "ordinary (non-@) group messages — /group all", scopes: ["im:message", "im:message.group_msg"] },
+  { key: "chat-admin", label: "broad group-message delivery + chat/member management", scopes: ["im:chat", "im:chat.members:read"] },
+  { key: "doc-autogrant", label: "auto-grant a created doc back to the requester", scopes: ["docs:permission.member:create"] },
+  { key: "sheets", label: "Feishu Sheets (spreadsheets)", scopes: ["sheets:spreadsheet:create", "sheets:spreadsheet:read", "sheets:spreadsheet:write_only", "sheets:spreadsheet.meta:read"] },
+  { key: "calendar", label: "Calendar (events + free/busy)", scopes: ["calendar:calendar:read", "calendar:calendar.event:read", "calendar:calendar.event:create", "calendar:calendar.event:update", "calendar:calendar.free_busy:read"] },
+  { key: "tasks", label: "Tasks & task lists", scopes: ["task:task:read", "task:task:write", "task:tasklist:read", "task:tasklist:write", "task:comment:write"] },
+  { key: "base", label: "Base / Bitable (tables, records, fields)", scopes: ["base:app:read", "base:table:read", "base:table:create", "base:record:read", "base:record:create", "base:record:update", "base:record:delete", "base:field:read", "base:field:create", "base:view:read"] },
+  { key: "meetings", label: "Video meetings & Minutes", scopes: ["vc:meeting.search:read", "vc:record:readonly", "vc:note:read", "minutes:minutes.search:read", "minutes:minutes.upload:write"] },
+  { key: "contact", label: "Contact lookup (name/email → user)", scopes: ["contact:user.base:readonly", "contact:user.basic_profile:readonly", "contact:user:search"] },
+  { key: "whiteboard", label: "Whiteboards", scopes: ["board:whiteboard:node:read", "board:whiteboard:node:create", "board:whiteboard:node:delete"] },
+  { key: "slides", label: "Slides / presentations", scopes: ["slides:presentation:read", "slides:presentation:create", "slides:presentation:update", "slides:presentation:write_only"] },
+  { key: "wiki", label: "Wiki spaces & nodes", scopes: ["wiki:node:read", "wiki:node:create", "wiki:node:update", "wiki:space:read"] },
+];
+
+export const OPTIONAL_LARK_SCOPES: readonly string[] = LARK_OPTIONAL_SCOPE_GROUPS.flatMap((group) => [...group.scopes]);
 
 export const REQUIRED_LARK_USER_SCOPES = [
   "im:chat:create_by_user",
@@ -170,31 +184,22 @@ export function formatLarkProvisioningResult(
     lines.push(...formatLarkScopeImportNextSteps(result.missingScopes, options));
   }
   if (result.missingOptionalScopes.length > 0) {
-    // Advanced, opt-in scopes the QR registration does NOT auto-grant. They are
-    // not required to run; surface them with a stable "Optional — " prefix so
-    // doctor renders them as info (never a blocking warning).
+    // Opt-in feature groups the QR registration does NOT auto-grant. Surface each
+    // group that has missing scopes with its own bulk-import JSON, all under a
+    // stable "Optional — " prefix so doctor renders them as info (never blocking).
     const optional: string[] = [
-      `scopes (advanced features, not required to run): ${result.missingOptionalScopes.join(", ")}`,
+      "advanced features below are opt-in (none are auto-granted by the QR registration). Import a group's scopes in the console + publish the app version ONLY to enable it:",
     ];
+    for (const group of LARK_OPTIONAL_SCOPE_GROUPS) {
+      const missing = group.scopes.filter((scope) => result.missingOptionalScopes.includes(scope));
+      if (missing.length > 0) {
+        optional.push(`${group.label}: ${formatLarkScopeImportJson(missing)}`);
+      }
+    }
     if (options.appId) {
-      optional.push(`permissions page (only if you want these): ${formatLarkPermissionConsoleUrl(options.appId, options.domain)}`);
+      optional.push(`permissions page (for any group above): ${formatLarkPermissionConsoleUrl(options.appId, options.domain)}`);
     }
-    optional.push(`bulk-import JSON (only if you want these): ${formatLarkScopeImportJson(result.missingOptionalScopes)}`);
-    if (result.missingOptionalScopes.includes("im:message.group_msg")) {
-      optional.push("to receive ordinary (non-@) group messages (/group all), add im:message.group_msg, publish the app version, then rerun lark provision.");
-    }
-    if (result.missingOptionalScopes.includes("im:message") || result.missingOptionalScopes.includes("im:chat")) {
-      optional.push("for broad group-message delivery and full chat management, add im:message and im:chat.");
-    }
-    if (result.missingOptionalScopes.includes("im:chat.members:read")) {
-      optional.push("to resolve @name mentions to native at-tags in groups, add im:chat.members:read.");
-    }
-    if (result.missingOptionalScopes.includes("docs:permission.member:create")) {
-      optional.push("to let created docs auto-grant back to the requester (instead of a Permission denied warning), add docs:permission.member:create.");
-    }
-    if (result.missingOptionalScopes.some((scope) => scope.startsWith("sheets:"))) {
-      optional.push("to enable Feishu Sheets workflows, add the sheets:spreadsheet:* scopes; for user-backed Sheets also run `node dist/src/index.js lark auth start --scope \"sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read\"`.");
-    }
+    optional.push("for user-backed Docs/Sheets/Calendar/etc., also run `node dist/src/index.js lark auth start --domain <domain>` and finish the device flow.");
     lines.push(...optional.map((line) => `Optional — ${line}`));
   }
   return lines;

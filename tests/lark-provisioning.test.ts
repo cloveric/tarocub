@@ -252,7 +252,7 @@ describe("provisionLarkApp", () => {
     expect(result.unauthorizedScopes).toEqual([]);
     expect(result.missingOptionalScopes).toEqual([...OPTIONAL_LARK_SCOPES]);
     expect(formatted).toContain("Lark required scopes: ok");
-    expect(formatted).toContain("Optional — scopes (advanced features, not required to run)");
+    expect(formatted).toContain("Optional — advanced features below are opt-in (none are auto-granted by the QR registration)");
   });
 
   it("reports a missing CORE scope as blocking", async () => {
@@ -269,7 +269,7 @@ describe("provisionLarkApp", () => {
     expect(formatLarkProvisioningResult(result).join("\n")).toContain("Core scopes not present in app config: im:resource");
   });
 
-  it("surfaces advanced scopes as optional, with a console link, JSON, and per-feature guidance", async () => {
+  it("surfaces advanced scopes as optional, grouped by feature, each with import JSON and a console link", async () => {
     const client = createProvisioningClientMock({
       scopes: grantAllRequiredScopes(),
       apps: [appProvisioning({ callbacks: [...REQUIRED_LARK_CALLBACKS], events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"] })],
@@ -283,15 +283,14 @@ describe("provisionLarkApp", () => {
     expect(result.missingOptionalScopes).toContain("sheets:spreadsheet:create");
     expect(result.missingOptionalScopes).toContain("docs:permission.member:create");
     // Surfaced as optional (info) — never blocking. Stable "Optional — " prefix.
-    expect(formatted).toContain("Optional — scopes (advanced features, not required to run)");
-    expect(formatted).toContain("Optional — permissions page (only if you want these): https://open.feishu.cn/app/cli_app/auth");
-    expect(formatted).toContain("Optional — bulk-import JSON (only if you want these):");
+    expect(formatted).toContain("Optional — advanced features below are opt-in (none are auto-granted by the QR registration)");
+    expect(formatted).toContain("Optional — permissions page (for any group above): https://open.feishu.cn/app/cli_app/auth");
+    // One grouped line per feature family, each carrying its own import JSON.
+    expect(formatted).toContain("Optional — ordinary (non-@) group messages — /group all:");
+    expect(formatted).toContain("Optional — Feishu Sheets (spreadsheets):");
+    expect(formatted).toContain("Optional — Calendar (events + free/busy):");
     expect(formatted).toContain("im:message.group_msg");
     expect(formatted).toContain("sheets:spreadsheet:create");
-    expect(formatted).toContain("Optional — to receive ordinary (non-@) group messages (/group all), add im:message.group_msg");
-    expect(formatted).toContain("Optional — to enable Feishu Sheets workflows");
-    expect(formatted).toContain("Optional — to resolve @name mentions to native at-tags");
-    expect(formatted).toContain("Optional — to let created docs auto-grant back to the requester");
     // A fresh app's core scopes are still "ok".
     expect(formatted).toContain("Lark required scopes: ok");
   });
