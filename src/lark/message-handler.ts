@@ -333,6 +333,13 @@ async function runAcceptedLarkMessage(
   }
 
   const handleConversationQueueWait = async (event: ChatQueueWaitEvent): Promise<void> => {
+    // If the user already cancelled this queued task from its card, do not
+    // re-render a "queued" wait card. The cancel tap terminalizes the card to
+    // "cancelled"; a wait notification that fires just after (in-flight) would
+    // otherwise overwrite it back to "queued" — the reported flicker-then-revert.
+    if (input.runtime.cancelledQueueTaskIds.has(normalized.messageId)) {
+      return;
+    }
     await appendLarkTimelineEvent(input.stateDir, normalized, {
       type: "engine.lock.waiting",
       detail: "waiting for Lark conversation queue",

@@ -7831,6 +7831,43 @@ describe("lark service", () => {
     }
   });
 
+  it("does not render a wait card for a task already cancelled from its card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-wait-cancelled-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.cancelledQueueTaskIds.add("om_waiting_cancelled"); // user already tapped "cancel queue"
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: string }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({ chatId: "lark:oc_chat", waitedMs: 10_500, reason: "conversation_queue" });
+        return await job();
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const channel = fakeChannel();
+    const bridge = { handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })) };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_waiting_cancelled", content: "hello" }),
+      });
+      // The cancelled task's wait notification must be suppressed — otherwise it
+      // would overwrite the "cancelled" card back to "queued" (flicker-then-revert).
+      // (updateCard may still be used by the run card; only the queue-wait render
+      // must be skipped, which the guard does before any card/timeline work.)
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("取消此排队任务");
+      const timelineRaw = await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8").catch(() => "");
+      expect(timelineRaw).not.toContain("waiting for Lark conversation queue");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("continues an already queued Lark message after the active engine turn fails", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-after-error-"));
     const runtime = createLarkServiceRuntime();
