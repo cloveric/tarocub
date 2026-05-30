@@ -1160,7 +1160,15 @@ async function createLarkRunCardController(input: {
     updateTimer = undefined;
     void enqueuePatch(update);
   };
+  // Leading edge: the very first live update fires immediately so the card
+  // shows progress without waiting a full throttle interval; the rest coalesce.
+  let firstLiveUpdateDone = false;
   const scheduleUpdate = (): void => {
+    if (!firstLiveUpdateDone) {
+      firstLiveUpdateDone = true;
+      void enqueuePatch(update);
+      return;
+    }
     if (updateTimer) {
       return;
     }

@@ -91,6 +91,39 @@ describe("lark card renderer", () => {
     expect(body).toContain("Read");
   });
 
+  it("renders a TodoWrite tool as a checklist with progress", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, {
+      type: "tool_use", toolName: "TodoWrite", toolUseId: "t1",
+      toolInput: { todos: [
+        { content: "Read the code", status: "completed", activeForm: "Reading the code" },
+        { content: "Write tests", status: "in_progress", activeForm: "Writing tests" },
+        { content: "Ship it", status: "pending", activeForm: "Shipping it" },
+      ] },
+    });
+    const serialized = JSON.stringify(renderLarkRunCard(state));
+    expect(serialized).toContain("✅ Read the code");   // completed
+    expect(serialized).toContain("Writing tests");        // in-progress shows activeForm
+    expect(serialized).toContain("⬜ Ship it");           // pending
+    expect(serialized).toContain("1/3");                  // header progress (1 of 3 done)
+  });
+
+  it("renders MCP tool names as a friendly 'server · tool'", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "mcp__chrome-devtools__click", toolInput: {}, toolUseId: "t1" });
+    const serialized = JSON.stringify(renderLarkRunCard(state));
+    expect(serialized).toContain("chrome-devtools · click");
+    expect(serialized).not.toContain("mcp__chrome-devtools__click");
+  });
+
+  it("annotates multi-line tool output with a line count", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolInput: { command: "ls" }, toolUseId: "t1" });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t1", output: "a\nb\nc" });
+    const serialized = JSON.stringify(renderLarkRunCard(state));
+    expect(serialized).toContain("3 行");
+  });
+
   it("does not render a duplicate permission_request block for AskUserQuestion", () => {
     let state = initialLarkRunState("lark:oc_chat");
     // Claude emits the assistant tool_use block (carries an id, resolves via

@@ -250,6 +250,10 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
         body: state.reasoning.content,
       }));
     }
+    const livePlan = todoPlanPanel(state.blocks, labels, true);
+    if (livePlan) {
+      elements.push(livePlan);
+    }
     for (const group of groupBlocks(state.blocks)) {
       if (group.kind === "text") {
         const cleaned = cleanCardText(group.content);
@@ -269,6 +273,10 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     const answer = cleanCardText(finalAnswerText(state));
     if (answer) {
       elements.push(markdownElement(truncate(answer, COMPACT_ANSWER_MAX)));
+    }
+    const donePlan = todoPlanPanel(state.blocks, labels, false);
+    if (donePlan) {
+      elements.push(donePlan);
     }
     const processPanel = condensedProcessPanel(state, labels);
     if (processPanel) {
@@ -356,6 +364,10 @@ function condensedProcessPanel(
   let answerSkipped = false;
   for (const block of state.blocks) {
     if (block.kind === "tool") {
+      // TodoWrite shows as the dedicated plan panel, not in the process list.
+      if (block.tool.toolName === "TodoWrite") {
+        continue;
+      }
       toolCount += 1;
       parts.push(`- ${toolHeaderText(block.tool)}`);
       continue;
@@ -434,6 +446,10 @@ function* groupBlocks(blocks: LarkRunBlock[]): Generator<ToolGroup | TextGroup> 
   let toolBuf: LarkToolEntry[] = [];
   for (const block of blocks) {
     if (block.kind === "tool") {
+      // TodoWrite is surfaced as the dedicated plan panel, not the tool list.
+      if (block.tool.toolName === "TodoWrite") {
+        continue;
+      }
       toolBuf.push(block.tool);
       continue;
     }
@@ -500,11 +516,32 @@ function collapsedToolSummary(
 
 function toolHeaderText(tool: LarkToolEntry): string {
   const icon = tool.status === "done" ? "✅" : tool.status === "error" ? "❌" : "⏳";
+  const display = formatToolName(tool.toolName);
   const summary = summarizeToolInput(tool.toolName, tool.toolInput);
-  return summary ? `${icon} **${tool.toolName}** — ${summary}` : `${icon} **${tool.toolName}**`;
+  return summary ? `${icon} **${display}** — ${summary}` : `${icon} **${display}**`;
+}
+
+/** MCP tools arrive as `mcp__server__tool`; show them as a readable "🔌 server · tool". */
+function formatToolName(name: string): string {
+  if (!name.startsWith("mcp__")) {
+    return name;
+  }
+  const rest = name.slice("mcp__".length);
+  const sep = rest.indexOf("__");
+  if (sep > 0) {
+    const server = rest.slice(0, sep).replace(/_/g, " ");
+    const tool = rest.slice(sep + 2);
+    return `🔌 ${server} · ${tool}`;
+  }
+  return `🔌 ${rest.replace(/__/g, " · ")}`;
 }
 
 function toolBodyMd(tool: LarkToolEntry, labels: ReturnType<typeof runCardLabels>): string {
+  // TodoWrite is Claude's plan/checklist — render it as ☐/✅ items, not a raw
+  // JSON dump or a useless "todos updated" output.
+  if (tool.toolName === "TodoWrite") {
+    return renderTodoList(tool.toolInput) || `_${labels.noOutput}_`;
+  }
   const parts: string[] = [];
   const inputMd = renderToolInput(tool);
   if (inputMd) {
@@ -512,9 +549,13 @@ function toolBodyMd(tool: LarkToolEntry, labels: ReturnType<typeof runCardLabels
   }
   if (tool.output && tool.output.trim()) {
     const out = truncate(tool.output, TOOL_OUTPUT_MAX);
+    // Annotate the output with its line count (computed from the full output,
+    // so it stays accurate even when the shown block is truncated).
+    const lineCount = tool.output.replace(/\n+$/, "").split("\n").length;
+    const meta = lineCount > 1 ? ` · ${labels.outputLines(lineCount)}` : "";
     parts.push(tool.status === "error"
-      ? `**Error**\n\`\`\`\n${out}\n\`\`\``
-      : `**Output**\n\`\`\`\n${out}\n\`\`\``);
+      ? `**Error**${meta}\n\`\`\`\n${out}\n\`\`\``
+      : `**Output**${meta}\n\`\`\`\n${out}\n\`\`\``);
   } else if (tool.status === "running") {
     parts.push(`_${labels.toolRunning}_`);
   }
@@ -523,6 +564,65 @@ function toolBodyMd(tool: LarkToolEntry, labels: ReturnType<typeof runCardLabels
     return body;
   }
   return `${body.slice(0, TOOL_BODY_TOTAL_MAX)}…`;
+}
+
+/** The dedicated plan panel showing the latest TodoWrite checklist (always visible). */
+function todoPlanPanel(
+  blocks: LarkRunBlock[],
+  labels: ReturnType<typeof runCardLabels>,
+  expanded: boolean,
+): Record<string, unknown> | undefined {
+  let input: unknown;
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const block = blocks[i]!;
+    if (block.kind === "tool" && block.tool.toolName === "TodoWrite") {
+      input = block.tool.toolInput;
+      break;
+    }
+  }
+  if (input === undefined) {
+    return undefined;
+  }
+  const list = renderTodoList(input);
+  if (!list) {
+    return undefined;
+  }
+  const todos = Array.isArray((input as Record<string, unknown>).todos) ? (input as Record<string, unknown>).todos as unknown[] : [];
+  const done = todos.filter((todo) => todo && typeof todo === "object" && (todo as Record<string, unknown>).status === "completed").length;
+  return collapsiblePanel({
+    title: `${labels.plan} · ${done}/${todos.length}`,
+    expanded,
+    color: "grey",
+    body: list,
+  });
+}
+
+/** Render a TodoWrite todo list as a checklist (read-only display of Claude's plan). */
+function renderTodoList(input: unknown): string {
+  if (!input || typeof input !== "object") {
+    return "";
+  }
+  const raw = (input as Record<string, unknown>).todos;
+  const todos = Array.isArray(raw) ? raw : [];
+  const lines = todos
+    .map((entry) => {
+      const todo = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+      const status = typeof todo.status === "string" ? todo.status : "pending";
+      const content = typeof todo.content === "string" ? todo.content.trim() : "";
+      const active = typeof todo.activeForm === "string" ? todo.activeForm.trim() : "";
+      if (!content && !active) {
+        return "";
+      }
+      if (status === "completed") {
+        return `✅ ${content}`;
+      }
+      if (status === "in_progress") {
+        return `🔄 **${active || content}**`;
+      }
+      return `⬜ ${content}`;
+    })
+    .filter((line) => line.length > 0);
+  return lines.join("\n");
 }
 
 function summarizeToolInput(name: string, input: unknown): string {
@@ -560,6 +660,11 @@ function summarizeToolInput(name: string, input: unknown): string {
     case "Agent":
     case "Task":
       return pick("description") || pick("subagent_type");
+    case "TodoWrite": {
+      const todos = Array.isArray(rec.todos) ? rec.todos as unknown[] : [];
+      const done = todos.filter((todo) => todo && typeof todo === "object" && (todo as Record<string, unknown>).status === "completed").length;
+      return todos.length > 0 ? `${done}/${todos.length}` : "";
+    }
     default:
       return pick("command") || pick("file_path") || pick("path") || pick("query");
   }
@@ -652,6 +757,8 @@ function runCardLabels(locale: Locale): {
   tools: string;
   process: string;
   processSteps: (n: number) => string;
+  outputLines: (n: number) => string;
+  plan: string;
   noOutput: string;
   toolRunning: string;
   background: string;
@@ -675,6 +782,8 @@ function runCardLabels(locale: Locale): {
       tools: "Tool calls",
       process: "Process",
       processSteps: (n) => `${n} step${n === 1 ? "" : "s"}`,
+      outputLines: (n) => `${n} line${n === 1 ? "" : "s"}`,
+      plan: "📋 Plan",
       noOutput: "no output",
       toolRunning: "running…",
       background: "Background",
@@ -697,6 +806,8 @@ function runCardLabels(locale: Locale): {
       tools: "工具调用",
       process: "过程",
       processSteps: (n) => `${n} 步`,
+      outputLines: (n) => `${n} 行`,
+      plan: "📋 计划",
       noOutput: "无输出",
       toolRunning: "运行中…",
       background: "后台任务",
