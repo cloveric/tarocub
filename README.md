@@ -260,7 +260,8 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
-- **v0.1.68** (current) — Lark run cards no longer freeze on a long answer (Feishu element-limit 11310); they always reach a terminal state and the answer is delivered once. Earlier in this line: topic isolation follows the group message form (topic-message groups isolate each topic, conversation groups share one session), minimal zero-console bot setup, and bounded setup network calls.
+- **v0.1.69** (current) — Optional Lark scopes are now organized into 12 opt-in feature groups (ordinary group messages, chat admin, doc auto-grant, Sheets, Calendar, Tasks, Base/Bitable, VC/Minutes, Contact, Whiteboards, Slides, Wiki); `lark permissions` and provisioning surface each family with its own bulk-import JSON. The QR registration auto-grants none of them — only messaging, cards, and Docs/Drive are zero-console.
+- **v0.1.68** — Lark run cards no longer freeze on a long answer (Feishu element-limit 11310); they always reach a terminal state and the answer is delivered once. Earlier in this line: topic isolation follows the group message form (topic-message groups isolate each topic, conversation groups share one session), minimal zero-console bot setup, and bounded setup network calls.
 - **Lark queue controls (v0.1.59–v0.1.61)** — stop the running task without cancelling the rest of the queue, and cancel an individual queued task from its own card.
 - **Lark run cards (v0.1.47–v0.1.58)** — one rich card interleaving streamed text and tools, throttled so fast tokens don't lag, a condensed panel when finished, and a Codex plan panel matching Claude's; oversized cards fall back to text instead of freezing.
 - **AskUserQuestion (v0.1.50–v0.1.55)** — rendered as a native Feishu form (single/multi-select, required fields) that becomes a read-only submitted card.
