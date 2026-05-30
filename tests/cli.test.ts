@@ -1920,6 +1920,40 @@ describe("runCli", () => {
     }
   });
 
+  it("parses lark-cli OAuth output even when wrapped in a banner and a trailing notice", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-auth-decorated-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async () => ({
+      stdout: [
+        "lark-cli v1.0.41",
+        JSON.stringify({ verification_url: "https://open.feishu.cn/device", device_code: "device-999", user_code: "WXYZ", expires_in: 600 }),
+        "Notice: a new version is available. Run `lark-cli update`.",
+      ].join("\n"),
+      stderr: "",
+    }));
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        ['LARK_APP_ID="cli_x"', 'LARK_APP_SECRET="secret-from-file"', `CCTB_LARK_STATE_DIR="${stateDir}"`, 'LARK_DOMAIN="feishu"', ""].join("\n"),
+      );
+      const handled = await runCli(["lark", "auth", "start", "--recommend", "--domain", "docs,drive"], {
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+      } as Parameters<typeof runCli>[1] & { larkRunCommand: typeof runCommand });
+
+      expect(handled).toBe(true);
+      const output = messages.join("\n");
+      expect(output).toContain("Lark OAuth started.");
+      expect(output).toContain("Device code: device-999");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("runs an aggregate Lark setup flow without leaking the app secret", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-setup-"));
     const stateDir = path.join(tempDir, "lark-state");
@@ -2229,6 +2263,82 @@ describe("runCli", () => {
       expect(output).toContain("service: skipped (fix Lark permissions first)");
       expect(output).toContain('"im:message.group_msg"');
       expect(output).not.toContain("secret-from-file");
+      // Up-front context + a single consolidated next-steps block.
+      expect(output).toContain(`State dir: ${stateDir}`);
+      expect(output).toContain("Next steps to finish setup:");
+      expect(output).toContain("Publish the app version");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("fails Lark setup --skip-wizard fast with guidance when no credentials are saved", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-setup-no-creds-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const runCommand = vi.fn(async () => ({ stdout: "ok\n", stderr: "" }));
+
+    try {
+      await mkdir(stateDir, { recursive: true }); // no lark.env → no credentials
+      await expect(runCli(["lark", "setup", "--skip-wizard", "--skip-auth"], {
+        env: { HOME: tempDir, USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: () => undefined },
+        larkRunCommand: runCommand,
+      } as Parameters<typeof runCli>[1] & { larkRunCommand: typeof runCommand })).rejects.toThrow(/No saved Lark credentials/);
+      expect(runCommand).not.toHaveBeenCalled(); // bailed before the lark-cli bind step
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("keeps Lark setup going (doctor + summary) when provisioning throws", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-setup-provision-throws-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async () => ({ stdout: "ok\n", stderr: "" }));
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const provisioning = {
+      grantedScopes: ["im:message:send_as_bot"],
+      missingScopes: ["im:message.group_msg"],
+      unauthorizedScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: ["application:application", "admin:app.category:update"],
+      applied: false,
+      patchedSubscriptions: false,
+    };
+    const provisionApp = vi.fn(async () => {
+      throw new Error("Lark scope list failed: timed out after 20s (Feishu API unreachable — check your network/VPN and retry)");
+    });
+    const inspectApp = vi.fn(async () => provisioning);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        ['LARK_APP_ID="cli_x"', 'LARK_APP_SECRET="secret-xyz"', `CCTB_LARK_STATE_DIR="${stateDir}"`, 'LARK_DOMAIN="feishu"', ""].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "setup", "--skip-wizard", "--skip-auth", "--start-service"], {
+        env: { HOME: tempDir, USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+        larkProvisionApp: provisionApp,
+        larkInspectApp: inspectApp,
+        larkServiceDeps: { start, waitUntilRunning },
+      } as Parameters<typeof runCli>[1] & { larkRunCommand: typeof runCommand });
+
+      expect(handled).toBe(true); // a provisioning failure must NOT abort the run
+      const output = messages.join("\n");
+      expect(output).toContain("provision: failed");
+      expect(output).toContain("doctor: attention needed"); // doctor still ran
+      expect(output).toContain("service: skipped (fix Lark permissions first)");
+      expect(start).not.toHaveBeenCalled();
+      expect(output).not.toContain("secret-xyz");
     } finally {
       await removeTempRoot(tempDir);
     }

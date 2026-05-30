@@ -818,8 +818,20 @@ async function runLarkCommandProcess(input: LarkRunCommandInput): Promise<{ stdo
       }
       resolve({ stdout, stderr });
     };
-    const timer = setTimeout(() => {
+    // Escalate to SIGKILL if a wedged child ignores SIGTERM, so it can't linger
+    // as an orphan after we've already rejected the parent promise.
+    const terminateChild = () => {
       child.kill("SIGTERM");
+      setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // child already gone
+        }
+      }, 2_000).unref?.();
+    };
+    const timer = setTimeout(() => {
+      terminateChild();
       finish(new Error(`${input.file} ${input.args.join(" ")} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     const append = (target: "stdout" | "stderr", chunk: Buffer) => {
@@ -829,7 +841,7 @@ async function runLarkCommandProcess(input: LarkRunCommandInput): Promise<{ stdo
         stderr += chunk.toString("utf8");
       }
       if (stdout.length + stderr.length > maxBuffer) {
-        child.kill("SIGTERM");
+        terminateChild();
         finish(new Error(`${input.file} ${input.args.join(" ")} exceeded output limit`));
       }
     };
@@ -1340,6 +1352,7 @@ function formatLarkOAuthStartResult(stdout: string): string {
     `Device code: ${parsed.device_code}`,
     ...(typeof parsed.expires_in === "number" ? [`Expires in: ${parsed.expires_in}s`] : []),
     `Finish: node dist/src/index.js lark auth finish ${parsed.device_code}`,
+    "(approve in the browser first; `auth finish` then waits for your approval, up to ~11 min.)",
   ].join("\n");
 }
 
@@ -1348,12 +1361,49 @@ function parseJsonFromPossiblyDecoratedOutput(output: string): unknown {
   try {
     return JSON.parse(trimmed) as unknown;
   } catch {
-    const firstBrace = trimmed.indexOf("{");
-    if (firstBrace !== -1) {
-      return JSON.parse(trimmed.slice(firstBrace)) as unknown;
+    // lark-cli may wrap the JSON in a leading banner and/or a trailing `_notice`
+    // line. Extract the first balanced {...} block instead of slicing to the end,
+    // which would re-include a trailing notice and fail to parse.
+    const block = extractFirstJsonObject(trimmed);
+    if (block) {
+      return JSON.parse(block) as unknown;
     }
   }
   throw new Error("Expected JSON output from lark-cli");
+}
+
+function extractFirstJsonObject(text: string): string | undefined {
+  const start = text.indexOf("{");
+  if (start === -1) {
+    return undefined;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return undefined;
 }
 
 function resolveLarkServiceLogPath(stateDir: string): string {
@@ -2790,13 +2840,32 @@ async function runLarkSetupCommand(
       `tmux session: ${sessionName}`,
       `Log: ${logPath}`,
       ...(setupUrl ? [`Open directly: ${setupUrl}`] : ["Open link: pending; tail the log until the QR link appears."]),
+      `Watch: tmux attach -t ${sessionName}   |   Cancel: tmux kill-session -t ${sessionName}`,
       "The setup process will keep polling after this chat turn ends, then start the Lark service when setup completes.",
     ].join("\n"));
     return true;
   }
 
+  // Tell the user where things live up front, so a long step never looks frozen
+  // with no idea where to check.
+  const foregroundStateDir = resolveLarkStateDir(targetEnv);
+  logger.log([
+    `Setting up Lark (instance ${resolveLarkInstanceName(targetEnv)}).`,
+    `State dir: ${foregroundStateDir}`,
+    `Service log (after start): ${resolveLarkServiceLogPath(foregroundStateDir)}`,
+  ].join("\n"));
+
   let setupEnv = targetEnv;
   if (options.skipWizard) {
+    // No wizard means credentials must already be saved. Fail early and clearly
+    // here rather than deep inside the lark-cli bind step with "LARK_APP_ID is
+    // required".
+    const existing = await loadLarkRuntimeEnv(setupEnv);
+    if (!existing.LARK_APP_ID || !existing.LARK_APP_SECRET) {
+      throw new Error(
+        "No saved Lark credentials found. Run `node dist/src/index.js lark setup` without --skip-wizard to register an app, or set LARK_APP_ID and LARK_APP_SECRET first.",
+      );
+    }
     summary.push("wizard: skipped");
   } else {
     await runLarkWizard(targetEnv, logger);
@@ -2804,6 +2873,7 @@ async function runLarkSetupCommand(
     summary.push("wizard: ok");
   }
 
+  logger.log("Binding lark-cli to the bridge credentials…");
   await ensureLarkCliAvailable({
     install: options.installCli,
     logger,
@@ -2815,20 +2885,25 @@ async function runLarkSetupCommand(
   let loadedEnv = await loadLarkRuntimeEnv(setupEnv);
   let provisioningNeedsAttention = false;
   if (!options.skipProvision) {
-    if (!loadedEnv.LARK_APP_ID) {
-      throw new Error("LARK_APP_ID is required");
+    if (!loadedEnv.LARK_APP_ID || !loadedEnv.LARK_APP_SECRET) {
+      throw new Error("LARK_APP_ID and LARK_APP_SECRET are required for provisioning");
     }
-    if (!loadedEnv.LARK_APP_SECRET) {
-      throw new Error("LARK_APP_SECRET is required");
+    logger.log("Provisioning Lark app permissions (contacting the Lark API)…");
+    try {
+      const provisioning = await (deps.provisionApp ?? provisionLarkApp)({
+        appId: loadedEnv.LARK_APP_ID,
+        appSecret: loadedEnv.LARK_APP_SECRET,
+        ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
+        logger,
+      });
+      provisioningNeedsAttention = provisioning.missingScopes.length > 0 || provisioning.unauthorizedScopes.length > 0;
+      summary.push(`provision: ${provisioningNeedsAttention ? "attention needed" : "ok"}`);
+    } catch (error) {
+      // A provisioning failure must not abort the whole run (and lose the doctor
+      // summary + next steps), the way auth already degrades gracefully.
+      provisioningNeedsAttention = true;
+      summary.push(`provision: failed (${redactLarkSensitiveText(renderCommandError(error))})`);
     }
-    const provisioning = await (deps.provisionApp ?? provisionLarkApp)({
-      appId: loadedEnv.LARK_APP_ID,
-      appSecret: loadedEnv.LARK_APP_SECRET,
-      ...(loadedEnv.LARK_DOMAIN ? { domain: loadedEnv.LARK_DOMAIN } : {}),
-      logger,
-    });
-    provisioningNeedsAttention = provisioning.missingScopes.length > 0 || provisioning.unauthorizedScopes.length > 0;
-    summary.push(`provision: ${provisioningNeedsAttention ? "attention needed" : "ok"}`);
   } else {
     summary.push("provision: skipped");
   }
@@ -2837,6 +2912,7 @@ async function runLarkSetupCommand(
   let authSummary = "auth: skipped";
   const authNextSteps: string[] = [];
   if (!options.skipAuth) {
+    logger.log("Verifying Lark user authorization…");
     try {
       const context = await prepareLarkCliBridgeContext(loadedEnv);
       await deps.runCommand({
@@ -2857,6 +2933,7 @@ async function runLarkSetupCommand(
   summary.push(authSummary);
   summary.push(...authNextSteps);
 
+  logger.log("Running Lark doctor…");
   const doctor = await formatLarkDoctor(loadedEnv, deps.inspectApp ?? inspectLarkAppProvisioning);
   const doctorNeedsAttention = hasActionableLarkDoctorProblem(doctor);
   summary.push(doctorNeedsAttention ? "doctor: attention needed" : "doctor: ok");
@@ -2865,19 +2942,39 @@ async function runLarkSetupCommand(
     if (provisioningNeedsAttention || doctorNeedsAttention) {
       summary.push("service: skipped (fix Lark permissions first)");
     } else {
+      logger.log("Starting Lark service…");
       const serviceResult = await startLarkServiceFromSetup(loadedEnv, deps.service);
       summary.push(`service: ${serviceResult === "already_running" ? "already running" : "started"}`);
     }
   } else {
     summary.push("service: skipped");
   }
+  const nextSteps = buildLarkSetupNextSteps(provisioningNeedsAttention || doctorNeedsAttention);
   logger.log([
     "Lark setup complete.",
     ...summary.map((line) => `- ${line}`),
     "",
     doctor,
+    ...(nextSteps.length > 0 ? ["", ...nextSteps] : []),
   ].join("\n"));
   return true;
+}
+
+/**
+ * One consolidated "do these, then rerun" block when setup ends without a
+ * running service, so the operator isn't left guessing among scattered scope
+ * lines. The console URL + missing-scope JSON are already in the doctor output.
+ */
+function buildLarkSetupNextSteps(needsAttention: boolean): string[] {
+  if (!needsAttention) {
+    return [];
+  }
+  return [
+    "Next steps to finish setup:",
+    "1) Open the permission console URL shown above and bulk-import the missing scopes JSON.",
+    "2) Publish the app version — scopes do not take effect until the version is published/approved.",
+    "3) Rerun: node dist/src/index.js lark provision && node dist/src/index.js lark doctor && node dist/src/index.js lark service start",
+  ];
 }
 
 const RECOMMENDED_LARK_USER_AUTH_START_COMMAND = 'node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"';
