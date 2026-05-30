@@ -1362,7 +1362,7 @@ describe("CodexAppServerAdapter", () => {
     await expect(promise).rejects.toThrow("unexpected status 401 Unauthorized");
   });
 
-  it("times out an in-flight turn that never completes and restarts cleanly", async () => {
+  it("times out an in-flight turn that never completes without killing the shared child", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter(
       "codex",
@@ -1387,7 +1387,10 @@ describe("CodexAppServerAdapter", () => {
     await waitFor(() => child.stdin.lines.length >= 3);
 
     await expect(promise).rejects.toThrow("Codex app-server turn timed out");
-    expect(child.killCalls).toBe(1);
+    // Thread-scoped (H4): the timed-out turn rejects, but the SHARED child is not
+    // killed so other concurrent conversations keep running. A genuinely wedged
+    // child is still caught by the next thread/resume|read request timeout.
+    expect(child.killCalls).toBe(0);
   });
 
   it("aborts an idle app-server turn at the inactivity interval so queues can continue", async () => {
@@ -1416,7 +1419,9 @@ describe("CodexAppServerAdapter", () => {
     await waitFor(() => child.stdin.lines.length >= 3);
 
     await expect(promise).rejects.toThrow("Codex app-server turn became inactive after 1 minutes");
-    expect(child.killCalls).toBe(1);
+    // Thread-scoped (H4): rejecting the inactive turn lets this conversation's
+    // queue continue without killing the shared child / other live turns.
+    expect(child.killCalls).toBe(0);
   });
 
   it("uses a dedicated thread/read timeout after turn/completed instead of the inactivity watchdog", async () => {
@@ -1574,7 +1579,9 @@ describe("CodexAppServerAdapter", () => {
 
     await expect(promise).rejects.toThrow(/trustd: ocsp responder failed/);
     await expect(promise).rejects.toThrow(/non-json diagnostic line/);
-    expect(child.killCalls).toBe(1);
+    // Thread-scoped (H4): the rejection still carries diagnostics, but the shared
+    // child is not killed on a per-turn timeout.
+    expect(child.killCalls).toBe(0);
   });
 
   it("includes app-server protocol state in hard timeout failures after idle intervals", async () => {
@@ -1609,7 +1616,9 @@ describe("CodexAppServerAdapter", () => {
     await expect(promise).rejects.toThrow(/last notification: none/);
     await expect(promise).rejects.toThrow(/last turn activity: none/);
     await expect(promise).rejects.toThrow(/pending requests: id=3 method=turn\/start threadId=thread-123/);
-    expect(child.killCalls).toBe(1);
+    // Thread-scoped (H4): per-turn timeout rejects with full protocol state but
+    // does not kill the shared child.
+    expect(child.killCalls).toBe(0);
   });
 
   it("drops oversized non-JSON stdout diagnostics without killing the app-server turn", async () => {

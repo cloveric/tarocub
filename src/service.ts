@@ -636,8 +636,14 @@ async function migrateClaudeEngineHomeIfPresent(
  */
 function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
   const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  // Strip the bridge's own secrets so the model-controlled engine child (and any
+  // tool/MCP it runs) can't read them. We keep engine cloud creds (ANTHROPIC_API_KEY
+  // etc.) and the CCTB_LARK_ACTIVE_* turn markers (the engine's own `lark service
+  // restart` relies on them); lark-cli authenticates via its own store, not LARK_APP_ID.
   delete childEnv.TELEGRAM_BOT_TOKEN;
   delete childEnv.LARK_APP_SECRET;
+  delete childEnv.LARK_APP_ID;
+  delete childEnv.CCTB_SEND_TOKEN;
 
   const overlay: Array<[keyof EnvSource, string]> = [
     ["HOME", "HOME"],

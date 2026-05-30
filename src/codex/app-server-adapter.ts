@@ -1137,11 +1137,16 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return;
     }
 
+    // Thread-scoped: reject and evict only THIS thread. The child is shared by
+    // every concurrent conversation, so we must NOT destroy() it for one
+    // thread's fault (e.g. an unsupported server request) — that would tear down
+    // unrelated healthy turns. Genuine child-level faults (close/error/oversized
+    // protocol line) still failAllPending via their own handlers, and a wedged
+    // child is caught by the next thread/resume|read timeout (destroyOnTimeout).
     this.pendingTurns.delete(threadId);
     this.loadedThreads.delete(threadId);
     pending.reject(this.withDiagnostics(this.withAppServerState(message, threadId, pending)));
     this.notifyIdleWaitersIfIdle();
-    this.destroy();
   }
 
   private request(
@@ -1380,7 +1385,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
         resolve: resolveAndCleanup,
         reject: rejectAndCleanup,
       };
-      const abortTurn = (error: Error, options?: { destroyChild?: boolean }) => {
+      // Thread-scoped abort: reject and evict only this turn's thread. Never
+      // destroy() the shared child for one turn's timeout/abort — that would
+      // kill other concurrent conversations. A truly wedged child is still
+      // caught by the next thread/resume|thread/read request (destroyOnTimeout).
+      const abortTurn = (error: Error) => {
         const pendingTurnState = this.pendingTurns.get(threadId);
         if (pendingTurnState && pendingTurnState !== pendingTurn) {
           return;
@@ -1392,9 +1401,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
         this.loadedThreads.delete(threadId);
         pendingTurn.reject(error);
         this.notifyIdleWaitersIfIdle();
-        if (options?.destroyChild) {
-          this.destroy();
-        }
       };
 
       if (timeoutMs !== null) {
@@ -1407,7 +1413,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
                 pendingTurn,
               ),
             ),
-            { destroyChild: true },
           );
         }, timeoutMs);
       }
@@ -1512,7 +1517,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
           ),
         );
         this.notifyIdleWaitersIfIdle();
-        this.destroy();
+        // Thread-scoped: do not destroy the shared child for one turn's
+        // inactivity; other concurrent turns keep running. A wedged child is
+        // caught by the next thread/resume|read timeout (destroyOnTimeout).
       }
     }, timeoutMs);
   }
@@ -1532,6 +1539,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private async completeTurn(threadId: string, turnId: string | undefined, pending: PendingTurn): Promise<void> {
+    // A turn that received an `error` notification genuinely failed — surface it
+    // (so classifyFailure/auth-retry sees the real cause) even if partial text
+    // was already streamed, instead of reporting the partial output as success.
+    if (pending.errorMessage) {
+      pending.reject(new Error(pending.errorMessage));
+      return;
+    }
+
     let text = pending.finalText ?? pending.chunks.join("");
     for (const tag of pending.generatedImageTags) {
       if (!text.includes(tag)) {

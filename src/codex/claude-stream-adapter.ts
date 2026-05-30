@@ -1,21 +1,10 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
-function killProcessTree(pid: number | undefined): void {
-  if (!pid) return;
-  if (process.platform === "win32") {
-    execFile("taskkill", ["/F", "/T", "/PID", String(pid)], () => {});
-  } else {
-    execFile("pgrep", ["-P", String(pid)], (_, stdout) => {
-      if (stdout) {
-        for (const childPid of stdout.trim().split(/\s+/)) {
-          killProcessTree(Number(childPid));
-        }
-      }
-      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
-    });
-  }
-}
+// Use the shared kill helper (SIGTERM then grace + SIGKILL escalation) rather
+// than a local SIGTERM-only copy, so a Claude CLI (and its MCP/sandbox children)
+// that ignores SIGTERM is still force-killed — matching the other adapters.
+import { killProcessTree } from "./process-tree.js";
 
 import type {
   CodexAdapter,
@@ -150,11 +139,22 @@ type ClaudeWorker = {
 
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
+// A single stream-json event (e.g. a large tool_result from reading a big file)
+// can legitimately exceed the 1 MiB line cap. Allow recognized stream-json lines
+// to grow to this higher cap before aborting, matching the Codex adapters — only
+// non-JSON runaway output hard-fails at MAX_LINE_BUFFER_BYTES.
+const MAX_STRUCTURED_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_STDERR_TAIL_CHARS = 20_000;
 const DEFAULT_IDLE_WORKER_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 // No timeout — complex tasks (image generation, large projects) can run indefinitely
+
+/** A plausible Claude stream-json event line (so a large-but-valid event isn't
+ * hard-failed at the 1 MiB cap meant for non-JSON runaway output). */
+function looksLikeClaudeStreamJsonLine(value: string): boolean {
+  return /^\s*\{\s*"type"\s*:/.test(value);
+}
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
@@ -623,18 +623,36 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private handleStdout(worker: ClaudeWorker, chunk: string): void {
     worker.lineBuffer += chunk;
 
-    if (worker.lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
-      this.failWorker(worker, new Error("Engine output exceeded maximum buffer size"));
-      killProcessTree(worker.child.pid);
-      return;
-    }
-
     const lines = worker.lineBuffer.split(/\r?\n/);
     worker.lineBuffer = lines.pop() ?? "";
 
     for (const line of lines.map((value) => value.trim()).filter(Boolean)) {
+      if (line.length > MAX_LINE_BUFFER_BYTES && this.abortOnOversizedLine(worker, line)) {
+        return;
+      }
       this.handleMessage(worker, line);
     }
+
+    // The residual (still-incomplete) line: a large but valid stream-json event
+    // may not have its newline yet — let it keep accumulating up to the higher
+    // structured cap. Only non-JSON runaway output hard-fails at the 1 MiB cap.
+    if (worker.lineBuffer.length > MAX_LINE_BUFFER_BYTES) {
+      this.abortOnOversizedLine(worker, worker.lineBuffer);
+    }
+  }
+
+  /** Returns true (and fails+kills the worker) if `line` is over the hard limit
+   * for its kind: non-stream-json over 1 MiB, or stream-json over 64 MiB. */
+  private abortOnOversizedLine(worker: ClaudeWorker, line: string): boolean {
+    const isStructured = looksLikeClaudeStreamJsonLine(line);
+    if (!isStructured || line.length > MAX_STRUCTURED_LINE_BUFFER_BYTES) {
+      this.failWorker(worker, new Error(isStructured
+        ? "Engine structured output exceeded maximum buffer size"
+        : "Engine output exceeded maximum buffer size"));
+      killProcessTree(worker.child.pid);
+      return true;
+    }
+    return false;
   }
 
   private handleMessage(worker: ClaudeWorker, line: string): void {
@@ -706,7 +724,11 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       return;
     }
 
-    if (parsed.type === "system" && parsed.subtype === "init" && worker.pendingTaskNotification) {
+    // Only arm task-notification suppression when NO real turn is in flight.
+    // Otherwise a mid-turn re-init (e.g. /compact re-initializes the session)
+    // would arm the flag and swallow the FIRST assistant chunk of the resumed
+    // turn. The pendingTurn init handler below covers the in-turn re-init case.
+    if (parsed.type === "system" && parsed.subtype === "init" && worker.pendingTaskNotification && !worker.pendingTurn) {
       worker.suppressNextTaskNotificationAssistant = true;
       return;
     }
@@ -944,6 +966,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           if (error) {
             this.clearPendingTurnTimeout(worker.pendingTurn);
             worker.pendingTurn = null;
+            // Kill before forgetting the worker — removeWorker only drops the map
+            // entry, so without this a child orphaned by a broken stdin pipe is
+            // untracked and never reaped.
+            killProcessTree(worker.child.pid);
             this.removeWorker(worker);
             reject(error);
           }
@@ -957,6 +983,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     worker.child.stdin?.write(JSON.stringify(payload) + "\n", (error) => {
       if (error) {
         this.failWorker(worker, error);
+        killProcessTree(worker.child.pid);
         this.removeWorker(worker);
       }
     });
