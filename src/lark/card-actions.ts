@@ -18,7 +18,7 @@ import { loadInstanceConfig, resolveInstanceWorkspacePath, updateInstanceConfig,
 import type { Locale } from "../telegram/message-renderer.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
-import { renderLarkApprovalCard } from "./card-renderer.js";
+import { renderLarkApprovalCard, renderLarkQueueCancelledCard } from "./card-renderer.js";
 import { renderLarkResumeScanCard } from "./command-cards.js";
 import {
   applyLarkConfigCardAction,
@@ -528,17 +528,22 @@ export async function handleLarkCardAction(input: {
       // Claim the task so the eventual queue skip stays silent (no duplicate
       // notice), and forget its card so no wait/skip path re-renders it.
       input.runtime.cancelledQueueTaskIds.add(taskId);
-      const cardId = input.runtime.queueCards.get(taskId);
+      const ref = input.runtime.queueCards.get(taskId);
       input.runtime.queueCards.delete(taskId);
-      // Do NOT patch the tapped queue card to "cancelled" in place: Feishu
-      // reverts a just-clicked card's async patch back to its pre-click content
-      // (the flicker-to-"已取消"-then-back-to-"排队中" bug), same as a submitted
-      // form. Post a fresh "cancelled" notice and recall the now-useless card.
+      // Preferred: the queue card was sent as a CardKit managed card, so flip it
+      // to "已取消" IN PLACE — no recall, no extra notice. A CardKit full update
+      // lands even right after the cancel tap, where im.message.patch silently
+      // reverts a just-clicked card back to its pre-click "排队中" content.
+      if (ref?.handle && await updateManagedCard(input.channel, ref.handle, renderLarkQueueCancelledCard(locale))) {
+        return true;
+      }
+      // Fallback (CardKit unavailable, or the in-place update failed): post a
+      // fresh "已取消" notice and recall the now-useless interactive card.
       await input.channel.send(input.event.chatId, { text: cancelledText }, {
         ...(replyInThread ? { replyInThread: true } : {}),
       });
-      if (cardId && input.channel.recallMessage) {
-        await input.channel.recallMessage(cardId).catch(() => {
+      if (ref?.messageId && input.channel.recallMessage) {
+        await input.channel.recallMessage(ref.messageId).catch(() => {
           // Best-effort: if recall fails, the notice above still confirms it.
         });
       }

@@ -62,9 +62,10 @@ import {
   type LarkIncomingMessage,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
+import { sendManagedCard, updateManagedCard } from "./managed-card.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { verifyLarkNumericIds } from "./id-map.js";
-import type { LarkServiceRuntime } from "./runtime.js";
+import type { LarkQueueCardRef, LarkServiceRuntime } from "./runtime.js";
 import { type LarkReactionSettings, withLarkMessageReactions } from "./reactions.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkFetchedMessage, LarkSendOptions } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
@@ -357,17 +358,24 @@ async function runAcceptedLarkMessage(
         replyInThread: Boolean(normalized.threadId),
         locale: messageLocale,
       });
-      // Reuse a single card across repeated wait notifications, and remember its
-      // id so the run card can take it over (queued → running → done) instead of
+      // Reuse a single card across repeated wait notifications, and remember it
+      // so the run card can take it over (queued → running → done) instead of
       // leaving a stale "queued" card behind once the task starts.
       const existing = input.runtime.queueCards.get(normalized.messageId);
-      if (existing && input.channel.updateCard) {
-        try {
-          await input.channel.updateCard(existing, card);
-          return;
-        } catch {
-          // fall through to sending a fresh card
-        }
+      if (existing && await updateLarkQueueCardInPlace(input.channel, existing, card)) {
+        return;
+      }
+      // Prefer a CardKit managed card so the cancel tap can flip it to "已取消"
+      // IN PLACE (CardKit survives a post-interaction update; im.message.patch
+      // reverts a just-clicked card). Fall back to a normal inline card when
+      // CardKit is unavailable.
+      const managed = await sendManagedCard(input.channel, normalized.chatId, card, {
+        replyTo: normalized.messageId,
+        ...(normalized.threadId ? { replyInThread: true } : {}),
+      });
+      if (managed) {
+        input.runtime.queueCards.set(normalized.messageId, { messageId: managed.messageId, handle: managed });
+        return;
       }
       const sent = await sendLarkCardWithFallback({
         channel: input.channel,
@@ -378,7 +386,7 @@ async function runAcceptedLarkMessage(
         locale: messageLocale,
       });
       if (!sent.fallback) {
-        input.runtime.queueCards.set(normalized.messageId, sent.messageId);
+        input.runtime.queueCards.set(normalized.messageId, { messageId: sent.messageId });
       }
     } catch (error) {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
@@ -446,24 +454,19 @@ async function enqueueLarkTurn(
         },
       });
       // A skipped turn must not leave its "queued" card spinning forever.
-      const queuedCardId = input.runtime.queueCards.get(normalized.messageId);
+      const queuedRef = input.runtime.queueCards.get(normalized.messageId);
       input.runtime.queueCards.delete(normalized.messageId);
       const skippedText = renderLarkQueuedTaskSkipped(locale);
-      if (queuedCardId && input.channel.updateCard) {
-        try {
-          await input.channel.updateCard(queuedCardId, {
-            schema: "2.0",
-            config: { update_multi: true },
-            body: {
-              direction: "vertical",
-              padding: "12px 12px 12px 12px",
-              elements: [{ tag: "markdown", content: skippedText }],
-            },
-          });
-          return true;
-        } catch {
-          // fall through to a plain-text notice
-        }
+      if (queuedRef && await updateLarkQueueCardInPlace(input.channel, queuedRef, {
+        schema: "2.0",
+        config: { update_multi: true },
+        body: {
+          direction: "vertical",
+          padding: "12px 12px 12px 12px",
+          elements: [{ tag: "markdown", content: skippedText }],
+        },
+      })) {
+        return true;
       }
       await input.channel.send(normalized.chatId, { text: skippedText }, {
         replyTo: normalized.messageId,
@@ -472,6 +475,31 @@ async function enqueueLarkTurn(
       return true;
     },
   });
+}
+
+/**
+ * Update a "queued" card in place. Prefers CardKit (lands even right after the
+ * user taps the card's cancel button, where im.message.patch reverts), falling
+ * back to im.message.patch for a plain inline card. Returns whether the in-place
+ * update landed; on false the caller sends a fresh card/notice instead.
+ */
+async function updateLarkQueueCardInPlace(
+  channel: LarkChannelLike,
+  ref: LarkQueueCardRef,
+  card: Record<string, unknown>,
+): Promise<boolean> {
+  if (ref.handle) {
+    return await updateManagedCard(channel, ref.handle, card);
+  }
+  if (channel.updateCard) {
+    try {
+      await channel.updateCard(ref.messageId, card);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function shouldBatchLarkMessage(
@@ -842,8 +870,16 @@ async function runNormalizedLarkMessage(
     try {
       // If a "queued" card was already shown for this conversation, take it over
       // as the run card so it transitions in place instead of being orphaned.
-      const queuedCardId = input.runtime.queueCards.get(normalized.messageId);
+      const queuedRef = input.runtime.queueCards.get(normalized.messageId);
       input.runtime.queueCards.delete(normalized.messageId);
+      // A plain inline queue card is taken over in place via im.message.patch. A
+      // CardKit-managed queue card is NOT reused here (the run card still streams
+      // via im.message.patch, which we don't rely on for a CardKit-bound card —
+      // migrating the run card to CardKit is stage 4); recall it and start the
+      // run card fresh so nothing is orphaned.
+      if (queuedRef?.handle && input.channel.recallMessage) {
+        await input.channel.recallMessage(queuedRef.messageId).catch(() => undefined);
+      }
       runCard = await createLarkRunCardController({
         channel: input.channel,
         chatId: normalized.chatId,
@@ -852,7 +888,7 @@ async function runNormalizedLarkMessage(
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
         locale,
-        ...(queuedCardId ? { existingMessageId: queuedCardId } : {}),
+        ...(queuedRef && !queuedRef.handle ? { existingMessageId: queuedRef.messageId } : {}),
       });
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
         await runCard?.apply(event);

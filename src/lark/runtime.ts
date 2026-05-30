@@ -79,6 +79,18 @@ export interface PendingLarkApproval {
   abortHandler?: () => void;
 }
 
+/**
+ * A live "queued" card. `messageId` is always set (used to take the card over as
+ * the run card, or to recall it). `handle` is set when the card was delivered as
+ * a CardKit managed card, so the cancel tap can flip it to "已取消" IN PLACE
+ * (CardKit survives a post-interaction update, where im.message.patch reverts).
+ * Absent `handle` → a plain inline card (CardKit was unavailable).
+ */
+export interface LarkQueueCardRef {
+  messageId: string;
+  handle?: ManagedCardHandle;
+}
+
 export interface LarkServiceRuntime {
   activeRuns: Map<string, LarkActiveRun>;
   pendingApprovals: Map<string, PendingLarkApproval>;
@@ -91,8 +103,9 @@ export interface LarkServiceRuntime {
    * the TTL instead of requiring a service restart.
    */
   chatModeCache: Map<string, { mode: LarkChatMode; expiresAt: number }>;
-  /** queued message id → its "queued" card message id, so each task's run card reuses its own card. */
-  queueCards: Map<string, string>;
+  /** queued message id → its "queued" card ref, so each task's run card reuses
+   *  its own card and the cancel handler can update it in place. */
+  queueCards: Map<string, LarkQueueCardRef>;
   /**
    * Queued task ids the user explicitly cancelled from a card button. The
    * cancel handler already updated that task's card, so its eventual skip must

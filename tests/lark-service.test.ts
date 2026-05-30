@@ -5893,7 +5893,7 @@ describe("lark service", () => {
     const runtime = createLarkServiceRuntime();
     const abortController = new AbortController();
     runtime.activeRuns.set("lark:oc_chat", { abortController });
-    runtime.queueCards.set("om_queued", "card_q");
+    runtime.queueCards.set("om_queued", { messageId: "card_q" }); // inline card (no CardKit)
     const cancelSpy = vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(true);
     const channel = fakeChannel();
 
@@ -5921,7 +5921,7 @@ describe("lark service", () => {
 
   it("still confirms the cancel even if recalling the queue card fails", async () => {
     const runtime = createLarkServiceRuntime();
-    runtime.queueCards.set("om_queued", "card_q");
+    runtime.queueCards.set("om_queued", { messageId: "card_q" }); // inline card (no CardKit)
     vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(true);
     // Recall can fail (e.g. outside the recall window): the cancel must still
     // be confirmed by the fresh notice, never vanish silently.
@@ -5946,6 +5946,52 @@ describe("lark service", () => {
       { text: expect.stringContaining("已取消") },
       expect.any(Object),
     );
+  });
+
+  it("cancels a managed queue card in place via CardKit (no recall, no extra notice)", async () => {
+    const runtime = createLarkServiceRuntime();
+    const update = vi.fn(async () => ({ data: {} }));
+    const channel = fakeChannel({ rawClient: { cardkit: { v1: { card: { update } } } } });
+    // The queue card was delivered as a CardKit managed card → handle tracked.
+    runtime.queueCards.set("om_queued", { messageId: "om_qcard", handle: { messageId: "om_qcard", cardId: "card_q", sequence: 0 } });
+    vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(true);
+
+    const handled = await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat", taskId: "om_queued" } } },
+    });
+
+    expect(handled).toBe(true);
+    // Flipped to "已取消" IN PLACE via a CardKit full update — no recall, no
+    // second message (the flicker-then-revert path is gone for managed cards).
+    expect(update).toHaveBeenCalledTimes(1);
+    const body = JSON.stringify(update.mock.calls.at(-1));
+    expect(body).toContain("card_q");
+    expect(body).toContain("已取消");
+    expect(channel.recallMessage).not.toHaveBeenCalled();
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(runtime.cancelledQueueTaskIds.has("om_queued")).toBe(true);
+    expect(runtime.queueCards.has("om_queued")).toBe(false);
+  });
+
+  it("falls back to recall + notice when the CardKit cancel update fails", async () => {
+    const runtime = createLarkServiceRuntime();
+    const update = vi.fn(async () => { throw new Error("cardkit down"); });
+    const channel = fakeChannel({ rawClient: { cardkit: { v1: { card: { update } } } } });
+    runtime.queueCards.set("om_queued", { messageId: "om_qcard", handle: { messageId: "om_qcard", cardId: "card_q", sequence: 0 } });
+    vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(true);
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat", taskId: "om_queued" } } },
+    });
+
+    // CardKit update attempted but failed → fall back to the fresh notice + recall.
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: expect.stringContaining("已取消") }, expect.any(Object));
+    expect(channel.recallMessage).toHaveBeenCalledWith("om_qcard");
   });
 
   it("falls back to aborting the active run when the carried task already started", async () => {
@@ -8184,6 +8230,91 @@ describe("lark service", () => {
       expect(runtime.queueCards.has("om_q1")).toBe(true);
       expect(runtime.queueCards.has("om_q2")).toBe(true);
       expect(runtime.queueCards.has("lark:oc_chat")).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends the queue-wait card as a CardKit managed card when available", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-managed-"));
+    const create = vi.fn(async () => ({ data: { card_id: "card_q" } }));
+    const messageReply = vi.fn(async () => ({ data: { message_id: "om_qcard" } }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_qcard" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create } } },
+        im: { v1: { message: { create: messageCreate, reply: messageReply } } },
+      },
+    });
+    const runtime = createLarkServiceRuntime();
+    // Stay queued (don't run the job) so the managed card isn't taken over.
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, _job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: "conversation_queue" }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({ chatId: "lark:oc_chat", waitedMs: 10_000, reason: "conversation_queue" });
+        return true as unknown as T;
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const bridge: LarkBridgeLike = { handleAuthorizedMessage: vi.fn(async () => ({ text: "x" })) };
+
+    try {
+      await handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage({ messageId: "om_q_managed", content: "second" }) });
+
+      // Created as a CardKit managed card (create + send by reference), with its
+      // handle tracked so the cancel tap can update it in place — not sent as a
+      // plain inline card via channel.send.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(runtime.queueCards.get("om_q_managed")?.handle?.cardId).toBe("card_q");
+      const cardSends = channel.send.mock.calls.filter((call: unknown[]) => Boolean((call[1] as { card?: unknown } | undefined)?.card));
+      expect(cardSends).toHaveLength(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recalls a managed queue card and starts the run card fresh on take-over", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-managed-takeover-"));
+    const create = vi.fn(async () => ({ data: { card_id: "card_q" } }));
+    const messageReply = vi.fn(async () => ({ data: { message_id: "om_qcard" } }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_qcard" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create } } },
+        im: { v1: { message: { create: messageCreate, reply: messageReply } } },
+      },
+    });
+    const runtime = createLarkServiceRuntime();
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: "conversation_queue" }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({ chatId: "lark:oc_chat", waitedMs: 10_000, reason: "conversation_queue" });
+        return await job();
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "answer text" }));
+        return { text: "answer text" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage({ messageId: "om_reuse_managed", content: "go" }) });
+
+      // The managed queue card can't be reused via im.message.patch, so it's
+      // recalled and the run card is sent fresh, then updated in place as it
+      // streams — nothing orphaned, no stale queued-card ref left behind.
+      expect(channel.recallMessage).toHaveBeenCalledWith("om_qcard");
+      const cardSends = channel.send.mock.calls.filter((call: unknown[]) => Boolean((call[1] as { card?: unknown } | undefined)?.card));
+      expect(cardSends).toHaveLength(1); // the fresh run card
+      expect(JSON.stringify(channel.updateCard.mock.calls)).toContain("answer text");
+      expect(runtime.queueCards.size).toBe(0);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

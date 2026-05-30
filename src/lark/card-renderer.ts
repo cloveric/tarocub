@@ -979,6 +979,21 @@ export function renderLarkQueueWaitCard(input: LarkQueueWaitCardInput): Record<s
   };
 }
 
+/** Read-only terminal card shown in place after a queued task is cancelled from
+ * its card (no buttons). Used to flip a CardKit-managed queue card to "已取消". */
+export function renderLarkQueueCancelledCard(locale: Locale = "zh"): Record<string, unknown> {
+  const text = locale === "en" ? "Cancelled this queued task." : "已取消此排队任务。";
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: text } },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [markdownElement(`✅ ${text}`)],
+    },
+  };
+}
+
 function approvalCardLabels(locale: Locale): { allowOnce: string; allowSession: string; deny: string } {
   return locale === "en"
     ? { allowOnce: "Allow once", allowSession: "Allow for this turn", deny: "Deny" }
