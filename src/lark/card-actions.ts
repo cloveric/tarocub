@@ -188,6 +188,10 @@ function askFormFieldName(index: number): string {
   return `q${index}`;
 }
 
+function askFormOtherFieldName(index: number): string {
+  return `q${index}_other`;
+}
+
 function renderLarkAskUserQuestionCard(input: {
   requestId: string;
   toolInput: unknown;
@@ -228,9 +232,8 @@ function renderLarkAskUserQuestionCard(input: {
     formElements.push({
       tag: question.multiSelect ? "multi_select_static" : "select_static",
       name: askFormFieldName(index),
-      // Single-select questions must be answered; Feishu blocks submit until a
-      // value is chosen. Multi-select stays optional (selecting none is valid).
-      ...(question.multiSelect ? {} : { required: true }),
+      // Not Feishu-`required`: the "Other" free-text below is a valid alternative,
+      // so "answered" = a pick OR an Other value (enforced by the submit backstop).
       placeholder: {
         tag: "plain_text",
         content: question.multiSelect
@@ -238,6 +241,16 @@ function renderLarkAskUserQuestionCard(input: {
           : (locale === "en" ? "Select one" : "请选择"),
       },
       options: selectOptions,
+    });
+    // Free-text "Other" — mirrors the AskUserQuestion CLI, where the last choice
+    // lets you type your own answer. Filled only when none of the options fit.
+    formElements.push({
+      tag: "input",
+      name: askFormOtherFieldName(index),
+      placeholder: {
+        tag: "plain_text",
+        content: locale === "en" ? "Other — type your own (optional)" : "其他 —— 不合适就自己填（选填）",
+      },
     });
   });
 
@@ -495,6 +508,9 @@ export async function handleLarkCardAction(input: {
     }
     if (taskId && input.runtime.chatQueue.cancel(value.conversationKey, taskId)) {
       const cancelledText = locale === "en" ? "Cancelled this queued task." : "已取消此排队任务。";
+      // Claim the task now so the eventual queue skip stays silent (no duplicate
+      // notice) regardless of which feedback path below runs.
+      input.runtime.cancelledQueueTaskIds.add(taskId);
       const cardId = input.runtime.queueCards.get(taskId);
       let terminalized = false;
       if (cardId && input.channel.updateCard) {
@@ -509,27 +525,21 @@ export async function handleLarkCardAction(input: {
             },
           });
           terminalized = true;
+          input.runtime.queueCards.delete(taskId);
         } catch {
-          // fall through
+          // fall through to a text ack
         }
       }
-      if (terminalized) {
-        // The card now shows "cancelled"; claim it and keep the eventual skip
-        // silent so it doesn't post a second notice.
-        input.runtime.cancelledQueueTaskIds.add(taskId);
-        input.runtime.queueCards.delete(taskId);
-      } else if (!cardId) {
-        // No card to terminalize (rare — the button lives on the queue card):
-        // ack via text and silence the skip.
-        input.runtime.cancelledQueueTaskIds.add(taskId);
+      if (!terminalized) {
+        // GUARANTEE immediate feedback. Previously a "card exists but updateCard
+        // failed" branch left it to the silent skip path, so a successful cancel
+        // showed no reaction at all. Always acknowledge as a reply to the tapped
+        // card when the queue card could not be terminalized in place.
         await input.channel.send(input.event.chatId, { text: cancelledText }, {
           replyTo: input.event.messageId,
           ...(replyInThread ? { replyInThread: true } : {}),
         });
       }
-      // else: the card update failed transiently — leave the queueCards entry so
-      // the normal skip path terminalizes the card (no duplicate text) when the
-      // task is reached.
       return true;
     }
     // Otherwise this is the running task: abort only it; let the queue keep
@@ -741,6 +751,14 @@ export async function handleLarkCardAction(input: {
       } else {
         answer = stringValue(raw) ?? "";
       }
+      // Merge the free-text "Other": for single-select it stands in when nothing
+      // was picked; for multi-select it is appended to the chosen labels.
+      const other = stringValue(formValue[askFormOtherFieldName(index)]) ?? "";
+      if (other) {
+        answer = answer
+          ? (question.multiSelect ? joinLabels([answer, other]) : answer)
+          : other;
+      }
       answers[question.question] = answer;
     });
 
@@ -771,29 +789,29 @@ export async function handleLarkCardAction(input: {
       },
     });
 
-    // Turn the form into a read-only "submitted" card so it no longer looks
-    // actionable; fall back to a text summary if the update fails.
+    // Feishu silently ignores `im.message.patch` on a SUBMITTED form card — it
+    // returns OK and bumps update_time but keeps the interactive form. So we can
+    // not turn it read-only in place. Instead post a compact read-only summary
+    // (keeps the record of what was picked) and recall the now-useless form.
     const summary = questions
       .map((question) => `${question.header}: ${answers[question.question] || (locale === "en" ? "—" : "（未选）")}`)
       .join("\n");
-    let cardUpdated = false;
-    if (input.channel.updateCard) {
-      try {
-        await input.channel.updateCard(
-          input.event.messageId,
-          renderLarkAskUserQuestionSubmittedCard(pending.askUserQuestionInput, answers, locale),
-        );
-        cardUpdated = true;
-      } catch {
-        // fall through to a text summary
-      }
-    }
-    if (!cardUpdated) {
-      await input.channel.send(
-        input.event.chatId,
-        { text: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary },
-        replyOpts,
-      );
+    const summaryOptions: LarkSendOptions | undefined = (pending.replyInThread ?? replyInThread)
+      ? { replyInThread: true }
+      : undefined;
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.event.chatId,
+      card: renderLarkAskUserQuestionSubmittedCard(pending.askUserQuestionInput, answers, locale),
+      fallbackText: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary,
+      options: summaryOptions,
+      locale,
+    });
+    if (input.channel.recallMessage) {
+      await input.channel.recallMessage(input.event.messageId).catch(() => {
+        // Best-effort: if recall fails (e.g. outside the recall window) the
+        // read-only summary above still records the choice; the form lingers.
+      });
     }
     return true;
   }

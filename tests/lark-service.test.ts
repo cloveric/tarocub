@@ -5916,6 +5916,34 @@ describe("lark service", () => {
     expect(channel.updateCard).toHaveBeenCalledWith("card_q", expect.objectContaining({ schema: "2.0" }));
   });
 
+  it("acks by text when the queued card cannot be updated in place (no silent cancel)", async () => {
+    const runtime = createLarkServiceRuntime();
+    runtime.queueCards.set("om_queued", "card_q");
+    vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(true);
+    // The in-place card update fails (Feishu can ignore/refuse patches): the
+    // cancel must still give immediate feedback, not vanish silently.
+    const channel = fakeChannel({ updateCard: vi.fn(async () => { throw new Error("patch refused"); }) });
+
+    const handled = await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat", taskId: "om_queued" } },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(runtime.cancelledQueueTaskIds.has("om_queued")).toBe(true); // claimed → later skip stays silent
+    expect(channel.send).toHaveBeenCalledWith(
+      "oc_chat",
+      { text: expect.stringContaining("已取消") },
+      expect.objectContaining({ replyTo: "om_card" }),
+    );
+  });
+
   it("falls back to aborting the active run when the carried task already started", async () => {
     const runtime = createLarkServiceRuntime();
     const abortController = new AbortController();
@@ -9781,7 +9809,11 @@ describe("lark service", () => {
     expect(payload).toContain('"select_static"');       // single-select question
     expect(payload).toContain('"multi_select_static"');  // multiSelect question
     expect(payload).toContain('"action":"form_submit"');
-    expect(payload).toContain('"required":true'); // single-select must be answered
+    // Each question has a free-text "Other" input; not Feishu-`required` because
+    // the Other value is a valid alternative (enforced by the submit backstop).
+    expect(payload).toContain('"tag":"input"');
+    expect(payload).toContain("q0_other");
+    expect(payload).toContain("q1_other");
     expect(payload).not.toContain("collapsible_panel");
     expect(payload).not.toContain('"action":"toggle"');
 
@@ -9859,7 +9891,7 @@ describe("lark service", () => {
     expect(resolved.updatedInput.answers).toEqual({ "Pick": "A, C" });
   });
 
-  it("replaces the AskUserQuestion form with a read-only submitted card", async () => {
+  it("posts a read-only summary and recalls the form on submit (Feishu ignores form-card patches)", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
     const pending = requestLarkApproval({
@@ -9879,12 +9911,16 @@ describe("lark service", () => {
     });
 
     await pending;
-    const updates = JSON.stringify(channel.updateCard.mock.calls);
-    expect(updates).toContain("已提交");
-    expect(updates).toContain("Fast");
-    // The submitted card is read-only: no inputs or submit button remain.
-    expect(updates).not.toContain("select_static");
-    expect(updates).not.toContain("form_submit");
+    // The LAST send is a compact read-only summary (not an in-place patch, which
+    // Feishu ignores on a submitted form), carrying the pick and no interactive
+    // parts (the earlier send was the original form, which does have them).
+    const summarySend = JSON.stringify(channel.send.mock.calls.at(-1));
+    expect(summarySend).toContain("已提交");
+    expect(summarySend).toContain("Fast");
+    expect(summarySend).not.toContain("select_static");
+    expect(summarySend).not.toContain("form_submit");
+    // The now-useless interactive form is recalled.
+    expect(channel.recallMessage).toHaveBeenCalledWith("om_card");
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
@@ -9950,6 +9986,32 @@ describe("lark service", () => {
 
     const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
     expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Careful" });
+    expect(runtime.pendingApprovals.size).toBe(0);
+    expect(JSON.stringify(channel.send.mock.calls)).not.toContain("请先选择");
+  });
+
+  it("accepts the free-text Other answer when no option is picked", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    // Nothing picked from the dropdown, but the "Other" field is filled.
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "", q0_other: "Whimsical" } } },
+    });
+
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Whimsical" });
     expect(runtime.pendingApprovals.size).toBe(0);
     expect(JSON.stringify(channel.send.mock.calls)).not.toContain("请先选择");
   });
@@ -10835,6 +10897,7 @@ function baseFakeChannel() {
       return { messageId: "stream_1" };
     }),
     updateCard: vi.fn(async () => undefined),
+    recallMessage: vi.fn(async () => undefined),
     downloadResource: vi.fn(async () => Buffer.from("")),
   };
 }

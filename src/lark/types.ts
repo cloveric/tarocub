@@ -60,6 +60,7 @@ export interface LarkChannelLike {
     };
   }, opts?: LarkSendOptions): Promise<{ messageId: string }>;
   updateCard?(messageId: string, card: object): Promise<void>;
+  recallMessage?(messageId: string): Promise<void>;
   addReaction?(messageId: string, emojiType: string): Promise<string>;
   removeReaction?(messageId: string, reactionId: string): Promise<void>;
   removeReactionByEmoji?(messageId: string, emojiType: string): Promise<boolean>;
