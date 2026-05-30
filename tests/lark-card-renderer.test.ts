@@ -39,6 +39,27 @@ describe("lark card renderer", () => {
     expect(serialized).not.toContain("停止");
   });
 
+  it("ignores a TodoWrite tool_result so it can't finish an unrelated running tool", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolInput: { command: "sleep 30" }, toolUseId: "b1" });
+    // A Codex plan can complete as an id-less TodoWrite tool_result; it must not
+    // fall through to mark the still-running Bash as done.
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolName: "TodoWrite", output: "" });
+    const bash = state.blocks.find((b) => b.kind === "tool" && b.tool.toolName === "Bash");
+    expect(bash && bash.kind === "tool" ? bash.tool.status : undefined).toBe("running");
+  });
+
+  it("renders a todo using activeForm when its content is empty", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, {
+      type: "tool_use",
+      toolName: "TodoWrite",
+      toolInput: { todos: [{ content: "", activeForm: "Building the widget", status: "completed" }] },
+    });
+    const serialized = JSON.stringify(renderLarkRunCard(state));
+    expect(serialized).toContain("Building the widget"); // no bare "✅ " blank row
+  });
+
   it("renders the final answer exactly once in the done card body (card is canonical)", () => {
     const answer = "This is the full final answer body shown in the single canonical card.";
     let state = initialLarkRunState("lark:oc_chat");

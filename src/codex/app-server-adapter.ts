@@ -876,14 +876,19 @@ export class CodexAppServerAdapter implements CodexAdapter {
             ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
             sessionId: threadId,
           })).catch(() => {});
-          void Promise.resolve(pending.onEngineEvent?.({
-            type: "tool_result",
-            ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
-            toolName: toolEvent.toolName,
-            ...(toolEvent.output !== undefined ? { output: toolEvent.output } : {}),
-            isError: toolEvent.isError,
-            sessionId: threadId,
-          })).catch(() => {});
+          // A plan (TodoWrite) is meta-state shown as the plan panel, not a tool
+          // block, so it needs no completion event. Skipping it also avoids an
+          // id-less result wrongly finishing an unrelated running tool.
+          if (toolEvent.toolName !== "TodoWrite") {
+            void Promise.resolve(pending.onEngineEvent?.({
+              type: "tool_result",
+              ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
+              toolName: toolEvent.toolName,
+              ...(toolEvent.output !== undefined ? { output: toolEvent.output } : {}),
+              isError: toolEvent.isError,
+              sessionId: threadId,
+            })).catch(() => {});
+          }
         }
       }
       return;

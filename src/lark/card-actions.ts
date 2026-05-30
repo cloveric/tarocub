@@ -484,13 +484,15 @@ export async function handleLarkCardAction(input: {
     // A queue card carries the id of its own still-queued task. If that task is
     // still pending, cancel just it (the user can still /stop the running one).
     const taskId = typeof value.taskId === "string" ? value.taskId : undefined;
+    if (taskId && input.runtime.cancelledQueueTaskIds.has(taskId)) {
+      // Already cancelled (e.g. a double-tap before the card re-rendered). Treat
+      // as a no-op — never fall through to abort the active run.
+      return true;
+    }
     if (taskId && input.runtime.chatQueue.cancel(value.conversationKey, taskId)) {
-      // Keep the eventual skip silent — we acknowledge the cancel right here.
-      input.runtime.cancelledQueueTaskIds.add(taskId);
       const cancelledText = locale === "en" ? "Cancelled this queued task." : "已取消此排队任务。";
       const cardId = input.runtime.queueCards.get(taskId);
-      input.runtime.queueCards.delete(taskId);
-      let acknowledged = false;
+      let terminalized = false;
       if (cardId && input.channel.updateCard) {
         try {
           await input.channel.updateCard(cardId, {
@@ -502,17 +504,28 @@ export async function handleLarkCardAction(input: {
               elements: [{ tag: "markdown", content: cancelledText }],
             },
           });
-          acknowledged = true;
+          terminalized = true;
         } catch {
-          // fall through to a plain-text notice
+          // fall through
         }
       }
-      if (!acknowledged) {
+      if (terminalized) {
+        // The card now shows "cancelled"; claim it and keep the eventual skip
+        // silent so it doesn't post a second notice.
+        input.runtime.cancelledQueueTaskIds.add(taskId);
+        input.runtime.queueCards.delete(taskId);
+      } else if (!cardId) {
+        // No card to terminalize (rare — the button lives on the queue card):
+        // ack via text and silence the skip.
+        input.runtime.cancelledQueueTaskIds.add(taskId);
         await input.channel.send(input.event.chatId, { text: cancelledText }, {
           replyTo: input.event.messageId,
           ...(replyInThread ? { replyInThread: true } : {}),
         });
       }
+      // else: the card update failed transiently — leave the queueCards entry so
+      // the normal skip path terminalizes the card (no duplicate text) when the
+      // task is reached.
       return true;
     }
     // Otherwise this is the running task: abort only it; let the queue keep

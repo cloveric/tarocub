@@ -129,6 +129,14 @@ export function applyLarkEngineEvent(
         footer: "tool_running",
       };
     case "tool_result":
+      // A TodoWrite/plan is meta-state (state.plan), never a block, so its
+      // result has nothing to complete. Ignore it outright — otherwise an
+      // id-less plan result (some Codex payloads omit the id) would fall through
+      // to applyToolResult's "most recent running tool" branch and wrongly mark
+      // an unrelated, still-running tool as done.
+      if (event.toolName === "TodoWrite") {
+        return state;
+      }
       return {
         ...state,
         blocks: applyToolResult(state.blocks, event),
@@ -624,12 +632,12 @@ function renderTodoList(input: unknown): string {
         return "";
       }
       if (status === "completed") {
-        return `✅ ${content}`;
+        return `✅ ${content || active}`;
       }
       if (status === "in_progress") {
         return `🔄 **${active || content}**`;
       }
-      return `⬜ ${content}`;
+      return `⬜ ${content || active}`;
     })
     .filter((line) => line.length > 0);
   return lines.join("\n");

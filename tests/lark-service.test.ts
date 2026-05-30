@@ -5861,6 +5861,31 @@ describe("lark service", () => {
     expect(abortController.signal.aborted).toBe(true); // fell back to aborting the active task
   });
 
+  it("treats a repeat cancel tap as a no-op and never aborts the active run", async () => {
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    // First cancel already marked this task cancelled (silent-skip claim).
+    runtime.cancelledQueueTaskIds.add("om_queued");
+    const cancelSpy = vi.spyOn(runtime.chatQueue, "cancel");
+    const channel = fakeChannel();
+
+    const handled = await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat", taskId: "om_queued" } },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(cancelSpy).not.toHaveBeenCalled(); // short-circuited
+    expect(abortController.signal.aborted).toBe(false); // did NOT fall through to abort active
+  });
+
   it("renders Lark stop card action replies in English when Lark locale is English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-card-en-"));
     const runtime = createLarkServiceRuntime();
