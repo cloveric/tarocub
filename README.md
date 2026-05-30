@@ -200,14 +200,14 @@ Inside Lark, the bot supports the same core slash surface as Telegram: `/status`
 
 Lark group/session semantics:
 
-Whether a Lark group isolates each topic into its own session follows the group's **群消息形式 (group message form)** — read from `im.v1.chat.get` and cached for ~30s, so switching the form takes effect within ~30s without a service restart:
+Whether a Lark group isolates each topic into its own session follows the group's **message form** (the "Group message form" setting in Lark) — read from `im.v1.chat.get` and cached for ~30s, so switching the form takes effect within ~30s without a service restart:
 
 | Chat type | Feishu signal | Topic context (session) |
 |---|---|---|
-| 1:1 chat (单聊) | `chat_mode = p2p` | One continuous session. |
-| Topic group (话题群) | `chat_mode = topic` | Each topic is its **own isolated** session. |
-| Conversation group switched to topic messages (对话群 → 群消息形式 = 话题消息) | `chat_mode = group` + `group_message_type = thread` | Each topic is its **own isolated** session. |
-| Conversation group, default form (对话消息) | `chat_mode = group` + `group_message_type = chat` | Topic replies **share the one** group session. |
+| 1:1 chat | `chat_mode = p2p` | One continuous session. |
+| Topic group | `chat_mode = topic` | Each topic is its **own isolated** session. |
+| Conversation group switched to the topic message form | `chat_mode = group` + `group_message_type = thread` | Each topic is its **own isolated** session. |
+| Conversation group, default form | `chat_mode = group` + `group_message_type = chat` | Topic replies **share the one** group session. |
 
 - "Isolated" means a topic's context does not bleed into other topics or the group's main timeline. "Shared" means a topic reply continues the group's single session.
 - A topic conversation key is `lark:<chat_id>:<thread_id>`; the shared group / 1:1 key is `lark:<chat_id>`. Isolation needs both the topic form **and** a `thread_id` on the message.
@@ -260,7 +260,7 @@ See the full [Slash Command Index](./docs/slash-commands.md) for command groups,
 
 ## Current Release
 
-- **v0.1.64** (current) — Lark topic isolation follows the group message form: 话题消息 isolates each topic into its own session, 对话消息 shares one group session. Switching the form takes effect within ~30s, no restart.
+- **v0.1.68** (current) — Lark run cards no longer freeze on a long answer (Feishu element-limit 11310); they always reach a terminal state and the answer is delivered once. Earlier in this line: topic isolation follows the group message form (topic-message groups isolate each topic, conversation groups share one session), minimal zero-console bot setup, and bounded setup network calls.
 - **Lark queue controls (v0.1.59–v0.1.61)** — stop the running task without cancelling the rest of the queue, and cancel an individual queued task from its own card.
 - **Lark run cards (v0.1.47–v0.1.58)** — one rich card interleaving streamed text and tools, throttled so fast tokens don't lag, a condensed panel when finished, and a Codex plan panel matching Claude's; oversized cards fall back to text instead of freezing.
 - **AskUserQuestion (v0.1.50–v0.1.55)** — rendered as a native Feishu form (single/multi-select, required fields) that becomes a read-only submitted card.
