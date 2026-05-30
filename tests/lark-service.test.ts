@@ -9801,7 +9801,7 @@ describe("lark service", () => {
               sessionId: "claude-session-card",
               dirName: "-Users-cloveric-projects-demo",
               displayName: "demo",
-              workspacePath: "/Users/cloveric/projects/demo",
+              workspacePath: stateDir, // must be an existing directory (validated on resume)
             },
           },
         },
@@ -9813,7 +9813,7 @@ describe("lark service", () => {
       expect(record?.codexSessionId).toBe("claude-session-card");
       expect(config.resume).toMatchObject({
         sessionId: "claude-session-card",
-        workspacePath: "/Users/cloveric/projects/demo",
+        workspacePath: stateDir,
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(

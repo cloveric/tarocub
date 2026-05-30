@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -620,6 +620,14 @@ export async function handleLarkCardAction(input: {
         options: larkReplyOptions(input.event.messageId, replyInThread),
         locale,
       });
+    }
+    // The "Save settings" button is a Card 2.0 form SUBMIT: Feishu's client locks
+    // a just-submitted form and reverts the in-place patch above, so the operator
+    // wouldn't see the result. Post the notice as a separate message so the save
+    // is visibly confirmed. The quick-action buttons are plain callbacks (no form
+    // lock, no revert), so they don't need this.
+    if (value.action === "submit" && notice) {
+      await input.channel.send(input.event.chatId, { text: notice }, larkReplyOptions(input.event.messageId, replyInThread));
     }
     await appendLarkCardActionTurnEvent({
       stateDir: input.stateDir,
@@ -1737,6 +1745,20 @@ async function applyLarkResumeCardAction(
       return locale === "en"
         ? "Cannot resume this session because its workspace path is unknown."
         : "无法恢复这个 session：工作区路径未知。";
+    }
+    // Validate the workspace path before writing it into config.resume — that
+    // path becomes the file-delivery root override (a deliberate trust-boundary
+    // widening), so don't accept an arbitrary/crafted card value: it must be an
+    // existing directory.
+    try {
+      const info = await stat(workspacePath);
+      if (!info.isDirectory()) {
+        throw new Error("not a directory");
+      }
+    } catch {
+      return locale === "en"
+        ? "Cannot resume this session because its workspace path is not an existing directory."
+        : "无法恢复这个 session：工作区路径不是一个有效的目录。";
     }
     await updateInstanceConfig(stateDir, (config) => {
       config.resume = {
