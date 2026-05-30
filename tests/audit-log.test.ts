@@ -49,6 +49,28 @@ describe("audit log", () => {
     }
   });
 
+  it("redacts secrets from the detail field before writing", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+
+    try {
+      await appendAuditEvent(tempDir, {
+        type: "update.handle",
+        instanceName: "default",
+        outcome: "error",
+        detail: 'request failed: app_secret=super-secret Authorization: Bearer abc.def.ghi',
+      });
+
+      const raw = await readFile(resolveAuditLogPath(tempDir), "utf8");
+      expect(raw).not.toContain("super-secret");
+      expect(raw).not.toContain("abc.def.ghi");
+      const line = JSON.parse(raw.trim());
+      expect(line.detail).toContain("app_secret=[redacted]");
+      expect(line.detail).toContain("Bearer [redacted]");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("rejects invalid audit event shapes on append", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 

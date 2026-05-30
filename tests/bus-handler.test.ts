@@ -155,6 +155,76 @@ describe("createBusTalkHandler", () => {
     }
   });
 
+  it("caps concurrent bus turns so excess requests queue", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "bus-handler-"));
+    await mkdir(root, { recursive: true });
+
+    let active = 0;
+    let maxActive = 0;
+    const releases: Array<() => void> = [];
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            releases.push(() => {
+              active -= 1;
+              resolve({ text: "done" });
+            });
+          }),
+      ),
+    };
+
+    try {
+      const handler = createBusTalkHandler({
+        bridge: bridge as never,
+        stateDir: root,
+        instanceName: "worker",
+      });
+
+      const total = 6;
+      const inflight = Array.from({ length: total }, (_, i) =>
+        handler({ fromInstance: "caller", prompt: `m${i}`, depth: 0 }),
+      );
+
+      // The cap is 4: only four turns should reach the bridge at once; the rest
+      // park in acquireBusTurnSlot() until a slot frees. Poll (generous deadline)
+      // rather than a fixed delay — the pre-bridge awaits (timeline write, budget
+      // read) are real FS ops and stagger under full-suite parallel load.
+      const deadline = Date.now() + 8000;
+      while (releases.length < 4 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(releases.length).toBe(4);
+      // The 5th/6th are blocked at the semaphore and literally cannot reach the
+      // bridge until a slot frees, so the admitted count stays pinned at the cap.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(releases.length).toBe(4);
+
+      // Drain exactly `total` turns: releasing one frees a slot, which admits a
+      // queued turn that then pushes its own release. Wait when none are pending
+      // so we never exit early and leave a turn unresolved.
+      let released = 0;
+      while (released < total) {
+        const release = releases.shift();
+        if (release) {
+          release();
+          released += 1;
+        } else {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      }
+
+      const results = await Promise.all(inflight);
+      expect(results.every((r) => r.success)).toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(total);
+      expect(maxActive).toBe(4);
+    } finally {
+      await removeTempRoot(root);
+    }
+  }, 20000);
+
   it("appends an error audit event when the bus turn fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "bus-handler-"));
     await mkdir(root, { recursive: true });

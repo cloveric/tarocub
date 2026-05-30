@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { AuditEventSchema, formatAuditSchemaError } from "./audit-log-schema.js";
 import { classifyFailure, type FailureCategory } from "../runtime/error-classification.js";
+import { redactSecrets } from "../runtime/secret-redaction.js";
 
 export interface AuditEvent {
   timestamp?: string;
@@ -59,7 +60,13 @@ export function resolveAuditLogPath(stateDir: string): string {
 
 export async function appendAuditEvent(stateDir: string, event: AuditEvent): Promise<void> {
   const filePath = resolveAuditLogPath(stateDir);
-  const materialized = { timestamp: event.timestamp ?? new Date().toISOString(), ...event };
+  const materialized = {
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    ...event,
+    // Defense-in-depth: detail is frequently a raw error message that may carry a
+    // bearer token or `*_secret=...` assignment. Scrub before it lands on disk.
+    ...(typeof event.detail === "string" ? { detail: redactSecrets(event.detail) } : {}),
+  };
   const result = AuditEventSchema.safeParse(materialized);
   if (!result.success) {
     throw new Error(`invalid audit event: ${formatAuditSchemaError(result.error)}`);

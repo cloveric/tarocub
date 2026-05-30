@@ -10,6 +10,32 @@ import {
 import { createBusErrorResponse, createBusTalkResponseEnvelope } from "./bus-protocol.js";
 import type { BusTalkHandler, BusTalkResponse } from "./bus-server.js";
 
+// Cap concurrent bus turns process-wide. Each bus request gets a unique synthetic
+// session id, so the per-session turn-lock never serializes them — without this an
+// authorized peer could fire unbounded concurrent /api/talk requests, each spawning
+// an engine subprocess and (TOCTOU on the start-of-turn budget check) overshooting
+// the budget. Excess requests queue here rather than all running at once.
+const MAX_CONCURRENT_BUS_TURNS = 4;
+let activeBusTurns = 0;
+const busTurnWaiters: Array<() => void> = [];
+
+async function acquireBusTurnSlot(): Promise<void> {
+  if (activeBusTurns < MAX_CONCURRENT_BUS_TURNS) {
+    activeBusTurns += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => busTurnWaiters.push(resolve));
+}
+
+function releaseBusTurnSlot(): void {
+  const next = busTurnWaiters.shift();
+  if (next) {
+    next(); // hand the slot to the next waiter (activeBusTurns stays at the cap)
+  } else {
+    activeBusTurns = Math.max(0, activeBusTurns - 1);
+  }
+}
+
 export function createBusTalkHandler(input: {
   bridge: Bridge;
   stateDir: string;
@@ -20,7 +46,7 @@ export function createBusTalkHandler(input: {
   // in the future (hot reload / multiple handlers), revisit this allocator.
   let busSessionCounter = 0;
 
-  return async (req): Promise<BusTalkResponse> => {
+  const runBusTurn = async (req: Parameters<BusTalkHandler>[0]): Promise<BusTalkResponse> => {
     const startedAt = Date.now();
     const busChatId = -(++busSessionCounter);
     await appendTimelineEventBestEffort(input.stateDir, {
@@ -178,6 +204,15 @@ export function createBusTalkHandler(input: {
         retryable: mapped.retryable,
         durationMs: Date.now() - startedAt,
       });
+    }
+  };
+
+  return async (req): Promise<BusTalkResponse> => {
+    await acquireBusTurnSlot();
+    try {
+      return await runBusTurn(req);
+    } finally {
+      releaseBusTurnSlot();
     }
   };
 }

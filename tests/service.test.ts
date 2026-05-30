@@ -4707,8 +4707,14 @@ describe("polling helpers", () => {
       expect(result.hadUpdates).toBe(true);
       expect(result.conflict).toBe(false);
 
-      // Wait for background processing to complete
-      await new Promise((r) => setTimeout(r, 100));
+      // Wait for background processing to complete. Poll for the late completed-state
+      // write attempt (the final step) rather than a fixed delay: the latter starves
+      // under full-suite parallel load and made this test flaky. Once update() has been
+      // attempted, the delivery (sendMessage) and any error have already happened.
+      const deadline = Date.now() + 2000;
+      while (updateSpy.mock.calls.length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
       expect(api.sendMessage).toHaveBeenCalledWith(123, "continuation complete", expect.anything());
       expect(logger.error).not.toHaveBeenCalled();
 

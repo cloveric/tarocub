@@ -2,6 +2,7 @@ import { mkdir, open } from "node:fs/promises";
 import path from "node:path";
 
 import { TimelineEventSchema, formatTimelineSchemaError } from "./timeline-log-schema.js";
+import { redactSecrets } from "../runtime/secret-redaction.js";
 
 export interface TimelineEvent {
   timestamp?: string;
@@ -82,7 +83,13 @@ export function resolveTimelineLogPath(stateDir: string): string {
 
 export async function appendTimelineEvent(stateDir: string, event: TimelineEvent): Promise<void> {
   const filePath = resolveTimelineLogPath(stateDir);
-  const materialized = { timestamp: event.timestamp ?? new Date().toISOString(), ...event };
+  const materialized = {
+    timestamp: event.timestamp ?? new Date().toISOString(),
+    ...event,
+    // Defense-in-depth: detail is frequently a raw error message that may carry a
+    // bearer token or `*_secret=...` assignment. Scrub before it lands on disk.
+    ...(typeof event.detail === "string" ? { detail: redactSecrets(event.detail) } : {}),
+  };
   const result = TimelineEventSchema.safeParse(materialized);
   if (!result.success) {
     throw new Error(`invalid timeline event: ${formatTimelineSchemaError(result.error)}`);
