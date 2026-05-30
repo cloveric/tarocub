@@ -224,9 +224,52 @@ export function extractCodexToolItem(item: unknown): CodexToolItemEvent | null {
         isError: isErrorStatus,
       };
     }
+    case "plan":
+    case "update_plan": {
+      // Codex's plan/checklist — render it like Claude's TodoWrite plan panel.
+      const todos = codexPlanTodos(rec.plan ?? rec.steps ?? rec.items);
+      if (!todos) {
+        return null;
+      }
+      return {
+        toolName: "TodoWrite",
+        toolInput: { todos },
+        ...(id ? { toolUseId: id } : {}),
+        isError: false,
+      };
+    }
     default:
       return null;
   }
+}
+
+/**
+ * Convert Codex plan steps (`[{step, status}]`, status pending/in_progress/
+ * completed) into the TodoWrite todo shape the run card's plan panel renders.
+ * Returns null when there is nothing usable. Field access is defensive because
+ * Codex's payload shape varies across versions.
+ */
+export function codexPlanTodos(planValue: unknown): Array<{ content: string; status: string; activeForm: string }> | null {
+  const arr = Array.isArray(planValue)
+    ? planValue
+    : (planValue && typeof planValue === "object" && Array.isArray((planValue as Record<string, unknown>).steps)
+      ? (planValue as Record<string, unknown>).steps as unknown[]
+      : undefined);
+  if (!arr) {
+    return null;
+  }
+  const todos = arr
+    .map((entry) => {
+      const step = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+      const content = typeof step.step === "string" ? step.step
+        : typeof step.content === "string" ? step.content
+        : typeof step.text === "string" ? step.text
+        : "";
+      const status = typeof step.status === "string" ? step.status : "pending";
+      return { content: content.trim(), status, activeForm: content.trim() };
+    })
+    .filter((todo) => todo.content.length > 0);
+  return todos.length > 0 ? todos : null;
 }
 
 function resolveTurnApprovalPolicy(
@@ -773,6 +816,24 @@ export class CodexAppServerAdapter implements CodexAdapter {
         void Promise.resolve(pending?.onEngineEvent?.({
           type: "thinking",
           text: delta,
+          sessionId: threadId,
+        })).catch(() => {});
+      }
+      return;
+    }
+
+    if (parsed.method === "turn/plan/updated") {
+      // Codex's plan/checklist (the `update_plan` tool). Surface it the same way
+      // as Claude's TodoWrite so the run card shows the live plan panel.
+      const threadId = this.readString(parsed.params?.threadId);
+      const todos = codexPlanTodos((parsed.params as Record<string, unknown> | undefined)?.plan);
+      if (threadId && todos) {
+        this.noteTurnActivity(threadId, parsed.method);
+        const pending = this.pendingTurns.get(threadId);
+        void Promise.resolve(pending?.onEngineEvent?.({
+          type: "tool_use",
+          toolName: "TodoWrite",
+          toolInput: { todos },
           sessionId: threadId,
         })).catch(() => {});
       }

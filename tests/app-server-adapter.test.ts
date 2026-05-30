@@ -13,6 +13,7 @@ import {
   CODEX_APP_SERVER_TURN_TIMEOUT_MS,
   CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS,
   CodexAppServerAdapter,
+  codexPlanTodos,
   extractCodexToolItem,
 } from "../src/codex/app-server-adapter.js";
 
@@ -52,6 +53,43 @@ describe("extractCodexToolItem", () => {
     expect(extractCodexToolItem({ type: "agentMessage", text: "hi" })).toBeNull();
     expect(extractCodexToolItem(null)).toBeNull();
     expect(extractCodexToolItem("nope")).toBeNull();
+  });
+
+  it("maps a Codex plan item to a TodoWrite event (so the plan panel renders)", () => {
+    // Shape confirmed from the Codex app-server: turn/plan/updated → { plan: [{step, status}] }.
+    expect(extractCodexToolItem({
+      type: "plan",
+      plan: [
+        { step: "Read the code", status: "completed" },
+        { step: "Write tests", status: "in_progress" },
+        { step: "Ship", status: "pending" },
+      ],
+    })).toMatchObject({
+      toolName: "TodoWrite",
+      toolInput: { todos: [
+        { content: "Read the code", status: "completed" },
+        { content: "Write tests", status: "in_progress" },
+        { content: "Ship", status: "pending" },
+      ] },
+    });
+  });
+});
+
+describe("codexPlanTodos", () => {
+  it("converts Codex plan steps to TodoWrite todos", () => {
+    expect(codexPlanTodos([{ step: "A", status: "completed" }, { step: "B", status: "pending" }])).toEqual([
+      { content: "A", status: "completed", activeForm: "A" },
+      { content: "B", status: "pending", activeForm: "B" },
+    ]);
+  });
+  it("accepts a { steps: [...] } wrapper and drops empty steps", () => {
+    expect(codexPlanTodos({ steps: [{ step: "X", status: "in_progress" }, { step: "  ", status: "pending" }] }))
+      .toEqual([{ content: "X", status: "in_progress", activeForm: "X" }]);
+  });
+  it("returns null for nothing usable", () => {
+    expect(codexPlanTodos(undefined)).toBeNull();
+    expect(codexPlanTodos([])).toBeNull();
+    expect(codexPlanTodos("nope")).toBeNull();
   });
 });
 
