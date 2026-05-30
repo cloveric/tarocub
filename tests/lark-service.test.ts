@@ -1657,12 +1657,12 @@ describe("lark service", () => {
       );
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("飞书 Docs 评论 @bot") },
+        { markdown: expect.stringContaining("**会话**") },
         { replyTo: "om_help", replyInThread: false },
       );
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("`lark.card`") },
+        { markdown: expect.stringContaining("/code-review") },
         { replyTo: "om_help", replyInThread: false },
       );
       expect(channel.send).toHaveBeenCalledWith(
@@ -1697,7 +1697,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("Common commands:") },
+        { markdown: expect.stringContaining("**Session**") },
         { replyTo: "om_help_en", replyInThread: false },
       );
       expect(channel.send).toHaveBeenCalledWith(
