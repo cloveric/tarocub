@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  OPTIONAL_LARK_SCOPES,
   REQUIRED_LARK_CALLBACKS,
   REQUIRED_LARK_EVENTS,
   REQUIRED_LARK_SCOPES,
@@ -235,236 +236,85 @@ describe("provisionLarkApp", () => {
     expect(result.applied).toBe(true);
   });
 
-  it("reports required scopes that are not present in the app configuration", async () => {
+  it("treats auto-granted core scopes as required-ok and advanced ones as optional (non-blocking)", async () => {
+    // grantAllRequiredScopes grants exactly the core set Feishu auto-grants on
+    // QR registration; the advanced scopes are not configured, so they land in
+    // missingOptionalScopes and never block.
+    const client = createProvisioningClientMock({
+      scopes: grantAllRequiredScopes(),
+      apps: [appProvisioning({ callbacks: [...REQUIRED_LARK_CALLBACKS], events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"] })],
+    });
+
+    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
+    const formatted = formatLarkProvisioningResult(result).join("\n");
+
+    expect(result.missingScopes).toEqual([]);
+    expect(result.unauthorizedScopes).toEqual([]);
+    expect(result.missingOptionalScopes).toEqual([...OPTIONAL_LARK_SCOPES]);
+    expect(formatted).toContain("Lark required scopes: ok");
+    expect(formatted).toContain("Optional — scopes (advanced features, not required to run)");
+  });
+
+  it("reports a missing CORE scope as blocking", async () => {
     const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:resource");
     const client = createProvisioningClientMock({
       scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
+      apps: [appProvisioning({ callbacks: [...REQUIRED_LARK_CALLBACKS], events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"] })],
     });
 
     const result = await provisionLarkApp({ appId: "cli_app", appSecret: "secret", client });
 
     expect(client.application.scope.apply).not.toHaveBeenCalled();
-    expect(client.application.application.patch).not.toHaveBeenCalled();
     expect(result.missingScopes).toEqual(["im:resource"]);
-    expect(formatLarkProvisioningResult(result).join("\n")).toContain("Scopes not present in app config: im:resource");
+    expect(formatLarkProvisioningResult(result).join("\n")).toContain("Core scopes not present in app config: im:resource");
   });
 
-  it("requires the base bot message scope used by Feishu for message receive and send", async () => {
-    const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message");
+  it("surfaces advanced scopes as optional, with a console link, JSON, and per-feature guidance", async () => {
     const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
-    });
-
-    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
-    const formatted = formatLarkProvisioningResult(result).join("\n");
-
-    expect(result.missingScopes).toEqual(["im:message"]);
-    expect(formatted).toContain("Scopes not present in app config: im:message");
-    expect(formatted).toContain("Lark message receive/send needs the base im:message scope");
-  });
-
-  it("explains that group-all mode needs the ordinary group message scope", async () => {
-    const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message.group_msg");
-    const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
-    });
-
-    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
-    const formatted = formatLarkProvisioningResult(result).join("\n");
-
-    expect(result.missingScopes).toEqual(["im:message.group_msg"]);
-    expect(formatted).toContain("Lark /group all requires im:message.group_msg");
-    expect(formatted).toContain("ordinary group messages may not reach the bot");
-    expect(formatted).toContain("not part of the PersonalAgent QR wizard default");
-    expect(formatted).toContain("add or bulk-import im:message.group_msg");
-    expect(formatted).toContain('Bulk import missing scopes JSON: {"scopes":{"tenant":["im:message.group_msg"]}}');
-    expect(formatted).toContain("node dist/src/index.js lark permissions --missing");
-    expect(formatted).toContain("then rerun lark provision and lark doctor");
-    expect(formatted).not.toContain("recreate the app with the QR wizard");
-  });
-
-  it("prints a direct app permission console link when app id is available", async () => {
-    const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message.group_msg");
-    const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
+      scopes: grantAllRequiredScopes(),
+      apps: [appProvisioning({ callbacks: [...REQUIRED_LARK_CALLBACKS], events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"] })],
     });
 
     const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
     const formatted = formatLarkProvisioningResult(result, { appId: "cli_app" }).join("\n");
 
-    expect(formatted).toContain("Permissions page: https://open.feishu.cn/app/cli_app/auth");
-    expect(formatted).toContain('Bulk import missing scopes JSON: {"scopes":{"tenant":["im:message.group_msg"]}}');
+    expect(result.missingScopes).toEqual([]);
+    expect(result.missingOptionalScopes).toContain("im:message.group_msg");
+    expect(result.missingOptionalScopes).toContain("sheets:spreadsheet:create");
+    expect(result.missingOptionalScopes).toContain("docs:permission.member:create");
+    // Surfaced as optional (info) — never blocking. Stable "Optional — " prefix.
+    expect(formatted).toContain("Optional — scopes (advanced features, not required to run)");
+    expect(formatted).toContain("Optional — permissions page (only if you want these): https://open.feishu.cn/app/cli_app/auth");
+    expect(formatted).toContain("Optional — bulk-import JSON (only if you want these):");
+    expect(formatted).toContain("im:message.group_msg");
+    expect(formatted).toContain("sheets:spreadsheet:create");
+    expect(formatted).toContain("Optional — to receive ordinary (non-@) group messages (/group all), add im:message.group_msg");
+    expect(formatted).toContain("Optional — to enable Feishu Sheets workflows");
+    expect(formatted).toContain("Optional — to resolve @name mentions to native at-tags");
+    expect(formatted).toContain("Optional — to let created docs auto-grant back to the requester");
+    // A fresh app's core scopes are still "ok".
+    expect(formatted).toContain("Lark required scopes: ok");
   });
 
-  it("explains that Lark running feedback reactions need reaction write scope", async () => {
-    const scopes = grantAllRequiredScopes().filter((scope) => scope.scope_name !== "im:message.reactions:write_only");
-    const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
-    });
-
-    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
-    const formatted = formatLarkProvisioningResult(result).join("\n");
-
-    expect(result.missingScopes).toEqual(["im:message.reactions:write_only"]);
-    expect(formatted).toContain("Lark running feedback reactions require im:message.reactions:write_only");
-  });
-
-  it("includes the bot-mention group scope for Lark agent-to-agent workflows", () => {
-    expect(REQUIRED_LARK_SCOPES).toContain("im:message");
-    expect(REQUIRED_LARK_SCOPES).toContain("im:message.group_at_msg.include_bot:readonly");
-    expect(formatLarkTenantScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("\"im:message\"");
-    expect(formatLarkTenantScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("im:message.group_at_msg.include_bot:readonly");
-  });
-
-  it("includes chat creation scopes for Lark /newgroup workflows", () => {
-    expect(REQUIRED_LARK_SCOPES).toContain("im:chat");
-    expect(REQUIRED_LARK_SCOPES).toContain("im:chat:create");
-    expect(REQUIRED_LARK_SCOPES).not.toContain("im:chat:create_by_user");
-    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain('"tenant":["im:chat","im:chat:create"');
-    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).not.toContain("im:chat:create_by_user");
-  });
-
-  it("includes reaction write scope for Lark running feedback", () => {
-    expect(REQUIRED_LARK_SCOPES).toContain("im:message.reactions:write_only");
-    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("im:message.reactions:write_only");
-  });
-
-  it("does not describe /newgroup repair when only mention member-read scope is missing", async () => {
-    const scopes = grantAllRequiredScopes()
-      .filter((scope) => scope.scope_name !== "im:chat.members:read");
-    const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
-    });
-
-    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
-    const formatted = formatLarkProvisioningResult(result).join("\n");
-
-    expect(result.missingScopes).toEqual(["im:chat.members:read"]);
-    expect(formatted).toContain("Lark @name mention resolution requires im:chat.members:read");
-    expect(formatted).toContain("Add or bulk-import im:chat.members:read");
-    expect(formatted).not.toContain("Lark /newgroup requires im:chat");
-    expect(formatted).not.toContain("Smoke test `/newgroup CCTB smoke test`");
-    expect(formatted).not.toContain("missing chat-creation scopes");
-  });
-
-  it("includes document permission scopes for lark.doc.create auto-grant", () => {
-    expect(REQUIRED_LARK_SCOPES).toContain("docs:permission.member:create");
-    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("docs:permission.member:create");
-  });
-
-  it("includes spreadsheet scopes for Lark Sheets workflows", () => {
-    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet:create");
-    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet:read");
-    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet:write_only");
-    expect(REQUIRED_LARK_SCOPES).toContain("sheets:spreadsheet.meta:read");
-    expect(formatLarkScopeImportJson(REQUIRED_LARK_SCOPES)).toContain("sheets:spreadsheet:create");
-  });
-
-  it("explains that /newgroup needs the bot chat creation scopes", async () => {
-    const scopes = grantAllRequiredScopes()
-      .filter((scope) => scope.scope_name !== "im:chat");
-    const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
-    });
-
-    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
-    const formatted = formatLarkProvisioningResult(result).join("\n");
-
-    expect(result.missingScopes).toEqual(["im:chat"]);
-    expect(formatted).toContain("Lark /newgroup requires im:chat and im:chat:create for bot-created project groups");
-    expect(formatted).toContain("cannot create fresh Lark project groups");
-    expect(formatted).toContain('Bulk import missing scopes JSON: {"scopes":{"tenant":["im:chat"]}}');
-    expect(formatted).toContain("Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open");
-    expect(formatted).toContain("Publish the app version");
-    expect(formatted).toContain("Rerun `node dist/src/index.js lark provision`");
-    expect(formatted).toContain("Smoke test `/newgroup CCTB smoke test`");
-  });
-
-  it("explains that lark.doc.create needs document collaborator grant permission", async () => {
-    const scopes = grantAllRequiredScopes()
-      .filter((scope) => scope.scope_name !== "docs:permission.member:create");
-    const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
-    });
-
-    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
-    const formatted = formatLarkProvisioningResult(result).join("\n");
-
-    expect(result.missingScopes).toEqual(["docs:permission.member:create"]);
-    expect(formatted).toContain("Lark document creation needs docs:permission.member:create");
-    expect(formatted).toContain("auto-grant the created document back to the requester");
-    expect(formatted).toContain("Permission denied auto-grant warning");
-    expect(formatted).toContain("user identity is missing");
-  });
-
-  it("explains that Lark Sheets workflows need spreadsheet scopes and user OAuth", async () => {
-    const scopes = grantAllRequiredScopes()
-      .filter((scope) => scope.scope_name !== "sheets:spreadsheet:create");
-    const client = createProvisioningClientMock({
-      scopes,
-      apps: [
-        appProvisioning({
-          callbacks: [...REQUIRED_LARK_CALLBACKS],
-          events: [...REQUIRED_LARK_EVENTS, "drive.notice.comment_add_v1"],
-        }),
-      ],
-    });
-
-    const result = await inspectLarkAppProvisioning({ appId: "cli_app", appSecret: "secret", client });
-    const formatted = formatLarkProvisioningResult(result).join("\n");
-
-    expect(result.missingScopes).toEqual(["sheets:spreadsheet:create"]);
-    expect(formatted).toContain("Lark Sheets workflows need spreadsheet create/read/write/meta scopes");
-    expect(formatted).toContain("lark auth start --scope");
-    expect(formatted).toContain("sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read");
+  it("keeps auto-granted scopes in REQUIRED (core) and advanced ones in OPTIONAL, disjoint", () => {
+    for (const scope of [
+      "im:chat:create", "im:message:send_as_bot", "im:message:readonly", "im:message.reactions:write_only",
+      "im:resource", "cardkit:card:read", "cardkit:card:write", "docx:document:create",
+      "docs:document.comment:create", "drive:drive.metadata:readonly",
+    ]) {
+      expect(REQUIRED_LARK_SCOPES).toContain(scope);
+    }
+    for (const scope of [
+      "im:message", "im:message.group_msg", "im:chat", "im:chat.members:read",
+      "docs:permission.member:create", "sheets:spreadsheet:create", "sheets:spreadsheet:read",
+      "sheets:spreadsheet:write_only", "sheets:spreadsheet.meta:read",
+    ]) {
+      expect(OPTIONAL_LARK_SCOPES).toContain(scope);
+      expect(REQUIRED_LARK_SCOPES).not.toContain(scope);
+    }
+    expect(REQUIRED_LARK_SCOPES.some((scope) => (OPTIONAL_LARK_SCOPES as readonly string[]).includes(scope))).toBe(false);
+    expect(formatLarkScopeImportJson(OPTIONAL_LARK_SCOPES)).toContain("sheets:spreadsheet:create");
+    expect(formatLarkScopeImportJson(OPTIONAL_LARK_SCOPES)).toContain("im:message.group_msg");
   });
 
   it("renders im:chat:create_by_user as a user-scope import instead of tenant-scope JSON", () => {

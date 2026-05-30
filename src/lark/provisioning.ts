@@ -2,14 +2,14 @@ import { Client, Domain } from "@larksuiteoapi/node-sdk";
 
 import { redactLarkSensitiveText } from "./redaction.js";
 
+// Core scopes for a working chat bot: receive/send messages, interactive cards,
+// and basic Docs. Verified (2026-05-30) to be AUTO-GRANTED by Feishu's
+// PersonalAgent QR registration, so a fresh scan needs ZERO manual console work.
+// These block service start if somehow missing.
 export const REQUIRED_LARK_SCOPES = [
-  "im:chat",
   "im:chat:create",
-  "im:chat.members:read",
-  "im:message",
   "im:message.group_at_msg.include_bot:readonly",
   "im:message.group_at_msg:readonly",
-  "im:message.group_msg",
   "im:message.p2p_msg:readonly",
   "im:message.reactions:write_only",
   "im:message:readonly",
@@ -20,10 +20,21 @@ export const REQUIRED_LARK_SCOPES = [
   "docx:document:create",
   "docx:document:readonly",
   "docx:document:write_only",
-  "docs:permission.member:create",
   "drive:drive.metadata:readonly",
   "docs:document.comment:read",
   "docs:document.comment:create",
+] as const;
+
+// Advanced scopes that the PersonalAgent QR registration does NOT auto-grant.
+// They power opt-in features (ordinary group messages, Sheets, doc permission
+// granting, full chat management). Surfaced as optional — they do NOT block
+// setup; add them in the console only when you enable those features.
+export const OPTIONAL_LARK_SCOPES = [
+  "im:message",
+  "im:message.group_msg",
+  "im:chat",
+  "im:chat.members:read",
+  "docs:permission.member:create",
   "sheets:spreadsheet:create",
   "sheets:spreadsheet:read",
   "sheets:spreadsheet:write_only",
@@ -59,6 +70,8 @@ export interface LarkProvisioningResult {
   grantedScopes: string[];
   missingScopes: string[];
   unauthorizedScopes: string[];
+  /** Advanced scopes (OPTIONAL_LARK_SCOPES) not configured/granted — non-blocking. */
+  missingOptionalScopes: string[];
   subscribedCallbacks: string[];
   missingCallbacks: string[];
   subscribedEvents: string[];
@@ -146,7 +159,9 @@ export function formatLarkProvisioningResult(
     lines.push(`Unauthorized scopes: ${result.unauthorizedScopes.join(", ")}`);
   }
   if (result.missingScopes.length > 0) {
-    lines.push(`Scopes not present in app config: ${result.missingScopes.join(", ")}`);
+    // Core scopes are normally auto-granted by the PersonalAgent QR registration,
+    // so this should be rare; if it happens, it blocks the bot and needs fixing.
+    lines.push(`Core scopes not present in app config: ${result.missingScopes.join(", ")}`);
     if (options.appId) {
       lines.push(`Permissions page: ${formatLarkPermissionConsoleUrl(options.appId, options.domain)}`);
     }
@@ -154,40 +169,33 @@ export function formatLarkProvisioningResult(
     lines.push("Run `node dist/src/index.js lark permissions --missing` to reprint only the currently missing scopes.");
     lines.push(...formatLarkScopeImportNextSteps(result.missingScopes, options));
   }
-  if (result.missingScopes.includes("im:message")) {
-    lines.push("Lark message receive/send needs the base im:message scope; without it, broad group-message delivery may stay filtered even when narrower message scopes are present.");
-    lines.push("Add or bulk-import im:message in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
-  }
-  if (result.missingScopes.includes("im:message.group_msg")) {
-    lines.push("Lark /group all requires im:message.group_msg; without it, ordinary group messages may not reach the bot.");
-    lines.push("This scope is not part of the PersonalAgent QR wizard default; add or bulk-import im:message.group_msg in the Feishu/Lark app permissions UI, then rerun lark provision and lark doctor.");
-  }
-  if (result.missingScopes.includes("im:message.reactions:write_only")) {
-    lines.push("Lark running feedback reactions require im:message.reactions:write_only; without it, the bot still replies normally but cannot show processing/done/error reactions.");
-    lines.push("Add or bulk-import im:message.reactions:write_only in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
-  }
-  if (result.missingScopes.includes("im:chat") || result.missingScopes.includes("im:chat:create")) {
-    lines.push("Lark /newgroup requires im:chat and im:chat:create for bot-created project groups; without them, the bot may receive messages but cannot create fresh Lark project groups.");
-    lines.push("If you set CCTB_LARK_CHAT_CREATE_AS=user, also add the user-scope im:chat:create_by_user.");
-    lines.push("Add or bulk-import the missing chat-creation scopes in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
-  }
-  if (result.missingScopes.includes("im:chat.members:read")) {
-    lines.push("Lark @name mention resolution requires im:chat.members:read so the bridge can map display names to native Feishu/Lark at tags.");
-    lines.push("Add or bulk-import im:chat.members:read in the Feishu/Lark app permissions UI, publish the app version, then rerun lark provision and lark doctor.");
-  }
-  if (result.missingScopes.includes("docs:permission.member:create")) {
-    lines.push("Lark document creation needs docs:permission.member:create so lark-cli can auto-grant the created document back to the requester.");
-    lines.push("Without it, lark.doc.create may create the document but print a Permission denied auto-grant warning.");
-    lines.push("After the scope is granted, run lark auth start/finish if lark auth status says the lark-channel user identity is missing; app permission and user identity are both needed for auto-grant.");
-  }
-  if (
-    result.missingScopes.includes("sheets:spreadsheet:create") ||
-    result.missingScopes.includes("sheets:spreadsheet:read") ||
-    result.missingScopes.includes("sheets:spreadsheet:write_only") ||
-    result.missingScopes.includes("sheets:spreadsheet.meta:read")
-  ) {
-    lines.push("Lark Sheets workflows need spreadsheet create/read/write/meta scopes so agents can create, inspect, read, and update Feishu spreadsheets through lark-cli.");
-    lines.push("After the app scopes are granted, run `node dist/src/index.js lark auth start --scope \"sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read\"` and finish the device flow for user-backed Sheets actions.");
+  if (result.missingOptionalScopes.length > 0) {
+    // Advanced, opt-in scopes the QR registration does NOT auto-grant. They are
+    // not required to run; surface them with a stable "Optional — " prefix so
+    // doctor renders them as info (never a blocking warning).
+    const optional: string[] = [
+      `scopes (advanced features, not required to run): ${result.missingOptionalScopes.join(", ")}`,
+    ];
+    if (options.appId) {
+      optional.push(`permissions page (only if you want these): ${formatLarkPermissionConsoleUrl(options.appId, options.domain)}`);
+    }
+    optional.push(`bulk-import JSON (only if you want these): ${formatLarkScopeImportJson(result.missingOptionalScopes)}`);
+    if (result.missingOptionalScopes.includes("im:message.group_msg")) {
+      optional.push("to receive ordinary (non-@) group messages (/group all), add im:message.group_msg, publish the app version, then rerun lark provision.");
+    }
+    if (result.missingOptionalScopes.includes("im:message") || result.missingOptionalScopes.includes("im:chat")) {
+      optional.push("for broad group-message delivery and full chat management, add im:message and im:chat.");
+    }
+    if (result.missingOptionalScopes.includes("im:chat.members:read")) {
+      optional.push("to resolve @name mentions to native at-tags in groups, add im:chat.members:read.");
+    }
+    if (result.missingOptionalScopes.includes("docs:permission.member:create")) {
+      optional.push("to let created docs auto-grant back to the requester (instead of a Permission denied warning), add docs:permission.member:create.");
+    }
+    if (result.missingOptionalScopes.some((scope) => scope.startsWith("sheets:"))) {
+      optional.push("to enable Feishu Sheets workflows, add the sheets:spreadsheet:* scopes; for user-backed Sheets also run `node dist/src/index.js lark auth start --scope \"sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read\"`.");
+    }
+    lines.push(...optional.map((line) => `Optional — ${line}`));
   }
   return lines;
 }
@@ -258,6 +266,7 @@ async function readLarkAppProvisioning(client: LarkProvisioningClient, appId: st
     .sort();
   const missingScopes = REQUIRED_LARK_SCOPES.filter((scope) => !scopeStatus.has(scope));
   const unauthorizedScopes = REQUIRED_LARK_SCOPES.filter((scope) => scopeStatus.has(scope) && scopeStatus.get(scope) !== 1);
+  const missingOptionalScopes = OPTIONAL_LARK_SCOPES.filter((scope) => scopeStatus.get(scope) !== 1);
   const canPatchSubscriptions = LARK_APP_SUBSCRIPTION_PATCH_SCOPES.some((scope) => scopeStatus.get(scope) === 1);
   const app = appResult.data?.app;
   const subscribedCallbacks = app?.callback_info?.subscribed_callbacks ?? app?.callback?.subscribed_callbacks ?? [];
@@ -269,6 +278,7 @@ async function readLarkAppProvisioning(client: LarkProvisioningClient, appId: st
     grantedScopes,
     missingScopes,
     unauthorizedScopes,
+    missingOptionalScopes,
     subscribedCallbacks,
     missingCallbacks: REQUIRED_LARK_CALLBACKS.filter((callback) => !subscribedCallbacks.includes(callback)),
     subscribedEvents,
