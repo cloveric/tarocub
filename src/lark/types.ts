@@ -66,6 +66,14 @@ export interface LarkChannelLike {
   downloadResource(fileKey: string, type: "image" | "file"): Promise<Buffer>;
   fetchMessage?(messageId: string): Promise<LarkFetchedMessage | null>;
   getChatMode?(chatId: string): Promise<LarkChatMode>;
+  /**
+   * Whether the chat is in topic-message form, i.e. each topic should be its own
+   * isolated session. True for a native topic group (chat_mode='topic') and for
+   * a conversation group switched to the topic message form
+   * (group_message_type='thread'); false for the default conversation form
+   * (group_message_type='chat'), whose topic replies share the one group session.
+   */
+  getChatTopicForm?(chatId: string): Promise<boolean>;
 }
 
 export interface LarkFetchedMessage {

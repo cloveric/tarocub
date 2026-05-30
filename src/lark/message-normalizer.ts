@@ -128,17 +128,24 @@ export function larkSessionThreadIdForMessage(
   threadId?: string,
   chatMode?: LarkChatMode,
 ): string | undefined {
-  // A 1:1 chat never has topics; its reply thread ids must not split the single
-  // private conversation.
-  if (chatType === "p2p" || chatMode === "p2p") {
-    return undefined;
-  }
-  // Any other chat: a message that belongs to a thread/topic is its own
-  // conversation, isolated by thread id. This holds both for a topic group
-  // (chat_mode='topic') and for a normal group that merely has topic replies
-  // (chat_mode='group' + thread_id) — without this the latter's separate topics
-  // all collapse into one shared group context.
-  return threadId;
+  // Isolate by thread only when the chat is in topic-message form. The caller
+  // (resolveLarkMessageChatMode) resolves chatMode to "topic" for both a native
+  // topic group (chat_mode='topic') and a conversation group switched to the
+  // topic message form (group_message_type='thread'); a conversation-form group
+  // stays "group" so its topic replies share the one group session.
+  const effectiveMode = chatMode ?? (chatType === "p2p" ? "p2p" : "topic");
+  return effectiveMode === "topic" ? threadId : undefined;
+}
+
+/**
+ * Decide, from a Feishu `im.v1.chat.get` payload, whether a chat is in
+ * topic-message form (each topic = its own isolated session). True for a native
+ * topic group (`chat_mode: "topic"`) and for a conversation group switched to
+ * the topic message form (`group_message_type: "thread"`). The default
+ * conversation form (`group_message_type: "chat"`) shares one group session.
+ */
+export function larkChatIsTopicForm(chat: { chat_mode?: unknown; group_message_type?: unknown }): boolean {
+  return chat.chat_mode === "topic" || chat.group_message_type === "thread";
 }
 
 export function larkAccessConversationKeyFromConversationKey(conversationKey: string): string {

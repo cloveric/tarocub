@@ -24,7 +24,7 @@ import { startLarkHealthMonitor, type LarkHealthMonitor } from "./health.js";
 import { larkOperatorRawId } from "./identity.js";
 import { resolveLarkLocale } from "./locale.js";
 import { handleLarkMessage } from "./message-handler.js";
-import { buildLarkConversationKey, larkSessionThreadIdForMessage, stableLarkNumericId } from "./message-normalizer.js";
+import { buildLarkConversationKey, larkChatIsTopicForm, larkSessionThreadIdForMessage, stableLarkNumericId } from "./message-normalizer.js";
 import { resolveLarkReactionSettings } from "./reactions.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { renderLarkUserFacingError } from "./errors.js";
@@ -60,6 +60,11 @@ export type {
   LarkServiceLogger,
   LarkStreamControllerLike,
 } from "./types.js";
+
+/** Minimal shape of the SDK channel's raw client used to read a chat's form. */
+interface LarkRawChatClient {
+  im: { v1: { chat: { get(args: { path: { chat_id: string } }): Promise<{ data?: Record<string, unknown> }> } } };
+}
 
 export async function runLarkService(
   env: LarkRuntimeEnv = process.env,
@@ -166,6 +171,21 @@ export async function runLarkService(
     channel = options.createChannel
       ? options.createChannel(channelOptions)
       : createLarkChannel(channelOptions) as LarkRuntimeChannelLike;
+
+    // The SDK channel only exposes chat_mode via getChatMode, but topic
+    // isolation also depends on group_message_type (a conversation group can be
+    // switched to the topic message form). Read both off the raw client so each
+    // topic in a topic-form chat gets its own session, while a conversation-form
+    // group keeps sharing one. Attached only when the SDK exposes rawClient.
+    if (!channel.getChatTopicForm) {
+      const rawClient = (channel as { rawClient?: unknown }).rawClient as LarkRawChatClient | undefined;
+      if (typeof rawClient?.im?.v1?.chat?.get === "function") {
+        channel.getChatTopicForm = async (chatId: string): Promise<boolean> => {
+          const response = await rawClient.im.v1.chat.get({ path: { chat_id: chatId } });
+          return larkChatIsTopicForm(response?.data ?? {});
+        };
+      }
+    }
 
     channel.on("message", async (message) => {
       try {

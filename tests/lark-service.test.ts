@@ -185,10 +185,10 @@ describe("lark service", () => {
     }
   });
 
-  it("isolates a Lark group topic reply into its own thread session", async () => {
+  it("isolates a topic reply in a topic-form group into its own thread session", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-thread-session-"));
     const channel = fakeChannel({
-      getChatMode: vi.fn(async () => "group"),
+      getChatTopicForm: vi.fn(async () => true), // topic message form (thread / topic group)
     });
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
@@ -210,9 +210,7 @@ describe("lark service", () => {
         }),
       });
 
-      // A threaded message is a topic conversation regardless of the group's
-      // chat_mode, so we don't even need to query getChatMode.
-      expect(channel.getChatMode).not.toHaveBeenCalled();
+      expect(channel.getChatTopicForm).toHaveBeenCalledWith("oc_chat");
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         chatType: "group",
         conversationKey: "lark:oc_chat:omt_group_reply",
@@ -230,7 +228,43 @@ describe("lark service", () => {
     }
   });
 
-  it("preserves an existing Lark thread session even when chat mode later resolves to group", async () => {
+  it("keeps a conversation-form group's topic reply in the shared group session", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-convo-thread-session-"));
+    const channel = fakeChannel({
+      getChatTopicForm: vi.fn(async () => false), // conversation message form (group_message_type=chat)
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_convo_thread",
+          chatType: "group",
+          threadId: "omt_convo_reply",
+          mentionedBot: true,
+          content: "继续",
+        }),
+      });
+
+      expect(channel.getChatTopicForm).toHaveBeenCalledWith("oc_chat");
+      // Conversation form: the topic reply shares the one group session.
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chatType: "group",
+        conversationKey: "lark:oc_chat",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes an existing thread session in a topic-form group", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-existing-thread-session-"));
     const threadConversationKey = "lark:oc_chat:omt_existing_thread";
     await new SessionStore(path.join(stateDir, "session.json")).upsert({
@@ -241,7 +275,7 @@ describe("lark service", () => {
       updatedAt: new Date("2026-05-29T06:20:00.000Z").toISOString(),
     });
     const channel = fakeChannel({
-      getChatMode: vi.fn(async () => "group"),
+      getChatTopicForm: vi.fn(async () => true),
     });
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
@@ -263,9 +297,7 @@ describe("lark service", () => {
         }),
       });
 
-      // The thread is its own topic conversation, so its existing session is
-      // resumed by thread key without consulting the group's chat_mode.
-      expect(channel.getChatMode).not.toHaveBeenCalled();
+      // The topic is isolated by thread key, so its existing session is resumed.
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         chatType: "group",
         conversationKey: threadConversationKey,
@@ -10612,6 +10644,7 @@ type FakeLarkChannel = ReturnType<typeof baseFakeChannel> & {
   removeReaction?: ReturnType<typeof vi.fn>;
   removeReactionByEmoji?: ReturnType<typeof vi.fn>;
   getChatMode?: ReturnType<typeof vi.fn>;
+  getChatTopicForm?: ReturnType<typeof vi.fn>;
   rawClient?: unknown;
 };
 

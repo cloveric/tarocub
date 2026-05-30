@@ -141,15 +141,7 @@ async function resolveLarkMessageChatMode(
   if (message.chatType === "p2p") {
     return { ...message, chatMode: "p2p" };
   }
-  // A message that belongs to a thread/topic is its own topic conversation —
-  // both in a topic group (chat_mode='topic') and in a normal group that merely
-  // has topic replies (chat_mode='group' + thread_id). Treating it as topic is
-  // what keeps each topic's context isolated; otherwise the normal group's
-  // separate topics all collapse into one shared group session.
-  if (message.threadId) {
-    return { ...message, chatMode: "topic" };
-  }
-  // Non-threaded group message: use the explicit / cached / API chat mode.
+  // An explicitly-provided mode (e.g. tests) wins.
   if (message.chatMode) {
     runtime.chatModeCache.set(message.chatId, message.chatMode);
     return { ...message };
@@ -158,31 +150,50 @@ async function resolveLarkMessageChatMode(
   if (cached) {
     return { ...message, chatMode: cached };
   }
-  const resolved = await resolveLarkChannelChatMode(channel, message.chatId);
-  if (!resolved) {
-    return { ...message, chatMode: "group" };
+  // Resolve the chat's message form. Topic form (a native topic group, or a
+  // conversation group switched to the topic message form) isolates each topic;
+  // conversation form shares one group session. We map both to "topic"/"group"
+  // so larkSessionThreadIdForMessage isolates only the former.
+  const mode = await resolveLarkChatSessionMode(channel, message.chatId);
+  if (mode) {
+    runtime.chatModeCache.set(message.chatId, mode);
+    return { ...message, chatMode: mode };
   }
-  runtime.chatModeCache.set(message.chatId, resolved);
-  return { ...message, chatMode: resolved };
+  // Couldn't determine the form (no channel support, or a transient error): do
+  // NOT cache, so the next message retries. A threaded message is most likely a
+  // topic (isolate to avoid bleeding contexts); a plain one is a group.
+  return { ...message, chatMode: message.threadId ? "topic" : "group" };
 }
 
-async function resolveLarkChannelChatMode(
+/**
+ * Resolve whether a group chat should isolate each topic ("topic") or share one
+ * session ("group"). Prefers the topic-message-form signal (chat_mode='topic'
+ * OR group_message_type='thread'); falls back to chat_mode alone, then gives up
+ * (undefined) so the caller can apply a transient default without caching it.
+ */
+async function resolveLarkChatSessionMode(
   channel: LarkChannelLike,
   chatId: string,
-): Promise<LarkChatMode | undefined> {
-  if (!channel.getChatMode) {
-    return undefined;
+): Promise<"topic" | "group" | undefined> {
+  if (channel.getChatTopicForm) {
+    try {
+      return (await channel.getChatTopicForm(chatId)) ? "topic" : "group";
+    } catch {
+      // Transient failure of the precise signal: don't downgrade to the coarser
+      // chat_mode (which can't see group_message_type and would mislabel a
+      // thread-form group as shared). Give up so the caller retries uncached.
+      return undefined;
+    }
   }
-  try {
-    const mode = await channel.getChatMode(chatId);
-    return isLarkChatMode(mode) ? mode : undefined;
-  } catch {
-    return undefined;
+  // Older channel without topic-form support: chat_mode is the best we have.
+  if (channel.getChatMode) {
+    try {
+      return (await channel.getChatMode(chatId)) === "topic" ? "topic" : "group";
+    } catch {
+      // fall through to the caller's transient default
+    }
   }
-}
-
-function isLarkChatMode(value: unknown): value is LarkChatMode {
-  return value === "p2p" || value === "group" || value === "topic";
+  return undefined;
 }
 
 async function runAcceptedLarkMessage(
