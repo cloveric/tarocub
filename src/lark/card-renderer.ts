@@ -988,14 +988,14 @@ function approvalCardLabels(locale: Locale): { allowOnce: string; allowSession: 
 function markdownElement(content: string): Record<string, unknown> {
   return {
     tag: "markdown",
-    content,
+    content: truncateBytes(content, ELEMENT_CONTENT_MAX_BYTES),
   };
 }
 
 function noteElement(content: string): Record<string, unknown> {
   return {
     tag: "markdown",
-    content,
+    content: truncateBytes(content, ELEMENT_CONTENT_MAX_BYTES),
     text_size: "notation",
   };
 }
@@ -1019,7 +1019,7 @@ function collapsiblePanel(input: {
     border: { color: input.color, corner_radius: "5px" },
     vertical_spacing: "8px",
     padding: "8px 8px 8px 8px",
-    elements: [{ tag: "markdown", content: input.body || "_无内容_", text_size: "notation" }],
+    elements: [{ tag: "markdown", content: truncateBytes(input.body || "_无内容_", ELEMENT_CONTENT_MAX_BYTES), text_size: "notation" }],
   };
 }
 
@@ -1081,6 +1081,31 @@ function shortenPath(p: string): string {
 
 function truncate(s: string, max: number): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+// Feishu rejects any card whose SINGLE element exceeds the per-element size cap
+// (ErrCode 11310, "element exceeds the limit") — and it's measured in BYTES, not
+// characters (CJK is ~3 bytes/char). Char-length caps aren't enough, and some
+// panels (the collapsed tool summary, the todo plan) aggregate unboundedly, so
+// e.g. max reasoning effort can overflow one element and fail the whole card.
+// Byte-cap every element's content at the factory level as a final safety net.
+const ELEMENT_CONTENT_MAX_BYTES = 9000;
+function truncateBytes(s: string, maxBytes: number): string {
+  if (Buffer.byteLength(s, "utf8") <= maxBytes) {
+    return s;
+  }
+  const budget = maxBytes - Buffer.byteLength("…", "utf8");
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (Buffer.byteLength(s.slice(0, mid), "utf8") <= budget) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return `${s.slice(0, lo)}…`;
 }
 
 function cardSummary(state: LarkRunState, locale: Locale): string {

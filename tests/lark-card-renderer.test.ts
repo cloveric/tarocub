@@ -72,6 +72,39 @@ describe("lark card renderer", () => {
     expect(maxMarkdownElementLength(renderLarkRunCardCompact(state))).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
   });
 
+  it("byte-caps every element so max-effort CJK reasoning + many tools can't overflow the 11310 limit", () => {
+    const maxBytes = (card: unknown): number => {
+      let max = 0;
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) { node.forEach(walk); return; }
+        if (node && typeof node === "object") {
+          const rec = node as Record<string, unknown>;
+          if (rec.tag === "markdown" && typeof rec.content === "string") {
+            max = Math.max(max, Buffer.byteLength(rec.content, "utf8"));
+          }
+          Object.values(rec).forEach(walk);
+        }
+      };
+      walk(card);
+      return max;
+    };
+
+    let state = initialLarkRunState("lark:oc_chat");
+    // Max reasoning effort produces a huge CJK "thinking" stream (~3 bytes/char).
+    state = applyLarkEngineEvent(state, { type: "thinking", text: "推".repeat(20000) });
+    // ...and many tool calls, which fold into one aggregate "tool summary" panel
+    // whose body was previously uncapped.
+    for (let i = 0; i < 80; i += 1) {
+      state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolInput: { command: "回".repeat(60) }, toolUseId: `t${i}` });
+      state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: `t${i}`, output: "输出".repeat(60) });
+    }
+    state = applyLarkEngineEvent(state, { type: "result", text: "答".repeat(20000) });
+
+    // No single card element may exceed Feishu's per-element byte limit (11310).
+    expect(maxBytes(renderLarkRunCard(state))).toBeLessThanOrEqual(11310);
+    expect(maxBytes(renderLarkRunCardCompact(state))).toBeLessThanOrEqual(11310);
+  });
+
   it("renders a guaranteed-tiny terminal card pointing to the full reply", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, { type: "assistant_text", text: "x".repeat(50000) });
