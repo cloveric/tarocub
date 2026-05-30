@@ -5963,16 +5963,17 @@ describe("lark service", () => {
     });
 
     expect(handled).toBe(true);
-    // Flipped to "已取消" IN PLACE via a CardKit full update — no recall, no
-    // second message (the flicker-then-revert path is gone for managed cards).
-    expect(update).toHaveBeenCalledTimes(1);
+    // The cancel is claimed immediately; the card flip to "已取消" is detached +
+    // delayed (settle window) so the client's post-tap lock doesn't revert it.
+    expect(runtime.cancelledQueueTaskIds.has("om_queued")).toBe(true);
+    expect(runtime.queueCards.has("om_queued")).toBe(false);
+    // Flipped IN PLACE via a CardKit full update — no recall, no second message.
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2000 });
     const body = JSON.stringify(update.mock.calls.at(-1));
     expect(body).toContain("card_q");
     expect(body).toContain("已取消");
     expect(channel.recallMessage).not.toHaveBeenCalled();
     expect(channel.send).not.toHaveBeenCalled();
-    expect(runtime.cancelledQueueTaskIds.has("om_queued")).toBe(true);
-    expect(runtime.queueCards.has("om_queued")).toBe(false);
   });
 
   it("falls back to recall + notice when the CardKit cancel update fails", async () => {
@@ -5988,9 +5989,13 @@ describe("lark service", () => {
         action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat", taskId: "om_queued" } } },
     });
 
-    // CardKit update attempted but failed → fall back to the fresh notice + recall.
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: expect.stringContaining("已取消") }, expect.any(Object));
+    // The CardKit update is detached + delayed; it fails (throws) → fall back to
+    // the fresh notice + recall.
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    await vi.waitFor(
+      () => expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: expect.stringContaining("已取消") }, expect.any(Object)),
+      { timeout: 2000 },
+    );
     expect(channel.recallMessage).toHaveBeenCalledWith("om_qcard");
   });
 
@@ -10174,9 +10179,10 @@ describe("lark service", () => {
     const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
     expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Careful" });
 
-    // The form is turned read-only IN PLACE via a CardKit full update — no fresh
-    // summary message, no recall of the form.
-    expect(update).toHaveBeenCalledTimes(1);
+    // The form is turned read-only IN PLACE via a CardKit full update — but the
+    // update is detached + delayed (settle window) so the client's post-submit
+    // lock doesn't revert it, so wait for it. No fresh summary, no recall.
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2000 });
     const updateBody = JSON.stringify(update.mock.calls.at(-1));
     expect(updateBody).toContain("card_aqq");
     expect(updateBody).toContain("已提交");
@@ -10216,9 +10222,10 @@ describe("lark service", () => {
     });
     await pending;
 
-    // The CardKit update was attempted but failed → fall back to a read-only
-    // summary send and recall of the original form message.
-    expect(update).toHaveBeenCalledTimes(1);
+    // The CardKit update is detached + delayed; it fails (throws) → fall back to
+    // a read-only summary send and recall of the original form message.
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalled(), { timeout: 2000 });
     const summarySend = JSON.stringify(channel.send.mock.calls.at(-1));
     expect(summarySend).toContain("已提交");
     expect(summarySend).toContain("Fast");

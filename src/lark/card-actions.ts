@@ -38,7 +38,7 @@ import {
   renderLarkStopResult,
   resolveLarkLocale,
 } from "./locale.js";
-import { sendManagedCard, updateManagedCard } from "./managed-card.js";
+import { sendManagedCard, settleThenUpdateManagedCard } from "./managed-card.js";
 import { larkAccessChatIdFromConversationKey, larkAccessConversationKeyFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime, PendingLarkApproval } from "./runtime.js";
@@ -530,23 +530,28 @@ export async function handleLarkCardAction(input: {
       input.runtime.cancelledQueueTaskIds.add(taskId);
       const ref = input.runtime.queueCards.get(taskId);
       input.runtime.queueCards.delete(taskId);
+      // Fallback (CardKit unavailable, or the in-place update is rejected): post
+      // a fresh "已取消" notice and recall the now-useless interactive card.
+      const postCancelledFallback = async (): Promise<void> => {
+        await input.channel.send(input.event.chatId, { text: cancelledText }, {
+          ...(replyInThread ? { replyInThread: true } : {}),
+        });
+        if (ref?.messageId && input.channel.recallMessage) {
+          await input.channel.recallMessage(ref.messageId).catch(() => {
+            // Best-effort: if recall fails, the notice above still confirms it.
+          });
+        }
+      };
       // Preferred: the queue card was sent as a CardKit managed card, so flip it
-      // to "已取消" IN PLACE — no recall, no extra notice. A CardKit full update
-      // lands even right after the cancel tap, where im.message.patch silently
-      // reverts a just-clicked card back to its pre-click "排队中" content.
-      if (ref?.handle && await updateManagedCard(input.channel, ref.handle, renderLarkQueueCancelledCard(locale))) {
+      // to "已取消" IN PLACE — no recall, no extra notice. The update must be
+      // detached + delayed (settleThenUpdateManagedCard): an immediate update
+      // right after the cancel tap is reverted by the client's post-tap lock,
+      // snapping the card back to "排队中".
+      if (ref?.handle) {
+        settleThenUpdateManagedCard(input.channel, ref.handle, renderLarkQueueCancelledCard(locale), postCancelledFallback);
         return true;
       }
-      // Fallback (CardKit unavailable, or the in-place update failed): post a
-      // fresh "已取消" notice and recall the now-useless interactive card.
-      await input.channel.send(input.event.chatId, { text: cancelledText }, {
-        ...(replyInThread ? { replyInThread: true } : {}),
-      });
-      if (ref?.messageId && input.channel.recallMessage) {
-        await input.channel.recallMessage(ref.messageId).catch(() => {
-          // Best-effort: if recall fails, the notice above still confirms it.
-        });
-      }
+      await postCancelledFallback();
       return true;
     }
     // Otherwise this is the running task: abort only it; let the queue keep
@@ -798,38 +803,42 @@ export async function handleLarkCardAction(input: {
 
     const submittedCard = renderLarkAskUserQuestionSubmittedCard(pending.askUserQuestionInput, answers, locale);
 
+    // Fallback (CardKit unavailable, this form was sent the legacy way, or the
+    // in-place update is rejected): Feishu silently ignores `im.message.patch`
+    // on a submitted form card, so post a compact read-only summary (keeps the
+    // record of what was picked) and recall the now-useless interactive form.
+    const postSummaryFallback = async (): Promise<void> => {
+      const summary = questions
+        .map((question) => `${question.header}: ${answers[question.question] || (locale === "en" ? "—" : "（未选）")}`)
+        .join("\n");
+      const summaryOptions: LarkSendOptions | undefined = (pending.replyInThread ?? replyInThread)
+        ? { replyInThread: true }
+        : undefined;
+      await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: input.event.chatId,
+        card: submittedCard,
+        fallbackText: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary,
+        options: summaryOptions,
+        locale,
+      });
+      if (input.channel.recallMessage) {
+        await input.channel.recallMessage(input.event.messageId).catch(() => {
+          // Best-effort: if recall fails (e.g. outside the recall window) the
+          // read-only summary above still records the choice; the form lingers.
+        });
+      }
+    };
+
     // Preferred: the form was sent as a CardKit managed card, so flip it
-    // read-only IN PLACE — no recall, no second message. A CardKit full update
-    // lands even right after the user submits, where `im.message.patch` silently
-    // reverts a just-submitted form card back to its pre-submit content.
-    if (pending.managedCard && await updateManagedCard(input.channel, pending.managedCard, submittedCard)) {
+    // read-only IN PLACE — no recall, no second message. The update must be
+    // detached + delayed (settleThenUpdateManagedCard): an immediate update
+    // right after submit is reverted by the client's post-submit card lock.
+    if (pending.managedCard) {
+      settleThenUpdateManagedCard(input.channel, pending.managedCard, submittedCard, postSummaryFallback);
       return true;
     }
-
-    // Fallback (CardKit unavailable, or this form was sent the legacy way):
-    // Feishu silently ignores `im.message.patch` on a submitted form card, so
-    // post a compact read-only summary (keeps the record of what was picked) and
-    // recall the now-useless interactive form.
-    const summary = questions
-      .map((question) => `${question.header}: ${answers[question.question] || (locale === "en" ? "—" : "（未选）")}`)
-      .join("\n");
-    const summaryOptions: LarkSendOptions | undefined = (pending.replyInThread ?? replyInThread)
-      ? { replyInThread: true }
-      : undefined;
-    await sendLarkCardWithFallback({
-      channel: input.channel,
-      chatId: input.event.chatId,
-      card: submittedCard,
-      fallbackText: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary,
-      options: summaryOptions,
-      locale,
-    });
-    if (input.channel.recallMessage) {
-      await input.channel.recallMessage(input.event.messageId).catch(() => {
-        // Best-effort: if recall fails (e.g. outside the recall window) the
-        // read-only summary above still records the choice; the form lingers.
-      });
-    }
+    await postSummaryFallback();
     return true;
   }
 

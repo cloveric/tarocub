@@ -103,9 +103,52 @@ export async function sendManagedCard(
 }
 
 /**
+ * Lark's client locks a just-submitted form / just-tapped card for a short
+ * window and reverts ANY async update issued during it — CardKit included — so
+ * the card snaps back to its pre-interaction content. Confirmed by the peer
+ * feishu-claude-code-bridge (same stack), whose FORM_SETTLE_MS works around it.
+ * To make a terminal in-place update stick after an interaction, the cardAction
+ * handler must (1) return immediately so the client releases the lock, and (2)
+ * wait out this window before updating. ~1s is enough empirically.
+ */
+export const MANAGED_CARD_SETTLE_MS = 1000;
+
+/**
+ * Schedule a terminal in-place update of a just-interacted managed card: returns
+ * synchronously (so the caller can return from the cardAction handler and let
+ * Lark release the card's post-interaction lock), then after MANAGED_CARD_SETTLE_MS
+ * runs updateManagedCard. If the update doesn't land, runs `onFailure` (e.g. post
+ * a fresh notice + recall the stale card). See MANAGED_CARD_SETTLE_MS for why.
+ */
+export function settleThenUpdateManagedCard(
+  channel: unknown,
+  handle: ManagedCardHandle,
+  cardSpec: object,
+  onFailure?: () => Promise<void>,
+  settleMs: number = MANAGED_CARD_SETTLE_MS,
+): void {
+  void (async () => {
+    if (settleMs > 0) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, settleMs);
+        timer.unref?.();
+      });
+    }
+    const updated = await updateManagedCard(channel, handle, cardSpec);
+    if (!updated && onFailure) {
+      await onFailure();
+    }
+  })();
+}
+
+/**
  * Replace the whole card in place by card_id, bumping the handle's sequence.
  * Returns true on success, false if CardKit is unavailable or the update failed
  * (the caller may then post a fresh card/message as a fallback).
+ *
+ * NOTE: when the update follows a user interaction on the SAME card (form submit
+ * / button tap), call settleThenUpdateManagedCard instead — an immediate update
+ * is reverted by the client's post-interaction lock.
  */
 export async function updateManagedCard(
   channel: unknown,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { sendManagedCard, updateManagedCard, type ManagedCardHandle } from "../src/lark/managed-card.js";
+import { sendManagedCard, settleThenUpdateManagedCard, updateManagedCard, type ManagedCardHandle } from "../src/lark/managed-card.js";
 
 function fakeCardKitChannel(overrides: Record<string, unknown> = {}) {
   const create = vi.fn(async () => ({ data: { card_id: "card_abc" } }));
@@ -85,5 +85,31 @@ describe("lark managed card (CardKit)", () => {
     const { channel, create } = fakeCardKitChannel();
     create.mockRejectedValueOnce(new Error("cardkit down"));
     expect(await sendManagedCard(channel, "oc_chat", { schema: "2.0" })).toBeUndefined();
+  });
+});
+
+describe("settleThenUpdateManagedCard (post-interaction in-place update)", () => {
+  it("returns synchronously, then updates after the settle delay; no failure callback on success", async () => {
+    const { channel, update } = fakeCardKitChannel();
+    const handle: ManagedCardHandle = { messageId: "om", cardId: "card_s", sequence: 0 };
+    const onFailure = vi.fn(async () => undefined);
+
+    // A small settle delay keeps the test fast while still deferring the update:
+    // it must NOT have fired by the time this synchronous call returns.
+    settleThenUpdateManagedCard(channel, handle, { v: 1 }, onFailure, 50);
+    expect(update).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("runs the failure callback when the settled update fails", async () => {
+    const { channel, update } = fakeCardKitChannel();
+    update.mockRejectedValue(new Error("rejected"));
+    const handle: ManagedCardHandle = { messageId: "om", cardId: "card_s", sequence: 0 };
+    const onFailure = vi.fn(async () => undefined);
+
+    settleThenUpdateManagedCard(channel, handle, { v: 1 }, onFailure, 0);
+    await vi.waitFor(() => expect(onFailure).toHaveBeenCalledTimes(1));
   });
 });
