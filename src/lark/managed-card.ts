@@ -138,7 +138,11 @@ export function settleThenUpdateManagedCard(
     if (!updated && onFailure) {
       await onFailure();
     }
-  })();
+  })().catch(() => {
+    // Best-effort terminal card update — onFailure itself can reject (e.g. the
+    // fallback channel.send fails). Swallow so a transient Lark API hiccup during
+    // this detached, fire-and-forget update can't become an unhandled rejection.
+  });
 }
 
 /**

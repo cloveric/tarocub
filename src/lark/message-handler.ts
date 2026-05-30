@@ -508,6 +508,11 @@ function shouldBatchLarkMessage(
   commandText: string,
 ): boolean {
   return runtime.queuePolicy.batchWindowMs > 0 &&
+    // Only batch in private chats. In a group, messages on one conversationKey
+    // can come from DIFFERENT users; merging them would run a second user's text
+    // under the first sender's authorization (and attribution). p2p has a single
+    // sender, so coalescing is safe there.
+    normalized.bridgeChatType === "private" &&
     !isSlashCommand(commandText) &&
     normalized.attachments.length === 0;
 }

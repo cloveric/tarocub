@@ -186,12 +186,24 @@ export function renderLarkArchiveContinueCard(input: {
 }
 
 export function safeSegment(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80) || "message";
+  const cleaned = value.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80);
+  // Neutralize "." / ".." (and all-dot names): the char class above keeps dots,
+  // so without this a segment of ".." would escape the intended directory when
+  // path.join'd. This is the filesystem-egress sandbox primitive — keep it tight.
+  if (/^\.+$/.test(cleaned)) {
+    return "message";
+  }
+  return cleaned || "message";
 }
 
 function safeFileName(value: string): string {
   const base = path.basename(value).replace(/[/\\:]/g, "_");
-  return base || "attachment";
+  // basename(".." ) === "..", and dots survive the replace above — reject all-dot
+  // names so an attachment file_name of ".."/"." can't traverse out of input/.
+  if (!base || /^\.+$/.test(base)) {
+    return "attachment";
+  }
+  return base;
 }
 
 function defaultExtension(kind: LarkNormalizedAttachment["kind"]): string {

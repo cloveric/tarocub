@@ -1,6 +1,7 @@
 import type { LarkChannelLike } from "./types.js";
 
 const CHAT_MEMBER_CACHE_TTL_MS = 60 * 60 * 1000;
+const MAX_CHAT_MEMBER_CACHE_ENTRIES = 256;
 
 interface ChatMemberEntry {
   fetchedAt: number;
@@ -58,6 +59,23 @@ async function getLarkChatMembers(
     members = await fetchLarkChatMembers(channel, chatId);
   } catch {
     return new Map();
+  }
+  // Bound the cache: a long-lived process resolving mentions across many chats
+  // would otherwise grow one entry per chat forever. Drop expired entries, then
+  // evict oldest-inserted until under the cap.
+  if (chatMemberCache.size >= MAX_CHAT_MEMBER_CACHE_ENTRIES) {
+    for (const [key, entry] of chatMemberCache) {
+      if (now - entry.fetchedAt >= CHAT_MEMBER_CACHE_TTL_MS) {
+        chatMemberCache.delete(key);
+      }
+    }
+    while (chatMemberCache.size >= MAX_CHAT_MEMBER_CACHE_ENTRIES) {
+      const oldest = chatMemberCache.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      chatMemberCache.delete(oldest);
+    }
   }
   chatMemberCache.set(chatId, { fetchedAt: now, members });
   return members;
