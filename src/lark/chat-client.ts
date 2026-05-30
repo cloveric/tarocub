@@ -40,6 +40,16 @@ export async function createLarkChatWithCli(input: LarkChatCreateInput): Promise
     args.push("--users", input.operatorOpenId);
   }
   if (actor === "bot") {
+    // The bot creates the chat (so it is a member of the group), but hand
+    // OWNERSHIP to the human operator — otherwise they are only a plain member
+    // and cannot change group settings such as the message form (话题/对话).
+    // The bot stays a manager via --set-bot-manager. operatorOpenId is the
+    // sender open_id in the bot app's namespace, so it matches an --as bot
+    // creation. (On the --as user path the owner already defaults to the
+    // authorizing user, and operatorOpenId would be the wrong namespace.)
+    if (input.operatorOpenId?.startsWith("ou_")) {
+      args.push("--owner", input.operatorOpenId);
+    }
     args.push("--set-bot-manager");
   }
 

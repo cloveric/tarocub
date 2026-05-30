@@ -8504,6 +8504,9 @@ describe("lark service", () => {
       expect(args.slice(args.indexOf("--chat-mode"), args.indexOf("--chat-mode") + 2)).toEqual(["--chat-mode", "topic"]);
       expect(args.slice(args.indexOf("--as"), args.indexOf("--as") + 2)).toEqual(["--as", "bot"]);
       expect(args.slice(args.indexOf("--users"), args.indexOf("--users") + 2)).toEqual(["--users", "ou_user"]);
+      // The human operator becomes the group OWNER (so they can change the
+      // message form 话题/对话); the bot stays a manager.
+      expect(args.slice(args.indexOf("--owner"), args.indexOf("--owner") + 2)).toEqual(["--owner", "ou_user"]);
       expect(args).toContain("--set-bot-manager");
       expect(args.slice(args.indexOf("--format"), args.indexOf("--format") + 2)).toEqual(["--format", "json"]);
     } finally {
@@ -8541,6 +8544,9 @@ describe("lark service", () => {
       expect(args.slice(args.indexOf("--as"), args.indexOf("--as") + 2)).toEqual(["--as", "user"]);
       expect(args.slice(args.indexOf("--users"), args.indexOf("--users") + 2)).toEqual(["--users", "ou_requester"]);
       expect(args).not.toContain("--set-bot-manager");
+      // On the user-identity path the owner defaults to the authorizing user;
+      // we must NOT pass --owner with the bot-namespace open_id.
+      expect(args).not.toContain("--owner");
     } finally {
       process.env.PATH = originalPath;
       if (originalAs === undefined) {
