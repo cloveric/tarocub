@@ -38,6 +38,7 @@ import {
   renderLarkStopResult,
   resolveLarkLocale,
 } from "./locale.js";
+import { sendManagedCard, updateManagedCard } from "./managed-card.js";
 import { larkAccessChatIdFromConversationKey, larkAccessConversationKeyFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime, PendingLarkApproval } from "./runtime.js";
@@ -129,19 +130,35 @@ export async function requestLarkApproval(input: {
 
     input.runtime.pendingApprovals.set(requestId, pending);
     if (isAskUserQuestionRequest(input.request)) {
-      sendLarkCardWithFallback({
-        channel: input.channel,
-        chatId: input.chatId,
-        card: renderLarkAskUserQuestionCard({
-          requestId,
-          toolInput: input.request.toolInput,
-          replyInThread: input.replyInThread,
-          locale: input.locale,
-        }),
-        fallbackText: renderLarkAskUserQuestionFallbackText(input.request.toolInput, input.locale ?? "zh"),
-        options: larkReplyOptions(input.replyTo, input.replyInThread),
-        locale: input.locale ?? "zh",
-      }).catch((error) => {
+      const askCard = renderLarkAskUserQuestionCard({
+        requestId,
+        toolInput: input.request.toolInput,
+        replyInThread: input.replyInThread,
+        locale: input.locale,
+      });
+      void (async () => {
+        // Prefer a CardKit managed card: the form can then be turned read-only
+        // IN PLACE after submit (CardKit updates survive post-interaction, where
+        // im.message.patch reverts a just-submitted form). Track the handle on
+        // the pending approval so the submit handler can update it. Falls back to
+        // the normal card send (recall workaround on submit) when CardKit is off.
+        const handle = await sendManagedCard(input.channel, input.chatId, askCard, {
+          ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+          ...(input.replyInThread ? { replyInThread: true } : {}),
+        });
+        if (handle) {
+          pending.managedCard = handle;
+          return;
+        }
+        await sendLarkCardWithFallback({
+          channel: input.channel,
+          chatId: input.chatId,
+          card: askCard,
+          fallbackText: renderLarkAskUserQuestionFallbackText(input.request.toolInput, input.locale ?? "zh"),
+          options: larkReplyOptions(input.replyTo, input.replyInThread),
+          locale: input.locale ?? "zh",
+        });
+      })().catch((error) => {
         cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       });
@@ -774,10 +791,20 @@ export async function handleLarkCardAction(input: {
       },
     });
 
-    // Feishu silently ignores `im.message.patch` on a SUBMITTED form card — it
-    // returns OK and bumps update_time but keeps the interactive form. So we can
-    // not turn it read-only in place. Instead post a compact read-only summary
-    // (keeps the record of what was picked) and recall the now-useless form.
+    const submittedCard = renderLarkAskUserQuestionSubmittedCard(pending.askUserQuestionInput, answers, locale);
+
+    // Preferred: the form was sent as a CardKit managed card, so flip it
+    // read-only IN PLACE — no recall, no second message. A CardKit full update
+    // lands even right after the user submits, where `im.message.patch` silently
+    // reverts a just-submitted form card back to its pre-submit content.
+    if (pending.managedCard && await updateManagedCard(input.channel, pending.managedCard, submittedCard)) {
+      return true;
+    }
+
+    // Fallback (CardKit unavailable, or this form was sent the legacy way):
+    // Feishu silently ignores `im.message.patch` on a submitted form card, so
+    // post a compact read-only summary (keeps the record of what was picked) and
+    // recall the now-useless interactive form.
     const summary = questions
       .map((question) => `${question.header}: ${answers[question.question] || (locale === "en" ? "—" : "（未选）")}`)
       .join("\n");
@@ -787,7 +814,7 @@ export async function handleLarkCardAction(input: {
     await sendLarkCardWithFallback({
       channel: input.channel,
       chatId: input.event.chatId,
-      card: renderLarkAskUserQuestionSubmittedCard(pending.askUserQuestionInput, answers, locale),
+      card: submittedCard,
       fallbackText: (locale === "en" ? "Submitted:\n" : "已提交：\n") + summary,
       options: summaryOptions,
       locale,

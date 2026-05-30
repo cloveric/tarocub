@@ -9845,6 +9845,9 @@ describe("lark service", () => {
     });
     const requestId = [...runtime.pendingApprovals.keys()][0]!;
 
+    // No rawClient on the fake channel → CardKit is unavailable, so the form
+    // falls back to a normal card send (after the async managed-card attempt).
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalled());
     const payload = JSON.stringify((channel.send.mock.calls[0] as unknown[])?.[1]);
     expect(payload).toContain('"tag":"form"');
     expect(payload).toContain('"select_static"');       // single-select question
@@ -9962,6 +9965,96 @@ describe("lark service", () => {
     expect(summarySend).not.toContain("form_submit");
     // The now-useless interactive form is recalled.
     expect(channel.recallMessage).toHaveBeenCalledWith("om_card");
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
+  it("updates the AskUserQuestion form in place via CardKit (no recall) when managed cards work", async () => {
+    const runtime = createLarkServiceRuntime();
+    const create = vi.fn(async () => ({ data: { card_id: "card_aqq" } }));
+    const update = vi.fn(async () => ({ data: {} }));
+    const messageReply = vi.fn(async () => ({ data: { message_id: "om_form" } }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_form" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create, update } } },
+        im: { v1: { message: { create: messageCreate, reply: messageReply } } },
+      },
+    });
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    // The form is sent as a CardKit managed card (create instance + send by
+    // reference), not via channel.send, and the handle is tracked on the pending.
+    await vi.waitFor(() => expect(runtime.pendingApprovals.get(requestId)?.managedCard).toBeDefined());
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(messageReply).toHaveBeenCalledTimes(1);
+    expect(channel.send).not.toHaveBeenCalled();
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_form", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "Careful" } } },
+    });
+
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Careful" });
+
+    // The form is turned read-only IN PLACE via a CardKit full update — no fresh
+    // summary message, no recall of the form.
+    expect(update).toHaveBeenCalledTimes(1);
+    const updateBody = JSON.stringify(update.mock.calls.at(-1));
+    expect(updateBody).toContain("card_aqq");
+    expect(updateBody).toContain("已提交");
+    expect(updateBody).toContain("Careful");
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(channel.recallMessage).not.toHaveBeenCalled();
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
+  it("falls back to a recall + summary when the CardKit in-place update fails", async () => {
+    const runtime = createLarkServiceRuntime();
+    const create = vi.fn(async () => ({ data: { card_id: "card_aqq" } }));
+    const update = vi.fn(async () => { throw new Error("cardkit update rejected"); });
+    const messageReply = vi.fn(async () => ({ data: { message_id: "om_form" } }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_form" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create, update } } },
+        im: { v1: { message: { create: messageCreate, reply: messageReply } } },
+      },
+    });
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+    await vi.waitFor(() => expect(runtime.pendingApprovals.get(requestId)?.managedCard).toBeDefined());
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_form", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "Fast" } } },
+    });
+    await pending;
+
+    // The CardKit update was attempted but failed → fall back to a read-only
+    // summary send and recall of the original form message.
+    expect(update).toHaveBeenCalledTimes(1);
+    const summarySend = JSON.stringify(channel.send.mock.calls.at(-1));
+    expect(summarySend).toContain("已提交");
+    expect(summarySend).toContain("Fast");
+    expect(channel.recallMessage).toHaveBeenCalledWith("om_form");
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 

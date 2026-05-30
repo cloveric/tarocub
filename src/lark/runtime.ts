@@ -13,6 +13,7 @@ import {
   type LarkChatCreateResult,
 } from "./chat-client.js";
 import type { LarkCommentClientLike } from "./comment-client.js";
+import type { ManagedCardHandle } from "./managed-card.js";
 import type { LarkChatMode, LarkNormalizedBridgeMessage } from "./message-normalizer.js";
 import {
   createLarkDocumentWithCli,
@@ -64,6 +65,13 @@ export interface PendingLarkApproval {
   replyTo?: string;
   replyInThread?: boolean;
   askUserQuestionInput?: unknown;
+  /**
+   * Set when the AskUserQuestion form was delivered as a CardKit managed card,
+   * so the submit handler can turn it read-only IN PLACE (CardKit updates land
+   * even right after the user interacts, unlike im.message.patch). Absent when
+   * CardKit was unavailable and the form fell back to a normal card send.
+   */
+  managedCard?: ManagedCardHandle;
   resolve: (decision: EngineApprovalDecision) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
