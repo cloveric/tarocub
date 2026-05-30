@@ -7,7 +7,6 @@ import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
-import { SessionStore } from "../state/session-store.js";
 import { loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { handleLarkCrewWorkflow } from "./bus.js";
@@ -122,7 +121,7 @@ export async function handleLarkMessage(input: {
     return false;
   }
 
-  const message = await resolveLarkMessageChatMode(input.channel, input.runtime, input.stateDir, input.message);
+  const message = await resolveLarkMessageChatMode(input.channel, input.runtime, input.message);
   const baseNormalized = normalizeLarkMessage(message, {
     requireMentionInGroup,
   });
@@ -137,45 +136,34 @@ export async function handleLarkMessage(input: {
 async function resolveLarkMessageChatMode(
   channel: LarkChannelLike,
   runtime: LarkServiceRuntime,
-  stateDir: string,
   message: LarkIncomingMessage,
 ): Promise<LarkIncomingMessage> {
-  if (message.chatMode) {
-    runtime.chatModeCache.set(message.chatId, message.chatMode);
-    return await preserveExistingLarkThreadSession(stateDir, message, message.chatMode);
-  }
   if (message.chatType === "p2p") {
     return { ...message, chatMode: "p2p" };
   }
-
+  // A message that belongs to a thread/topic is its own topic conversation —
+  // both in a topic group (chat_mode='topic') and in a normal group that merely
+  // has topic replies (chat_mode='group' + thread_id). Treating it as topic is
+  // what keeps each topic's context isolated; otherwise the normal group's
+  // separate topics all collapse into one shared group session.
+  if (message.threadId) {
+    return { ...message, chatMode: "topic" };
+  }
+  // Non-threaded group message: use the explicit / cached / API chat mode.
+  if (message.chatMode) {
+    runtime.chatModeCache.set(message.chatId, message.chatMode);
+    return { ...message };
+  }
   const cached = runtime.chatModeCache.get(message.chatId);
   if (cached) {
-    return await preserveExistingLarkThreadSession(stateDir, message, cached);
+    return { ...message, chatMode: cached };
   }
-
   const resolved = await resolveLarkChannelChatMode(channel, message.chatId);
   if (!resolved) {
-    return { ...message, chatMode: message.threadId ? "topic" : "group" };
+    return { ...message, chatMode: "group" };
   }
   runtime.chatModeCache.set(message.chatId, resolved);
-  return await preserveExistingLarkThreadSession(stateDir, message, resolved);
-}
-
-async function preserveExistingLarkThreadSession(
-  stateDir: string,
-  message: LarkIncomingMessage,
-  chatMode: LarkChatMode,
-): Promise<LarkIncomingMessage> {
-  if (chatMode !== "group" || !message.threadId || message.chatType === "p2p") {
-    return { ...message, chatMode };
-  }
-
-  const threadConversationKey = buildLarkConversationKey(message.chatId, message.threadId);
-  const existingSession = await new SessionStore(path.join(stateDir, "session.json"))
-    .findByConversationKeySafe(threadConversationKey);
-  return existingSession.record
-    ? { ...message, chatMode: "topic" }
-    : { ...message, chatMode };
+  return { ...message, chatMode: resolved };
 }
 
 async function resolveLarkChannelChatMode(

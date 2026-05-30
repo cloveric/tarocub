@@ -185,7 +185,7 @@ describe("lark service", () => {
     }
   });
 
-  it("keeps ordinary Lark group threads on the parent group session when chat mode resolves to group", async () => {
+  it("isolates a Lark group topic reply into its own thread session", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-thread-session-"));
     const channel = fakeChannel({
       getChatMode: vi.fn(async () => "group"),
@@ -210,19 +210,20 @@ describe("lark service", () => {
         }),
       });
 
-      expect(channel.getChatMode).toHaveBeenCalledWith("oc_chat");
+      // A threaded message is a topic conversation regardless of the group's
+      // chat_mode, so we don't even need to query getChatMode.
+      expect(channel.getChatMode).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         chatType: "group",
-        conversationKey: "lark:oc_chat",
+        conversationKey: "lark:oc_chat:omt_group_reply",
       }));
       const known = JSON.parse(await readFile(path.join(stateDir, "known-chats.json"), "utf8")) as {
         chats: Array<{ conversationKey: string; label: string; threadId?: string }>;
       };
       expect(known.chats).toContainEqual(expect.objectContaining({
-        conversationKey: "lark:oc_chat",
-        label: "oc_chat",
+        conversationKey: "lark:oc_chat:omt_group_reply",
+        threadId: "omt_group_reply",
       }));
-      expect(known.chats.find((chat) => chat.conversationKey === "lark:oc_chat")).not.toHaveProperty("threadId");
       expectLarkFinalAnswer(channel, "done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -262,7 +263,9 @@ describe("lark service", () => {
         }),
       });
 
-      expect(channel.getChatMode).toHaveBeenCalledWith("oc_chat");
+      // The thread is its own topic conversation, so its existing session is
+      // resumed by thread key without consulting the group's chat_mode.
+      expect(channel.getChatMode).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         chatType: "group",
         conversationKey: threadConversationKey,

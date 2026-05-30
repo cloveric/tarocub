@@ -128,8 +128,17 @@ export function larkSessionThreadIdForMessage(
   threadId?: string,
   chatMode?: LarkChatMode,
 ): string | undefined {
-  const effectiveMode = chatMode ?? (chatType === "p2p" ? "p2p" : "topic");
-  return effectiveMode === "topic" ? threadId : undefined;
+  // A 1:1 chat never has topics; its reply thread ids must not split the single
+  // private conversation.
+  if (chatType === "p2p" || chatMode === "p2p") {
+    return undefined;
+  }
+  // Any other chat: a message that belongs to a thread/topic is its own
+  // conversation, isolated by thread id. This holds both for a topic group
+  // (chat_mode='topic') and for a normal group that merely has topic replies
+  // (chat_mode='group' + thread_id) — without this the latter's separate topics
+  // all collapse into one shared group context.
+  return threadId;
 }
 
 export function larkAccessConversationKeyFromConversationKey(conversationKey: string): string {

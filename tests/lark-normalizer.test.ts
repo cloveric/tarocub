@@ -33,6 +33,31 @@ describe("normalizeLarkMessage", () => {
     expect(normalized?.text).toContain("hello");
   });
 
+  it("gives two topics in the same group separate sessions while the main timeline stays shared", () => {
+    const base = {
+      chatId: "oc_group",
+      chatType: "group" as const,
+      chatMode: "group" as const,
+      senderId: "ou_user",
+      rawContentType: "text",
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: true,
+      createTime: 123,
+    };
+    const topicA = normalizeLarkMessage({ ...base, messageId: "om_a", threadId: "omt_a", content: "股票" });
+    const topicB = normalizeLarkMessage({ ...base, messageId: "om_b", threadId: "omt_b", content: "登录" });
+    const mainTimeline = normalizeLarkMessage({ ...base, messageId: "om_c", content: "no thread" });
+
+    // Distinct topics never bleed into one shared context...
+    expect(topicA?.conversationKey).toBe("lark:oc_group:omt_a");
+    expect(topicB?.conversationKey).toBe("lark:oc_group:omt_b");
+    expect(topicA?.conversationKey).not.toBe(topicB?.conversationKey);
+    // ...but a non-topic group message still shares the one group session.
+    expect(mainTimeline?.conversationKey).toBe("lark:oc_group");
+  });
+
   it("keeps topic chats isolated by thread id", () => {
     const normalized = normalizeLarkMessage({
       messageId: "om_123",
@@ -58,7 +83,7 @@ describe("normalizeLarkMessage", () => {
     expect(normalized?.text).toContain("reply_to_message_id: om_parent");
   });
 
-  it("keeps ordinary group message threads in the parent group session when chat mode is known", () => {
+  it("isolates a topic reply by thread even in a normal group (chat_mode=group)", () => {
     const normalized = normalizeLarkMessage({
       messageId: "om_123",
       chatId: "oc_group",
@@ -75,7 +100,9 @@ describe("normalizeLarkMessage", () => {
       createTime: 123,
     });
 
-    expect(normalized?.conversationKey).toBe("lark:oc_group");
+    // A topic reply in a normal group is its own conversation — so distinct
+    // topics in the same group never bleed into one shared context.
+    expect(normalized?.conversationKey).toBe("lark:oc_group:omt_group_thread");
     expect(normalized?.bridgeChatType).toBe("group");
     expect(normalized?.threadId).toBe("omt_group_thread");
     expect(normalized?.text).toContain("thread_id: omt_group_thread");
