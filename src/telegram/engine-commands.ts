@@ -6,7 +6,6 @@ import {
 } from "./turn-bookkeeping.js";
 import { applyEngineSelection } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
-import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 import type { InstanceEngine } from "./instance-config.js";
 
 const ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "antigravity"];
@@ -128,15 +127,6 @@ export interface EngineCommandSessionStore {
   removeByChatId(chatId: number): Promise<boolean | void>;
   removeByConversationKey?(conversationKey: string): Promise<boolean | void>;
   clearAll(): Promise<number>;
-}
-
-function removeSessionForConversation(
-  store: EngineCommandSessionStore,
-  normalized: NormalizedTelegramMessage,
-): Promise<boolean | void> {
-  return store.removeByConversationKey
-    ? store.removeByConversationKey(getNormalizedTelegramConversationKey(normalized))
-    : store.removeByChatId(normalized.chatId);
 }
 
 export async function handleLocalEngineTelegramCommand(input: {
@@ -267,10 +257,14 @@ export async function handleLocalEngineTelegramCommand(input: {
       if (classifyFailure(error) === "auth") {
         throw error;
       }
-      await removeSessionForConversation(sessionStore, normalized);
+      // Do NOT reset the session on a compact failure. Compaction is NOT the
+      // same as a reset: it would have kept the conversation (summarized), while
+      // a reset throws it away. Silently resetting here destroyed the very
+      // conversation the user was trying to preserve. Leave the session intact
+      // and let the user decide whether to /reset.
       const fallbackMsg = locale === "zh"
-        ? "引擎不支持 compact，已重置会话（效果相同）。"
-        : "Engine does not support compact. Session reset instead (same effect).";
+        ? "这次没能压缩上下文，会话保持不变。如果想清空、重新开始，请发送 /reset。"
+        : "Couldn't compact the context this time; your conversation is unchanged. Send /reset if you want to start fresh.";
       compactAuditText = fallbackMsg;
       await context.api.sendMessage(normalized.chatId, fallbackMsg);
     }

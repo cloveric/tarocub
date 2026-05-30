@@ -358,13 +358,14 @@ describe("handleLocalEngineTelegramCommand", () => {
     }
   });
 
-  it("falls back to session reset when /compact execution fails", async () => {
+  it("keeps the session intact (no reset) when /compact execution fails", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
     const sessionStore = {
       removeByChatId: vi.fn().mockResolvedValue(true),
+      removeByConversationKey: vi.fn().mockResolvedValue(true),
       clearAll: vi.fn(),
     };
 
@@ -388,9 +389,12 @@ describe("handleLocalEngineTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
-      expect(sessionStore.removeByChatId).toHaveBeenCalledWith(123);
+      // A compact failure must NOT reset the session — that would destroy the
+      // very conversation the user was trying to preserve (compact != reset).
+      expect(sessionStore.removeByChatId).not.toHaveBeenCalled();
+      expect(sessionStore.removeByConversationKey).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Compacting session context...");
-      expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Engine does not support compact. Session reset instead (same effect).");
+      expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Couldn't compact the context this time; your conversation is unchanged. Send /reset if you want to start fresh.");
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({
         type: "update.handle",
@@ -404,7 +408,7 @@ describe("handleLocalEngineTelegramCommand", () => {
     }
   });
 
-  it("resets the current topic session when /compact fails in a forum topic", async () => {
+  it("keeps the topic session intact (no reset) when /compact fails in a forum topic", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
@@ -440,7 +444,8 @@ describe("handleLocalEngineTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
-      expect(sessionStore.removeByConversationKey).toHaveBeenCalledWith("chat:-100123:topic:88");
+      // No reset of the topic session on a compact failure.
+      expect(sessionStore.removeByConversationKey).not.toHaveBeenCalled();
       expect(sessionStore.removeByChatId).not.toHaveBeenCalled();
     } finally {
       await removeTempRoot(root);
