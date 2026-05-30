@@ -508,36 +508,21 @@ export async function handleLarkCardAction(input: {
     }
     if (taskId && input.runtime.chatQueue.cancel(value.conversationKey, taskId)) {
       const cancelledText = locale === "en" ? "Cancelled this queued task." : "已取消此排队任务。";
-      // Claim the task now so the eventual queue skip stays silent (no duplicate
-      // notice) regardless of which feedback path below runs.
+      // Claim the task so the eventual queue skip stays silent (no duplicate
+      // notice), and forget its card so no wait/skip path re-renders it.
       input.runtime.cancelledQueueTaskIds.add(taskId);
       const cardId = input.runtime.queueCards.get(taskId);
-      let terminalized = false;
-      if (cardId && input.channel.updateCard) {
-        try {
-          await input.channel.updateCard(cardId, {
-            schema: "2.0",
-            config: { update_multi: true },
-            body: {
-              direction: "vertical",
-              padding: "12px 12px 12px 12px",
-              elements: [{ tag: "markdown", content: cancelledText }],
-            },
-          });
-          terminalized = true;
-          input.runtime.queueCards.delete(taskId);
-        } catch {
-          // fall through to a text ack
-        }
-      }
-      if (!terminalized) {
-        // GUARANTEE immediate feedback. Previously a "card exists but updateCard
-        // failed" branch left it to the silent skip path, so a successful cancel
-        // showed no reaction at all. Always acknowledge as a reply to the tapped
-        // card when the queue card could not be terminalized in place.
-        await input.channel.send(input.event.chatId, { text: cancelledText }, {
-          replyTo: input.event.messageId,
-          ...(replyInThread ? { replyInThread: true } : {}),
+      input.runtime.queueCards.delete(taskId);
+      // Do NOT patch the tapped queue card to "cancelled" in place: Feishu
+      // reverts a just-clicked card's async patch back to its pre-click content
+      // (the flicker-to-"已取消"-then-back-to-"排队中" bug), same as a submitted
+      // form. Post a fresh "cancelled" notice and recall the now-useless card.
+      await input.channel.send(input.event.chatId, { text: cancelledText }, {
+        ...(replyInThread ? { replyInThread: true } : {}),
+      });
+      if (cardId && input.channel.recallMessage) {
+        await input.channel.recallMessage(cardId).catch(() => {
+          // Best-effort: if recall fails, the notice above still confirms it.
         });
       }
       return true;

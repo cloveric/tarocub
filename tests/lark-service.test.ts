@@ -5912,17 +5912,20 @@ describe("lark service", () => {
     expect(cancelSpy).toHaveBeenCalledWith("lark:oc_chat", "om_queued");
     expect(abortController.signal.aborted).toBe(false); // the running task is left alone
     expect(runtime.cancelledQueueTaskIds.has("om_queued")).toBe(true); // skip stays silent later
-    expect(runtime.queueCards.has("om_queued")).toBe(false); // card claimed
-    expect(channel.updateCard).toHaveBeenCalledWith("card_q", expect.objectContaining({ schema: "2.0" }));
+    expect(runtime.queueCards.has("om_queued")).toBe(false); // card forgotten
+    // Posts a fresh "cancelled" notice and recalls the queue card — never an
+    // in-place patch (Feishu reverts a just-clicked card's async patch).
+    expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: expect.stringContaining("已取消") }, expect.any(Object));
+    expect(channel.recallMessage).toHaveBeenCalledWith("card_q");
   });
 
-  it("acks by text when the queued card cannot be updated in place (no silent cancel)", async () => {
+  it("still confirms the cancel even if recalling the queue card fails", async () => {
     const runtime = createLarkServiceRuntime();
     runtime.queueCards.set("om_queued", "card_q");
     vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(true);
-    // The in-place card update fails (Feishu can ignore/refuse patches): the
-    // cancel must still give immediate feedback, not vanish silently.
-    const channel = fakeChannel({ updateCard: vi.fn(async () => { throw new Error("patch refused"); }) });
+    // Recall can fail (e.g. outside the recall window): the cancel must still
+    // be confirmed by the fresh notice, never vanish silently.
+    const channel = fakeChannel({ recallMessage: vi.fn(async () => { throw new Error("recall window expired"); }) });
 
     const handled = await handleLarkCardAction({
       channel,
@@ -5937,10 +5940,11 @@ describe("lark service", () => {
 
     expect(handled).toBe(true);
     expect(runtime.cancelledQueueTaskIds.has("om_queued")).toBe(true); // claimed → later skip stays silent
+    expect(channel.recallMessage).toHaveBeenCalledWith("card_q");
     expect(channel.send).toHaveBeenCalledWith(
       "oc_chat",
       { text: expect.stringContaining("已取消") },
-      expect.objectContaining({ replyTo: "om_card" }),
+      expect.any(Object),
     );
   });
 
