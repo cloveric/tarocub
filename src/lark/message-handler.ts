@@ -335,6 +335,7 @@ async function runAcceptedLarkMessage(
       const card = renderLarkQueueWaitCard({
         conversationKey: normalized.conversationKey,
         bridgeChatType: normalized.bridgeChatType,
+        taskId: normalized.messageId,
         waitedMs: event.waitedMs,
         replyInThread: Boolean(normalized.threadId),
         locale: messageLocale,
@@ -402,9 +403,23 @@ async function enqueueLarkTurn(
   return await input.runtime.chatQueue.enqueue(normalized.conversationKey, async () => {
     return await runNormalizedLarkMessage(input, normalized);
   }, {
+    taskId: normalized.messageId,
     waitNotifyAfterMs: 10_000,
     onWait,
     onSkipped: async () => {
+      // A task the user cancelled from its card was already acknowledged (card
+      // updated to "cancelled") by the stop handler — stay silent here so the
+      // skip doesn't post a duplicate notice.
+      if (input.runtime.cancelledQueueTaskIds.delete(normalized.messageId)) {
+        input.runtime.queueCards.delete(normalized.messageId);
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "turn.completed",
+          outcome: "skipped",
+          detail: "queued turn cancelled by user",
+          metadata: { phase: "queue" },
+        });
+        return true;
+      }
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "turn.completed",
         outcome: "skipped",

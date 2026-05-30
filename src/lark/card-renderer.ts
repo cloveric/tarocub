@@ -50,6 +50,8 @@ export interface LarkApprovalCardInput {
 export interface LarkQueueWaitCardInput {
   conversationKey: string;
   bridgeChatType?: "private" | "group";
+  /** Id of this queued task, so the card's button cancels just this task. */
+  taskId?: string;
   waitedMs: number;
   replyInThread?: boolean;
   locale?: Locale;
@@ -865,9 +867,9 @@ export function renderLarkQueueWaitCard(input: LarkQueueWaitCardInput): Record<s
   const seconds = Math.max(1, Math.round(input.waitedMs / 1000));
   const title = locale === "en" ? "Queued behind the active turn" : "正在排队等待当前任务";
   const body = locale === "en"
-    ? `This conversation already has a running task. This message has waited about ${seconds}s and will continue automatically.\n\nIf the active task is stuck, stop it here or send \`/stop\`.`
-    : `同一个会话里还有任务在运行。这条消息已等待约 ${seconds} 秒，前一个任务结束后会自动继续。\n\n如果前一个任务卡住，可以点下面按钮或发送 \`/stop\` 停止。`;
-  const stop = locale === "en" ? "Stop active task" : "停止当前任务";
+    ? `This conversation already has a running task. This message has waited about ${seconds}s and will continue automatically.\n\nDon't need it anymore? Cancel just this queued task below. To stop the task that's *running*, send \`/stop\`.`
+    : `同一个会话里还有任务在运行。这条消息已等待约 ${seconds} 秒，前一个任务结束后会自动继续。\n\n不想等了？可点下面取消这条排队任务。要停止*正在运行*的任务，请发送 \`/stop\`。`;
+  const stop = locale === "en" ? "Cancel this task" : "取消此排队任务";
   const keepWaiting = locale === "en" ? "Keep waiting" : "继续等待";
   return {
     schema: "2.0",
@@ -898,6 +900,7 @@ export function renderLarkQueueWaitCard(input: LarkQueueWaitCardInput): Record<s
                   behaviors: [callbackBehavior({
                     cctb_lark: "stop",
                     conversationKey: input.conversationKey,
+                    ...(input.taskId ? { taskId: input.taskId } : {}),
                     ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
                     ...(input.replyInThread ? { replyInThread: true } : {}),
                   })],

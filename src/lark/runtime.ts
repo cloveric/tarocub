@@ -80,6 +80,12 @@ export interface LarkServiceRuntime {
   chatModeCache: Map<string, LarkChatMode>;
   /** queued message id → its "queued" card message id, so each task's run card reuses its own card. */
   queueCards: Map<string, string>;
+  /**
+   * Queued task ids the user explicitly cancelled from a card button. The
+   * cancel handler already updated that task's card, so its eventual skip must
+   * stay silent (no duplicate "skipped" notice).
+   */
+  cancelledQueueTaskIds: Set<string>;
   appInfo?: { appId: string; domain?: string };
   cronRuntime?: LarkCronRuntime;
   busRuntime?: LarkBusRuntime;
@@ -115,6 +121,7 @@ export function createLarkServiceRuntime(options: {
     pendingBatches: new Map(),
     chatModeCache: new Map(),
     queueCards: new Map(),
+    cancelledQueueTaskIds: new Set(),
     ...(options.cronRuntime ? { cronRuntime: options.cronRuntime } : {}),
     ...(options.busRuntime ? { busRuntime: options.busRuntime } : {}),
     ...(options.miniRuntime ? { miniRuntime: options.miniRuntime } : {}),

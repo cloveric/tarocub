@@ -5812,6 +5812,55 @@ describe("lark service", () => {
     expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已停止。" }, { replyTo: "om_card" });
   });
 
+  it("cancels just the queued task from its card without aborting the active run", async () => {
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    runtime.queueCards.set("om_queued", "card_q");
+    const cancelSpy = vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(true);
+    const channel = fakeChannel();
+
+    const handled = await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat", taskId: "om_queued" } },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(cancelSpy).toHaveBeenCalledWith("lark:oc_chat", "om_queued");
+    expect(abortController.signal.aborted).toBe(false); // the running task is left alone
+    expect(runtime.cancelledQueueTaskIds.has("om_queued")).toBe(true); // skip stays silent later
+    expect(runtime.queueCards.has("om_queued")).toBe(false); // card claimed
+    expect(channel.updateCard).toHaveBeenCalledWith("card_q", expect.objectContaining({ schema: "2.0" }));
+  });
+
+  it("falls back to aborting the active run when the carried task already started", async () => {
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(false); // task is the running one
+    const channel = fakeChannel();
+
+    const handled = await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat", taskId: "om_active" } },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(abortController.signal.aborted).toBe(true); // fell back to aborting the active task
+  });
+
   it("renders Lark stop card action replies in English when Lark locale is English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-card-en-"));
     const runtime = createLarkServiceRuntime();
@@ -7633,7 +7682,7 @@ describe("lark service", () => {
         expect.objectContaining({ card: expect.any(Object) }),
         { replyTo: "om_waiting" },
       );
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("停止当前任务");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("取消此排队任务");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "engine.lock.waiting",

@@ -94,6 +94,35 @@ describe("ChatQueue", () => {
     await expect(second).rejects.toThrow("skipped by stop");
   });
 
+  it("cancels a single queued task by id without skipping the others", async () => {
+    const queue = new ChatQueue();
+    const events: string[] = [];
+    let release!: () => void;
+    const first = queue.enqueue("chat:1", async () => {
+      events.push("first");
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    }, { taskId: "t1" });
+    const second = queue.enqueue("chat:1", async () => {
+      events.push("second");
+    }, { taskId: "t2", onSkipped: () => { events.push("second-skipped"); } });
+    const third = queue.enqueue("chat:1", async () => {
+      events.push("third");
+    }, { taskId: "t3" });
+
+    await vi.waitFor(() => expect(release).toBeTypeOf("function")); // t1 is running
+    expect(queue.cancel("chat:1", "t1")).toBe(false); // already started → not cancellable
+    expect(queue.cancel("chat:1", "t2")).toBe(true); // still queued → cancellable
+    expect(queue.cancel("chat:1", "nope")).toBe(false); // unknown id
+
+    release();
+    await Promise.all([first, second, third]);
+    // t2 was skipped (its job never ran), t1 and t3 ran normally.
+    expect(events).toEqual(["first", "second-skipped", "third"]);
+    expect(queue.cancel("chat:1", "t2")).toBe(false); // already consumed
+  });
+
   it("reports a key as busy while a job is running or queued", async () => {
     const queue = new ChatQueue();
     let release!: () => void;

@@ -481,8 +481,42 @@ export async function handleLarkCardAction(input: {
     })) {
       return true;
     }
-    // Stop only the running task; let the queue keep advancing (do not
-    // clearPending, which would cancel every other queued task too).
+    // A queue card carries the id of its own still-queued task. If that task is
+    // still pending, cancel just it (the user can still /stop the running one).
+    const taskId = typeof value.taskId === "string" ? value.taskId : undefined;
+    if (taskId && input.runtime.chatQueue.cancel(value.conversationKey, taskId)) {
+      // Keep the eventual skip silent — we acknowledge the cancel right here.
+      input.runtime.cancelledQueueTaskIds.add(taskId);
+      const cancelledText = locale === "en" ? "Cancelled this queued task." : "已取消此排队任务。";
+      const cardId = input.runtime.queueCards.get(taskId);
+      input.runtime.queueCards.delete(taskId);
+      let acknowledged = false;
+      if (cardId && input.channel.updateCard) {
+        try {
+          await input.channel.updateCard(cardId, {
+            schema: "2.0",
+            config: { update_multi: true },
+            body: {
+              direction: "vertical",
+              padding: "12px 12px 12px 12px",
+              elements: [{ tag: "markdown", content: cancelledText }],
+            },
+          });
+          acknowledged = true;
+        } catch {
+          // fall through to a plain-text notice
+        }
+      }
+      if (!acknowledged) {
+        await input.channel.send(input.event.chatId, { text: cancelledText }, {
+          replyTo: input.event.messageId,
+          ...(replyInThread ? { replyInThread: true } : {}),
+        });
+      }
+      return true;
+    }
+    // Otherwise this is the running task: abort only it; let the queue keep
+    // advancing (do not clearPending, which would cancel every queued task too).
     const active = input.runtime.activeRuns.get(value.conversationKey);
     active?.abortController.abort();
     await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active), locale) }, {
