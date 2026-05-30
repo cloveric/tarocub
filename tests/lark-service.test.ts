@@ -307,6 +307,48 @@ describe("lark service", () => {
     }
   });
 
+  it("re-resolves a group's form after the cache TTL so toggling 群消息形式 applies without restart", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-form-ttl-"));
+    const runtime = createLarkServiceRuntime();
+    let topicForm = false; // starts as conversation form (shares)
+    const channel = fakeChannel({ getChatTopicForm: vi.fn(async () => topicForm) });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const send = (messageId: string) => handleLarkMessage({
+      channel, bridge, runtime, stateDir,
+      message: fakeLarkMessage({ messageId, chatType: "group", threadId: "omt_x", mentionedBot: true, content: "x" }),
+    });
+
+    try {
+      await send("om_1"); // conversation form → shares the group session
+      expect(bridge.handleAuthorizedMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ conversationKey: "lark:oc_chat" }),
+      );
+
+      // Toggle to topic form, but still within the TTL → cached form is reused.
+      topicForm = true;
+      nowSpy.mockReturnValue(1_000_000 + 10_000);
+      await send("om_2");
+      expect(bridge.handleAuthorizedMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ conversationKey: "lark:oc_chat" }),
+      );
+
+      // Past the TTL → re-resolves the form → now isolates the topic.
+      nowSpy.mockReturnValue(1_000_000 + 31_000);
+      await send("om_3");
+      expect(bridge.handleAuthorizedMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ conversationKey: "lark:oc_chat:omt_x" }),
+      );
+      expect(channel.getChatTopicForm).toHaveBeenCalledTimes(2); // fetched at t0 and after TTL, not the cached middle call
+    } finally {
+      nowSpy.mockRestore();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("guides unauthorized Lark groups to invite or allow the group without running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-denied-help-"));
     const channel = fakeChannel({

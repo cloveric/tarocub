@@ -69,6 +69,13 @@ import { appendLarkTimelineEvent } from "./timeline.js";
 
 const defaultTranscribeLarkMedia = createDefaultTranscribeVoice();
 
+/**
+ * How long a chat's resolved session mode (conversation vs topic form) is cached.
+ * Short enough that toggling a group's 群消息形式 takes effect within the window
+ * without a service restart, long enough to avoid a chat.get on every message.
+ */
+const CHAT_FORM_CACHE_TTL_MS = 30_000;
+
 function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | undefined): LarkSendOptions | undefined {
   if (!replyTo) {
     return undefined;
@@ -141,22 +148,24 @@ async function resolveLarkMessageChatMode(
   if (message.chatType === "p2p") {
     return { ...message, chatMode: "p2p" };
   }
+  const now = Date.now();
   // An explicitly-provided mode (e.g. tests) wins.
   if (message.chatMode) {
-    runtime.chatModeCache.set(message.chatId, message.chatMode);
+    runtime.chatModeCache.set(message.chatId, { mode: message.chatMode, expiresAt: now + CHAT_FORM_CACHE_TTL_MS });
     return { ...message };
   }
   const cached = runtime.chatModeCache.get(message.chatId);
-  if (cached) {
-    return { ...message, chatMode: cached };
+  if (cached && cached.expiresAt > now) {
+    return { ...message, chatMode: cached.mode };
   }
   // Resolve the chat's message form. Topic form (a native topic group, or a
   // conversation group switched to the topic message form) isolates each topic;
   // conversation form shares one group session. We map both to "topic"/"group"
-  // so larkSessionThreadIdForMessage isolates only the former.
+  // so larkSessionThreadIdForMessage isolates only the former. Cached briefly so
+  // toggling 群消息形式 takes effect without a restart.
   const mode = await resolveLarkChatSessionMode(channel, message.chatId);
   if (mode) {
-    runtime.chatModeCache.set(message.chatId, mode);
+    runtime.chatModeCache.set(message.chatId, { mode, expiresAt: now + CHAT_FORM_CACHE_TTL_MS });
     return { ...message, chatMode: mode };
   }
   // Couldn't determine the form (no channel support, or a transient error): do

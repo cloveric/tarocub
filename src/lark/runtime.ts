@@ -77,7 +77,12 @@ export interface LarkServiceRuntime {
   chatQueue: ChatQueue;
   queuePolicy: LarkQueuePolicy;
   pendingBatches: Map<string, PendingLarkBatch>;
-  chatModeCache: Map<string, LarkChatMode>;
+  /**
+   * Per-chat cache of the resolved session mode (p2p/group/topic) with an expiry,
+   * so switching a group's 群消息形式 (conversation ⇄ topic) takes effect within
+   * the TTL instead of requiring a service restart.
+   */
+  chatModeCache: Map<string, { mode: LarkChatMode; expiresAt: number }>;
   /** queued message id → its "queued" card message id, so each task's run card reuses its own card. */
   queueCards: Map<string, string>;
   /**
