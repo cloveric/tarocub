@@ -200,8 +200,18 @@ Inside Lark, the bot supports the same core slash surface as Telegram: `/status`
 
 Lark group/session semantics:
 
-- Normal group chats share one parent-group session. Reply threads created inside a normal group stay on the parent group session unless that thread already has an explicit historical session binding.
-- Topic-style Lark groups use one session per topic. A topic conversation key is `lark:<chat_id>:<thread_id>`, while the parent group key is `lark:<chat_id>`.
+Whether a Lark group isolates each topic into its own session follows the group's **群消息形式 (group message form)** — read from `im.v1.chat.get` and cached for ~30s, so switching the form takes effect within ~30s without a service restart:
+
+| Chat type | Feishu signal | Topic context (session) |
+|---|---|---|
+| 1:1 chat (单聊) | `chat_mode = p2p` | One continuous session. |
+| Topic group (话题群) | `chat_mode = topic` | Each topic is its **own isolated** session. |
+| Conversation group switched to topic messages (对话群 → 群消息形式 = 话题消息) | `chat_mode = group` + `group_message_type = thread` | Each topic is its **own isolated** session. |
+| Conversation group, default form (对话消息) | `chat_mode = group` + `group_message_type = chat` | Topic replies **share the one** group session. |
+
+- "Isolated" means a topic's context does not bleed into other topics or the group's main timeline. "Shared" means a topic reply continues the group's single session.
+- A topic conversation key is `lark:<chat_id>:<thread_id>`; the shared group / 1:1 key is `lark:<chat_id>`. Isolation needs both the topic form **and** a `thread_id` on the message.
+- `chat_mode` alone cannot tell a toggled topic group (`chat_mode = group` + `group_message_type = thread`) from a plain conversation group, so `group_message_type` is the decisive signal.
 - `/invite group` and `/group allow` authorize the current group, not only the current thread. `/remove group` and `/group deny` remove the current group authorization.
 - `known-chats.json` is diagnostic metadata for `/status`, `/config`, and dashboard labels. It never decides routing or access by itself.
 
