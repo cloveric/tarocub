@@ -1,12 +1,33 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  LARK_CARD_ANSWER_MAX,
   applyLarkEngineEvent,
   initialLarkRunState,
   renderLarkApprovalCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
+  renderLarkRunCardMinimal,
 } from "../src/lark/card-renderer.js";
+
+function maxMarkdownElementLength(card: unknown): number {
+  let max = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (node && typeof node === "object") {
+      const rec = node as Record<string, unknown>;
+      if (rec.tag === "markdown" && typeof rec.content === "string") {
+        max = Math.max(max, rec.content.length);
+      }
+      Object.values(rec).forEach(walk);
+    }
+  };
+  walk(card);
+  return max;
+}
 
 describe("lark card renderer", () => {
   it("renders streaming engine events into one interactive run card", () => {
@@ -37,6 +58,29 @@ describe("lark card renderer", () => {
     expect(serialized).toContain("Read");
     expect(serialized).not.toContain("file contents here");
     expect(serialized).not.toContain("停止");
+  });
+
+  it("caps every card markdown element so a long answer cannot overflow Feishu's element limit", () => {
+    const huge = "好".repeat(20000);
+    let state = initialLarkRunState("lark:oc_chat");
+    // While streaming (running): the streamed text element must be capped.
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: huge });
+    expect(maxMarkdownElementLength(renderLarkRunCard(state))).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
+    // When done: the answer element (full + compact) must be capped too.
+    state = applyLarkEngineEvent(state, { type: "result", text: huge });
+    expect(maxMarkdownElementLength(renderLarkRunCard(state))).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
+    expect(maxMarkdownElementLength(renderLarkRunCardCompact(state))).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
+  });
+
+  it("renders a guaranteed-tiny terminal card pointing to the full reply", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "x".repeat(50000) });
+    state = applyLarkEngineEvent(state, { type: "result", text: "x".repeat(50000) });
+    const card = renderLarkRunCardMinimal(state) as { body: unknown };
+    const body = JSON.stringify(card.body);
+    expect(body).toContain("完整回复见下方消息"); // points to the text message
+    expect(body).not.toContain("xxxxx"); // no huge answer in the body
+    expect(maxMarkdownElementLength(card.body)).toBeLessThan(100); // tiny — always fits Feishu's limit
   });
 
   it("ignores a TodoWrite tool_result so it can't finish an unrelated running tool", () => {

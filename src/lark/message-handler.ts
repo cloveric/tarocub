@@ -14,11 +14,13 @@ import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import {
+  LARK_CARD_ANSWER_MAX,
   applyLarkEngineEvent,
   initialLarkRunState,
   renderLarkQueueWaitCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
+  renderLarkRunCardMinimal,
   type LarkRunState,
 } from "./card-renderer.js";
 import {
@@ -1005,7 +1007,7 @@ async function runNormalizedLarkMessage(
             CCTB_LARK_ACTIVE_STATE_DIR: input.stateDir,
           },
         });
-        await runCard?.finish(result.text);
+        const answerShownInCard = (await runCard?.finish(result.text)) ?? false;
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
         await deliverLarkResponse({
           channel: input.channel,
@@ -1014,11 +1016,12 @@ async function runNormalizedLarkMessage(
           replyTo: normalized.messageId,
           replyInThread: Boolean(normalized.threadId),
           text: result.text,
-          // The run card is the single canonical reply: it renders the full
-          // answer in its block stream. Only fall back to a separate markdown
-          // message when the card failed to create (runCard undefined).
-          // deliverLarkResponse still processes tool tags / files / images.
-          sendText: runCard === undefined,
+          // The run card is normally the single canonical reply. Send a separate
+          // markdown message only when there is no card, OR when the answer was
+          // too long to show in the card (truncated / tiny-terminal fallback) so
+          // the full text is never lost. deliverLarkResponse still processes tool
+          // tags / files / images regardless.
+          sendText: runCard === undefined || !answerShownInCard,
           stateDir: input.stateDir,
           requestOutputDir,
           workspaceOverride,
@@ -1094,7 +1097,8 @@ async function runNormalizedLarkMessage(
 
 interface LarkRunCardController {
   apply(event: EngineStreamEvent): Promise<void>;
-  finish(text: string): Promise<void>;
+  /** Finalize with the answer; resolves to whether the answer is fully shown in the card. */
+  finish(text: string): Promise<boolean>;
   fail(text: string): Promise<void>;
   interrupt(): Promise<void>;
   idleTimeout(minutes: number): Promise<void>;
@@ -1175,9 +1179,9 @@ async function createLarkRunCardController(input: {
   const THROTTLE_MS = 400;
   let updateTimer: ReturnType<typeof setTimeout> | undefined;
   let patchChain: Promise<void> = Promise.resolve();
-  const enqueuePatch = (fn: () => Promise<void>): Promise<void> => {
+  const enqueuePatch = <T>(fn: () => Promise<T>): Promise<T> => {
     const next = patchChain.then(fn, fn);
-    patchChain = next.catch(() => undefined);
+    patchChain = next.then(() => undefined, () => undefined);
     return next;
   };
   const flushUpdate = (): void => {
@@ -1208,21 +1212,24 @@ async function createLarkRunCardController(input: {
   // Terminal update: guarantee the card leaves the "running" state and the
   // answer is not lost. Try the full card, then the compact card, and as a
   // last resort deliver the text directly so a failed patch never swallows it.
-  const finalize = async (text?: string): Promise<void> => {
+  // Returns whether the full answer is visible in the rendered card. When it is
+  // not (the card was truncated or fell back to the tiny terminal card), the
+  // caller delivers the answer as a separate text message so nothing is lost.
+  const finalize = async (text?: string): Promise<boolean> => {
+    const answerFitsCard = !text || text.length <= LARK_CARD_ANSWER_MAX;
     if (!degraded && await tryUpdate(renderLarkRunCard(state, input.locale))) {
-      return;
+      return answerFitsCard;
     }
     degraded = true;
     if (await tryUpdate(renderLarkRunCardCompact(state, input.locale))) {
-      return;
+      return answerFitsCard;
     }
-    if (text && text.trim()) {
-      await input.channel.send(
-        input.chatId,
-        { text },
-        larkReplyOptions(input.replyTo, input.replyInThread),
-      ).catch(() => undefined);
-    }
+    // Both the full and compact cards can be rejected when a single element
+    // (e.g. a long CJK answer) exceeds Feishu's limit. Fall back to a guaranteed-
+    // tiny terminal card so the card never freezes in "running"; the caller then
+    // delivers the answer as text.
+    await tryUpdate(renderLarkRunCardMinimal(state, input.locale));
+    return false;
   };
   return {
     apply: async (event) => {
@@ -1230,12 +1237,13 @@ async function createLarkRunCardController(input: {
       // Coalesced, non-blocking: never await the live patch.
       scheduleUpdate();
     },
-    finish: async (text) => {
+    finish: async (text): Promise<boolean> => {
       // Reuse the reducer so non-streaming engines (which emit no incremental
       // assistant_text) still get the final answer seeded into the block stream.
       state = applyLarkEngineEvent(state, { type: "result", text });
       cancelScheduledUpdate();
-      await enqueuePatch(() => finalize(text));
+      // Returns whether the answer is fully visible in the card.
+      return await enqueuePatch(() => finalize(text));
     },
     fail: async (text) => {
       state = {

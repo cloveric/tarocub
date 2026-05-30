@@ -7936,12 +7936,75 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_fail_card", content: "do work" }),
       });
 
-      // The answer reached the user as a plain-text message (last-resort fallback).
-      const textSends = channel.send.mock.calls.filter((call: unknown[]) => {
-        const payload = call[1] as { text?: string } | undefined;
-        return typeof payload?.text === "string" && payload.text.includes("the final answer");
+      // The card could never render, so the answer must arrive as a separate
+      // message (text or markdown) instead of being swallowed or frozen in-card.
+      const answerSends = channel.send.mock.calls.filter((call: unknown[]) => {
+        const payload = call[1] as { text?: string; markdown?: string } | undefined;
+        return (typeof payload?.text === "string" && payload.text.includes("the final answer"))
+          || (typeof payload?.markdown === "string" && payload.markdown.includes("the final answer"));
       });
-      expect(textSends.length).toBeGreaterThan(0);
+      expect(answerSends.length).toBeGreaterThan(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not duplicate a normal-length answer as text when the run card renders it", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-ok-"));
+    const channel = fakeChannel(); // updateCard succeeds
+    const runtime = createLarkServiceRuntime();
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "short answer XYZ" }));
+        return { text: "short answer XYZ" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel, bridge, runtime, stateDir,
+        message: fakeLarkMessage({ messageId: "om_ok_card", content: "do work" }),
+      });
+
+      // The answer lives in the card (via updateCard); it must NOT also be sent
+      // as a separate text/markdown message (that was the duplicate bug).
+      const answerSends = channel.send.mock.calls.filter((call: unknown[]) => {
+        const p = call[1] as { text?: string; markdown?: string } | undefined;
+        return (typeof p?.text === "string" && p.text.includes("short answer XYZ"))
+          || (typeof p?.markdown === "string" && p.markdown.includes("short answer XYZ"));
+      });
+      expect(answerSends.length).toBe(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers the full answer as a message when it is too long for the run card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-long-"));
+    const channel = fakeChannel(); // updateCard succeeds, but the answer exceeds the card element cap
+    const runtime = createLarkServiceRuntime();
+    const longAnswer = `LONGMARKER ${"好".repeat(6000)}`;
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: longAnswer }));
+        return { text: longAnswer };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel, bridge, runtime, stateDir,
+        message: fakeLarkMessage({ messageId: "om_long_card", content: "do work" }),
+      });
+
+      // The card only holds a truncated preview, so the full answer must arrive
+      // as a separate message (identified by its marker).
+      const answerSends = channel.send.mock.calls.filter((call: unknown[]) => {
+        const p = call[1] as { text?: string; markdown?: string } | undefined;
+        return (typeof p?.text === "string" && p.text.includes("LONGMARKER"))
+          || (typeof p?.markdown === "string" && p.markdown.includes("LONGMARKER"));
+      });
+      expect(answerSends.length).toBeGreaterThan(0);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

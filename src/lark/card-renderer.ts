@@ -282,7 +282,9 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
       if (group.kind === "text") {
         const cleaned = cleanCardText(group.content);
         if (cleaned) {
-          elements.push(markdownElement(cleaned));
+          // Cap each streamed text element — a long answer would otherwise
+          // overflow Feishu's per-element limit and fail every card update.
+          elements.push(markdownElement(truncate(cleaned, LARK_CARD_ANSWER_MAX)));
         }
       } else {
         for (const element of renderToolGroup(group.tools, false, labels)) {
@@ -314,7 +316,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     const mins = state.idleTimeoutMinutes ?? 0;
     elements.push(noteElement(`_⏱ ${labels.idleTimeout(mins)}_`));
   } else if (state.status === "error" && state.errorText.trim()) {
-    elements.push(markdownElement(`⚠️ ${state.errorText.trim()}`));
+    elements.push(markdownElement(`⚠️ ${truncate(state.errorText.trim(), LARK_CARD_ANSWER_MAX)}`));
   } else if (state.status === "done" && elements.length === 1) {
     elements.push(markdownElement(`_${labels.empty}_`));
   }
@@ -355,7 +357,12 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   };
 }
 
-const COMPACT_ANSWER_MAX = 8000;
+// Feishu rejects a card whose single markdown element exceeds its limit (ErrCode
+// 11310, byte-ish, so CJK counts ~3x). Cap every markdown element well under it;
+// when the answer is longer it is truncated in the card and the full text is
+// delivered as a separate message (see LARK_CARD_ANSWER_MAX usage in the handler).
+export const LARK_CARD_ANSWER_MAX = 3000;
+const COMPACT_ANSWER_MAX = LARK_CARD_ANSWER_MAX;
 const PROCESS_PANEL_MAX = 3000;
 
 /** The canonical final answer: the engine's result text, or the last non-empty text block. */
@@ -448,6 +455,40 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
     elements.push(markdownElement(`_${labels.empty}_`));
   }
 
+  return {
+    schema: "2.0",
+    config: {
+      streaming_mode: false,
+      update_multi: true,
+      summary: { content: cardSummary(state, locale) },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements,
+    },
+  };
+}
+
+/**
+ * The smallest possible terminal card: just the status (+ a note that the full
+ * reply was sent as a separate message). It carries no answer/tool body, so it
+ * is guaranteed to fit Feishu's element limit. finalize uses it as the last card
+ * resort so the card can ALWAYS leave the "running" state, even when the full
+ * and compact renders are both rejected (ErrCode 11310, element too large).
+ */
+export function renderLarkRunCardMinimal(state: LarkRunState, locale: Locale = "zh"): Record<string, unknown> {
+  const labels = runCardLabels(locale);
+  const elements: unknown[] = [markdownElement(`**${runCardStatusLabel(state.status, labels)}**`)];
+  if (state.status === "interrupted") {
+    elements.push(noteElement(`_⏹ ${labels.interrupted}_`));
+  } else if (state.status === "idle_timeout") {
+    elements.push(noteElement(`_⏱ ${labels.idleTimeout(state.idleTimeoutMinutes ?? 0)}_`));
+  } else if (state.status === "error" && state.errorText.trim()) {
+    elements.push(markdownElement(`⚠️ ${truncate(state.errorText.trim(), 400)}`));
+  } else {
+    elements.push(noteElement(locale === "en" ? "_Full reply sent as a message below._" : "_完整回复见下方消息。_"));
+  }
   return {
     schema: "2.0",
     config: {
