@@ -30,6 +30,8 @@ export interface LarkRunState {
   status: "running" | "done" | "error" | "interrupted" | "idle_timeout";
   blocks: LarkRunBlock[];
   reasoning: { content: string; active: boolean };
+  /** Latest TodoWrite/Codex plan (the `{ todos: [...] }` input); rendered as the plan panel. */
+  plan?: unknown;
   footer: "thinking" | "tool_running" | "streaming" | null;
   taskNotifications: string[];
   resultText: string;
@@ -99,6 +101,13 @@ export function applyLarkEngineEvent(
         // via tool_result). Skip the duplicate permission_request block, which
         // carries no toolUseId and would otherwise spin "running" forever.
         return { ...state, reasoning: { ...state.reasoning, active: false } };
+      }
+      if (event.type === "tool_use" && event.toolName === "TodoWrite") {
+        // The plan/checklist is meta-state shown as the dedicated plan panel —
+        // not a block. Keeping it out of the block stream means repeated plan
+        // updates never accumulate stale blocks and never close (chop) the
+        // streaming answer text.
+        return { ...state, plan: event.toolInput };
       }
       return {
         ...state,
@@ -171,9 +180,14 @@ function applyToolResult(
   let targetIndex = -1;
   if (event.toolUseId !== undefined) {
     targetIndex = blocks.findIndex(matchById);
-  }
-  if (targetIndex === -1) {
-    // No id match (or no id) — attach to the most recent still-running tool.
+    // An id was given but no block carries it — the originating tool_use was not
+    // rendered as a block (e.g. a TodoWrite/plan update). Do NOT fall back to the
+    // last running tool, or this result would wrongly finish an unrelated tool.
+    if (targetIndex === -1) {
+      return blocks;
+    }
+  } else {
+    // No id — attach to the most recent still-running tool.
     for (let i = blocks.length - 1; i >= 0; i--) {
       const block = blocks[i]!;
       if (block.kind === "tool" && block.tool.status === "running") {
@@ -250,7 +264,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
         body: state.reasoning.content,
       }));
     }
-    const livePlan = todoPlanPanel(state.blocks, labels, true);
+    const livePlan = todoPlanPanel(state, labels, true);
     if (livePlan) {
       elements.push(livePlan);
     }
@@ -274,7 +288,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     if (answer) {
       elements.push(markdownElement(truncate(answer, COMPACT_ANSWER_MAX)));
     }
-    const donePlan = todoPlanPanel(state.blocks, labels, false);
+    const donePlan = todoPlanPanel(state, labels, false);
     if (donePlan) {
       elements.push(donePlan);
     }
@@ -566,28 +580,22 @@ function toolBodyMd(tool: LarkToolEntry, labels: ReturnType<typeof runCardLabels
   return `${body.slice(0, TOOL_BODY_TOTAL_MAX)}…`;
 }
 
-/** The dedicated plan panel showing the latest TodoWrite checklist (always visible). */
+/** The dedicated plan panel showing the latest TodoWrite/Codex plan (always visible). */
 function todoPlanPanel(
-  blocks: LarkRunBlock[],
+  state: LarkRunState,
   labels: ReturnType<typeof runCardLabels>,
   expanded: boolean,
 ): Record<string, unknown> | undefined {
-  let input: unknown;
-  for (let i = blocks.length - 1; i >= 0; i -= 1) {
-    const block = blocks[i]!;
-    if (block.kind === "tool" && block.tool.toolName === "TodoWrite") {
-      input = block.tool.toolInput;
-      break;
-    }
-  }
-  if (input === undefined) {
+  if (state.plan === undefined) {
     return undefined;
   }
-  const list = renderTodoList(input);
+  const list = renderTodoList(state.plan);
   if (!list) {
     return undefined;
   }
-  const todos = Array.isArray((input as Record<string, unknown>).todos) ? (input as Record<string, unknown>).todos as unknown[] : [];
+  const todos = state.plan && typeof state.plan === "object" && Array.isArray((state.plan as Record<string, unknown>).todos)
+    ? (state.plan as Record<string, unknown>).todos as unknown[]
+    : [];
   const done = todos.filter((todo) => todo && typeof todo === "object" && (todo as Record<string, unknown>).status === "completed").length;
   return collapsiblePanel({
     title: `${labels.plan} · ${done}/${todos.length}`,

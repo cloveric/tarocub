@@ -108,6 +108,37 @@ describe("lark card renderer", () => {
     expect(serialized).toContain("1/3");                  // header progress (1 of 3 done)
   });
 
+  it("keeps the plan as meta-state: repeated updates don't accumulate blocks or chop the answer", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    // Stream answer text with plan updates interleaved (as Codex does).
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "Working", delta: true });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "TodoWrite", toolUseId: "p1", toolInput: { todos: [{ content: "A", status: "in_progress" }] } });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: " on it.", delta: true });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "TodoWrite", toolUseId: "p2", toolInput: { todos: [{ content: "A", status: "completed" }, { content: "B", status: "in_progress" }] } });
+
+    // No TodoWrite ever becomes a block; the streamed text stays in one piece.
+    const toolBlocks = state.blocks.filter((b) => b.kind === "tool");
+    expect(toolBlocks).toHaveLength(0);
+    const textBlocks = state.blocks.filter((b): b is Extract<typeof b, { kind: "text" }> => b.kind === "text");
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0].content).toBe("Working on it.");
+
+    // The plan panel reflects the LATEST plan only.
+    const serialized = JSON.stringify(renderLarkRunCard(state));
+    expect(serialized).toContain("✅ A");      // completed in latest
+    expect(serialized).toContain("B");          // newest step
+    expect(serialized).toContain("📋");
+  });
+
+  it("ignores a tool_result whose id matches no block (no cross-attaching)", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolUseId: "b1", toolInput: { command: "sleep 5" } });
+    // A plan result (id p1) arrives while Bash is still running; Bash must stay running.
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "p1", output: "plan saved" });
+    const bash = state.blocks.find((b) => b.kind === "tool");
+    expect(bash).toMatchObject({ kind: "tool", tool: { toolName: "Bash", status: "running" } });
+  });
+
   it("renders MCP tool names as a friendly 'server · tool'", () => {
     let state = initialLarkRunState("lark:oc_chat", "group");
     state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "mcp__chrome-devtools__click", toolInput: {}, toolUseId: "t1" });
