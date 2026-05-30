@@ -156,6 +156,11 @@ export async function runLarkService(
       appSecret: config.appSecret,
       transport: "websocket",
       source: "tarocub",
+      // The SDK's normalizeCardAction drops action.form_value, so AskUserQuestion
+      // form submits (select/dropdown picks) would otherwise arrive empty. Keep
+      // the raw event body on every normalized event so the card-action handler
+      // can recover form_value from evt.raw.
+      includeRawEvent: true,
       policy: {
         dmMode: "open",
         requireMention: false,

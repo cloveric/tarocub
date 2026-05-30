@@ -461,6 +461,10 @@ export async function handleLarkCardAction(input: {
       form_value?: unknown;
       formValue?: unknown;
     };
+    // Full raw Feishu event (present when the channel is created with
+    // includeRawEvent). The SDK's normalizeCardAction drops action.form_value,
+    // so a Card 2.0 form submit's per-field values are only recoverable here.
+    raw?: unknown;
   };
 }): Promise<boolean> {
   const value = actionValue(input.event.action.value);
@@ -708,7 +712,7 @@ export async function handleLarkCardAction(input: {
 
     const replyOpts = larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread);
     const questions = normalizeAskUserQuestions(pending.askUserQuestionInput);
-    const formValue = actionFormValue(input.event.action) ?? {};
+    const formValue = larkCardActionFormValue(input.event);
 
     // The whole form arrives in one submit. Map each question's selected
     // value(s) back to an answer string (single = label, multi = joined labels).
@@ -1710,6 +1714,47 @@ function buildSuspendedPreviousSnapshot(input: {
 function actionFormValue(action: { form_value?: unknown; formValue?: unknown }): Record<string, unknown> | undefined {
   const raw = action.form_value ?? action.formValue;
   return actionValue(raw) ?? undefined;
+}
+
+/**
+ * Form-field values for a Card 2.0 form submit. The SDK's `normalizeCardAction`
+ * keeps only `{ value, tag, name, option }` and discards `action.form_value`, so
+ * the per-question picks must be recovered from the raw Feishu event body
+ * (attached as `event.raw` when the channel is created with `includeRawEvent`).
+ * Falls back across the possible raw nestings, then to the normalized action.
+ */
+function larkCardActionFormValue(event: {
+  action: { form_value?: unknown; formValue?: unknown };
+  raw?: unknown;
+}): Record<string, unknown> {
+  const fromAction = actionFormValue(event.action);
+  if (fromAction && Object.keys(fromAction).length > 0) {
+    return fromAction;
+  }
+  for (const candidate of larkRawCardActionContainers(event.raw)) {
+    const formValue = candidate.form_value ?? candidate.formValue;
+    const parsed = actionValue(formValue);
+    if (parsed && Object.keys(parsed).length > 0) {
+      return parsed;
+    }
+  }
+  return fromAction ?? {};
+}
+
+/** Possible locations of `action` within the raw Feishu card-action event. */
+function larkRawCardActionContainers(raw: unknown): Array<{ form_value?: unknown; formValue?: unknown }> {
+  const containers: Array<{ form_value?: unknown; formValue?: unknown }> = [];
+  const root = objectValue(raw);
+  if (!root) {
+    return containers;
+  }
+  const candidates = [objectValue(root.action), objectValue(objectValue(root.event)?.action)];
+  for (const candidate of candidates) {
+    if (candidate) {
+      containers.push(candidate as { form_value?: unknown; formValue?: unknown });
+    }
+  }
+  return containers;
 }
 
 function actionValue(value: unknown): Record<string, unknown> | null {

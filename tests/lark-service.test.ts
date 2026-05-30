@@ -9921,6 +9921,39 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
+  it("recovers AskUserQuestion answers from the raw event when the SDK drops action.form_value", async () => {
+    // The SDK's normalizeCardAction keeps only { value, tag, name, option } and
+    // discards action.form_value, so a real form submit arrives with the picks
+    // ONLY on the raw event body (channel created with includeRawEvent). Without
+    // recovery this re-prompts "请先选择" forever and the run card never resolves.
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    const callbackValue = { cctb_lark: "ask_user_question", action: "form_submit", requestId };
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: callbackValue },
+        raw: { action: { value: callbackValue, form_value: { q0: "Careful" } } },
+      },
+    });
+
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Careful" });
+    expect(runtime.pendingApprovals.size).toBe(0);
+    expect(JSON.stringify(channel.send.mock.calls)).not.toContain("请先选择");
+  });
+
   it("answers unsupported Lark card actions instead of silently ignoring them", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
