@@ -116,7 +116,11 @@ export async function updateManagedCard(
   if (!update) {
     return false;
   }
-  const sequence = handle.sequence + 1;
+  // Advance the sequence on every attempt, not only on success. A card that
+  // streams many updates (the run card) retries a rejected full render with a
+  // compact one; reusing the same sequence/uuid could be deduped or rejected
+  // server-side. Feishu only requires the sequence to increase — gaps are fine.
+  const sequence = (handle.sequence += 1);
   try {
     await update({
       path: { card_id: handle.cardId },
@@ -126,7 +130,6 @@ export async function updateManagedCard(
         uuid: `c_${handle.cardId}_${sequence}`,
       },
     });
-    handle.sequence = sequence;
     return true;
   } catch {
     return false;

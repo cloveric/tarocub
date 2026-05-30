@@ -8275,14 +8275,15 @@ describe("lark service", () => {
     }
   });
 
-  it("recalls a managed queue card and starts the run card fresh on take-over", async () => {
+  it("takes over a managed queue card as the run card in place via CardKit", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-managed-takeover-"));
     const create = vi.fn(async () => ({ data: { card_id: "card_q" } }));
+    const update = vi.fn(async () => ({ data: {} }));
     const messageReply = vi.fn(async () => ({ data: { message_id: "om_qcard" } }));
     const messageCreate = vi.fn(async () => ({ data: { message_id: "om_qcard" } }));
     const channel = fakeChannel({
       rawClient: {
-        cardkit: { v1: { card: { create } } },
+        cardkit: { v1: { card: { create, update } } },
         im: { v1: { message: { create: messageCreate, reply: messageReply } } },
       },
     });
@@ -8307,14 +8308,50 @@ describe("lark service", () => {
     try {
       await handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage({ messageId: "om_reuse_managed", content: "go" }) });
 
-      // The managed queue card can't be reused via im.message.patch, so it's
-      // recalled and the run card is sent fresh, then updated in place as it
-      // streams — nothing orphaned, no stale queued-card ref left behind.
-      expect(channel.recallMessage).toHaveBeenCalledWith("om_qcard");
+      // The managed queue card (card_q) is taken over as the run card and
+      // updated IN PLACE via CardKit — no recall, no fresh card, no patch.
+      expect(create).toHaveBeenCalledTimes(1); // only the queue card was created
+      expect(JSON.stringify(update.mock.calls)).toContain("answer text"); // run card updates via CardKit
+      expect(channel.recallMessage).not.toHaveBeenCalled();
       const cardSends = channel.send.mock.calls.filter((call: unknown[]) => Boolean((call[1] as { card?: unknown } | undefined)?.card));
-      expect(cardSends).toHaveLength(1); // the fresh run card
-      expect(JSON.stringify(channel.updateCard.mock.calls)).toContain("answer text");
+      expect(cardSends).toHaveLength(0); // nothing sent fresh
+      expect(channel.updateCard).not.toHaveBeenCalled(); // not patched
       expect(runtime.queueCards.size).toBe(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends a fresh run card as a CardKit managed card when there is no queued card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runcard-managed-"));
+    const create = vi.fn(async () => ({ data: { card_id: "card_run" } }));
+    const update = vi.fn(async () => ({ data: {} }));
+    const messageReply = vi.fn(async () => ({ data: { message_id: "om_runcard" } }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_runcard" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create, update } } },
+        im: { v1: { message: { create: messageCreate, reply: messageReply } } },
+      },
+    });
+    const runtime = createLarkServiceRuntime();
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "answer text" }));
+        return { text: "answer text" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage({ messageId: "om_run", content: "go" }) });
+
+      // No queue wait → the run card is created fresh as a CardKit managed card
+      // (create + send by reference) and updated in place via CardKit, not patch.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(update.mock.calls)).toContain("answer text");
+      expect(channel.updateCard).not.toHaveBeenCalled();
+      const cardSends = channel.send.mock.calls.filter((call: unknown[]) => Boolean((call[1] as { card?: unknown } | undefined)?.card));
+      expect(cardSends).toHaveLength(0); // not an inline card send
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

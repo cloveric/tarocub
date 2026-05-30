@@ -57,6 +57,22 @@ describe("lark managed card (CardKit)", () => {
     });
   });
 
+  it("advances the sequence even when an update attempt fails (no uuid reuse on retry)", async () => {
+    const { channel, update } = fakeCardKitChannel();
+    update.mockRejectedValueOnce(new Error("card too big")).mockResolvedValueOnce({ data: {} });
+    const handle: ManagedCardHandle = { messageId: "om", cardId: "card_x", sequence: 0 };
+
+    expect(await updateManagedCard(channel, handle, { v: "full" })).toBe(false); // rejected
+    expect(handle.sequence).toBe(1); // advanced despite the failure
+    expect(await updateManagedCard(channel, handle, { v: "compact" })).toBe(true); // retry
+    expect(handle.sequence).toBe(2);
+    // The retry used a DISTINCT sequence/uuid, so Feishu can't dedupe it against
+    // the failed attempt (which is what the run card's full→compact retry needs).
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ sequence: 2, uuid: "c_card_x_2" }),
+    }));
+  });
+
   it("returns undefined/false (so callers fall back) when CardKit is unavailable", async () => {
     const noRaw = {};
     expect(await sendManagedCard(noRaw, "oc_chat", { schema: "2.0" })).toBeUndefined();

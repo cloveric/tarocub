@@ -62,7 +62,7 @@ import {
   type LarkIncomingMessage,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
-import { sendManagedCard, updateManagedCard } from "./managed-card.js";
+import { sendManagedCard, updateManagedCard, type ManagedCardHandle } from "./managed-card.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { verifyLarkNumericIds } from "./id-map.js";
 import type { LarkQueueCardRef, LarkServiceRuntime } from "./runtime.js";
@@ -869,17 +869,11 @@ async function runNormalizedLarkMessage(
     let runCard: LarkRunCardController | undefined;
     try {
       // If a "queued" card was already shown for this conversation, take it over
-      // as the run card so it transitions in place instead of being orphaned.
+      // as the run card so it transitions in place instead of being orphaned: a
+      // CardKit-managed queue card is updated by card_id (seamless, survives the
+      // take-over), a plain inline one via im.message.patch.
       const queuedRef = input.runtime.queueCards.get(normalized.messageId);
       input.runtime.queueCards.delete(normalized.messageId);
-      // A plain inline queue card is taken over in place via im.message.patch. A
-      // CardKit-managed queue card is NOT reused here (the run card still streams
-      // via im.message.patch, which we don't rely on for a CardKit-bound card —
-      // migrating the run card to CardKit is stage 4); recall it and start the
-      // run card fresh so nothing is orphaned.
-      if (queuedRef?.handle && input.channel.recallMessage) {
-        await input.channel.recallMessage(queuedRef.messageId).catch(() => undefined);
-      }
       runCard = await createLarkRunCardController({
         channel: input.channel,
         chatId: normalized.chatId,
@@ -888,7 +882,7 @@ async function runNormalizedLarkMessage(
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
         locale,
-        ...(queuedRef && !queuedRef.handle ? { existingMessageId: queuedRef.messageId } : {}),
+        ...(queuedRef ? { existingCard: queuedRef } : {}),
       });
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
         await runCard?.apply(event);
@@ -1155,45 +1149,76 @@ async function createLarkRunCardController(input: {
   replyTo: string;
   replyInThread: boolean;
   locale: "zh" | "en";
-  /** Reuse an existing card (e.g. the "queued" card) instead of sending a new one. */
-  existingMessageId?: string;
+  /** Reuse the queued card (managed → CardKit in place; inline → patch) instead of sending a new one. */
+  existingCard?: LarkQueueCardRef;
 }): Promise<LarkRunCardController | undefined> {
   if (!input.channel.updateCard) {
     return undefined;
   }
   let state: LarkRunState = initialLarkRunState(input.conversationKey, input.bridgeChatType);
-  let sent: { messageId: string; fallback: boolean };
-  if (input.existingMessageId) {
-    // Take over the queued card: turn it into the run card in place.
-    try {
-      await input.channel.updateCard(input.existingMessageId, renderLarkRunCard(state, input.locale));
-      sent = { messageId: input.existingMessageId, fallback: false };
-    } catch {
-      sent = { messageId: input.existingMessageId, fallback: true };
+  // When set, the run card is a CardKit managed card updated in place by card_id
+  // (it survives the queue→run take-over and post-interaction updates, where
+  // im.message.patch reverts). Otherwise it's a plain inline card patched by
+  // message id — the fallback when CardKit is unavailable.
+  let handle: ManagedCardHandle | undefined;
+  let sent: { messageId: string; fallback: boolean } = { messageId: "", fallback: true };
+
+  // 1) Take the queued card over as the run card, in place.
+  if (input.existingCard?.handle) {
+    handle = input.existingCard.handle;
+    if (await updateManagedCard(input.channel, handle, renderLarkRunCard(state, input.locale))) {
+      sent = { messageId: handle.messageId, fallback: false };
+    } else {
+      // CardKit take-over failed → recall the orphan and create a fresh card.
+      handle = undefined;
+      if (input.channel.recallMessage) {
+        await input.channel.recallMessage(input.existingCard.messageId).catch(() => undefined);
+      }
     }
-  } else {
-    sent = { messageId: "", fallback: true };
+  } else if (input.existingCard?.messageId) {
+    try {
+      await input.channel.updateCard(input.existingCard.messageId, renderLarkRunCard(state, input.locale));
+      sent = { messageId: input.existingCard.messageId, fallback: false };
+    } catch {
+      sent = { messageId: input.existingCard.messageId, fallback: true };
+    }
   }
+
+  // 2) No reusable card (or take-over failed) → send a fresh one. Prefer a
+  // CardKit managed card so the whole run card updates in place; fall back to a
+  // plain inline card when CardKit is unavailable.
   if (sent.fallback) {
-    sent = await sendLarkCardWithFallback({
-      channel: input.channel,
-      chatId: input.chatId,
-      card: renderLarkRunCard(state, input.locale),
-      fallbackText: input.locale === "en"
-        ? "Task is running. Send /stop to cancel it."
-        : "任务处理中，可发送 /stop 停止。",
-      options: larkReplyOptions(input.replyTo, input.replyInThread),
-      locale: input.locale,
+    const managed = await sendManagedCard(input.channel, input.chatId, renderLarkRunCard(state, input.locale), {
+      replyTo: input.replyTo,
+      ...(input.replyInThread ? { replyInThread: true } : {}),
     });
+    if (managed) {
+      handle = managed;
+      sent = { messageId: managed.messageId, fallback: false };
+    } else {
+      sent = await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: input.chatId,
+        card: renderLarkRunCard(state, input.locale),
+        fallbackText: input.locale === "en"
+          ? "Task is running. Send /stop to cancel it."
+          : "任务处理中，可发送 /stop 停止。",
+        options: larkReplyOptions(input.replyTo, input.replyInThread),
+        locale: input.locale,
+      });
+    }
   }
   if (sent.fallback) {
     return undefined;
   }
-  // Once the full card is too large for Feishu's patch limit, every update
+  // Once the full card is too large for Feishu's update limit, every update
   // fails; switch to the compact render so live progress (and finalization)
   // keep landing instead of freezing the card in its "running" state.
   let degraded = false;
   const tryUpdate = async (card: Record<string, unknown>): Promise<boolean> => {
+    if (handle) {
+      return await updateManagedCard(input.channel, handle, card);
+    }
     if (!input.channel.updateCard) {
       return false;
     }
