@@ -249,16 +249,17 @@ async function runAcceptedLarkMessage(
       });
       return true;
     }
+    // Stop only the currently-running task; let the queue advance so other
+    // queued tasks are NOT cancelled (clearPending would skip the whole queue).
     const active = input.runtime.activeRuns.get(normalized.conversationKey);
     active?.abortController.abort();
-    const skippedQueued = input.runtime.chatQueue.clearPending(normalized.conversationKey);
-    await input.channel.send(normalized.chatId, { text: renderLarkStopResult(Boolean(active || skippedQueued), messageLocale) }, {
+    await input.channel.send(normalized.chatId, { text: renderLarkStopResult(Boolean(active), messageLocale) }, {
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
     });
     await appendLarkTimelineEvent(input.stateDir, normalized, {
       type: "command.handled",
-      outcome: active || skippedQueued ? "success" : "noop",
+      outcome: active ? "success" : "noop",
       detail: "/stop",
     });
     return true;
@@ -341,7 +342,7 @@ async function runAcceptedLarkMessage(
       // Reuse a single card across repeated wait notifications, and remember its
       // id so the run card can take it over (queued → running → done) instead of
       // leaving a stale "queued" card behind once the task starts.
-      const existing = input.runtime.queueCards.get(normalized.conversationKey);
+      const existing = input.runtime.queueCards.get(normalized.messageId);
       if (existing && input.channel.updateCard) {
         try {
           await input.channel.updateCard(existing, card);
@@ -359,7 +360,7 @@ async function runAcceptedLarkMessage(
         locale: messageLocale,
       });
       if (!sent.fallback) {
-        input.runtime.queueCards.set(normalized.conversationKey, sent.messageId);
+        input.runtime.queueCards.set(normalized.messageId, sent.messageId);
       }
     } catch (error) {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
@@ -413,8 +414,8 @@ async function enqueueLarkTurn(
         },
       });
       // A skipped turn must not leave its "queued" card spinning forever.
-      const queuedCardId = input.runtime.queueCards.get(normalized.conversationKey);
-      input.runtime.queueCards.delete(normalized.conversationKey);
+      const queuedCardId = input.runtime.queueCards.get(normalized.messageId);
+      input.runtime.queueCards.delete(normalized.messageId);
       const skippedText = renderLarkQueuedTaskSkipped(locale);
       if (queuedCardId && input.channel.updateCard) {
         try {
@@ -809,8 +810,8 @@ async function runNormalizedLarkMessage(
     try {
       // If a "queued" card was already shown for this conversation, take it over
       // as the run card so it transitions in place instead of being orphaned.
-      const queuedCardId = input.runtime.queueCards.get(normalized.conversationKey);
-      input.runtime.queueCards.delete(normalized.conversationKey);
+      const queuedCardId = input.runtime.queueCards.get(normalized.messageId);
+      input.runtime.queueCards.delete(normalized.messageId);
       runCard = await createLarkRunCardController({
         channel: input.channel,
         chatId: normalized.chatId,

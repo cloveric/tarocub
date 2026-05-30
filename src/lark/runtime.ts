@@ -78,7 +78,7 @@ export interface LarkServiceRuntime {
   queuePolicy: LarkQueuePolicy;
   pendingBatches: Map<string, PendingLarkBatch>;
   chatModeCache: Map<string, LarkChatMode>;
-  /** conversationKey → message id of the "queued" card, so the run card can reuse it. */
+  /** queued message id → its "queued" card message id, so each task's run card reuses its own card. */
   queueCards: Map<string, string>;
   appInfo?: { appId: string; domain?: string };
   cronRuntime?: LarkCronRuntime;

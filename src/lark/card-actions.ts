@@ -481,10 +481,11 @@ export async function handleLarkCardAction(input: {
     })) {
       return true;
     }
+    // Stop only the running task; let the queue keep advancing (do not
+    // clearPending, which would cancel every other queued task too).
     const active = input.runtime.activeRuns.get(value.conversationKey);
     active?.abortController.abort();
-    const skippedQueued = input.runtime.chatQueue.clearPending(value.conversationKey);
-    await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active || skippedQueued), locale) }, {
+    await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active), locale) }, {
       replyTo: input.event.messageId,
       ...(replyInThread ? { replyInThread: true } : {}),
     });

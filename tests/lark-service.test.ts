@@ -3091,6 +3091,32 @@ describe("lark service", () => {
     }
   });
 
+  it("Lark /stop aborts the active task but does NOT cancel the queue", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-queue-"));
+    const runtime = createLarkServiceRuntime();
+    const clearPendingSpy = vi.spyOn(runtime.chatQueue, "clearPending");
+    const abortController = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController });
+    const channel = fakeChannel();
+    const bridge = { handleAuthorizedMessage: vi.fn(async () => ({ text: "x" })) };
+
+    try {
+      await handleLarkMessage({
+        channel, bridge, runtime, stateDir,
+        message: {
+          messageId: "om_stop", chatId: "oc_chat", chatType: "p2p", senderId: "ou_user",
+          content: "/stop", rawContentType: "text", resources: [], mentions: [],
+          mentionAll: false, mentionedBot: false, createTime: Date.now(),
+        },
+      });
+
+      expect(abortController.signal.aborted).toBe(true);     // running task stopped
+      expect(clearPendingSpy).not.toHaveBeenCalled();         // queued tasks left intact
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders Lark stop text replies in English when Lark locale is English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-en-"));
     const runtime = createLarkServiceRuntime();
@@ -7843,6 +7869,38 @@ describe("lark service", () => {
       const cardSends = channel.send.mock.calls.filter((call: unknown[]) => Boolean((call[1] as { card?: unknown } | undefined)?.card));
       expect(cardSends).toHaveLength(1); // only the queued card was *sent*
       expect(runtime.queueCards.size).toBe(0); // no stale queued-card id left behind
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("gives each queued task its own card (keyed by message id, not shared)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-multi-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    // Stub the queue so each task fires its wait notification but stays "queued"
+    // (job not run), letting us inspect how its card is keyed.
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, _job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: "conversation_queue" }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({ chatId: "lark:oc_chat", waitedMs: 10_000, reason: "conversation_queue" });
+        return true as unknown as T;
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    const bridge: LarkBridgeLike = { handleAuthorizedMessage: vi.fn(async () => ({ text: "x" })) };
+
+    try {
+      await handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage({ messageId: "om_q1", content: "first" }) });
+      await handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage({ messageId: "om_q2", content: "second" }) });
+
+      // Two queued tasks → two distinct cards, keyed by their message ids — not
+      // a single card keyed by conversationKey (which they would have shared).
+      expect(runtime.queueCards.has("om_q1")).toBe(true);
+      expect(runtime.queueCards.has("om_q2")).toBe(true);
+      expect(runtime.queueCards.has("lark:oc_chat")).toBe(false);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
