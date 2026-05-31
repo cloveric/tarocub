@@ -43,6 +43,9 @@ export interface ManagedCardHandle {
   messageId: string;
   cardId: string;
   sequence: number;
+  /** Internal: serializes update delivery per card. Set by updateManagedCard;
+   * callers should not touch it. */
+  updateChain?: Promise<void>;
 }
 
 export interface ManagedCardSendOptions {
@@ -163,22 +166,43 @@ export async function updateManagedCard(
   if (!update) {
     return false;
   }
-  // Advance the sequence on every attempt, not only on success. A card that
-  // streams many updates (the run card) retries a rejected full render with a
-  // compact one; reusing the same sequence/uuid could be deduped or rejected
-  // server-side. Feishu only requires the sequence to increase — gaps are fine.
-  const sequence = (handle.sequence += 1);
-  try {
-    await update({
-      path: { card_id: handle.cardId },
-      data: {
-        card: { type: "card_json", data: JSON.stringify(cardSpec) },
-        sequence,
-        uuid: `c_${handle.cardId}_${sequence}`,
-      },
-    });
-    return true;
-  } catch {
-    return false;
-  }
+  // Serialize all updates to this card through a per-handle chain. The run card
+  // streams updates via one path (patchChain) while a card-action terminal update
+  // can fire from another (settleThenUpdateManagedCard) on the SAME handle. Without
+  // serialization their network calls can land out of order — a higher sequence
+  // arriving before a lower one makes Lark reject the lower update (sequence must
+  // increase), and a late lower-sequence update can revert the card. Allocating the
+  // sequence AND awaiting delivery inside the chain keeps both in order, so the
+  // last-intended state always wins.
+  const deliver = async (): Promise<boolean> => {
+    // Advance the sequence on every attempt, not only on success. A card that
+    // streams many updates (the run card) retries a rejected full render with a
+    // compact one; reusing the same sequence/uuid could be deduped or rejected
+    // server-side. Feishu only requires the sequence to increase — gaps are fine.
+    const sequence = (handle.sequence += 1);
+    try {
+      await update({
+        path: { card_id: handle.cardId },
+        data: {
+          card: { type: "card_json", data: JSON.stringify(cardSpec) },
+          sequence,
+          uuid: `c_${handle.cardId}_${sequence}`,
+        },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const prior = handle.updateChain ?? Promise.resolve();
+  let result = false;
+  const next = prior.then(async () => {
+    result = await deliver();
+  });
+  // Keep the chain alive even if a link rejects so one failure can't wedge every
+  // later update to the card. deliver() already swallows its own errors, so this
+  // is belt-and-suspenders.
+  handle.updateChain = next.catch(() => {});
+  await next;
+  return result;
 }

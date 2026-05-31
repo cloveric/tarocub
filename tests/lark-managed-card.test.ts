@@ -57,6 +57,32 @@ describe("lark managed card (CardKit)", () => {
     });
   });
 
+  it("serializes concurrent updates to the same card so delivery stays in sequence order", async () => {
+    const { channel, update } = fakeCardKitChannel();
+    // The first update's network call is slow, the second is fast. Without
+    // per-handle serialization the second (higher sequence) would be delivered to
+    // Lark before the first (lower sequence), which Lark rejects / reverts.
+    const deliveryOrder: number[] = [];
+    update.mockImplementation(async (req?: { data: { sequence: number } }) => {
+      const seq = req?.data.sequence ?? 0;
+      await new Promise((r) => setTimeout(r, seq === 1 ? 60 : 5));
+      deliveryOrder.push(seq);
+      return { data: {} };
+    });
+    const handle: ManagedCardHandle = { messageId: "om", cardId: "card_seq", sequence: 0 };
+
+    const [a, b] = await Promise.all([
+      updateManagedCard(channel, handle, { v: 1 }),
+      updateManagedCard(channel, handle, { v: 2 }),
+    ]);
+
+    expect(a).toBe(true);
+    expect(b).toBe(true);
+    // Delivered in allocation order despite the first call being slower.
+    expect(deliveryOrder).toEqual([1, 2]);
+    expect(handle.sequence).toBe(2);
+  });
+
   it("advances the sequence even when an update attempt fails (no uuid reuse on retry)", async () => {
     const { channel, update } = fakeCardKitChannel();
     update.mockRejectedValueOnce(new Error("card too big")).mockResolvedValueOnce({ data: {} });
