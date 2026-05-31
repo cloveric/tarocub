@@ -10026,6 +10026,9 @@ describe("lark service", () => {
     expect(payload).toContain('"select_static"');       // single-select question
     expect(payload).toContain('"multi_select_static"');  // multiSelect question
     expect(payload).toContain('"action":"form_submit"');
+    // Option values are per-question indices, not labels — labels aren't unique.
+    expect(payload).toContain('"value":"0"');
+    expect(payload).not.toContain('"value":"Fast"');
     // Each question has a free-text "Other" input; not Feishu-`required` because
     // the Other value is a valid alternative (enforced by the submit backstop).
     expect(payload).toContain('"tag":"input"');
@@ -10038,6 +10041,8 @@ describe("lark service", () => {
     await handleLarkCardAction({
       channel, runtime,
       event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        // Legacy label-valued submit (q0:"Fast") — exercises the backward-compat
+        // fallback for forms rendered before the index migration.
         action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "Fast", q1: ["A"] } } },
     });
     await pending.catch(() => undefined);
@@ -10069,7 +10074,8 @@ describe("lark service", () => {
         chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
         action: {
           value: { cctb_lark: "ask_user_question", action: "form_submit", requestId },
-          form_value: { q0: "Careful", q1: ["Alpha", "Gamma"] },
+          // Index-valued submit: q0 → option 1 ("Careful"); q1 → options 0,2 ("Alpha","Gamma").
+          form_value: { q0: "1", q1: ["0", "2"] },
         },
       },
     });
@@ -10100,12 +10106,45 @@ describe("lark service", () => {
       channel, runtime,
       event: {
         chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
-        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: '["A","C"]' } },
+        // Multi-select as a JSON string of indices: options 0 ("A") and 2 ("C").
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: '["0","2"]' } },
       },
     });
 
     const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
     expect(resolved.updatedInput.answers).toEqual({ "Pick": "A, C" });
+  });
+
+  it("gives duplicate-label options distinct values so a selection is unambiguous", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Confirm?", header: "Confirm", multiSelect: false, options: [{ label: "Yes" }, { label: "Yes" }, { label: "No" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalled());
+    const payload = JSON.stringify((channel.send.mock.calls[0] as unknown[])?.[1]);
+    // The two identical "Yes" labels get DISTINCT option values (indices), so Feishu
+    // renders/selects them unambiguously; a label-keyed value would collide on "Yes".
+    expect(payload).toContain('"value":"0"');
+    expect(payload).toContain('"value":"1"');
+    expect(payload).toContain('"value":"2"');
+    expect(payload).not.toContain('"value":"Yes"');
+
+    // Picking the second option (index 1) resolves to its label, "Yes".
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "1" } } },
+    });
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Confirm?": "Yes" });
   });
 
   it("posts a read-only summary and recalls the form on submit (Feishu ignores form-card patches)", async () => {

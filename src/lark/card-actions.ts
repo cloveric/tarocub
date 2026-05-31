@@ -242,9 +242,13 @@ function renderLarkAskUserQuestionCard(input: {
     if (lines) {
       formElements.push({ tag: "markdown", content: lines, text_size: "notation" });
     }
-    const selectOptions = question.options.map((option) => ({
+    const selectOptions = question.options.map((option, optionIndex) => ({
       text: { tag: "plain_text", content: option.label },
-      value: option.label,
+      // Value is the option's index, not its label: labels aren't guaranteed
+      // unique within a question (duplicates / templated / i18n), so a label-keyed
+      // value maps an ambiguous selection back to the wrong option. The submit
+      // handler translates the index back to the label.
+      value: String(optionIndex),
     }));
     formElements.push({
       tag: question.multiSelect ? "multi_select_static" : "select_static",
@@ -744,29 +748,43 @@ export async function handleLarkCardAction(input: {
     const questions = normalizeAskUserQuestions(pending.askUserQuestionInput);
     const formValue = larkCardActionFormValue(input.event);
 
-    // The whole form arrives in one submit. Map each question's selected
-    // value(s) back to an answer string (single = label, multi = joined labels).
-    const joinLabels = (arr: unknown[]): string =>
-      arr.filter((entry): entry is string => typeof entry === "string").join(", ");
+    // The whole form arrives in one submit. Each select carries the option's
+    // INDEX as its value (labels aren't unique per question); map each selected
+    // index back to its label (single = label, multi = joined labels). A value
+    // that isn't a valid index — e.g. a card rendered before this migration, or
+    // the legacy label-valued form — is used as-is for backward compatibility.
+    const labelForValue = (question: AskUserQuestionCardQuestion, rawValue: string): string => {
+      const trimmed = rawValue.trim();
+      const idx = Number(trimmed);
+      if (trimmed !== "" && Number.isInteger(idx) && idx >= 0 && idx < question.options.length) {
+        return question.options[idx]!.label;
+      }
+      return trimmed;
+    };
+    const joinLabels = (question: AskUserQuestionCardQuestion, arr: unknown[]): string =>
+      arr
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => labelForValue(question, entry))
+        .join(", ");
     const answers: Record<string, string> = {};
     questions.forEach((question, index) => {
       const raw = formValue[askFormFieldName(index)];
       let answer = "";
       if (Array.isArray(raw)) {
-        // multi_select_static → array of selected option values.
-        answer = joinLabels(raw);
+        // multi_select_static → array of selected option values (indices).
+        answer = joinLabels(question, raw);
       } else if (typeof raw === "string") {
         const trimmed = raw.trim();
         if (trimmed.startsWith("[")) {
           // Some Feishu clients deliver a multi-select value as a JSON string.
           try {
             const parsed = JSON.parse(trimmed) as unknown;
-            answer = Array.isArray(parsed) ? joinLabels(parsed) : trimmed;
+            answer = Array.isArray(parsed) ? joinLabels(question, parsed) : labelForValue(question, trimmed);
           } catch {
-            answer = trimmed;
+            answer = labelForValue(question, trimmed);
           }
         } else {
-          answer = trimmed;
+          answer = labelForValue(question, trimmed);
         }
       } else {
         answer = stringValue(raw) ?? "";
@@ -775,8 +793,10 @@ export async function handleLarkCardAction(input: {
       // was picked; for multi-select it is appended to the chosen labels.
       const other = stringValue(formValue[askFormOtherFieldName(index)]) ?? "";
       if (other) {
+        // answer is already resolved labels and other is free text — neither is an
+        // index, so join directly rather than re-running the index→label mapping.
         answer = answer
-          ? (question.multiSelect ? joinLabels([answer, other]) : answer)
+          ? (question.multiSelect ? [answer, other].join(", ") : answer)
           : other;
       }
       answers[question.question] = answer;
