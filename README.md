@@ -298,7 +298,7 @@ More detail: [Security Boundaries](./docs/security-boundaries.md), [State Model]
 
 ## Release Contract
 
-In this repo, "commit and release" is not done at a GitHub tag alone. A complete TaroCub release means: commit the intended changes, create/update the GitHub Release, run `npm publish`, then restart and verify the local Telegram and Lark fleet. If npm publishing is blocked by package privacy, registry auth, or package metadata, say it is blocked instead of calling the release complete.
+In this repo, "commit and release" is not done at a GitHub tag alone. A complete TaroCub release means: commit the intended changes, create/update the GitHub Release, run `npm publish`, then restart and verify the local Telegram and Lark fleet. The package metadata is meant to be publishable by default, with the `tarocub` bin pointing at the built `dist/src/index.js` and package contents limited to runtime `dist/src`; if npm publishing is blocked by registry auth or package metadata, say it is blocked instead of calling the release complete.
 
 Use [docs/release-checklist.md](./docs/release-checklist.md) as the source of truth for release verification. For Lark fleet restarts, use `node dist/src/index.js lark service restart --all` rather than manual per-instance loops.
 

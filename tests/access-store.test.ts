@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomInt } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { removeTempRoot } from "./helpers/temp-files.js";
+import { childProcessTestEnv, removeTempRoot } from "./helpers/temp-files.js";
 
 vi.mock("node:crypto", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:crypto")>();
@@ -22,7 +22,7 @@ const tsxCliPath = require.resolve("tsx/cli");
 
 function execFileAsync(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { cwd }, (error) => {
+    execFile(command, args, { cwd, env: childProcessTestEnv() }, (error) => {
       if (error) {
         reject(error);
         return;

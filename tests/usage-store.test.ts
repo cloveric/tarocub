@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { removeTempRoot } from "./helpers/temp-files.js";
+import { childProcessTestEnv, removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it } from "vitest";
 
@@ -14,7 +14,7 @@ const tsxCliPath = require.resolve("tsx/cli");
 
 function execFileAsync(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(command, args, { cwd }, (error) => {
+    execFile(command, args, { cwd, env: childProcessTestEnv() }, (error) => {
       if (error) {
         reject(error);
         return;

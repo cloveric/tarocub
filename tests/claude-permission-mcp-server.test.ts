@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 
 import { resolveClaudePermissionMcpServerInvocation } from "../src/codex/claude-permission-hook.js";
+import { childProcessTestEnv } from "./helpers/temp-files.js";
 
 async function startJsonServer(payload: unknown): Promise<{ url: string; close: () => Promise<void> }> {
   const server = createServer((_request, response) => {
@@ -41,10 +42,10 @@ describe("Claude permission MCP server", () => {
     const invocation = resolveClaudePermissionMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
+      env: childProcessTestEnv({
         ...process.env,
         CCTB_CLAUDE_APPROVAL_URL: bridge.url,
-      },
+      }),
     });
 
     try {

@@ -11,6 +11,7 @@ import {
   resolveSearchMcpServerInvocation,
   truncateExtractResult,
 } from "../src/search/search-mcp-server.js";
+import { childProcessTestEnv } from "./helpers/temp-files.js";
 
 async function readOneJsonLine(stdout: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
   return await new Promise((resolve, reject) => {
@@ -37,11 +38,11 @@ describe("search MCP server", () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
+      env: childProcessTestEnv({
         ...process.env,
         BRAVE_API_KEY: "",
         TAVILY_API_KEY: "",
-      },
+      }),
     });
 
     try {
@@ -78,11 +79,11 @@ describe("search MCP server", () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: {
+      env: childProcessTestEnv({
         ...process.env,
         BRAVE_API_KEY: "",
         TAVILY_API_KEY: "",
-      },
+      }),
     });
 
     try {

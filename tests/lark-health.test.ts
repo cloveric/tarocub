@@ -5,7 +5,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { startLarkHealthMonitor } from "../src/lark/health.js";
-import { parseTimelineEvents } from "../src/state/timeline-log.js";
+import { parseTimelineEvents, type TimelineEvent } from "../src/state/timeline-log.js";
+
+async function readTimeline(stateDir: string): Promise<TimelineEvent[]> {
+  try {
+    return parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
 
 describe("Lark health monitor", () => {
   afterEach(() => {
@@ -39,6 +50,13 @@ describe("Lark health monitor", () => {
       await vi.waitFor(() => {
         expect(probe).toHaveBeenCalledTimes(1);
       });
+      await vi.waitFor(async () => {
+        expect(await readTimeline(stateDir)).toContainEqual(expect.objectContaining({
+          type: "service.health",
+          outcome: "down",
+          metadata: expect.objectContaining({ consecutiveFailures: 1 }),
+        }));
+      });
       expect(channel.connect).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1_000);
@@ -48,7 +66,7 @@ describe("Lark health monitor", () => {
       });
 
       monitor.stop();
-      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      const timeline = await readTimeline(stateDir);
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "service.health",
         instanceName: "lark-alpha",
