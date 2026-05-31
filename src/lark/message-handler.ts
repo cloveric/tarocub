@@ -264,10 +264,15 @@ async function runAcceptedLarkMessage(
     // queued tasks are NOT cancelled (clearPending would skip the whole queue).
     const active = input.runtime.activeRuns.get(normalized.conversationKey);
     active?.abortController.abort();
-    await input.channel.send(normalized.chatId, { text: renderLarkStopResult(Boolean(active), messageLocale) }, {
-      replyTo: normalized.messageId,
-      replyInThread: Boolean(normalized.threadId),
-    });
+    // When the active run has a live run card, its in-place update to "已中断" is the
+    // acknowledgment — skip the redundant "已停止。" text. Send text only when nothing
+    // was running, or the run had no card (fallback) to reflect the stop.
+    if (!active?.hasRunCard) {
+      await input.channel.send(normalized.chatId, { text: renderLarkStopResult(Boolean(active), messageLocale) }, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+    }
     await appendLarkTimelineEvent(input.stateDir, normalized, {
       type: "command.handled",
       outcome: active ? "success" : "noop",
@@ -908,6 +913,12 @@ async function runNormalizedLarkMessage(
         locale,
         ...(queuedRef ? { existingCard: queuedRef } : {}),
       });
+      // Record whether a live run card exists so the stop handlers can skip the
+      // redundant "已停止。" text — the card itself updates in place to "已中断".
+      const activeHandle = input.runtime.activeRuns.get(normalized.conversationKey);
+      if (activeHandle) {
+        activeHandle.hasRunCard = Boolean(runCard);
+      }
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
         await runCard?.apply(event);
         await appendLarkTimelineEvent(input.stateDir, normalized, {

@@ -3168,6 +3168,36 @@ describe("lark service", () => {
     }
   });
 
+  it("does not post a redundant '已停止。' on /stop when a run card shows 已中断 in place", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-card-"));
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    // The active run has a live run card → its in-place "已中断" update is the ack.
+    runtime.activeRuns.set("lark:oc_chat", { abortController, hasRunCard: true });
+    const channel = fakeChannel();
+    const bridge = { handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })) };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: {
+          messageId: "om_stop", chatId: "oc_chat", chatType: "p2p", senderId: "ou_user",
+          content: "/stop", rawContentType: "text", resources: [], mentions: [],
+          mentionAll: false, mentionedBot: false, createTime: Date.now(),
+        },
+      });
+
+      expect(abortController.signal.aborted).toBe(true);
+      // No redundant text — the run card itself reflects the stop.
+      expect(channel.send).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("Lark /stop aborts the active task but does NOT cancel the queue", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stop-queue-"));
     const runtime = createLarkServiceRuntime();
@@ -5887,6 +5917,29 @@ describe("lark service", () => {
     expect(handled).toBe(true);
     expect(abortController.signal.aborted).toBe(true);
     expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已停止。" }, { replyTo: "om_card" });
+  });
+
+  it("does not post a redundant '已停止。' from a stop card action when a run card exists", async () => {
+    const runtime = createLarkServiceRuntime();
+    const abortController = new AbortController();
+    // Active run HAS a live run card → its in-place "已中断" update is the ack.
+    runtime.activeRuns.set("lark:oc_chat", { abortController, hasRunCard: true });
+    const channel = fakeChannel();
+
+    const handled = await handleLarkCardAction({
+      channel,
+      runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "stop", conversationKey: "lark:oc_chat" } },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(abortController.signal.aborted).toBe(true);
+    expect(channel.send).not.toHaveBeenCalled();
   });
 
   it("cancels just the queued task from its card without aborting the active run", async () => {

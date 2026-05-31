@@ -562,10 +562,14 @@ export async function handleLarkCardAction(input: {
     // advancing (do not clearPending, which would cancel every queued task too).
     const active = input.runtime.activeRuns.get(value.conversationKey);
     active?.abortController.abort();
-    await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active), locale) }, {
-      replyTo: input.event.messageId,
-      ...(replyInThread ? { replyInThread: true } : {}),
-    });
+    // The run card updates in place to "已中断"; only post the "已停止。" text when
+    // there's no live card to reflect the stop (fallback or nothing running).
+    if (!active?.hasRunCard) {
+      await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active), locale) }, {
+        replyTo: input.event.messageId,
+        ...(replyInThread ? { replyInThread: true } : {}),
+      });
+    }
     return true;
   }
 

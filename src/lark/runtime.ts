@@ -23,6 +23,11 @@ import {
 
 export interface LarkActiveRun {
   abortController: AbortController;
+  // Set true once a live run card (managed or inline) exists for this run. When a
+  // task is stopped, that card updates IN PLACE to "已中断", so the stop handlers
+  // must NOT also post a redundant "已停止。" text. Absent/false → no card (the
+  // CardKit-unavailable fallback), so the text is the only acknowledgment.
+  hasRunCard?: boolean;
 }
 
 export interface LarkQueuePolicy {
