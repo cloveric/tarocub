@@ -139,6 +139,7 @@ export async function deliverLarkResponse(input: {
         const real = await realpath(filePath);
         if (
           !input.allowAnyAbsolutePath &&
+          !larkAnyFilePathAllowed() &&
           !real.startsWith(workspacePrefix) &&
           !(outputPrefix && real.startsWith(outputPrefix)) &&
           !(overridePrefix && real.startsWith(overridePrefix))
@@ -537,7 +538,7 @@ async function sendLarkPath(input: {
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
-  if (!prefixes.some((prefix) => real.startsWith(prefix))) {
+  if (!larkAnyFilePathAllowed() && !prefixes.some((prefix) => real.startsWith(prefix))) {
     await appendLarkFileRejectedTimeline(input, {
       path: input.filePath,
       realPath: real,
@@ -662,14 +663,22 @@ async function sendLarkImageWithFileFallback(input: {
   });
 }
 
+function larkAnyFilePathAllowed(): boolean {
+  // Opt-in per instance (set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 in the instance's
+  // lark.env): when on, the file/image delivery sandbox is disabled and the bot may
+  // send a file from ANY absolute path on the machine. Off by default — only files
+  // under the workspace / output / override roots are sendable.
+  return /^(?:1|true|yes|on)$/i.test((process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH ?? "").trim());
+}
+
 function renderLarkFileDeliveryError(reason: "outside-workspace" | "read-error", locale: Locale): string {
   if (locale === "en") {
     return reason === "outside-workspace"
-      ? "File was not sent: the path is outside the allowed directories."
+      ? "This file is outside the allowed send directories (by default only files in the workspace can be sent) — a path restriction, not a send failure. Copy it into the workspace and resend, or set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 on this instance to allow any path."
       : "File was not sent: failed to read the file; details were recorded in logs.";
   }
   return reason === "outside-workspace"
-    ? "文件未发送：路径不在允许目录内。"
+    ? "该文件不在允许发送的目录内（默认仅工作区内的文件可直接发送）——这是路径限制，不是发送失败。把它复制到工作区后再发即可，或在该实例设置 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 放开任意路径。"
     : "文件未发送：读取文件失败，详细原因已记录到日志。";
 }
 

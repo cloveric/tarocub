@@ -6895,7 +6895,7 @@ describe("lark service", () => {
 
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { text: "文件未发送：路径不在允许目录内。" },
+        { text: expect.stringContaining("不在允许发送的目录内") },
         { replyTo: "om_reject_file" },
       );
       expect(channel.send).not.toHaveBeenCalledWith(
@@ -6916,6 +6916,47 @@ describe("lark service", () => {
         }),
       }));
     } finally {
+      await rm(stateDir, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends an out-of-workspace file when CCTB_LARK_ALLOW_ANY_FILE_PATH is enabled", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-anypath-"));
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-outside-ok-"));
+    const outsidePath = path.join(outsideDir, "report.txt");
+    await writeFile(outsidePath, "send me");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: `[tool:{"name":"send.file","payload":{"path":${JSON.stringify(outsidePath)}}}]`,
+      })),
+    };
+    const prev = process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH;
+    process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH = "1";
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_anypath", content: "send outside file" }),
+      });
+
+      // Toggle on → the out-of-workspace file is sent, not rejected.
+      const calls = channel.send.mock.calls as unknown as unknown[][];
+      const fileCall = calls.find((c) => (c[1] as { file?: unknown } | undefined)?.file);
+      expect(fileCall).toBeDefined();
+      expect((fileCall![1] as { file: { fileName: string } }).file.fileName).toBe("report.txt");
+      const texts = calls.map((c) => (c[1] as { text?: string } | undefined)?.text).filter(Boolean).join("\n");
+      expect(texts).not.toContain("不在允许发送的目录内");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH;
+      } else {
+        process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH = prev;
+      }
       await rm(stateDir, { recursive: true, force: true });
       await rm(outsideDir, { recursive: true, force: true });
     }

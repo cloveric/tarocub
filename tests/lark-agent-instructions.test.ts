@@ -6,8 +6,15 @@ describe("larkAgentInstructions", () => {
   it("keeps the injected Lark system prompt compact enough for every-turn use", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions.length).toBeLessThan(1200);
+    expect(instructions.length).toBeLessThan(1500);
     expect(instructions.split("\n").length).toBeLessThanOrEqual(8);
+  });
+
+  it("tells agents that file send is workspace-sandboxed (copy in before sending)", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("workspace-sandboxed");
+    expect(instructions).toContain("copy it into your workspace first");
   });
 
   it("tells agents to answer ordinary Lark requests directly instead of emitting placeholder cards", () => {
