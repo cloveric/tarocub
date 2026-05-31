@@ -6866,6 +6866,9 @@ describe("lark service", () => {
         }
         return { messageId: "sent_1" };
       }),
+      // Force the captioned-card path to fail so this still exercises the
+      // image-message → file fallback (card → image → file is the full chain).
+      uploadImage: vi.fn(async () => { throw new Error("card upload failed"); }),
     });
 
     try {
@@ -6896,6 +6899,51 @@ describe("lark service", () => {
           fallbackFrom: "image",
         }),
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers each image as a card pairing its caption (the line above the tag) with the image", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-card-"));
+    const workspace = path.join(stateDir, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const p1 = path.join(workspace, "p1.png");
+    const p2 = path.join(workspace, "p2.png");
+    await writeFile(p1, "p1 bytes");
+    await writeFile(p2, "p2 bytes");
+    const channel = fakeChannel();
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: `这是封面图\n\nP1 封面标题\n[send-image:${p1}]\n\nP2 内页标题\n[send-image:${p2}]`,
+        stateDir,
+      });
+
+      // Each image is uploaded (for an img_key) and sent as its own card with the
+      // title line that sat directly above its tag — no bare image messages.
+      expect(channel.uploadImage).toHaveBeenCalledTimes(2);
+      const cardCalls = (channel.send.mock.calls as unknown[][])
+        .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
+        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
+      expect(cardCalls).toHaveLength(2);
+
+      const captionsAndImages = cardCalls.map((card) => {
+        const els = card.body.elements;
+        return {
+          caption: (els.find((e) => e.tag === "markdown")?.content as string | undefined),
+          imgKey: (els.find((e) => e.tag === "img")?.img_key as string | undefined),
+        };
+      });
+      expect(captionsAndImages).toContainEqual({ caption: "P1 封面标题", imgKey: "img_key_fake" });
+      expect(captionsAndImages).toContainEqual({ caption: "P2 内页标题", imgKey: "img_key_fake" });
+
+      // No bare image message was sent (everything went through the captioned card).
+      expect((channel.send.mock.calls as unknown[][]).some((c) =>
+        c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -11537,5 +11585,6 @@ function baseFakeChannel() {
     updateCard: vi.fn(async () => undefined),
     recallMessage: vi.fn(async () => undefined),
     downloadResource: vi.fn(async () => Buffer.from("")),
+    uploadImage: vi.fn(async () => ({ fileKey: "img_key_fake" })),
   };
 }

@@ -65,6 +65,12 @@ export interface LarkChannelLike {
   removeReaction?(messageId: string, reactionId: string): Promise<void>;
   removeReactionByEmoji?(messageId: string, emojiType: string): Promise<boolean>;
   downloadResource(fileKey: string, type: "image" | "file"): Promise<Buffer>;
+  /**
+   * Upload an image and return its image_key, for embedding in a card's `img`
+   * element (the underlying SDK channel already implements this). Optional so a
+   * channel without upload simply degrades to sending a bare image message.
+   */
+  uploadImage?(buffer: Buffer): Promise<{ fileKey: string }>;
   fetchMessage?(messageId: string): Promise<LarkFetchedMessage | null>;
   getChatMode?(chatId: string): Promise<LarkChatMode>;
   /**

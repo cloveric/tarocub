@@ -156,12 +156,33 @@ export async function deliverLarkResponse(input: {
         }
         const body = await readFile(real);
         if (match.preferPhoto) {
-          await sendLarkImageWithFileFallback({
-            ...input,
+          // Pair each image with the caption that precedes its tag and deliver it
+          // as a single card (caption + image), so a batch of titled images (e.g.
+          // 小红书 P1/P2/…) stays legible instead of arriving as a bare pile that
+          // you can't match to its title. Falls back to the plain image message if
+          // the upload/card path is unavailable or fails — never worse than before.
+          const caption = captionForLarkImage(input.text, match.index);
+          const cardSent = await sendLarkCaptionedImageCard({
+            channel: input.channel,
+            chatId: input.chatId,
+            replyOptions,
             body,
-            realPath: real,
-            originalPath: filePath,
-          });
+            caption,
+          }).catch(() => false);
+          if (cardSent) {
+            await appendLarkFileAcceptedTimeline(input, {
+              fileName: path.basename(real),
+              bytes: body.length,
+              kind: "image",
+            });
+          } else {
+            await sendLarkImageWithFileFallback({
+              ...input,
+              body,
+              realPath: real,
+              originalPath: filePath,
+            });
+          }
         } else {
           await input.channel.send(input.chatId, {
             file: {
@@ -612,6 +633,76 @@ async function sendLarkPath(input: {
     bytes: body.length,
     kind: input.kind,
   });
+  return true;
+}
+
+const LARK_IMAGE_CAPTION_MAX = 80;
+
+/**
+ * The caption for an image is the title line that sits directly above its
+ * `[send-image:…]` tag — Claude's natural shape for a captioned series
+ * ("P1 标题\n[send-image:…]"), and what the agent instructions ask for. Returns
+ * undefined when the preceding non-empty line is itself a delivery tag (the
+ * image has no caption) or is too long to be a title (likely prose, not a label).
+ * `tagIndex` indexes into the same string passed here; the matcher's masking
+ * preserves length + newlines, so indices stay aligned with the raw text.
+ */
+export function captionForLarkImage(text: string, tagIndex: number): string | undefined {
+  const before = text.slice(0, tagIndex);
+  const lines = before.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (!line) {
+      continue;
+    }
+    if (/\[send-(?:file|image):[^\]]+\]/.test(line)) {
+      return undefined;
+    }
+    if (line.length > LARK_IMAGE_CAPTION_MAX) {
+      return undefined;
+    }
+    // Drop a leading markdown heading marker so it renders at normal body size.
+    return line.replace(/^#{1,6}\s+/, "").trim() || undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Deliver one image as a single card: caption (if any) + the image, so a batch of
+ * titled images stays legible. Returns false (caller falls back to a bare image
+ * message) when the channel can't upload or the upload yields no key.
+ */
+async function sendLarkCaptionedImageCard(input: {
+  channel: LarkChannelLike;
+  chatId: string;
+  replyOptions: LarkSendOptions | undefined;
+  body: Buffer;
+  caption?: string;
+}): Promise<boolean> {
+  if (!input.channel.uploadImage) {
+    return false;
+  }
+  const uploaded = await input.channel.uploadImage(input.body);
+  const imgKey = uploaded?.fileKey;
+  if (!imgKey) {
+    return false;
+  }
+  const elements: Record<string, unknown>[] = [];
+  if (input.caption) {
+    elements.push({ tag: "markdown", content: input.caption });
+  }
+  elements.push({
+    tag: "img",
+    img_key: imgKey,
+    alt: { tag: "plain_text", content: input.caption && input.caption.length > 0 ? input.caption : "图片" },
+  });
+  await input.channel.send(input.chatId, {
+    card: {
+      schema: "2.0",
+      config: { update_multi: true },
+      body: { direction: "vertical", padding: "12px 12px 12px 12px", elements },
+    },
+  }, input.replyOptions);
   return true;
 }
 
