@@ -1,6 +1,7 @@
 import path from "node:path";
 
-import { loadCodexUserDefaults, renderCodexEffortSetting, renderCodexModelSetting } from "../codex/user-defaults.js";
+import { loadCodexUserDefaults } from "../codex/user-defaults.js";
+import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
 import { resolveApprovalMode } from "../state/approval-mode.js";
 import { AccessStore } from "../state/access-store.js";
 import { SessionStore } from "../state/session-store.js";
@@ -66,12 +67,8 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
   const labels = larkConfigLabels(input.locale);
   const approvalMode = approvalModeLabel(resolvedApprovalMode, input.locale);
   const fastOn = cfg.codexServiceTier === "fast";
-  const modelLabel = cfg.engine === "codex"
-    ? renderCodexModelSetting(cfg.model, codexDefaults, input.locale)
-    : cfg.model ?? labels.defaultValue;
-  const effortLabel = cfg.engine === "codex"
-    ? renderCodexEffortSetting(cfg.effort, codexDefaults, input.locale)
-    : cfg.effort ?? labels.defaultValue;
+  const modelLabel = renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, input.locale);
+  const effortLabel = renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, input.locale);
   const requiresMention = input.bridgeChatType === "group"
     ? input.requireMentionInGroup !== false && !groupState.listenAll
     : true;

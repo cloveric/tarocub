@@ -383,6 +383,42 @@ describe("runCli", () => {
     }
   });
 
+  it("explains Claude CLI defaults in Lark operational status", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "config.json"),
+        JSON.stringify({
+          engine: "claude",
+          locale: "en",
+        }),
+        "utf8",
+      );
+
+      const handled = await runCli(["lark", "status"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      const output = messages.join("\n");
+      expect(handled).toBe(true);
+      expect(output).toContain("Engine: claude");
+      expect(output).toContain("Model: default (Claude CLI default; no --model override)");
+      expect(output).toContain("Effort: default (Claude CLI default; no --effort override)");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("does not report listen-all Lark groups as active while group mode is disabled", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

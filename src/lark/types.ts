@@ -98,6 +98,7 @@ export interface LarkRuntimeChannelLike extends LarkChannelLike {
 }
 
 export interface LarkBridgeLike {
+  destroy?(): void | Promise<void>;
   checkAccess?(input: {
     chatId: number;
     conversationChatId?: number;

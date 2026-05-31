@@ -4,6 +4,25 @@ This is the lightweight release and verification checklist for TaroCub.
 
 Use it before tagging a release, merging a large refactor, or claiming a milestone is done.
 
+## Release Definition
+
+For this repository, "commit and release" means all of the following have completed:
+
+1. The intended changes are committed, with no unrelated runtime state or secrets staged.
+2. The version/tag and GitHub Release are created or updated with accurate release notes.
+3. The package is published with `npm publish`.
+4. The local fleet is restarted and verified across Telegram and Lark.
+
+Do not call a release complete until GitHub Release, `npm publish`, and Telegram and Lark restart verification have all succeeded. If `package.json` is still marked private, the registry rejects the package, or credentials are missing, report the npm publish step as blocked instead of silently skipping it.
+
+For Lark service restarts, use the single fleet command:
+
+```bash
+node dist/src/index.js lark service restart --all
+```
+
+Do not hand-roll shell loops for Lark service restarts. The CLI knows how to defer the current active Lark instance so it does not kill the turn that is running the release.
+
 ## 1. Baseline Validation
 
 Run:

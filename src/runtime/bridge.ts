@@ -139,6 +139,10 @@ export class Bridge {
     this.supportsTurnScopedEnv = adapter.supportsTurnScopedEnv !== false;
   }
 
+  destroy(): void {
+    this.adapter.destroy?.();
+  }
+
   async validateCodexThread(threadId: string): Promise<void> {
     if (!this.adapter.validateExternalSession) {
       throw new Error("codex thread validation unsupported");

@@ -289,12 +289,18 @@ The bridge is powerful because it controls local CLIs. Treat it like local autom
 - Use YOLO unsafe/bypass only for trusted instances; it intentionally bypasses normal approval prompts and sandbox restrictions.
 - Keep app secrets in bridge state, not prompts, argv, or child-process env.
 - Use `doctor`, `timeline`, `audit`, and `dashboard` before guessing at failures.
-- Telegram/Lark can share an optional machine-wide AI worker pool when you set `TAROCUB_MAX_CONCURRENT_TURNS=<n>`; it is off by default, and `0`/`off` keeps it disabled. Lark same-conversation preempt/batch is also off by default; opt in with `CCTB_LARK_QUEUE_MODE=preempt|batch|preempt-batch`.
+- Telegram/Lark can share an optional machine-wide AI worker pool when you set `TAROCUB_MAX_CONCURRENT_TURNS=<n>`; it is off by default, and `0`/`off` keeps it disabled. Agent Bus does not add a hidden per-process concurrency cap by default; use the explicit worker pool when you want one. Lark same-conversation preempt/batch is also off by default; opt in with `CCTB_LARK_QUEUE_MODE=preempt|batch|preempt-batch`.
 - Lark records `service.health` events and reconnect attempts when health probes fail; telemetry adapters receive `ws_reconnect`, `pool_active`, `pool_waiting`, `run_e2e_ms`, token, cost, and error metrics when configured.
 - Lark keeps a local `known-chats.json` cache so `/status`, `/config`, and `dashboard` can show friendly chat names instead of only opaque chat IDs.
 - Optional local observability can be loaded with `TAROCUB_TELEMETRY_MODULE=/abs/path/adapter.mjs`; telemetry failures are swallowed so they cannot break user turns.
 
 More detail: [Security Boundaries](./docs/security-boundaries.md), [State Model](./docs/state-model.md), and [Full Reference](./docs/full-reference.md).
+
+## Release Contract
+
+In this repo, "commit and release" is not done at a GitHub tag alone. A complete TaroCub release means: commit the intended changes, create/update the GitHub Release, run `npm publish`, then restart and verify the local Telegram and Lark fleet. If npm publishing is blocked by package privacy, registry auth, or package metadata, say it is blocked instead of calling the release complete.
+
+Use [docs/release-checklist.md](./docs/release-checklist.md) as the source of truth for release verification. For Lark fleet restarts, use `node dist/src/index.js lark service restart --all` rather than manual per-instance loops.
 
 ## Docs
 

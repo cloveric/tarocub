@@ -19,6 +19,17 @@ This repository is not in maintenance mode. The active objective is:
 
 Do not treat "feature implemented" as "work complete" unless the current milestone has been verified end-to-end.
 
+## Release Rule
+
+When the operator says "commit and release", do not stop at a commit, tag, or GitHub Release. A complete TaroCub release requires:
+
+1. Commit the intended changes without unrelated runtime state or secrets.
+2. Create or update the GitHub Release with accurate notes.
+3. Run `npm publish`.
+4. Restart and verify the Telegram and Lark fleet.
+
+If npm publishing is blocked because the package is private, registry auth is missing, or package metadata is invalid, report that blocker instead of claiming the release is complete. For Lark fleet restarts, use `node dist/src/index.js lark service restart --all`; do not hand-roll per-instance restart loops.
+
 ## Persistence Rule
 
 When you feel the urge to stop, summarize, or hand back partially-finished work:

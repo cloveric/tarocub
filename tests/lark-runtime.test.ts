@@ -118,6 +118,48 @@ describe("runLarkService", () => {
     }
   });
 
+  it("destroys the bridge when the Lark service shuts down", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-destroy-"));
+    const abortController = new AbortController();
+    const destroyBridge = vi.fn();
+    const channel = {
+      on: vi.fn(() => () => undefined),
+      connect: vi.fn(async () => {
+        abortController.abort("test shutdown");
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+            destroy: destroyBridge,
+          },
+        }),
+        signal: abortController.signal,
+        logger: silentLogger(),
+      });
+
+      expect(destroyBridge).toHaveBeenCalledTimes(1);
+      expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps private Lark messages on the current instance even when a sibling owns the chat", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-owner-route-"));
     const currentStateDir = path.join(rootDir, "ccfcc1");

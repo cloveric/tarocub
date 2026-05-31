@@ -9,6 +9,7 @@ export interface ServiceLifecycleEvent {
     | "service.started"
     | "service.stopped"
     | "service.startup_maintenance"
+    | "service.shutdown_cleanup"
     | "service.fatal"
     | "process.signal"
     | "process.exit"

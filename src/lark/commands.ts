@@ -8,10 +8,9 @@ import type {
 } from "../codex/adapter.js";
 import {
   loadCodexUserDefaults,
-  renderCodexEffortSetting,
-  renderCodexModelSetting,
 } from "../codex/user-defaults.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
+import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
 import { AccessStore } from "../state/access-store.js";
@@ -1429,8 +1428,8 @@ async function renderLarkStatusMessage(
       "**Lark conversation status**",
       "",
       `Engine: ${cfg.engine}`,
-      `Model: ${renderCodexModelSetting(cfg.model, codexDefaults, locale)}`,
-      `Effort: ${renderCodexEffortSetting(cfg.effort, codexDefaults, locale)}`,
+      `Model: ${renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, locale)}`,
+      `Effort: ${renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, locale)}`,
       `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
       `Approval mode: ${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
       `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
@@ -1457,8 +1456,8 @@ async function renderLarkStatusMessage(
     "**Lark 会话状态**",
     "",
     `引擎：${cfg.engine}`,
-    `模型：${renderCodexModelSetting(cfg.model, codexDefaults, locale)}`,
-    `推理强度：${renderCodexEffortSetting(cfg.effort, codexDefaults, locale)}`,
+    `模型：${renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, locale)}`,
+    `推理强度：${renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, locale)}`,
     `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
     `审批模式：${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
     `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,

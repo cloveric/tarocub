@@ -155,7 +155,7 @@ describe("createBusTalkHandler", () => {
     }
   });
 
-  it("caps concurrent bus turns so excess requests queue", async () => {
+  it("does not cap concurrent bus turns by default", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "bus-handler-"));
     await mkdir(root, { recursive: true });
 
@@ -188,19 +188,14 @@ describe("createBusTalkHandler", () => {
         handler({ fromInstance: "caller", prompt: `m${i}`, depth: 0 }),
       );
 
-      // The cap is 4: only four turns should reach the bridge at once; the rest
-      // park in acquireBusTurnSlot() until a slot frees. Poll (generous deadline)
-      // rather than a fixed delay — the pre-bridge awaits (timeline write, budget
-      // read) are real FS ops and stagger under full-suite parallel load.
+      // Bus is a local trusted control plane. By default it should not impose a
+      // hidden process-wide cap; operators who want a global cap can use the
+      // explicit TAROCUB_MAX_CONCURRENT_TURNS worker pool.
       const deadline = Date.now() + 8000;
-      while (releases.length < 4 && Date.now() < deadline) {
+      while (releases.length < total && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 10));
       }
-      expect(releases.length).toBe(4);
-      // The 5th/6th are blocked at the semaphore and literally cannot reach the
-      // bridge until a slot frees, so the admitted count stays pinned at the cap.
-      await new Promise((r) => setTimeout(r, 50));
-      expect(releases.length).toBe(4);
+      expect(releases.length).toBe(total);
 
       // Drain exactly `total` turns: releasing one frees a slot, which admits a
       // queued turn that then pushes its own release. Wait when none are pending
@@ -219,7 +214,7 @@ describe("createBusTalkHandler", () => {
       const results = await Promise.all(inflight);
       expect(results.every((r) => r.success)).toBe(true);
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(total);
-      expect(maxActive).toBe(4);
+      expect(maxActive).toBe(total);
     } finally {
       await removeTempRoot(root);
     }

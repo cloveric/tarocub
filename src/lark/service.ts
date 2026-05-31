@@ -349,6 +349,18 @@ export async function runLarkService(
       if (cronScheduler) {
         await cronScheduler.stop();
       }
+      try {
+        await bridge.destroy?.();
+      } catch (error) {
+        logLifecycleEvent({
+          type: "service.shutdown_cleanup",
+          outcome: "error",
+          detail: `bridge destroy: ${redactLarkErrorDetail(error)}`,
+          metadata: {
+            channel: "lark",
+          },
+        });
+      }
       if (connected && channel) {
         await channel.disconnect();
       }
@@ -360,6 +372,7 @@ export async function runLarkService(
         metadata: buildLarkServiceStoppedMetadata(options.signal),
       });
       process.removeListener("uncaughtExceptionMonitor", uncaughtExceptionMonitor);
+      process.removeListener("unhandledRejection", unhandledRejectionHandler);
     }
   }
 }
