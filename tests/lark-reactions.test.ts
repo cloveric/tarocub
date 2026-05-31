@@ -6,12 +6,16 @@ import {
 } from "../src/lark/reactions.js";
 
 describe("Lark message reactions", () => {
-  it("defaults to lightweight processing and done reactions", () => {
+  it("defaults to a done/failure reaction only — no processing reaction (the run card already signals progress)", () => {
     expect(resolveLarkReactionSettings({})).toEqual({
-      processingEmoji: "OnIt",
+      processingEmoji: null,
       doneEmoji: "DONE",
       failureEmoji: "ERROR",
     });
+  });
+
+  it("re-enables the processing reaction when CCTB_LARK_REACTION_EMOJI is set", () => {
+    expect(resolveLarkReactionSettings({ CCTB_LARK_REACTION_EMOJI: "OnIt" }).processingEmoji).toBe("OnIt");
   });
 
   it("lets env override or disable reaction emoji", () => {

@@ -17,7 +17,11 @@ export interface LarkReactionEnv {
 
 export function resolveLarkReactionSettings(env: LarkReactionEnv): LarkReactionSettings {
   return {
-    processingEmoji: parseEmojiSetting(env.CCTB_LARK_REACTION_EMOJI ?? env.LARK_REACTION_EMOJI, "OnIt"),
+    // Off by default: a turn already pops an in-progress run card, so a separate
+    // "received/processing" reaction on the user's message is redundant noise. Set
+    // CCTB_LARK_REACTION_EMOJI (e.g. "OnIt") to re-enable it. The DONE reaction stays
+    // on — it's a useful completion signal (the card is finished).
+    processingEmoji: parseEmojiSetting(env.CCTB_LARK_REACTION_EMOJI ?? env.LARK_REACTION_EMOJI, null),
     doneEmoji: parseEmojiSetting(env.CCTB_LARK_DONE_EMOJI ?? env.LARK_DONE_EMOJI, "DONE"),
     failureEmoji: parseEmojiSetting(env.CCTB_LARK_FAILURE_EMOJI ?? env.LARK_FAILURE_EMOJI, "ERROR"),
   };
@@ -82,7 +86,7 @@ async function removeReactionBestEffort(
   }
 }
 
-function parseEmojiSetting(value: string | undefined, fallback: string): string | null {
+function parseEmojiSetting(value: string | undefined, fallback: string | null): string | null {
   if (value === undefined) {
     return fallback;
   }
