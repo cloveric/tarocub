@@ -927,7 +927,7 @@ describe("lark service", () => {
     }
   });
 
-  it("splits long Lark final replies before sending them to Feishu", async () => {
+  it("stashes a very long Lark final reply in a Feishu doc and posts the link", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-long-reply-"));
     const channel = fakeChannel();
     const longReply = [
@@ -935,6 +935,13 @@ describe("lark service", () => {
       "第二段：" + "乙".repeat(2500),
       "第三段：" + "丙".repeat(2500),
     ].join("\n\n");
+    let docContent: string | undefined;
+    let docActor: string | undefined;
+    const createDocument = vi.fn(async (docInput: { content: string; as?: string; title?: string }) => {
+      docContent = docInput.content;
+      docActor = docInput.as;
+      return { url: "https://feishu.cn/docx/LONGDOC", title: docInput.title };
+    });
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
       handleAuthorizedMessage: vi.fn(async () => ({ text: longReply })),
@@ -944,22 +951,52 @@ describe("lark service", () => {
       await handleLarkMessage({
         channel,
         bridge,
-        runtime: createLarkServiceRuntime(),
+        runtime: createLarkServiceRuntime({ createDocument }),
         stateDir,
         message: fakeLarkMessage({ messageId: "om_long", content: "写一份长报告" }),
       });
 
-      // The run card is the canonical reply: a long answer is rendered into the
-      // card's text block (one element, well under Feishu's per-element limit)
-      // rather than chunked across multiple markdown messages. The card must
-      // carry every segment of the long reply.
-      const cardJson = JSON.stringify([
-        ...(channel.send.mock.calls as unknown[][]),
-        ...((channel.updateCard?.mock?.calls as unknown[][] | undefined) ?? []),
-      ]);
-      expect(cardJson).toContain("甲".repeat(2500));
-      expect(cardJson).toContain("乙".repeat(2500));
-      expect(cardJson).toContain("丙".repeat(2500));
+      // A reply too long for the card is stashed in a Feishu doc — created with the
+      // operator's USER identity so they can open it — and only the link is posted.
+      // The giant text is NOT dumped as chunked chat messages.
+      expect(createDocument).toHaveBeenCalledTimes(1);
+      expect(docActor).toBe("user");
+      expect(docContent).toContain("甲".repeat(2500));
+      expect(docContent).toContain("乙".repeat(2500));
+      expect(docContent).toContain("丙".repeat(2500));
+      const sends = JSON.stringify(channel.send.mock.calls);
+      expect(sends).toContain("https://feishu.cn/docx/LONGDOC");
+      expect(sends).not.toContain("乙".repeat(2500));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the markdown dump when the overflow doc cannot be created", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-long-reply-fb-"));
+    const channel = fakeChannel();
+    const longReply = `FALLBACKMARKER ${"甲".repeat(7000)}`;
+    const createDocument = vi.fn(async () => { throw new Error("not logged in"); });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: longReply })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime({ createDocument }),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_long_fb", content: "写一份长报告" }),
+      });
+
+      // Doc creation failed → the full reply is still delivered as markdown so the
+      // content is never lost, and no (broken) doc link is posted.
+      expect(createDocument).toHaveBeenCalledTimes(1);
+      const sends = JSON.stringify(channel.send.mock.calls);
+      expect(sends).toContain("FALLBACKMARKER");
+      expect(sends).not.toContain("feishu.cn/docx");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -8152,11 +8189,13 @@ describe("lark service", () => {
     }
   });
 
-  it("delivers the full answer as a message when it is too long for the run card", async () => {
+  it("delivers a moderately long answer as a message when it overflows the card (under the doc threshold)", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-long-"));
     const channel = fakeChannel(); // updateCard succeeds, but the answer exceeds the card element cap
     const runtime = createLarkServiceRuntime();
-    const longAnswer = `LONGMARKER ${"好".repeat(6000)}`;
+    // Over the card's answer cap but below LARK_OVERFLOW_DOC_MIN_CHARS (6000), so it
+    // stays a markdown message rather than being stashed in a doc.
+    const longAnswer = `LONGMARKER ${"好".repeat(4000)}`;
     const bridge: LarkBridgeLike = {
       handleAuthorizedMessage: vi.fn(async (input) => {
         await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: longAnswer }));

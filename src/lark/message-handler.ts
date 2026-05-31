@@ -32,6 +32,7 @@ import {
   isStopCommand,
 } from "./commands.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
+import { LARK_OVERFLOW_DOC_MIN_CHARS, postLarkOverflowAnswerDoc } from "./overflow-doc.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
 import { LarkKnownChatStore } from "./known-chats.js";
@@ -1081,6 +1082,22 @@ async function runNormalizedLarkMessage(
         });
         const answerShownInCard = (await runCard?.finish(result.text)) ?? false;
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
+        // The card couldn't fit the answer (a card exists but the text overflowed) →
+        // that overflow is the signal it's a long document: stash the full text in a
+        // Feishu Doc and post just the link, instead of dumping a huge multi-part
+        // markdown message. The card keeps its truncated preview. If doc creation
+        // fails, fall through to the markdown dump so the content is never lost.
+        let overflowDocPosted = false;
+        if (runCard !== undefined && !answerShownInCard && result.text.length > LARK_OVERFLOW_DOC_MIN_CHARS) {
+          overflowDocPosted = await postLarkOverflowAnswerDoc({
+            channel: input.channel,
+            createDocument: input.runtime.createDocument,
+            chatId: normalized.chatId,
+            replyOptions: larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
+            text: result.text,
+            locale,
+          });
+        }
         await deliverLarkResponse({
           channel: input.channel,
           runtime: input.runtime,
@@ -1089,11 +1106,11 @@ async function runNormalizedLarkMessage(
           replyInThread: Boolean(normalized.threadId),
           text: result.text,
           // The run card is normally the single canonical reply. Send a separate
-          // markdown message only when there is no card, OR when the answer was
-          // too long to show in the card (truncated / tiny-terminal fallback) so
-          // the full text is never lost. deliverLarkResponse still processes tool
-          // tags / files / images regardless.
-          sendText: runCard === undefined || !answerShownInCard,
+          // markdown message only when there is no card, OR when the answer was too
+          // long to show in the card AND we couldn't post it as a Feishu Doc — so the
+          // full text is never lost. deliverLarkResponse still processes tool tags /
+          // files / images regardless.
+          sendText: runCard === undefined || (!answerShownInCard && !overflowDocPosted),
           stateDir: input.stateDir,
           requestOutputDir,
           workspaceOverride,
