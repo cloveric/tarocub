@@ -253,20 +253,31 @@ export async function runLarkService(
         }));
       }
     });
-    channel.on("cardAction", async (event) => {
-      try {
-        await handleLarkCardAction({ channel: channel!, bridge, runtime, stateDir, instanceName, event });
-      } catch (error) {
-        logLarkServiceError(logger, "Lark card action handling failed", error);
-        await appendLarkServiceCardActionErrorTimelineEvent(stateDir, event);
-        const locale = await resolveLarkLocale(stateDir);
-        await channel!.send(event.chatId, {
-          text: renderLarkUserFacingError(error, "engine", locale),
-        }, {
-          replyTo: event.messageId,
-          ...getCardActionReplyInThreadOption(event),
-        }).catch(() => undefined);
-      }
+    channel.on("cardAction", (event) => {
+      // Feishu gives a card-button callback only ~3s to be acknowledged; if we
+      // haven't responded by then the user sees "出错了，请稍后重试" (e.g. pressing
+      // the stop button while a tool call keeps the process busy). So ack
+      // IMMEDIATELY — return synchronously so the SDK sends its {} ack now — and
+      // run the real handler detached, exactly how inbound messages are
+      // dispatched (`void dispatchHandler`). Card updates happen out-of-band via
+      // the CardKit API, never through the callback response, so nothing depends
+      // on us blocking the ack. This makes the stop button as reliable as the
+      // /stop text command (both ultimately call the same abortController.abort()).
+      void (async () => {
+        try {
+          await handleLarkCardAction({ channel: channel!, bridge, runtime, stateDir, instanceName, event });
+        } catch (error) {
+          logLarkServiceError(logger, "Lark card action handling failed", error);
+          await appendLarkServiceCardActionErrorTimelineEvent(stateDir, event);
+          const locale = await resolveLarkLocale(stateDir);
+          await channel!.send(event.chatId, {
+            text: renderLarkUserFacingError(error, "engine", locale),
+          }, {
+            replyTo: event.messageId,
+            ...getCardActionReplyInThreadOption(event),
+          }).catch(() => undefined);
+        }
+      })();
     });
     channel.on("comment", async (event) => {
       try {

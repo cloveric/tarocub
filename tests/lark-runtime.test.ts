@@ -1010,22 +1010,30 @@ describe("runLarkService", () => {
         logger: silentLogger(),
       });
 
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_group",
-        { text: expect.stringContaining("错误：") },
-        { replyTo: "om_card_error", replyInThread: true },
-      );
-      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
-      expect(timeline).toContainEqual(expect.objectContaining({
-        type: "turn.completed",
-        channel: "lark",
-        conversationKey: "lark:oc_group:omt_topic",
-        outcome: "error",
-        metadata: expect.objectContaining({
-          phase: "service-card-action",
-          larkMessageId: "om_card_error",
-        }),
-      }));
+      // The card-action handler acks Feishu synchronously and runs the work
+      // DETACHED (so a busy/slow handler never trips Feishu's ~3s callback
+      // timeout), so the error send + timeline write land asynchronously after
+      // connect() returns — poll for them rather than asserting synchronously.
+      await vi.waitFor(() => {
+        expect(channel.send).toHaveBeenCalledWith(
+          "oc_group",
+          { text: expect.stringContaining("错误：") },
+          { replyTo: "om_card_error", replyInThread: true },
+        );
+      });
+      await vi.waitFor(async () => {
+        const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+        expect(timeline).toContainEqual(expect.objectContaining({
+          type: "turn.completed",
+          channel: "lark",
+          conversationKey: "lark:oc_group:omt_topic",
+          outcome: "error",
+          metadata: expect.objectContaining({
+            phase: "service-card-action",
+            larkMessageId: "om_card_error",
+          }),
+        }));
+      });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
