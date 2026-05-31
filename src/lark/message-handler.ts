@@ -1087,9 +1087,9 @@ async function runNormalizedLarkMessage(
         // Feishu Doc and post just the link, instead of dumping a huge multi-part
         // markdown message. The card keeps its truncated preview. If doc creation
         // fails, fall through to the markdown dump so the content is never lost.
-        let overflowDocPosted = false;
+        let overflowDelivered = false;
         if (runCard !== undefined && !answerShownInCard && result.text.length > LARK_OVERFLOW_DOC_MIN_CHARS) {
-          overflowDocPosted = await postLarkOverflowAnswerDoc({
+          const overflow = await postLarkOverflowAnswerDoc({
             channel: input.channel,
             createDocument: input.runtime.createDocument,
             chatId: normalized.chatId,
@@ -1097,6 +1097,20 @@ async function runNormalizedLarkMessage(
             text: result.text,
             locale,
           });
+          overflowDelivered = overflow.delivered;
+          if (overflow.mode !== "doc") {
+            // The Feishu Doc step failed — surface why (it is otherwise swallowed) so
+            // the .md-file fallback the operator sees can be traced to its cause.
+            await appendLarkTimelineEvent(input.stateDir, normalized, {
+              type: "engine.event.delivery_failed",
+              detail: "overflow_doc_create_failed",
+              metadata: {
+                fallback: overflow.mode,
+                docError: overflow.docError,
+                ...(overflow.mode === "failed" ? { fileError: overflow.fileError } : {}),
+              },
+            });
+          }
         }
         await deliverLarkResponse({
           channel: input.channel,
@@ -1110,7 +1124,7 @@ async function runNormalizedLarkMessage(
           // long to show in the card AND we couldn't post it as a Feishu Doc — so the
           // full text is never lost. deliverLarkResponse still processes tool tags /
           // files / images regardless.
-          sendText: runCard === undefined || (!answerShownInCard && !overflowDocPosted),
+          sendText: runCard === undefined || (!answerShownInCard && !overflowDelivered),
           stateDir: input.stateDir,
           requestOutputDir,
           workspaceOverride,

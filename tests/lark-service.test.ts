@@ -972,7 +972,7 @@ describe("lark service", () => {
     }
   });
 
-  it("falls back to the markdown dump when the overflow doc cannot be created", async () => {
+  it("falls back to a .md file (not an inline dump) when the overflow doc cannot be created", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-long-reply-fb-"));
     const channel = fakeChannel();
     const longReply = `FALLBACKMARKER ${"甲".repeat(7000)}`;
@@ -991,12 +991,33 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_long_fb", content: "写一份长报告" }),
       });
 
-      // Doc creation failed → the full reply is still delivered as markdown so the
-      // content is never lost, and no (broken) doc link is posted.
+      // Doc creation failed → the full reply is delivered as a .md FILE (clean chat,
+      // and a file vs a link signals the doc step failed) — NOT an inline dump.
       expect(createDocument).toHaveBeenCalledTimes(1);
-      const sends = JSON.stringify(channel.send.mock.calls);
-      expect(sends).toContain("FALLBACKMARKER");
-      expect(sends).not.toContain("feishu.cn/docx");
+      const calls = channel.send.mock.calls as unknown as unknown[][];
+      const fileCall = calls.find((c) => (c[1] as { file?: unknown } | undefined)?.file);
+      expect(fileCall).toBeDefined();
+      const file = (fileCall![1] as { file: { source: Buffer; fileName: string } }).file;
+      expect(file.fileName).toMatch(/\.md$/);
+      expect(file.source.toString("utf8")).toContain("FALLBACKMARKER");
+      // No inline markdown dump of the full reply, and no (broken) doc link.
+      const markdowns = calls
+        .map((c) => (c[1] as { markdown?: string } | undefined)?.markdown)
+        .filter(Boolean)
+        .join("\n");
+      expect(markdowns).not.toContain("FALLBACKMARKER");
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("feishu.cn/docx");
+      // The doc failure is logged (otherwise invisible) so the .md fallback is traceable.
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event.delivery_failed",
+        channel: "lark",
+        detail: "overflow_doc_create_failed",
+        metadata: expect.objectContaining({
+          fallback: "file",
+          docError: "not logged in",
+        }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2996,6 +3017,34 @@ describe("lark service", () => {
     }
   });
 
+  it("explains Claude CLI defaults in the Lark status card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-claude-default-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en", engine: "claude" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_status_claude_default", content: "/status" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("Engine: claude");
+      expect(rendered).toContain("Model: default (Claude CLI default; no --model override)");
+      expect(rendered).toContain("Effort: default (Claude CLI default; no --effort override)");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not report the Lark status command itself as an active run", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-idle-"));
     const channel = fakeChannel();
@@ -3583,6 +3632,37 @@ describe("lark service", () => {
       expect(rendered).toContain('"cctb_lark":"config"');
       expect(rendered).toContain('"action":"engine"');
       expect(rendered).toContain('"action":"yolo"');
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("explains Claude CLI defaults in the Lark config card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-card-claude-default-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "claude",
+      locale: "en",
+    }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_config_claude_default", content: "/config" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("Engine: claude");
+      expect(rendered).toContain("Model: default (Claude CLI default; no --model override)");
+      expect(rendered).toContain("Effort: default (Claude CLI default; no --effort override)");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -8189,12 +8269,17 @@ describe("lark service", () => {
     }
   });
 
-  it("delivers a moderately long answer as a message when it overflows the card (under the doc threshold)", async () => {
+  it("routes a moderately-long over-card answer to a Feishu doc (threshold = card cap)", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-long-"));
-    const channel = fakeChannel(); // updateCard succeeds, but the answer exceeds the card element cap
-    const runtime = createLarkServiceRuntime();
-    // Over the card's answer cap but below LARK_OVERFLOW_DOC_MIN_CHARS (6000), so it
-    // stays a markdown message rather than being stashed in a doc.
+    const channel = fakeChannel();
+    let docContent: string | undefined;
+    const createDocument = vi.fn(async (docInput: { content: string; as?: string }) => {
+      docContent = docInput.content;
+      return { url: "https://feishu.cn/docx/MODERATE" };
+    });
+    const runtime = createLarkServiceRuntime({ createDocument });
+    // Over the card's answer cap (3000) → overflows. With the doc threshold now equal
+    // to the card cap, any over-card answer is stashed in a doc, not dumped inline.
     const longAnswer = `LONGMARKER ${"好".repeat(4000)}`;
     const bridge: LarkBridgeLike = {
       handleAuthorizedMessage: vi.fn(async (input) => {
@@ -8209,14 +8294,17 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_long_card", content: "do work" }),
       });
 
-      // The card only holds a truncated preview, so the full answer must arrive
-      // as a separate message (identified by its marker).
-      const answerSends = channel.send.mock.calls.filter((call: unknown[]) => {
+      // The over-card answer is stashed in a doc; only the link is posted, and the
+      // full answer is NOT dumped as an inline markdown message.
+      expect(createDocument).toHaveBeenCalledTimes(1);
+      expect(docContent).toContain("LONGMARKER");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("https://feishu.cn/docx/MODERATE");
+      const inlineDump = channel.send.mock.calls.filter((call: unknown[]) => {
         const p = call[1] as { text?: string; markdown?: string } | undefined;
         return (typeof p?.text === "string" && p.text.includes("LONGMARKER"))
           || (typeof p?.markdown === "string" && p.markdown.includes("LONGMARKER"));
       });
-      expect(answerSends.length).toBeGreaterThan(0);
+      expect(inlineDump.length).toBe(0);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
