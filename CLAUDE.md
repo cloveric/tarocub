@@ -25,10 +25,9 @@ When the operator says "commit and release", do not stop at a commit, tag, or Gi
 
 1. Commit the intended changes without unrelated runtime state or secrets.
 2. Create or update the GitHub Release with accurate notes.
-3. Run `npm publish`.
-4. Restart and verify the Telegram and Lark fleet.
+3. Restart and verify the Telegram and Lark fleet.
 
-If npm publishing is blocked because the package is private, registry auth is missing, or package metadata is invalid, report that blocker instead of claiming the release is complete. For Lark fleet restarts, use `node dist/src/index.js lark service restart --all`; do not hand-roll per-instance restart loops.
+Do not include external package-registry publishing in the release flow. For Lark fleet restarts, use `node dist/src/index.js lark service restart --all`; do not hand-roll per-instance restart loops.
 
 ## Persistence Rule
 

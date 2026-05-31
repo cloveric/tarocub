@@ -8,13 +8,13 @@ describe("release checklist", () => {
     const checklist = await readFile(path.join(process.cwd(), "docs/release-checklist.md"), "utf8");
 
     expect(checklist).toContain("GitHub Release");
-    expect(checklist).toContain("npm publish");
     expect(checklist).toContain("Telegram and Lark");
     expect(checklist).toContain("node dist/src/index.js lark service restart --all");
     expect(checklist).toContain("Do not call a release complete");
+    expect(checklist).toContain("external package-registry publishing");
   });
 
-  it("keeps package metadata aligned with npm publish releases", async () => {
+  it("keeps package metadata out of registry publishing", async () => {
     const packageJson = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8")) as {
       private?: boolean;
       bin?: Record<string, string>;
@@ -22,9 +22,9 @@ describe("release checklist", () => {
       publishConfig?: { access?: string };
     };
 
-    expect(packageJson.private).not.toBe(true);
-    expect(packageJson.bin?.tarocub).toBe("dist/src/index.js");
-    expect(packageJson.files).toEqual(expect.arrayContaining(["dist/src", "README.md", "LICENSE"]));
-    expect(packageJson.publishConfig?.access).toBe("public");
+    expect(packageJson.private).toBe(true);
+    expect(packageJson.bin).toBeUndefined();
+    expect(packageJson.files).toBeUndefined();
+    expect(packageJson.publishConfig).toBeUndefined();
   });
 });

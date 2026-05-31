@@ -10,12 +10,9 @@ For this repository, "commit and release" means all of the following have comple
 
 1. The intended changes are committed, with no unrelated runtime state or secrets staged.
 2. The version/tag and GitHub Release are created or updated with accurate release notes.
-3. The package is published with `npm publish`.
-4. The local fleet is restarted and verified across Telegram and Lark.
+3. The local fleet is restarted and verified across Telegram and Lark.
 
-Do not call a release complete until GitHub Release, `npm publish`, and Telegram and Lark restart verification have all succeeded. If `package.json` is still marked private, the registry rejects the package, or credentials are missing, report the npm publish step as blocked instead of silently skipping it.
-
-`package.json` is intentionally publishable by default: it must not be marked `private`, and its npm metadata must keep the `tarocub` bin pointing at the built `dist/src/index.js` entrypoint. Run `npm run build` before publishing so the package contains fresh `dist/src` output without test artifacts.
+Do not call a release complete until GitHub Release and Telegram and Lark restart verification have all succeeded. Keep `package.json` private and do not treat external package-registry publishing as a release step.
 
 For Lark service restarts, use the single fleet command:
 
