@@ -1,13 +1,35 @@
 import { describe, expect, it } from "vitest";
 
-import { larkAgentInstructions } from "../src/lark/agent-instructions.js";
+import { larkAgentInstructions, localAsrAgentInstruction } from "../src/lark/agent-instructions.js";
 
 describe("larkAgentInstructions", () => {
   it("keeps the injected Lark system prompt compact enough for every-turn use", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions.length).toBeLessThan(1700);
-    expect(instructions.split("\n").length).toBeLessThanOrEqual(9);
+    // Bound covers the optional local-ASR line, which is appended on machines
+    // where an ASR backend is actually installed (e.g. the dev box running the
+    // suite); CI has neither the env nor the CLI files, so it stays absent there.
+    expect(instructions.length).toBeLessThan(2200);
+    expect(instructions.split("\n").length).toBeLessThanOrEqual(10);
+  });
+
+  it("tells the agent to use the local ASR (not whisper) for its own transcription when one is configured", () => {
+    const previous = process.env.ASR_HTTP_URL;
+    process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
+    try {
+      const asr = localAsrAgentInstruction();
+      expect(asr).toBeDefined();
+      expect(asr).toContain("http://127.0.0.1:8412/transcribe");
+      expect(asr).toContain("whisper");
+      // It is wired into the injected Lark prompt when ASR is available.
+      expect(larkAgentInstructions()).toContain("do NOT default to whisper");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ASR_HTTP_URL;
+      } else {
+        process.env.ASR_HTTP_URL = previous;
+      }
+    }
   });
 
   it("tells agents that file send is workspace-sandboxed (copy in before sending)", () => {
