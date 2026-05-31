@@ -702,10 +702,12 @@ const LARK_IMAGE_CAPTION_MAX = 80;
 
 // A batch of titled images (e.g. a 小红书 P1/P2/… series) is one deliverable, so we
 // pack the whole batch into a SINGLE card (each image keeps its own title above it)
-// instead of one card per image — tidier and what the operator asked for. Very large
-// batches are split into multiple cards at this cap so we never risk exceeding the
-// card's element budget; an 8-image card is verified to render on real Feishu.
-const LARK_MAX_IMAGES_PER_CARD = 9;
+// instead of one card per image. The Feishu card JSON docs set no hard cap on the
+// number of elements/images — the binding limit is the message byte size, and img_key
+// references are tiny (an 18-image card is only ~3 KB of JSON and sends fine on real
+// Feishu). We still split very large batches at this cap so a single card stays
+// scrollable rather than endless; past 12 images the overflow spills into more cards.
+const LARK_MAX_IMAGES_PER_CARD = 12;
 
 /**
  * The caption for an image is the title line that sits directly above its

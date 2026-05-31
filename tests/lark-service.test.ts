@@ -6948,11 +6948,11 @@ describe("lark service", () => {
     }
   });
 
-  it("splits a large [send-image:] batch across multiple cards (cap 9 per card), order preserved", async () => {
+  it("splits a large [send-image:] batch across multiple cards (cap 12 per card), order preserved", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-split-"));
     const workspace = path.join(stateDir, "workspace");
     await mkdir(workspace, { recursive: true });
-    const total = 12;
+    const total = 15;
     const captions: string[] = [];
     const blocks: string[] = [];
     for (let i = 1; i <= total; i++) {
@@ -6978,11 +6978,11 @@ describe("lark service", () => {
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
         .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
 
-      // 12 images, cap 9 per card → two cards (9 + 3); no card exceeds the cap.
+      // 15 images, cap 12 per card → two cards (12 + 3); no card exceeds the cap.
       expect(cardCalls).toHaveLength(2);
       const imgCounts = cardCalls.map((c) => c.body.elements.filter((e) => e.tag === "img").length);
-      expect(imgCounts).toEqual([9, 3]);
-      expect(imgCounts.every((n) => n <= 9)).toBe(true);
+      expect(imgCounts).toEqual([12, 3]);
+      expect(imgCounts.every((n) => n <= 12)).toBe(true);
 
       // Captions arrive in order across the cards (P01 … P12).
       const orderedCaptions = cardCalls
