@@ -6868,7 +6868,7 @@ describe("lark service", () => {
       }),
       // Force the captioned-card path to fail so this still exercises the
       // image-message → file fallback (card → image → file is the full chain).
-      uploadImage: vi.fn(async () => { throw new Error("card upload failed"); }),
+      rawClient: { im: { v1: { image: { create: vi.fn(async () => { throw new Error("card upload failed"); }) } } } },
     });
 
     try {
@@ -6925,7 +6925,7 @@ describe("lark service", () => {
 
       // Each image is uploaded (for an img_key) and sent as its own card with the
       // title line that sat directly above its tag — no bare image messages.
-      expect(channel.uploadImage).toHaveBeenCalledTimes(2);
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(2);
       const cardCalls = (channel.send.mock.calls as unknown[][])
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
         .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
@@ -7198,7 +7198,7 @@ describe("lark service", () => {
       });
 
       // Each captioned batch image is uploaded and sent as its own title+image card.
-      expect(channel.uploadImage).toHaveBeenCalledTimes(2);
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(2);
       const cardCalls = (channel.send.mock.calls as unknown[][])
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
         .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
@@ -7238,7 +7238,7 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_img_caption", content: "出图" }),
       });
 
-      expect(channel.uploadImage).toHaveBeenCalledTimes(1);
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(1);
       const pairs = (channel.send.mock.calls as unknown[][])
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
         .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card))
@@ -11671,6 +11671,14 @@ function baseFakeChannel() {
     updateCard: vi.fn(async () => undefined),
     recallMessage: vi.fn(async () => undefined),
     downloadResource: vi.fn(async () => Buffer.from("")),
-    uploadImage: vi.fn(async () => ({ fileKey: "img_key_fake" })),
+    // Mirror the real SDK channel: image upload is via rawClient.im.v1.image.create
+    // (there is NO channel.uploadImage). Captioned-image cards use this to get an
+    // image_key. Typed `unknown` so other tests can stub a different rawClient slice.
+    rawClient: { im: { v1: { image: { create: vi.fn(async () => ({ image_key: "img_key_fake" })) } } } } as unknown,
   };
+}
+
+/** The rawClient image-upload mock the captioned-card path calls (see baseFakeChannel). */
+function imageCreateMock(channel: FakeLarkChannel): ReturnType<typeof vi.fn> {
+  return (channel.rawClient as { im: { v1: { image: { create: ReturnType<typeof vi.fn> } } } }).im.v1.image.create;
 }

@@ -745,6 +745,32 @@ export function captionForLarkImage(text: string, tagIndex: number): string | un
  * titled images stays legible. Returns false (caller falls back to a bare image
  * message) when the channel can't upload or the upload yields no key.
  */
+interface LarkRawImageClient {
+  im?: {
+    v1?: {
+      image?: {
+        create?: (req: { data: { image_type: string; image: Buffer } }) =>
+          Promise<{ image_key?: string; data?: { image_key?: string } }>;
+      };
+    };
+  };
+}
+
+/**
+ * Uploads an image via the SDK channel's raw client and returns its image_key.
+ * The SDK channel does NOT expose a standalone uploadImage; `rawClient.im.v1.image.create`
+ * is the supported path (verified against real Feishu). Returns undefined when the
+ * raw client / method isn't available so the caller falls back to a bare image.
+ */
+async function uploadLarkImageKey(channel: LarkChannelLike, body: Buffer): Promise<string | undefined> {
+  const image = (channel as { rawClient?: LarkRawImageClient }).rawClient?.im?.v1?.image;
+  if (!image || typeof image.create !== "function") {
+    return undefined;
+  }
+  const res = await image.create({ data: { image_type: "message", image: body } });
+  return res?.image_key ?? res?.data?.image_key ?? undefined;
+}
+
 async function sendLarkCaptionedImageCard(input: {
   channel: LarkChannelLike;
   chatId: string;
@@ -752,11 +778,7 @@ async function sendLarkCaptionedImageCard(input: {
   body: Buffer;
   caption?: string;
 }): Promise<boolean> {
-  if (!input.channel.uploadImage) {
-    return false;
-  }
-  const uploaded = await input.channel.uploadImage(input.body);
-  const imgKey = uploaded?.fileKey;
+  const imgKey = await uploadLarkImageKey(input.channel, input.body);
   if (!imgKey) {
     return false;
   }

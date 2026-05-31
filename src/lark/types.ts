@@ -66,11 +66,13 @@ export interface LarkChannelLike {
   removeReactionByEmoji?(messageId: string, emojiType: string): Promise<boolean>;
   downloadResource(fileKey: string, type: "image" | "file"): Promise<Buffer>;
   /**
-   * Upload an image and return its image_key, for embedding in a card's `img`
-   * element (the underlying SDK channel already implements this). Optional so a
-   * channel without upload simply degrades to sending a bare image message.
+   * The underlying SDK client (`@larksuiteoapi/node-sdk`), used to upload an
+   * image and obtain an `image_key` for embedding in a card's `img` element via
+   * `rawClient.im.v1.image.create`. The SDK channel does NOT expose a standalone
+   * `uploadImage` method, so the raw client is the supported path. Optional/typed
+   * as unknown so test channels can stub just the slice they need.
    */
-  uploadImage?(buffer: Buffer): Promise<{ fileKey: string }>;
+  rawClient?: unknown;
   fetchMessage?(messageId: string): Promise<LarkFetchedMessage | null>;
   getChatMode?(chatId: string): Promise<LarkChatMode>;
   /**
