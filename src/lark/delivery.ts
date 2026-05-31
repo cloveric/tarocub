@@ -133,6 +133,9 @@ export async function deliverLarkResponse(input: {
     const outputPrefix = outputRoot ? `${outputRoot}${path.sep}` : undefined;
     const overridePrefix = overrideRoot ? `${overrideRoot}${path.sep}` : undefined;
 
+    // Images are collected and delivered together as one card (a titled series stays
+    // grouped — see deliverLarkPendingImages); files are sent inline as we go.
+    const pendingImages: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }> = [];
     for (const match of matches) {
       const filePath = match.path;
       try {
@@ -156,33 +159,15 @@ export async function deliverLarkResponse(input: {
         }
         const body = await readFile(real);
         if (match.preferPhoto) {
-          // Pair each image with the caption that precedes its tag and deliver it
-          // as a single card (caption + image), so a batch of titled images (e.g.
-          // 小红书 P1/P2/…) stays legible instead of arriving as a bare pile that
-          // you can't match to its title. Falls back to the plain image message if
-          // the upload/card path is unavailable or fails — never worse than before.
-          const caption = captionForLarkImage(input.text, match.index);
-          const cardSent = await sendLarkCaptionedImageCard({
-            channel: input.channel,
-            chatId: input.chatId,
-            replyOptions,
+          // Pair each image with the caption that precedes its tag; the whole batch
+          // is rendered as one card below so a titled series (e.g. 小红书 P1/P2/…)
+          // stays grouped and legible instead of arriving as a bare, unlabelled pile.
+          pendingImages.push({
+            caption: captionForLarkImage(input.text, match.index),
             body,
-            caption,
-          }).catch(() => false);
-          if (cardSent) {
-            await appendLarkFileAcceptedTimeline(input, {
-              fileName: path.basename(real),
-              bytes: body.length,
-              kind: "image",
-            });
-          } else {
-            await sendLarkImageWithFileFallback({
-              ...input,
-              body,
-              realPath: real,
-              originalPath: filePath,
-            });
-          }
+            real,
+            originalPath: filePath,
+          });
         } else {
           await input.channel.send(input.chatId, {
             file: {
@@ -208,6 +193,10 @@ export async function deliverLarkResponse(input: {
           text: renderLarkFileDeliveryError("read-error", locale),
         }, replyOptions);
       }
+    }
+
+    if (pendingImages.length > 0) {
+      await deliverLarkPendingImages(input, pendingImages, replyOptions);
     }
   }
 
@@ -711,6 +700,13 @@ async function sendLarkPath(input: {
 
 const LARK_IMAGE_CAPTION_MAX = 80;
 
+// A batch of titled images (e.g. a 小红书 P1/P2/… series) is one deliverable, so we
+// pack the whole batch into a SINGLE card (each image keeps its own title above it)
+// instead of one card per image — tidier and what the operator asked for. Very large
+// batches are split into multiple cards at this cap so we never risk exceeding the
+// card's element budget; an 8-image card is verified to render on real Feishu.
+const LARK_MAX_IMAGES_PER_CARD = 9;
+
 /**
  * The caption for an image is the title line that sits directly above its
  * `[send-image:…]` tag — Claude's natural shape for a captioned series
@@ -771,6 +767,31 @@ async function uploadLarkImageKey(channel: LarkChannelLike, body: Buffer): Promi
   return res?.image_key ?? res?.data?.image_key ?? undefined;
 }
 
+/**
+ * Builds a Card 2.0 holding one or more images, each preceded by its caption (if
+ * any). One image → a single titled card; many images → the whole batch in one card
+ * (a 小红书 series stays grouped). Caller is responsible for keeping the count within
+ * {@link LARK_MAX_IMAGES_PER_CARD}.
+ */
+function buildLarkImageCard(items: Array<{ caption?: string; imgKey: string }>): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = [];
+  for (const item of items) {
+    if (item.caption) {
+      elements.push({ tag: "markdown", content: item.caption });
+    }
+    elements.push({
+      tag: "img",
+      img_key: item.imgKey,
+      alt: { tag: "plain_text", content: item.caption && item.caption.length > 0 ? item.caption : "图片" },
+    });
+  }
+  return {
+    schema: "2.0",
+    config: { update_multi: true },
+    body: { direction: "vertical", padding: "12px 12px 12px 12px", elements },
+  };
+}
+
 async function sendLarkCaptionedImageCard(input: {
   channel: LarkChannelLike;
   chatId: string;
@@ -782,23 +803,68 @@ async function sendLarkCaptionedImageCard(input: {
   if (!imgKey) {
     return false;
   }
-  const elements: Record<string, unknown>[] = [];
-  if (input.caption) {
-    elements.push({ tag: "markdown", content: input.caption });
-  }
-  elements.push({
-    tag: "img",
-    img_key: imgKey,
-    alt: { tag: "plain_text", content: input.caption && input.caption.length > 0 ? input.caption : "图片" },
-  });
   await input.channel.send(input.chatId, {
-    card: {
-      schema: "2.0",
-      config: { update_multi: true },
-      body: { direction: "vertical", padding: "12px 12px 12px 12px", elements },
-    },
+    card: buildLarkImageCard([{ caption: input.caption, imgKey }]),
   }, input.replyOptions);
   return true;
+}
+
+/**
+ * Delivers a batch of `[send-image:…]` images as a SINGLE card (each image keeps its
+ * own caption above it) so a titled series — e.g. a 小红书 P1/P2/… deck — arrives as
+ * one grouped deliverable rather than one card per image. Batches larger than
+ * {@link LARK_MAX_IMAGES_PER_CARD} are split into multiple cards. Any image whose
+ * upload fails, or a card the channel rejects (e.g. element budget), degrades to a
+ * bare image message — never worse than before.
+ */
+async function deliverLarkPendingImages(
+  input: {
+    channel: LarkChannelLike;
+    chatId: string;
+    replyTo?: string;
+    replyInThread?: boolean;
+    stateDir: string;
+    conversationKey?: string;
+    bridgeChatId?: number;
+    bridgeUserId?: number;
+    bridgeChatType?: "private" | "group";
+    larkMessageId?: string;
+  },
+  images: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }>,
+  replyOptions: LarkSendOptions | undefined,
+): Promise<void> {
+  const uploaded: Array<{ caption?: string; imgKey: string; real: string; originalPath: string; body: Buffer }> = [];
+  const failedUploads: typeof images = [];
+  for (const img of images) {
+    const imgKey = await uploadLarkImageKey(input.channel, img.body).catch(() => undefined);
+    if (imgKey) {
+      uploaded.push({ caption: img.caption, imgKey, real: img.real, originalPath: img.originalPath, body: img.body });
+    } else {
+      failedUploads.push(img);
+    }
+  }
+
+  for (let i = 0; i < uploaded.length; i += LARK_MAX_IMAGES_PER_CARD) {
+    const chunk = uploaded.slice(i, i + LARK_MAX_IMAGES_PER_CARD);
+    try {
+      await input.channel.send(input.chatId, { card: buildLarkImageCard(chunk) }, replyOptions);
+      for (const item of chunk) {
+        await appendLarkFileAcceptedTimeline(input, {
+          fileName: path.basename(item.real),
+          bytes: item.body.length,
+          kind: "image",
+        });
+      }
+    } catch {
+      for (const item of chunk) {
+        await sendLarkImageWithFileFallback({ ...input, body: item.body, realPath: item.real, originalPath: item.originalPath });
+      }
+    }
+  }
+
+  for (const img of failedUploads) {
+    await sendLarkImageWithFileFallback({ ...input, body: img.body, realPath: img.real, originalPath: img.originalPath });
+  }
 }
 
 async function sendLarkImageWithFileFallback(input: {

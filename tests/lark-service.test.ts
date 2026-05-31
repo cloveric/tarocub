@@ -6904,7 +6904,7 @@ describe("lark service", () => {
     }
   });
 
-  it("delivers each image as a card pairing its caption (the line above the tag) with the image", async () => {
+  it("delivers a titled [send-image:] batch as ONE card, each image keeping its own caption", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-card-"));
     const workspace = path.join(stateDir, "workspace");
     await mkdir(workspace, { recursive: true });
@@ -6923,25 +6923,73 @@ describe("lark service", () => {
         stateDir,
       });
 
-      // Each image is uploaded (for an img_key) and sent as its own card with the
-      // title line that sat directly above its tag — no bare image messages.
+      // Both images are uploaded (for img_keys) and packed into a SINGLE card — a
+      // titled series stays grouped instead of fanning out to one card per image.
       expect(imageCreateMock(channel)).toHaveBeenCalledTimes(2);
       const cardCalls = (channel.send.mock.calls as unknown[][])
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
         .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
-      expect(cardCalls).toHaveLength(2);
+      expect(cardCalls).toHaveLength(1);
 
-      const captionsAndImages = cardCalls.map((card) => {
-        const els = card.body.elements;
-        return {
-          caption: (els.find((e) => e.tag === "markdown")?.content as string | undefined),
-          imgKey: (els.find((e) => e.tag === "img")?.img_key as string | undefined),
-        };
+      // The one card carries both caption→image pairs, in order.
+      const els = cardCalls[0]!.body.elements;
+      expect(els).toEqual([
+        { tag: "markdown", content: "P1 封面标题" },
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "P1 封面标题" } },
+        { tag: "markdown", content: "P2 内页标题" },
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "P2 内页标题" } },
+      ]);
+
+      // No bare image message was sent (everything went through the consolidated card).
+      expect((channel.send.mock.calls as unknown[][]).some((c) =>
+        c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("splits a large [send-image:] batch across multiple cards (cap 9 per card), order preserved", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-split-"));
+    const workspace = path.join(stateDir, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const total = 12;
+    const captions: string[] = [];
+    const blocks: string[] = [];
+    for (let i = 1; i <= total; i++) {
+      const label = `P${String(i).padStart(2, "0")}`;
+      const file = path.join(workspace, `${label}.png`);
+      await writeFile(file, `${label} bytes`);
+      captions.push(label);
+      blocks.push(`${label} 标题\n[send-image:${file}]`);
+    }
+    const channel = fakeChannel();
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: blocks.join("\n\n"),
+        stateDir,
       });
-      expect(captionsAndImages).toContainEqual({ caption: "P1 封面标题", imgKey: "img_key_fake" });
-      expect(captionsAndImages).toContainEqual({ caption: "P2 内页标题", imgKey: "img_key_fake" });
 
-      // No bare image message was sent (everything went through the captioned card).
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(total);
+      const cardCalls = (channel.send.mock.calls as unknown[][])
+        .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
+        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
+
+      // 12 images, cap 9 per card → two cards (9 + 3); no card exceeds the cap.
+      expect(cardCalls).toHaveLength(2);
+      const imgCounts = cardCalls.map((c) => c.body.elements.filter((e) => e.tag === "img").length);
+      expect(imgCounts).toEqual([9, 3]);
+      expect(imgCounts.every((n) => n <= 9)).toBe(true);
+
+      // Captions arrive in order across the cards (P01 … P12).
+      const orderedCaptions = cardCalls
+        .flatMap((c) => c.body.elements.filter((e) => e.tag === "markdown").map((e) => e.content as string));
+      expect(orderedCaptions).toEqual(captions.map((c) => `${c} 标题`));
+
+      // Still no bare image fallback — every image rode in a card.
       expect((channel.send.mock.calls as unknown[][]).some((c) =>
         c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);
     } finally {
