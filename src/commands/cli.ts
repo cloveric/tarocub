@@ -2087,6 +2087,21 @@ function isCurrentActiveLarkTurnTarget(env: LarkRuntimeEnv, targetEnv: LarkRunti
   return Boolean(activeInstance) && normalizeInstanceName(activeInstance) === resolveLarkInstanceName(targetEnv);
 }
 
+function isCurrentLarkServiceContext(env: LarkRuntimeEnv, targetStateDir: string): boolean {
+  // When `restart --all` is driven from within an instance's engine turn, the
+  // per-turn CCTB_LARK_ACTIVE_* markers aren't visible to spawned CLI subprocesses
+  // (the worker is long-lived; those markers arrive per-message, not as process
+  // env). But the instance's own state dir IS exported (CCTB_LARK_STATE_DIR), so a
+  // match means "this is the instance running the command" — defer it rather than
+  // skip it as busy. The deferred helper retries until the queue is idle, so it
+  // restarts promptly when nothing is running and never kills the in-flight turn.
+  const contextStateDir = env.CCTB_LARK_STATE_DIR?.trim();
+  if (!contextStateDir) {
+    return false;
+  }
+  return path.resolve(contextStateDir) === path.resolve(targetStateDir);
+}
+
 function clearLarkActiveTurnEnv(env: NodeJS.ProcessEnv): void {
   delete env.CCTB_LARK_ACTIVE_TURN;
   delete env.CCTB_LARK_ACTIVE_INSTANCE;
@@ -2259,7 +2274,10 @@ async function runLarkServiceCommand(
         try {
           const targetEnv = await loadLarkServiceTargetEnv(loadedEnv, target);
           const targetInput = buildLarkServiceCommandInput(targetEnv);
-          if (isCurrentActiveLarkTurnTarget(env, targetEnv, targetInput.stateDir)) {
+          if (
+            isCurrentActiveLarkTurnTarget(env, targetEnv, targetInput.stateDir)
+            || isCurrentLarkServiceContext(env, targetInput.stateDir)
+          ) {
             deferredCurrentInput = targetInput;
             continue;
           }
@@ -2279,7 +2297,7 @@ async function runLarkServiceCommand(
           }
           logger.log(formatLarkServiceAction("start", result));
         } catch (error) {
-          const name = typeof target === "string" ? target : String(target);
+          const name = target.instanceName;
           restartFailures.push(name);
           logger.log(`Skipped Lark instance "${name}": ${error instanceof Error ? error.message : String(error)}`);
         }

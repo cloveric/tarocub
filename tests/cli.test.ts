@@ -599,6 +599,66 @@ describe("runCli", () => {
     }
   });
 
+  it("defers the current instance on restart --all via CCTB_LARK_STATE_DIR when active-turn markers are absent", async () => {
+    // Real scenario: restart --all is run from within an engine turn's Bash, where
+    // the per-turn CCTB_LARK_ACTIVE_* markers don't propagate to the subprocess but
+    // CCTB_LARK_STATE_DIR (the instance's own dir) does. The current instance must
+    // still be DEFERRED, not skipped as busy.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const alphaDir = path.join(tempDir, ".cctb", "alpha");
+    const betaDir = path.join(tempDir, ".cctb", "beta");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const scheduleDeferredRestart = vi.fn(async () => 'Scheduled deferred restart for current Lark instance "alpha" in 5s.');
+
+    try {
+      await mkdir(alphaDir, { recursive: true });
+      await mkdir(betaDir, { recursive: true });
+      await writeFile(path.join(alphaDir, "lark.env"), [
+        `CCTB_LARK_STATE_DIR="${alphaDir}"`,
+        'CCTB_LARK_INSTANCE="alpha"',
+        'LARK_APP_ID="cli_a"',
+        'LARK_APP_SECRET="secret"',
+        "",
+      ].join("\n"));
+      await writeFile(path.join(betaDir, "lark.env"), [
+        `CCTB_LARK_STATE_DIR="${betaDir}"`,
+        'CCTB_LARK_INSTANCE="beta"',
+        'LARK_APP_ID="cli_b"',
+        'LARK_APP_SECRET="secret"',
+        "",
+      ].join("\n"));
+
+      const handled = await runCli(["lark", "service", "restart", "--all"], {
+        env: {
+          USERPROFILE: tempDir,
+          // No CCTB_LARK_ACTIVE_* markers — only the current instance's state dir.
+          CCTB_LARK_STATE_DIR: alphaDir,
+          CCTB_LARK_INSTANCE: "alpha",
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning, scheduleDeferredRestart },
+      });
+
+      expect(handled).toBe(true);
+      // beta restarts immediately; alpha (current context) is deferred, not skipped.
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledWith(expect.objectContaining({ stateDir: betaDir }));
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(scheduleDeferredRestart).toHaveBeenCalledWith(
+        expect.objectContaining({ stateDir: alphaDir }),
+        { current: true },
+      );
+      const joined = messages.join("\n");
+      expect(joined).not.toContain("skipped");
+      expect(joined).not.toContain("[object Object]");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("starts all Lark services with each target's own app credentials", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const alphaDir = path.join(tempDir, ".cctb", "alpha");
