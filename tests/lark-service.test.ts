@@ -6948,8 +6948,8 @@ describe("lark service", () => {
     }
   });
 
-  it("splits a large [send-image:] batch across multiple cards (cap 12 per card), order preserved", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-split-"));
+  it("packs a large [send-image:] batch into a SINGLE card — no preset count cap", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-onecard-"));
     const workspace = path.join(stateDir, "workspace");
     await mkdir(workspace, { recursive: true });
     const total = 15;
@@ -6978,18 +6978,77 @@ describe("lark service", () => {
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
         .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
 
-      // 15 images, cap 12 per card → two cards (12 + 3); no card exceeds the cap.
-      expect(cardCalls).toHaveLength(2);
-      const imgCounts = cardCalls.map((c) => c.body.elements.filter((e) => e.tag === "img").length);
-      expect(imgCounts).toEqual([12, 3]);
-      expect(imgCounts.every((n) => n <= 12)).toBe(true);
+      // The whole batch rides in ONE card — no arbitrary per-card limit.
+      expect(cardCalls).toHaveLength(1);
+      expect(cardCalls[0]!.body.elements.filter((e) => e.tag === "img")).toHaveLength(total);
 
-      // Captions arrive in order across the cards (P01 … P12).
-      const orderedCaptions = cardCalls
+      // Every caption present, in order.
+      const orderedCaptions = cardCalls[0]!.body.elements.filter((e) => e.tag === "markdown").map((e) => e.content as string);
+      expect(orderedCaptions).toEqual(captions.map((c) => `${c} 标题`));
+
+      // No bare image fallback — everything rode in the one card.
+      expect((channel.send.mock.calls as unknown[][]).some((c) =>
+        c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("splits in half and retries only when the channel rejects an oversized card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-split-"));
+    const workspace = path.join(stateDir, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const total = 15;
+    const captions: string[] = [];
+    const blocks: string[] = [];
+    for (let i = 1; i <= total; i++) {
+      const label = `P${String(i).padStart(2, "0")}`;
+      const file = path.join(workspace, `${label}.png`);
+      await writeFile(file, `${label} bytes`);
+      captions.push(label);
+      blocks.push(`${label} 标题\n[send-image:${file}]`);
+    }
+    // Simulate Feishu rejecting any card carrying more than 10 images (a stand-in for
+    // the byte ceiling); smaller cards are accepted.
+    const REJECT_OVER = 10;
+    const channel = fakeChannel({
+      send: vi.fn(async (_chatId: string, payload: unknown) => {
+        const card = (payload as { card?: { body?: { elements?: Array<{ tag?: string }> } } } | undefined)?.card;
+        if (card) {
+          const imgs = (card.body?.elements ?? []).filter((e) => e.tag === "img").length;
+          if (imgs > REJECT_OVER) {
+            throw new Error("card too large");
+          }
+        }
+        return { messageId: "sent" };
+      }),
+    });
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: blocks.join("\n\n"),
+        stateDir,
+      });
+
+      const cardCalls = (channel.send.mock.calls as unknown[][])
+        .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
+        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
+      const imgCount = (card: { body: { elements: Array<Record<string, unknown>> } }) =>
+        card.body.elements.filter((e) => e.tag === "img").length;
+
+      // It tried the whole batch in one card first (rejected), then split in half.
+      expect(cardCalls.map(imgCount)).toContain(total);
+      // The cards that fit (<= the limit) carry every image exactly once, in order.
+      const acceptedCards = cardCalls.filter((c) => imgCount(c) <= REJECT_OVER);
+      expect(acceptedCards.reduce((n, c) => n + imgCount(c), 0)).toBe(total);
+      const orderedCaptions = acceptedCards
         .flatMap((c) => c.body.elements.filter((e) => e.tag === "markdown").map((e) => e.content as string));
       expect(orderedCaptions).toEqual(captions.map((c) => `${c} 标题`));
 
-      // Still no bare image fallback — every image rode in a card.
+      // Split cards succeeded, so no bare image fallback was needed.
       expect((channel.send.mock.calls as unknown[][]).some((c) =>
         c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);
     } finally {

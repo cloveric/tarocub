@@ -700,15 +700,6 @@ async function sendLarkPath(input: {
 
 const LARK_IMAGE_CAPTION_MAX = 80;
 
-// A batch of titled images (e.g. a 小红书 P1/P2/… series) is one deliverable, so we
-// pack the whole batch into a SINGLE card (each image keeps its own title above it)
-// instead of one card per image. The Feishu card JSON docs set no hard cap on the
-// number of elements/images — the binding limit is the message byte size, and img_key
-// references are tiny (an 18-image card is only ~3 KB of JSON and sends fine on real
-// Feishu). We still split very large batches at this cap so a single card stays
-// scrollable rather than endless; past 12 images the overflow spills into more cards.
-const LARK_MAX_IMAGES_PER_CARD = 12;
-
 /**
  * The caption for an image is the title line that sits directly above its
  * `[send-image:…]` tag — Claude's natural shape for a captioned series
@@ -772,8 +763,9 @@ async function uploadLarkImageKey(channel: LarkChannelLike, body: Buffer): Promi
 /**
  * Builds a Card 2.0 holding one or more images, each preceded by its caption (if
  * any). One image → a single titled card; many images → the whole batch in one card
- * (a 小红书 series stays grouped). Caller is responsible for keeping the count within
- * {@link LARK_MAX_IMAGES_PER_CARD}.
+ * (a 小红书 series stays grouped). There is no preset count limit — the only real
+ * ceiling is the Feishu message byte size, which {@link deliverLarkPendingImages}
+ * discovers at send time and works around by splitting.
  */
 function buildLarkImageCard(items: Array<{ caption?: string; imgKey: string }>): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
@@ -811,31 +803,44 @@ async function sendLarkCaptionedImageCard(input: {
   return true;
 }
 
+interface LarkUploadedImage {
+  caption?: string;
+  imgKey: string;
+  real: string;
+  originalPath: string;
+  body: Buffer;
+}
+
+type LarkImageDeliveryInput = {
+  channel: LarkChannelLike;
+  chatId: string;
+  replyTo?: string;
+  replyInThread?: boolean;
+  stateDir: string;
+  conversationKey?: string;
+  bridgeChatId?: number;
+  bridgeUserId?: number;
+  bridgeChatType?: "private" | "group";
+  larkMessageId?: string;
+};
+
 /**
  * Delivers a batch of `[send-image:…]` images as a SINGLE card (each image keeps its
  * own caption above it) so a titled series — e.g. a 小红书 P1/P2/… deck — arrives as
- * one grouped deliverable rather than one card per image. Batches larger than
- * {@link LARK_MAX_IMAGES_PER_CARD} are split into multiple cards. Any image whose
- * upload fails, or a card the channel rejects (e.g. element budget), degrades to a
- * bare image message — never worse than before.
+ * one grouped deliverable rather than one card per image. There is no preset image
+ * count: the whole batch goes in one card. The only real ceiling is the Feishu message
+ * byte size (img_key references are tiny — an 18-image card is ~3 KB), so we don't
+ * guess a number; if the channel ever rejects the card as too large, we split it in
+ * half and retry each half (see sendLarkImageCardOrSplit). Any image whose upload
+ * fails — or a lone image whose card is still rejected — degrades to a bare image
+ * message, never worse than before.
  */
 async function deliverLarkPendingImages(
-  input: {
-    channel: LarkChannelLike;
-    chatId: string;
-    replyTo?: string;
-    replyInThread?: boolean;
-    stateDir: string;
-    conversationKey?: string;
-    bridgeChatId?: number;
-    bridgeUserId?: number;
-    bridgeChatType?: "private" | "group";
-    larkMessageId?: string;
-  },
+  input: LarkImageDeliveryInput,
   images: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }>,
   replyOptions: LarkSendOptions | undefined,
 ): Promise<void> {
-  const uploaded: Array<{ caption?: string; imgKey: string; real: string; originalPath: string; body: Buffer }> = [];
+  const uploaded: LarkUploadedImage[] = [];
   const failedUploads: typeof images = [];
   for (const img of images) {
     const imgKey = await uploadLarkImageKey(input.channel, img.body).catch(() => undefined);
@@ -846,26 +851,45 @@ async function deliverLarkPendingImages(
     }
   }
 
-  for (let i = 0; i < uploaded.length; i += LARK_MAX_IMAGES_PER_CARD) {
-    const chunk = uploaded.slice(i, i + LARK_MAX_IMAGES_PER_CARD);
-    try {
-      await input.channel.send(input.chatId, { card: buildLarkImageCard(chunk) }, replyOptions);
-      for (const item of chunk) {
-        await appendLarkFileAcceptedTimeline(input, {
-          fileName: path.basename(item.real),
-          bytes: item.body.length,
-          kind: "image",
-        });
-      }
-    } catch {
-      for (const item of chunk) {
-        await sendLarkImageWithFileFallback({ ...input, body: item.body, realPath: item.real, originalPath: item.originalPath });
-      }
-    }
-  }
+  await sendLarkImageCardOrSplit(input, uploaded, replyOptions);
 
   for (const img of failedUploads) {
     await sendLarkImageWithFileFallback({ ...input, body: img.body, realPath: img.real, originalPath: img.originalPath });
+  }
+}
+
+/**
+ * Sends the given images as ONE card. If the channel rejects it (e.g. the card exceeds
+ * the message byte budget), splits the batch in half and retries each half — so the
+ * real, undocumented size limit is discovered at send time instead of guessed with a
+ * magic count. A single image whose card is still rejected falls back to a bare image.
+ */
+async function sendLarkImageCardOrSplit(
+  input: LarkImageDeliveryInput,
+  items: LarkUploadedImage[],
+  replyOptions: LarkSendOptions | undefined,
+): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+  try {
+    await input.channel.send(input.chatId, { card: buildLarkImageCard(items) }, replyOptions);
+    for (const item of items) {
+      await appendLarkFileAcceptedTimeline(input, {
+        fileName: path.basename(item.real),
+        bytes: item.body.length,
+        kind: "image",
+      });
+    }
+  } catch {
+    if (items.length === 1) {
+      const only = items[0]!;
+      await sendLarkImageWithFileFallback({ ...input, body: only.body, realPath: only.real, originalPath: only.originalPath });
+      return;
+    }
+    const mid = Math.floor(items.length / 2);
+    await sendLarkImageCardOrSplit(input, items.slice(0, mid), replyOptions);
+    await sendLarkImageCardOrSplit(input, items.slice(mid), replyOptions);
   }
 }
 
