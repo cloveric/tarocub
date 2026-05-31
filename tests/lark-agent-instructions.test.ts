@@ -39,6 +39,14 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("copy it into your workspace first");
   });
 
+  it("routes titled images through per-image [send-image:] (which becomes a captioned card), not send.batch", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("send each as its own [send-image:/path] tag");
+    expect(instructions).toContain("do NOT use send.batch for titled images");
+    expect(instructions).toContain("title on the line directly above");
+  });
+
   it("tells agents to answer ordinary Lark requests directly instead of emitting placeholder cards", () => {
     const instructions = larkAgentInstructions();
 
