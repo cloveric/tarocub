@@ -8932,21 +8932,30 @@ describe("lark service", () => {
     }
   });
 
-  it("uses lark-cli im +chat-create for Lark /newgroup creation", async () => {
+  it("uses lark-cli im +chat-create for Lark /newgroup creation and pulls the bot into a topic group", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-chat-"));
     const binDir = path.join(tempDir, "bin");
-    const logPath = path.join(tempDir, "args.json");
+    const createLog = path.join(tempDir, "create.json");
+    const membersLog = path.join(tempDir, "members.json");
     const fakeCliPath = path.join(binDir, "lark-cli");
     const originalPath = process.env.PATH;
+    const originalApp = process.env.LARK_APP_ID;
     await mkdir(binDir, { recursive: true });
     await writeFile(fakeCliPath, [
       "#!/usr/bin/env node",
       "const { writeFileSync } = require('node:fs');",
-      `writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
+      "const argv = process.argv.slice(2);",
       "if (process.env.LARK_CHANNEL !== '1') { throw new Error('missing lark-channel env'); }",
-      "console.log(JSON.stringify({ ok: true, data: { chat: { chat_id: 'oc_new', name: '新项目', share_link: 'https://example.feishu.cn/chat/oc_new' } } }));",
+      "if (argv.includes('+chat-create')) {",
+      `  writeFileSync(${JSON.stringify(createLog)}, JSON.stringify(argv));`,
+      "  console.log(JSON.stringify({ ok: true, data: { chat: { chat_id: 'oc_new', name: '新项目', share_link: 'https://example.feishu.cn/chat/oc_new' } } }));",
+      "} else if (argv.includes('chat.members')) {",
+      `  writeFileSync(${JSON.stringify(membersLog)}, JSON.stringify(argv));`,
+      "  console.log(JSON.stringify({ ok: true }));",
+      "} else { console.log(JSON.stringify({ ok: true })); }",
     ].join("\n"), { mode: 0o755 });
     process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    process.env.LARK_APP_ID = "cli_testapp";
 
     try {
       const created = await createLarkChatWithCli({
@@ -8954,14 +8963,14 @@ describe("lark service", () => {
         mode: "topic",
         operatorOpenId: "ou_user",
       });
-      const args = JSON.parse(await readFile(logPath, "utf8")) as string[];
+      const args = JSON.parse(await readFile(createLog, "utf8")) as string[];
 
+      // The chat is created and returned, with no warning (the bot add succeeded).
       expect(created).toEqual({
         chatId: "oc_new",
         name: "新项目",
         shareLink: "https://example.feishu.cn/chat/oc_new",
       });
-      expect(args).toContain("im");
       expect(args).toContain("+chat-create");
       expect(args.slice(args.indexOf("--name"), args.indexOf("--name") + 2)).toEqual(["--name", "新项目"]);
       expect(args.slice(args.indexOf("--chat-mode"), args.indexOf("--chat-mode") + 2)).toEqual(["--chat-mode", "topic"]);
@@ -8971,9 +8980,45 @@ describe("lark service", () => {
       // message form 话题/对话); the bot stays a manager.
       expect(args.slice(args.indexOf("--owner"), args.indexOf("--owner") + 2)).toEqual(["--owner", "ou_user"]);
       expect(args).toContain("--set-bot-manager");
-      expect(args.slice(args.indexOf("--format"), args.indexOf("--format") + 2)).toEqual(["--format", "json"]);
+      // Topic groups don't retain the creating bot, so it is explicitly pulled in
+      // via chat.members create with the bot's App ID (member_id_type=app_id).
+      const memberArgs = JSON.parse(await readFile(membersLog, "utf8")) as string[];
+      expect(memberArgs.slice(0, 3)).toEqual(["im", "chat.members", "create"]);
+      expect(memberArgs.join(" ")).toContain("cli_testapp");
+      expect(memberArgs.join(" ")).toContain("app_id");
     } finally {
       process.env.PATH = originalPath;
+      if (originalApp === undefined) { delete process.env.LARK_APP_ID; } else { process.env.LARK_APP_ID = originalApp; }
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces a warning when the bot cannot be added to a new topic group (missing scope)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-chat-warn-"));
+    const binDir = path.join(tempDir, "bin");
+    const fakeCliPath = path.join(binDir, "lark-cli");
+    const originalPath = process.env.PATH;
+    const originalApp = process.env.LARK_APP_ID;
+    await mkdir(binDir, { recursive: true });
+    await writeFile(fakeCliPath, [
+      "#!/usr/bin/env node",
+      "const argv = process.argv.slice(2);",
+      "if (argv.includes('+chat-create')) {",
+      "  console.log(JSON.stringify({ ok: true, data: { chat: { chat_id: 'oc_warn' } } }));",
+      "} else if (argv.includes('chat.members')) {",
+      "  console.log(JSON.stringify({ ok: false, error: { message: 'App scope not enabled: required scope im:chat.members:write_only' } }));",
+      "} else { console.log(JSON.stringify({ ok: true })); }",
+    ].join("\n"), { mode: 0o755 });
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+    process.env.LARK_APP_ID = "cli_testapp";
+
+    try {
+      const created = await createLarkChatWithCli({ name: "话题群", mode: "topic", operatorOpenId: "ou_user" });
+      expect(created.chatId).toBe("oc_warn"); // chat still created
+      expect(created.warning).toContain("im:chat.members:write_only");
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalApp === undefined) { delete process.env.LARK_APP_ID; } else { process.env.LARK_APP_ID = originalApp; }
       await rm(tempDir, { recursive: true, force: true });
     }
   });

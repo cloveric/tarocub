@@ -615,6 +615,7 @@ async function handleLarkNewGroupCommand(
       chatId: created.chatId,
       shareLink: created.shareLink,
       welcomeWarning,
+      ...(created.warning ? { botWarning: created.warning } : {}),
     }),
   );
 }
@@ -667,6 +668,7 @@ function renderLarkNewGroupCreated(input: {
   chatId: string;
   shareLink?: string;
   welcomeWarning?: string;
+  botWarning?: string;
 }): string {
   const kind = input.mode === "topic"
     ? input.locale === "en" ? "topic chat" : "飞书话题群"
@@ -688,6 +690,12 @@ function renderLarkNewGroupCreated(input: {
     lines.push(input.locale === "en"
       ? `Created, but the welcome message failed to send: ${input.welcomeWarning}`
       : `已创建，但欢迎消息发送失败：${input.welcomeWarning}`);
+  }
+  if (input.botWarning) {
+    lines.push("");
+    lines.push(input.locale === "en"
+      ? `Note: ${input.botWarning}. Enable the im:chat.members:write_only scope for this app (then the bot is auto-added), or add the bot to the group manually for now.`
+      : `提示：${input.botWarning}。请为该应用开启 im:chat.members:write_only 权限（之后会自动把机器人加入），或暂时手动把机器人拉进群。`);
   }
   return lines.join("\n");
 }
