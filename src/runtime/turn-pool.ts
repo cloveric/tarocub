@@ -139,6 +139,11 @@ export class FileTurnPool implements TurnPoolLike {
         if (typeof activeAfterRelease === "number") {
           await this.recordPoolMetric("pool_active", activeAfterRelease, options);
         }
+      } else if (waitMetricRecorded) {
+        // Aborted while still queued (e.g. /stop on a waiting turn): we set
+        // pool_waiting=1 but never acquired, so clear the gauge — otherwise it leaks
+        // at 1 forever and the dashboard shows a phantom waiter.
+        await this.recordPoolMetric("pool_waiting", 0, options).catch(() => undefined);
       }
     }
   }

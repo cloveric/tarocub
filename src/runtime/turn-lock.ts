@@ -12,6 +12,17 @@ export function resolveBridgeTurnLockPath(sessionId: string): string {
   return path.join(os.tmpdir(), "tarocub-turn-locks", digest);
 }
 
+/**
+ * Opt-in escape hatch (default OFF). Set CCTB_DISABLE_TURN_LOCK=1 to run turns
+ * WITHOUT the per-conversation lock — e.g. to unstick a wedged/leaked lock, or to
+ * deliberately allow concurrent turns in one conversation. ⚠️ With the lock off,
+ * two turns in the same conversation can run at once and race on session state, so
+ * leave it off unless the lock is actively causing problems.
+ */
+export function isBridgeTurnLockDisabled(): boolean {
+  return /^(?:1|true|yes|on)$/i.test((process.env.CCTB_DISABLE_TURN_LOCK ?? "").trim());
+}
+
 export async function withBridgeTurnLock<T>(
   sessionId: string,
   task: () => Promise<T>,
@@ -20,6 +31,9 @@ export async function withBridgeTurnLock<T>(
     onWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
   } = {},
 ): Promise<T> {
+  if (isBridgeTurnLockDisabled()) {
+    return await task();
+  }
   return await withFileMutex(resolveBridgeTurnLockPath(sessionId), task, {
     staleLockMs: TURN_LOCK_STALE_MS,
     waitNotifyAfterMs: options.waitNotifyAfterMs ?? TURN_LOCK_WAIT_NOTIFY_AFTER_MS,

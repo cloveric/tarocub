@@ -162,21 +162,23 @@ function scheduleFileMutexWaitNotification(
 
 async function releaseFileMutex(lockPath: string, token: string): Promise<void> {
   const ownerPath = `${lockPath}/owner.json`;
+  let ownsLock = false;
   try {
     const raw = await readFile(ownerPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockOwnerRecord>;
-    if (typeof parsed.token === "string" && parsed.token !== token) {
-      // The lock was recovered and re-acquired by another owner while we
-      // stalled past staleLockMs; do not delete a lock we no longer hold.
-      return;
-    }
-  } catch (error) {
-    // Missing owner record (already recovered) or corrupt JSON: fall through and
-    // remove the lock we believe we hold rather than leaking it. A *different*
-    // owner is only proven by a readable, mismatched token (handled above).
-    void error;
+    ownsLock = typeof parsed.token === "string" && parsed.token === token;
+  } catch {
+    // Missing owner.json (ENOENT) or corrupt JSON: do NOT delete. A missing record
+    // can mean another owner already recovered the stale lock and re-created the dir
+    // but has not written its owner.json yet — removing it would destroy *their* lock
+    // and crash their acquire (writeFile ENOENT). Only delete a lock we can PROVE is
+    // ours (readable, matching token); a genuinely-leaked lock is reclaimed later via
+    // staleLockMs.
+    ownsLock = false;
   }
-  await rm(lockPath, { recursive: true, force: true });
+  if (ownsLock) {
+    await rm(lockPath, { recursive: true, force: true });
+  }
 }
 
 export async function withFileMutex<T>(

@@ -96,7 +96,7 @@ export class LarkKnownChatStore {
   async record(normalized: LarkNormalizedBridgeMessage, now = new Date()): Promise<void> {
     const entry = knownChatFromNormalized(normalized, now);
     await this.enqueueWrite(async () => {
-      const state = await this.store.read({ chats: [] });
+      const state = await this.readState();
       const next = dedupeKnownChats([
         entry,
         ...state.chats.filter((chat) => chat.conversationKey !== entry.conversationKey),
@@ -108,13 +108,29 @@ export class LarkKnownChatStore {
   }
 
   async get(conversationKey: string): Promise<LarkKnownChat | null> {
-    const state = await this.store.read({ chats: [] });
+    const state = await this.readState();
     return state.chats.find((chat) => chat.conversationKey === conversationKey) ?? null;
   }
 
   async list(limit = 50): Promise<LarkKnownChat[]> {
-    const state = await this.store.read({ chats: [] });
+    const state = await this.readState();
     return state.chats.slice(0, limit);
+  }
+
+  private async readState(): Promise<LarkKnownChatState> {
+    try {
+      return await this.store.read({ chats: [] });
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // Corrupt / non-JSON known-chats.json: quarantine it and continue with an
+        // empty set, matching the other state stores. Without this a corrupt file
+        // throws on every read and silently disables chat-label recording forever
+        // (record() swallows the throw before it can overwrite the file).
+        await this.store.quarantineCurrentFile("corrupt").catch(() => undefined);
+        return { chats: [] };
+      }
+      throw error;
+    }
   }
 
   private async enqueueWrite(operation: () => Promise<void>): Promise<void> {
