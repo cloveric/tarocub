@@ -508,6 +508,33 @@ async function updateLarkQueueCardInPlace(
   return false;
 }
 
+async function settleLingeringLarkQueueCard(
+  channel: LarkChannelLike,
+  ref: LarkQueueCardRef,
+  locale: "zh" | "en",
+): Promise<void> {
+  // A queued task ran without a run card taking this "queued" card over — most
+  // commonly a slash command, which handleLarkSimpleCommand processes and returns
+  // from before the run-card hand-off (that hand-off is what normally transitions
+  // the card in place). The task's real outcome was already posted as its own
+  // message, so this card is now stale. Recall it for a clean thread; if the
+  // channel can't recall, at least flip it out of the "排队中" state so its
+  // now-dead Cancel/Wait buttons can't mislead the user into thinking it's stuck.
+  if (channel.recallMessage) {
+    await channel.recallMessage(ref.messageId).catch(() => undefined);
+    return;
+  }
+  await updateLarkQueueCardInPlace(channel, ref, {
+    schema: "2.0",
+    config: { update_multi: true },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [{ tag: "markdown", content: locale === "en" ? "✅ Done." : "✅ 已结束。" }],
+    },
+  }).catch(() => undefined);
+}
+
 function shouldBatchLarkMessage(
   runtime: LarkServiceRuntime,
   normalized: LarkNormalizedBridgeMessage,
@@ -1193,6 +1220,17 @@ async function runNormalizedLarkMessage(
   } finally {
     if (abortController) {
       input.runtime.activeRuns.delete(normalized.conversationKey);
+    }
+    // A "queued" card is normally taken over by the run card, whose creation
+    // deletes this entry. If it's still tracked, the task finished via an
+    // early-return path that never reached that hand-off — most commonly a queued
+    // slash command (e.g. /effort max) — so settle the now-stale card instead of
+    // leaving it stuck on "排队中" with dead Cancel/Wait buttons. The task's real
+    // outcome was already posted as its own message.
+    const lingeringQueuedRef = input.runtime.queueCards.get(normalized.messageId);
+    if (lingeringQueuedRef) {
+      input.runtime.queueCards.delete(normalized.messageId);
+      await settleLingeringLarkQueueCard(input.channel, lingeringQueuedRef, locale).catch(() => undefined);
     }
     await cleanupLarkMessageArtifacts(input.stateDir, normalized.messageId).catch(() => undefined);
   }

@@ -1768,6 +1768,38 @@ describe("lark service", () => {
     }
   });
 
+  it("settles a lingering queued card when the queued task is a slash command", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-cmd-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const runtime = createLarkServiceRuntime();
+    // Simulate the "排队中" card that was shown while this command waited behind a
+    // running task — keyed by the command's own message id, as the live code does.
+    runtime.queueCards.set("om_queued_cmd", { messageId: "card_queued" });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_queued_cmd", content: "/help" }),
+      });
+
+      // The slash command is handled without a run card taking the queued card
+      // over, so the stale card must be settled (recalled) — not left forever on
+      // "排队中" with dead buttons (the bug). The command itself still ran.
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.recallMessage).toHaveBeenCalledWith("card_queued");
+      expect(runtime.queueCards.has("om_queued_cmd")).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers Lark /group status without running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-"));
     const channel = fakeChannel();
