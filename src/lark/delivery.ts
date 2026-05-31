@@ -393,21 +393,30 @@ async function executeLarkToolTag(input: {
       ...input,
       filePath: payload.path,
       kind: input.name.slice("send.".length) as LarkSendPathKind,
+      ...(typeof payload?.caption === "string" && payload.caption.trim() ? { caption: payload.caption.trim() } : {}),
     });
   }
 
   if (input.name === "send.batch") {
     let ok = true;
-    const invalidField = invalidStringArrayField(payload, ["images", "files", "audios", "videos"]);
+    const invalidField = invalidStringArrayField(payload, ["files", "audios", "videos"]);
     if (invalidField) {
       await input.channel.send(input.chatId, {
         text: renderInvalidLarkToolPayload("send.batch", "string_array", input.locale, invalidField),
       }, larkReplyOptions(input.replyTo, input.replyInThread));
       return false;
     }
+    // images accept paths OR {path, caption} objects so a batch can carry per-image titles.
+    const imageEntries = normalizeLarkBatchImages(payload?.images);
+    if (imageEntries === null) {
+      await input.channel.send(input.chatId, {
+        text: renderInvalidLarkToolPayload("send.batch", "image_entries", input.locale, "images"),
+      }, larkReplyOptions(input.replyTo, input.replyInThread));
+      return false;
+    }
     const message = typeof payload?.message === "string" ? payload.message : "";
-    for (const image of stringArray(payload?.images)) {
-      ok = await sendLarkPath({ ...input, filePath: image, kind: "image" }) && ok;
+    for (const image of imageEntries) {
+      ok = await sendLarkPath({ ...input, filePath: image.path, kind: "image", ...(image.caption ? { caption: image.caption } : {}) }) && ok;
     }
     for (const file of stringArray(payload?.files)) {
       ok = await sendLarkPath({ ...input, filePath: file, kind: "file" }) && ok;
@@ -496,9 +505,44 @@ async function executeLarkToolTag(input: {
   return false;
 }
 
+/**
+ * Normalizes a send.batch `images` field, which accepts either a path string or
+ * a `{ path, caption }` object (so a batch can carry per-image titles). Returns
+ * the normalized entries, [] when absent, or null when malformed.
+ */
+function normalizeLarkBatchImages(value: unknown): Array<{ path: string; caption?: string }> | null {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const out: Array<{ path: string; caption?: string }> = [];
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      if (!entry.trim()) {
+        return null;
+      }
+      out.push({ path: entry });
+      continue;
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return null;
+    }
+    const pathValue = (entry as { path?: unknown }).path;
+    if (typeof pathValue !== "string" || !pathValue.trim()) {
+      return null;
+    }
+    const captionRaw = (entry as { caption?: unknown }).caption;
+    const caption = typeof captionRaw === "string" && captionRaw.trim() ? captionRaw.trim() : undefined;
+    out.push(caption ? { path: pathValue, caption } : { path: pathValue });
+  }
+  return out;
+}
+
 function renderInvalidLarkToolPayload(
   toolName: string,
-  reason: "requires_path" | "string_array",
+  reason: "requires_path" | "string_array" | "image_entries",
   locale: Locale,
   field?: string,
 ): string {
@@ -506,10 +550,16 @@ function renderInvalidLarkToolPayload(
     if (reason === "requires_path") {
       return `Invalid Lark tool payload: ${toolName} requires payload.path.`;
     }
+    if (reason === "image_entries") {
+      return `Invalid Lark tool payload: ${toolName} images must be path strings or {path, caption} objects.`;
+    }
     return `Invalid Lark tool payload: ${toolName} ${field ?? "field"} must be an array of strings.`;
   }
   if (reason === "requires_path") {
     return `错误：飞书工具参数无效：${toolName} 需要 payload.path。`;
+  }
+  if (reason === "image_entries") {
+    return `错误：飞书工具参数无效：${toolName} images 必须是路径字符串或 {path, caption} 对象。`;
   }
   return `错误：飞书工具参数无效：${toolName} ${field ?? "字段"} 必须是字符串数组。`;
 }
@@ -530,6 +580,8 @@ async function sendLarkPath(input: {
   bridgeChatType?: "private" | "group";
   larkMessageId?: string;
   locale: Locale;
+  /** Optional title for an image — renders it as a caption + image card. */
+  caption?: string;
 }): Promise<boolean> {
   const workspaceRoot = await realpath(path.join(input.stateDir, "workspace"))
     .catch(() => path.join(input.stateDir, "workspace"));
@@ -586,6 +638,27 @@ async function sendLarkPath(input: {
     return false;
   }
   if (input.kind === "image") {
+    // A captioned image (e.g. a titled send.batch entry, or send.image with a
+    // caption) is delivered as a single card pairing the title with the image,
+    // so a 小红书 P1/P2/… series stays legible. Falls back to the plain image
+    // message if there's no caption, or if the upload/card path fails.
+    if (input.caption) {
+      const cardSent = await sendLarkCaptionedImageCard({
+        channel: input.channel,
+        chatId: input.chatId,
+        replyOptions: larkReplyOptions(input.replyTo, input.replyInThread),
+        body,
+        caption: input.caption,
+      }).catch(() => false);
+      if (cardSent) {
+        await appendLarkFileAcceptedTimeline(input, {
+          fileName: path.basename(real),
+          bytes: body.length,
+          kind: "image",
+        });
+        return true;
+      }
+    }
     await sendLarkImageWithFileFallback({
       ...input,
       body,

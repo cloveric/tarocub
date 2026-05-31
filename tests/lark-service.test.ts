@@ -7166,6 +7166,92 @@ describe("lark service", () => {
     }
   });
 
+  it("renders send.batch images given as {path, caption} objects as title+image cards", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-caption-"));
+    const outputDir = path.join(stateDir, "workspace", "out");
+    await mkdir(outputDir, { recursive: true });
+    const p1 = path.join(outputDir, "p1.png");
+    const p2 = path.join(outputDir, "p2.png");
+    await writeFile(p1, "p1 bytes");
+    await writeFile(p2, "p2 bytes");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: [
+          "```tool-call",
+          JSON.stringify({
+            name: "send.batch",
+            payload: { images: [{ path: p1, caption: "P1 · 封面" }, { path: p2, caption: "P2 · 内页" }] },
+          }),
+          "```",
+        ].join("\n"),
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_batch_caption", content: "出图" }),
+      });
+
+      // Each captioned batch image is uploaded and sent as its own title+image card.
+      expect(channel.uploadImage).toHaveBeenCalledTimes(2);
+      const cardCalls = (channel.send.mock.calls as unknown[][])
+        .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
+        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
+      const pairs = cardCalls.map((card) => ({
+        caption: card.body.elements.find((e) => e.tag === "markdown")?.content as string | undefined,
+        imgKey: card.body.elements.find((e) => e.tag === "img")?.img_key as string | undefined,
+      }));
+      expect(pairs).toContainEqual({ caption: "P1 · 封面", imgKey: "img_key_fake" });
+      expect(pairs).toContainEqual({ caption: "P2 · 内页", imgKey: "img_key_fake" });
+      // Not bare image messages.
+      expect((channel.send.mock.calls as unknown[][]).some((c) =>
+        c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders a send.image with a caption as a title+image card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-caption-"));
+    const outputDir = path.join(stateDir, "workspace", "out");
+    await mkdir(outputDir, { recursive: true });
+    const img = path.join(outputDir, "cover.png");
+    await writeFile(img, "cover bytes");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: `[tool:${JSON.stringify({ name: "send.image", payload: { path: img, caption: "封面标题" } })}]`,
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_img_caption", content: "出图" }),
+      });
+
+      expect(channel.uploadImage).toHaveBeenCalledTimes(1);
+      const pairs = (channel.send.mock.calls as unknown[][])
+        .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
+        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card))
+        .map((card) => ({
+          caption: card.body.elements.find((e) => e.tag === "markdown")?.content as string | undefined,
+          imgKey: card.body.elements.find((e) => e.tag === "img")?.img_key as string | undefined,
+        }));
+      expect(pairs).toContainEqual({ caption: "封面标题", imgKey: "img_key_fake" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects unknown Lark tool tags instead of silently dropping them", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-unknown-tool-"));
     const channel = fakeChannel();
