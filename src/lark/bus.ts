@@ -1,5 +1,6 @@
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import { handleBoardTelegramCommand, type BoardCommandContext } from "../telegram/board-commands.js";
+import { BoardStore, normalizeBoardTaskId } from "../state/board-store.js";
 import {
   handleCrewTelegramWorkflow,
   type CrewWorkflowContext,
@@ -21,6 +22,8 @@ import {
   stableLarkNumericId,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
+import { renderLarkBoardTaskCard } from "./board-card.js";
+import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
 import { redactLarkErrorDetail } from "./redaction.js";
@@ -56,10 +59,11 @@ export async function handleLarkBoardCommand(
   const cfg = await loadInstanceConfig(input.stateDir);
   const locale = await resolveLarkLocale(input.stateDir);
   const abortController = new AbortController();
+  const pendingReplies: string[] = [];
   const boardContext: BoardCommandContext = {
     api: {
       sendMessage: async (_chatId: number, text: string) => {
-        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
+        pendingReplies.push(text);
         return { message_id: 0, text };
       },
     },
@@ -91,13 +95,62 @@ export async function handleLarkBoardCommand(
     }),
   };
 
-  return await handleBoardTelegramCommand({
+  const handled = await handleBoardTelegramCommand({
     stateDir: input.stateDir,
     startedAt: Date.now(),
     locale,
     normalized: toBoardTelegramMessage(normalized, commandText),
     context: boardContext,
   });
+  if (!handled) {
+    return false;
+  }
+  for (const reply of pendingReplies) {
+    await sendLarkBoardReply({
+      channel: input.channel,
+      stateDir: input.stateDir,
+      normalized,
+      commandText,
+      reply,
+      locale,
+    });
+  }
+  return true;
+}
+
+async function sendLarkBoardReply(input: {
+  channel: LarkChannelLike;
+  stateDir: string;
+  normalized: LarkNormalizedBridgeMessage;
+  commandText: string;
+  reply: string;
+  locale: Locale;
+}): Promise<void> {
+  const showMatch = input.commandText.trim().match(/^\/(?:board|kanban)(?:@\w+)?\s+(?:show|view)\s+(\S+)/i);
+  const taskId = showMatch ? normalizeBoardTaskId(showMatch[1]!) : null;
+  if (taskId) {
+    const task = await new BoardStore(input.stateDir).getTask(taskId);
+    if (task) {
+      await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: input.normalized.chatId,
+        card: renderLarkBoardTaskCard({
+          task,
+          markdown: input.reply,
+          locale: input.locale,
+          conversationKey: input.normalized.conversationKey,
+          bridgeChatType: input.normalized.bridgeChatType,
+          bridgeChatId: input.normalized.bridgeChatId,
+          replyInThread: Boolean(input.normalized.threadId),
+        }),
+        fallbackText: input.reply,
+        options: larkCommandReplyOptions(input.normalized),
+        locale: input.locale,
+      });
+      return;
+    }
+  }
+  await sendLarkMarkdown(input.channel, input.normalized.chatId, input.reply, larkCommandReplyOptions(input.normalized));
 }
 
 function toBoardTelegramMessage(

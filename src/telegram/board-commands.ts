@@ -12,6 +12,7 @@ import {
   type BoardTaskPriority,
   type BoardTaskRecord,
   type BoardTaskStatus,
+  type BoardTaskWorkspace,
 } from "../state/board-store.js";
 import { MiniBusStore, type MiniBusPeerRecord } from "../state/mini-bus-store.js";
 import {
@@ -23,6 +24,7 @@ import {
 import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
 import type { ResumeState } from "./instance-config.js";
 import type { Locale } from "./message-renderer.js";
+import { parseBoardPlanOutput, renderBoardPlanPrompt } from "./board-plan.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 type BoardAction =
@@ -35,9 +37,13 @@ type BoardAction =
   | { kind: "labels"; id: string; labels: string[] }
   | { kind: "checkAdd"; id: string; text: string }
   | { kind: "checkDone"; id: string; checklistItemId: string; done: boolean }
+  | { kind: "plan"; goal: string }
   | { kind: "assign"; id: string; assignee: string }
   | { kind: "dep"; id: string; dependencyId: string }
   | { kind: "limits"; key?: "global" | "perAssignee" | "perConversation"; value?: number }
+  | { kind: "workspace"; id: string; workspace: { mode: BoardTaskWorkspace["mode"]; path?: string; branch?: string } }
+  | { kind: "heartbeat"; id: string; note?: string }
+  | { kind: "recover"; olderThanMinutes?: number }
   | { kind: "ready"; id: string }
   | { kind: "start"; id: string }
   | { kind: "run"; id: string }
@@ -104,6 +110,9 @@ function parseBoardCommand(text: string): BoardAction | null {
   if (action === "add" || action === "create" || action === "new") {
     return rest ? { kind: "add", title: rest } : { kind: "usage" };
   }
+  if (action === "plan" || action === "decompose") {
+    return rest ? { kind: "plan", goal: rest } : { kind: "usage" };
+  }
   if (action === "desc" || action === "describe" || action === "description") {
     const descMatch = rest.match(/^(\S+)\s+([\s\S]+)$/);
     return descMatch ? { kind: "desc", id: descMatch[1]!, description: descMatch[2]!.trim() } : { kind: "usage" };
@@ -169,6 +178,47 @@ function parseBoardCommand(text: string): BoardAction | null {
         : "perConversation";
     return { kind: "limits", key, value: Number(limitMatch[2]) };
   }
+  if (action === "workspace" || action === "worktree") {
+    const workspaceMatch = rest.match(/^(\S+)(?:\s+(\S+))?(?:\s+(\S+))?$/);
+    if (!workspaceMatch) {
+      return { kind: "usage" };
+    }
+    const id = workspaceMatch[1]!;
+    if (action === "worktree") {
+      return {
+        kind: "workspace",
+        id,
+        workspace: {
+          mode: "worktree",
+          ...(workspaceMatch[2] ? { path: workspaceMatch[2] } : {}),
+          ...(workspaceMatch[3] ? { branch: workspaceMatch[3] } : {}),
+        },
+      };
+    }
+    const mode = workspaceMatch[2];
+    if (!mode || !isBoardWorkspaceMode(mode)) {
+      return { kind: "usage" };
+    }
+    return {
+      kind: "workspace",
+      id,
+      workspace: {
+        mode,
+        ...(workspaceMatch[3] ? { path: workspaceMatch[3] } : {}),
+      },
+    };
+  }
+  if (action === "heartbeat" || action === "ping") {
+    const heartbeatMatch = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+    return heartbeatMatch ? { kind: "heartbeat", id: heartbeatMatch[1]!, note: heartbeatMatch[2]?.trim() } : { kind: "usage" };
+  }
+  if (action === "recover") {
+    if (!rest) {
+      return { kind: "recover" };
+    }
+    const minutes = Number(rest);
+    return Number.isFinite(minutes) && minutes >= 0 ? { kind: "recover", olderThanMinutes: minutes } : { kind: "usage" };
+  }
   if (action === "ready") {
     return rest ? { kind: "ready", id: rest } : { kind: "usage" };
   }
@@ -226,10 +276,14 @@ function isBoardPriority(value: string): value is BoardTaskPriority {
   return (BOARD_PRIORITIES as string[]).includes(value);
 }
 
+function isBoardWorkspaceMode(value: string): value is BoardTaskWorkspace["mode"] {
+  return value === "default" || value === "dir" || value === "worktree" || value === "scratch";
+}
+
 function renderBoardUsage(locale: Locale): string {
   return locale === "zh"
-    ? "用法: /board [list|add|desc|accept|priority|labels|check|assign|dep|limits|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]"
-    : "Usage: /board [list|add|desc|accept|priority|labels|check|assign|dep|limits|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]";
+    ? "用法: /board [list|add|plan|desc|accept|priority|labels|check|assign|dep|limits|worktree|workspace|heartbeat|recover|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]"
+    : "Usage: /board [list|add|plan|desc|accept|priority|labels|check|assign|dep|limits|worktree|workspace|heartbeat|recover|review|approve|reject|ready|run|start|fail|runs|block|unblock|done]";
 }
 
 function renderNoBoardTasks(locale: Locale): string {
@@ -260,6 +314,7 @@ function renderTaskDetail(task: BoardTaskRecord, locale: Locale): string {
     `labels: ${task.labels.length > 0 ? task.labels.join(", ") : "none"}`,
     `review: ${task.review.required ? task.review.reviewer ?? "required" : "off"}`,
     `dependencies: ${task.dependencies.length > 0 ? task.dependencies.join(", ") : "none"}`,
+    task.workspace ? `workspace: ${task.workspace.mode}${task.workspace.path ? ` ${task.workspace.path}` : ""}${task.workspace.branch ? ` branch:${task.workspace.branch}` : ""}` : "workspace: default",
   ];
   if (task.description) {
     lines.push(`description: ${task.description}`);
@@ -286,6 +341,7 @@ function renderTaskDetail(task: BoardTaskRecord, locale: Locale): string {
       .replace("labels:", "标签:")
       .replace("review:", "复核:")
       .replace("dependencies:", "依赖:")
+      .replace("workspace:", "工作区:")
       .replace("description:", "描述:")
       .replace("acceptance:", "完成标准:")
       .replace("checklist:", "清单:")
@@ -325,6 +381,26 @@ function renderTaskCreated(task: BoardTaskRecord, locale: Locale): string {
     : `Created ${task.id}: ${task.title}`;
 }
 
+function renderPlanCreated(tasks: BoardTaskRecord[], locale: Locale): string {
+  const ids = tasks.map((task) => task.id).join(", ");
+  const lines = tasks.map((task) => renderTaskLine(task));
+  return locale === "zh"
+    ? [`已创建计划: ${ids}`, ...lines].join("\n")
+    : [`Created plan: ${ids}`, ...lines].join("\n");
+}
+
+function renderWorkspaceUpdated(task: BoardTaskRecord, locale: Locale): string {
+  const workspace = task.workspace ?? { mode: "default" as const };
+  const detail = [
+    workspace.mode,
+    workspace.path,
+    workspace.branch ? `branch=${workspace.branch}` : undefined,
+  ].filter(Boolean).join(" ");
+  return locale === "zh"
+    ? `工作区 ${task.id}: ${detail}`
+    : `Workspace ${task.id}: ${detail}`;
+}
+
 function renderPromoted(promotedTaskIds: string[], locale: Locale): string | null {
   if (promotedTaskIds.length === 0) {
     return null;
@@ -348,6 +424,7 @@ function renderBoardRunPrompt(task: BoardTaskRecord, locale: Locale): string {
         `标题：${task.title}`,
         task.description ? `描述：${task.description}` : null,
         `优先级：${task.priority}`,
+        task.workspace ? `工作区：${task.workspace.mode}${task.workspace.path ? ` ${task.workspace.path}` : ""}` : null,
         task.labels.length > 0 ? `标签：${task.labels.join(", ")}` : null,
         task.acceptanceCriteria.length > 0
           ? ["完成标准：", ...task.acceptanceCriteria.map((criterion) => `- ${criterion}`)].join("\n")
@@ -364,6 +441,7 @@ function renderBoardRunPrompt(task: BoardTaskRecord, locale: Locale): string {
         `Title: ${task.title}`,
         task.description ? `Description: ${task.description}` : null,
         `Priority: ${task.priority}`,
+        task.workspace ? `Workspace: ${task.workspace.mode}${task.workspace.path ? ` ${task.workspace.path}` : ""}` : null,
         task.labels.length > 0 ? `Labels: ${task.labels.join(", ")}` : null,
         task.acceptanceCriteria.length > 0
           ? ["Acceptance criteria:", ...task.acceptanceCriteria.map((criterion) => `- ${criterion}`)].join("\n")
@@ -463,6 +541,7 @@ async function runBoardTask(input: {
     const result: { text: string; usage?: AdapterUsage } = peer
       ? await runMiniBoardTask({
           peer,
+          task,
           prompt,
           locale: input.locale,
           normalized: input.normalized,
@@ -507,6 +586,7 @@ async function assertAgentBusAssignee(input: {
 
 async function runMiniBoardTask(input: {
   peer: MiniBusPeerRecord;
+  task: BoardTaskRecord;
   prompt: string;
   locale: Locale;
   normalized: NormalizedTelegramMessage;
@@ -525,7 +605,7 @@ async function runMiniBoardTask(input: {
     locale: input.locale,
     text: input.prompt,
     files: [],
-    workspaceOverride: input.context.cfg?.resume?.workspacePath,
+    workspaceOverride: input.task.workspace?.path ?? input.context.cfg?.resume?.workspacePath,
     abortSignal: input.context.abortSignal,
     onApprovalRequest: input.context.onApprovalRequest,
     onEngineEvent: input.context.onEngineEvent,
@@ -642,6 +722,56 @@ export async function handleBoardTelegramCommand(input: {
       return true;
     }
 
+    if (action.kind === "plan") {
+      if (!context.bridge) {
+        await replyAndAudit({
+          stateDir,
+          startedAt,
+          locale,
+          normalized,
+          context,
+          text: locale === "zh" ? "Board plan 需要当前引擎来拆解任务。" : "Board plan requires the current engine to decompose tasks.",
+          outcome: "invalid",
+          action: "plan",
+        });
+        return true;
+      }
+      const result = await context.bridge.handleAuthorizedMessage({
+        chatId: normalized.chatId,
+        userId: normalized.userId,
+        chatType: normalized.chatType,
+        ...(normalized.messageThreadId !== undefined ? { messageThreadId: normalized.messageThreadId } : {}),
+        conversationKey: getNormalizedTelegramConversationKey(normalized),
+        locale,
+        text: renderBoardPlanPrompt(action.goal, locale),
+        files: [],
+        workspaceOverride: context.cfg?.resume?.workspacePath,
+        abortSignal: context.abortSignal,
+        onApprovalRequest: context.onApprovalRequest,
+        onEngineEvent: context.onEngineEvent,
+      });
+      const planned = await store.createPlan({
+        createdBy: {
+          chatId: normalized.chatId,
+          userId: normalized.userId,
+          ...(normalized.messageThreadId !== undefined ? { messageThreadId: normalized.messageThreadId } : {}),
+          conversationKey: getNormalizedTelegramConversationKey(normalized),
+        },
+        tasks: parseBoardPlanOutput(result.text),
+      });
+      await replyAndAudit({
+        stateDir,
+        startedAt,
+        locale,
+        normalized,
+        context,
+        text: renderPlanCreated(planned.tasks, locale),
+        action: "plan",
+        metadata: { boardTaskIds: planned.tasks.map((task) => task.id) },
+      });
+      return true;
+    }
+
     if (action.kind === "desc") {
       const task = await store.updateTaskCard(action.id, { description: action.description });
       await replyAndAudit({ stateDir, startedAt, locale, normalized, context, text: `Updated ${task.id} description`, action: "desc", metadata: { boardTaskId: task.id } });
@@ -722,6 +852,28 @@ export async function handleBoardTelegramCommand(input: {
         ? await store.setLimits({ [action.key]: action.value })
         : await store.getLimits();
       await replyAndAudit({ stateDir, startedAt, locale, normalized, context, text: renderBoardLimits(limits), action: "limits", metadata: { limits } });
+      return true;
+    }
+
+    if (action.kind === "workspace") {
+      const task = await store.setTaskWorkspace(action.id, action.workspace);
+      await replyAndAudit({ stateDir, startedAt, locale, normalized, context, text: renderWorkspaceUpdated(task, locale), action: "workspace", metadata: { boardTaskId: task.id, workspace: task.workspace } });
+      return true;
+    }
+
+    if (action.kind === "heartbeat") {
+      const task = await store.heartbeatTask(action.id, action.note);
+      await replyAndAudit({ stateDir, startedAt, locale, normalized, context, text: locale === "zh" ? `已记录 ${task.id} heartbeat` : `Heartbeat ${task.id}`, action: "heartbeat", metadata: { boardTaskId: task.id } });
+      return true;
+    }
+
+    if (action.kind === "recover") {
+      const olderThanMinutes = action.olderThanMinutes ?? 15;
+      const recovered = await store.recoverStaleRuns({ olderThanMs: olderThanMinutes * 60 * 1000 });
+      const text = recovered.length > 0
+        ? (locale === "zh" ? `已恢复卡住的 Board run: ${recovered.map((task) => task.id).join(", ")}` : `Recovered stale board runs: ${recovered.map((task) => task.id).join(", ")}`)
+        : (locale === "zh" ? "没有发现卡住的 Board run。" : "No stale board runs found.");
+      await replyAndAudit({ stateDir, startedAt, locale, normalized, context, text, action: "recover", metadata: { boardTaskIds: recovered.map((task) => task.id), olderThanMinutes } });
       return true;
     }
 

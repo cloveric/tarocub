@@ -187,6 +187,85 @@ describe("BoardStore", () => {
     }
   });
 
+  it("records worker heartbeats and recovers stale running tasks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
+
+    try {
+      const actor = { chatId: -100123, userId: 42, conversationKey: "chat:-100123" };
+      const store = new BoardStore(root);
+      await store.createTask({ title: "Long worker", createdBy: actor });
+      await store.startTask("B1");
+
+      const heartbeatAt = new Date("2026-06-01T00:00:00.000Z");
+      await store.heartbeatTask("B1", "still working", heartbeatAt);
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        status: "running",
+        runs: [
+          expect.objectContaining({
+            id: "R1",
+            status: "running",
+            lastHeartbeatAt: heartbeatAt.toISOString(),
+            heartbeatNote: "still working",
+          }),
+        ],
+      });
+
+      const recovered = await store.recoverStaleRuns({
+        olderThanMs: 15 * 60 * 1000,
+        now: new Date("2026-06-01T00:16:00.000Z"),
+      });
+
+      expect(recovered.map((task) => task.id)).toEqual(["B1"]);
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        status: "blocked",
+        blockedReason: expect.stringContaining("stale board run recovered"),
+        runs: [
+          expect.objectContaining({
+            id: "R1",
+            status: "failed",
+            completedAt: "2026-06-01T00:16:00.000Z",
+            error: expect.stringContaining("stale board run recovered"),
+          }),
+        ],
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("stores optional task workspace configuration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
+
+    try {
+      const actor = { chatId: -100123, userId: 42, conversationKey: "chat:-100123" };
+      const store = new BoardStore(root);
+      await store.createTask({ title: "Code task", createdBy: actor });
+
+      const updated = await store.setTaskWorkspace("B1", {
+        mode: "worktree",
+        path: "/tmp/tarocub-board/B1",
+        branch: "board/B1",
+      });
+
+      expect(updated).toMatchObject({
+        workspace: {
+          mode: "worktree",
+          path: "/tmp/tarocub-board/B1",
+          branch: "board/B1",
+        },
+      });
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        workspace: {
+          mode: "worktree",
+          path: "/tmp/tarocub-board/B1",
+          branch: "board/B1",
+        },
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("stores richer task card metadata for planner-generated work", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
 

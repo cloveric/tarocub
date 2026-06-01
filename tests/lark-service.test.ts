@@ -26,6 +26,7 @@ import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
 import { CronStore } from "../src/state/cron-store.js";
 import { FileWorkflowStore } from "../src/state/file-workflow-store.js";
 import { MiniBusStore } from "../src/state/mini-bus-store.js";
+import { BoardStore } from "../src/state/board-store.js";
 import { SessionStore } from "../src/state/session-store.js";
 import { AccessStore } from "../src/state/access-store.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
@@ -5476,6 +5477,69 @@ describe("lark service", () => {
         "oc_chat",
         { markdown: expect.stringContaining("No board tasks yet") },
         { replyTo: "om_board_list_en", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders Lark board task cards and handles board card actions", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-board-card-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const store = new BoardStore(stateDir);
+    await store.createTask({
+      title: "Ship Kanban card UX",
+      createdBy: {
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_user"),
+        conversationKey: "lark:oc_chat",
+      },
+    });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_board_show", content: "/board show B1" }),
+      });
+
+      const cardCall = (channel.send.mock.calls as unknown[][]).find((call) => Boolean((call[1] as { card?: unknown } | undefined)?.card));
+      expect(cardCall).toBeTruthy();
+      expect(JSON.stringify((cardCall?.[1] as { card?: unknown }).card)).toContain("Ship Kanban card UX");
+      expect(JSON.stringify((cardCall?.[1] as { card?: unknown }).card)).toContain("\"cctb_lark\":\"board\"");
+
+      await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_board_card",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "board",
+              command: "/board ready B1",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              bridgeChatId: stableLarkNumericId("lark:oc_chat"),
+            },
+          },
+        },
+      });
+
+      await expect(store.getTask("B1")).resolves.toMatchObject({ status: "ready" });
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        expect.objectContaining({ markdown: expect.stringContaining("Ready B1") }),
+        { replyTo: "om_board_card", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });

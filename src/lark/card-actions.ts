@@ -17,6 +17,7 @@ import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
 import { loadInstanceConfig, resolveInstanceWorkspacePath, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
+import { handleLarkBoardCommand } from "./bus.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkApprovalCard, renderLarkQueueCancelledCard } from "./card-renderer.js";
 import { renderLarkResumeScanCard } from "./command-cards.js";
@@ -574,6 +575,49 @@ export async function handleLarkCardAction(input: {
   }
 
   if (value.cctb_lark === "noop") {
+    return true;
+  }
+
+  if (value.cctb_lark === "board" && typeof value.command === "string" && typeof value.conversationKey === "string") {
+    if (!input.bridge || !input.stateDir) {
+      return false;
+    }
+    const bridgeChatType = bridgeChatTypeFromValue(value.bridgeChatType);
+    if (!await ensureLarkCardActionAccess({
+      ...input,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      replyInThread,
+      action: "board",
+    })) {
+      return true;
+    }
+    const operatorRawId = larkOperatorRawId(input.event.operator);
+    const bridgeChatId = typeof value.bridgeChatId === "number" && Number.isInteger(value.bridgeChatId)
+      ? value.bridgeChatId
+      : stableLarkNumericId(value.conversationKey);
+    const accessConversationKey = larkAccessConversationKeyFromConversationKey(value.conversationKey);
+    await handleLarkBoardCommand({
+      channel: input.channel,
+      bridge: input.bridge,
+      runtime: input.runtime,
+      stateDir: input.stateDir,
+      instanceName: input.instanceName,
+      requestApproval: async (requestInput) => await requestLarkApproval(requestInput),
+    }, {
+      messageId: input.event.messageId,
+      chatId: input.event.chatId,
+      senderId: operatorRawId,
+      bridgeChatId,
+      bridgeAccessChatId: larkAccessChatIdFromConversationKey(value.conversationKey),
+      bridgeUserId: stableLarkNumericId(`user:${operatorRawId}`),
+      bridgeChatType,
+      conversationKey: value.conversationKey,
+      accessConversationKey,
+      text: value.command,
+      mentions: [],
+      attachments: [],
+    }, value.command);
     return true;
   }
 
@@ -1588,7 +1632,7 @@ async function appendLarkCardActionTurnEvent(
   }, "Lark card action turn timeline event");
 }
 
-type LarkCardActionTimelineAction = "stop" | "approval" | "choice" | "continue_archive" | "config" | "resume";
+type LarkCardActionTimelineAction = "stop" | "approval" | "choice" | "continue_archive" | "config" | "resume" | "board";
 
 function extractButtonLabel(button: Record<string, unknown>): string {
   const text = payloadObject(button.text);

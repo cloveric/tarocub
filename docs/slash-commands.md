@@ -63,9 +63,12 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/cron run <job-id>` | Run a job immediately. | Telegram, Lark |
 | `/board ...` | Manage durable Kanban tasks outside model memory. | Telegram, Lark |
 | `/board add <task>` | Create a durable task. | Telegram, Lark |
+| `/board plan <goal>` | Ask the current engine to decompose a goal into durable task cards. | Telegram, Lark |
 | `/board list` | List board tasks. | Telegram, Lark |
-| `/board show <id>` | Show one task card. | Telegram, Lark |
+| `/board show <id>` | Show one task card; Lark renders an interactive card with state-transition buttons. | Telegram, Lark |
 | `/board run <id>` | Execute one ready task through its assignee or current context. | Telegram, Lark |
+| `/board heartbeat <id>` / `/board recover [minutes]` | Track worker liveness and recover stale running tasks. | Telegram, Lark |
+| `/board worktree <id> [path] [branch]` | Attach optional per-task worktree metadata for isolated code work. | Telegram, Lark |
 
 ## Multi-Agent Workflows
 

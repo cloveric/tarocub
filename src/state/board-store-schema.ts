@@ -14,6 +14,8 @@ export const BoardTaskRunSchema = z.object({
   id: z.string().min(1),
   status: z.enum(["running", "done", "failed"]),
   startedAt: z.string(),
+  lastHeartbeatAt: z.string().optional(),
+  heartbeatNote: z.string().optional(),
   completedAt: z.string().optional(),
   summary: z.string().optional(),
   error: z.string().optional(),
@@ -38,6 +40,12 @@ export const BoardReviewGateSchema = z.object({
   reviewer: z.string().optional(),
 }).passthrough();
 
+export const BoardTaskWorkspaceSchema = z.object({
+  mode: z.enum(["default", "dir", "worktree", "scratch"]),
+  path: z.string().min(1).optional(),
+  branch: z.string().min(1).optional(),
+}).passthrough();
+
 export const BoardTaskRecordSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -57,6 +65,7 @@ export const BoardTaskRecordSchema = z.object({
   assignee: z.string().optional(),
   dependencies: z.array(z.string()).optional(),
   runs: z.array(BoardTaskRunSchema).optional(),
+  workspace: BoardTaskWorkspaceSchema.optional(),
   createdBy: BoardTaskActorSchema,
 }).passthrough();
 
@@ -78,6 +87,7 @@ export type BoardTaskRun = z.infer<typeof BoardTaskRunSchema>;
 export type BoardChecklistItem = z.infer<typeof BoardChecklistItemSchema>;
 export type BoardArtifact = z.infer<typeof BoardArtifactSchema>;
 export type BoardReviewGate = z.infer<typeof BoardReviewGateSchema>;
+export type BoardTaskWorkspace = z.infer<typeof BoardTaskWorkspaceSchema>;
 export type BoardWipLimits = {
   global: number;
   perAssignee: number;
@@ -102,6 +112,7 @@ export type BoardTaskRecord = {
   assignee?: string;
   dependencies: string[];
   runs: BoardTaskRun[];
+  workspace?: BoardTaskWorkspace;
   createdBy: BoardTaskActor;
 };
 export type BoardStoreState = {

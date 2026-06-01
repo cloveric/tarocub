@@ -12,6 +12,7 @@ import {
   type BoardTaskRecord,
   type BoardTaskRun,
   type BoardTaskStatus,
+  type BoardTaskWorkspace,
   type BoardWipLimits,
 } from "./board-store-schema.js";
 
@@ -24,6 +25,7 @@ export type {
   BoardTaskRecord,
   BoardTaskRun,
   BoardTaskStatus,
+  BoardTaskWorkspace,
   BoardWipLimits,
 } from "./board-store-schema.js";
 
@@ -57,6 +59,12 @@ export type BoardTaskCardUpdate = Partial<Pick<
   BoardTaskInput,
   "description" | "acceptanceCriteria" | "priority" | "labels" | "checklist" | "artifacts"
 >>;
+
+export type BoardTaskWorkspaceInput = {
+  mode: BoardTaskWorkspace["mode"];
+  path?: string;
+  branch?: string;
+};
 
 export type BoardPlanTaskInput = BoardTaskCardUpdate & {
   key: string;
@@ -181,6 +189,7 @@ function normalizeBoardSummary(summary: string | undefined): string | undefined 
 }
 
 function normalizeTask(task: BoardTaskRecord): BoardTaskRecord {
+  const workspace = normalizeWorkspace(task.workspace);
   return {
     ...task,
     id: normalizeBoardTaskId(task.id) ?? task.id,
@@ -196,6 +205,21 @@ function normalizeTask(task: BoardTaskRecord): BoardTaskRecord {
     },
     dependencies: [...new Set((task.dependencies ?? []).map((id) => normalizeBoardTaskId(id) ?? id))],
     runs: task.runs ?? [],
+    ...(workspace ? { workspace } : {}),
+  };
+}
+
+function normalizeWorkspace(workspace: BoardTaskWorkspace | undefined): BoardTaskWorkspace | undefined {
+  if (!workspace) {
+    return undefined;
+  }
+  const mode = workspace.mode ?? "default";
+  const pathValue = workspace.path?.trim();
+  const branch = workspace.branch?.trim();
+  return {
+    mode,
+    ...(pathValue ? { path: pathValue } : {}),
+    ...(branch ? { branch } : {}),
   };
 }
 
@@ -236,6 +260,7 @@ function cloneTask(task: BoardTaskRecord): BoardTaskRecord {
     artifacts: task.artifacts.map((artifact) => ({ ...artifact })),
     review: { ...task.review },
     createdBy: { ...task.createdBy },
+    ...(task.workspace ? { workspace: { ...task.workspace } } : {}),
   };
 }
 
@@ -505,6 +530,84 @@ export class BoardStore {
       }
       await this.store.write(state);
       return { tasks: created.map(cloneTask) };
+    });
+  }
+
+  async setTaskWorkspace(id: string, workspace: BoardTaskWorkspaceInput): Promise<BoardTaskRecord> {
+    const normalizedId = requireBoardTaskId(id);
+    const normalizedWorkspace = normalizeWorkspace(workspace as BoardTaskWorkspace);
+    if (!normalizedWorkspace || normalizedWorkspace.mode === "default") {
+      return await this.updateTask(normalizedId, (_state, task) => {
+        delete task.workspace;
+        task.updatedAt = nowIso();
+        return task;
+      });
+    }
+    return await this.updateTask(normalizedId, (_state, task) => {
+      task.workspace = normalizedWorkspace;
+      task.updatedAt = nowIso();
+      return task;
+    });
+  }
+
+  async heartbeatTask(id: string, note?: string, now: Date = new Date()): Promise<BoardTaskRecord> {
+    const normalizedId = requireBoardTaskId(id);
+    return await this.updateTask(normalizedId, (_state, task) => {
+      const activeRun = [...task.runs].reverse().find((run) => run.status === "running");
+      if (!activeRun) {
+        throw new Error(`board task ${normalizedId} has no running run`);
+      }
+      const timestamp = now.toISOString();
+      activeRun.lastHeartbeatAt = timestamp;
+      const normalizedNote = note?.trim();
+      if (normalizedNote) {
+        activeRun.heartbeatNote = normalizedNote;
+      } else {
+        delete activeRun.heartbeatNote;
+      }
+      task.updatedAt = timestamp;
+      return task;
+    });
+  }
+
+  async recoverStaleRuns(input: {
+    olderThanMs: number;
+    now?: Date;
+    reason?: string;
+  }): Promise<BoardTaskRecord[]> {
+    const olderThanMs = Math.max(0, Math.trunc(input.olderThanMs));
+    const now = input.now ?? new Date();
+    const nowMs = now.getTime();
+    const timestamp = now.toISOString();
+    const reason = input.reason?.trim() || `stale board run recovered after ${Math.round(olderThanMs / 60_000)}m without heartbeat`;
+
+    return await this.enqueueWrite(async () => {
+      const state = await this.store.read(defaultState());
+      const recovered: BoardTaskRecord[] = [];
+      for (const task of state.tasks) {
+        if (task.status !== "running") {
+          continue;
+        }
+        const activeRun = [...task.runs].reverse().find((run) => run.status === "running");
+        if (!activeRun) {
+          continue;
+        }
+        const lastSeen = Date.parse(activeRun.lastHeartbeatAt ?? activeRun.startedAt);
+        if (!Number.isFinite(lastSeen) || nowMs - lastSeen < olderThanMs) {
+          continue;
+        }
+        activeRun.status = "failed";
+        activeRun.completedAt = timestamp;
+        activeRun.error = reason;
+        task.status = "blocked";
+        task.blockedReason = reason;
+        task.updatedAt = timestamp;
+        recovered.push(cloneTask(task));
+      }
+      if (recovered.length > 0) {
+        await this.store.write(state);
+      }
+      return recovered;
     });
   }
 

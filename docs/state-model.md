@@ -548,6 +548,10 @@ Schema:
     - `reviewer?`
   - `assignee?`
   - `dependencies[]`
+  - `workspace?`
+    - `mode`: `default`, `dir`, `worktree`, or `scratch`
+    - `path?`
+    - `branch?`
   - `blockedReason?`
   - `summary?`
   - `createdAt`
@@ -562,6 +566,8 @@ Schema:
     - `id`
     - `status`
     - `startedAt`
+    - `lastHeartbeatAt?`
+    - `heartbeatNote?`
     - `completedAt?`
     - `summary?`
     - `error?`
@@ -570,7 +576,7 @@ Schema:
 
 This file is authoritative for Board task ids, task status, dependencies, assignees, blocked reasons, completion summaries, and lightweight run history.
 
-It is also authoritative for card metadata used by planner/dispatcher flows: description, acceptance criteria, priority, labels, checklist, artifacts, review requirement, and WIP limits.
+It is also authoritative for card metadata used by planner/dispatcher flows: description, acceptance criteria, priority, labels, checklist, artifacts, review requirement, optional workspace metadata, run heartbeat evidence, and WIP limits.
 
 It is not authoritative for access control, Mini Bus peers, or Agent Bus peer configuration.
 
@@ -582,6 +588,10 @@ It is not authoritative for access control, Mini Bus peers, or Agent Bus peer co
 - dependency completion promotes waiting `todo` tasks to `ready` when all dependencies are done
 - WIP limits are enforced before a task can start a new run
 - default WIP limits are `global=3`, `perAssignee=1`, and `perConversation=1`
+- `/board plan <goal>` creates a task graph from the current engine's JSON output and stores the resulting dependencies atomically
+- `/board heartbeat <id>` updates the active run's `lastHeartbeatAt` and optional `heartbeatNote`
+- `/board recover [minutes]` closes stale running attempts as failed and blocks those tasks for operator review
+- `/board worktree <id> [path] [branch]` stores optional per-task workspace metadata; task metadata by itself does not grant access or change bus topology
 - starting a task is rejected while dependencies are incomplete
 - dependency cycles are rejected when adding a dependency
 - each `start` creates one run attempt; duplicate concurrent running attempts are rejected

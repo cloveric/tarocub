@@ -851,6 +851,7 @@ In any bot's Telegram chat:
 
 ```
 /board add Draft launch plan
+/board plan Ship the onboarding flow
 /board desc B1 Write launch messaging and rollout tasks
 /board accept B1 README updated
 /board priority B1 high
@@ -861,6 +862,9 @@ In any bot's Telegram chat:
 /board assign B1 writer
 /board dep B2 B1
 /board limits global 3
+/board worktree B1 /tmp/tarocub-board/B1 board/B1
+/board heartbeat B1 still working
+/board recover 15
 /board review B1 on reviewer
 /board ready B2
 /board run B2
@@ -875,6 +879,7 @@ In any bot's Telegram chat:
 ```
 
 - `/board add <task>` — create a durable task with a stable id like `B1`
+- `/board plan <goal>` — ask the current engine to return a JSON task graph, then persist it as Board cards with dependencies
 - `/board desc <id> <description>` — set task card description
 - `/board accept <id> <criterion>` — append an acceptance criterion
 - `/board priority <id> <low|normal|high|urgent>` — set priority
@@ -885,6 +890,9 @@ In any bot's Telegram chat:
 - `/board assign <id> <assignee>` — label the task with a Mini Bus peer, bot instance, or free-form owner
 - `/board dep <id> <depends-on-id>` — declare that one task waits for another
 - `/board limits [global|assignee|conversation] <n>` — set WIP limits; defaults are `global=3`, `assignee=1`, `conversation=1`
+- `/board worktree <id> [path] [branch]` / `/board workspace <id> <default|dir|worktree|scratch> [path]` — attach optional workspace metadata; Mini Bus runs use the task workspace path when set
+- `/board heartbeat <id> [note]` — update the active run's liveness timestamp
+- `/board recover [minutes]` — fail and block running tasks with no heartbeat/new activity older than the threshold; default is 15 minutes
 - `/board review <id> <on|off> [reviewer]` — require review before `done`
 - `/board approve <id>` / `/board reject <id> <reason>` — resolve tasks waiting in review
 - `/board ready <id>` — move a task to ready if dependencies are complete
@@ -895,7 +903,7 @@ In any bot's Telegram chat:
 - `/board block <id> <reason>` / `/board unblock <id>` — manage blocked work
 - `/board done <id> [summary]` — complete a task; dependents whose dependencies are all done are promoted to `ready`
 
-This is not an autonomous dispatcher yet. It gives the bridge durable planning state first: richer task cards, WIP limits, run history, dependency promotion, review gates, and explicit one-task execution with `/board run <id>`. Automatic dispatch should build on this primitive rather than bypassing the task model.
+This is not a hidden autonomous dispatcher. It gives the bridge durable planning state first: model-assisted task graph creation, richer task cards, WIP limits, workspace metadata, run heartbeats, stale-run recovery, dependency promotion, review gates, and explicit one-task execution with `/board run <id>`. Lark `/board show <id>` renders an interactive task card with safe state-transition buttons; card actions route back through the same `/board` command path and access checks.
 
 ### Mini Bus: topic/thread-to-topic/thread workflows
 

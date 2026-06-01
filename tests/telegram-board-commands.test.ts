@@ -160,6 +160,131 @@ describe("handleBoardTelegramCommand", () => {
     }
   });
 
+  it("creates a planner task graph from the current agent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: "```json\n{\"tasks\":[{\"key\":\"design\",\"title\":\"Design auth schema\",\"assignee\":\"planner\",\"acceptanceCriteria\":[\"schema reviewed\"]},{\"key\":\"build\",\"title\":\"Build auth API\",\"assignee\":\"backend\",\"dependsOn\":[\"design\"],\"labels\":[\"code\"]}]}\n```",
+      }),
+    };
+
+    try {
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board plan Ship auth feature"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          bridge,
+        } as never,
+      })).resolves.toBe(true);
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining("Ship auth feature"),
+        files: [],
+      }));
+      expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("Created plan: B1, B2"));
+      await expect(new BoardStore(root).getTask("B2")).resolves.toMatchObject({
+        title: "Build auth API",
+        assignee: "backend",
+        dependencies: ["B1"],
+        labels: ["code"],
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("records heartbeats and recovers stale runs from commands", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const store = new BoardStore(root);
+    await store.createTask({
+      title: "Long worker",
+      createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+    });
+    await store.startTask("B1");
+
+    try {
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board heartbeat B1 still alive"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+        },
+      })).resolves.toBe(true);
+
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        runs: [expect.objectContaining({ heartbeatNote: "still alive" })],
+      });
+
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board recover 0"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+        },
+      })).resolves.toBe(true);
+
+      expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("Recovered stale board runs: B1"));
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        status: "blocked",
+        runs: [expect.objectContaining({ status: "failed" })],
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("configures worktree workspace metadata from commands", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const store = new BoardStore(root);
+    await store.createTask({
+      title: "Code task",
+      createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+    });
+
+    try {
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board worktree B1 /tmp/tarocub-board/B1 board/B1"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+        },
+      })).resolves.toBe(true);
+
+      expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("Workspace B1: worktree"));
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        workspace: {
+          mode: "worktree",
+          path: "/tmp/tarocub-board/B1",
+          branch: "board/B1",
+        },
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("updates richer task cards from Telegram commands", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
     const api = {

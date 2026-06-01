@@ -729,6 +729,7 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 
 ```
 /board add 写 launch plan
+/board plan 发布 onboarding flow
 /board desc B1 写 launch messaging 和 rollout 任务
 /board accept B1 README 已更新
 /board priority B1 high
@@ -739,6 +740,9 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 /board assign B1 writer
 /board dep B2 B1
 /board limits global 3
+/board worktree B1 /tmp/tarocub-board/B1 board/B1
+/board heartbeat B1 还在处理
+/board recover 15
 /board review B1 on reviewer
 /board ready B2
 /board run B2
@@ -753,6 +757,7 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 ```
 
 - `/board add <任务>` — 创建持久任务，得到类似 `B1` 的稳定 ID
+- `/board plan <目标>` — 让当前引擎返回 JSON 任务图，并把任务和依赖一次性落到 Board
 - `/board desc <ID> <描述>` — 设置任务卡描述
 - `/board accept <ID> <完成标准>` — 追加完成标准
 - `/board priority <ID> <low|normal|high|urgent>` — 设置优先级
@@ -763,6 +768,9 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 - `/board assign <ID> <对象>` — 给任务标记 Mini Bus peer、bot 实例或任意负责人
 - `/board dep <ID> <依赖ID>` — 声明某任务依赖另一个任务完成
 - `/board limits [global|assignee|conversation] <n>` — 设置 WIP 限制；默认是 `global=3`、`assignee=1`、`conversation=1`
+- `/board worktree <ID> [path] [branch]` / `/board workspace <ID> <default|dir|worktree|scratch> [path]` — 给任务挂可选工作区 metadata；Mini Bus 执行时会优先使用任务自己的 workspace path
+- `/board heartbeat <ID> [说明]` — 更新 active run 的存活时间戳
+- `/board recover [分钟]` — 把超过阈值没有 heartbeat/新活动的 running 任务标记失败并阻塞；默认 15 分钟
 - `/board review <ID> <on|off> [reviewer]` — 要求 done 前先进入 review
 - `/board approve <ID>` / `/board reject <ID> <原因>` — 处理 review 中的任务
 - `/board ready <ID>` — 依赖完成后把任务推进到 ready
@@ -773,7 +781,7 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 - `/board block <ID> <原因>` / `/board unblock <ID>` — 管理阻塞状态
 - `/board done <ID> [总结]` — 完成任务；依赖它的任务如果条件满足会自动推进到 `ready`
 
-当前版本不是自动调度器。它先把任务状态模型打稳：更完整的任务卡、WIP 限制、run history、依赖推进、review gate，以及 `/board run <ID>` 这种一次只跑一张卡的显式执行。后续自动 dispatch 应该基于这个原语，而不是绕过任务模型。
+当前版本不是隐藏的自动调度器。它先把任务状态模型打稳：模型辅助拆任务、任务卡 metadata、WIP 限制、workspace metadata、run heartbeat、卡住任务恢复、依赖推进、review gate，以及 `/board run <ID>` 这种一次只跑一张卡的显式执行。Lark 里 `/board show <ID>` 会渲染交互任务卡，按钮动作仍走同一套 `/board` 命令路径和权限检查。
 
 ### Mini Bus：topic/thread 到 topic/thread 的工作流
 
