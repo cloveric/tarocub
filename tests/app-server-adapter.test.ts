@@ -442,7 +442,12 @@ describe("CodexAppServerAdapter", () => {
   it("responds to app-server command approval requests instead of leaving the turn hanging", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "allow", scope: "session" });
-    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    // Approvals are only forwarded in "normal" mode; this test exercises that flow,
+    // so the instance is configured normal (the default is bypass → policy "never").
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ approvalMode: "normal" }) + "\n", "utf8");
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), undefined, spawnFn, undefined, undefined, configPath);
 
     const promise = adapter.sendUserMessage("telegram-12345", {
       text: "Hello",
@@ -491,12 +496,17 @@ describe("CodexAppServerAdapter", () => {
     await expect(promise).resolves.toMatchObject({
       text: "approved ok",
     });
+    await removeTempRoot(root);
   });
 
   it("declines app-server approval denials while allowing the turn to continue", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "deny" });
-    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    // Forwarding (and thus this user-driven deny) only happens in "normal" mode.
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ approvalMode: "normal" }) + "\n", "utf8");
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), undefined, spawnFn, undefined, undefined, configPath);
 
     const promise = adapter.sendUserMessage("telegram-12345", {
       text: "Hello",
@@ -530,6 +540,8 @@ describe("CodexAppServerAdapter", () => {
     await expect(promise).resolves.toMatchObject({
       text: "declined ok",
     });
+    expect(onApprovalRequest).toHaveBeenCalled();
+    await removeTempRoot(root);
   });
 
   it("times out and destroys app-server when thread/resume never replies", async () => {
@@ -746,10 +758,13 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
       await waitFor(() => child.stdin.lines.length >= 3);
       const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+      // full-auto opts out of approvals: even though onApprovalRequest was passed,
+      // the turn runs with policy "never" (Codex won't prompt) — only "normal" mode
+      // forwards approvals. The workspace-write sandbox still bounds what can run.
       expect(turnStart).toMatchObject({
         method: "turn/start",
         params: {
-          approvalPolicy: "on-request",
+          approvalPolicy: "never",
         },
       });
       child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
@@ -791,6 +806,48 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
       await promise;
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("runs bypass instances with approvalPolicy never even when onApprovalRequest is provided", async () => {
+    // Operator report: a yolo/bypass Codex instance still prompted to approve `rm -rf`.
+    // bypass = danger-full-access + no approvals, so the turn must use policy "never"
+    // and ignore any onApprovalRequest (matching the Claude/Antigravity/process adapters,
+    // which gate approval forwarding on `approvalMode === "normal"`).
+    const { child, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, JSON.stringify({ approvalMode: "bypass" }) + "\n", "utf8");
+      const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "allow", scope: "session" });
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), undefined, spawnFn, undefined, undefined, configPath);
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+        onApprovalRequest,
+      });
+
+      await waitFor(() => child.stdin.lines.length >= 1);
+      const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+      child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+      await waitFor(() => child.stdin.lines.length >= 2);
+      const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+      child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+      await waitFor(() => child.stdin.lines.length >= 3);
+      const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+      expect(turnStart).toMatchObject({
+        method: "turn/start",
+        params: { approvalPolicy: "never" },
+      });
+
+      child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","status":"completed"}}}\n');
+      await promise;
+      expect(onApprovalRequest).not.toHaveBeenCalled();
     } finally {
       await removeTempRoot(root);
     }

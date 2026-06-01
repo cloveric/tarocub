@@ -427,6 +427,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private readonly spawnCodex: AppServerSpawnCodex;
   private readonly instructionsPath: string | undefined;
   private readonly configPath: string | undefined;
+  /**
+   * Approval mode of the running app-server, captured at spawn alongside
+   * sandbox_mode. Turns only forward command approvals in "normal" mode; in
+   * bypass (danger-full-access) and full-auto the user opted out of approvals, so
+   * the turn runs with policy "never". Without this gate Codex asked even in yolo.
+   */
+  private currentApprovalMode: ApprovalMode = DEFAULT_APPROVAL_MODE;
   private child: AppServerChildProcess | null = null;
   private initializePromise: Promise<void> | null = null;
   private initializeKey: string | null = null;
@@ -678,6 +685,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     const parsed = await readValidatedConfigFile(this.configPath);
     const approvalMode: ApprovalMode = normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
+    this.currentApprovalMode = approvalMode;
     const effort = typeof parsed.effort === "string" ? parsed.effort : undefined;
     const model = typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : undefined;
     const codexServiceTier = parsed.codexServiceTier === "fast" ? "fast" : undefined;
@@ -1492,6 +1500,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
     abortSignal?: AbortSignal,
     timeoutMs: number | null = this.turnTimeoutMs,
   ): Promise<{ text: string; usage?: AdapterUsage }> {
+    // Forward command approvals only in "normal" mode; in bypass/full-auto the user
+    // opted out, so the turn runs with approvalPolicy "never" and Codex never asks
+    // (mirrors the `approvalMode === "normal"` gate in the Claude/Antigravity/process
+    // adapters). Without this, even a yolo/bypass instance prompted for e.g. rm -rf.
+    const gatedApprovalRequest = this.currentApprovalMode === "normal" ? onApprovalRequest : undefined;
     const pending = await new Promise<{ text: string; usage?: AdapterUsage }>((resolve, reject) => {
       const turnErrorPrefix = "Codex app-server turn";
       const rejectAndCleanup = (error: Error) => {
@@ -1518,7 +1531,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         startedAt: Date.now(),
         onProgress,
         onEngineEvent,
-        onApprovalRequest,
+        onApprovalRequest: gatedApprovalRequest,
         inactivityTimeoutDisabled: timeoutMs === null,
         resolve: resolveAndCleanup,
         reject: rejectAndCleanup,
@@ -1575,7 +1588,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
       this.request("turn/start", {
         threadId,
-        approvalPolicy: resolveTurnApprovalPolicy(onApprovalRequest),
+        approvalPolicy: resolveTurnApprovalPolicy(gatedApprovalRequest),
         input: [
           {
             type: "text",
