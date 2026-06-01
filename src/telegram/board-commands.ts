@@ -92,6 +92,11 @@ export interface BoardCommandContext extends TelegramTurnContext {
 const BOARD_STATUSES: BoardTaskStatus[] = ["todo", "ready", "running", "review", "blocked", "done", "archived"];
 const BOARD_PRIORITIES: BoardTaskPriority[] = ["low", "normal", "high", "urgent"];
 
+function splitFirstToken(value: string): { first: string; rest: string } | null {
+  const match = value.trim().match(/^(\S+)(?:\s+([\s\S]+))?$/);
+  return match ? { first: match[1]!, rest: (match[2] ?? "").trim() } : null;
+}
+
 function parseBoardCommand(text: string): BoardAction | null {
   const match = text.trim().match(/^\/(?:board|kanban)(?:@\w+)?(?:\s+([\s\S]+))?$/i);
   if (!match) {
@@ -179,23 +184,28 @@ function parseBoardCommand(text: string): BoardAction | null {
     return { kind: "limits", key, value: Number(limitMatch[2]) };
   }
   if (action === "workspace" || action === "worktree") {
-    const workspaceMatch = rest.match(/^(\S+)(?:\s+(\S+))?(?:\s+(\S+))?$/);
-    if (!workspaceMatch) {
+    const idParts = splitFirstToken(rest);
+    if (!idParts) {
       return { kind: "usage" };
     }
-    const id = workspaceMatch[1]!;
+    const id = idParts.first;
     if (action === "worktree") {
+      const worktreeParts = idParts.rest ? idParts.rest.split(/\s+/) : [];
+      if (worktreeParts.length > 2) {
+        return { kind: "usage" };
+      }
       return {
         kind: "workspace",
         id,
         workspace: {
           mode: "worktree",
-          ...(workspaceMatch[2] ? { path: workspaceMatch[2] } : {}),
-          ...(workspaceMatch[3] ? { branch: workspaceMatch[3] } : {}),
+          ...(worktreeParts[0] ? { path: worktreeParts[0] } : {}),
+          ...(worktreeParts[1] ? { branch: worktreeParts[1] } : {}),
         },
       };
     }
-    const mode = workspaceMatch[2];
+    const workspaceParts = splitFirstToken(idParts.rest);
+    const mode = workspaceParts?.first;
     if (!mode || !isBoardWorkspaceMode(mode)) {
       return { kind: "usage" };
     }
@@ -204,7 +214,7 @@ function parseBoardCommand(text: string): BoardAction | null {
       id,
       workspace: {
         mode,
-        ...(workspaceMatch[3] ? { path: workspaceMatch[3] } : {}),
+        ...(workspaceParts.rest ? { path: workspaceParts.rest } : {}),
       },
     };
   }
@@ -536,7 +546,11 @@ async function runBoardTask(input: {
   }
 
   const prompt = renderBoardRunPrompt(task, input.locale);
-  await input.store.startReadyTask(task.id);
+  const startedTask = await input.store.startReadyTask(task.id);
+  const runId = startedTask.runs.at(-1)?.id;
+  if (!runId) {
+    throw new Error(`board task ${task.id} started without a run id`);
+  }
   try {
     const result: { text: string; usage?: AdapterUsage } = peer
       ? await runMiniBoardTask({
@@ -553,7 +567,10 @@ async function runBoardTask(input: {
           prompt,
           context: input.context,
         });
-    const completion = await input.store.completeTask(task.id, result.text);
+    const completion = await input.store.completeRunningRun(task.id, runId, result.text);
+    if (!completion) {
+      throw new Error(`board task ${task.id} run ${runId} is no longer running`);
+    }
     return {
       task: completion.task,
       targetKind,
@@ -563,7 +580,7 @@ async function runBoardTask(input: {
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    await input.store.failTask(task.id, detail);
+    await input.store.failRunningRun(task.id, runId, detail);
     throw error;
   }
 }

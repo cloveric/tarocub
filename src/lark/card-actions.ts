@@ -593,9 +593,7 @@ export async function handleLarkCardAction(input: {
       return true;
     }
     const operatorRawId = larkOperatorRawId(input.event.operator);
-    const bridgeChatId = typeof value.bridgeChatId === "number" && Number.isInteger(value.bridgeChatId)
-      ? value.bridgeChatId
-      : stableLarkNumericId(value.conversationKey);
+    const bridgeChatId = stableLarkNumericId(value.conversationKey);
     const accessConversationKey = larkAccessConversationKeyFromConversationKey(value.conversationKey);
     await handleLarkBoardCommand({
       channel: input.channel,

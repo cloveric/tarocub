@@ -5549,6 +5549,68 @@ describe("lark service", () => {
     }
   });
 
+  it("derives Lark board card chat identity from the authenticated conversation key", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-board-card-chat-id-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "forged peer should not run" })),
+    };
+    const store = new BoardStore(stateDir);
+    const miniStore = new MiniBusStore(stateDir);
+    await miniStore.upsertPeer({
+      name: "writer",
+      chatId: stableLarkNumericId("lark:oc_other"),
+      conversationKey: "lark:oc_other",
+    });
+    await store.createTask({
+      title: "Ship Kanban card UX",
+      assignee: "writer",
+      createdBy: {
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_user"),
+        conversationKey: "lark:oc_chat",
+      },
+    });
+    await store.markReady("B1");
+
+    try {
+      await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_board_card",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "board",
+              command: "/board run B1",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              bridgeChatId: stableLarkNumericId("lark:oc_other"),
+            },
+          },
+        },
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        status: "ready",
+        runs: [],
+      });
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        expect.objectContaining({ markdown: expect.stringContaining("执行失败 B1") }),
+        { replyTo: "om_board_card", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("handles Lark fan delegation through the shared Agent Bus command path", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-fan-"));
     const channel = fakeChannel();

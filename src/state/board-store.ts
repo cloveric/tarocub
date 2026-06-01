@@ -85,6 +85,7 @@ export type BoardPlanInput = {
 const BOARD_TASK_ID_PATTERN = /^B\d+$/i;
 const BOARD_CHECKLIST_ID_PATTERN = /^C\d+$/i;
 const MAX_BOARD_SUMMARY_CHARS = 4000;
+const MAX_BOARD_PLAN_TASKS = 50;
 const DEFAULT_WIP_LIMITS: BoardWipLimits = {
   global: 3,
   perAssignee: 1,
@@ -209,12 +210,18 @@ function normalizeTask(task: BoardTaskRecord): BoardTaskRecord {
   };
 }
 
-function normalizeWorkspace(workspace: BoardTaskWorkspace | undefined): BoardTaskWorkspace | undefined {
+function normalizeWorkspace(
+  workspace: BoardTaskWorkspace | undefined,
+  options: { requireAbsolutePath?: boolean } = {},
+): BoardTaskWorkspace | undefined {
   if (!workspace) {
     return undefined;
   }
   const mode = workspace.mode ?? "default";
   const pathValue = workspace.path?.trim();
+  if (pathValue && options.requireAbsolutePath && !path.isAbsolute(pathValue)) {
+    throw new Error("board workspace path must be absolute");
+  }
   const branch = workspace.branch?.trim();
   return {
     mode,
@@ -473,6 +480,9 @@ export class BoardStore {
     if (input.tasks.length === 0) {
       throw new Error("board plan requires at least one task");
     }
+    if (input.tasks.length > MAX_BOARD_PLAN_TASKS) {
+      throw new Error(`board plan can create at most ${MAX_BOARD_PLAN_TASKS} tasks`);
+    }
 
     return await this.enqueueWrite(async () => {
       const state = await this.store.read(defaultState());
@@ -535,7 +545,7 @@ export class BoardStore {
 
   async setTaskWorkspace(id: string, workspace: BoardTaskWorkspaceInput): Promise<BoardTaskRecord> {
     const normalizedId = requireBoardTaskId(id);
-    const normalizedWorkspace = normalizeWorkspace(workspace as BoardTaskWorkspace);
+    const normalizedWorkspace = normalizeWorkspace(workspace as BoardTaskWorkspace, { requireAbsolutePath: true });
     if (!normalizedWorkspace || normalizedWorkspace.mode === "default") {
       return await this.updateTask(normalizedId, (_state, task) => {
         delete task.workspace;
@@ -744,6 +754,36 @@ export class BoardStore {
     });
   }
 
+  async failRunningRun(id: string, runId: string, error: string): Promise<BoardTaskRecord | null> {
+    const normalizedId = requireBoardTaskId(id);
+    const normalizedRunId = runId.trim();
+    const normalizedError = error.trim();
+    if (!normalizedRunId) {
+      throw new Error("board run id is required");
+    }
+    if (!normalizedError) {
+      throw new Error("board failure reason is required");
+    }
+
+    return await this.enqueueWrite(async () => {
+      const state = await this.store.read(defaultState());
+      const task = findTask(state.tasks, normalizedId);
+      const activeRun = [...task.runs].reverse().find((run) => run.status === "running");
+      if (!activeRun || activeRun.id !== normalizedRunId) {
+        return null;
+      }
+      const timestamp = nowIso();
+      activeRun.status = "failed";
+      activeRun.completedAt = timestamp;
+      activeRun.error = normalizedError;
+      task.status = "blocked";
+      task.blockedReason = normalizedError;
+      task.updatedAt = timestamp;
+      await this.store.write(state);
+      return cloneTask(task);
+    });
+  }
+
   async blockTask(id: string, reason: string): Promise<BoardTaskRecord> {
     const normalizedId = requireBoardTaskId(id);
     const normalizedReason = reason.trim();
@@ -806,6 +846,51 @@ export class BoardStore {
         if (task.summary) {
           activeRun.summary = task.summary;
         }
+      }
+
+      const promotedTaskIds = shouldReview ? [] : promoteDependents(state, normalizedId, timestamp);
+
+      await this.store.write(state);
+      return {
+        task: cloneTask(task),
+        promotedTaskIds,
+      };
+    });
+  }
+
+  async completeRunningRun(id: string, runId: string, summary?: string): Promise<BoardCompletionResult | null> {
+    const normalizedId = requireBoardTaskId(id);
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) {
+      throw new Error("board run id is required");
+    }
+
+    return await this.enqueueWrite(async () => {
+      const state = await this.store.read(defaultState());
+      const task = findTask(state.tasks, normalizedId);
+      const activeRun = [...task.runs].reverse().find((run) => run.status === "running");
+      if (!activeRun || activeRun.id !== normalizedRunId || task.status !== "running") {
+        return null;
+      }
+
+      const timestamp = nowIso();
+      const shouldReview = task.review.required;
+      const normalizedSummary = normalizeBoardSummary(summary);
+      task.status = shouldReview ? "review" : "done";
+      if (!shouldReview) {
+        task.completedAt = timestamp;
+      } else {
+        delete task.completedAt;
+      }
+      task.updatedAt = timestamp;
+      if (normalizedSummary) {
+        task.summary = normalizedSummary;
+      }
+      delete task.blockedReason;
+      activeRun.status = "done";
+      activeRun.completedAt = timestamp;
+      if (task.summary) {
+        activeRun.summary = task.summary;
       }
 
       const promotedTaskIds = shouldReview ? [] : promoteDependents(state, normalizedId, timestamp);

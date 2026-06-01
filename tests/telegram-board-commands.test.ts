@@ -285,6 +285,65 @@ describe("handleBoardTelegramCommand", () => {
     }
   });
 
+  it("configures absolute board workspace paths that contain spaces", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const store = new BoardStore(root);
+    await store.createTask({
+      title: "Workspace task",
+      createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+    });
+    const workspacePath = path.join(root, "workspace with spaces");
+
+    try {
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized(`/board workspace B1 dir ${workspacePath}`),
+        context: { api: api as never } as never,
+      })).resolves.toBe(true);
+
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        workspace: {
+          mode: "dir",
+          path: workspacePath,
+        },
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("rejects relative board workspace paths from commands", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const store = new BoardStore(root);
+    await store.createTask({
+      title: "Workspace task",
+      createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+    });
+
+    try {
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board workspace B1 dir relative/project"),
+        context: { api: api as never } as never,
+      })).resolves.toBe(true);
+
+      expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("workspace path must be absolute"));
+      await expect(store.getTask("B1")).resolves.not.toHaveProperty("workspace");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("updates richer task cards from Telegram commands", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
     const api = {
@@ -477,6 +536,66 @@ describe("handleBoardTelegramCommand", () => {
         summary: "Draft is complete.",
         runs: [expect.objectContaining({ id: "R1", status: "done", summary: "Draft is complete." })],
       });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("does not complete or promote a board run that was recovered while delegation was in flight", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const store = new BoardStore(root);
+    const miniStore = new MiniBusStore(root);
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => {
+        await store.recoverStaleRuns({
+          olderThanMs: 0,
+          now: new Date(Date.now() + 1000),
+          reason: "manual board recovery",
+        });
+        return { text: "Late success should be ignored." };
+      }),
+    };
+    await miniStore.upsertPeer({
+      name: "writer",
+      chatId: -100123,
+      messageThreadId: 22,
+      conversationKey: "chat:-100123:topic:22",
+    });
+    const first = await store.createTask({
+      title: "Draft launch copy",
+      assignee: "writer",
+      createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+    });
+    const second = await store.createTask({
+      title: "Publish launch copy",
+      createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+    });
+    await store.addDependency(second.id, first.id);
+    await store.markReady(first.id);
+
+    try {
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board run B1"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          bridge,
+        } as never,
+      })).resolves.toBe(true);
+
+      expect(api.sendMessage).toHaveBeenLastCalledWith(-100123, expect.stringContaining("Run failed B1"));
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        status: "blocked",
+        blockedReason: "manual board recovery",
+        runs: [expect.objectContaining({ id: "R1", status: "failed", error: "manual board recovery" })],
+      });
+      await expect(store.getTask("B2")).resolves.toMatchObject({ status: "todo" });
     } finally {
       await removeTempRoot(root);
     }

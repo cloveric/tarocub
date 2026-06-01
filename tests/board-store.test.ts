@@ -148,6 +148,27 @@ describe("BoardStore", () => {
     }
   });
 
+  it("rejects planner-created task graphs above the task limit", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
+
+    try {
+      const actor = { chatId: -100123, userId: 42, conversationKey: "chat:-100123" };
+      const store = new BoardStore(root);
+
+      await expect(store.createPlan({
+        createdBy: actor,
+        tasks: Array.from({ length: 51 }, (_value, index) => ({
+          key: `task-${index + 1}`,
+          title: `Task ${index + 1}`,
+        })),
+      })).rejects.toThrow("at most 50 tasks");
+
+      await expect(store.listTasks()).resolves.toEqual([]);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("keeps task state separate from run attempt history", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
 
@@ -261,6 +282,25 @@ describe("BoardStore", () => {
           branch: "board/B1",
         },
       });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("rejects relative task workspace paths", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
+
+    try {
+      const actor = { chatId: -100123, userId: 42, conversationKey: "chat:-100123" };
+      const store = new BoardStore(root);
+      await store.createTask({ title: "Code task", createdBy: actor });
+
+      await expect(store.setTaskWorkspace("B1", {
+        mode: "dir",
+        path: "relative/project",
+      })).rejects.toThrow("workspace path must be absolute");
+
+      await expect(store.getTask("B1")).resolves.not.toHaveProperty("workspace");
     } finally {
       await removeTempRoot(root);
     }
