@@ -1583,6 +1583,7 @@ describe("telegram service commands", () => {
       for (const instance of instances) {
         const stateDir = path.join(tempDir, ".cctb", instance.name);
         await mkdir(stateDir, { recursive: true });
+        await writeFile(path.join(stateDir, ".env"), `TELEGRAM_BOT_TOKEN="token-${instance.name}"\n`);
         await writeFile(
           resolveInstanceLockPath(stateDir),
           JSON.stringify({
@@ -1656,6 +1657,7 @@ describe("telegram service commands", () => {
       for (const instance of instances) {
         const stateDir = path.join(tempDir, ".cctb", instance.name);
         await mkdir(stateDir, { recursive: true });
+        await writeFile(path.join(stateDir, ".env"), `TELEGRAM_BOT_TOKEN="token-${instance.name}"\n`);
         await writeFile(
           resolveInstanceLockPath(stateDir),
           JSON.stringify({
@@ -1731,6 +1733,7 @@ describe("telegram service commands", () => {
       for (const instance of instances) {
         const stateDir = path.join(tempDir, ".cctb", instance.name);
         await mkdir(stateDir, { recursive: true });
+        await writeFile(path.join(stateDir, ".env"), `TELEGRAM_BOT_TOKEN="token-${instance.name}"\n`);
         await writeFile(
           resolveInstanceLockPath(stateDir),
           JSON.stringify({
@@ -1862,7 +1865,9 @@ describe("telegram service commands", () => {
       await mkdir(path.join(tempDir, ".cctb", "alpha"), { recursive: true });
       await writeFile(path.join(tempDir, ".cctb", "alpha", ".env"), 'TELEGRAM_BOT_TOKEN="token-alpha"\n');
       await mkdir(path.join(tempDir, ".cctb", "lark"), { recursive: true });
-      await writeFile(path.join(tempDir, ".cctb", "lark", "lark.env"), [
+      await writeFile(path.join(tempDir, ".cctb", "lark", "runtime-state.json"), "{}\n");
+      await mkdir(path.join(tempDir, ".cctb", "lark-with-env"), { recursive: true });
+      await writeFile(path.join(tempDir, ".cctb", "lark-with-env", "lark.env"), [
         'LARK_APP_ID="cli_a"',
         'LARK_APP_SECRET="lark-secret"',
         "",
@@ -1877,6 +1882,7 @@ describe("telegram service commands", () => {
       expect(handled).toBe(true);
       expect(output).toContain("Instance: alpha");
       expect(output).not.toContain("Instance: lark");
+      expect(output).not.toContain("Instance: lark-with-env");
       expect(output).not.toContain("TELEGRAM_BOT_TOKEN is required");
     } finally {
       await removeTempRoot(tempDir);

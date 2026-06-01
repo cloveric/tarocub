@@ -4140,7 +4140,8 @@ async function listConfiguredInstanceNames(env: InstanceTokenEnv): Promise<strin
       if (!entry.isDirectory() || entry.name.startsWith(".")) {
         continue;
       }
-      if (await isLarkOnlyStateDir(path.join(channelsDir, entry.name))) {
+      const stateDir = path.join(channelsDir, entry.name);
+      if (!await isConfiguredTelegramStateDir(stateDir)) {
         continue;
       }
       names.push(entry.name);
@@ -4151,9 +4152,13 @@ async function listConfiguredInstanceNames(env: InstanceTokenEnv): Promise<strin
   }
 }
 
-async function isLarkOnlyStateDir(stateDir: string): Promise<boolean> {
+async function isConfiguredTelegramStateDir(stateDir: string): Promise<boolean> {
   const envText = await readOptionalFile(path.join(stateDir, ".env"));
-  if (envText && /\bTELEGRAM_BOT_TOKEN\s*=/.test(envText)) {
+  return Boolean(envText && /\bTELEGRAM_BOT_TOKEN\s*=/.test(envText));
+}
+
+async function isLarkOnlyStateDir(stateDir: string): Promise<boolean> {
+  if (await isConfiguredTelegramStateDir(stateDir)) {
     return false;
   }
   return Boolean(await readOptionalFile(path.join(stateDir, "lark.env"))) ||
