@@ -5234,7 +5234,7 @@ describe("lark service", () => {
     const channel = fakeChannel();
     const runtime = createLarkServiceRuntime();
     const watcherAbort = new AbortController(); // an active goal watcher
-    runtime.activeRuns.set("lark:oc_chat", { abortController: watcherAbort, hasRunCard: true });
+    runtime.activeRuns.set("lark:oc_chat", { abortController: watcherAbort, hasRunCard: true, goalWatch: true });
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
       clearThreadGoal: vi.fn(async () => ({ cleared: true })),
@@ -5254,6 +5254,39 @@ describe("lark service", () => {
       expect(watcherAbort.signal.aborted).toBe(true);
       expect(bridge.clearThreadGoal).not.toHaveBeenCalled();
       expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("已清除");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not abort a normal turn on /goal clear — only goal watchers", async () => {
+    // Regression guard (the v0.1.117 over-broad abort): /goal clear must target the
+    // goal, not kill an unrelated normal turn that happens to occupy the activeRuns
+    // slot (nor falsely report it cleared).
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-clear-turn-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const turnAbort = new AbortController(); // a NORMAL turn (no goalWatch flag)
+    runtime.activeRuns.set("lark:oc_chat", { abortController: turnAbort, hasRunCard: true });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      clearThreadGoal: vi.fn(async () => ({ cleared: false })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_goal_clear_turn", content: "/goal clear" }),
+      });
+      // The running turn is NOT killed; the handler falls through to clearThreadGoal
+      // (which reports there is no goal to clear).
+      expect(turnAbort.signal.aborted).toBe(false);
+      expect(bridge.clearThreadGoal).toHaveBeenCalled();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

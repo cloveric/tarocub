@@ -28,6 +28,12 @@ export interface LarkActiveRun {
   // must NOT also post a redundant "已停止。" text. Absent/false → no card (the
   // CardKit-unavailable fallback), so the text is the only acknowledgment.
   hasRunCard?: boolean;
+  /**
+   * Set true for an autonomous Codex /goal watcher (vs a normal turn). `/goal
+   * clear` aborts only a goal watcher — a normal turn must not be killed, nor
+   * falsely reported as "goal cleared", by `/goal clear`.
+   */
+  goalWatch?: boolean;
 }
 
 export interface LarkQueuePolicy {

@@ -1955,11 +1955,12 @@ async function handleLarkGoalCommand(
         : "当前 runtime 不支持结构化 /goal clear。");
       return true;
     }
-    // If a goal watcher is actively pursuing this conversation's goal, abort it first
+    // If a goal WATCHER is actively pursuing this conversation's goal, abort it first
     // so it stops cleanly — its abort path clears the goal in the engine and flips the
-    // run card to interrupted — instead of lingering and racing the clear.
+    // run card to interrupted. Guard on goalWatch so a normal turn sharing the
+    // activeRuns slot is NOT killed (nor falsely reported "cleared") by /goal clear.
     const activeGoalRun = input.runtime.activeRuns.get(conversationKey);
-    if (activeGoalRun) {
+    if (activeGoalRun?.goalWatch) {
       activeGoalRun.abortController.abort();
       await sendLarkCommandMarkdown(input, normalized, "/goal", locale === "en"
         ? "Current goal cleared." : "已清除当前 goal。");
@@ -2002,7 +2003,7 @@ async function handleLarkGoalCommand(
       // otherwise overwriting activeRuns would orphan it (untracked; /stop can't reach
       // it). Guarantees exactly one tracked active run per conversation.
       input.runtime.activeRuns.get(conversationKey)?.abortController.abort();
-      input.runtime.activeRuns.set(conversationKey, { abortController: abort, hasRunCard: true });
+      input.runtime.activeRuns.set(conversationKey, { abortController: abort, hasRunCard: true, goalWatch: true });
       void (async () => {
         try {
           const { goal: watched } = await watchThreadGoal({
