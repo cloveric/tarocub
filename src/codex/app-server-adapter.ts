@@ -365,6 +365,19 @@ function readGoalResponse(value: unknown): CodexThreadGoalResponse {
   return { goal };
 }
 
+/** Goal statuses at which the autonomous pursuit has stopped — the watch should end. */
+function isTerminalGoalStatus(status: CodexThreadGoal["status"]): boolean {
+  return status === "complete" || status === "budgetLimited";
+}
+
+/**
+ * How often watchThreadGoal polls the goal status as a fallback. A long multi-turn goal
+ * can miss the live terminal thread/goal/updated event, which would otherwise hang the
+ * watch (and the caller's active-run slot) forever — the instance then looks permanently
+ * "busy" and refuses to restart. Polling guarantees the watch resolves when the goal ends.
+ */
+const GOAL_WATCH_POLL_MS = 30_000;
+
 function readClearedResponse(value: unknown): boolean {
   return typeof value === "object" &&
     value !== null &&
@@ -567,6 +580,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       else input.abortSignal.addEventListener("abort", onAbort, { once: true });
     }
 
+    let pollTimer: ReturnType<typeof setInterval> | undefined;
     try {
       // Clear any existing goal first. thread/goal/set on a thread that already holds a
       // COMPLETE goal keeps the stale "complete" status + old token/time usage, so the
@@ -582,16 +596,36 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const setGoal = readGoalResponse(setResult).goal;
       if (setGoal) {
         watcher.latestGoal = setGoal;
-        if (setGoal.status === "complete" || setGoal.status === "budgetLimited") {
+        if (isTerminalGoalStatus(setGoal.status)) {
           resolveTerminal(setGoal);
         }
       }
+      // Poll fallback so the watch always resolves even if the live terminal
+      // thread/goal/updated event is missed (otherwise the caller's active-run slot
+      // leaks and the instance looks permanently busy — observed on a long goal).
+      pollTimer = setInterval(() => {
+        void this.request("thread/goal/get", { threadId })
+          .then((response) => {
+            const goal = readGoalResponse(response).goal;
+            if (goal) {
+              watcher.latestGoal = goal;
+              if (isTerminalGoalStatus(goal.status)) {
+                resolveTerminal(goal);
+              }
+            }
+          })
+          .catch(() => {});
+      }, GOAL_WATCH_POLL_MS);
+      pollTimer.unref?.();
       const finalGoal = await terminal;
       return {
         goal: finalGoal ?? setGoal ?? watcher.latestGoal,
         sessionId: threadId !== sessionId ? threadId : undefined,
       };
     } finally {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+      }
       this.goalWatchers.delete(threadId);
       input.abortSignal?.removeEventListener("abort", onAbort);
     }
@@ -922,7 +956,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           const goal = readThreadGoal((parsed.params as { goal?: unknown } | undefined)?.goal);
           if (goal) {
             watcher.latestGoal = goal;
-            if (goal.status === "complete" || goal.status === "budgetLimited") {
+            if (isTerminalGoalStatus(goal.status)) {
               watcher.resolve(goal);
             }
           }
