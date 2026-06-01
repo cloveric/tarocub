@@ -2,6 +2,7 @@ import { mkdtemp, writeFile, readFile, mkdir } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer as createTcpServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -74,6 +75,10 @@ import { BUS_PROTOCOL_CAPABILITIES, BUS_PROTOCOL_VERSION, BusProtocolError } fro
 
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+// Repo root derived from this test file, so the spawned-subprocess tests work from
+// any checkout (any user, any folder name — not a hardcoded /Users/.../cc-telegram-bridge).
+const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+const srcImportUrl = (rel: string): string => pathToFileURL(path.join(repoRoot, rel)).href;
 
 function execFileAsync(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -424,7 +429,7 @@ describe("bus registry", () => {
     const scriptPath = path.join(tempDir, "register.ts");
     try {
       await writeFile(scriptPath, [
-        "import { registerInstance } from '/Users/cloveric/projects/cc-telegram-bridge/src/bus/bus-registry.ts';",
+        `import { registerInstance } from '${srcImportUrl("src/bus/bus-registry.ts")}';`,
         "(async () => {",
         "  const [root, name, port, secret] = process.argv.slice(2);",
         "  await registerInstance(root, name, Number(port), secret);",
@@ -432,8 +437,8 @@ describe("bus registry", () => {
       ].join("\n"), "utf8");
 
       await Promise.all([
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, tempDir, "alpha", "9201", "secret-a"], "/Users/cloveric/projects/cc-telegram-bridge"),
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, tempDir, "beta", "9202", "secret-b"], "/Users/cloveric/projects/cc-telegram-bridge"),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, tempDir, "alpha", "9201", "secret-a"], repoRoot),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, tempDir, "beta", "9202", "secret-b"], repoRoot),
       ]);
 
       const registry = await readRegistry(tempDir);

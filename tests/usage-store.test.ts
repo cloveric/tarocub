@@ -1,6 +1,7 @@
 import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { childProcessTestEnv, removeTempRoot } from "./helpers/temp-files.js";
@@ -11,6 +12,10 @@ import { UsageStore } from "../src/state/usage-store.js";
 
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+// Repo root derived from this test file, so the spawned-subprocess tests work from
+// any checkout (any user, any folder name — not a hardcoded /Users/.../cc-telegram-bridge).
+const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+const srcImportUrl = (rel: string): string => pathToFileURL(path.join(repoRoot, rel)).href;
 
 function execFileAsync(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -201,7 +206,7 @@ describe("UsageStore", () => {
     const scriptPath = path.join(stateDir, "record-usage.ts");
     try {
       await writeFile(scriptPath, [
-        "import { UsageStore } from '/Users/cloveric/projects/cc-telegram-bridge/src/state/usage-store.ts';",
+        `import { UsageStore } from '${srcImportUrl("src/state/usage-store.ts")}';`,
         "(async () => {",
         "  const [dir, inputTokens, costUsd] = process.argv.slice(2);",
         "  const store = new UsageStore(dir);",
@@ -210,8 +215,8 @@ describe("UsageStore", () => {
       ].join("\n"), "utf8");
 
       await Promise.all([
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, stateDir, "10", "0.1"], "/Users/cloveric/projects/cc-telegram-bridge"),
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, stateDir, "20", "0.2"], "/Users/cloveric/projects/cc-telegram-bridge"),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, stateDir, "10", "0.1"], repoRoot),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, stateDir, "20", "0.2"], repoRoot),
       ]);
 
       await expect(new UsageStore(stateDir).load()).resolves.toEqual(expect.objectContaining({

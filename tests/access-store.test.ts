@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { randomInt } from "node:crypto";
@@ -19,6 +20,10 @@ import { AccessStore } from "../src/state/access-store.js";
 
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
+// Repo root derived from this test file, so the spawned-subprocess tests work from
+// any checkout (any user, any folder name — not a hardcoded /Users/.../cc-telegram-bridge).
+const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+const srcImportUrl = (rel: string): string => pathToFileURL(path.join(repoRoot, rel)).href;
 
 function execFileAsync(command: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -429,7 +434,7 @@ describe("AccessStore", () => {
     const filePath = path.join(dir, "access.json");
     try {
       await writeFile(scriptPath, [
-        "import { AccessStore } from '/Users/cloveric/projects/cc-telegram-bridge/src/state/access-store.ts';",
+        `import { AccessStore } from '${srcImportUrl("src/state/access-store.ts")}';`,
         "(async () => {",
         "  const [file, chatId, multi] = process.argv.slice(2);",
         "  const store = new AccessStore(file);",
@@ -440,8 +445,8 @@ describe("AccessStore", () => {
 
       await new AccessStore(filePath).setMultiChat(true);
       await Promise.all([
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "111", "on"], "/Users/cloveric/projects/cc-telegram-bridge"),
-        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "222", "on"], "/Users/cloveric/projects/cc-telegram-bridge"),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "111", "on"], repoRoot),
+        execFileAsync(process.execPath, [tsxCliPath, scriptPath, filePath, "222", "on"], repoRoot),
       ]);
 
       await expect(new AccessStore(filePath).load()).resolves.toEqual(expect.objectContaining({
