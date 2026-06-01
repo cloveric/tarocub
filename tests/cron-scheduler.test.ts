@@ -84,13 +84,21 @@ describe("CronScheduler", () => {
     });
   });
 
-  it("scheduleJob skips invalid cron expressions", async () => {
+  it("scheduleJob disables (not silently skips) jobs with invalid cron expressions", async () => {
     await withDeps(async ({ store, scheduler }) => {
       const job = await store.add({ chatId: 1, userId: 1, cronExpr: "0 9 * * *", prompt: "a" });
-      // Manually mutate to invalid via a forged record (simulating corruption)
-      const forgedJob = { ...job, cronExpr: "garbage" };
+      // Forge an invalid expr (e.g. a 7-field cron the engine generated) on an enabled job.
+      const forgedJob = { ...job, cronExpr: "0 */15 14 1 6 * 2026" };
       scheduler.scheduleJob(forgedJob);
       expect(scheduler.countScheduled()).toBe(0);
+      // It must be DISABLED in the store (visible as ✗ in /cron list), not left "enabled"
+      // and silently never-firing.
+      let disabled = false;
+      for (let i = 0; i < 30 && !disabled; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        disabled = (await store.get(job.id))?.enabled === false;
+      }
+      expect(disabled).toBe(true);
     });
   });
 

@@ -125,7 +125,13 @@ export class CronScheduler {
       return;
     }
     if (validateCronExpression(job.cronExpr, job.timezone) === null) {
-      this.logger.warn(`cron: skipping job ${job.id} with invalid expression "${job.cronExpr}"`);
+      // Disable rather than silently skip: an invalid expression never fires, so leaving
+      // the job "enabled" hides a dead reminder (the user thinks it's set). Disabling
+      // surfaces it as ✗ in /cron list so it's visible and removable.
+      this.logger.warn(`cron: disabling job ${job.id} with invalid expression "${job.cronExpr}"`);
+      if (job.enabled) {
+        void this.store.update(job.id, { enabled: false }).catch(() => {});
+      }
       return;
     }
     const cron = new Cron(job.cronExpr, { timezone: job.timezone }, () => {
