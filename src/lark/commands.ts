@@ -1911,6 +1911,14 @@ async function handleLarkGoalCommand(
     if (nativeText) {
       normalized.text = nativeText;
     }
+    // Claude/Antigravity have a NATIVE /goal (autonomous multi-turn pursuit with an
+    // independent completion checker), so we just forward "/goal <objective>" as a
+    // normal engine turn — no thread-goal API needed. Tag the turn with the
+    // objective so its run card renders the 🎯 goal banner, matching the framing of
+    // the Codex goal card instead of looking like an ordinary reply.
+    if (action.kind === "set") {
+      normalized.goalObjective = action.objective;
+    }
     return null;
   }
 
@@ -1964,6 +1972,7 @@ async function handleLarkGoalCommand(
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
       locale,
+      goalObjective: action.objective,
     });
     if (runCard) {
       // Bind to the bridge: a bare `const fn = input.bridge.watchThreadGoal` loses

@@ -942,6 +942,7 @@ async function runNormalizedLarkMessage(
         replyInThread: Boolean(normalized.threadId),
         locale,
         ...(queuedRef ? { existingCard: queuedRef } : {}),
+        ...(normalized.goalObjective ? { goalObjective: normalized.goalObjective } : {}),
       });
       // Record whether a live run card exists so the stop handlers can skip the
       // redundant "已停止。" text — the card itself updates in place to "已中断".
@@ -1257,11 +1258,16 @@ export async function createLarkRunCardController(input: {
   locale: "zh" | "en";
   /** Reuse the queued card (managed → CardKit in place; inline → patch) instead of sending a new one. */
   existingCard?: LarkQueueCardRef;
+  /** When set, frames the card as an autonomous /goal pursuit (🎯 banner). */
+  goalObjective?: string;
 }): Promise<LarkRunCardController | undefined> {
   if (!input.channel.updateCard) {
     return undefined;
   }
   let state: LarkRunState = initialLarkRunState(input.conversationKey, input.bridgeChatType);
+  if (input.goalObjective && input.goalObjective.trim()) {
+    state = { ...state, goalObjective: input.goalObjective.trim() };
+  }
   // When set, the run card is a CardKit managed card updated in place by card_id
   // (it survives the queue→run take-over and post-interaction updates, where
   // im.message.patch reverts). Otherwise it's a plain inline card patched by

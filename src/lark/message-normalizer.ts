@@ -61,6 +61,12 @@ export interface LarkNormalizedBridgeMessage {
   };
   mentions: unknown[];
   attachments: LarkNormalizedAttachment[];
+  /**
+   * Set by the /goal command handler (Claude/Antigravity path) before the message
+   * falls through to a normal engine turn: it carries the goal objective so the
+   * turn's run card renders the 🎯 goal banner (parity with the Codex goal card).
+   */
+  goalObjective?: string;
 }
 
 const SUPPORTED_RESOURCE_TYPES = new Set(["image", "file", "audio", "video"]);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   LARK_CARD_ANSWER_MAX,
+  type LarkRunState,
   applyLarkEngineEvent,
   initialLarkRunState,
   renderLarkApprovalCard,
@@ -58,6 +59,31 @@ describe("lark card renderer", () => {
     expect(serialized).toContain("Read");
     expect(serialized).not.toContain("file contents here");
     expect(serialized).not.toContain("停止");
+  });
+
+  it("frames a /goal run with a 🎯 goal banner (full + compact), persisting from running to done", () => {
+    let state: LarkRunState = { ...initialLarkRunState("lark:oc_chat"), goalObjective: "review every bug in the auth module" };
+
+    // Running: the banner sits up top alongside the live process.
+    const running = JSON.stringify(renderLarkRunCard(state, "zh"));
+    expect(running).toContain("🎯");
+    expect(running).toContain("目标");
+    expect(running).toContain("review every bug in the auth module");
+
+    // Done: the banner persists so the finished card still reads as a goal.
+    state = applyLarkEngineEvent(state, { type: "result", text: "All bugs reviewed. Goal complete." });
+    const done = JSON.stringify(renderLarkRunCard(state, "zh"));
+    expect(done).toContain("🎯");
+    expect(done).toContain("review every bug in the auth module");
+    // Compact render (used when the card degrades) keeps the banner too.
+    expect(JSON.stringify(renderLarkRunCardCompact(state, "zh"))).toContain("🎯");
+    // English locale localizes the label but keeps the marker + objective.
+    const en = JSON.stringify(renderLarkRunCard(state, "en"));
+    expect(en).toContain("🎯 **Goal:**");
+
+    // A normal (non-goal) run shows no banner — the field is opt-in.
+    const plain = JSON.stringify(renderLarkRunCard(initialLarkRunState("lark:oc_chat"), "zh"));
+    expect(plain).not.toContain("🎯");
   });
 
   it("caps every card markdown element so a long answer cannot overflow Feishu's element limit", () => {

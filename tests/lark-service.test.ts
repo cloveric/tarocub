@@ -5238,6 +5238,45 @@ describe("lark service", () => {
     }
   });
 
+  it("frames a Claude /goal turn's run card with a 🎯 goal banner (full path)", async () => {
+    // The fall-through path (command sets normalized.goalObjective → message-handler
+    // → run card) must actually reach the card, not just type-check — same lesson as
+    // the watchThreadGoal bind bug: exercise the whole wiring, not the pieces.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-claude-goal-banner-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");
+    const seenTexts: string[] = [];
+    const channel = fakeChannel(); // has updateCard → the run-card path engages
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (input: { text: string }) => {
+        seenTexts.push(input.text);
+        return { text: "done reviewing" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_goal_banner", content: "/goal review the auth bugs" }),
+      });
+
+      // Forwarded as Claude's native /goal turn (no thread-goal API).
+      expect(seenTexts).toEqual(["/goal review the auth bugs"]);
+      // …and the turn's run card is framed as a goal: 🎯 banner + the objective.
+      const cards = JSON.stringify([
+        ...(channel.send as ReturnType<typeof vi.fn>).mock.calls,
+        ...(channel.updateCard as ReturnType<typeof vi.fn>).mock.calls,
+      ]);
+      expect(cards).toContain("🎯");
+      expect(cards).toContain("review the auth bugs");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes explicitly unbounded Claude goals through as native slash commands from Lark", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-claude-goal-unbounded-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");

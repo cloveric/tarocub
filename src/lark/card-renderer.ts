@@ -37,6 +37,13 @@ export interface LarkRunState {
   resultText: string;
   errorText: string;
   idleTimeoutMinutes?: number;
+  /**
+   * When set, this run is an autonomous `/goal` pursuit; rendered as a 🎯 banner
+   * so the card visibly signals "goal mode engaged" (parity with the Codex
+   * thread-goal card). Claude/Antigravity `/goal` runs as a normal engine turn,
+   * so without this the card is indistinguishable from any other reply.
+   */
+  goalObjective?: string;
 }
 
 export interface LarkApprovalCardInput {
@@ -263,6 +270,17 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     markdownElement(`**${runCardStatusLabel(state.status, labels)}**`),
   ];
 
+  // Goal banner: when this run is an autonomous /goal pursuit, show the
+  // objective up top so the card reads as "goal mode" (parity with Codex /goal),
+  // not just a normal reply. Persists across running → done/interrupted.
+  if (state.goalObjective && state.goalObjective.trim()) {
+    elements.push(markdownElement(
+      locale === "en"
+        ? `🎯 **Goal:** ${truncate(state.goalObjective.trim(), 120)}`
+        : `🎯 **目标:** ${truncate(state.goalObjective.trim(), 120)}`,
+    ));
+  }
+
   if (state.status === "running") {
     // While the task runs, show the live process in full: thinking, every text
     // span, and tool panels interleaved as they happen.
@@ -440,6 +458,17 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
   const elements: unknown[] = [
     markdownElement(`**${runCardStatusLabel(state.status, labels)}**`),
   ];
+
+  // Goal banner: when this run is an autonomous /goal pursuit, show the
+  // objective up top so the card reads as "goal mode" (parity with Codex /goal),
+  // not just a normal reply. Persists across running → done/interrupted.
+  if (state.goalObjective && state.goalObjective.trim()) {
+    elements.push(markdownElement(
+      locale === "en"
+        ? `🎯 **Goal:** ${truncate(state.goalObjective.trim(), 120)}`
+        : `🎯 **目标:** ${truncate(state.goalObjective.trim(), 120)}`,
+    ));
+  }
   const answer = cleanCardText(finalAnswerText(state));
   if (answer) {
     elements.push(markdownElement(truncate(answer, COMPACT_ANSWER_MAX)));
