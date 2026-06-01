@@ -196,7 +196,15 @@ export async function deliverLarkResponse(input: {
     }
 
     if (pendingImages.length > 0) {
-      await deliverLarkPendingImages(input, pendingImages, replyOptions);
+      try {
+        await deliverLarkPendingImages(input, pendingImages, replyOptions);
+      } catch {
+        // Best-effort: image delivery must never abort the text reply or the rest of
+        // the turn. (Previously this call sat outside the per-match try/catch, so a
+        // send failure threw out of deliverLarkResponse and dropped the text answer.)
+        // Per-image failures already record rejected-timeline events inside
+        // deliverLarkPendingImages / sendLarkImageWithFileFallback.
+      }
     }
   }
 

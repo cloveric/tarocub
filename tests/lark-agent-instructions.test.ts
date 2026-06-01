@@ -45,7 +45,7 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("give each image its own title");
     expect(instructions).toContain("images entry an object {path, caption}");
     expect(instructions).toContain("title on the line directly above");
-    expect(instructions).toContain("its own title+image card");
+    expect(instructions).toContain("packed into ONE card, each image under its own title");
   });
 
   it("tells agents to answer ordinary Lark requests directly instead of emitting placeholder cards", () => {

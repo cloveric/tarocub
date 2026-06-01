@@ -6971,6 +6971,44 @@ describe("lark service", () => {
     }
   });
 
+  it("still delivers the text reply when image delivery fails entirely (a send failure must not abort the turn)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-abort-"));
+    const workspace = path.join(stateDir, "workspace");
+    const imagePath = path.join(workspace, "cover.png");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(imagePath, "image body");
+    const channel = fakeChannel({
+      // Every image / file / card send fails; only the plain markdown text succeeds.
+      send: vi.fn(async (_chatId: string, payload: unknown) => {
+        if (payload && typeof payload === "object" && ("image" in payload || "file" in payload || "card" in payload)) {
+          throw new Error("send failed");
+        }
+        return { messageId: "sent_1" };
+      }),
+      rawClient: { im: { v1: { image: { create: vi.fn(async () => { throw new Error("upload failed"); }) } } } },
+    });
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: `答案文本\n[send-image:${imagePath}]`,
+        stateDir,
+      });
+
+      // The text answer (with the image tag stripped) is still delivered despite the
+      // total image-delivery failure — it is NOT aborted by the thrown send.
+      const textSent = (channel.send.mock.calls as unknown[][]).some((c) => {
+        const payload = c[1] as { markdown?: string } | undefined;
+        return typeof payload?.markdown === "string" && payload.markdown.includes("答案文本");
+      });
+      expect(textSent).toBe(true);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("delivers a titled [send-image:] batch as ONE card, each image keeping its own caption", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-card-"));
     const workspace = path.join(stateDir, "workspace");
