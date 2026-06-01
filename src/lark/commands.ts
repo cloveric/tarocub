@@ -589,6 +589,7 @@ async function handleLarkNewGroupCommand(
       name: command.name,
       mode: command.mode,
       operatorOpenId: normalized.senderId,
+      channel: input.channel,
     });
   } catch (error) {
     await sendLarkCommandMarkdown(input, normalized, "/newgroup", renderLarkNewGroupFailed(locale, error));

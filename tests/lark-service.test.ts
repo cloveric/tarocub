@@ -2144,6 +2144,7 @@ describe("lark service", () => {
         name: "产品需求讨论",
         mode: "group",
         operatorOpenId: "ou_user",
+        channel: expect.anything(),
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
@@ -2190,6 +2191,7 @@ describe("lark service", () => {
         name: "研发话题群",
         mode: "topic",
         operatorOpenId: "ou_user",
+        channel: expect.anything(),
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
@@ -2230,6 +2232,7 @@ describe("lark service", () => {
         name: "快捷话题群",
         mode: "topic",
         operatorOpenId: "ou_user",
+        channel: expect.anything(),
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
@@ -9269,7 +9272,7 @@ describe("lark service", () => {
     }
   });
 
-  it("uses lark-cli im +chat-create for Lark /newgroup creation and invites the bot into a topic group", async () => {
+  it("falls back to lark-cli im +chat-create (topic) when no channel is available, inviting the bot via --bots", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-chat-"));
     const binDir = path.join(tempDir, "bin");
     const logPath = path.join(tempDir, "args.json");
@@ -9392,6 +9395,38 @@ describe("lark service", () => {
         process.env.CCTB_LARK_CHAT_CREATE_AS = originalAs;
       }
       await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates the Lark group via the instance SDK (channel.rawClient) — no lark-cli, no cross-app open_id", async () => {
+    const chatCreate = vi.fn(async (_req: { params: { user_id_type?: string; set_bot_manager?: boolean }; data: Record<string, unknown> }) =>
+      ({ code: 0, msg: "success", data: { chat_id: "oc_sdk_grp", name: "SDK 群" } }));
+    const channel = { rawClient: { im: { v1: { chat: { create: chatCreate } } } } } as unknown as Parameters<typeof createLarkChatWithCli>[0]["channel"];
+
+    const created = await createLarkChatWithCli({ name: "SDK 群", mode: "group", operatorOpenId: "ou_user", channel });
+
+    expect(created).toEqual({ chatId: "oc_sdk_grp", name: "SDK 群" });
+    expect(chatCreate).toHaveBeenCalledTimes(1);
+    const arg = chatCreate.mock.calls[0]![0];
+    // Same app that captured the open_id creates the chat → owner_id is in-namespace.
+    expect(arg.params).toEqual({ user_id_type: "open_id", set_bot_manager: true });
+    expect(arg.data).toMatchObject({ name: "SDK 群", chat_mode: "group", owner_id: "ou_user", user_id_list: ["ou_user"] });
+    expect(arg.data.bot_id_list).toBeUndefined();
+  });
+
+  it("creates a Lark topic group via the instance SDK with bot_id_list (the --bots equivalent)", async () => {
+    const originalApp = process.env.LARK_APP_ID;
+    process.env.LARK_APP_ID = "cli_testapp";
+    const chatCreate = vi.fn(async (_req: { params: { user_id_type?: string; set_bot_manager?: boolean }; data: Record<string, unknown> }) =>
+      ({ code: 0, msg: "success", data: { chat_id: "oc_sdk_topic" } }));
+    const channel = { rawClient: { im: { v1: { chat: { create: chatCreate } } } } } as unknown as Parameters<typeof createLarkChatWithCli>[0]["channel"];
+
+    try {
+      await createLarkChatWithCli({ name: "SDK 话题群", mode: "topic", operatorOpenId: "ou_user", channel });
+      const arg = chatCreate.mock.calls[0]![0];
+      expect(arg.data).toMatchObject({ chat_mode: "topic", owner_id: "ou_user", bot_id_list: ["cli_testapp"] });
+    } finally {
+      if (originalApp === undefined) { delete process.env.LARK_APP_ID; } else { process.env.LARK_APP_ID = originalApp; }
     }
   });
 

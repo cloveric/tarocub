@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { buildLarkCliChannelEnv } from "./cli-env.js";
+import type { LarkChannelLike } from "./types.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -8,6 +9,12 @@ export interface LarkChatCreateInput {
   name: string;
   mode: "group" | "topic";
   operatorOpenId?: string;
+  // The instance's own Lark channel. The bot path creates the chat through this
+  // channel's SDK client (the instance's app) instead of lark-cli, because lark-cli
+  // authenticates as its own separate app — so a sender open_id captured by THIS
+  // instance's app would be rejected as "open_id cross app" by lark-cli's app. Creating
+  // via the instance SDK keeps the acting app and the open_id in the same namespace.
+  channel?: LarkChannelLike;
 }
 
 export interface LarkChatCreateResult {
@@ -23,6 +30,15 @@ export async function createLarkChatWithCli(input: LarkChatCreateInput): Promise
   }
 
   const actor = resolveDefaultLarkChatCreateActor();
+
+  // Bot path: create through the instance's own SDK so the acting app matches the
+  // sender open_id's namespace (avoids "open_id cross app"). Falls back to lark-cli
+  // only when no channel/rawClient is available. The user-identity path stays on
+  // lark-cli (it creates under the authorizing user's OAuth).
+  if (actor === "bot" && larkChannelHasChatCreate(input.channel)) {
+    return await createLarkChatViaSdk(input.channel!, name, input);
+  }
+
   const args = [
     "im",
     "+chat-create",
@@ -128,4 +144,70 @@ function parseLarkCliJson(stdout: string): unknown {
 function resolveDefaultLarkChatCreateActor(): "user" | "bot" {
   const value = process.env.CCTB_LARK_CHAT_CREATE_AS ?? process.env.LARK_CHAT_CREATE_AS;
   return value?.trim().toLowerCase() === "user" ? "user" : "bot";
+}
+
+interface LarkRawChatCreate {
+  im?: {
+    v1?: {
+      chat?: {
+        create?: (req: {
+          params?: { user_id_type?: string; set_bot_manager?: boolean };
+          data?: Record<string, unknown>;
+        }) => Promise<{ code?: number; msg?: string; data?: { chat_id?: string; name?: string } }>;
+      };
+    };
+  };
+}
+
+function larkChannelHasChatCreate(channel: LarkChannelLike | undefined): boolean {
+  const create = (channel as { rawClient?: LarkRawChatCreate } | undefined)?.rawClient?.im?.v1?.chat?.create;
+  return typeof create === "function";
+}
+
+/**
+ * Creates the chat via the instance's own SDK client (the instance's bot app). Because
+ * the acting app is the same app that captured the sender open_id, the open_id is in
+ * the right namespace — so handing ownership to the operator no longer trips
+ * "open_id cross app" the way the shared lark-cli (a different app) did.
+ */
+async function createLarkChatViaSdk(
+  channel: LarkChannelLike,
+  name: string,
+  input: LarkChatCreateInput,
+): Promise<LarkChatCreateResult> {
+  const create = (channel as { rawClient?: LarkRawChatCreate }).rawClient?.im?.v1?.chat?.create;
+  if (typeof create !== "function") {
+    throw new Error("lark channel rawClient does not expose im.v1.chat.create");
+  }
+  const owner = input.operatorOpenId?.startsWith("ou_") ? input.operatorOpenId : undefined;
+  const data: Record<string, unknown> = {
+    name,
+    chat_mode: input.mode === "topic" ? "topic" : "group",
+  };
+  if (owner) {
+    // Hand ownership to the human operator (same app namespace → no cross-app) and add
+    // them to the chat. The creating bot is a member by virtue of creating the chat.
+    data.owner_id = owner;
+    data.user_id_list = [owner];
+  }
+  if (input.mode === "topic") {
+    // A topic chat does not retain the creating bot via set_bot_manager alone — invite
+    // it explicitly via bot_id_list (the SDK equivalent of lark-cli --bots).
+    const botAppId = (process.env.LARK_APP_ID ?? "").trim();
+    if (botAppId.startsWith("cli_")) {
+      data.bot_id_list = [botAppId];
+    }
+  }
+  const res = await create({
+    params: { user_id_type: "open_id", set_bot_manager: true },
+    data,
+  });
+  if (typeof res?.code === "number" && res.code !== 0) {
+    throw new Error(res.msg ?? `lark chat.create failed (code ${res.code})`);
+  }
+  const chatId = res?.data?.chat_id;
+  if (!chatId) {
+    throw new Error("lark chat.create returned no chat_id");
+  }
+  return { chatId, name: res.data?.name ?? name };
 }
