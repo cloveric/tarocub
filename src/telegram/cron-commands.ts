@@ -3,6 +3,7 @@ import type { CronChannel, CronJobRecord, CronSessionMode } from "../state/cron-
 import type { CronStore } from "../state/cron-store.js";
 import type { CronScheduler } from "../runtime/cron-scheduler.js";
 import { validateCronExpression } from "../runtime/cron-scheduler.js";
+import { formatInCronTimezone } from "../state/cron-timezone.js";
 
 export type CronLocale = "zh" | "en";
 
@@ -140,8 +141,8 @@ function renderJob(job: CronJobRecord, index: number, locale: CronLocale): strin
   lines.push(`${index}. ID  ${job.id}  ${enabledLabel}`);
   const human = job.runOnce && job.targetAt
     ? locale === "zh"
-      ? `仅一次 ${job.targetAt} (${humanizeRelative(job.targetAt, locale)})`
-      : `once ${job.targetAt} (${humanizeRelative(job.targetAt, locale)})`
+      ? `仅一次 ${formatInCronTimezone(job.targetAt, job.timezone)} (${humanizeRelative(job.targetAt, locale)})`
+      : `once ${formatInCronTimezone(job.targetAt, job.timezone)} (${humanizeRelative(job.targetAt, locale)})`
     : humanizeCronExpr(job.cronExpr, locale);
   const exprLine = job.runOnce && job.targetAt
     ? human
@@ -156,7 +157,7 @@ function renderJob(job: CronJobRecord, index: number, locale: CronLocale): strin
       ? locale === "zh" ? `失败：${job.lastError}` : `failed: ${job.lastError}`
       : locale === "zh" ? "成功" : "success";
     const label = locale === "zh" ? "上次" : "last";
-    lines.push(`   ⏱ ${label}: ${rel} (${job.lastRunAt}) ${status}`);
+    lines.push(`   ⏱ ${label}: ${rel} (${formatInCronTimezone(job.lastRunAt, job.timezone)}) ${status}`);
   }
   return lines.join("\n");
 }

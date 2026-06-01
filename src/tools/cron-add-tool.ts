@@ -3,7 +3,7 @@ import { validateCronExpression } from "../runtime/cron-scheduler.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { CronJobInput, CronJobRecord } from "../state/cron-store.js";
 import type { CronDeliveryMode, CronSessionMode } from "../state/cron-store-schema.js";
-import { normalizeCronTimezone } from "../state/cron-timezone.js";
+import { formatInCronTimezone, normalizeCronTimezone } from "../state/cron-timezone.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import type { TelegramToolContext, TelegramToolResult } from "./telegram-tool-types.js";
 
@@ -217,7 +217,9 @@ function buildCronInput(
 }
 
 function renderAccepted(record: CronJobRecord, locale: Locale): string {
-  const when = record.runOnce && record.targetAt ? record.targetAt : record.cronExpr;
+  const when = record.runOnce && record.targetAt
+    ? formatInCronTimezone(record.targetAt, record.timezone)
+    : record.cronExpr;
   const timezone = record.timezone && !record.runOnce ? ` (${record.timezone})` : "";
   return locale === "zh"
     ? `✓ 已添加定时任务  ID  ${record.id}\n⏰ ${when}${timezone}\n📝 ${record.prompt}`

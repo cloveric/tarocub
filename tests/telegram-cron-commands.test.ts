@@ -10,6 +10,7 @@ import {
   type CronCommandContext,
 } from "../src/telegram/cron-commands.js";
 import { CronStore } from "../src/state/cron-store.js";
+import { formatInCronTimezone } from "../src/state/cron-timezone.js";
 import { CronScheduler } from "../src/runtime/cron-scheduler.js";
 import { removeTempRoot } from "./helpers/temp-files.js";
 
@@ -139,7 +140,7 @@ describe("handleCronCommand", () => {
       expect(msg).toContain("session=new_per_run");
     });
 
-    it("renders one-shot jobs with the target time instead of cron internals", async () => {
+    it("renders one-shot jobs with the local target time, not cron internals or raw UTC", async () => {
       const targetAt = new Date(Date.now() + 10 * 60_000).toISOString();
       await h.store.add({
         chatId: CHAT_ID,
@@ -148,12 +149,16 @@ describe("handleCronCommand", () => {
         prompt: "drink water",
         runOnce: true,
         targetAt,
+        timezone: "Asia/Shanghai",
       });
 
       await handleCronCommand("/cron", makeContext(h, "en"));
       const msg = h.api.sendMessage.mock.calls[0]![1] as string;
       expect(msg).toContain("once");
-      expect(msg).toContain(targetAt);
+      // Local wall-clock in the job's timezone, e.g. "2026-06-01 13:42 (Asia/Shanghai)"
+      expect(msg).toContain(formatInCronTimezone(targetAt, "Asia/Shanghai"));
+      // ...and never the raw UTC ISO that read 8h off for the operator.
+      expect(msg).not.toContain(targetAt);
       expect(msg).not.toContain("daily 09:00");
     });
 

@@ -45,7 +45,7 @@ export function larkAgentInstructions(): string {
     "File/image send is workspace-sandboxed: to send one from elsewhere (e.g. ~/.codex/generated_images/), copy it into your workspace first, then send that path — an outside path is refused (a path restriction, not a failure).",
     "Titled images (小红书 P1/P2 series, etc.): give each image its own title. Via send.batch make each images entry an object {path, caption} (not a bare path); or via [send-image:/path] put the title on the line directly above. A titled batch is then packed into ONE card, each image under its own title.",
     "Service ops: use `node dist/src/index.js lark service restart --all`; no manual Lark restart loops. CLI defers current.",
-    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` ISO timezone; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
+    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` ISO timezone; recurring (every N min/hrs, or a daily window) = ONE `cron` (fires separately each time, own push), never many one-shot `in`/`at`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
     "Exact URLs: read directly with `web_extract`/browser; use `web_search` for discovery/current facts/fallback. Treat <forwarded_lark_messages> as task context.",
   ];
   const asr = localAsrAgentInstruction();
