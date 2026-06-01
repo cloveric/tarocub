@@ -1966,8 +1966,12 @@ async function handleLarkGoalCommand(
       locale,
     });
     if (runCard) {
-      const watchThreadGoal = input.bridge.watchThreadGoal;
-      const clearThreadGoal = input.bridge.clearThreadGoal;
+      // Bind to the bridge: a bare `const fn = input.bridge.watchThreadGoal` loses
+      // `this`, so the method's `this.adapter` would throw "Cannot read properties of
+      // undefined (reading 'adapter')". (This is why /goal failed end-to-end while the
+      // adapter passed in isolation.)
+      const watchThreadGoal = input.bridge.watchThreadGoal.bind(input.bridge);
+      const clearThreadGoal = input.bridge.clearThreadGoal?.bind(input.bridge);
       // Register the autonomous goal as the conversation's active run so /stop (and the
       // run card's stop button) can abort it — both flip activeRuns[key].abortController.
       const abort = new AbortController();

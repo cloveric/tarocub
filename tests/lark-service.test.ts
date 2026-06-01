@@ -5009,6 +5009,53 @@ describe("lark service", () => {
     }
   });
 
+  it("invokes watchThreadGoal bound to the bridge for a live Codex /goal run card", async () => {
+    // Regression: the handler used `const fn = input.bridge.watchThreadGoal` then called
+    // `fn(...)` unbound, so the method's `this.adapter` threw "Cannot read properties of
+    // undefined (reading 'adapter')" and /goal failed end-to-end (while the adapter passed
+    // in isolation). watchThreadGoal MUST be invoked with the bridge as `this`.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-watch-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel(); // has updateCard → the run-card (watch) path engages
+    let observedThis: unknown = "NOT_CALLED";
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      // A real method (not an arrow) so `this` is dynamic and observable.
+      watchThreadGoal: async function (this: unknown, input: { objective: string }) {
+        observedThis = this;
+        return {
+          goal: {
+            threadId: "t",
+            objective: input.objective,
+            status: "complete" as const,
+            tokenBudget: null,
+            tokensUsed: 1,
+            timeUsedSeconds: 1,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        };
+      },
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_goal_watch", content: "/goal ship it" }),
+      });
+      // The watch runs detached; give it a tick to invoke watchThreadGoal.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(observedThis).toBe(bridge); // unbound (the regression) would be undefined
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders structured Lark goal replies in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex", locale: "en" }) + "\n");
