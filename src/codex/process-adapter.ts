@@ -419,6 +419,26 @@ export class ProcessCodexAdapter implements CodexAdapter {
     }
   }
 
+  async watchThreadGoal(sessionId: string, input: {
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    abortSignal?: AbortSignal;
+  }): Promise<CodexThreadGoalResponse> {
+    // Goals require the app-server protocol; delegate to a temp app-server like the
+    // other goal methods. The await holds it open for the whole autonomous pursuit
+    // (it streams events to onEngineEvent), then `finally` tears it down. Without
+    // this, the process/antigravity Codex runtimes had no watchThreadGoal at all, so
+    // /goal threw "Structured goal API is not available" before it could run.
+    const appServer = this.createGoalAppServerAdapter(input.workspaceOverride);
+    try {
+      return await appServer.watchThreadGoal(sessionId, input);
+    } finally {
+      appServer.destroy();
+    }
+  }
+
   async validateExternalSession(sessionId: string): Promise<void> {
     const codexHome = this.resolveCodexHome();
     const sessionIndexPath = path.join(codexHome, "session_index.jsonl");

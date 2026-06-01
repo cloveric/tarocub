@@ -1992,6 +1992,14 @@ async function handleLarkGoalCommand(
               : locale === "en" ? "Goal finished." : "Goal 已结束。");
           }
         } catch (error) {
+          // Record the real reason so "详细原因已记录到日志" is actually true and the
+          // failure is diagnosable from the timeline (the run card stays redacted).
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "command.handled",
+            outcome: "error",
+            detail: "/goal",
+            metadata: { error: error instanceof Error ? (error.stack ?? error.message) : String(error) },
+          }).catch(() => {});
           await runCard.fail(renderLarkUserFacingError(error, "engine", locale));
         } finally {
           // Release our slot only if a newer run hasn't already replaced it.
