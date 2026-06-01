@@ -107,19 +107,35 @@ export function buildLarkCronExecutor(input: {
           : {}),
       })
       : undefined;
-    const result = await input.bridge.handleAuthorizedMessage({
-      chatId: accessChatId,
-      userId: job.userId,
-      chatType: bridgeChatType,
-      text: job.prompt,
-      conversationKey,
-      locale: job.locale ?? "zh",
-      files: [],
-      requestOutputDir,
-      workspaceOverride: input.workspaceOverride,
-      abortSignal,
-      instructions: input.agentInstructions?.(),
-    });
+    let result: Awaited<ReturnType<typeof input.bridge.handleAuthorizedMessage>>;
+    try {
+      result = await input.bridge.handleAuthorizedMessage({
+        chatId: accessChatId,
+        userId: job.userId,
+        chatType: bridgeChatType,
+        text: job.prompt,
+        conversationKey,
+        locale: job.locale ?? "zh",
+        files: [],
+        requestOutputDir,
+        workspaceOverride: input.workspaceOverride,
+        abortSignal,
+        instructions: input.agentInstructions?.(),
+      });
+    } catch (error) {
+      // Don't leave the AI-task run card stuck on "running" when the engine errors
+      // or times out: flip it to interrupted (job aborted, e.g. /stop) or failed,
+      // then rethrow so the scheduler still records the failure, retries, and sends
+      // its own failure notification (which carries the error detail).
+      if (runCard) {
+        if (abortSignal?.aborted) {
+          await runCard.interrupt().catch(() => {});
+        } else {
+          await runCard.fail(job.locale === "en" ? "Scheduled task failed." : "定时任务执行失败。").catch(() => {});
+        }
+      }
+      throw error;
+    }
     await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
     if (job.mute) {
       return;

@@ -5191,6 +5191,74 @@ describe("lark service", () => {
     }
   });
 
+  it("preempts an existing active run when a Codex /goal claims the conversation (no orphan)", async () => {
+    // The watcher runs detached (outside the chat queue); overwriting activeRuns
+    // without aborting the prior run would orphan it (untracked → /stop can't reach
+    // it). The goal-set must abort the existing run before claiming the slot.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-preempt-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel(); // updateCard → the live watch path engages
+    const runtime = createLarkServiceRuntime();
+    const preAbort = new AbortController(); // a run already active for this conversation
+    runtime.activeRuns.set("lark:oc_chat", { abortController: preAbort });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      watchThreadGoal: async () => ({
+        goal: {
+          threadId: "t", objective: "ship it", status: "complete" as const,
+          tokenBudget: null, tokensUsed: 1, timeUsedSeconds: 1, createdAt: 0, updatedAt: 0,
+        },
+      }),
+      clearThreadGoal: vi.fn(async () => ({ cleared: true })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_goal_preempt", content: "/goal ship it" }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(preAbort.signal.aborted).toBe(true);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts the active goal watcher on /goal clear (stops it cleanly, no double-clear)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-clear-abort-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const watcherAbort = new AbortController(); // an active goal watcher
+    runtime.activeRuns.set("lark:oc_chat", { abortController: watcherAbort, hasRunCard: true });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      clearThreadGoal: vi.fn(async () => ({ cleared: true })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_goal_clear", content: "/goal clear" }),
+      });
+      // The watcher is aborted (its own abort path clears the goal + interrupts the
+      // card), so the clear handler must NOT double-clear, and confirms to the user.
+      expect(watcherAbort.signal.aborted).toBe(true);
+      expect(bridge.clearThreadGoal).not.toHaveBeenCalled();
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("已清除");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders structured Lark goal replies in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex", locale: "en" }) + "\n");

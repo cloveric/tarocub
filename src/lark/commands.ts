@@ -1929,6 +1929,10 @@ async function handleLarkGoalCommand(
     conversationKey: normalized.conversationKey,
     workspaceOverride: resolveInstanceWorkspacePath(cfg),
   };
+  // activeRuns key for this conversation — shared by the live watcher (which claims
+  // it) and by clear (which aborts it), so a detached goal watcher participates in
+  // the same single-active-run tracking as normal turns instead of running unguarded.
+  const conversationKey = normalized.conversationKey ?? `lark:${normalized.chatId}`;
 
   if (action.kind === "status") {
     if (!input.bridge.getThreadGoal) {
@@ -1951,6 +1955,16 @@ async function handleLarkGoalCommand(
         : "当前 runtime 不支持结构化 /goal clear。");
       return true;
     }
+    // If a goal watcher is actively pursuing this conversation's goal, abort it first
+    // so it stops cleanly — its abort path clears the goal in the engine and flips the
+    // run card to interrupted — instead of lingering and racing the clear.
+    const activeGoalRun = input.runtime.activeRuns.get(conversationKey);
+    if (activeGoalRun) {
+      activeGoalRun.abortController.abort();
+      await sendLarkCommandMarkdown(input, normalized, "/goal", locale === "en"
+        ? "Current goal cleared." : "已清除当前 goal。");
+      return true;
+    }
     const { cleared } = await input.bridge.clearThreadGoal(goalInput);
     await sendLarkCommandMarkdown(input, normalized, "/goal", cleared
       ? locale === "en" ? "Current goal cleared." : "已清除当前 goal。"
@@ -1963,7 +1977,6 @@ async function handleLarkGoalCommand(
   // detached so the command returns immediately while the card updates in the
   // background. Falls back to plain set-and-confirm when watch/CardKit is unavailable.
   if (input.bridge.watchThreadGoal && input.createRunCard) {
-    const conversationKey = normalized.conversationKey ?? `lark:${normalized.chatId}`;
     const runCard = await input.createRunCard({
       channel: input.channel,
       chatId: normalized.chatId,
@@ -1984,6 +1997,11 @@ async function handleLarkGoalCommand(
       // Register the autonomous goal as the conversation's active run so /stop (and the
       // run card's stop button) can abort it — both flip activeRuns[key].abortController.
       const abort = new AbortController();
+      // Active protection: the watcher runs detached (outside the chat queue), so abort
+      // any run already active for this conversation before claiming the slot —
+      // otherwise overwriting activeRuns would orphan it (untracked; /stop can't reach
+      // it). Guarantees exactly one tracked active run per conversation.
+      input.runtime.activeRuns.get(conversationKey)?.abortController.abort();
       input.runtime.activeRuns.set(conversationKey, { abortController: abort, hasRunCard: true });
       void (async () => {
         try {
