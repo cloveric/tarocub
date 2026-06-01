@@ -568,6 +568,12 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     try {
+      // Clear any existing goal first. thread/goal/set on a thread that already holds a
+      // COMPLETE goal keeps the stale "complete" status + old token/time usage, so the
+      // watch would resolve instantly showing the PREVIOUS run's stats (e.g. a brand-new
+      // "review the bugs" goal reporting 432937 tokens / 1430s as already done). Clearing
+      // makes the new objective start fresh as "active" so Codex actually pursues it.
+      await this.request("thread/goal/clear", { threadId }).catch(() => {});
       const setResult = await this.request("thread/goal/set", {
         threadId,
         objective: input.objective,

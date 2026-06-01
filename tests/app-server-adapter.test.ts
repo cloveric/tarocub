@@ -230,6 +230,54 @@ describe("CodexAppServerAdapter", () => {
     });
   });
 
+  it("clears any existing goal before setting when watching, and resolves on the live status (not the stale set result)", async () => {
+    // Regression: re-running /goal on a thread that already had a COMPLETE goal made
+    // thread/goal/set return the stale "complete" status + old usage, so the watch
+    // resolved instantly (e.g. a fresh "review the bugs" goal showing 432937 tokens as
+    // done). watchThreadGoal must clear first so the new objective starts fresh.
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", "/tmp/default-workspace", spawnFn);
+
+    const promise = adapter.watchThreadGoal("telegram-12345", {
+      objective: "review the bugs",
+      tokenBudget: null,
+      workspaceOverride: "/tmp/project",
+      onEngineEvent: () => {},
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    expect(threadStart.method).toBe("thread/start");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+
+    // The fix: clear BEFORE set.
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const goalClear = JSON.parse(child.stdin.lines[2] ?? "{}");
+    expect(goalClear.method).toBe("thread/goal/clear");
+    expect(goalClear.params).toMatchObject({ threadId: "thread-123" });
+    child.stdout.emitData(`{"id":${goalClear.id},"result":{"cleared":true}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const goalSet = JSON.parse(child.stdin.lines[3] ?? "{}");
+    expect(goalSet).toMatchObject({
+      method: "thread/goal/set",
+      params: { threadId: "thread-123", objective: "review the bugs", tokenBudget: null },
+    });
+    // Set returns a fresh "active" goal (0 usage); the watch must NOT resolve on this.
+    child.stdout.emitData(`{"id":${goalSet.id},"result":{"goal":{"threadId":"thread-123","objective":"review the bugs","status":"active","tokenBudget":null,"tokensUsed":0,"timeUsedSeconds":0,"createdAt":1,"updatedAt":1}}}\n`);
+
+    // It resolves only when Codex's autonomous pursuit actually reaches complete.
+    child.stdout.emitData(`{"method":"thread/goal/updated","params":{"threadId":"thread-123","goal":{"threadId":"thread-123","objective":"review the bugs","status":"complete","tokenBudget":null,"tokensUsed":1234,"timeUsedSeconds":56,"createdAt":1,"updatedAt":2}}}\n`);
+
+    const result = await promise;
+    expect(result.goal?.status).toBe("complete");
+    expect(result.goal?.tokensUsed).toBe(1234);
+  });
+
   it("times out and destroys app-server when initialize never replies", async () => {
     vi.useFakeTimers();
     try {
