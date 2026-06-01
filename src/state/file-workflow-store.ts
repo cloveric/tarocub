@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { FileWorkflowStateSchema } from "./file-workflow-schema.js";
+import { withFileMutex } from "./file-mutex.js";
 import { JsonStore } from "./json-store.js";
 
 export const FILE_WORKFLOW_STATE_UNREADABLE_WARNING = "file workflow state unreadable";
@@ -58,10 +59,12 @@ export function resolveFileWorkflowStatePath(stateDir: string): string {
 
 export class FileWorkflowStore {
   private readonly store: JsonStore<FileWorkflowState>;
+  private readonly filePath: string;
   private pendingWrite: Promise<void> = Promise.resolve();
 
   constructor(stateDir: string) {
-    this.store = new JsonStore<FileWorkflowState>(resolveFileWorkflowStatePath(stateDir), (value) => {
+    this.filePath = resolveFileWorkflowStatePath(stateDir);
+    this.store = new JsonStore<FileWorkflowState>(this.filePath, (value) => {
       const result = FileWorkflowStateSchema.safeParse(value);
       if (result.success) {
         return result.data;
@@ -337,11 +340,16 @@ export class FileWorkflowStore {
   }
 
   async reset(): Promise<void> {
-    await this.store.write(createDefaultState());
+    await this.enqueueWrite(async () => {
+      await this.store.write(createDefaultState());
+    });
   }
 
   private enqueueWrite(task: () => Promise<void>): Promise<void> {
-    const run = this.pendingWrite.then(task, task);
+    const run = this.pendingWrite.then(
+      () => withFileMutex(this.filePath, task),
+      () => withFileMutex(this.filePath, task),
+    );
     this.pendingWrite = run.then(
       () => undefined,
       () => undefined,

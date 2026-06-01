@@ -31,6 +31,7 @@ export async function withLarkMessageReactions<T>(input: {
   channel: Pick<LarkChannelLike, "addReaction" | "removeReaction">;
   messageId: string;
   settings: LarkReactionSettings;
+  isFailure?: (error: unknown) => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
   const reactionId = input.settings.processingEmoji
@@ -49,7 +50,7 @@ export async function withLarkMessageReactions<T>(input: {
     if (reactionId) {
       await removeReactionBestEffort(input.channel, input.messageId, reactionId);
     }
-    if (input.settings.failureEmoji) {
+    if ((input.isFailure?.(error) ?? true) && input.settings.failureEmoji) {
       await addReactionBestEffort(input.channel, input.messageId, input.settings.failureEmoji);
     }
     throw error;

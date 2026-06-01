@@ -865,6 +865,13 @@ export async function handleBoardTelegramCommand(input: {
     }
 
     if (action.kind === "limits") {
+      if (action.key && action.value !== undefined && action.value <= 0) {
+        const text = locale === "zh"
+          ? "WIP limit 必须是正整数。"
+          : "WIP limit must be a positive integer.";
+        await replyAndAudit({ stateDir, startedAt, locale, normalized, context, text, outcome: "invalid", action: "limits", metadata: { key: action.key, value: action.value } });
+        return true;
+      }
       const limits = action.key && action.value !== undefined
         ? await store.setLimits({ [action.key]: action.value })
         : await store.getLimits();

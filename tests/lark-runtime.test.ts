@@ -1110,7 +1110,7 @@ describe("runLarkService", () => {
         metadata: expect.objectContaining({
           phase: "service-comment",
           larkSurface: "comment",
-          fileToken: "doc_token",
+          fileToken: "[redacted]",
           commentId: "comment_error",
         }),
       }));

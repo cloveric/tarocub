@@ -543,7 +543,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       },
     });
 
-    if (event.type === "task_notification") {
+    if (event.type === "task_notification" && !event.settlesCurrentTurn) {
       const notificationText = [
         locale === "zh" ? "后台任务完成" : "Background task completed",
         event.text.trim(),

@@ -342,7 +342,12 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   }
 
   if (state.taskNotifications.length > 0) {
-    elements.push(markdownElement(`**${labels.background}**\n${state.taskNotifications.slice(-3).join("\n\n")}`));
+    const previews = state.taskNotifications
+      .slice(-3)
+      .map(renderTaskNotificationPreview)
+      .filter(Boolean)
+      .join("\n\n");
+    elements.push(noteElement(`**${labels.background}**\n${previews}`));
   }
 
   if (state.status === "running") {
@@ -384,6 +389,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
 export const LARK_CARD_ANSWER_MAX = 3000;
 const COMPACT_ANSWER_MAX = LARK_CARD_ANSWER_MAX;
 const PROCESS_PANEL_MAX = 3000;
+const TASK_NOTIFICATION_PREVIEW_MAX = 650;
 
 /** The canonical final answer: the engine's result text, or the last non-empty text block. */
 function finalAnswerText(state: LarkRunState): string {
@@ -394,6 +400,16 @@ function finalAnswerText(state: LarkRunState): string {
     (block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0,
   );
   return lastText?.content ?? "";
+}
+
+function renderTaskNotificationPreview(text: string): string {
+  const cleaned = cleanCardText(text)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s{0,3}#{1,6}\s+/, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return truncate(cleaned, TASK_NOTIFICATION_PREVIEW_MAX);
 }
 
 /**

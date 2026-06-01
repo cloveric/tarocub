@@ -82,4 +82,28 @@ describe("Lark message reactions", () => {
     expect(channel.removeReaction).toHaveBeenCalledWith("om_1", "reaction_1");
     expect(channel.addReaction).toHaveBeenNthCalledWith(2, "om_1", "ERROR");
   });
+
+  it("does not add the failure reaction when the caller classifies the error as non-failure", async () => {
+    const channel = {
+      addReaction: vi.fn(async () => "reaction_1"),
+      removeReaction: vi.fn(async () => undefined),
+    };
+
+    await expect(withLarkMessageReactions({
+      channel,
+      messageId: "om_1",
+      settings: {
+        processingEmoji: "OnIt",
+        doneEmoji: "DONE",
+        failureEmoji: "ERROR",
+      },
+      isFailure: () => false,
+      run: async () => {
+        throw new Error("Task was stopped by user");
+      },
+    } as Parameters<typeof withLarkMessageReactions>[0] & { isFailure: () => boolean })).rejects.toThrow("Task was stopped by user");
+
+    expect(channel.removeReaction).toHaveBeenCalledWith("om_1", "reaction_1");
+    expect(channel.addReaction).toHaveBeenCalledTimes(1);
+  });
 });

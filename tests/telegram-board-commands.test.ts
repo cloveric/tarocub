@@ -412,6 +412,43 @@ describe("handleBoardTelegramCommand", () => {
     }
   });
 
+  it("rejects non-positive WIP limits instead of silently resetting them", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+
+    try {
+      await handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board limits global 2"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+        },
+      });
+      api.sendMessage.mockClear();
+
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board limits global 0"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+        },
+      })).resolves.toBe(true);
+
+      await expect(new BoardStore(root).getLimits()).resolves.toMatchObject({ global: 2 });
+      expect(api.sendMessage).toHaveBeenCalledWith(-100123, expect.stringContaining("positive"));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("routes review gate commands through review before done", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
     const api = {

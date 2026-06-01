@@ -433,6 +433,23 @@ describe("handleCronCommand", () => {
       expect(messages.some((m) => m.includes("triggered"))).toBe(true);
     });
 
+    it("does not trigger disabled jobs", async () => {
+      const job = await h.store.add({
+        chatId: CHAT_ID,
+        userId: USER_ID,
+        cronExpr: "* * * * *",
+        prompt: "do not run me",
+        enabled: false,
+      });
+
+      await handleCronCommand(`/cron run ${job.id}`, makeContext(h, "en"));
+
+      expect(h.executor).not.toHaveBeenCalled();
+      const messages = h.api.sendMessage.mock.calls.map((c) => c[1] as string);
+      expect(messages.some((m) => m.includes("disabled"))).toBe(true);
+      expect(messages.some((m) => m.includes("triggered"))).toBe(false);
+    });
+
     it("not-found for unknown id and does not call executor", async () => {
       await handleCronCommand("/cron run deadbeef", makeContext(h, "en"));
       expect(h.executor).not.toHaveBeenCalled();

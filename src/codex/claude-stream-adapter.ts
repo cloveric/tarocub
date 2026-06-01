@@ -94,6 +94,7 @@ type ClaudeStreamEvent = {
 };
 
 type PendingTurn = {
+  turnId: number;
   assistantText: string;
   intermediateDeliveryText: string;
   resolve: (value: CodexAdapterResponse) => void;
@@ -105,6 +106,7 @@ type PendingTurn = {
   abortSignal?: AbortSignal;
   abortHandler?: () => void;
   timeout?: ReturnType<typeof setTimeout>;
+  backgroundCompletionTimer?: ReturnType<typeof setTimeout>;
 };
 
 type ClaudeTaskNotificationMetadata = {
@@ -115,6 +117,7 @@ type ClaudeTaskNotificationMetadata = {
 };
 
 type ClaudeBackgroundTask = ClaudeTaskNotificationMetadata & {
+  turnId?: number;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   lastSeenAt: number;
 };
@@ -148,7 +151,10 @@ const MAX_STDERR_TAIL_CHARS = 20_000;
 const DEFAULT_IDLE_WORKER_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
 // No timeout — complex tasks (image generation, large projects) can run indefinitely
+
+let nextPendingTurnId = 0;
 
 /** A plausible Claude stream-json event line (so a large-but-valid event isn't
  * hard-failed at the 1 MiB cap meant for non-JSON runaway output). */
@@ -201,6 +207,22 @@ function appendAssistantText(existing: string, next: string): string {
   }
 
   return existing ? `${existing}\n${next}` : next;
+}
+
+function renderBackgroundTaskTurnResult(metadata: ClaudeTaskNotificationMetadata, text?: string): string {
+  const notificationText = text?.trim();
+  if (notificationText) {
+    return notificationText;
+  }
+  const summary = metadata.summary?.trim();
+  if (summary) {
+    return summary;
+  }
+  const status = metadata.status?.trim().toLowerCase();
+  if (status === "failed" || status === "error") {
+    return "Background task failed.";
+  }
+  return "Background task completed.";
 }
 
 /**
@@ -673,6 +695,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       if (metadata.taskId) {
         worker.backgroundTasks.set(metadata.taskId, {
           ...metadata,
+          ...(worker.pendingTurn ? { turnId: worker.pendingTurn.turnId } : {}),
           onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
           lastSeenAt: eventSeenAt,
         });
@@ -701,6 +724,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         status: resultMetadata.status ?? worker.pendingTaskNotification?.status ?? resultTask?.status,
         summary: resultMetadata.summary ?? worker.pendingTaskNotification?.summary ?? resultTask?.summary,
         outputFile: resultMetadata.outputFile ?? worker.pendingTaskNotification?.outputFile ?? resultTask?.outputFile,
+        turnId: worker.pendingTaskNotification?.turnId ?? resultTask?.turnId,
         onEngineEvent: worker.pendingTaskNotification?.onEngineEvent ?? resultTask?.onEngineEvent ?? worker.onEngineEvent,
         lastSeenAt: eventSeenAt,
       };
@@ -711,6 +735,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }
       const text = parsed.result?.trim();
       if (text) {
+        const settlesCurrentTurn = metadata.turnId !== undefined && worker.pendingTurn?.turnId === metadata.turnId;
         this.emitEngineEvent(worker, {
           type: "task_notification",
           text,
@@ -719,7 +744,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           status: metadata.status,
           summary: metadata.summary,
           outputFile: metadata.outputFile,
+          ...(settlesCurrentTurn ? { settlesCurrentTurn: true } : {}),
         }, metadata.onEngineEvent);
+        this.armBackgroundTaskTurnSettlement(worker, metadata, text);
       }
       return;
     }
@@ -747,6 +774,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     if (parsed.type === "assistant" && worker.pendingTurn) {
+      this.clearBackgroundTaskTurnSettlement(worker.pendingTurn);
       const textParts: string[] = [];
       for (const item of parsed.message?.content ?? []) {
         if (item.type === "thinking" && typeof item.thinking === "string" && item.thinking) {
@@ -790,6 +818,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     if (parsed.type === "user" && worker.pendingTurn) {
+      this.clearBackgroundTaskTurnSettlement(worker.pendingTurn);
       for (const item of parsed.message?.content ?? []) {
         if (item.type !== "tool_result") {
           continue;
@@ -806,6 +835,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     if (parsed.type === "control_request") {
+      if (worker.pendingTurn) {
+        this.clearBackgroundTaskTurnSettlement(worker.pendingTurn);
+      }
       void this.handleControlRequest(worker, parsed);
       return;
     }
@@ -815,6 +847,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     if (parsed.type === "result" && worker.pendingTurn) {
+      this.clearBackgroundTaskTurnSettlement(worker.pendingTurn);
       worker.suppressNextTaskNotificationAssistant = false;
       const pending = worker.pendingTurn;
       if (parsed.is_error) {
@@ -854,6 +887,44 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     if (parsed.type === "result") {
       worker.pendingTaskNotification = null;
       worker.suppressNextTaskNotificationAssistant = false;
+    }
+  }
+
+  private armBackgroundTaskTurnSettlement(
+    worker: ClaudeWorker,
+    metadata: ClaudeTaskNotificationMetadata & { turnId?: number },
+    text?: string,
+  ): void {
+    const pending = worker.pendingTurn;
+    if (!pending || metadata.turnId === undefined || metadata.turnId !== pending.turnId) {
+      return;
+    }
+    this.clearBackgroundTaskTurnSettlement(pending);
+    const resultText = renderBackgroundTaskTurnResult(metadata, text);
+    pending.backgroundCompletionTimer = setTimeout(() => {
+      if (worker.pendingTurn !== pending) {
+        return;
+      }
+      worker.pendingTurn = null;
+      this.markWorkerActivity(worker);
+      this.clearPendingTurnTimeout(pending);
+      this.emitEngineEvent(worker, {
+        type: "result",
+        text: resultText,
+        sessionId: worker.currentSessionId ?? undefined,
+      }, pending.onEngineEvent);
+      pending.resolve({
+        text: resultText,
+        sessionId: worker.currentSessionId ?? undefined,
+      });
+    }, BACKGROUND_TASK_TURN_SETTLE_GRACE_MS);
+    pending.backgroundCompletionTimer.unref?.();
+  }
+
+  private clearBackgroundTaskTurnSettlement(pending: PendingTurn | null | undefined): void {
+    if (pending?.backgroundCompletionTimer) {
+      clearTimeout(pending.backgroundCompletionTimer);
+      pending.backgroundCompletionTimer = undefined;
     }
   }
 
@@ -925,6 +996,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     return await new Promise<CodexAdapterResponse>((resolve, reject) => {
       this.markWorkerActivity(worker);
       const pendingTurn: PendingTurn = {
+        turnId: ++nextPendingTurnId,
         assistantText: "",
         intermediateDeliveryText: "",
         onProgress: input.onProgress,
@@ -1075,6 +1147,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private clearPendingTurnTimeout(pending: PendingTurn | null | undefined): void {
+    this.clearBackgroundTaskTurnSettlement(pending);
     pending?.approvalAbortController.abort();
     if (pending?.abortSignal && pending.abortHandler) {
       pending.abortSignal.removeEventListener("abort", pending.abortHandler);

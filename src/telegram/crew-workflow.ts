@@ -431,97 +431,97 @@ export async function handleCrewTelegramWorkflow(input: {
 
   activeCrewRunKeys.add(activeRunKey);
 
-  if (await maybeReplyWithBudgetExhausted(stateDir, cfg.budgetUsd, locale, context, normalized)) {
-    activeCrewRunKeys.delete(activeRunKey);
-    return true;
-  }
-
-  const runId = randomUUID();
-  const crewRunStore = new CrewRunStore(stateDir);
-  const createdAt = new Date().toISOString();
-  let activeStage: CrewStageName = "decomposition";
-
-  const coordinatorChatId = createSyntheticCoordinatorChatId();
-  const delegateRole: CrewRoleDelegate = input.delegateRole ?? (async (delegateInput) => {
-    const result = await delegateToInstance({
-      fromInstance: currentInstance,
-      targetInstance: delegateInput.targetName,
-      prompt: delegateInput.prompt,
-      depth: 0,
-      stateDir,
-      timeoutMs: delegateInput.timeoutMs,
-    });
-    return { text: result.text };
-  });
-  const runCoordinatorTurn = async (text: string) => {
-    const result = await context.bridge.handleAuthorizedMessage({
-      chatId: coordinatorChatId,
-      userId: normalized.userId,
-      chatType: "bus",
-      locale,
-      text,
-      files: [],
-      workspaceOverride: cfg.resume?.workspacePath,
-      abortSignal: context.abortSignal,
-      onApprovalRequest: context.onApprovalRequest,
-      onEngineEvent: context.onEngineEvent,
-    });
-    await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
-    return result.text;
-  };
-  const recordDelegatedUsage = async (usage: AdapterUsage | undefined) => {
-    if (usage) {
-      await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, usage);
-    }
-  };
-
-  await crewRunStore.create({
-    runId,
-    workflow: crew.workflow,
-    status: "running",
-    currentStage: "decomposition",
-    coordinator: currentInstance,
-    chatId: normalized.chatId,
-    userId: normalized.userId,
-    locale,
-    originalPrompt: normalized.text,
-    createdAt,
-    updatedAt: createdAt,
-    stages: {},
-  });
-  await appendCrewTimelineEvent(stateDir, {
-    type: "crew.run.started",
-    context,
-    normalized,
-    runId,
-    workflow: crew.workflow,
-    outcome: "success",
-  });
-
-  await context.api.sendMessage(
-    normalized.chatId,
-    locale === "zh" ? "正在运行 research-report crew..." : "Running research-report crew...",
-  );
-
   try {
-    await crewRunStore.update(runId, (record) => {
-      record.currentStage = "decomposition";
-      record.stages.decomposition = {
-        ...(record.stages.decomposition ?? {}),
-        status: "running",
-        updatedAt: new Date().toISOString(),
-      };
+    if (await maybeReplyWithBudgetExhausted(stateDir, cfg.budgetUsd, locale, context, normalized)) {
+      return true;
+    }
+
+    const runId = randomUUID();
+    const crewRunStore = new CrewRunStore(stateDir);
+    const createdAt = new Date().toISOString();
+    let activeStage: CrewStageName = "decomposition";
+
+    const coordinatorChatId = createSyntheticCoordinatorChatId();
+    const delegateRole: CrewRoleDelegate = input.delegateRole ?? (async (delegateInput) => {
+      const result = await delegateToInstance({
+        fromInstance: currentInstance,
+        targetInstance: delegateInput.targetName,
+        prompt: delegateInput.prompt,
+        depth: 0,
+        stateDir,
+        timeoutMs: delegateInput.timeoutMs,
+      });
+      return { text: result.text };
+    });
+    const runCoordinatorTurn = async (text: string) => {
+      const result = await context.bridge.handleAuthorizedMessage({
+        chatId: coordinatorChatId,
+        userId: normalized.userId,
+        chatType: "bus",
+        locale,
+        text,
+        files: [],
+        workspaceOverride: cfg.resume?.workspacePath,
+        abortSignal: context.abortSignal,
+        onApprovalRequest: context.onApprovalRequest,
+        onEngineEvent: context.onEngineEvent,
+      });
+      await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+      return result.text;
+    };
+    const recordDelegatedUsage = async (usage: AdapterUsage | undefined) => {
+      if (usage) {
+        await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, usage);
+      }
+    };
+
+    await crewRunStore.create({
+      runId,
+      workflow: crew.workflow,
+      status: "running",
+      currentStage: "decomposition",
+      coordinator: currentInstance,
+      chatId: normalized.chatId,
+      userId: normalized.userId,
+      locale,
+      originalPrompt: normalized.text,
+      createdAt,
+      updatedAt: createdAt,
+      stages: {},
     });
     await appendCrewTimelineEvent(stateDir, {
-      type: "crew.stage.started",
+      type: "crew.run.started",
       context,
       normalized,
       runId,
       workflow: crew.workflow,
-      stage: "decomposition",
       outcome: "success",
     });
+
     await context.api.sendMessage(
+      normalized.chatId,
+      locale === "zh" ? "正在运行 research-report crew..." : "Running research-report crew...",
+    );
+
+    try {
+      await crewRunStore.update(runId, (record) => {
+        record.currentStage = "decomposition";
+        record.stages.decomposition = {
+          ...(record.stages.decomposition ?? {}),
+          status: "running",
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      await appendCrewTimelineEvent(stateDir, {
+        type: "crew.stage.started",
+        context,
+        normalized,
+        runId,
+        workflow: crew.workflow,
+        stage: "decomposition",
+        outcome: "success",
+      });
+      await context.api.sendMessage(
       normalized.chatId,
       locale === "zh" ? "Coordinator 正在拆分研究问题..." : "Coordinator is decomposing the research task...",
     );
@@ -1003,10 +1003,10 @@ export async function handleCrewTelegramWorkflow(input: {
         coordinator: currentInstance,
       },
     });
-  }
-  finally {
+    }
+
+    return true;
+  } finally {
     activeCrewRunKeys.delete(activeRunKey);
   }
-
-  return true;
 }

@@ -196,6 +196,32 @@ describe("SessionStore", () => {
     }
   });
 
+  it("serializes concurrent writes across separate SessionStore instances", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const storeA = new SessionStore(filePath);
+    const storeB = new SessionStore(filePath);
+    const storeC = new SessionStore(filePath);
+
+    try {
+      await Promise.all([
+        storeA.upsert(createRecord({ telegramChatId: 201, codexSessionId: "session-201" })),
+        storeB.upsert(createRecord({ telegramChatId: 202, codexSessionId: "session-202" })),
+        storeC.upsert(createRecord({ telegramChatId: 203, codexSessionId: "session-203" })),
+      ]);
+
+      await expect(new SessionStore(filePath).load()).resolves.toEqual(expect.objectContaining({
+        chats: expect.arrayContaining([
+          createRecord({ telegramChatId: 201, codexSessionId: "session-201" }),
+          createRecord({ telegramChatId: 202, codexSessionId: "session-202" }),
+          createRecord({ telegramChatId: 203, codexSessionId: "session-203" }),
+        ]),
+      }));
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("removes a single chat session without touching other bindings", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const filePath = path.join(tempDir, "session.json");

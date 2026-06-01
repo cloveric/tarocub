@@ -755,6 +755,10 @@ async function runNormalizedLarkMessage(
   let abortController: AbortController | undefined;
   const activateRun = (): AbortController => {
     if (!abortController) {
+      const active = input.runtime.activeRuns.get(normalized.conversationKey);
+      if (active?.goalWatch) {
+        active.abortController.abort();
+      }
       abortController = new AbortController();
       input.runtime.activeRuns.set(normalized.conversationKey, { abortController });
     }
@@ -962,7 +966,7 @@ async function runNormalizedLarkMessage(
           },
         });
 
-        if (event.type !== "task_notification") {
+        if (event.type !== "task_notification" || event.settlesCurrentTurn) {
           return;
         }
 
@@ -1222,7 +1226,10 @@ async function runNormalizedLarkMessage(
     }
   } finally {
     if (abortController) {
-      input.runtime.activeRuns.delete(normalized.conversationKey);
+      const active = input.runtime.activeRuns.get(normalized.conversationKey);
+      if (active?.abortController === abortController) {
+        input.runtime.activeRuns.delete(normalized.conversationKey);
+      }
     }
     // A "queued" card is normally taken over by the run card, whose creation
     // deletes this entry. If it's still tracked, the task finished via an
@@ -1464,6 +1471,7 @@ async function runAuthorizedLarkTurnWithReactions<T>(
     channel: input.channel,
     messageId: normalized.messageId,
     settings: input.reactionSettings,
+    isFailure: (error) => classifyLarkTurnTermination(error, undefined).kind === "error",
     run,
   });
 }

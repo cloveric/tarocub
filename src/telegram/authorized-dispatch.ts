@@ -7,7 +7,10 @@ import { handleLocalEngineTelegramCommand as defaultHandleLocalEngineTelegramCom
 import { handleGoalTelegramCommand as defaultHandleGoalTelegramCommand } from "./goal-commands.js";
 import { handleMiniBusTelegramCommand as defaultHandleMiniBusTelegramCommand } from "./mini-bus-commands.js";
 import type { InstanceEngine, ResumeState } from "./instance-config.js";
-import { prepareTelegramMessageInput as defaultPrepareTelegramMessageInput } from "./message-input.js";
+import {
+  prepareTelegramMessageInput as defaultPrepareTelegramMessageInput,
+  type TelegramMessageInputPreparationResult,
+} from "./message-input.js";
 import {
   executeWorkflowAwareTelegramTurn as defaultExecuteWorkflowAwareTelegramTurn,
   type WorkflowAwareTurnState,
@@ -153,6 +156,10 @@ export interface AuthorizedTelegramDispatchHandlers {
   prepareTelegramMessageInput?: typeof defaultPrepareTelegramMessageInput;
   executeWorkflowAwareTelegramTurn?: typeof defaultExecuteWorkflowAwareTelegramTurn;
 }
+
+type PreparedTelegramMessageInput = Extract<TelegramMessageInputPreparationResult, { kind: "ready" }>;
+
+const preparedTelegramMessageInputs = new WeakMap<NormalizedTelegramMessage, PreparedTelegramMessageInput>();
 
 function isBlockingWorkflowStatus(status: "preparing" | "processing" | "awaiting_continue" | "completed" | "failed"): boolean {
   return status === "preparing" || status === "processing" || status === "failed";
@@ -385,7 +392,8 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     return;
   }
 
-  const inputPreparation = await prepareTelegramMessageInput({
+  const cachedInputPreparation = preparedTelegramMessageInputs.get(normalized);
+  const inputPreparation = cachedInputPreparation ?? await prepareTelegramMessageInput({
     locale,
     inboxDir: context.inboxDir,
     normalized,
@@ -397,6 +405,9 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     return;
   }
 
+  if (!cachedInputPreparation) {
+    preparedTelegramMessageInputs.set(normalized, inputPreparation);
+  }
   normalized.text = inputPreparation.text;
 
   await executeWorkflowAwareTelegramTurn({

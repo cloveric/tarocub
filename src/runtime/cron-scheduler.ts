@@ -43,6 +43,9 @@ const RUN_ONCE_MISSED_GRACE_MS = 60 * 60_000;
  * Returns the next-fire date if valid, or null if invalid.
  */
 export function validateCronExpression(expr: string, timezone?: string): Date | null {
+  if (expr.trim().split(/\s+/).length !== 5) {
+    return null;
+  }
   try {
     const probe = new Cron(expr, { paused: true, timezone });
     const next = probe.nextRun();

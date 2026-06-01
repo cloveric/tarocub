@@ -529,4 +529,64 @@ describe("handleCrewTelegramWorkflow", () => {
       await removeTempRoot(root);
     }
   });
+
+  it("releases the active crew lock when setup fails before the workflow try/finally starts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-crew-workflow-"));
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 11 });
+    const activeRunKey = "crew-setup-failure-lock";
+    const createSpy = vi.spyOn(CrewRunStore.prototype, "create").mockRejectedValueOnce(new Error("state init failed"));
+
+    try {
+      await expect(handleCrewTelegramWorkflow({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("Explain the impact of AI."),
+        context: {
+          api: { sendMessage } as never,
+          bridge: { handleAuthorizedMessage: vi.fn() } as never,
+          instanceName: "coordinator",
+          updateId: 97,
+        },
+        loadBusConfig: vi.fn().mockResolvedValue(createCrewConfig()),
+        delegateToInstance: vi.fn() as never,
+        activeRunKey,
+      })).rejects.toThrow("state init failed");
+
+      createSpy.mockRestore();
+
+      const handled = await handleCrewTelegramWorkflow({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("Explain the impact of AI."),
+        context: {
+          api: { sendMessage } as never,
+          bridge: {
+            handleAuthorizedMessage: vi.fn().mockResolvedValueOnce({
+              text: "1. What changed first?\n2. What is measurable now?",
+            }),
+          } as never,
+          instanceName: "coordinator",
+          updateId: 98,
+        },
+        loadBusConfig: vi.fn().mockResolvedValue(createCrewConfig()),
+        delegateToInstance: vi.fn()
+          .mockResolvedValueOnce({ text: "Research findings A" })
+          .mockResolvedValueOnce({ text: "Research findings B" })
+          .mockResolvedValueOnce({ text: "Analysis summary" })
+          .mockResolvedValueOnce({ text: "Draft report" })
+          .mockResolvedValueOnce({ text: "VERDICT: PASS\nISSUES:\n- none" }) as never,
+        activeRunKey,
+      });
+
+      expect(handled).toBe(true);
+      expect(sendMessage).not.toHaveBeenCalledWith(123, "A crew run is already active for this chat.");
+    } finally {
+      createSpy.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
 });

@@ -50,6 +50,10 @@ describe("validateCronExpression", () => {
     expect(validateCronExpression("invalid")).toBeNull();
     expect(validateCronExpression("99 99 * * *")).toBeNull();
   });
+
+  it("rejects six-field cron expressions instead of treating the first field as seconds", () => {
+    expect(validateCronExpression("0 0 9 * * *")).toBeNull();
+  });
 });
 
 describe("CronScheduler", () => {

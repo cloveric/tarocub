@@ -278,6 +278,41 @@ describe("CodexAppServerAdapter", () => {
     expect(result.goal?.tokensUsed).toBe(1234);
   });
 
+  it("resolves goal watchers with the latest goal when the app-server child exits", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", "/tmp/default-workspace", spawnFn);
+
+    const promise = adapter.watchThreadGoal("telegram-12345", {
+      objective: "keep shipping",
+      tokenBudget: null,
+      workspaceOverride: "/tmp/project",
+      onEngineEvent: () => {},
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const goalClear = JSON.parse(child.stdin.lines[2] ?? "{}");
+    child.stdout.emitData(`{"id":${goalClear.id},"result":{"cleared":true}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const goalSet = JSON.parse(child.stdin.lines[3] ?? "{}");
+    child.stdout.emitData(`{"id":${goalSet.id},"result":{"goal":{"threadId":"thread-123","objective":"keep shipping","status":"active","tokenBudget":null,"tokensUsed":7,"timeUsedSeconds":2,"createdAt":1,"updatedAt":1}}}\n`);
+
+    child.close(1);
+
+    await expect(Promise.race([
+      promise.then((result) => result.goal?.status ?? "missing-goal"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 20)),
+    ])).resolves.toBe("active");
+  });
+
   it("times out and destroys app-server when initialize never replies", async () => {
     vi.useFakeTimers();
     try {
@@ -611,6 +646,26 @@ describe("CodexAppServerAdapter", () => {
     }
   });
 
+  it("treats live goal watchers as non-idle app-server work", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new CodexAppServerAdapter("codex", process.cwd()) as unknown as {
+        goalWatchers: Map<string, unknown>;
+        waitForIdle: () => Promise<void>;
+      };
+      adapter.goalWatchers.set("thread-goal", {});
+
+      const waitPromise = adapter.waitForIdle();
+      const assertion = expect(waitPromise).rejects.toThrow(
+        `Codex app-server did not become idle within ${CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS}ms`,
+      );
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("creates a logical telegram session placeholder", async () => {
     const adapter = new CodexAppServerAdapter("codex", process.cwd());
     await expect(adapter.createSession(12345)).resolves.toEqual({
@@ -848,6 +903,53 @@ describe("CodexAppServerAdapter", () => {
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","status":"completed"}}}\n');
       await promise;
       expect(onApprovalRequest).not.toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("uses the turn's captured approval mode when starting an app-server turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, JSON.stringify({ approvalMode: "normal" }) + "\n", "utf8");
+      const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "allow", scope: "session" });
+      const adapter = new CodexAppServerAdapter("codex", process.cwd(), undefined, spawnFn, undefined, undefined, configPath);
+      const internal = adapter as unknown as {
+        currentApprovalMode: string;
+        loadRuntimeOptions: () => Promise<unknown>;
+      };
+      const loadRuntimeOptions = internal.loadRuntimeOptions.bind(adapter);
+      internal.loadRuntimeOptions = async () => {
+        const runtimeOptions = await loadRuntimeOptions();
+        internal.currentApprovalMode = "bypass";
+        return runtimeOptions;
+      };
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+        onApprovalRequest,
+      });
+
+      await waitFor(() => child.stdin.lines.length >= 1);
+      const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+      child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+      await waitFor(() => child.stdin.lines.length >= 2);
+      const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+      child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-123"}}}\n`);
+      await waitFor(() => child.stdin.lines.length >= 3);
+      const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+      expect(turnStart).toMatchObject({
+        method: "turn/start",
+        params: { approvalPolicy: "on-request" },
+      });
+
+      child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","item":{"type":"agentMessage","text":"ok"}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","status":"completed"}}}\n');
+      await promise;
     } finally {
       await removeTempRoot(root);
     }

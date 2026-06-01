@@ -3049,6 +3049,64 @@ describe("polling helpers", () => {
     }
   });
 
+  it("does not append voice transcripts again when retrying after auth refresh", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inboxDir = path.join(root, "inbox");
+    await mkdir(inboxDir, { recursive: true });
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      editMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+      sendChatAction: vi.fn().mockResolvedValue(undefined),
+      sendMediaGroup: vi.fn().mockResolvedValue(undefined),
+      getFile: vi.fn().mockResolvedValue({ file_path: "voice/message.ogg" }),
+      downloadFile: vi.fn().mockImplementation(async (_filePath: string, destinationPath: string) => {
+        await writeFile(destinationPath, "voice-bytes", "utf8");
+      }),
+    };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn()
+        .mockRejectedValueOnce(new Error("401 Unauthorized"))
+        .mockResolvedValueOnce({ text: "done" }),
+    };
+    const onAuthRetry = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "spoken transcript",
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await handleNormalizedTelegramMessage(
+        {
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          text: "What did I say?",
+          replyContext: undefined,
+          attachments: [{ fileId: "voice-1", kind: "voice" }],
+        },
+        {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir,
+          onAuthRetry,
+        },
+      );
+
+      expect(onAuthRetry).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect((bridge.handleAuthorizedMessage as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].text)).toEqual([
+        "What did I say?\nspoken transcript",
+        "What did I say?\nspoken transcript",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+      await removeTempRoot(root);
+    }
+  });
+
   it("releases an archive continuation workflow before retrying after auth refresh", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const inboxDir = path.join(root, "inbox");

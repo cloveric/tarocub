@@ -31,6 +31,31 @@ function maxMarkdownElementLength(card: unknown): number {
   return max;
 }
 
+function findMarkdownElement(card: unknown, needle: string): Record<string, unknown> | undefined {
+  if (Array.isArray(card)) {
+    for (const item of card) {
+      const found = findMarkdownElement(item, needle);
+      if (found) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  if (card && typeof card === "object") {
+    const rec = card as Record<string, unknown>;
+    if (rec.tag === "markdown" && typeof rec.content === "string" && rec.content.includes(needle)) {
+      return rec;
+    }
+    for (const value of Object.values(rec)) {
+      const found = findMarkdownElement(value, needle);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return undefined;
+}
+
 describe("lark card renderer", () => {
   it("renders streaming engine events into one interactive run card", () => {
     let state = initialLarkRunState("lark:oc_chat");
@@ -98,6 +123,26 @@ describe("lark card renderer", () => {
     expect(card.config.summary.content).toContain("看盘：A股开盘");
     // English locale localizes the heading.
     expect(JSON.stringify(renderLarkReminderCard("check the market", "en"))).toContain("⏰ Reminder");
+  });
+
+  it("renders background task notifications as compact small-note previews, not full markdown headings", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, {
+      type: "task_notification",
+      text: "# 审计完成\n\n## 高危\n\n这里是非常长的后台报告。" + "内容".repeat(400),
+      status: "completed",
+    });
+
+    const card = renderLarkRunCard(state, "zh");
+    const background = findMarkdownElement(card, "后台任务");
+
+    expect(background).toBeDefined();
+    expect(background?.text_size).toBe("notation");
+    expect(background?.content).toContain("审计完成");
+    expect(background?.content).toContain("高危");
+    expect(background?.content).not.toContain("# 审计完成");
+    expect(background?.content).not.toContain("## 高危");
+    expect(String(background?.content ?? "").length).toBeLessThan(800);
   });
 
   it("caps every card markdown element so a long answer cannot overflow Feishu's element limit", () => {

@@ -2,6 +2,7 @@ import { mkdir, open } from "node:fs/promises";
 import path from "node:path";
 
 import { AuditEventSchema, formatAuditSchemaError } from "./audit-log-schema.js";
+import { redactLogMetadata } from "./log-redaction.js";
 import { classifyFailure, type FailureCategory } from "../runtime/error-classification.js";
 import { redactSecrets } from "../runtime/secret-redaction.js";
 
@@ -66,6 +67,7 @@ export async function appendAuditEvent(stateDir: string, event: AuditEvent): Pro
     // Defense-in-depth: detail is frequently a raw error message that may carry a
     // bearer token or `*_secret=...` assignment. Scrub before it lands on disk.
     ...(typeof event.detail === "string" ? { detail: redactSecrets(event.detail) } : {}),
+    ...(event.metadata ? { metadata: redactLogMetadata(event.metadata) } : {}),
   };
   const result = AuditEventSchema.safeParse(materialized);
   if (!result.success) {

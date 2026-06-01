@@ -71,7 +71,7 @@ export type LarkApprovalTextCommandResult =
     outcome: "success" | "noop";
     choice: LarkApprovalChoice;
     requestId?: string;
-    reason?: "no-pending" | "different-conversation";
+    reason?: "no-pending" | "different-conversation" | "ask-user-question";
   };
 
 export async function requestLarkApproval(input: {
@@ -488,6 +488,16 @@ export async function handleLarkApprovalTextCommand(input: {
       reason: "different-conversation",
     };
   }
+  if (pending.askUserQuestionInput !== undefined && parsed.choice !== "deny") {
+    await input.channel.send(input.chatId, { text: renderAskUserQuestionNeedsCard(locale) }, larkReplyOptions(input.messageId, input.replyInThread));
+    return {
+      handled: true,
+      outcome: "noop",
+      choice: parsed.choice,
+      requestId: pending.requestId,
+      reason: "ask-user-question",
+    };
+  }
 
   cleanupPendingApproval(input.runtime, pending.requestId);
   pending.resolve(renderTextApprovalDecision(parsed.choice));
@@ -672,7 +682,7 @@ export async function handleLarkCardAction(input: {
       return true;
     }
 
-    const notice = await applyLarkConfigCardAction(input.stateDir, value, locale, actionFormValue(input.event.action));
+    const notice = await applyLarkConfigCardAction(input.stateDir, value, locale, larkCardActionFormValue(input.event));
     const bridgeChatId = typeof value.bridgeChatId === "number" && Number.isInteger(value.bridgeChatId)
       ? value.bridgeChatId
       : stableLarkNumericId(value.conversationKey);
@@ -1323,7 +1333,7 @@ async function runLarkCardChoice(input: {
         },
       });
 
-      if (event.type !== "task_notification") {
+      if (event.type !== "task_notification" || event.settlesCurrentTurn) {
         return;
       }
 
@@ -1500,7 +1510,7 @@ async function runLarkArchiveContinueCardAction(input: {
         },
       });
 
-      if (event.type !== "task_notification") {
+      if (event.type !== "task_notification" || event.settlesCurrentTurn) {
         return;
       }
 
@@ -1818,6 +1828,12 @@ function renderApprovalDifferentConversation(locale: Locale): string {
   return locale === "en"
     ? "This approval request belongs to another Lark conversation."
     : "这个审批请求属于另一个飞书会话。";
+}
+
+function renderAskUserQuestionNeedsCard(locale: Locale): string {
+  return locale === "en"
+    ? "This is a question card. Please choose an answer in the card; /approve cannot replace an answer."
+    : "这个是问题卡片，请在卡片里选择答案，不能用 /approve 代替。";
 }
 
 function renderUnsupportedLarkCardAction(locale: Locale): string {

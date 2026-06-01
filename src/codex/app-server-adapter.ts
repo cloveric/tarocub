@@ -517,6 +517,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       prompt,
       input.onProgress,
       input.onEngineEvent,
+      runtimeOptions.approvalMode,
       input.onApprovalRequest,
       input.abortSignal,
       input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
@@ -635,6 +636,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
       this.goalWatchers.delete(threadId);
       input.abortSignal?.removeEventListener("abort", onAbort);
+      this.notifyIdleWaitersIfIdle();
     }
   }
 
@@ -1496,6 +1498,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     prompt: string,
     onProgress?: (partialText: string) => void,
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>,
+    approvalMode: ApprovalMode = this.currentApprovalMode,
     onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>,
     abortSignal?: AbortSignal,
     timeoutMs: number | null = this.turnTimeoutMs,
@@ -1504,7 +1507,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     // opted out, so the turn runs with approvalPolicy "never" and Codex never asks
     // (mirrors the `approvalMode === "normal"` gate in the Claude/Antigravity/process
     // adapters). Without this, even a yolo/bypass instance prompted for e.g. rm -rf.
-    const gatedApprovalRequest = this.currentApprovalMode === "normal" ? onApprovalRequest : undefined;
+    const gatedApprovalRequest = approvalMode === "normal" ? onApprovalRequest : undefined;
     const pending = await new Promise<{ text: string; usage?: AdapterUsage }>((resolve, reject) => {
       const turnErrorPrefix = "Codex app-server turn";
       const rejectAndCleanup = (error: Error) => {
@@ -1811,6 +1814,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
     this.pendingTurns.clear();
     this.completingTurns = 0;
+    for (const watcher of this.goalWatchers.values()) {
+      watcher.resolve(watcher.latestGoal);
+    }
+    this.goalWatchers.clear();
     this.loadedThreads.clear();
     this.notifyIdleWaitersIfIdle();
   }
@@ -1821,7 +1828,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         return false;
       }
     }
-    return this.pendingTurns.size === 0 && this.completingTurns === 0;
+    return this.pendingTurns.size === 0 && this.completingTurns === 0 && this.goalWatchers.size === 0;
   }
 
   private async waitForIdle(): Promise<void> {

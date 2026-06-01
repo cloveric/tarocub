@@ -3557,6 +3557,7 @@ async function runServiceCommand(
       : null;
     const shouldSkipCurrentStop = currentServiceInstanceName !== null && subcommand === "stop";
     let deferredCurrentRestartInstance: string | null = null;
+    const failures: Array<{ instanceName: string; message: string }> = [];
 
     for (const currentInstanceName of instanceNames) {
       if (shouldSkipCurrentStop && currentInstanceName === currentServiceInstanceName) {
@@ -3569,31 +3570,47 @@ async function runServiceCommand(
         deferredCurrentRestartInstance = currentInstanceName;
         continue;
       }
-      if (subcommand === "start") {
-        logger.log(await startServiceInstance(env, currentInstanceName, serviceDeps));
-        continue;
-      }
-      if (subcommand === "stop") {
-        logger.log(await stopServiceInstance(env, currentInstanceName, serviceDeps, { force }));
-        continue;
-      }
-      if (subcommand === "restart") {
-        await stopServiceInstance(env, currentInstanceName, serviceDeps, { force });
-        logger.log(await startServiceInstance(env, currentInstanceName, serviceDeps));
-        continue;
-      }
-      if (subcommand === "status") {
-        logger.log(formatServiceStatus(await getServiceStatus(env, currentInstanceName, serviceDeps)));
-        continue;
-      }
-      if (subcommand === "doctor") {
-        logger.log(formatServiceDoctor(await runServiceDoctor(env, currentInstanceName, serviceDeps)));
+      try {
+        if (subcommand === "start") {
+          logger.log(await startServiceInstance(env, currentInstanceName, serviceDeps));
+          continue;
+        }
+        if (subcommand === "stop") {
+          logger.log(await stopServiceInstance(env, currentInstanceName, serviceDeps, { force }));
+          continue;
+        }
+        if (subcommand === "restart") {
+          await stopServiceInstance(env, currentInstanceName, serviceDeps, { force });
+          logger.log(await startServiceInstance(env, currentInstanceName, serviceDeps));
+          continue;
+        }
+        if (subcommand === "status") {
+          logger.log(formatServiceStatus(await getServiceStatus(env, currentInstanceName, serviceDeps)));
+          continue;
+        }
+        if (subcommand === "doctor") {
+          logger.log(formatServiceDoctor(await runServiceDoctor(env, currentInstanceName, serviceDeps)));
+          continue;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push({ instanceName: currentInstanceName, message });
+        logger.log(`Failed instance "${currentInstanceName}": ${message}`);
         continue;
       }
       throw new Error("Usage: telegram service <start|stop|restart|status|logs|doctor> ...");
     }
     if (deferredCurrentRestartInstance !== null) {
-      logger.log(await scheduleDeferredServiceRestart(env, deferredCurrentRestartInstance, serviceDeps, { current: true }));
+      try {
+        logger.log(await scheduleDeferredServiceRestart(env, deferredCurrentRestartInstance, serviceDeps, { current: true }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failures.push({ instanceName: deferredCurrentRestartInstance, message });
+        logger.log(`Failed instance "${deferredCurrentRestartInstance}": ${message}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`${failures.length} service command(s) failed: ${failures.map((failure) => `${failure.instanceName}: ${failure.message}`).join("; ")}`);
     }
     return true;
   }

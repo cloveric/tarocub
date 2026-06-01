@@ -317,8 +317,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     const turnLogFile = path.join(turnLogDir, "turn.log");
     const args = [
       "--print",
-      "--print-timeout",
-      "1h",
+      ...(!input.disableRuntimeTimeout ? ["--print-timeout", "1h"] : []),
       "--log-file",
       turnLogFile,
       ...permissionFlags,

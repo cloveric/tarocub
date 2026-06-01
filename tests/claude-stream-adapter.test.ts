@@ -826,6 +826,69 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("settles the active turn when its own background task completion is the terminal output", async () => {
+    vi.useFakeTimers();
+    const { children, spawnFn } = createSpawnHarness();
+    const events: unknown[] = [];
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+    });
+
+    try {
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Run a long audit workflow",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+
+      expect(children).toHaveLength(1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "completed",
+        session_id: "session-123",
+        summary: "Audit complete",
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "# Audit complete\n\nFull background report.",
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+
+      await vi.advanceTimersByTimeAsync(1600);
+
+      await expect(promise).resolves.toEqual({
+        text: "# Audit complete\n\nFull background report.",
+        sessionId: "session-123",
+      });
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "task_notification",
+          taskId: "task-1",
+          status: "completed",
+          text: "# Audit complete\n\nFull background report.",
+          settlesCurrentTurn: true,
+        }),
+        expect.objectContaining({
+          type: "result",
+          text: "# Audit complete\n\nFull background report.",
+          sessionId: "session-123",
+        }),
+      ]));
+    } finally {
+      adapter.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("routes Claude background task notifications to the turn that started the task", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const firstEvents: unknown[] = [];

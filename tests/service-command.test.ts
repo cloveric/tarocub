@@ -1642,6 +1642,81 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("continues restart --all when one instance fails and reports a summary error", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const killProcessTree = vi.fn();
+    const spawnDetached = vi.fn();
+    const instances = [
+      { name: "alpha", oldPid: 54321, newPid: 12345 },
+      { name: "beta", oldPid: 54322, newPid: 12346 },
+    ];
+
+    try {
+      for (const instance of instances) {
+        const stateDir = path.join(tempDir, ".cctb", instance.name);
+        await mkdir(stateDir, { recursive: true });
+        await writeFile(
+          resolveInstanceLockPath(stateDir),
+          JSON.stringify({
+            pid: instance.oldPid,
+            token: `old-${instance.name}`,
+            acquiredAt: new Date().toISOString(),
+          }),
+          "utf8",
+        );
+      }
+
+      await expect(runCli(["telegram", "service", "restart", "--all"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => {
+            if (instances.some((instance) => instance.oldPid === pid)) {
+              return !killProcessTree.mock.calls.some((call) => call[0] === pid);
+            }
+            return instances.some((instance) => instance.newPid === pid);
+          },
+          isExpectedServiceProcess: (pid) => instances.some((instance) => instance.oldPid === pid || instance.newPid === pid),
+          killProcessTree,
+          spawnDetached: (command, args, options) => {
+            const instanceName = args.at(-1);
+            const instance = instances.find((candidate) => candidate.name === instanceName);
+            if (!instance) {
+              throw new Error(`unexpected instance: ${instanceName}`);
+            }
+            if (instance.name === "alpha") {
+              throw new Error("launchd rejected alpha");
+            }
+            const stateDir = path.join(tempDir, ".cctb", instance.name);
+            writeFileSync(
+              resolveInstanceLockPath(stateDir),
+              JSON.stringify({
+                pid: instance.newPid,
+                token: `new-${instance.name}`,
+                acquiredAt: new Date().toISOString(),
+              }),
+              "utf8",
+            );
+            spawnDetached(command, args, options);
+          },
+          sleep: async () => {},
+        },
+      })).rejects.toThrow('1 service command(s) failed: alpha: launchd rejected alpha');
+
+      expect(killProcessTree).toHaveBeenCalledWith(54321);
+      expect(killProcessTree).toHaveBeenCalledWith(54322);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(messages).toEqual([
+        'Failed instance "alpha": launchd rejected alpha',
+        'Started instance "beta" with pid 12346.',
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("defers restarting the current instance when restarting all from inside an instance", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

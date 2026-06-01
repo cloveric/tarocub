@@ -1,4 +1,5 @@
 import { SessionStateSchema } from "./session-state-schema.js";
+import { withFileMutex } from "./file-mutex.js";
 import { JsonStore } from "./json-store.js";
 import type { SessionRecord, SessionState } from "../types.js";
 import { getTelegramConversationKey } from "../telegram/conversation-key.js";
@@ -25,9 +26,11 @@ function normalizeRecord(record: SessionRecord): SessionRecord {
 
 export class SessionStore {
   private readonly store: JsonStore<SessionState>;
+  private readonly filePath: string;
   private pendingWrite: Promise<void> = Promise.resolve();
 
   constructor(filePath: string) {
+    this.filePath = filePath;
     this.store = new JsonStore<SessionState>(filePath, (value) => {
       const result = SessionStateSchema.safeParse(value);
       if (result.success) {
@@ -192,11 +195,16 @@ export class SessionStore {
   }
 
   async reset(): Promise<void> {
-    await this.store.write(createDefaultSessionState());
+    await this.enqueueWrite(async () => {
+      await this.store.write(createDefaultSessionState());
+    });
   }
 
   private enqueueWrite(task: () => Promise<void>): Promise<void> {
-    const run = this.pendingWrite.then(task, task);
+    const run = this.pendingWrite.then(
+      () => withFileMutex(this.filePath, task),
+      () => withFileMutex(this.filePath, task),
+    );
     this.pendingWrite = run.then(
       () => undefined,
       () => undefined,

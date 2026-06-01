@@ -394,6 +394,13 @@ async function handleRun(rest: string, context: CronCommandContext): Promise<voi
   }
   const job = await ensureChatJob(id, context);
   if (!job) return;
+  if (!job.enabled) {
+    const msg = context.locale === "zh"
+      ? `任务 ${id} 已停用；请先 /cron toggle ${id} 启用后再运行。`
+      : `Task ${id} is disabled; enable it with /cron toggle ${id} before running it.`;
+    await context.api.sendMessage(context.chatId, msg);
+    return;
+  }
 
   const ack = context.locale === "zh"
     ? `▶ 正在运行任务 ${id}…`

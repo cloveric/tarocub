@@ -110,6 +110,8 @@ export type EngineStreamEvent =
       status?: string;
       summary?: string;
       outputFile?: string;
+      /** True when this notification is being promoted into the active turn's final answer. */
+      settlesCurrentTurn?: boolean;
     };
 
 export interface CodexUserMessageInput {

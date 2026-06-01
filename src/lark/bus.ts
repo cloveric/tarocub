@@ -384,7 +384,7 @@ function createLarkBusEngineEventHandler(
       },
     });
 
-    if (event.type !== "task_notification") {
+    if (event.type !== "task_notification" || event.settlesCurrentTurn) {
       return;
     }
 

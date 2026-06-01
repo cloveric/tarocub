@@ -123,7 +123,7 @@ export async function handleLarkComment(input: {
           },
         });
 
-        if (event.type !== "task_notification") {
+        if (event.type !== "task_notification" || event.settlesCurrentTurn) {
           return;
         }
 

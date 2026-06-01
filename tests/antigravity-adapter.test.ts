@@ -79,6 +79,35 @@ describe("ProcessAntigravityAdapter", () => {
     expect(calls[0]?.options.env?.NODE_OPTIONS).toBeUndefined();
   });
 
+  it("omits agy's print timeout for explicitly unbounded turns", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy",
+      { HOME: "/tmp/home" },
+      spawnAntigravity,
+      undefined,
+      undefined,
+      "/tmp/workspace",
+    );
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "/goal --unbounded finish the migration",
+      files: [],
+      disableRuntimeTimeout: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(calls).toHaveLength(1);
+    });
+    child.stdout.emitData("ok");
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({ text: "ok" });
+    expect(calls[0]?.args).toContain("--print");
+    expect(calls[0]?.args).not.toContain("--print-timeout");
+    expect(calls[0]?.args).not.toContain("1h");
+  });
+
   it("binds new Telegram chats to the Antigravity conversation reported in the per-turn log file", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
     const { spawnAntigravity, child, calls } = createSpawnHarness();

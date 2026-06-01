@@ -527,6 +527,59 @@ describe("FileWorkflowStore", () => {
     }
   });
 
+  it("serializes concurrent workflow mutations across separate FileWorkflowStore instances", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const storeA = new FileWorkflowStore(stateDir);
+    const storeB = new FileWorkflowStore(stateDir);
+    const storeC = new FileWorkflowStore(stateDir);
+
+    try {
+      await Promise.all([
+        storeA.append({
+          uploadId: "upload-a",
+          chatId: 100,
+          userId: 100,
+          kind: "document",
+          status: "processing",
+          sourceFiles: ["a.txt"],
+          derivedFiles: [],
+          summary: "record-a",
+          createdAt: "2026-04-10T00:00:00.000Z",
+          updatedAt: "2026-04-10T00:00:00.000Z",
+        }),
+        storeB.append({
+          uploadId: "upload-b",
+          chatId: 100,
+          userId: 100,
+          kind: "document",
+          status: "processing",
+          sourceFiles: ["b.txt"],
+          derivedFiles: [],
+          summary: "record-b",
+          createdAt: "2026-04-10T00:01:00.000Z",
+          updatedAt: "2026-04-10T00:01:00.000Z",
+        }),
+        storeC.append({
+          uploadId: "upload-c",
+          chatId: 100,
+          userId: 100,
+          kind: "document",
+          status: "processing",
+          sourceFiles: ["c.txt"],
+          derivedFiles: [],
+          summary: "record-c",
+          createdAt: "2026-04-10T00:02:00.000Z",
+          updatedAt: "2026-04-10T00:02:00.000Z",
+        }),
+      ]);
+
+      expect((await new FileWorkflowStore(stateDir).list({ chatId: 100 })).map((record) => record.uploadId))
+        .toEqual(["upload-c", "upload-b", "upload-a"]);
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
   it("serializes update and remove mutations without losing records", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new FileWorkflowStore(stateDir);

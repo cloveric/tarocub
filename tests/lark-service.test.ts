@@ -939,6 +939,49 @@ describe("lark service", () => {
     }
   });
 
+  it("does not send a duplicate Lark notification when a background task settles the active turn", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-terminal-task-notification-"));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({
+          type: "task_notification",
+          text: "# 审计完成\n\n完整报告。",
+          status: "completed",
+          settlesCurrentTurn: true,
+        });
+        return { text: "# 审计完成\n\n完整报告。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_terminal_task", content: "跑一个长审计" }),
+      });
+
+      const sentMarkdown = (channel.send.mock.calls as unknown[][])
+        .map((call) => call[1])
+        .filter((payload): payload is { markdown: string } =>
+          typeof payload === "object" &&
+          payload !== null &&
+          "markdown" in payload &&
+          typeof payload.markdown === "string"
+        )
+        .map((payload) => payload.markdown);
+      expect(sentMarkdown).not.toContain("后台任务完成\n# 审计完成\n\n完整报告。");
+      const rendered = `${JSON.stringify(channel.send.mock.calls)}\n${JSON.stringify(channel.updateCard.mock.calls)}`;
+      expect(rendered).toContain("完整报告。");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders Lark background task notifications in English when Lark locale is English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-en-"));
     const channel = fakeChannel();
@@ -5292,6 +5335,64 @@ describe("lark service", () => {
     }
   });
 
+  it("aborts an active goal watcher before a normal Lark turn claims the conversation", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-normal-preempts-goal-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const goalAbort = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: goalAbort, hasRunCard: true, goalWatch: true });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "normal answer" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_normal_after_goal", content: "hello" }),
+      });
+
+      expect(goalAbort.signal.aborted).toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalled();
+      expect(runtime.activeRuns.size).toBe(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delete a newer active run when a normal Lark turn finishes", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-normal-run-guard-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const replacementAbort = new AbortController();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => {
+        runtime.activeRuns.set("lark:oc_chat", { abortController: replacementAbort, hasRunCard: true, goalWatch: true });
+        return { text: "normal answer" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_normal_replaced", content: "hello" }),
+      });
+
+      expect(runtime.activeRuns.get("lark:oc_chat")?.abortController).toBe(replacementAbort);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders structured Lark goal replies in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex", locale: "en" }) + "\n");
@@ -7083,7 +7184,7 @@ describe("lark service", () => {
           conversationKey: "lark-comment:doc_token",
           metadata: expect.objectContaining({
             larkSurface: "comment",
-            fileToken: "doc_token",
+            fileToken: "[redacted]",
             fileType: "docx",
             commentId: "comment_1",
           }),
@@ -7097,7 +7198,7 @@ describe("lark service", () => {
           outcome: "success",
           metadata: expect.objectContaining({
             larkSurface: "comment",
-            fileToken: "doc_token",
+            fileToken: "[redacted]",
             fileType: "docx",
             commentId: "comment_1",
           }),
@@ -7165,7 +7266,7 @@ describe("lark service", () => {
         detail: "task_notification",
         metadata: expect.objectContaining({
           larkSurface: "comment",
-          fileToken: "doc_token",
+          fileToken: "[redacted]",
           fileType: "docx",
           commentId: "comment_1",
           textChars: "文档后台分析完成。".length,
@@ -7235,7 +7336,7 @@ describe("lark service", () => {
         detail: "access denied",
         metadata: expect.objectContaining({
           larkSurface: "comment",
-          fileToken: "doc_token",
+          fileToken: "[redacted]",
           fileType: "docx",
           commentId: "comment_1",
         }),
@@ -10745,6 +10846,66 @@ describe("lark service", () => {
     }
   });
 
+  it("recovers Lark config form submissions from the raw event when the SDK drops action.form_value", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-form-raw-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "codex",
+      locale: "zh",
+      codexServiceTier: "fast",
+      approvalMode: "full-auto",
+    }) + "\n");
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const callbackValue = {
+      cctb_lark: "config",
+      action: "submit",
+      conversationKey: "lark:oc_chat",
+      bridgeChatType: "private",
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_config_form_raw",
+          operator: { openId: "ou_user", name: "User" },
+          action: { value: callbackValue },
+          raw: {
+            action: {
+              value: callbackValue,
+              form_value: {
+                engine: "claude",
+                fast: "off",
+                yolo: "off",
+                locale: "en",
+              },
+            },
+          },
+        },
+      });
+
+      const config = await loadInstanceConfig(stateDir);
+      const rawConfig = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(handled).toBe(true);
+      expect(config.engine).toBe("claude");
+      expect(config.locale).toBe("en");
+      expect(rawConfig.approvalMode).toBe("normal");
+      expect(config.codexServiceTier).toBeUndefined();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.updateCard).toHaveBeenCalledWith("card_config_form_raw", expect.any(Object));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps Lark group config unchanged when submitting the config form without a group change", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-form-group-keep-"));
     const groupChatId = stableLarkNumericId("lark:oc_group");
@@ -11806,6 +11967,62 @@ describe("lark service", () => {
         }),
       }));
     } finally {
+      runtime.pendingApprovals.clear();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let text /approve resolve an AskUserQuestion without an answer", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-ask-text-approve-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const resolve = vi.fn();
+    const reject = vi.fn();
+    const timer = setTimeout(() => undefined, 60_000);
+    runtime.pendingApprovals.set("req_ask", {
+      requestId: "req_ask",
+      chatId: "oc_chat",
+      conversationKey: "lark:oc_chat",
+      bridgeChatType: "private",
+      askUserQuestionInput: {
+        questions: [{
+          header: "Scope",
+          question: "Pick one",
+          options: [{ label: "A", description: "alpha" }],
+        }],
+      },
+      resolve,
+      reject,
+      timer,
+    });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_approve_ask",
+          content: "/approve",
+        }),
+      });
+
+      expect(resolve).not.toHaveBeenCalled();
+      expect(reject).not.toHaveBeenCalled();
+      expect(runtime.pendingApprovals.has("req_ask")).toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "这个是问题卡片，请在卡片里选择答案，不能用 /approve 代替。" },
+        { replyTo: "om_approve_ask" },
+      );
+    } finally {
+      clearTimeout(timer);
       runtime.pendingApprovals.clear();
       await rm(stateDir, { recursive: true, force: true });
     }

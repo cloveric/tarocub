@@ -71,6 +71,44 @@ describe("audit log", () => {
     }
   });
 
+  it("redacts secrets recursively from metadata before writing", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+
+    try {
+      await appendAuditEvent(tempDir, {
+        type: "update.handle",
+        instanceName: "default",
+        outcome: "error",
+        metadata: {
+          token: "top-secret-token",
+          nested: {
+            Authorization: "Bearer nested-token",
+            error: "request failed: client_secret=nested-secret",
+          },
+          list: ["api_key=list-secret"],
+        },
+      });
+
+      const raw = await readFile(resolveAuditLogPath(tempDir), "utf8");
+      expect(raw).not.toContain("top-secret-token");
+      expect(raw).not.toContain("nested-token");
+      expect(raw).not.toContain("nested-secret");
+      expect(raw).not.toContain("list-secret");
+
+      const line = JSON.parse(raw.trim());
+      expect(line.metadata).toEqual({
+        token: "[redacted]",
+        nested: {
+          Authorization: "[redacted]",
+          error: "request failed: client_secret=[redacted]",
+        },
+        list: ["api_key=[redacted]"],
+      });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("rejects invalid audit event shapes on append", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 
