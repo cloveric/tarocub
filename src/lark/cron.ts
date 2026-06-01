@@ -5,6 +5,8 @@ import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { CronAccessDeniedError } from "../runtime/cron-errors.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
+import { sendLarkCardWithFallback } from "./card-delivery.js";
+import { renderLarkReminderCard } from "./card-renderer.js";
 import { sendLarkMarkdown } from "./delivery.js";
 import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import type { LarkServiceRuntime } from "./runtime.js";
@@ -29,6 +31,8 @@ type LarkCronDeliverResponse = (input: {
   larkMessageId?: string;
   replyTo?: string;
   replyInThread?: boolean;
+  /** When false, only files/overflow are delivered (the text is already in the run card). */
+  sendText?: boolean;
 }) => Promise<void>;
 
 export function buildLarkCronExecutor(input: {
@@ -39,6 +43,8 @@ export function buildLarkCronExecutor(input: {
   workspaceOverride?: string;
   agentInstructions?: () => string;
   deliverResponse?: LarkCronDeliverResponse;
+  /** Factory for the run card an AI-task cron renders its result into (injected to avoid a cron→message-handler import cycle). */
+  createRunCard?: typeof import("./message-handler.js")["createLarkRunCardController"];
 }): CronExecutor {
   return async (job: CronJobRecord, abortSignal?: AbortSignal): Promise<void> => {
     if (job.channel !== "lark") {
@@ -67,18 +73,40 @@ export function buildLarkCronExecutor(input: {
 
     if (job.deliveryMode === "notify") {
       if (!job.mute) {
-        const replyOptions = larkCronReplyOptions(job);
-        if (replyOptions) {
-          await input.channel.send(job.larkChatId, { text: renderLarkCronNotification(job) }, replyOptions);
-        } else {
-          await input.channel.send(job.larkChatId, { text: renderLarkCronNotification(job) });
-        }
+        const locale = job.locale === "en" ? "en" : "zh";
+        // Reminder card — each fire sends its own card, so it is still a separate
+        // push (never batched). Falls back to the plain "⏰ 提醒" text if the card
+        // can't be sent, so a reminder is never silently dropped.
+        await sendLarkCardWithFallback({
+          channel: input.channel,
+          chatId: job.larkChatId,
+          card: renderLarkReminderCard(larkReminderBody(job), locale),
+          fallbackText: renderLarkCronNotification(job),
+          options: larkCronReplyOptions(job),
+          locale,
+        });
       }
       return;
     }
 
     const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
     await mkdir(requestOutputDir, { recursive: true });
+    const replyFields = larkCronReplyFields(job);
+    // Render the AI task's result into a run card (same UX as a chat reply): open
+    // the card, run the turn, then finish it with the answer. Skipped for muted
+    // jobs (no card) and when no run-card factory is wired (older callers).
+    const runCard = !job.mute && input.createRunCard
+      ? await input.createRunCard({
+        channel: input.channel,
+        chatId: job.larkChatId,
+        conversationKey,
+        bridgeChatType,
+        locale: job.locale === "en" ? "en" : "zh",
+        ...(replyFields.replyTo
+          ? { replyTo: replyFields.replyTo, replyInThread: replyFields.replyInThread ?? false }
+          : {}),
+      })
+      : undefined;
     const result = await input.bridge.handleAuthorizedMessage({
       chatId: accessChatId,
       userId: job.userId,
@@ -96,28 +124,38 @@ export function buildLarkCronExecutor(input: {
     if (job.mute) {
       return;
     }
-    if (!input.deliverResponse) {
-      await sendLarkMarkdown(input.channel, job.larkChatId, result.text || renderLarkEmptyCronAgentReply(job), {
-        ...larkCronReplyFields(job),
+    // Finish the card with the answer; finish() reports whether the full answer
+    // fit, which decides if deliverResponse should still send the text — it always
+    // delivers file/image tags + any overflow regardless.
+    let answerShownInCard = false;
+    if (runCard) {
+      answerShownInCard = await runCard.finish(result.text || renderLarkEmptyCronAgentReply(job));
+    }
+    if (input.deliverResponse) {
+      await input.deliverResponse({
+        channel: input.channel,
+        runtime: input.runtime,
+        chatId: job.larkChatId,
+        text: result.text,
+        stateDir: input.stateDir,
+        requestOutputDir,
+        workspaceOverride: input.workspaceOverride,
+        conversationKey,
+        bridgeChatType,
+        bridgeChatId: job.chatId,
+        bridgeUserId: job.userId,
+        larkThreadId: job.larkThreadId,
+        larkMessageId: job.larkMessageId,
+        sendText: runCard ? !answerShownInCard : true,
+        ...replyFields,
       });
       return;
     }
-    await input.deliverResponse({
-      channel: input.channel,
-      runtime: input.runtime,
-      chatId: job.larkChatId,
-      text: result.text,
-      stateDir: input.stateDir,
-      requestOutputDir,
-      workspaceOverride: input.workspaceOverride,
-      conversationKey,
-      bridgeChatType,
-      bridgeChatId: job.chatId,
-      bridgeUserId: job.userId,
-      larkThreadId: job.larkThreadId,
-      larkMessageId: job.larkMessageId,
-      ...larkCronReplyFields(job),
-    });
+    if (!runCard) {
+      await sendLarkMarkdown(input.channel, job.larkChatId, result.text || renderLarkEmptyCronAgentReply(job), {
+        ...replyFields,
+      });
+    }
   };
 }
 
@@ -192,13 +230,17 @@ function stripLeadingLarkReminderTimeAnchors(prompt: string): string {
   return body || prompt.trim();
 }
 
+/** The reminder text with the "提醒我…" prefix and leading time anchors stripped — shared by the card body and the plain-text fallback. */
+function larkReminderBody(job: CronJobRecord): string {
+  return stripLeadingLarkReminderTimeAnchors(stripLarkReminderPrefix(job.prompt));
+}
+
 function renderLarkCronNotification(job: CronJobRecord): string {
-  const body = stripLeadingLarkReminderTimeAnchors(stripLarkReminderPrefix(job.prompt));
   const prefix = job.locale === "en" ? "⏰ Reminder\n" : "⏰ 提醒\n";
   const truncationNotice = job.locale === "en"
     ? "\n... (reminder text truncated.)"
     : "\n…（提醒内容过长，已截断。）";
-  return `${prefix}${truncateLarkCronText(body, LARK_CRON_TEXT_LIMIT - prefix.length, truncationNotice)}`;
+  return `${prefix}${truncateLarkCronText(larkReminderBody(job), LARK_CRON_TEXT_LIMIT - prefix.length, truncationNotice)}`;
 }
 
 function renderLarkEmptyCronAgentReply(job: CronJobRecord): string {

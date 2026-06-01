@@ -1253,8 +1253,9 @@ export async function createLarkRunCardController(input: {
   chatId: string;
   conversationKey: string;
   bridgeChatType: "private" | "group";
-  replyTo: string;
-  replyInThread: boolean;
+  /** Optional: a scheduled (cron) run card has no originating message to reply to → send fresh. */
+  replyTo?: string;
+  replyInThread?: boolean;
   locale: "zh" | "en";
   /** Reuse the queued card (managed → CardKit in place; inline → patch) instead of sending a new one. */
   existingCard?: LarkQueueCardRef;

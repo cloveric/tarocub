@@ -21,6 +21,7 @@ import {
   requestLarkApproval,
 } from "../src/lark/service.js";
 import { deliverLarkResponse } from "../src/lark/delivery.js";
+import { createLarkRunCardController } from "../src/lark/message-handler.js";
 import { LarkGroupModeStore } from "../src/lark/group-mode-store.js";
 import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
 import { CronStore } from "../src/state/cron-store.js";
@@ -4612,10 +4613,15 @@ describe("lark service", () => {
         conversationKey: "lark:oc_chat",
       }));
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: "⏰ 提醒\n早定课" },
-      );
+      // A reminder now goes out as its own card (still a separate fire → still a
+      // push; never batched). The card carries the heading + reminder body.
+      expect(channel.send).toHaveBeenCalledTimes(1);
+      const reminderPayload = (channel.send as ReturnType<typeof vi.fn>).mock.calls[0][1] as { card?: unknown; text?: string };
+      expect(reminderPayload.card).toBeDefined();
+      expect(reminderPayload.text).toBeUndefined();
+      const reminderJson = JSON.stringify(reminderPayload.card);
+      expect(reminderJson).toContain("提醒");
+      expect(reminderJson).toContain("早定课");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -4664,11 +4670,13 @@ describe("lark service", () => {
         runHistory: [],
       });
 
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: "⏰ 提醒\n早定课" },
-        { replyTo: "om_cron_thread", replyInThread: true },
-      );
+      expect(channel.send).toHaveBeenCalledTimes(1);
+      const [threadChat, threadPayload, threadOpts] = (channel.send as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(threadChat).toBe("oc_chat");
+      expect((threadPayload as { card?: unknown }).card).toBeDefined();
+      expect(JSON.stringify(threadPayload)).toContain("早定课");
+      // Still threaded back to the originating message.
+      expect(threadOpts).toEqual({ replyTo: "om_cron_thread", replyInThread: true });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -4726,6 +4734,73 @@ describe("lark service", () => {
         { markdown: "agent result" },
         {},
       );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders an agent-mode Lark cron result into a run card and still delivers files", async () => {
+    // Production wiring (createRunCard provided): the AI task's result reads like a
+    // chat reply (run card), the [send-file:] tag is stripped from the card text,
+    // and the file is still delivered via deliverResponse alongside the card.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-agent-card-"));
+    const channel = fakeChannel(); // has updateCard → the run-card path engages
+    const runtime = createLarkServiceRuntime();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (input: { requestOutputDir?: string }) => {
+        const dir = input.requestOutputDir!;
+        await mkdir(dir, { recursive: true });
+        const reportPath = path.join(dir, "out.txt");
+        await writeFile(reportPath, "data");
+        return { text: `Here is the summary [send-file:${reportPath}]` };
+      }),
+    };
+    const executor = buildLarkCronExecutor({
+      channel,
+      bridge,
+      runtime,
+      stateDir,
+      deliverResponse: deliverLarkResponse,
+      createRunCard: createLarkRunCardController,
+    });
+
+    try {
+      await executor({
+        id: "agentcard1",
+        channel: "lark",
+        chatId: stableLarkNumericId("lark:oc_chat"),
+        userId: stableLarkNumericId("user:ou_user"),
+        chatType: "private",
+        conversationKey: "lark:oc_chat",
+        larkChatId: "oc_chat",
+        cronExpr: "0 9 * * *",
+        timezone: "Asia/Shanghai",
+        prompt: "daily summary",
+        enabled: true,
+        runOnce: false,
+        sessionMode: "new_per_run",
+        deliveryMode: "agent",
+        mute: false,
+        silent: false,
+        timeoutMins: 30,
+        maxFailures: 3,
+        createdAt: "2026-05-25T00:00:00.000Z",
+        updatedAt: "2026-05-25T00:00:00.000Z",
+        failureCount: 0,
+        runHistory: [],
+      });
+
+      // The answer lands in the run card (finished via updateCard), tag stripped.
+      const cardUpdates = JSON.stringify((channel.updateCard as ReturnType<typeof vi.fn>).mock.calls);
+      expect(cardUpdates).toContain("Here is the summary");
+      expect(cardUpdates).not.toContain("send-file:");
+      // The file is still delivered (deliverResponse runs with sendText:false).
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.accepted",
+        metadata: expect.objectContaining({ fileName: "out.txt", larkChatId: "oc_chat" }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -4894,9 +4969,20 @@ describe("lark service", () => {
       });
 
       expect(channel.send).toHaveBeenCalledTimes(1);
-      const payload = (channel.send.mock.calls[0] as unknown as Array<unknown>)[1] as { text: string };
-      expect(payload.text.length).toBeLessThanOrEqual(3500);
-      expect(payload.text).toContain("已截断");
+      const longPayload = (channel.send.mock.calls[0] as unknown as Array<unknown>)[1] as { card?: unknown };
+      expect(longPayload.card).toBeDefined();
+      // The card body element is bounded — not the raw 6000-char prompt.
+      let maxEl = 0;
+      const walkCard = (n: unknown): void => {
+        if (Array.isArray(n)) { n.forEach(walkCard); return; }
+        if (n && typeof n === "object") {
+          const rec = n as Record<string, unknown>;
+          if (rec.tag === "markdown" && typeof rec.content === "string") maxEl = Math.max(maxEl, rec.content.length);
+          Object.values(rec).forEach(walkCard);
+        }
+      };
+      walkCard(longPayload.card);
+      expect(maxEl).toBeLessThanOrEqual(3001); // LARK_CARD_ANSWER_MAX (3000) + slack
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

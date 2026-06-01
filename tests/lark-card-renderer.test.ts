@@ -6,6 +6,7 @@ import {
   applyLarkEngineEvent,
   initialLarkRunState,
   renderLarkApprovalCard,
+  renderLarkReminderCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
   renderLarkRunCardMinimal,
@@ -84,6 +85,19 @@ describe("lark card renderer", () => {
     // A normal (non-goal) run shows no banner — the field is opt-in.
     const plain = JSON.stringify(renderLarkRunCard(initialLarkRunState("lark:oc_chat"), "zh"));
     expect(plain).not.toContain("🎯");
+  });
+
+  it("renders a reminder card with the ⏰ heading, body, and a push-friendly summary", () => {
+    const card = renderLarkReminderCard("看盘：A股开盘", "zh") as {
+      config: { summary: { content: string } };
+    };
+    const json = JSON.stringify(card);
+    expect(json).toContain("⏰ 提醒");
+    expect(json).toContain("看盘：A股开盘");
+    // The summary is the phone-notification preview → must carry the reminder text.
+    expect(card.config.summary.content).toContain("看盘：A股开盘");
+    // English locale localizes the heading.
+    expect(JSON.stringify(renderLarkReminderCard("check the market", "en"))).toContain("⏰ Reminder");
   });
 
   it("caps every card markdown element so a long answer cannot overflow Feishu's element limit", () => {

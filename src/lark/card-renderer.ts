@@ -533,6 +533,35 @@ export function renderLarkRunCardMinimal(state: LarkRunState, locale: Locale = "
   };
 }
 
+/**
+ * A standalone card for a fired `notify` cron reminder. Deliberately simple
+ * (heading + body) — a reminder is a one-shot push, not a run. The card's
+ * `summary` carries the reminder text so the phone notification preview stays
+ * meaningful: Feishu shows the summary, not the card body, in the push. Each
+ * fire sends its own card (separate, never batched), so notifications are
+ * preserved exactly as with the plain-text path.
+ */
+export function renderLarkReminderCard(body: string, locale: Locale = "zh"): Record<string, unknown> {
+  const heading = locale === "en" ? "⏰ Reminder" : "⏰ 提醒";
+  const text = body.trim() || (locale === "en" ? "(reminder)" : "（提醒）");
+  return {
+    schema: "2.0",
+    config: {
+      streaming_mode: false,
+      update_multi: true,
+      summary: { content: truncate(`⏰ ${text}`, 100) },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [
+        markdownElement(`**${heading}**`),
+        markdownElement(truncate(text, LARK_CARD_ANSWER_MAX)),
+      ],
+    },
+  };
+}
+
 type ToolGroup = { kind: "tools"; tools: LarkToolEntry[] };
 type TextGroup = { kind: "text"; content: string };
 

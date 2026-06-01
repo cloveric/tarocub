@@ -23,7 +23,7 @@ import { deliverLarkResponse } from "./delivery.js";
 import { startLarkHealthMonitor, type LarkHealthMonitor } from "./health.js";
 import { larkOperatorRawId } from "./identity.js";
 import { resolveLarkLocale } from "./locale.js";
-import { handleLarkMessage } from "./message-handler.js";
+import { createLarkRunCardController, handleLarkMessage } from "./message-handler.js";
 import { buildLarkConversationKey, larkChatIsTopicForm, larkSessionThreadIdForMessage, stableLarkNumericId } from "./message-normalizer.js";
 import { resolveLarkReactionSettings } from "./reactions.js";
 import { redactLarkErrorDetail } from "./redaction.js";
@@ -323,6 +323,7 @@ export async function runLarkService(
           stateDir,
           agentInstructions: larkAgentInstructions,
           deliverResponse: deliverLarkResponse,
+          createRunCard: createLarkRunCardController,
         }),
         stateDir,
         instanceName,
