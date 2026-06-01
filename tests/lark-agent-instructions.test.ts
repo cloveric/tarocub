@@ -9,7 +9,7 @@ describe("larkAgentInstructions", () => {
     // Bound covers the optional local-ASR line, which is appended on machines
     // where an ASR backend is actually installed (e.g. the dev box running the
     // suite); CI has neither the env nor the CLI files, so it stays absent there.
-    expect(instructions.length).toBeLessThan(2200);
+    expect(instructions.length).toBeLessThan(2400);
     expect(instructions.split("\n").length).toBeLessThanOrEqual(10);
   });
 
@@ -91,8 +91,11 @@ describe("larkAgentInstructions", () => {
     expect(instructions).not.toContain("Never use `AskUserQuestion`");
     expect(instructions).toContain("Do not call `lark-cli` just to send choice cards");
     expect(instructions).toContain("Use `lark-cli` for Lark-native work");
-    expect(instructions).toContain("basic chat transport can still work without it");
-    expect(instructions).toContain("Docs/IM/Calendar/Drive");
+    expect(instructions).toContain("Docs/Calendar/Drive");
+    // Guardrail: lark-cli is a separate app, so it must NOT be used for IM on this
+    // bot's own chats (creating groups / inviting / sending) — that trips cross-app.
+    expect(instructions).toContain("NOT IM on this bot's own chats");
+    expect(instructions).toContain("open_id cross app");
     expect(instructions).toContain("Sheets: start `sheets +info`");
     expect(instructions).toContain("do not treat Sheets as Docs/Base");
     expect(instructions).toContain("structured Sheets values");

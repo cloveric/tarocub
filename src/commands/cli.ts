@@ -1000,6 +1000,25 @@ async function readCliStdin(): Promise<string> {
   });
 }
 
+/**
+ * Reads the app id the global lark-cli config is currently bound to (via
+ * `lark-cli config show`). Returns undefined when lark-cli is unconfigured or the
+ * command isn't available — callers treat that as "no current app" (safe to init).
+ */
+async function readCurrentLarkCliApp(runCommand: LarkRunCommand): Promise<string | undefined> {
+  try {
+    const { stdout } = await runCommand({
+      file: "lark-cli",
+      args: ["config", "show"],
+      timeoutMs: 10_000,
+    });
+    const match = stdout.match(/"appId"\s*:\s*"(cli_[A-Za-z0-9_]+)"/);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 async function runLarkCliBridgeCommand(
   args: string[],
   env: LarkRuntimeEnv,
@@ -1008,8 +1027,10 @@ async function runLarkCliBridgeCommand(
 ): Promise<boolean> {
   const action = args[0] ?? "";
   if (action === "init") {
-    if (args.length !== 1) {
-      throw new Error("Usage: lark cli init");
+    const force = args.slice(1).includes("--force");
+    const unexpected = args.slice(1).filter((arg) => arg !== "--force");
+    if (unexpected.length > 0) {
+      throw new Error("Usage: lark cli init [--force]");
     }
     const loadedEnv = await loadLarkRuntimeEnv(env);
     if (!loadedEnv.LARK_APP_ID) {
@@ -1017,6 +1038,19 @@ async function runLarkCliBridgeCommand(
     }
     if (!loadedEnv.LARK_APP_SECRET) {
       throw new Error("LARK_APP_SECRET is required");
+    }
+    // Guard the SINGLE global lark-cli config (~/.lark-cli/config.json holds ONE app,
+    // but every instance has its own). If lark-cli is already bound to a DIFFERENT app,
+    // re-initing here repoints it for ALL instances — the "open_id cross app" / "every
+    // bot the same app" hazard. Refuse unless --force.
+    const currentApp = await readCurrentLarkCliApp(runCommand);
+    if (currentApp && currentApp !== loadedEnv.LARK_APP_ID && !force) {
+      logger.log([
+        `lark-cli is already configured for app ${currentApp}, but this instance's app is ${loadedEnv.LARK_APP_ID}.`,
+        "Re-initializing rewrites the SINGLE global lark-cli config and would repoint it for ALL instances",
+        "(the 'open_id cross app' hazard). Skipped — run `lark cli init --force` only if you truly mean to rebind it.",
+      ].join("\n"));
+      return true;
     }
     const brand = loadedEnv.LARK_DOMAIN === "lark" ? "lark" : "feishu";
     await runCommand({

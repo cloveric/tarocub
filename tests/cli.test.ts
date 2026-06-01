@@ -1782,6 +1782,79 @@ describe("runCli", () => {
     }
   });
 
+  it("refuses `lark cli init` when lark-cli is already bound to a different app (avoids hijacking the global config)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-cli-init-guard-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async (input: { file: string; args: string[] }) => {
+      if (input.args[0] === "config" && input.args[1] === "show") {
+        return { stdout: JSON.stringify({ appId: "cli_other_app" }), stderr: "" };
+      }
+      return { stdout: "initialized\n", stderr: "" };
+    });
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        ['LARK_APP_ID="cli_from_file"', 'LARK_APP_SECRET="secret-from-file"', `CCTB_LARK_STATE_DIR="${stateDir}"`, 'LARK_DOMAIN="feishu"', ""].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "cli", "init"], {
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; stdinText?: string }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      // The dangerous `config init` (which rewrites the single global config) must NOT run.
+      const didInit = runCommand.mock.calls.some((c) => c[0].args[0] === "config" && c[0].args[1] === "init");
+      expect(didInit).toBe(false);
+      expect(messages.join("\n")).toContain("already configured for app cli_other_app");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("allows `lark cli init --force` to rebind even when bound to a different app", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-cli-init-force-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const runCommand = vi.fn(async (input: { file: string; args: string[] }) => {
+      if (input.args[0] === "config" && input.args[1] === "show") {
+        return { stdout: JSON.stringify({ appId: "cli_other_app" }), stderr: "" };
+      }
+      return { stdout: "initialized\n", stderr: "" };
+    });
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark.env"),
+        ['LARK_APP_ID="cli_from_file"', 'LARK_APP_SECRET="secret-from-file"', `CCTB_LARK_STATE_DIR="${stateDir}"`, 'LARK_DOMAIN="feishu"', ""].join("\n"),
+      );
+
+      const handled = await runCli(["lark", "cli", "init", "--force"], {
+        env: { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+        larkRunCommand: runCommand,
+      } as Parameters<typeof runCli>[1] & {
+        larkRunCommand: (input: { file: string; args: string[]; stdinText?: string }) => Promise<{ stdout: string; stderr: string }>;
+      });
+
+      expect(handled).toBe(true);
+      expect(runCommand).toHaveBeenCalledWith(expect.objectContaining({
+        file: "lark-cli",
+        args: ["config", "init", "--app-id", "cli_from_file", "--app-secret-stdin", "--brand", "feishu"],
+        stdinText: "secret-from-file\n",
+      }));
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("binds lark-cli through a lark-channel source wrapper without leaking the app secret to the child env", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-cli-bind-"));
     const stateDir = path.join(tempDir, "lark-state");
