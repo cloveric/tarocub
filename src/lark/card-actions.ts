@@ -115,6 +115,8 @@ export async function requestLarkApproval(input: {
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       ...(input.replyInThread ? { replyInThread: true } : {}),
       ...(isAskUserQuestionRequest(input.request) ? { askUserQuestionInput: input.request.toolInput } : {}),
+      approvalToolName: input.request.toolName,
+      approvalToolInput: input.request.toolInput,
       resolve,
       reject,
       timer,
@@ -166,20 +168,36 @@ export async function requestLarkApproval(input: {
       return;
     }
 
-    sendLarkCardWithFallback({
-      channel: input.channel,
-      chatId: input.chatId,
-      card: renderLarkApprovalCard({
-        requestId,
-        toolName: input.request.toolName,
-        toolInput: input.request.toolInput,
-        replyInThread: input.replyInThread,
-        locale: input.locale,
-      }),
-      fallbackText: renderLarkApprovalFallbackText(requestId, input.request, input.locale ?? "zh"),
-      options: larkReplyOptions(input.replyTo, input.replyInThread),
-      locale: input.locale ?? "zh",
-    }).catch((error) => {
+    const approvalCard = renderLarkApprovalCard({
+      requestId,
+      toolName: input.request.toolName,
+      toolInput: input.request.toolInput,
+      replyInThread: input.replyInThread,
+      locale: input.locale,
+    });
+    void (async () => {
+      // Prefer a CardKit managed card so the decision handler can flip it to a
+      // resolved state IN PLACE (buttons removed) after the operator decides —
+      // same UX as the AskUserQuestion form / run / goal / config cards. Track the
+      // handle on the pending approval. Falls back to a normal card send (the card
+      // then lingers + a separate "decided" reply is posted) when CardKit is off.
+      const handle = await sendManagedCard(input.channel, input.chatId, approvalCard, {
+        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+        ...(input.replyInThread ? { replyInThread: true } : {}),
+      });
+      if (handle) {
+        pending.managedCard = handle;
+        return;
+      }
+      await sendLarkCardWithFallback({
+        channel: input.channel,
+        chatId: input.chatId,
+        card: approvalCard,
+        fallbackText: renderLarkApprovalFallbackText(requestId, input.request, input.locale ?? "zh"),
+        options: larkReplyOptions(input.replyTo, input.replyInThread),
+        locale: input.locale ?? "zh",
+      });
+    })().catch((error) => {
       cleanup();
       reject(error instanceof Error ? error : new Error(String(error)));
     });
@@ -473,7 +491,27 @@ export async function handleLarkApprovalTextCommand(input: {
 
   cleanupPendingApproval(input.runtime, pending.requestId);
   pending.resolve(renderTextApprovalDecision(parsed.choice));
-  await input.channel.send(input.chatId, { text: renderTextApprovalResolution(parsed.choice, locale) }, larkReplyOptions(input.messageId, input.replyInThread));
+  const replyText = renderTextApprovalResolution(parsed.choice, locale);
+  const cardStatus = `${parsed.choice === "deny" ? "⛔" : "✅"} ${replyText}`;
+  const postReply = async (): Promise<void> => {
+    await input.channel.send(input.chatId, { text: replyText }, larkReplyOptions(input.messageId, input.replyInThread));
+  };
+  // If the approval card was a CardKit managed card, resolve it in place too — so
+  // the card reflects the decision whether the operator tapped a button or typed
+  // /approve · /deny. Otherwise just post the reply.
+  if (pending.managedCard) {
+    const resolvedCard = renderLarkApprovalCard({
+      requestId: pending.requestId,
+      toolName: pending.approvalToolName ?? "",
+      toolInput: pending.approvalToolInput,
+      replyInThread: pending.replyInThread,
+      locale,
+      decidedStatus: cardStatus,
+    });
+    settleThenUpdateManagedCard(input.channel, pending.managedCard, resolvedCard, postReply);
+  } else {
+    await postReply();
+  }
   return { handled: true, outcome: "success", choice: parsed.choice, requestId: pending.requestId };
 }
 
@@ -966,11 +1004,33 @@ export async function handleLarkCardAction(input: {
     }
     cleanupPendingApproval(input.runtime, value.requestId);
     pending.resolve(renderApprovalDecision(value.decision));
-    await input.channel.send(
-      input.event.chatId,
-      { text: renderApprovalResolution(value.decision, locale) },
-      larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread),
-    );
+    const replyText = renderApprovalResolution(value.decision, locale);
+    // The card status carries an emoji marker; the plain reply text stays as-is.
+    const cardStatus = `${value.decision === "deny" ? "⛔" : "✅"} ${replyText}`;
+    // Post the decision as a plain reply — used directly when the card wasn't
+    // managed, and as the fallback if the in-place card update is rejected.
+    const postResolutionReply = async (): Promise<void> => {
+      await input.channel.send(
+        input.event.chatId,
+        { text: replyText },
+        larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread),
+      );
+    };
+    if (pending.managedCard) {
+      // CardKit managed card → flip it to resolved IN PLACE (buttons removed), the
+      // same UX as the AskUserQuestion form. No separate reply unless that fails.
+      const resolvedCard = renderLarkApprovalCard({
+        requestId: value.requestId,
+        toolName: pending.approvalToolName ?? "",
+        toolInput: pending.approvalToolInput,
+        replyInThread: pending.replyInThread ?? replyInThread,
+        locale,
+        decidedStatus: cardStatus,
+      });
+      settleThenUpdateManagedCard(input.channel, pending.managedCard, resolvedCard, postResolutionReply);
+    } else {
+      await postResolutionReply();
+    }
     if (input.stateDir) {
       await appendLarkCardActionTurnEvent({
         stateDir: input.stateDir,

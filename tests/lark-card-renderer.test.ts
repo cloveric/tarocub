@@ -451,6 +451,22 @@ describe("lark card renderer", () => {
     expect(serialized).toContain('"type":"callback"');
   });
 
+  it("renders a resolved approval card (decidedStatus) showing the outcome with no buttons", () => {
+    const card = renderLarkApprovalCard({
+      requestId: "req_1",
+      toolName: "Codex command approval",
+      toolInput: { command: "rm -rf /tmp/x" },
+      decidedStatus: "✅ 已允许一次。",
+    }) as any;
+    const serialized = JSON.stringify(card);
+    // Keeps the command for context + shows the decision; the buttons are dropped.
+    expect(serialized).toContain("rm -rf /tmp/x");
+    expect(serialized).toContain("✅ 已允许一次。");
+    expect(serialized).not.toContain("column_set");
+    expect(serialized).not.toContain("allow_session");
+    expect(serialized).not.toContain('"type":"callback"');
+  });
+
   it("renders approval cards in English when locale is English", () => {
     const card = renderLarkApprovalCard({
       requestId: "req_1",

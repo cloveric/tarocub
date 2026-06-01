@@ -11291,6 +11291,53 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
+  it("updates a command-approval card in place via CardKit (no separate reply) when the operator decides", async () => {
+    const runtime = createLarkServiceRuntime();
+    const create = vi.fn(async () => ({ data: { card_id: "card_appr" } }));
+    const update = vi.fn(async () => ({ data: {} }));
+    const messageReply = vi.fn(async () => ({ data: { message_id: "om_appr" } }));
+    const messageCreate = vi.fn(async () => ({ data: { message_id: "om_appr" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create, update } } },
+        im: { v1: { message: { create: messageCreate, reply: messageReply } } },
+      },
+    });
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "codex",
+        toolName: "Codex command approval",
+        toolInput: "rm -rf /tmp/x",
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    // Sent as a CardKit managed card (not channel.send); the handle is tracked so
+    // the decision can flip it in place.
+    await vi.waitFor(() => expect(runtime.pendingApprovals.get(requestId)?.managedCard).toBeDefined());
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(channel.send).not.toHaveBeenCalled();
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_appr", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "approval", requestId, decision: "allow_once" } } },
+    });
+
+    expect(await pending).toEqual({ behavior: "allow", scope: "once" });
+
+    // The card is flipped to resolved IN PLACE (CardKit update, detached + delayed):
+    // shows the decision, drops the buttons, and posts NO separate reply.
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    const updateBody = JSON.stringify(update.mock.calls.at(-1));
+    expect(updateBody).toContain("card_appr");
+    expect(updateBody).toContain("已允许一次");
+    expect(updateBody).not.toContain("column_set");
+    expect(channel.send).not.toHaveBeenCalled();
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
   it("re-prompts instead of resolving when a required single-select answer is missing", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();

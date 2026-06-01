@@ -70,11 +70,15 @@ export interface PendingLarkApproval {
   replyTo?: string;
   replyInThread?: boolean;
   askUserQuestionInput?: unknown;
+  /** Tool name/input of a regular (non-AskUserQuestion) approval, kept so the decision handler can re-render the card in place as resolved. */
+  approvalToolName?: string;
+  approvalToolInput?: unknown;
   /**
-   * Set when the AskUserQuestion form was delivered as a CardKit managed card,
-   * so the submit handler can turn it read-only IN PLACE (CardKit updates land
-   * even right after the user interacts, unlike im.message.patch). Absent when
-   * CardKit was unavailable and the form fell back to a normal card send.
+   * Set when the approval card (an AskUserQuestion form or a regular command
+   * approval) was delivered as a CardKit managed card, so the decision handler
+   * can update it IN PLACE (CardKit updates land even right after the user
+   * interacts, unlike im.message.patch). Absent when CardKit was unavailable and
+   * the card fell back to a normal send.
    */
   managedCard?: ManagedCardHandle;
   resolve: (decision: EngineApprovalDecision) => void;

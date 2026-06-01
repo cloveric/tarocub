@@ -52,6 +52,8 @@ export interface LarkApprovalCardInput {
   toolInput?: unknown;
   replyInThread?: boolean;
   locale?: Locale;
+  /** When set, the card is rendered resolved (this status line replaces the buttons) — used to update the card in place after the operator decides. */
+  decidedStatus?: string;
 }
 
 export interface LarkQueueWaitCardInput {
@@ -943,28 +945,37 @@ export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<str
   const toolInput = input.toolInput === undefined ? "" : `\n${formatJson(input.toolInput)}`;
   const labels = approvalCardLabels(input.locale ?? "zh");
 
+  const elements: unknown[] = [
+    markdownElement(`**Approval requested**\n${input.toolName}${toolInput}`),
+  ];
+  if (input.decidedStatus) {
+    // Resolved in place after the operator decided: show the outcome, drop the buttons.
+    elements.push(markdownElement(input.decidedStatus));
+  } else {
+    elements.push({
+      tag: "column_set",
+      columns: [
+        approvalButtonColumn(input.requestId, "allow_once", labels.allowOnce, "primary", input.replyInThread),
+        approvalButtonColumn(input.requestId, "allow_session", labels.allowSession, "default", input.replyInThread),
+        approvalButtonColumn(input.requestId, "deny", labels.deny, "danger", input.replyInThread),
+      ],
+    });
+  }
+
   return {
     schema: "2.0",
     config: {
       update_multi: true,
       summary: {
-        content: `Approval requested: ${input.toolName}`,
+        content: input.decidedStatus
+          ? `${input.decidedStatus} — ${input.toolName}`
+          : `Approval requested: ${input.toolName}`,
       },
     },
     body: {
       direction: "vertical",
       padding: "12px 12px 12px 12px",
-      elements: [
-        markdownElement(`**Approval requested**\n${input.toolName}${toolInput}`),
-        {
-          tag: "column_set",
-          columns: [
-            approvalButtonColumn(input.requestId, "allow_once", labels.allowOnce, "primary", input.replyInThread),
-            approvalButtonColumn(input.requestId, "allow_session", labels.allowSession, "default", input.replyInThread),
-            approvalButtonColumn(input.requestId, "deny", labels.deny, "danger", input.replyInThread),
-          ],
-        },
-      ],
+      elements,
     },
   };
 }
