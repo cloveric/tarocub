@@ -140,7 +140,8 @@ export async function handleLarkMessage(input: {
     return false;
   }
   const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, message);
-  const normalized = await enrichLarkReplyContext(input.channel, expandedNormalized);
+  const cardNormalized = await enrichLarkInteractiveCardContext(input.channel, expandedNormalized, message);
+  const normalized = await enrichLarkReplyContext(input.channel, cardNormalized);
   return await runAcceptedLarkMessage(input, normalized);
 }
 
@@ -1508,6 +1509,68 @@ async function enrichLarkMergedForwardContext(
   }
 }
 
+// The placeholder the channel emits when it can't read an interactive card from the
+// receive event (managed/forwarded cards arrive as a reference, not inline content).
+const LARK_INTERACTIVE_CARD_PLACEHOLDER = "[interactive card]";
+
+/**
+ * A forwarded/received interactive card arrives as an opaque reference, so the channel
+ * surfaces only "[interactive card]" and the engine can't see the content. Re-fetch the
+ * message with card_msg_content_type=user_card_content (official API: returns the original
+ * card JSON) and splice the card's extracted text into the prompt, so the bot can read a
+ * forwarded card. No cross-app issue: the bot reads its OWN received message.
+ */
+async function enrichLarkInteractiveCardContext(
+  channel: LarkChannelLike,
+  normalized: LarkNormalizedBridgeMessage,
+  message: LarkIncomingMessage,
+): Promise<LarkNormalizedBridgeMessage> {
+  if (message.rawContentType !== "interactive") {
+    return normalized;
+  }
+  if ((message.content ?? "").trim() !== LARK_INTERACTIVE_CARD_PLACEHOLDER) {
+    return normalized; // the channel already extracted usable text
+  }
+  try {
+    const cardJson = await fetchLarkCardContent(channel, message.messageId);
+    const text = cardJson ? extractLarkCardText(cardJson) : "";
+    if (!text) {
+      return normalized;
+    }
+    const block = `<forwarded_card>\n${text.slice(0, 8000)}\n</forwarded_card>`;
+    const newText = normalized.text.includes(LARK_INTERACTIVE_CARD_PLACEHOLDER)
+      ? normalized.text.replace(LARK_INTERACTIVE_CARD_PLACEHOLDER, block)
+      : [normalized.text, block].filter(Boolean).join("\n\n");
+    return { ...normalized, text: newText };
+  } catch {
+    return normalized;
+  }
+}
+
+/** GET a message with card_msg_content_type=user_card_content → the original card JSON. */
+async function fetchLarkCardContent(channel: LarkChannelLike, messageId: string): Promise<Record<string, unknown> | null> {
+  const getMessage = (channel as {
+    rawClient?: {
+      im?: { v1?: { message?: { get(input: {
+        params: { user_id_type: "open_id"; card_msg_content_type: "user_card_content" };
+        path: { message_id: string };
+      }): Promise<unknown> } } };
+    };
+  }).rawClient?.im?.v1?.message?.get;
+  if (!getMessage) {
+    return null;
+  }
+  const response = await getMessage({
+    params: { user_id_type: "open_id", card_msg_content_type: "user_card_content" },
+    path: { message_id: messageId },
+  });
+  const data = isRecord(response) ? response.data : undefined;
+  const items = isRecord(data) && Array.isArray(data.items) ? data.items.filter(isRecord) : [];
+  const body = items[0] && isRecord(items[0].body) ? items[0].body : undefined;
+  const content = body && typeof body.content === "string" ? body.content : undefined;
+  return content ? parseJsonObject(content) : null;
+}
+
 async function fetchLarkMessage(channel: LarkChannelLike, messageId: string): Promise<LarkFetchedMessage | null> {
   if (channel.fetchMessage) {
     return await channel.fetchMessage(messageId);
@@ -1518,7 +1581,7 @@ async function fetchLarkMessage(channel: LarkChannelLike, messageId: string): Pr
         v1?: {
           message?: {
             get(input: {
-              params: { user_id_type: "open_id" };
+              params: { user_id_type: "open_id"; card_msg_content_type: "user_card_content" };
               path: { message_id: string };
             }): Promise<unknown>;
           };
@@ -1531,7 +1594,7 @@ async function fetchLarkMessage(channel: LarkChannelLike, messageId: string): Pr
     return null;
   }
   const response = await getMessage({
-    params: { user_id_type: "open_id" },
+    params: { user_id_type: "open_id", card_msg_content_type: "user_card_content" },
     path: { message_id: messageId },
   });
   return normalizeFetchedLarkMessage(response, messageId);
@@ -1604,6 +1667,8 @@ function summarizeLarkFetchedMessage(message: LarkFetchedMessage): string {
       text = `[${messageType ?? "file"}: ${parsed.file_name}]`;
     } else if (messageType === "post") {
       text = extractPlainStrings(parsed).join("\n");
+    } else if (messageType === "interactive") {
+      text = extractLarkCardText(parsed);
     }
   }
   if (!text) {
@@ -1662,6 +1727,77 @@ function extractPlainStrings(value: unknown): string[] {
     .filter(([key]) => !["title", "text", "href"].includes(key))
     .flatMap(([, child]) => extractPlainStrings(child));
   return [...direct, ...nested];
+}
+
+/**
+ * Pull human-readable text out of a Feishu interactive-card JSON tree (header titles,
+ * plain_text / lark_md / markdown content, button labels, form fields, nested
+ * elements/columns/body) so a forwarded card's content is readable by the engine.
+ * Mirrors the channel SDK's card walker; handles Card 1.0 and 2.0 shapes.
+ */
+function extractLarkCardText(node: unknown): string {
+  const pieces: string[] = [];
+  visitLarkCard(node, pieces);
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const piece of pieces) {
+    const key = piece.trim();
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      lines.push(key);
+    }
+  }
+  return lines.join("\n");
+}
+
+function visitLarkCard(node: unknown, out: string[]): void {
+  if (node === null || typeof node !== "object") {
+    return;
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      visitLarkCard(child, out);
+    }
+    return;
+  }
+  const obj = node as Record<string, unknown>;
+  const tag = obj.tag;
+  if (typeof tag === "string" && (tag === "plain_text" || tag === "lark_md" || tag === "markdown")) {
+    if (typeof obj.content === "string") {
+      out.push(obj.content);
+    }
+    return;
+  }
+  if (isRecord(obj.header)) {
+    visitLarkCard(obj.header.title, out);
+  }
+  if (obj.text) {
+    visitLarkCard(obj.text, out);
+  }
+  if (obj.label) {
+    visitLarkCard(obj.label, out);
+  }
+  if (obj.placeholder) {
+    visitLarkCard(obj.placeholder, out);
+  }
+  if (Array.isArray(obj.options)) {
+    for (const option of obj.options) {
+      if (isRecord(option)) {
+        visitLarkCard(option.text, out);
+      }
+    }
+  }
+  for (const key of ["elements", "fields", "actions", "columns"]) {
+    const arr = obj[key];
+    if (Array.isArray(arr)) {
+      for (const el of arr) {
+        visitLarkCard(el, out);
+      }
+    }
+  }
+  if (obj.body) {
+    visitLarkCard(obj.body, out);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

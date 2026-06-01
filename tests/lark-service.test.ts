@@ -719,6 +719,55 @@ describe("lark service", () => {
     }
   });
 
+  it("reads a forwarded interactive card via user_card_content and feeds its text to the engine", async () => {
+    // Regression: a forwarded CardKit/managed card arrives as "[interactive card]" with no
+    // content, so the bot saw nothing. The bridge must re-fetch with
+    // card_msg_content_type=user_card_content (official API → original card JSON) and splice
+    // the card's text into the prompt.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-fwd-card-"));
+    const cardJson = {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", content: "NVIDIA GTC 总结" } },
+      body: {
+        elements: [
+          { tag: "markdown", content: "NVIDIA 认为 AI 进入了 Agent + AI 工厂时代。" },
+          { tag: "div", text: { tag: "lark_md", content: "核心是低成本产 token、安全运行 Agent。" } },
+        ],
+      },
+    };
+    const get = vi.fn(async () => ({ data: { items: [{ body: { content: JSON.stringify(cardJson) } }] } }));
+    const channel = fakeChannel({ rawClient: { im: { v1: { message: { get } } } } });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string }) => ({ text: "card handled" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_fwd_card",
+          content: "[interactive card]",
+          rawContentType: "interactive",
+        }),
+      });
+
+      expect(get).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({ card_msg_content_type: "user_card_content" }),
+        path: { message_id: "om_fwd_card" },
+      }));
+      const bridgeText = bridge.handleAuthorizedMessage.mock.calls[0]![0].text;
+      expect(bridgeText).toContain("<forwarded_card>");
+      expect(bridgeText).toContain("NVIDIA GTC 总结");
+      expect(bridgeText).toContain("Agent + AI 工厂时代");
+      expect(bridgeText).not.toContain("[interactive card]");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("expands merged forwarded Lark messages from the raw Lark message API response", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-merge-forward-api-"));
     const getMessage = vi.fn(async () => ({
@@ -768,7 +817,7 @@ describe("lark service", () => {
       });
 
       expect(getMessage).toHaveBeenCalledWith({
-        params: { user_id_type: "open_id" },
+        params: { user_id_type: "open_id", card_msg_content_type: "user_card_content" },
         path: { message_id: "om_forward" },
       });
       const bridgeText = bridge.handleAuthorizedMessage.mock.calls[0]![0].text;
