@@ -50,6 +50,7 @@ import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig, renderLarkCronRuntimeMissing, renderLarkUserAccessDenied, resolveLarkLocale } from "./locale.js";
 import { stableLarkNumericId, type LarkNormalizedBridgeMessage } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
+import { renderLarkUserFacingError } from "./errors.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
@@ -79,6 +80,10 @@ export type LarkCommandInput = {
   requestApproval: RequestLarkApproval;
   requireMentionInGroup?: boolean;
   abortSignal?: AbortSignal;
+  // Live run-card factory, supplied by message-handler. Typed via an erased type-query
+  // so commands.ts keeps no runtime import of message-handler.ts (which imports this
+  // file — a direct import would be a cycle).
+  createRunCard?: typeof import("./message-handler.js")["createLarkRunCardController"];
 };
 
 export async function handleLarkSimpleCommand(
@@ -1943,6 +1948,60 @@ async function handleLarkGoalCommand(
       ? locale === "en" ? "Current goal cleared." : "已清除当前 goal。"
       : locale === "en" ? "This chat has no goal to clear." : "当前聊天没有可清除的 goal。");
     return true;
+  }
+
+  // Live path: set the goal AND watch Codex's autonomous pursuit of it, streaming the
+  // progress into a run card (Codex self-drives once the goal is set). The watch runs
+  // detached so the command returns immediately while the card updates in the
+  // background. Falls back to plain set-and-confirm when watch/CardKit is unavailable.
+  if (input.bridge.watchThreadGoal && input.createRunCard) {
+    const conversationKey = normalized.conversationKey ?? `lark:${normalized.chatId}`;
+    const runCard = await input.createRunCard({
+      channel: input.channel,
+      chatId: normalized.chatId,
+      conversationKey,
+      bridgeChatType: normalized.bridgeChatType ?? "private",
+      replyTo: normalized.messageId,
+      replyInThread: Boolean(normalized.threadId),
+      locale,
+    });
+    if (runCard) {
+      const watchThreadGoal = input.bridge.watchThreadGoal;
+      const clearThreadGoal = input.bridge.clearThreadGoal;
+      // Register the autonomous goal as the conversation's active run so /stop (and the
+      // run card's stop button) can abort it — both flip activeRuns[key].abortController.
+      const abort = new AbortController();
+      input.runtime.activeRuns.set(conversationKey, { abortController: abort, hasRunCard: true });
+      void (async () => {
+        try {
+          const { goal: watched } = await watchThreadGoal({
+            ...goalInput,
+            objective: action.objective,
+            tokenBudget: action.tokenBudget,
+            onEngineEvent: (event) => { void runCard.apply(event); },
+            abortSignal: abort.signal,
+          });
+          if (abort.signal.aborted) {
+            // Stopped: clear the goal so Codex halts its autonomous pursuit (aborting the
+            // watcher alone only stops us listening), then flip the card to "已中断".
+            try { await clearThreadGoal?.({ ...goalInput }); } catch { /* best-effort */ }
+            await runCard.interrupt();
+          } else {
+            await runCard.finish(watched
+              ? renderLarkGoal(watched, locale)
+              : locale === "en" ? "Goal finished." : "Goal 已结束。");
+          }
+        } catch (error) {
+          await runCard.fail(renderLarkUserFacingError(error, "engine", locale));
+        } finally {
+          // Release our slot only if a newer run hasn't already replaced it.
+          if (input.runtime.activeRuns.get(conversationKey)?.abortController === abort) {
+            input.runtime.activeRuns.delete(conversationKey);
+          }
+        }
+      })();
+      return true;
+    }
   }
 
   if (!input.bridge.setThreadGoal) {

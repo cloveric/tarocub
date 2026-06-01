@@ -138,6 +138,15 @@ export interface CodexAdapter {
     tokenBudget?: number | null;
     workspaceOverride?: string;
   }): Promise<CodexThreadGoalResponse>;
+  // Set a goal and watch Codex's autonomous pursuit of it, streaming turn/item events
+  // to onEngineEvent until it reaches a terminal status (or abortSignal fires).
+  watchThreadGoal?(sessionId: string, input: {
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    abortSignal?: AbortSignal;
+  }): Promise<CodexThreadGoalResponse>;
   clearThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<{ cleared: boolean; sessionId?: string }>;
   destroy?(): void;
 }

@@ -536,6 +536,36 @@ export class Bridge {
     return { goal: response.goal };
   }
 
+  async watchThreadGoal(input: {
+    chatId: number;
+    userId?: number;
+    chatType?: string;
+    messageThreadId?: number;
+    conversationKey?: string;
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    abortSignal?: AbortSignal;
+  }): Promise<{ goal: CodexThreadGoal | null }> {
+    if (!this.adapter.watchThreadGoal) {
+      throw new Error("Structured goal API is not available for this runtime");
+    }
+    const scope = this.conversationScope(input);
+    const session = await this.sessionManager.getOrCreateSession(scope);
+    const response = await this.adapter.watchThreadGoal(session.sessionId, {
+      objective: input.objective,
+      tokenBudget: input.tokenBudget,
+      workspaceOverride: input.workspaceOverride,
+      onEngineEvent: input.onEngineEvent,
+      abortSignal: input.abortSignal,
+    });
+    if (response.sessionId && response.sessionId !== session.sessionId) {
+      await this.sessionManager.bindSession(scope, response.sessionId);
+    }
+    return { goal: response.goal };
+  }
+
   async clearThreadGoal(input: {
     chatId: number;
     userId?: number;

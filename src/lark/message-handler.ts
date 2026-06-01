@@ -766,6 +766,7 @@ async function runNormalizedLarkMessage(
       ...input,
       requestApproval: requestLarkApproval,
       abortSignal: simpleCommandController?.signal,
+      createRunCard: createLarkRunCardController,
     }, normalized, commandText)) {
       return true;
     }
@@ -1236,7 +1237,7 @@ async function runNormalizedLarkMessage(
   }
 }
 
-interface LarkRunCardController {
+export interface LarkRunCardController {
   apply(event: EngineStreamEvent): Promise<void>;
   /** Finalize with the answer; resolves to whether the answer is fully shown in the card. */
   finish(text: string): Promise<boolean>;
@@ -1245,7 +1246,7 @@ interface LarkRunCardController {
   idleTimeout(minutes: number): Promise<void>;
 }
 
-async function createLarkRunCardController(input: {
+export async function createLarkRunCardController(input: {
   channel: LarkChannelLike;
   chatId: string;
   conversationKey: string;

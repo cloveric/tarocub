@@ -425,6 +425,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private readonly pendingRequests = new Map<number, PendingRequest>();
   private readonly nonBlockingRequestIds = new Set<number>();
   private readonly pendingTurns = new Map<string, PendingTurn>();
+  // Watchers for a self-running thread goal (no user-initiated turn). Codex pursues a
+  // goal autonomously and emits the SAME turn/item notifications; when there is no
+  // pendingTurn for the thread, events fall back to this watcher so a goal can drive a
+  // live run card. Keyed by threadId. Normal turns are unaffected (pendingTurns wins).
+  private readonly goalWatchers = new Map<string, {
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    resolve: (goal: CodexThreadGoal | null) => void;
+    latestGoal: CodexThreadGoal | null;
+  }>();
   private readonly loadedThreads = new Set<string>();
   private completingTurns = 0;
   private readonly idleWaiters = new Set<() => void>();
@@ -530,11 +539,70 @@ export class CodexAppServerAdapter implements CodexAdapter {
     };
   }
 
+  /**
+   * Sets a thread goal and then watches Codex's AUTONOMOUS pursuit of it: streams the
+   * turn/item events to onEngineEvent (so a live run card can render the progress) and
+   * resolves when the goal reaches a terminal status (complete / budgetLimited) or the
+   * abort signal fires. No turn is started here — Codex self-drives once the goal is set.
+   */
+  async watchThreadGoal(sessionId: string, input: {
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    abortSignal?: AbortSignal;
+  }): Promise<CodexThreadGoalResponse> {
+    const runtimeOptions = await this.loadRuntimeOptions();
+    await this.ensureInitialized(runtimeOptions);
+    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
+
+    let resolveTerminal!: (goal: CodexThreadGoal | null) => void;
+    const terminal = new Promise<CodexThreadGoal | null>((resolve) => { resolveTerminal = resolve; });
+    const watcher = { onEngineEvent: input.onEngineEvent, resolve: resolveTerminal, latestGoal: null as CodexThreadGoal | null };
+    this.goalWatchers.set(threadId, watcher);
+
+    const onAbort = () => resolveTerminal(watcher.latestGoal);
+    if (input.abortSignal) {
+      if (input.abortSignal.aborted) onAbort();
+      else input.abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    try {
+      const setResult = await this.request("thread/goal/set", {
+        threadId,
+        objective: input.objective,
+        tokenBudget: input.tokenBudget ?? null,
+      });
+      const setGoal = readGoalResponse(setResult).goal;
+      if (setGoal) {
+        watcher.latestGoal = setGoal;
+        if (setGoal.status === "complete" || setGoal.status === "budgetLimited") {
+          resolveTerminal(setGoal);
+        }
+      }
+      const finalGoal = await terminal;
+      return {
+        goal: finalGoal ?? setGoal ?? watcher.latestGoal,
+        sessionId: threadId !== sessionId ? threadId : undefined,
+      };
+    } finally {
+      this.goalWatchers.delete(threadId);
+      input.abortSignal?.removeEventListener("abort", onAbort);
+    }
+  }
+
   async clearThreadGoal(sessionId: string, input: { workspaceOverride?: string } = {}): Promise<{ cleared: boolean; sessionId?: string }> {
     const runtimeOptions = await this.loadRuntimeOptions();
     await this.ensureInitialized(runtimeOptions);
     const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
     const result = await this.request("thread/goal/clear", { threadId });
+    // End any live watcher for this thread so its run card finalizes instead of
+    // hanging: clearing the goal stops Codex's autonomous pursuit but emits no
+    // terminal thread/goal/updated for the watcher to key off.
+    const watcher = this.goalWatchers.get(threadId);
+    if (watcher) {
+      watcher.resolve(watcher.latestGoal);
+    }
     return {
       cleared: readClearedResponse(result),
       sessionId: threadId !== sessionId ? threadId : undefined,
@@ -796,13 +864,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
         if (pending) {
           pending.chunks.push(delta);
           pending.onProgress?.(pending.chunks.join(""));
-          void Promise.resolve(pending.onEngineEvent?.({
-            type: "assistant_text",
-            text: delta,
-            delta: true,
-            sessionId: threadId,
-          })).catch(() => {});
         }
+        this.emitEngineEvent(threadId, {
+          type: "assistant_text",
+          text: delta,
+          delta: true,
+          sessionId: threadId,
+        });
       }
       return;
     }
@@ -812,12 +880,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const delta = this.readString(parsed.params?.delta);
       if (threadId && delta) {
         this.noteTurnActivity(threadId, parsed.method);
-        const pending = this.pendingTurns.get(threadId);
-        void Promise.resolve(pending?.onEngineEvent?.({
+        this.emitEngineEvent(threadId, {
           type: "thinking",
           text: delta,
           sessionId: threadId,
-        })).catch(() => {});
+        });
       }
       return;
     }
@@ -829,13 +896,31 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const todos = codexPlanTodos((parsed.params as Record<string, unknown> | undefined)?.plan);
       if (threadId && todos) {
         this.noteTurnActivity(threadId, parsed.method);
-        const pending = this.pendingTurns.get(threadId);
-        void Promise.resolve(pending?.onEngineEvent?.({
+        this.emitEngineEvent(threadId, {
           type: "tool_use",
           toolName: "TodoWrite",
           toolInput: { todos },
           sessionId: threadId,
-        })).catch(() => {});
+        });
+      }
+      return;
+    }
+
+    if (parsed.method === "thread/goal/updated") {
+      // Progress of a (possibly self-running) thread goal. Feed the goal watcher so a
+      // live goal run card can show status/usage; a terminal status ends the watch.
+      const threadId = this.readString(parsed.params?.threadId);
+      if (threadId) {
+        const watcher = this.goalWatchers.get(threadId);
+        if (watcher) {
+          const goal = readThreadGoal((parsed.params as { goal?: unknown } | undefined)?.goal);
+          if (goal) {
+            watcher.latestGoal = goal;
+            if (goal.status === "complete" || goal.status === "budgetLimited") {
+              watcher.resolve(goal);
+            }
+          }
+        }
       }
       return;
     }
@@ -863,31 +948,32 @@ export class CodexAppServerAdapter implements CodexAdapter {
         typeof (item as { text?: unknown }).text === "string"
       ) {
         pending.finalText = (item as { text: string }).text;
-      } else if (pending && threadId) {
+      } else if (threadId) {
         const toolEvent = extractCodexToolItem(item);
         if (toolEvent) {
           // Codex app-server reports a completed tool item in one shot. Emit the
           // tool_use + tool_result pair so the Lark run card renders a finished
-          // tool panel with output and status, matching the Claude path.
-          void Promise.resolve(pending.onEngineEvent?.({
+          // tool panel with output and status, matching the Claude path. Routed via
+          // emitEngineEvent so a self-running goal's watcher receives it too.
+          this.emitEngineEvent(threadId, {
             type: "tool_use",
             toolName: toolEvent.toolName,
             ...(toolEvent.toolInput === undefined ? {} : { toolInput: toolEvent.toolInput }),
             ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
             sessionId: threadId,
-          })).catch(() => {});
+          });
           // A plan (TodoWrite) is meta-state shown as the plan panel, not a tool
           // block, so it needs no completion event. Skipping it also avoids an
           // id-less result wrongly finishing an unrelated running tool.
           if (toolEvent.toolName !== "TodoWrite") {
-            void Promise.resolve(pending.onEngineEvent?.({
+            this.emitEngineEvent(threadId, {
               type: "tool_result",
               ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
               toolName: toolEvent.toolName,
               ...(toolEvent.output !== undefined ? { output: toolEvent.output } : {}),
               isError: toolEvent.isError,
               sessionId: threadId,
-            })).catch(() => {});
+            });
           }
         }
       }
@@ -1013,6 +1099,18 @@ export class CodexAppServerAdapter implements CodexAdapter {
       threadId: this.readString(params?.threadId) ?? undefined,
       childGeneration: this.childGeneration,
     };
+  }
+
+  /**
+   * Routes a normalized engine event to the thread's active turn, or — when the thread
+   * is running a goal autonomously (no pendingTurn) — to its goal watcher, so a
+   * self-running goal can drive a live run card.
+   */
+  private emitEngineEvent(threadId: string, event: EngineStreamEvent): void {
+    const sink = this.pendingTurns.get(threadId)?.onEngineEvent ?? this.goalWatchers.get(threadId)?.onEngineEvent;
+    if (sink) {
+      void Promise.resolve(sink(event)).catch(() => {});
+    }
   }
 
   private handleServerRequest(request: AppServerRequest): void {

@@ -165,6 +165,17 @@ export interface LarkBridgeLike {
     tokenBudget?: number | null;
     workspaceOverride?: string;
   }): Promise<{ goal: CodexThreadGoal | null }>;
+  watchThreadGoal?(input: {
+    chatId: number;
+    userId?: number;
+    chatType?: string;
+    conversationKey?: string;
+    objective: string;
+    tokenBudget?: number | null;
+    workspaceOverride?: string;
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    abortSignal?: AbortSignal;
+  }): Promise<{ goal: CodexThreadGoal | null }>;
   clearThreadGoal?(input: {
     chatId: number;
     userId?: number;
