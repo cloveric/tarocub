@@ -22,6 +22,7 @@ import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { resolveLarkLocale } from "./locale.js";
+import { maybeSendLarkScopeAuthCard } from "./scope-auth.js";
 import { resolveLarkMentionsInText, shouldResolveLarkMentions } from "./mention-resolver.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
@@ -95,9 +96,21 @@ export async function deliverLarkResponse(input: {
       if (!(error instanceof SyntaxError)) {
         await appendLarkToolErrorTimeline(input, toolName, error);
       }
-      await input.channel.send(input.chatId, {
-        text: renderLarkToolTagParseError(error, locale),
-      }, replyOptions);
+      // A Feishu-native tool (lark.doc / lark.card / …) that failed because the app lacks a
+      // permission scope becomes an actionable "go authorize" card instead of a raw error.
+      const handledAsScope = !(error instanceof SyntaxError) && await maybeSendLarkScopeAuthCard({
+        channel: input.channel,
+        chatId: input.chatId,
+        appId: input.runtime.appInfo?.appId,
+        domain: input.runtime.appInfo?.domain,
+        options: replyOptions,
+        locale,
+      }, error);
+      if (!handledAsScope) {
+        await input.channel.send(input.chatId, {
+          text: renderLarkToolTagParseError(error, locale),
+        }, replyOptions);
+      }
     }
   }
 

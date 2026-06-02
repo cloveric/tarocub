@@ -1170,6 +1170,42 @@ describe("lark service", () => {
     }
   });
 
+  it("turns a Feishu missing-scope failure on a lark.doc tool into an authorize card, not a raw error", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-scope-card-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime({
+      createDocument: vi.fn(async () => {
+        throw Object.assign(
+          new Error("create doc failed (code 99991672) required_scope=docx:document"),
+          { code: 99991672 },
+        );
+      }),
+    });
+    // The deep-link to the permissions console needs the app id/domain off the runtime.
+    runtime.appInfo = { appId: "cli_scopetest", domain: "feishu" };
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime,
+        chatId: "oc_chat",
+        text: '[tool:{"name":"lark.doc.create","payload":{"title":"Spec","content":"# Spec\\n\\n正文","docFormat":"markdown"}}]',
+        stateDir,
+      });
+
+      const sends = JSON.stringify(channel.send.mock.calls);
+      // The missing-scope failure becomes an actionable "go authorize" card: it names the
+      // scope and links the app's permissions console — instead of dumping a raw error.
+      expect(sends).toContain("权限");
+      expect(sends).toContain("docx:document");
+      expect(sends).toContain("https://open.feishu.cn/app/cli_scopetest/auth");
+      // The raw tool error string is NOT what the user sees.
+      expect(sends).not.toContain("create doc failed");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("fetches replied Lark message text and passes it as bridge reply context", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-reply-context-"));
     const channel = fakeChannel({
