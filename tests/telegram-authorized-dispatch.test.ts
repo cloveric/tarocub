@@ -160,6 +160,68 @@ describe("dispatchAuthorizedTelegramMessage", () => {
     }));
   });
 
+  it("does not re-run transcription or re-inject the transcript on retry of the same message (regression #15)", async () => {
+    // A voice turn: prepareTelegramMessageInput transcribes and APPENDS the transcript
+    // to the message text. An auth/stale-session retry re-dispatches the SAME normalized
+    // object; without the per-message prep cache the second pass re-transcribed and
+    // appended the transcript again (text became "voice\n请买入腾讯\n请买入腾讯"). The cache
+    // must short-circuit prep so the transcript is injected exactly once.
+    const normalized = createNormalizedMessage("voice");
+    const transcript = "请买入腾讯";
+    const prepareTelegramMessageInput = vi.fn(async ({ normalized: n }: { normalized: NormalizedTelegramMessage }) => ({
+      kind: "ready" as const,
+      text: `${n.text}\n${transcript}`,
+      downloadedAttachments: [],
+    }));
+    const executeWorkflowAwareTelegramTurn = vi.fn().mockResolvedValue(undefined);
+
+    const makeInput = () => ({
+      stateDir: "/tmp/state",
+      startedAt: 100,
+      locale: "en" as const,
+      cfg: {
+        engine: "claude" as const,
+        budgetUsd: 1.5,
+        resume: {
+          sessionId: "session-1",
+          dirName: "project-dir",
+          workspacePath: "/tmp/workspace",
+        },
+      },
+      normalized,
+      context: {
+        api: { sendMessage: vi.fn(), sendVoice: vi.fn(), getFile: vi.fn(), downloadFile: vi.fn() },
+        bridge: {},
+        inboxDir: "/tmp/inbox",
+      } as never,
+      workflowStore: { inspect: vi.fn(), update: vi.fn() } as never,
+      deps: {
+        sessionStore: { inspect: vi.fn(), removeByChatId: vi.fn(), upsert: vi.fn(), findByChatIdSafe: vi.fn() } as never,
+        turnState: createTurnState(),
+        updateInstanceConfig: vi.fn(),
+        deliverTelegramResponse: vi.fn(),
+        sendTelegramOutFile: vi.fn(),
+        updateWorkflowBestEffort: vi.fn(),
+      },
+      handlers: {
+        handleLocalSessionTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleLocalEngineTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleSimpleLocalTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleDelegationTelegramCommand: vi.fn().mockResolvedValue(false),
+        prepareTelegramMessageInput,
+        executeWorkflowAwareTelegramTurn,
+      },
+    });
+
+    await dispatchAuthorizedTelegramMessage(makeInput());
+    await dispatchAuthorizedTelegramMessage(makeInput()); // retry — same normalized object
+
+    expect(prepareTelegramMessageInput).toHaveBeenCalledTimes(1);
+    expect(normalized.text).toBe(`voice\n${transcript}`);
+    expect(normalized.text.split(transcript).length - 1).toBe(1); // injected exactly once
+    expect(executeWorkflowAwareTelegramTurn).toHaveBeenCalledTimes(2);
+  });
+
   it("does not treat cron-sourced slash text as a Telegram command", async () => {
     const normalized = createNormalizedMessage("/cron list");
     const executeWorkflowAwareTelegramTurn = vi.fn().mockResolvedValue(undefined);

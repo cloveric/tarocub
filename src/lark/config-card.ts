@@ -191,7 +191,10 @@ async function applySubmitAction(
   formValue: Record<string, unknown> | undefined,
   locale: Locale,
 ): Promise<string> {
-  if (!formValue) {
+  // larkCardActionFormValue never returns undefined — it yields `{}` when the submit
+  // carried no picks — so guarding only `!formValue` was dead and an empty submit fell
+  // through to a misleading "nothing changed". Treat an empty object as no values too.
+  if (!formValue || Object.keys(formValue).length === 0) {
     return locale === "en" ? "No form values received." : "没有收到表单值。";
   }
   const selectedEngine = stringFormValue(formValue.engine);

@@ -187,9 +187,24 @@ async function extractAntigravityConversationIdFromLogs(input: {
   const pidPattern = input.pid
     ? new RegExp(`\\s${input.pid}\\s.*\\bconversation=(${ANTIGRAVITY_CONVERSATION_ID_PATTERN})\\b`)
     : null;
-  for (const entry of recentFiles) {
-    const content = await readFile(entry.filePath, "utf8").catch(() => "");
-    if (pidPattern) {
+
+  // Read each recent log once, preserving the newest-first order.
+  const contents = await Promise.all(
+    recentFiles.map(async (entry) => ({
+      entry,
+      content: await readFile(entry.filePath, "utf8").catch(() => ""),
+    })),
+  );
+
+  // Pass 1 — precise: when we know our child's pid, a pid-scoped match must win over
+  // any positional fallback, scanning ALL recent logs first. Files are sorted by
+  // mtime, so a newer FOREIGN log (a different agy conversation that happened to write
+  // more recently) sorts ahead of ours. The old single loop took that foreign file's
+  // any-conversation-id fallback before ever scanning our older log — binding the
+  // session to the wrong conversation. Resolve our pid's id everywhere before trusting
+  // file order.
+  if (pidPattern) {
+    for (const { content } of contents) {
       const lines = content.split(/\r?\n/).reverse();
       for (const line of lines) {
         const match = line.match(pidPattern);
@@ -198,7 +213,11 @@ async function extractAntigravityConversationIdFromLogs(input: {
         }
       }
     }
+  }
 
+  // Pass 2 — fallback: no pid, or the pid never appeared in any recent log. Take the
+  // newest log's conversation id as a best effort.
+  for (const { content } of contents) {
     const fallbackId = extractAntigravityConversationId(content);
     if (fallbackId) {
       return fallbackId;

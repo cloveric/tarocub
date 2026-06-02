@@ -233,6 +233,56 @@ describe("executeTelegramTool", () => {
     });
   });
 
+  it("refuses cron.run for a disabled job instead of falsely reporting success (regression #16)", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const runNow = vi.spyOn(scheduler, "runJobNow");
+      const mine = await store.add({ chatId: 123, userId: 456, cronExpr: "0 9 * * *", prompt: "mine" });
+      const disabled = await store.toggleEnabled(mine.id);
+      expect(disabled?.enabled).toBe(false);
+
+      const result = await executeTelegramTool({
+        name: "cron.run",
+        payload: { id: mine.id },
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "en",
+        },
+      });
+
+      // The /cron run command path already guards a disabled job; the tool path used
+      // to fire-and-forget runJobNow (which no-ops) and still report success. It must
+      // now refuse and never call runJobNow.
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(/disabled/i);
+      expect(runNow).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs an enabled job through cron.run", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const runNow = vi.spyOn(scheduler, "runJobNow").mockResolvedValue();
+      const mine = await store.add({ chatId: 123, userId: 456, cronExpr: "0 9 * * *", prompt: "mine" });
+
+      const result = await executeTelegramTool({
+        name: "cron.run",
+        payload: { id: mine.id },
+        context: {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "en",
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runNow).toHaveBeenCalledWith(mine.id);
+    });
+  });
+
   it("removes current-chat cron jobs by unique query without requiring the user to know the id", async () => {
     await withCronRuntime(async ({ stateDir, store, scheduler }) => {
       const refresh = vi.spyOn(scheduler, "refresh");

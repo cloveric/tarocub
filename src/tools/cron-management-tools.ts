@@ -228,7 +228,17 @@ export async function executeCronRunTool(payload: unknown, context: TelegramTool
   try {
     const runtime = requireCronRuntime(context);
     const id = asId(payload);
-    await getCurrentChatJob(id, context);
+    const job = await getCurrentChatJob(id, context);
+    // A disabled job must not silently "run". The /cron run command path already
+    // guards this; the tool path used to fire-and-forget and report success even
+    // though runJobNow no-ops a disabled job — so the model believed it ran. Mirror
+    // the command guard and surface the disabled state instead.
+    if (!job.enabled) {
+      const detail = context.locale === "zh"
+        ? `任务 ${id} 已停用；请先启用后再运行。`
+        : `Task ${id} is disabled; enable it before running it.`;
+      return renderRejected(detail, context);
+    }
     void runtime.scheduler.runJobNow(id).catch(() => {});
     return {
       ok: true,

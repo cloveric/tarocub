@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -264,6 +264,65 @@ describe("ProcessAntigravityAdapter", () => {
       });
       expect(onEngineEvent).toHaveBeenCalledWith({
         type: "session",
+        sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("binds to our pid's conversation even when a newer foreign agy log sorts first (regression #10)", async () => {
+    // Two agy conversations leave logs in the shared dir. A DIFFERENT conversation
+    // (pid 9999) wrote more recently than ours (the child's pid 4242), so it sorts
+    // first by mtime. The old single loop tried our pid in the newest file, missed,
+    // then took that file's any-conversation-id fallback — binding the session to the
+    // foreign conversation. The pid-scoped pass must win regardless of file order.
+    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy",
+      { HOME: root },
+      spawnAntigravity,
+      undefined,
+      undefined,
+      "/tmp/workspace",
+    );
+
+    try {
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await vi.waitFor(() => {
+        expect(calls).toHaveLength(1);
+      });
+      const logDir = path.join(root, ".gemini", "antigravity-cli", "log");
+      await mkdir(logDir, { recursive: true });
+      // Our turn's log carries the child pid 4242 and OUR conversation.
+      const oursPath = path.join(logDir, "cli-20260520_095913.log");
+      await writeFile(
+        oursPath,
+        "I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=fdfc8ab1-7936-4599-98b0-d8ba2593c250, sending message\n",
+        "utf8",
+      );
+      // An unrelated agy conversation (pid 9999) that wrote MORE RECENTLY.
+      const foreignPath = path.join(logDir, "cli-20260520_100000.log");
+      await writeFile(
+        foreignPath,
+        "I0520 10:00:00.000000  9999 printmode.go:130] Print mode: conversation=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, sending message\n",
+        "utf8",
+      );
+      // Force the foreign log newest (sorts first) while both stay inside the recency window.
+      const now = Date.now() / 1000;
+      await utimes(oursPath, now - 2, now - 2);
+      await utimes(foreignPath, now, now);
+
+      child.stdout.emitData("ok");
+      child.close(0);
+
+      await expect(promise).resolves.toEqual({
+        text: "ok",
         sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
       });
     } finally {

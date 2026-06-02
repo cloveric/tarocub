@@ -98,7 +98,11 @@ type LarkTurnTermination =
  * right terminal marker: user/stop interruption, an idle-timeout auto-stop
  * (the adapter kills a turn that goes silent for N minutes), or a real error.
  */
-function classifyLarkTurnTermination(error: unknown, signal: AbortSignal | undefined): LarkTurnTermination {
+// Exported for focused testing: this predicate is what feeds the reaction layer's
+// `isFailure` gate. A turn ended by the user (/stop, abort) or by the idle watchdog
+// must classify as interrupted/idle_timeout — NOT "error" — so it is not stamped with
+// the failure reaction.
+export function classifyLarkTurnTermination(error: unknown, signal: AbortSignal | undefined): LarkTurnTermination {
   const text = (error instanceof Error ? error.message : String(error ?? "")).toLowerCase();
   const idleMatch = text.match(/inactive after (\d+)\s*minute/);
   if (idleMatch) {
