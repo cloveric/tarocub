@@ -137,6 +137,7 @@ export interface LarkServiceCommandDeps {
   findProcessIds?: (input: LarkServiceCommandInput) => Promise<number[]>;
   isProcessAlive?: (pid: number) => boolean;
   killProcess?: (pid: number, signal?: NodeJS.Signals) => void;
+  readProcessCommandLine?: (pid: number) => Promise<string | null>;
   stopGraceMs?: number;
   forceStopGraceMs?: number;
   scheduleDeferredRestart?: (input: LarkServiceCommandInput, options?: { current?: boolean }) => Promise<string>;
@@ -1712,6 +1713,66 @@ function isLarkRunProcessCommand(command: string, input: LarkServiceCommandInput
     new RegExp(`(?:^|\\s)--instance(?:=|\\s+)${escapeRegExp(instanceName)}(?:\\s|$)`).test(normalized);
 }
 
+// Read a live process's full command line, cross-platform. Returns null when it can't
+// be read (no such process, permissions, or no `ps`/`pwsh`).
+async function readProcessCommandLine(pid: number): Promise<string | null> {
+  try {
+    if (process.platform === "win32") {
+      const script = `$proc = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($null -eq $proc) { exit 1 }; $proc.CommandLine`;
+      const encoded = Buffer.from(script, "utf16le").toString("base64");
+      const { stdout } = await execFile("pwsh", ["-NoProfile", "-EncodedCommand", encoded], { timeout: 3_000 });
+      const trimmed = stdout.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    const { stdout } = await execFile("ps", ["-p", String(pid), "-o", "args="], { timeout: 3_000 });
+    const trimmed = stdout.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether a command line belongs to the `lark run` service for a specific instance.
+// Mirrors isLarkRunProcessCommand's instance match but drops the entrypoint-path check,
+// which isn't needed to confirm a lock pid's identity (the `lark run` + instance signature
+// is decisive). Used to guard against pid REUSE: a dead service's pid can be recycled by
+// the OS for an unrelated process, and a bare alive-check would then misjudge it.
+function commandLineIsLarkServiceForInstance(command: string, stateDir: string, instanceName: string): boolean {
+  const normalized = command.replace(/\s+/g, " ").trim();
+  if (/^(?:\S*\/)?tmux\b/.test(normalized)) {
+    return false;
+  }
+  if (!/(?:^|\s)lark\s+run(?:\s|$)/.test(normalized)) {
+    return false;
+  }
+  if (/(?:^|\s)lark\s+service(?:\s|$)/.test(normalized)) {
+    return false;
+  }
+  const instance = escapeRegExp(instanceName);
+  return normalized.includes(stateDir)
+    || new RegExp(`(?:^|\\s)--instance(?:=|\\s+)${instance}(?:\\s|$)`).test(normalized)
+    || new RegExp(`(?:CCTB_LARK_INSTANCE|TAROCUB_INSTANCE)=['"]?${instance}['"]?(?:\\s|$)`).test(normalized);
+}
+
+// A lock pid is the real Lark service only if it is alive AND its command line matches
+// this instance's `lark run` service. When the command line can't be read, fall back to
+// the alive result so we never regress to a false "not the service" (which could drop a
+// live turn or skip stopping a real service) — the reuse guard only fires on a readable,
+// non-matching command line.
+async function isExpectedLarkServicePid(
+  pid: number,
+  stateDir: string,
+  instanceName: string,
+  readCommandLine: (pid: number) => Promise<string | null> = readProcessCommandLine,
+  isAlive: (pid: number) => boolean = isProcessAlive,
+): Promise<boolean> {
+  if (!isAlive(pid)) {
+    return false;
+  }
+  const command = await readCommandLine(pid);
+  return command === null ? true : commandLineIsLarkServiceForInstance(command, stateDir, instanceName);
+}
+
 function defaultKillLarkProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): void {
   try {
     process.kill(pid, signal);
@@ -1725,7 +1786,7 @@ function defaultKillLarkProcess(pid: number, signal: NodeJS.Signals = "SIGTERM")
 
 async function defaultStopLarkService(
   input: LarkServiceCommandInput,
-  deps: Pick<LarkServiceCommandDeps, "findProcessIds" | "isProcessAlive" | "killProcess" | "sleep" | "stopGraceMs" | "forceStopGraceMs"> = {},
+  deps: Pick<LarkServiceCommandDeps, "findProcessIds" | "isProcessAlive" | "killProcess" | "readProcessCommandLine" | "sleep" | "stopGraceMs" | "forceStopGraceMs"> = {},
 ): Promise<"stopped" | "not_running"> {
   let stopped = false;
   const findProcessIds = deps.findProcessIds ?? defaultFindLarkServiceProcessIds;
@@ -1737,7 +1798,11 @@ async function defaultStopLarkService(
 
   const pidsToStop = new Set<number>();
   const pid = await readLarkLockPid(input.stateDir);
-  const lockPidAlive = pid !== null && isAlive(pid);
+  // Only signal the lock pid if it is verifiably THIS instance's Lark service — never a
+  // bare alive-check, so a recycled (reused) pid belonging to an unrelated process is not
+  // killed. findProcessIds (command-line discovery) still catches the real service below.
+  const lockPidAlive = pid !== null
+    && await isExpectedLarkServicePid(pid, input.stateDir, resolveLarkInstanceName(input.env), deps.readProcessCommandLine, isAlive);
   if (lockPidAlive && pid !== null) {
     pidsToStop.add(pid);
   }
@@ -1945,7 +2010,11 @@ async function readLarkServiceLockState(stateDir: string): Promise<{ pid: number
   }
 }
 
-async function readLarkPendingTurnActivity(stateDir: string): Promise<{
+async function readLarkPendingTurnActivity(
+  stateDir: string,
+  instanceName: string,
+  readCommandLine?: (pid: number) => Promise<string | null>,
+): Promise<{
   activeTurnCount: number;
   oldestAcceptedAt?: string;
 }> {
@@ -1999,7 +2068,9 @@ async function readLarkPendingTurnActivity(stateDir: string): Promise<{
   // process never finished writing a terminal event for (e.g. SIGTERM/crash mid-turn)
   // can't masquerade as "active" and block restarts for hours.
   const lock = await readLarkServiceLockState(stateDir);
-  const ownerAlive = lock ? isProcessAlive(lock.pid) : null;
+  // Verify the lock pid is really THIS instance's Lark service (not a recycled pid for an
+  // unrelated process), so a leaked turn from a dead service can't masquerade as active.
+  const ownerAlive = lock ? await isExpectedLarkServicePid(lock.pid, stateDir, instanceName, readCommandLine) : null;
   const ownerStartedAtMs = lock?.startedAtMs ?? null;
 
   const freshPending = [...pendingByConversationKey.values()]
@@ -2046,8 +2117,9 @@ async function assertNoActiveLarkTurnsBeforeServiceAction(
   stateDir: string,
   instanceName: string,
   action: "restart" | "stop",
+  readCommandLine?: (pid: number) => Promise<string | null>,
 ): Promise<void> {
-  const activity = await readLarkPendingTurnActivity(stateDir);
+  const activity = await readLarkPendingTurnActivity(stateDir, instanceName, readCommandLine);
   if (activity.activeTurnCount <= 0) {
     return;
   }
@@ -2316,7 +2388,7 @@ async function runLarkServiceCommand(
           continue;
         }
         if (!force) {
-          await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "stop");
+          await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "stop", deps.readProcessCommandLine);
         }
         const result = deps.stop ? await deps.stop(targetInput) : await defaultStopLarkService(targetInput, deps);
         logger.log(formatLarkServiceAction("stop", result));
@@ -2327,7 +2399,7 @@ async function runLarkServiceCommand(
       throw new Error(`Refusing to stop current Lark instance "${resolveLarkInstanceName(loadedEnv)}" from inside an active Lark turn; run it from a terminal if you need to stop it.`);
     }
     if (!force) {
-      await assertNoActiveLarkTurnsBeforeServiceAction(stateDir, resolveLarkInstanceName(loadedEnv), "stop");
+      await assertNoActiveLarkTurnsBeforeServiceAction(stateDir, resolveLarkInstanceName(loadedEnv), "stop", deps.readProcessCommandLine);
     }
     const result = deps.stop ? await deps.stop(commandInput) : await defaultStopLarkService(commandInput, deps);
     logger.log(formatLarkServiceAction("stop", result));
@@ -2369,7 +2441,7 @@ async function runLarkServiceCommand(
             continue;
           }
           if (!force) {
-            await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "restart");
+            await assertNoActiveLarkTurnsBeforeServiceAction(targetInput.stateDir, resolveLarkInstanceName(targetEnv), "restart", deps.readProcessCommandLine);
           }
           await prepareLarkServiceStartEnv(targetEnv);
           const stopResult = deps.stop ? await deps.stop(targetInput) : await defaultStopLarkService(targetInput, deps);
@@ -2402,7 +2474,7 @@ async function runLarkServiceCommand(
       return true;
     }
     if (!force) {
-      await assertNoActiveLarkTurnsBeforeServiceAction(stateDir, resolveLarkInstanceName(loadedEnv), "restart");
+      await assertNoActiveLarkTurnsBeforeServiceAction(stateDir, resolveLarkInstanceName(loadedEnv), "restart", deps.readProcessCommandLine);
     }
     await prepareLarkServiceStartEnv(loadedEnv);
     const stopResult = deps.stop ? await deps.stop(commandInput) : await defaultStopLarkService(commandInput, deps);

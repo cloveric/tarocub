@@ -857,7 +857,13 @@ describe("runCli", () => {
           CCTB_LARK_STATE_DIR: stateDir,
         },
         logger: { log: (message) => messages.push(message) },
-        larkServiceDeps: { start, stop, waitUntilRunning },
+        larkServiceDeps: {
+          start, stop, waitUntilRunning,
+          // The lock owner (this test process) must read back as the alpha Lark service so
+          // the cross-check treats it as the live owner — the real pid's command line is
+          // the test runner, which wouldn't match.
+          readProcessCommandLine: async () => "node /x/dist/src/index.js lark run --instance alpha",
+        },
       });
 
       expect(handled).toBe(true);
@@ -908,11 +914,107 @@ describe("runCli", () => {
           CCTB_LARK_STATE_DIR: stateDir,
         },
         logger: { log: (message) => messages.push(message) },
-        larkServiceDeps: { start, stop, waitUntilRunning },
+        larkServiceDeps: {
+          start, stop, waitUntilRunning,
+          // The lock owner (this test process) must read back as the alpha Lark service so
+          // the cross-check treats this as a genuinely live turn that still blocks restart.
+          readProcessCommandLine: async () => "node /x/dist/src/index.js lark run --instance alpha",
+        },
       })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
 
       expect(stop).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("ignores a leaked turn whose lock pid was recycled by an unrelated process (pid reuse guard)", async () => {
+    // The service died mid-turn (leaving an accepted turn with no terminal event) and the
+    // OS recycled its pid for an UNRELATED process. The lock pid is "alive", but it is not
+    // the Lark service, so the leaked turn must not count as active or block the restart.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "input.received",
+          channel: "lark",
+          chatId: 123,
+          conversationKey: "lark:oc_chat",
+          userId: 456,
+          metadata: { larkMessageId: "om_leak" },
+        })}\n`,
+      );
+      await mkdir(path.join(stateDir, "lark-service"), { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark-service", "instance.lock.json"),
+        JSON.stringify({ pid: process.pid, acquiredAt: new Date(Date.now() - 60_000).toISOString() }),
+      );
+
+      const handled = await runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: {
+          start, stop, waitUntilRunning,
+          // The lock pid is alive but its command line is an unrelated, recycled process.
+          readProcessCommandLine: async () => "node /usr/local/bin/some-unrelated-daemon --foo",
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("does not signal the lock pid on stop when it is not this instance's Lark service (pid reuse guard)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const killed: number[] = [];
+
+    try {
+      await mkdir(path.join(stateDir, "lark-service"), { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark-service", "instance.lock.json"),
+        JSON.stringify({ pid: 424242, acquiredAt: new Date().toISOString() }),
+      );
+
+      const handled = await runCli(["lark", "service", "stop", "--force"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: () => {} },
+        larkServiceDeps: {
+          isProcessAlive: (pid) => pid === 424242, // the recycled pid is "alive"
+          readProcessCommandLine: async () => "node /usr/bin/unrelated", // but not the Lark service
+          findProcessIds: async () => [], // command-line discovery finds no real service
+          killProcess: (pid) => { killed.push(pid); },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(killed).not.toContain(424242); // the unrelated recycled pid is spared
     } finally {
       await removeTempRoot(tempDir);
     }
