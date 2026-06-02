@@ -18,6 +18,7 @@ import {
   LARK_CARD_ANSWER_MAX,
   LARK_MAX_OVERFLOW_CARDS,
   applyLarkEngineEvent,
+  cleanCardText,
   initialLarkRunState,
   renderLarkContinuationCard,
   renderLarkQueueWaitCard,
@@ -1153,14 +1154,20 @@ async function runNormalizedLarkMessage(
         // inline. The run card becomes card 1 (chunk 1); the rest follow as their own
         // cards. Only a genuinely document-sized reply (more than LARK_MAX_OVERFLOW_CARDS
         // chunks) still uses a Doc, where a long stream of cards would be worse.
+        // Split the CLEANED display text (tags stripped, headings downgraded) — the same
+        // transform the run card applies — so chunk sizing/boundaries match what is shown,
+        // a tag-heavy reply isn't over-split into near-empty cards, and continuation cards
+        // render consistently with the run card. deliverLarkResponse still gets the raw
+        // result.text below so file/image tags are actually processed.
+        const cardDisplayText = runCard !== undefined ? cleanCardText(result.text) : result.text;
         const answerChunks = runCard !== undefined
-          ? splitLarkAnswerIntoCardChunks(result.text)
-          : [result.text];
+          ? splitLarkAnswerIntoCardChunks(cardDisplayText)
+          : [cardDisplayText];
         const spillToContinuationCards = runCard !== undefined
           && answerChunks.length > 1
           && answerChunks.length <= LARK_MAX_OVERFLOW_CARDS;
         const answerShownInCard =
-          (await runCard?.finish(spillToContinuationCards ? answerChunks[0]! : result.text)) ?? false;
+          (await runCard?.finish(spillToContinuationCards ? answerChunks[0]! : cardDisplayText)) ?? false;
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
         let overflowDelivered = false;
         if (spillToContinuationCards && answerShownInCard) {

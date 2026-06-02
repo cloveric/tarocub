@@ -576,4 +576,17 @@ describe("long-answer continuation cards", () => {
     expect(Buffer.byteLength(elements[1]?.content ?? "", "utf8")).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
     expect(JSON.stringify(renderLarkContinuationCard("body", 2, 3, "en"))).toContain("Continued · 2/3");
   });
+
+  it("cleans continuation chunk text like the run card (downgrades headings, strips delivery tags)", () => {
+    const chunk = "## 大标题\n正文内容\n[send-file:/Users/me/report.pdf]\n更多正文";
+    const card = renderLarkContinuationCard(chunk, 2, 2, "zh");
+    const body = (card.body as { elements: Array<{ content?: string }> }).elements[1]?.content ?? "";
+    // "## " heading downgraded (no giant Feishu title) and the delivery tag stripped
+    // (not leaked as literal text) — consistent with the run card carrying chunk 1.
+    expect(body).not.toContain("## ");
+    expect(body).not.toContain("[send-file:");
+    expect(body).toContain("大标题");
+    expect(body).toContain("正文内容");
+    expect(body).toContain("更多正文");
+  });
 });

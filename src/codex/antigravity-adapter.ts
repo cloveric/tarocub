@@ -213,10 +213,15 @@ async function extractAntigravityConversationIdFromLogs(input: {
         }
       }
     }
+    // pid known but unmatched → FAIL CLOSED. Do NOT fall back to a positional id: if our
+    // pid line is delayed, missing, or the agy log format changed, the newest log could
+    // belong to a concurrent FOREIGN conversation, and binding to it is the exact risk
+    // this resolver exists to avoid. A fresh session (null → no resume) is safer than
+    // resuming someone else's. The positional fallback below is only for the no-pid case.
+    return null;
   }
 
-  // Pass 2 — fallback: no pid, or the pid never appeared in any recent log. Take the
-  // newest log's conversation id as a best effort.
+  // No pid to scope by → best-effort: take the newest log's conversation id.
   for (const { content } of contents) {
     const fallbackId = extractAntigravityConversationId(content);
     if (fallbackId) {

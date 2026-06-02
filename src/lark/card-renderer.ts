@@ -839,7 +839,7 @@ function renderToolInput(tool: LarkToolEntry): string {
   }
 }
 
-function cleanCardText(content: string): string {
+export function cleanCardText(content: string): string {
   const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
   return collapseBlankLines(downgradeMarkdownHeadings(stripped)).trim();
 }
@@ -1308,6 +1308,11 @@ export function renderLarkContinuationCard(
   locale: Locale = "zh",
 ): Record<string, unknown> {
   const heading = locale === "en" ? `↪ Continued · ${index}/${total}` : `↪ 接上 · ${index}/${total}`;
+  // Same text cleaning the run card applies (strip delivery/tool/cron tags, downgrade
+  // markdown headings): without it a chunk starting with "## " would render as a giant
+  // Feishu title and any [send-file:]/tool/cron tag would leak as literal text — making
+  // continuation cards inconsistent with the run card that carries chunk 1.
+  const cleaned = cleanCardText(body);
   return {
     schema: "2.0",
     config: {
@@ -1320,7 +1325,7 @@ export function renderLarkContinuationCard(
       padding: "12px 12px 12px 12px",
       elements: [
         noteElement(heading),
-        markdownElement(body.trim() || (locale === "en" ? "(empty)" : "（空）")),
+        markdownElement(cleaned || (locale === "en" ? "(empty)" : "（空）")),
       ],
     },
   };

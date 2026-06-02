@@ -330,6 +330,55 @@ describe("ProcessAntigravityAdapter", () => {
     }
   });
 
+  it("does NOT bind to a foreign conversation when our pid is known but absent from the logs (fail-closed, regression #10b)", async () => {
+    // Our child's pid (4242) never appears in the recent logs — only an unrelated agy
+    // conversation (pid 9999) does. Rather than fall back to that foreign conversation's
+    // id (the very risk this resolver guards against, e.g. a delayed/missing pid line or a
+    // log-format change), resolution must fail closed so the turn starts a fresh session
+    // instead of resuming someone else's.
+    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy",
+      { HOME: root },
+      spawnAntigravity,
+      undefined,
+      undefined,
+      "/tmp/workspace",
+    );
+    const foreignId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+    try {
+      const onEngineEvent = vi.fn();
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+        onEngineEvent,
+      });
+
+      await vi.waitFor(() => {
+        expect(calls).toHaveLength(1);
+      });
+      const logDir = path.join(root, ".gemini", "antigravity-cli", "log");
+      await mkdir(logDir, { recursive: true });
+      await writeFile(
+        path.join(logDir, "cli-20260520_100000.log"),
+        `I0520 10:00:00.000000  9999 printmode.go:130] Print mode: conversation=${foreignId}, sending message\n`,
+        "utf8",
+      );
+      child.stdout.emitData("ok");
+      child.close(0);
+
+      const result = await promise;
+      expect(result.text).toBe("ok");
+      // Must NOT have grabbed the foreign conversation id, and must not have emitted it.
+      expect(result.sessionId).not.toBe(foreignId);
+      expect(onEngineEvent).not.toHaveBeenCalledWith({ type: "session", sessionId: foreignId });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("emits stdout progress as assistant text stream events", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter(
