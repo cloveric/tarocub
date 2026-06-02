@@ -14,6 +14,7 @@ import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import {
+  ELEMENT_CONTENT_MAX_BYTES,
   LARK_CARD_ANSWER_MAX,
   applyLarkEngineEvent,
   initialLarkRunState,
@@ -1122,7 +1123,12 @@ async function runNormalizedLarkMessage(
         // markdown message. The card keeps its truncated preview. If doc creation
         // fails, fall through to the markdown dump so the content is never lost.
         let overflowDelivered = false;
-        if (runCard !== undefined && !answerShownInCard && result.text.length > LARK_OVERFLOW_DOC_MIN_CHARS) {
+        if (
+          runCard !== undefined
+          && !answerShownInCard
+          && (result.text.length > LARK_OVERFLOW_DOC_MIN_CHARS
+            || Buffer.byteLength(result.text, "utf8") > ELEMENT_CONTENT_MAX_BYTES)
+        ) {
           const overflow = await postLarkOverflowAnswerDoc({
             channel: input.channel,
             createDocument: input.runtime.createDocument,
@@ -1404,7 +1410,14 @@ export async function createLarkRunCardController(input: {
   // not (the card was truncated or fell back to the tiny terminal card), the
   // caller delivers the answer as a separate text message so nothing is lost.
   const finalize = async (text?: string): Promise<boolean> => {
-    const answerFitsCard = !text || text.length <= LARK_CARD_ANSWER_MAX;
+    // Byte-aware, not just char-count: Feishu's element limit is in BYTES (CJK is
+    // ~3 bytes/char), so a long Chinese answer can be byte-truncated in the card
+    // while its char length is well under the cap. Checking chars alone reported
+    // "fit" for a truncated answer → the overflow fallback never fired and the rest
+    // was lost. Require BOTH char and byte budgets so a too-big answer is delivered
+    // out-of-band instead.
+    const answerFitsCard = !text
+      || (text.length <= LARK_CARD_ANSWER_MAX && Buffer.byteLength(text, "utf8") <= ELEMENT_CONTENT_MAX_BYTES);
     if (!degraded && await tryUpdate(renderLarkRunCard(state, input.locale))) {
       return answerFitsCard;
     }

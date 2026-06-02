@@ -1066,6 +1066,46 @@ describe("lark service", () => {
     }
   });
 
+  it("overflows a CJK reply that fits the char cap but blows the byte cap (regression: byte-aware fit)", async () => {
+    // 2900 CJK chars is UNDER the 3000-char answer cap but ~8700 bytes — well over
+    // Feishu's per-element byte limit. Before the byte-aware fit check, this answer
+    // was judged "fits the card", so the card silently byte-truncated it and the
+    // overflow-to-doc fallback never fired — the operator lost the tail with no
+    // recourse. It must now overflow to a doc just like a char-too-long reply.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cjk-byte-"));
+    const channel = fakeChannel();
+    const cjkReply = "报告：" + "甲".repeat(2900);
+    expect(cjkReply.length).toBeLessThan(3000); // under the char cap
+    expect(Buffer.byteLength(cjkReply, "utf8")).toBeGreaterThan(7000); // over the byte cap
+    let docContent: string | undefined;
+    const createDocument = vi.fn(async (docInput: { content: string; as?: string; title?: string }) => {
+      docContent = docInput.content;
+      return { url: "https://feishu.cn/docx/CJKDOC", title: docInput.title };
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: cjkReply })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime({ createDocument }),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_cjk_byte", content: "写满一屏中文" }),
+      });
+
+      expect(createDocument).toHaveBeenCalledTimes(1);
+      expect(docContent).toContain("甲".repeat(2900));
+      const sends = JSON.stringify(channel.send.mock.calls);
+      expect(sends).toContain("https://feishu.cn/docx/CJKDOC");
+      expect(sends).not.toContain("甲".repeat(2900)); // full text not dumped to chat
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to a .md file (not an inline dump) when the overflow doc cannot be created", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-long-reply-fb-"));
     const channel = fakeChannel();

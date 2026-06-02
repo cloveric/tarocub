@@ -1189,7 +1189,12 @@ function truncate(s: string, max: number): string {
 // panels (the collapsed tool summary, the todo plan) aggregate unboundedly, so
 // e.g. max reasoning effort can overflow one element and fail the whole card.
 // Byte-cap every element's content at the factory level as a final safety net.
-const ELEMENT_CONTENT_MAX_BYTES = 9000;
+// Kept comfortably below Feishu's ~11310-byte element limit: 9000 still produced
+// frequent ErrCode 11310 in practice (card overhead + multiple elements summing
+// up), freezing long-reply cards. The handler also uses this to decide an answer
+// is too big for the card and must be delivered out-of-band (Doc/overflow), so a
+// long CJK answer (≈3 bytes/char) is never silently lost.
+export const ELEMENT_CONTENT_MAX_BYTES = 7000;
 function truncateBytes(s: string, maxBytes: number): string {
   if (Buffer.byteLength(s, "utf8") <= maxBytes) {
     return s;
