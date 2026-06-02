@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { buildLarkCliChannelEnv } from "./cli-env.js";
-import { LarkCliError, type LarkCliErrorEnvelope } from "./lark-cli-error.js";
+import { LarkCliError, larkCliErrorFromExec, type LarkCliErrorEnvelope } from "./lark-cli-error.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -91,6 +91,12 @@ export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput):
       documentId: document?.document_id ?? document?.documentId,
       warning: renderLarkDocumentCreateWarning(parsed.data?.permission_grant, stderr),
     };
+  } catch (error) {
+    // lark-cli exits nonzero and writes its typed envelope to stderr, so execFile REJECTS
+    // here before the parsed.ok check above can run. Recover the typed LarkCliError from the
+    // rejection so an auth/scope failure still becomes a scope-auth card instead of a raw
+    // ExecFileException whose .code is the process exit status.
+    throw larkCliErrorFromExec(error, "lark-cli docs +create failed");
   } finally {
     await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }

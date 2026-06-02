@@ -53,22 +53,27 @@ export function detectLarkMissingScope(error: unknown): LarkScopeDetection | nul
     ? (error as { code: number }).code
     : undefined;
   const codeInMessage = message.match(/\bcode[\s:=()]*?(\d{4,})/i);
-  const code = directCode ?? (codeInMessage ? Number(codeInMessage[1]) : undefined);
-
-  const byCode = code !== undefined && LARK_PERMISSION_ERROR_CODES.has(code);
+  const messageCode = codeInMessage ? Number(codeInMessage[1]) : undefined;
+  // Check BOTH the error's own .code AND a code embedded in the message: a rejected execFile
+  // sets .code to the PROCESS exit status (2/3), which would otherwise shadow the real lark
+  // permission code (99991672 …) sitting in the stderr text appended to the message.
+  const byCode = (directCode !== undefined && LARK_PERMISSION_ERROR_CODES.has(directCode))
+    || (messageCode !== undefined && LARK_PERMISSION_ERROR_CODES.has(messageCode));
   // Deliberately NOT matching generic "forbidden" / "access denied" / "未授权": those also
   // appear on non-scope failures (e.g. "Forbidden: bot not in chat"), and the delivery hook
   // tries this for EVERY tool error — a loose match would misdirect ordinary failures to the
-  // "go authorize a scope" card. Only scope-specific wording counts here; numeric permission
-  // codes and required_scope / scope tokens are the strong signals handled above/below.
+  // "go authorize a scope" card. Only scope-specific wording counts here.
   const byText = /required_scope/.test(lower)
     || /\b(no permission|permission denied|insufficient (?:permission|scope)|scope (?:not granted|missing|required))\b/.test(lower)
     || /(无权限|权限不足|没有权限|缺少权限|应用权限不足)/.test(message);
-  const scope = extractScopeFromMessage(message);
-  if (!byCode && !byText && scope === null) {
+  // A bare prefix:token (extractScopeFromMessage) is only a NAMER, never a standalone trigger:
+  // a coincidental "task:done:retry" / "base:not found" in a non-scope error must not misfire
+  // a scope card. Require a strong signal — a known permission code or explicit permission
+  // wording (required_scope included) — before firing.
+  if (!byCode && !byText) {
     return null;
   }
-  return { scope, kind: "scope" };
+  return { scope: extractScopeFromMessage(message), kind: "scope" };
 }
 
 // The app's "权限管理 / Permissions & Scopes" page in the Feishu/Lark developer console.

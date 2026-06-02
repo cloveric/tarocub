@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { buildLarkCliChannelEnv } from "./cli-env.js";
-import { LarkCliError, type LarkCliErrorEnvelope } from "./lark-cli-error.js";
+import { LarkCliError, larkCliErrorFromExec, type LarkCliErrorEnvelope } from "./lark-cli-error.js";
 import type { LarkChannelLike } from "./types.js";
 
 const execFile = promisify(execFileCallback);
@@ -78,10 +78,18 @@ export async function createLarkChatWithCli(input: LarkChatCreateInput): Promise
     }
   }
 
-  const { stdout } = await execFile("lark-cli", args, {
-    env: buildLarkCliChannelEnv(),
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  let stdout: string;
+  try {
+    // lark-cli exits nonzero + writes its typed envelope to stderr, so execFile REJECTS on a
+    // real failure; recover the typed LarkCliError from the rejection rather than letting a
+    // raw ExecFileException (with its process exit code) propagate.
+    ({ stdout } = await execFile("lark-cli", args, {
+      env: buildLarkCliChannelEnv(),
+      maxBuffer: 10 * 1024 * 1024,
+    }));
+  } catch (error) {
+    throw larkCliErrorFromExec(error, "lark-cli im +chat-create failed");
+  }
   const parsed = parseLarkCliJson(stdout) as {
     ok?: boolean;
     data?: {

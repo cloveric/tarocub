@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { LarkCliError } from "../src/lark/lark-cli-error.js";
+import { LarkCliError, larkCliErrorFromExec } from "../src/lark/lark-cli-error.js";
 import {
   detectLarkMissingScope,
   larkAppPermissionUrl,
@@ -79,6 +79,66 @@ describe("detectLarkMissingScope", () => {
   it("does NOT fire for a non-auth lark-cli error (type=api)", () => {
     const err = new LarkCliError({ type: "api", subtype: "not_found", code: 404, message: "HTTP 404" }, "lark-cli failed");
     expect(detectLarkMissingScope(err)).toBeNull();
+  });
+
+  it("does not let a process exit code shadow the real lark permission code in the message", () => {
+    // A rejected execFile that couldn't be parsed into a typed error still carries the real
+    // lark code in its message; .code is the PROCESS exit status (3). The card must still fire
+    // via the message code, not be masked by the exit code.
+    const err = Object.assign(new Error("lark chat.create failed (code 99991672)"), { code: 3 });
+    expect(detectLarkMissingScope(err)).toEqual({ scope: null, kind: "scope" });
+  });
+
+  it("does NOT fire on a bare prefix:token alone (no code, no permission wording)", () => {
+    // "task:done:retry" is a coincidental token in an ordinary failure, not a scope error.
+    expect(detectLarkMissingScope(new Error("step task:done:retry failed after timeout"))).toBeNull();
+  });
+});
+
+describe("larkCliErrorFromExec (lark-cli exits nonzero + writes the typed envelope to stderr)", () => {
+  // The exact shape a promisified child_process.execFile rejection has when lark-cli fails:
+  // .code is the PROCESS exit status, the typed envelope is on .stderr, stdout is empty.
+  const rejectionLike = (stderr: string, exitCode: number) =>
+    Object.assign(new Error(`Command failed: lark-cli ...\n${stderr}`), { code: exitCode, stdout: "", stderr });
+
+  it("recovers the typed LarkCliError from a rejected exec's stderr + keeps only the troubleshooter URL", () => {
+    const stderr = JSON.stringify({
+      ok: false,
+      error: {
+        type: "authentication",
+        subtype: "token_invalid",
+        code: 99991668,
+        message: "user access token not support",
+        troubleshooter: "排查建议查看(Troubleshooting suggestions): https://open.feishu.cn/search?from=openapi&code=99991668",
+      },
+    });
+    const recovered = larkCliErrorFromExec(rejectionLike(stderr, 3), "lark-cli docs +create failed");
+    expect(recovered).toBeInstanceOf(LarkCliError);
+    const cliErr = recovered as LarkCliError;
+    expect(cliErr.larkType).toBe("authentication");
+    expect(cliErr.larkCode).toBe(99991668);
+    // Only the URL is kept — the surrounding Chinese text + parens would break a card link.
+    expect(cliErr.troubleshooter).toBe("https://open.feishu.cn/search?from=openapi&code=99991668");
+  });
+
+  it("recovered LarkCliError flows through detection to an auth card", () => {
+    const stderr = JSON.stringify({ ok: false, error: { type: "authentication", code: 99991668, message: "user access token not support", troubleshooter: "see https://open.feishu.cn/search?code=99991668" } });
+    const recovered = larkCliErrorFromExec(rejectionLike(stderr, 3), "fb");
+    expect(detectLarkMissingScope(recovered)).toEqual({
+      scope: null,
+      kind: "auth",
+      troubleshooter: "https://open.feishu.cn/search?code=99991668",
+    });
+  });
+
+  it("returns an existing LarkCliError unchanged", () => {
+    const original = new LarkCliError({ type: "authentication", code: 99991672 }, "x");
+    expect(larkCliErrorFromExec(original, "fb")).toBe(original);
+  });
+
+  it("returns the original error when there is no parseable envelope", () => {
+    const plain = Object.assign(new Error("Command failed: lark-cli (exit 1)"), { code: 1, stdout: "", stderr: "boom, not json" });
+    expect(larkCliErrorFromExec(plain, "fb")).toBe(plain);
   });
 });
 
