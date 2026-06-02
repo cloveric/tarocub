@@ -56,13 +56,19 @@ export function detectLarkMissingScope(error: unknown): LarkScopeDetection | nul
   const code = directCode ?? (codeInMessage ? Number(codeInMessage[1]) : undefined);
 
   const byCode = code !== undefined && LARK_PERMISSION_ERROR_CODES.has(code);
+  // Deliberately NOT matching generic "forbidden" / "access denied" / "未授权": those also
+  // appear on non-scope failures (e.g. "Forbidden: bot not in chat"), and the delivery hook
+  // tries this for EVERY tool error — a loose match would misdirect ordinary failures to the
+  // "go authorize a scope" card. Only scope-specific wording counts here; numeric permission
+  // codes and required_scope / scope tokens are the strong signals handled above/below.
   const byText = /required_scope/.test(lower)
-    || /\b(no permission|permission denied|access denied|forbidden|insufficient (?:permission|scope)|scope (?:not granted|missing|required))\b/.test(lower)
-    || /(无权限|权限不足|没有权限|缺少权限|未授权|应用权限不足)/.test(message);
-  if (!byCode && !byText) {
+    || /\b(no permission|permission denied|insufficient (?:permission|scope)|scope (?:not granted|missing|required))\b/.test(lower)
+    || /(无权限|权限不足|没有权限|缺少权限|应用权限不足)/.test(message);
+  const scope = extractScopeFromMessage(message);
+  if (!byCode && !byText && scope === null) {
     return null;
   }
-  return { scope: extractScopeFromMessage(message), kind: "scope" };
+  return { scope, kind: "scope" };
 }
 
 // The app's "权限管理 / Permissions & Scopes" page in the Feishu/Lark developer console.

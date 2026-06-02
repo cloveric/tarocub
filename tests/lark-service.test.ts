@@ -9348,6 +9348,7 @@ describe("lark service", () => {
     // fresh card (a new message, not a revert-prone patch), so it still lands in a card.
     const channel = fakeChannel({
       updateCard: vi.fn(async () => { throw new Error("card patch rejected"); }),
+      recallMessage: vi.fn(async () => undefined),
     });
     const runtime = createLarkServiceRuntime();
     const bridge: LarkBridgeLike = {
@@ -9373,6 +9374,9 @@ describe("lark service", () => {
         return JSON.stringify(payload ?? {}).includes("the final answer");
       });
       expect(answerSends.length).toBeGreaterThan(0);
+      // "no frozen card" — the stale, un-updatable run card is RECALLED once the fresh card
+      // lands, instead of being left stuck in "running" beside the answer.
+      expect(channel.recallMessage).toHaveBeenCalled();
       // The fresh-card recovery is recorded, so a "the completion came as text, no card"
       // report is diagnosable from the timeline instead of guessed at.
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));

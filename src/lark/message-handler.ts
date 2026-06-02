@@ -1574,15 +1574,28 @@ export async function createLarkRunCardController(input: {
     // answer stays a card instead of spilling to plain text. (Skip when the answer is
     // too big for a card — that genuinely needs the out-of-band text/doc path.)
     if (answerFitsCard && text) {
+      // The stale in-place card (sent.messageId) can't be updated — that's exactly why
+      // we're re-sending — so best-effort RECALL it once the fresh card lands, otherwise it
+      // stays frozen in "running" next to the answer card. Recall is a different API from
+      // update, so it can succeed where the patch failed; if it can't, no worse than before.
+      const staleMessageId = sent.messageId;
+      const recallStale = async (): Promise<void> => {
+        if (input.channel.recallMessage && staleMessageId) {
+          await input.channel.recallMessage(staleMessageId).catch(() => undefined);
+        }
+      };
       const freshManaged = await sendManagedCard(input.channel, input.chatId, renderLarkRunCard(state, input.locale), {
         ...(input.replyTo ? { replyTo: input.replyTo } : {}),
         ...(input.replyInThread ? { replyInThread: true } : {}),
       });
       if (freshManaged) {
+        await recallStale();
         handle = freshManaged; // future updates target the fresh card
+        sent = { messageId: freshManaged.messageId, fallback: false };
         return { shown: true, reason: "fresh-card" };
       }
       if (await trySendFreshInlineCard(renderLarkRunCard(state, input.locale))) {
+        await recallStale();
         return { shown: true, reason: "fresh-card" };
       }
     }

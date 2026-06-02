@@ -38,6 +38,15 @@ describe("detectLarkMissingScope", () => {
     expect(detectLarkMissingScope(undefined)).toBeNull();
   });
 
+  it("does NOT misfire on generic non-scope failures (forbidden / access denied / 未授权)", () => {
+    // The delivery hook tries scope detection for EVERY tool error, so a business rejection
+    // that merely says "forbidden" must NOT be rendered as a "go authorize a scope" card —
+    // only codes, required_scope, or an extractable scope token count as scope signals.
+    expect(detectLarkMissingScope(new Error("Forbidden: bot not in chat"))).toBeNull();
+    expect(detectLarkMissingScope(new Error("Request failed: access denied by recipient"))).toBeNull();
+    expect(detectLarkMissingScope(new Error("操作未授权"))).toBeNull();
+  });
+
   // Typed lark-cli envelope (>= 1.0.45) — the authoritative path for lark-cli failures.
   it("treats a typed no-permission lark-cli error as a missing scope (kind=scope)", () => {
     const err = new LarkCliError(
