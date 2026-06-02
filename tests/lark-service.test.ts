@@ -21,6 +21,7 @@ import {
   requestLarkApproval,
 } from "../src/lark/service.js";
 import { deliverLarkResponse } from "../src/lark/delivery.js";
+import { LarkCliError } from "../src/lark/lark-cli-error.js";
 import { createLarkRunCardController } from "../src/lark/message-handler.js";
 import { LarkGroupModeStore } from "../src/lark/group-mode-store.js";
 import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
@@ -1201,6 +1202,46 @@ describe("lark service", () => {
       expect(sends).toContain("https://open.feishu.cn/app/cli_scopetest/auth");
       // The raw tool error string is NOT what the user sees.
       expect(sends).not.toContain("create doc failed");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("turns a typed lark-cli auth-domain failure (token type) into an auth card with the troubleshooter link", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-auth-card-"));
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime({
+      createDocument: vi.fn(async () => {
+        // The lark-cli >= 1.0.45 typed envelope a real auth failure carries.
+        throw new LarkCliError(
+          {
+            type: "authentication",
+            subtype: "token_invalid",
+            code: 99991668,
+            message: "user access token not support",
+            troubleshooter: "https://open.feishu.cn/search?code=99991668",
+          },
+          "lark-cli docs +create failed",
+        );
+      }),
+    });
+    runtime.appInfo = { appId: "cli_authtest", domain: "feishu" };
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime,
+        chatId: "oc_chat",
+        text: '[tool:{"name":"lark.doc.create","payload":{"title":"Spec","content":"# Spec\\n\\n正文","docFormat":"markdown"}}]',
+        stateDir,
+      });
+
+      const sends = JSON.stringify(channel.send.mock.calls);
+      // Honest auth-domain framing (not a flat "missing scope") + Feishu's own troubleshooter link.
+      expect(sends).toContain("认证/权限");
+      expect(sends).toContain("https://open.feishu.cn/search?code=99991668");
+      // The raw lark-cli error string is NOT what the user sees.
+      expect(sends).not.toContain("user access token not support");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { buildLarkCliChannelEnv } from "./cli-env.js";
+import { LarkCliError, type LarkCliErrorEnvelope } from "./lark-cli-error.js";
 import type { LarkChannelLike } from "./types.js";
 
 const execFile = promisify(execFileCallback);
@@ -97,11 +98,11 @@ export async function createLarkChatWithCli(input: LarkChatCreateInput): Promise
       share_link?: string;
       shareLink?: string;
     };
-    error?: { message?: string };
+    error?: LarkCliErrorEnvelope;
   };
 
   if (parsed.ok === false) {
-    throw new Error(parsed.error?.message ?? "lark-cli im +chat-create failed");
+    throw new LarkCliError(parsed.error, "lark-cli im +chat-create failed");
   }
   const data = parsed.data ?? {};
   const chat = data.chat ?? {};

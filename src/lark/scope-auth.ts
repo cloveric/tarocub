@@ -1,6 +1,17 @@
 import type { Locale } from "../telegram/message-renderer.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
+import { LarkCliError } from "./lark-cli-error.js";
 import type { LarkChannelLike, LarkSendOptions } from "./types.js";
+
+export interface LarkScopeDetection {
+  /** The missing scope when nameable (e.g. `docx:document`), else null. */
+  scope: string | null;
+  /** "scope" = a missing permission/scope (→ 权限管理); "auth" = a broader auth-domain
+   *  failure (token type/validity) where authorizing a scope may not be the whole fix. */
+  kind: "scope" | "auth";
+  /** Feishu's per-error troubleshooting URL, when the typed envelope carries one. */
+  troubleshooter?: string;
+}
 
 // Feishu/Lark returns code 99991672 (and friends) when the app lacks a required permission
 // scope, and the lark-cli surfaces `required_scope=...`. We detect these so a missing-scope
@@ -8,7 +19,34 @@ import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 // new operators who are still wiring up the bot's permissions.
 const LARK_PERMISSION_ERROR_CODES = new Set([99991672, 99991671, 99991679]);
 
-export function detectLarkMissingScope(error: unknown): { scope: string | null } | null {
+// Name the scope when the error carries it (required_scope=xxx, or an `im:message:send`
+// style token); otherwise the card just points to the permissions console.
+function extractScopeFromMessage(message: string): string | null {
+  const scopeMatch = message.match(/required_scope[=:\s]+([a-z][a-z0-9_.]*(?::[a-z0-9_.]+)+)/i)
+    || message.match(/\b((?:im|docx|docs|sheets|drive|calendar|contact|wiki|bitable|base|vc|task|minutes|board|mail)(?::[a-z0-9_.]+)+)\b/i);
+  return scopeMatch ? (scopeMatch[1] ?? null) : null;
+}
+
+export function detectLarkMissingScope(error: unknown): LarkScopeDetection | null {
+  // 1) Typed lark-cli envelope (>= 1.0.45): `type:"authentication"` is authoritative for
+  //    the lark-cli path — far more reliable than fuzzy-matching the message. A non-auth
+  //    lark-cli error (e.g. type:"api" not_found) is NOT our concern → fall through to null.
+  if (error instanceof LarkCliError) {
+    const code = error.larkCode;
+    const isScopeCode = code !== undefined && LARK_PERMISSION_ERROR_CODES.has(code);
+    if (error.larkType === "authentication" || isScopeCode) {
+      const scope = extractScopeFromMessage(error.message);
+      const isScope = isScopeCode || scope !== null;
+      return {
+        scope: isScope ? scope : null,
+        kind: isScope ? "scope" : "auth",
+        ...(error.troubleshooter ? { troubleshooter: error.troubleshooter } : {}),
+      };
+    }
+    return null;
+  }
+
+  // 2) SDK / generic errors: numeric permission code (99991672 …) or permission wording.
   const message = error instanceof Error ? error.message : String(error ?? "");
   const lower = message.toLowerCase();
   const directCode = typeof (error as { code?: unknown } | null)?.code === "number"
@@ -24,11 +62,7 @@ export function detectLarkMissingScope(error: unknown): { scope: string | null }
   if (!byCode && !byText) {
     return null;
   }
-  // Name the scope when the error carries it (required_scope=xxx, or an `im:message:send`
-  // style token); otherwise the card just points to the permissions console.
-  const scopeMatch = message.match(/required_scope[=:\s]+([a-z][a-z0-9_.]*(?::[a-z0-9_.]+)+)/i)
-    || message.match(/\b((?:im|docx|docs|sheets|drive|calendar|contact|wiki|bitable|base|vc|task|minutes|board|mail)(?::[a-z0-9_.]+)+)\b/i);
-  return { scope: scopeMatch ? (scopeMatch[1] ?? null) : null };
+  return { scope: extractScopeFromMessage(message), kind: "scope" };
 }
 
 // The app's "权限管理 / Permissions & Scopes" page in the Feishu/Lark developer console.
@@ -46,40 +80,70 @@ export function renderLarkScopeAuthCard(input: {
   appId?: string;
   domain?: string;
   locale?: Locale;
+  kind?: "scope" | "auth";
+  troubleshooter?: string;
 }): Record<string, unknown> {
   const locale = input.locale ?? "zh";
+  const en = locale === "en";
+  const kind = input.kind ?? "scope";
   const url = larkAppPermissionUrl(input.appId, input.domain);
-  const scopeLine = input.scope
-    ? (locale === "en" ? `Missing permission: \`${input.scope}\`` : `缺少权限：\`${input.scope}\``)
-    : (locale === "en" ? "The bot is missing a Feishu/Lark app permission." : "机器人缺少一项飞书应用权限。");
-  const body = locale === "en"
-    ? `${scopeLine}\n\nThis operation needs a Feishu/Lark app permission the bot hasn't been granted. Open the developer console → **Permissions & Scopes**, add it, then re-publish the app version.`
-    : `${scopeLine}\n\n这个操作需要一项机器人当前没有的飞书应用权限。点下面去开发者后台 →「**权限管理**」开通，然后发布新版本即可生效。`;
+
+  let header: string;
+  let body: string;
+  if (kind === "auth") {
+    // A typed auth-domain failure that isn't pinned to a named scope — could be a missing
+    // permission OR a token type/validity issue, so the wording stays honest (not "go add
+    // this scope") and leans on Feishu's own troubleshooting link.
+    header = en ? "⚠ Feishu auth/permission failed" : "⚠ 飞书认证/权限未通过";
+    body = en
+      ? "A Feishu operation failed its authentication/permission check — it may be a missing scope, or a token type/validity issue. See the troubleshooting link below, or check the app's **Permissions & Scopes** in the developer console."
+      : "一个飞书操作的**认证/权限**没通过——可能是缺权限，也可能是 token 类型或有效期问题。点下面看飞书的排查建议，或去开发者后台「**权限管理**」检查。";
+  } else {
+    const scopeLine = input.scope
+      ? (en ? `Missing permission: \`${input.scope}\`` : `缺少权限：\`${input.scope}\``)
+      : (en ? "The bot is missing a Feishu/Lark app permission." : "机器人缺少一项飞书应用权限。");
+    header = en ? "⚠ Missing Feishu permission" : "⚠ 缺少飞书权限";
+    body = en
+      ? `${scopeLine}\n\nThis operation needs a Feishu/Lark app permission the bot hasn't been granted. Open the developer console → **Permissions & Scopes**, add it, then re-publish the app version.`
+      : `${scopeLine}\n\n这个操作需要一项机器人当前没有的飞书应用权限。点下面去开发者后台 →「**权限管理**」开通，然后发布新版本即可生效。`;
+  }
+
   const elements: Array<Record<string, unknown>> = [{ tag: "markdown", content: body }];
   if (url) {
     elements.push({
       tag: "button",
-      text: { tag: "plain_text", content: locale === "en" ? "Open Permissions console" : "去权限管理授权" },
+      text: { tag: "plain_text", content: en ? "Open Permissions console" : "去权限管理授权" },
       type: "primary",
       behaviors: [{ type: "open_url", default_url: url }],
     });
-  } else {
+  } else if (kind === "scope") {
     elements.push({
       tag: "markdown",
-      content: locale === "en"
+      content: en
         ? "Run `node dist/src/index.js lark doctor` to see which scopes are missing."
         : "运行 `node dist/src/index.js lark doctor` 可查看缺哪些权限。",
     });
   }
+  if (input.troubleshooter) {
+    elements.push({
+      tag: "markdown",
+      content: en
+        ? `🔎 [Feishu troubleshooting](${input.troubleshooter})`
+        : `🔎 [飞书官方排查建议](${input.troubleshooter})`,
+    });
+  }
+  const summary = kind === "auth"
+    ? (en ? "Feishu auth/permission failed" : "飞书认证/权限未通过")
+    : (en ? "Missing Feishu permission" : "缺少飞书权限");
   return {
     schema: "2.0",
     config: {
       update_multi: true,
-      summary: { content: locale === "en" ? "Missing Feishu permission" : "缺少飞书权限" },
+      summary: { content: summary },
     },
     header: {
       template: "orange",
-      title: { tag: "plain_text", content: locale === "en" ? "⚠ Missing Feishu permission" : "⚠ 缺少飞书权限" },
+      title: { tag: "plain_text", content: header },
     },
     body: { direction: "vertical", padding: "12px 12px 12px 12px", elements },
   };
@@ -103,10 +167,22 @@ export async function maybeSendLarkScopeAuthCard(
   if (!missing) {
     return false;
   }
-  const card = renderLarkScopeAuthCard({ scope: missing.scope, appId: input.appId, domain: input.domain, locale: input.locale });
-  const fallbackText = input.locale === "en"
-    ? `Missing Feishu permission${missing.scope ? ` (${missing.scope})` : ""}. Open the developer console → Permissions & Scopes to authorize.`
-    : `缺少飞书权限${missing.scope ? `（${missing.scope}）` : ""}。请到开发者后台「权限管理」开通后重试。`;
+  const card = renderLarkScopeAuthCard({
+    scope: missing.scope,
+    appId: input.appId,
+    domain: input.domain,
+    locale: input.locale,
+    kind: missing.kind,
+    ...(missing.troubleshooter ? { troubleshooter: missing.troubleshooter } : {}),
+  });
+  const en = input.locale === "en";
+  const fallbackText = missing.kind === "auth"
+    ? (en
+      ? `Feishu auth/permission check failed.${missing.troubleshooter ? ` Troubleshooting: ${missing.troubleshooter}` : " Check the app's Permissions & Scopes."}`
+      : `飞书认证/权限未通过。${missing.troubleshooter ? `排查建议：${missing.troubleshooter}` : "请到开发者后台「权限管理」检查。"}`)
+    : (en
+      ? `Missing Feishu permission${missing.scope ? ` (${missing.scope})` : ""}. Open the developer console → Permissions & Scopes to authorize.`
+      : `缺少飞书权限${missing.scope ? `（${missing.scope}）` : ""}。请到开发者后台「权限管理」开通后重试。`);
   try {
     await sendLarkCardWithFallback({
       channel: input.channel,

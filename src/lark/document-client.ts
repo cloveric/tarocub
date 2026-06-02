@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { buildLarkCliChannelEnv } from "./cli-env.js";
+import { LarkCliError, type LarkCliErrorEnvelope } from "./lark-cli-error.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -78,12 +79,10 @@ export async function createLarkDocumentWithCli(input: LarkDocumentCreateInput):
           required_scope?: string;
         };
       };
-      error?: {
-        message?: string;
-      };
+      error?: LarkCliErrorEnvelope;
     };
     if (parsed.ok === false) {
-      throw new Error(parsed.error?.message ?? "lark-cli docs +create failed");
+      throw new LarkCliError(parsed.error, "lark-cli docs +create failed");
     }
     const document = parsed.data?.document;
     return {

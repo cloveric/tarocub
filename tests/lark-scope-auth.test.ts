@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { LarkCliError } from "../src/lark/lark-cli-error.js";
 import {
   detectLarkMissingScope,
   larkAppPermissionUrl,
@@ -9,32 +10,66 @@ import {
 
 describe("detectLarkMissingScope", () => {
   it("detects the Feishu no-permission code embedded in a thrown message", () => {
-    expect(detectLarkMissingScope(new Error("lark chat.create failed (code 99991672)"))).toEqual({ scope: null });
+    expect(detectLarkMissingScope(new Error("lark chat.create failed (code 99991672)"))).toEqual({ scope: null, kind: "scope" });
   });
 
   it("detects a direct numeric code on the error object", () => {
     const err = Object.assign(new Error("permission check"), { code: 99991672 });
-    expect(detectLarkMissingScope(err)).toEqual({ scope: null });
+    expect(detectLarkMissingScope(err)).toEqual({ scope: null, kind: "scope" });
   });
 
   it("extracts the scope from required_scope", () => {
     expect(detectLarkMissingScope(new Error("permission_grant=failed required_scope=docx:document message=nope")))
-      .toEqual({ scope: "docx:document" });
+      .toEqual({ scope: "docx:document", kind: "scope" });
   });
 
   it("extracts an im:message:send style scope token from a permission error", () => {
     expect(detectLarkMissingScope(new Error("No permission: im:message:send_as_bot is not granted")))
-      .toEqual({ scope: "im:message:send_as_bot" });
+      .toEqual({ scope: "im:message:send_as_bot", kind: "scope" });
   });
 
   it("detects Chinese permission wording", () => {
-    expect(detectLarkMissingScope(new Error("操作失败：权限不足"))).toEqual({ scope: null });
+    expect(detectLarkMissingScope(new Error("操作失败：权限不足"))).toEqual({ scope: null, kind: "scope" });
   });
 
   it("returns null for unrelated errors", () => {
     expect(detectLarkMissingScope(new Error("network timeout"))).toBeNull();
     expect(detectLarkMissingScope(new Error("code 500 internal"))).toBeNull();
     expect(detectLarkMissingScope(undefined)).toBeNull();
+  });
+
+  // Typed lark-cli envelope (>= 1.0.45) — the authoritative path for lark-cli failures.
+  it("treats a typed no-permission lark-cli error as a missing scope (kind=scope)", () => {
+    const err = new LarkCliError(
+      { type: "authentication", subtype: "permission_denied", code: 99991672, message: "no permission" },
+      "lark-cli docs +create failed",
+    );
+    expect(detectLarkMissingScope(err)).toEqual({ scope: null, kind: "scope" });
+  });
+
+  it("treats a typed token-type auth error as kind=auth (not a nameable scope) and carries the troubleshooter", () => {
+    const err = new LarkCliError(
+      { type: "authentication", subtype: "token_invalid", code: 99991668, message: "user access token not support", troubleshooter: "https://open.feishu.cn/search?code=99991668" },
+      "lark-cli failed",
+    );
+    expect(detectLarkMissingScope(err)).toEqual({
+      scope: null,
+      kind: "auth",
+      troubleshooter: "https://open.feishu.cn/search?code=99991668",
+    });
+  });
+
+  it("names the scope from a typed auth error message when present", () => {
+    const err = new LarkCliError(
+      { type: "authentication", code: 99990000, message: "required_scope=docx:document not granted" },
+      "lark-cli failed",
+    );
+    expect(detectLarkMissingScope(err)).toEqual({ scope: "docx:document", kind: "scope" });
+  });
+
+  it("does NOT fire for a non-auth lark-cli error (type=api)", () => {
+    const err = new LarkCliError({ type: "api", subtype: "not_found", code: 404, message: "HTTP 404" }, "lark-cli failed");
+    expect(detectLarkMissingScope(err)).toBeNull();
   });
 });
 
@@ -71,6 +106,24 @@ describe("renderLarkScopeAuthCard", () => {
     const hasButton = card.body.elements.some((e) => e.tag === "button");
     expect(hasButton).toBe(false);
     expect(JSON.stringify(card)).toContain("lark doctor");
+  });
+
+  it("uses an honest auth/permission framing + a troubleshooter link for kind=auth", () => {
+    const card = renderLarkScopeAuthCard({
+      scope: null,
+      appId: "cli_x",
+      domain: undefined,
+      locale: "zh",
+      kind: "auth",
+      troubleshooter: "https://open.feishu.cn/search?code=99991668",
+    });
+    const json = JSON.stringify(card);
+    // Honest wording (covers scope OR token), not a flat "missing scope" claim.
+    expect(json).toContain("认证/权限");
+    // Feishu's own troubleshooting link is surfaced...
+    expect(json).toContain("https://open.feishu.cn/search?code=99991668");
+    // ...and the permissions console button is still offered.
+    expect(json).toContain("权限管理");
   });
 });
 
