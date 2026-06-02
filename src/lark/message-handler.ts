@@ -1195,8 +1195,27 @@ async function runNormalizedLarkMessage(
         const spillToContinuationCards = runCard !== undefined
           && answerChunks.length > 1
           && answerChunks.length <= LARK_MAX_OVERFLOW_CARDS;
-        const answerShownInCard =
-          (await runCard?.finish(spillToContinuationCards ? answerChunks[0]! : cardDisplayText)) ?? false;
+        const finishResult = runCard
+          ? await runCard.finish(spillToContinuationCards ? answerChunks[0]! : cardDisplayText)
+          : undefined;
+        const answerShownInCard = finishResult?.shown ?? false;
+        if (finishResult) {
+          // Record whether the answer actually landed in a card (and why) — card-vs-text
+          // finish was previously unlogged, so a "no card" report could only be guessed at.
+          // reason=update-failed/too-big explains a text fallback; fresh-card means an
+          // in-place update was rejected (e.g. post-interaction revert) and we re-sent.
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event.card_finish",
+            detail: finishResult.reason,
+            metadata: {
+              shown: finishResult.shown,
+              reason: finishResult.reason,
+              answerChars: cardDisplayText.length,
+              answerBytes: Buffer.byteLength(cardDisplayText, "utf8"),
+              ...(spillToContinuationCards ? { spillCards: answerChunks.length } : {}),
+            },
+          });
+        }
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
         let overflowDelivered = false;
         if (spillToContinuationCards && answerShownInCard) {
@@ -1345,10 +1364,27 @@ async function runNormalizedLarkMessage(
   }
 }
 
+export type LarkRunFinishReason =
+  // In-place card update landed and the answer fits → shown in the run card.
+  | "fit"
+  // Answer exceeds the card's char/byte budget → must be delivered out-of-band.
+  | "too-big"
+  // In-place update kept failing (e.g. a post-interaction inline patch reverts), so the
+  // finished answer was re-sent as a FRESH card (a new message, not a patch) → still shown.
+  | "fresh-card"
+  // Every attempt to put the answer in a card failed → caller delivers it as text.
+  | "update-failed";
+
+export interface LarkRunFinishResult {
+  /** Whether the full answer is visible in a card (in place or a fresh one). */
+  shown: boolean;
+  reason: LarkRunFinishReason;
+}
+
 export interface LarkRunCardController {
   apply(event: EngineStreamEvent): Promise<void>;
-  /** Finalize with the answer; resolves to whether the answer is fully shown in the card. */
-  finish(text: string): Promise<boolean>;
+  /** Finalize with the answer; resolves to whether/how the answer was shown in a card. */
+  finish(text: string): Promise<LarkRunFinishResult>;
   fail(text: string): Promise<void>;
   interrupt(): Promise<void>;
   idleTimeout(minutes: number): Promise<void>;
@@ -1448,6 +1484,18 @@ export async function createLarkRunCardController(input: {
       return false;
     }
   };
+  // Re-send a card as a NEW message (not an in-place patch). Used as the terminal
+  // fallback when every in-place update is rejected — a fresh send dodges the
+  // post-interaction patch-revert an inline run card can hit, keeping the finished
+  // answer in a card instead of spilling to plain text.
+  const trySendFreshInlineCard = async (card: Record<string, unknown>): Promise<boolean> => {
+    try {
+      await input.channel.send(input.chatId, { card }, larkReplyOptions(input.replyTo, input.replyInThread));
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const update = async (): Promise<void> => {
     if (!degraded) {
       if (await tryUpdate(renderLarkRunCard(state, input.locale))) {
@@ -1502,7 +1550,7 @@ export async function createLarkRunCardController(input: {
   // Returns whether the full answer is visible in the rendered card. When it is
   // not (the card was truncated or fell back to the tiny terminal card), the
   // caller delivers the answer as a separate text message so nothing is lost.
-  const finalize = async (text?: string): Promise<boolean> => {
+  const finalize = async (text?: string): Promise<LarkRunFinishResult> => {
     // Byte-aware, not just char-count: Feishu's element limit is in BYTES (CJK is
     // ~3 bytes/char), so a long Chinese answer can be byte-truncated in the card
     // while its char length is well under the cap. Checking chars alone reported
@@ -1511,19 +1559,39 @@ export async function createLarkRunCardController(input: {
     // out-of-band instead.
     const answerFitsCard = !text
       || (text.length <= LARK_CARD_ANSWER_MAX && Buffer.byteLength(text, "utf8") <= ELEMENT_CONTENT_MAX_BYTES);
+    const fitReason: LarkRunFinishReason = answerFitsCard ? "fit" : "too-big";
     if (!degraded && await tryUpdate(renderLarkRunCard(state, input.locale))) {
-      return answerFitsCard;
+      return { shown: answerFitsCard, reason: fitReason };
     }
     degraded = true;
     if (await tryUpdate(renderLarkRunCardCompact(state, input.locale))) {
-      return answerFitsCard;
+      return { shown: answerFitsCard, reason: fitReason };
+    }
+    // Every in-place update was rejected. When the card is a fits-in-a-card answer,
+    // the usual cause is a post-interaction inline patch that Feishu reverts — but a
+    // fresh SEND is a new message, not a patch, so it lands where the update can't.
+    // Re-send the finished card (managed first, plain inline as a backstop) so the
+    // answer stays a card instead of spilling to plain text. (Skip when the answer is
+    // too big for a card — that genuinely needs the out-of-band text/doc path.)
+    if (answerFitsCard && text) {
+      const freshManaged = await sendManagedCard(input.channel, input.chatId, renderLarkRunCard(state, input.locale), {
+        ...(input.replyTo ? { replyTo: input.replyTo } : {}),
+        ...(input.replyInThread ? { replyInThread: true } : {}),
+      });
+      if (freshManaged) {
+        handle = freshManaged; // future updates target the fresh card
+        return { shown: true, reason: "fresh-card" };
+      }
+      if (await trySendFreshInlineCard(renderLarkRunCard(state, input.locale))) {
+        return { shown: true, reason: "fresh-card" };
+      }
     }
     // Both the full and compact cards can be rejected when a single element
     // (e.g. a long CJK answer) exceeds Feishu's limit. Fall back to a guaranteed-
     // tiny terminal card so the card never freezes in "running"; the caller then
     // delivers the answer as text.
     await tryUpdate(renderLarkRunCardMinimal(state, input.locale));
-    return false;
+    return { shown: false, reason: answerFitsCard ? "update-failed" : "too-big" };
   };
   return {
     apply: async (event) => {
@@ -1531,12 +1599,12 @@ export async function createLarkRunCardController(input: {
       // Coalesced, non-blocking: never await the live patch.
       scheduleUpdate();
     },
-    finish: async (text): Promise<boolean> => {
+    finish: async (text): Promise<LarkRunFinishResult> => {
       // Reuse the reducer so non-streaming engines (which emit no incremental
       // assistant_text) still get the final answer seeded into the block stream.
       state = applyLarkEngineEvent(state, { type: "result", text });
       cancelScheduledUpdate();
-      // Returns whether the answer is fully visible in the card.
+      // Returns whether/how the answer was shown in a card.
       return await enqueuePatch(() => finalize(text));
     },
     fail: async (text) => {

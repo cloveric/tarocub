@@ -145,7 +145,7 @@ export function buildLarkCronExecutor(input: {
     // delivers file/image tags + any overflow regardless.
     let answerShownInCard = false;
     if (runCard) {
-      answerShownInCard = await runCard.finish(result.text || renderLarkEmptyCronAgentReply(job));
+      answerShownInCard = (await runCard.finish(result.text || renderLarkEmptyCronAgentReply(job))).shown;
     }
     if (input.deliverResponse) {
       await input.deliverResponse({

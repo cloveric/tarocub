@@ -9300,12 +9300,13 @@ describe("lark service", () => {
     }
   });
 
-  it("delivers the answer even when run-card updates always fail (no frozen card)", async () => {
+  it("re-sends the answer as a fresh card when run-card in-place updates always fail (no frozen card, no text spill)", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-run-card-fail-"));
-    // Simulate Feishu rejecting every patch (e.g. an oversized card): the final
-    // answer must NOT be swallowed — it should arrive as a text fallback.
+    // Simulate Feishu rejecting every in-place patch (e.g. a post-interaction revert or
+    // an oversized card). The finished answer must NOT be swallowed — it is re-SENT as a
+    // fresh card (a new message, not a revert-prone patch), so it still lands in a card.
     const channel = fakeChannel({
-      updateCard: vi.fn(async () => { throw new Error("card too large"); }),
+      updateCard: vi.fn(async () => { throw new Error("card patch rejected"); }),
     });
     const runtime = createLarkServiceRuntime();
     const bridge: LarkBridgeLike = {
@@ -9324,14 +9325,45 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_fail_card", content: "do work" }),
       });
 
-      // The card could never render, so the answer must arrive as a separate
-      // message (text or markdown) instead of being swallowed or frozen in-card.
+      // The in-place card could never update, so the answer is re-sent as a fresh card
+      // and must arrive (here, inside that card) — not swallowed, not frozen in "running".
       const answerSends = channel.send.mock.calls.filter((call: unknown[]) => {
-        const payload = call[1] as { text?: string; markdown?: string } | undefined;
-        return (typeof payload?.text === "string" && payload.text.includes("the final answer"))
-          || (typeof payload?.markdown === "string" && payload.markdown.includes("the final answer"));
+        const payload = call[1] as { text?: string; markdown?: string; card?: unknown } | undefined;
+        return JSON.stringify(payload ?? {}).includes("the final answer");
       });
       expect(answerSends.length).toBeGreaterThan(0);
+      // The fresh-card recovery is recorded, so a "the completion came as text, no card"
+      // report is diagnosable from the timeline instead of guessed at.
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      const finishEvent = timeline.find((e) => e.type === "engine.event.card_finish");
+      expect(finishEvent?.metadata).toMatchObject({ shown: true, reason: "fresh-card" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records a card_finish=fit event when the answer lands in the run card normally", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-finish-fit-"));
+    const channel = fakeChannel();
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "ok done" }));
+        return { text: "ok done" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_fit", content: "do work" }),
+      });
+
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      const finishEvent = timeline.find((e) => e.type === "engine.event.card_finish");
+      expect(finishEvent?.metadata).toMatchObject({ shown: true, reason: "fit" });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
