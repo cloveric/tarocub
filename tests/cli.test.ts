@@ -290,6 +290,9 @@ describe("runCli", () => {
         },
         logger: { log: (message) => messages.push(message) },
         larkDetectCli: async () => ({ available: true, version: "lark-cli version 1.0.40" }),
+        // The lock owner (this test process) must read back as the default `lark` service
+        // so status shows "running" (the real pid's command line is the test runner).
+        larkServiceDeps: { readProcessCommandLine: async () => "node /x/dist/src/index.js lark run --instance lark" },
       } as Parameters<typeof runCli>[1] & {
         larkDetectCli: () => Promise<{ available: boolean; version?: string }>;
       });
@@ -1015,6 +1018,80 @@ describe("runCli", () => {
 
       expect(handled).toBe(true);
       expect(killed).not.toContain(424242); // the unrelated recycled pid is spared
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("clears a recycled-pid lock and starts when the lock pid is not this instance's Lark service", async () => {
+    // A dead service left a lock; the OS recycled its pid for an unrelated (alive) process.
+    // The lock reads as "stale" (not our service), so start clears it and spawns — instead
+    // of refusing as "already running" or letting the new service's acquire trip on it.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const spawned: unknown[] = [];
+    const lockPath = path.join(stateDir, "lark-service", "instance.lock.json");
+
+    try {
+      await mkdir(path.join(stateDir, "lark-service"), { recursive: true });
+      await writeFile(lockPath, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
+
+      const handled = await runCli(["lark", "service", "start"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: () => {} },
+        larkServiceDeps: {
+          waitUntilRunning: async () => {},
+          spawnDetached: () => { spawned.push(1); },
+          // The lock pid (this test process) is alive but NOT the alpha Lark service.
+          readProcessCommandLine: async () => "node /usr/bin/unrelated",
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(spawned.length).toBe(1); // started
+      await expect(readFile(lockPath, "utf8")).rejects.toThrow(); // recycled-pid lock cleared
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("does not clear the lock or restart when the lock pid IS this instance's Lark service", async () => {
+    // Safety (the dangerous direction): a genuinely-running service must read as "running"
+    // so start is a no-op — never clearing a valid lock and double-starting.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const spawned: unknown[] = [];
+    const lockPath = path.join(stateDir, "lark-service", "instance.lock.json");
+
+    try {
+      await mkdir(path.join(stateDir, "lark-service"), { recursive: true });
+      await writeFile(lockPath, JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }));
+
+      const handled = await runCli(["lark", "service", "start"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: () => {} },
+        larkServiceDeps: {
+          waitUntilRunning: async () => {},
+          spawnDetached: () => { spawned.push(1); },
+          readProcessCommandLine: async () => "node /x/dist/src/index.js lark run --instance alpha",
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(spawned.length).toBe(0); // already running → not started again
+      await expect(readFile(lockPath, "utf8")).resolves.toContain(String(process.pid)); // lock intact
     } finally {
       await removeTempRoot(tempDir);
     }

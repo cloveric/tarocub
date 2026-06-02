@@ -587,10 +587,11 @@ function resolveLarkStateDirForCli(env: LarkRuntimeEnv): string {
 async function formatLarkStatus(
   env: LarkRuntimeEnv,
   detectCli: () => Promise<LarkCliStatus> = detectLarkCliStatus,
+  readCommandLine?: (pid: number) => Promise<string | null>,
 ): Promise<string> {
   const stateDir = resolveLarkStateDirForCli(env);
   const operationalLines = await inspectLarkOperationalStatus(stateDir, detectCli);
-  const serviceStatus = await describeLarkServiceLock(stateDir);
+  const serviceStatus = await describeLarkServiceLock(stateDir, resolveLarkInstanceName(env), readCommandLine);
   const lines = [
     "Lark channel",
     `Instance: ${resolveLarkInstanceName(env)}`,
@@ -730,7 +731,11 @@ function renderLarkCliApprovalModeStatus(mode: unknown): string {
   return "normal approvals";
 }
 
-async function describeLarkServiceLock(stateDir: string): Promise<string> {
+async function describeLarkServiceLock(
+  stateDir: string,
+  instanceName: string,
+  readCommandLine?: (pid: number) => Promise<string | null>,
+): Promise<string> {
   if (stateDir.startsWith("(unknown:")) {
     return "unknown";
   }
@@ -744,7 +749,12 @@ async function describeLarkServiceLock(stateDir: string): Promise<string> {
     if (typeof parsed.pid !== "number") {
       return `unknown lock (${lockPath})`;
     }
-    const status = isProcessAlive(parsed.pid) ? "running" : "stale";
+    // "running" only if the lock pid is verifiably THIS instance's Lark service — a
+    // recycled pid for an unrelated process reads as "stale", so it neither shows as
+    // running nor blocks a start.
+    const status = (await isExpectedLarkServicePid(parsed.pid, stateDir, instanceName, readCommandLine))
+      ? "running"
+      : "stale";
     const acquiredAt = typeof parsed.acquiredAt === "string" ? ` since ${parsed.acquiredAt}` : "";
     return `${status} pid ${parsed.pid}${acquiredAt}`;
   } catch (error) {
@@ -873,7 +883,7 @@ async function formatLarkDoctor(
   inspectApp: NonNullable<CliOptions["larkInspectApp"]> = inspectLarkAppProvisioning,
 ): Promise<string> {
   const stateDir = resolveLarkStateDirForCli(env);
-  const serviceLock = await describeLarkServiceLock(stateDir);
+  const serviceLock = await describeLarkServiceLock(stateDir, resolveLarkInstanceName(env));
   const checks = [
     `${env.LARK_APP_ID ? "ok" : "fail"} LARK_APP_ID: ${env.LARK_APP_ID ? "configured" : "missing"}`,
     `${env.LARK_APP_SECRET ? "ok" : "fail"} LARK_APP_SECRET: ${env.LARK_APP_SECRET ? "configured" : "missing"}`,
@@ -1614,14 +1624,26 @@ export const resolveLarkSetupTargetEnv = resolveLarkCommandTargetEnv;
 
 async function defaultStartLarkService(
   input: LarkServiceCommandInput,
-  deps: Pick<LarkServiceCommandDeps, "spawnDetached"> = {},
+  deps: Pick<LarkServiceCommandDeps, "spawnDetached" | "readProcessCommandLine"> = {},
 ): Promise<"started" | "already_running"> {
   await mkdir(input.stateDir, { recursive: true });
-  if ((await describeLarkServiceLock(input.stateDir)).startsWith("running ")) {
+  const instanceName = resolveLarkInstanceName(input.env);
+  if ((await describeLarkServiceLock(input.stateDir, instanceName, deps.readProcessCommandLine)).startsWith("running ")) {
     return "already_running";
   }
-
-  const instanceName = resolveLarkInstanceName(input.env);
+  // A lock whose pid is alive but is NOT this instance's Lark service is a recycled pid
+  // from a dead service; the spawned service's lock acquire would otherwise see it as held
+  // and fail to start. Clear that stale lock first. (Our own running service is caught by
+  // the check above; a dead-pid lock is cleared by the acquire itself. The unreadable->
+  // treat-as-ours fallback in isExpectedLarkServicePid prevents clearing a valid lock.)
+  const lockPid = await readLarkLockPid(input.stateDir);
+  if (
+    lockPid !== null
+    && isProcessAlive(lockPid)
+    && !(await isExpectedLarkServicePid(lockPid, input.stateDir, instanceName, deps.readProcessCommandLine))
+  ) {
+    await rm(resolveLarkServiceLockPath(input.stateDir), { force: true });
+  }
   const serviceEnv: NodeJS.ProcessEnv = {
     ...process.env,
     CCTB_LARK_STATE_DIR: input.stateDir,
@@ -1646,9 +1668,10 @@ async function defaultStartLarkService(
 
 async function defaultWaitUntilLarkServiceRunning(input: LarkServiceCommandInput): Promise<void> {
   const deadline = Date.now() + 5_000;
+  const instanceName = resolveLarkInstanceName(input.env);
   let lastStatus = "unknown";
   while (Date.now() < deadline) {
-    lastStatus = await describeLarkServiceLock(input.stateDir);
+    lastStatus = await describeLarkServiceLock(input.stateDir, instanceName);
     if (lastStatus.startsWith("running ")) {
       return;
     }
@@ -2871,7 +2894,7 @@ async function runLarkCommand(
       throw new Error("Usage: lark status [--instance <name>]");
     }
     const loadedEnv = await loadLarkRuntimeEnv(larkEnv);
-    logger.log(await formatLarkStatus(loadedEnv, deps.detectCli ?? detectLarkCliStatus));
+    logger.log(await formatLarkStatus(loadedEnv, deps.detectCli ?? detectLarkCliStatus, deps.service?.readProcessCommandLine));
     return true;
   }
 
