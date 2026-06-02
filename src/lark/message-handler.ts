@@ -16,12 +16,15 @@ import { sendLarkCardWithFallback } from "./card-delivery.js";
 import {
   ELEMENT_CONTENT_MAX_BYTES,
   LARK_CARD_ANSWER_MAX,
+  LARK_MAX_OVERFLOW_CARDS,
   applyLarkEngineEvent,
   initialLarkRunState,
+  renderLarkContinuationCard,
   renderLarkQueueWaitCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
   renderLarkRunCardMinimal,
+  splitLarkAnswerIntoCardChunks,
   type LarkRunState,
 } from "./card-renderer.js";
 import {
@@ -70,6 +73,7 @@ import { verifyLarkNumericIds } from "./id-map.js";
 import type { LarkQueueCardRef, LarkServiceRuntime } from "./runtime.js";
 import { type LarkReactionSettings, withLarkMessageReactions } from "./reactions.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkFetchedMessage, LarkSendOptions } from "./types.js";
+import type { Locale } from "../telegram/message-renderer.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
 const defaultTranscribeLarkMedia = createDefaultTranscribeVoice();
@@ -86,6 +90,31 @@ function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | 
     return undefined;
   }
   return replyInThread ? { replyTo, replyInThread: true } : { replyTo };
+}
+
+// Deliver chunks 2..N of a long answer as standalone continuation cards (card 1, the
+// run card, already carries chunk 1). Each is its own push so it lands in order and as a
+// separate notification; sendLarkCardWithFallback drops to plain text per card so a
+// chunk is never lost if a card render is rejected.
+async function deliverLarkContinuationCards(input: {
+  channel: Pick<LarkChannelLike, "send">;
+  chatId: string;
+  chunks: string[];
+  replyOptions: LarkSendOptions | undefined;
+  locale: Locale;
+}): Promise<void> {
+  const total = input.chunks.length;
+  for (let index = 1; index < total; index++) {
+    const chunk = input.chunks[index]!;
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.chatId,
+      card: renderLarkContinuationCard(chunk, index + 1, total, input.locale),
+      fallbackText: chunk,
+      options: input.replyOptions,
+      locale: input.locale,
+    });
+  }
 }
 
 type LarkTurnTermination =
@@ -1119,15 +1148,39 @@ async function runNormalizedLarkMessage(
             CCTB_LARK_ACTIVE_STATE_DIR: input.stateDir,
           },
         });
-        const answerShownInCard = (await runCard?.finish(result.text)) ?? false;
+        // A reply too long for one card spills into continuation cards (card 2 continues
+        // card 1) rather than a Feishu Doc, which the operator finds more natural to read
+        // inline. The run card becomes card 1 (chunk 1); the rest follow as their own
+        // cards. Only a genuinely document-sized reply (more than LARK_MAX_OVERFLOW_CARDS
+        // chunks) still uses a Doc, where a long stream of cards would be worse.
+        const answerChunks = runCard !== undefined
+          ? splitLarkAnswerIntoCardChunks(result.text)
+          : [result.text];
+        const spillToContinuationCards = runCard !== undefined
+          && answerChunks.length > 1
+          && answerChunks.length <= LARK_MAX_OVERFLOW_CARDS;
+        const answerShownInCard =
+          (await runCard?.finish(spillToContinuationCards ? answerChunks[0]! : result.text)) ?? false;
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
-        // The card couldn't fit the answer (a card exists but the text overflowed) →
-        // that overflow is the signal it's a long document: stash the full text in a
-        // Feishu Doc and post just the link, instead of dumping a huge multi-part
-        // markdown message. The card keeps its truncated preview. If doc creation
-        // fails, fall through to the markdown dump so the content is never lost.
         let overflowDelivered = false;
-        if (
+        if (spillToContinuationCards && answerShownInCard) {
+          // Run card carries chunk 1; send chunks 2..N as continuation cards, each its
+          // own push in order. sendLarkCardWithFallback drops to plain text per card, so
+          // a chunk is never lost even if a card render is rejected.
+          await deliverLarkContinuationCards({
+            channel: input.channel,
+            chatId: normalized.chatId,
+            chunks: answerChunks,
+            replyOptions: larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
+            locale,
+          });
+          overflowDelivered = true;
+        } else if (
+          // The card couldn't fit the answer and it's too big to spill into a bounded
+          // number of cards → stash the full text in a Feishu Doc and post just the link,
+          // instead of dumping a huge multi-part markdown message. The card keeps its
+          // truncated preview. If doc creation fails, fall through to the markdown dump so
+          // the content is never lost.
           runCard !== undefined
           && !answerShownInCard
           && (result.text.length > LARK_OVERFLOW_DOC_MIN_CHARS

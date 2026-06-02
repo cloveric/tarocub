@@ -1021,13 +1021,26 @@ describe("lark service", () => {
     }
   });
 
+  // The markdown bodies of any continuation cards (card 2..N of a long answer) sent via
+  // channel.send, identified by the "接上"/"Continued" heading the renderer stamps on them.
+  function larkContinuationCardsSent(channel: FakeLarkChannel): string[] {
+    return (channel.send.mock.calls as unknown[][])
+      .map((call) => call[1] as { card?: { body?: { elements?: Array<{ content?: string }> } } } | undefined)
+      .filter((p): p is { card: { body: { elements: Array<{ content?: string }> } } } =>
+        Boolean(p?.card?.body?.elements?.some((el) => typeof el.content === "string" && /接上|Continued/.test(el.content))))
+      .map((p) => p.card.body.elements.map((el) => el.content ?? "").join("\n"));
+  }
+
   it("stashes a very long Lark final reply in a Feishu doc and posts the link", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-long-reply-"));
     const channel = fakeChannel();
+    // Document-sized: ~18000 CJK chars (~54KB) splits into well over the continuation-
+    // card cap (LARK_MAX_OVERFLOW_CARDS), so it routes to a Feishu doc, not a stream of
+    // cards.
     const longReply = [
-      "第一段：" + "甲".repeat(2500),
-      "第二段：" + "乙".repeat(2500),
-      "第三段：" + "丙".repeat(2500),
+      "第一段：" + "甲".repeat(6000),
+      "第二段：" + "乙".repeat(6000),
+      "第三段：" + "丙".repeat(6000),
     ].join("\n\n");
     let docContent: string | undefined;
     let docActor: string | undefined;
@@ -1055,33 +1068,29 @@ describe("lark service", () => {
       // The giant text is NOT dumped as chunked chat messages.
       expect(createDocument).toHaveBeenCalledTimes(1);
       expect(docActor).toBe("user");
-      expect(docContent).toContain("甲".repeat(2500));
-      expect(docContent).toContain("乙".repeat(2500));
-      expect(docContent).toContain("丙".repeat(2500));
+      expect(docContent).toContain("甲".repeat(6000));
+      expect(docContent).toContain("乙".repeat(6000));
+      expect(docContent).toContain("丙".repeat(6000));
       const sends = JSON.stringify(channel.send.mock.calls);
       expect(sends).toContain("https://feishu.cn/docx/LONGDOC");
-      expect(sends).not.toContain("乙".repeat(2500));
+      expect(sends).not.toContain("乙".repeat(6000));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("overflows a CJK reply that fits the char cap but blows the byte cap (regression: byte-aware fit)", async () => {
-    // 2900 CJK chars is UNDER the 3000-char answer cap but ~8700 bytes — well over
-    // Feishu's per-element byte limit. Before the byte-aware fit check, this answer
-    // was judged "fits the card", so the card silently byte-truncated it and the
-    // overflow-to-doc fallback never fired — the operator lost the tail with no
-    // recourse. It must now overflow to a doc just like a char-too-long reply.
+  it("spills a CJK reply that fits the char cap but blows the byte cap into continuation cards, not a doc (regression: byte-aware fit)", async () => {
+    // 2900 CJK chars is UNDER the 3000-char answer cap but ~8700 bytes — over Feishu's
+    // per-element byte limit. The byte-aware split detects this (char count alone would
+    // call it a fit) and spills the answer into continuation cards: the run card carries
+    // chunk 1, the rest follow as their own cards. Nothing is byte-truncated or lost, and
+    // a moderately-long reply no longer needs a doc.
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cjk-byte-"));
     const channel = fakeChannel();
     const cjkReply = "报告：" + "甲".repeat(2900);
     expect(cjkReply.length).toBeLessThan(3000); // under the char cap
     expect(Buffer.byteLength(cjkReply, "utf8")).toBeGreaterThan(7000); // over the byte cap
-    let docContent: string | undefined;
-    const createDocument = vi.fn(async (docInput: { content: string; as?: string; title?: string }) => {
-      docContent = docInput.content;
-      return { url: "https://feishu.cn/docx/CJKDOC", title: docInput.title };
-    });
+    const createDocument = vi.fn(async () => ({ url: "https://feishu.cn/docx/SHOULDNOTHAPPEN" }));
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
       handleAuthorizedMessage: vi.fn(async () => ({ text: cjkReply })),
@@ -1096,11 +1105,13 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_cjk_byte", content: "写满一屏中文" }),
       });
 
-      expect(createDocument).toHaveBeenCalledTimes(1);
-      expect(docContent).toContain("甲".repeat(2900));
-      const sends = JSON.stringify(channel.send.mock.calls);
-      expect(sends).toContain("https://feishu.cn/docx/CJKDOC");
-      expect(sends).not.toContain("甲".repeat(2900)); // full text not dumped to chat
+      // Byte overflow → continuation cards, NOT a doc.
+      expect(createDocument).not.toHaveBeenCalled();
+      const continuationCards = larkContinuationCardsSent(channel);
+      expect(continuationCards.length).toBeGreaterThanOrEqual(1);
+      // The continuation card carries the answer's tail, so the byte-overflowing part is
+      // delivered rather than silently truncated away.
+      expect(continuationCards.join("")).toContain("甲");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1109,7 +1120,9 @@ describe("lark service", () => {
   it("falls back to a .md file (not an inline dump) when the overflow doc cannot be created", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-long-reply-fb-"));
     const channel = fakeChannel();
-    const longReply = `FALLBACKMARKER ${"甲".repeat(7000)}`;
+    // Document-sized (~20000 CJK chars) so it routes to the doc path; the doc creation
+    // then fails, exercising the .md-file fallback.
+    const longReply = `FALLBACKMARKER ${"甲".repeat(20000)}`;
     const createDocument = vi.fn(async () => { throw new Error("not logged in"); });
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
@@ -9213,17 +9226,13 @@ describe("lark service", () => {
     }
   });
 
-  it("routes a moderately-long over-card answer to a Feishu doc (threshold = card cap)", async () => {
+  it("spills a moderately-long over-card answer into continuation cards (not a doc, no inline dump)", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-long-"));
     const channel = fakeChannel();
-    let docContent: string | undefined;
-    const createDocument = vi.fn(async (docInput: { content: string; as?: string }) => {
-      docContent = docInput.content;
-      return { url: "https://feishu.cn/docx/MODERATE" };
-    });
+    const createDocument = vi.fn(async () => ({ url: "https://feishu.cn/docx/SHOULDNOTHAPPEN" }));
     const runtime = createLarkServiceRuntime({ createDocument });
-    // Over the card's answer cap (3000) → overflows. With the doc threshold now equal
-    // to the card cap, any over-card answer is stashed in a doc, not dumped inline.
+    // Over the card's answer cap but well within the continuation-card budget → it spills
+    // into continuation cards (card 2 continues card 1), not a doc and not an inline dump.
     const longAnswer = `LONGMARKER ${"好".repeat(4000)}`;
     const bridge: LarkBridgeLike = {
       handleAuthorizedMessage: vi.fn(async (input) => {
@@ -9238,11 +9247,12 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_long_card", content: "do work" }),
       });
 
-      // The over-card answer is stashed in a doc; only the link is posted, and the
-      // full answer is NOT dumped as an inline markdown message.
-      expect(createDocument).toHaveBeenCalledTimes(1);
-      expect(docContent).toContain("LONGMARKER");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("https://feishu.cn/docx/MODERATE");
+      // No doc; the answer flows across continuation cards instead.
+      expect(createDocument).not.toHaveBeenCalled();
+      const continuationCards = larkContinuationCardsSent(channel);
+      expect(continuationCards.length).toBeGreaterThanOrEqual(1);
+      expect(continuationCards.join("")).toContain("好");
+      // And it is NOT dumped as an inline text/markdown message.
       const inlineDump = channel.send.mock.calls.filter((call: unknown[]) => {
         const p = call[1] as { text?: string; markdown?: string } | undefined;
         return (typeof p?.text === "string" && p.text.includes("LONGMARKER"))

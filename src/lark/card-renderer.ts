@@ -1213,6 +1213,119 @@ function truncateBytes(s: string, maxBytes: number): string {
   return `${s.slice(0, lo)}…`;
 }
 
+// --- Long-answer overflow: continuation cards ------------------------------------
+//
+// A reply too long for one card used to be byte-truncated (lost) or shipped to a
+// Feishu Doc. Instead, split it into card-sized chunks: the run card carries chunk 1
+// and the rest follow as "continuation" cards (card 2 continues card 1) — more natural
+// to read inline than opening a Doc. Only a genuinely document-sized reply (more than
+// LARK_MAX_OVERFLOW_CARDS chunks) still falls back to a Doc, where a long stream of
+// cards would be worse than one link.
+//
+// Each chunk must fit a card's answer element on BOTH axes the run card checks:
+// LARK_CARD_ANSWER_MAX chars AND ELEMENT_CONTENT_MAX_BYTES bytes. Headroom is left so a
+// chunk alongside the card's other small elements never trips the limit.
+export const LARK_OVERFLOW_CARD_MAX_CHARS = LARK_CARD_ANSWER_MAX - 80;
+export const LARK_OVERFLOW_CARD_MAX_BYTES = ELEMENT_CONTENT_MAX_BYTES - 400;
+export const LARK_MAX_OVERFLOW_CARDS = 6;
+
+function fitsCardChunk(s: string): boolean {
+  return s.length <= LARK_OVERFLOW_CARD_MAX_CHARS
+    && Buffer.byteLength(s, "utf8") <= LARK_OVERFLOW_CARD_MAX_BYTES;
+}
+
+// Hard-split a single oversized line into budget-sized pieces without cutting a code
+// point. Used only when one line alone exceeds the budget (e.g. a long URL list or a
+// minified blob) and so can't sit on a line boundary.
+function hardSplitCardLine(line: string): string[] {
+  const pieces: string[] = [];
+  let buf = "";
+  for (const ch of line) {
+    const next = buf + ch;
+    if (next.length > LARK_OVERFLOW_CARD_MAX_CHARS
+      || Buffer.byteLength(next, "utf8") > LARK_OVERFLOW_CARD_MAX_BYTES) {
+      if (buf) {
+        pieces.push(buf);
+      }
+      buf = ch;
+    } else {
+      buf = next;
+    }
+  }
+  if (buf) {
+    pieces.push(buf);
+  }
+  return pieces;
+}
+
+// Split an answer into card-sized chunks, preferring line boundaries so the reflow
+// reads naturally. Always returns at least one chunk.
+export function splitLarkAnswerIntoCardChunks(text: string): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  const flush = (): void => {
+    if (current.length > 0) {
+      chunks.push(current);
+      current = "";
+    }
+  };
+  const addLine = (line: string): void => {
+    const candidate = current ? `${current}\n${line}` : line;
+    if (fitsCardChunk(candidate)) {
+      current = candidate;
+    } else {
+      flush();
+      current = line;
+    }
+  };
+  for (const line of text.split("\n")) {
+    if (fitsCardChunk(line)) {
+      addLine(line);
+      continue;
+    }
+    // One line is itself too big — flush, emit full pieces as their own chunks, and
+    // carry the trailing partial piece so following lines can still pack onto it.
+    flush();
+    const pieces = hardSplitCardLine(line);
+    for (let i = 0; i < pieces.length; i++) {
+      if (i < pieces.length - 1) {
+        chunks.push(pieces[i]!);
+      } else {
+        current = pieces[i]!;
+      }
+    }
+  }
+  flush();
+  return chunks.length > 0 ? chunks : [""];
+}
+
+// A terminal card carrying one continuation chunk of a long answer. The heading marks
+// its place in the sequence ("接上 · 2/3") so the operator reads card to card.
+export function renderLarkContinuationCard(
+  body: string,
+  index: number,
+  total: number,
+  locale: Locale = "zh",
+): Record<string, unknown> {
+  const heading = locale === "en" ? `↪ Continued · ${index}/${total}` : `↪ 接上 · ${index}/${total}`;
+  return {
+    schema: "2.0",
+    config: {
+      streaming_mode: false,
+      update_multi: true,
+      summary: { content: truncate(heading, 100) },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [
+        noteElement(heading),
+        markdownElement(body.trim() || (locale === "en" ? "(empty)" : "（空）")),
+      ],
+    },
+  };
+}
+
 function cardSummary(state: LarkRunState, locale: Locale): string {
   if (state.status === "running") {
     return locale === "en" ? "Task is running" : "任务处理中";

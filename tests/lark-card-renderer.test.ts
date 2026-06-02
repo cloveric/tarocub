@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ELEMENT_CONTENT_MAX_BYTES,
   LARK_CARD_ANSWER_MAX,
+  LARK_OVERFLOW_CARD_MAX_BYTES,
+  LARK_OVERFLOW_CARD_MAX_CHARS,
   type LarkRunState,
   applyLarkEngineEvent,
   initialLarkRunState,
   renderLarkApprovalCard,
+  renderLarkContinuationCard,
   renderLarkReminderCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
   renderLarkRunCardMinimal,
+  splitLarkAnswerIntoCardChunks,
 } from "../src/lark/card-renderer.js";
 
 function maxMarkdownElementLength(card: unknown): number {
@@ -528,5 +533,47 @@ describe("lark card renderer", () => {
     expect(serialized).not.toContain("允许一次");
     expect(serialized).not.toContain("本轮允许");
     expect(serialized).not.toContain("拒绝");
+  });
+});
+
+describe("long-answer continuation cards", () => {
+  it("returns a single chunk for an answer that already fits one card", () => {
+    expect(splitLarkAnswerIntoCardChunks("hello\nworld")).toEqual(["hello\nworld"]);
+    expect(splitLarkAnswerIntoCardChunks("")).toEqual([""]);
+  });
+
+  it("packs whole lines into budget-sized chunks losslessly (rejoin reconstructs the original)", () => {
+    const text = Array.from({ length: 60 }, (_, i) => `第${i}行：` + "测".repeat(100)).join("\n");
+    const chunks = splitLarkAnswerIntoCardChunks(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(LARK_OVERFLOW_CARD_MAX_CHARS);
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(LARK_OVERFLOW_CARD_MAX_BYTES);
+    }
+    // Splits only at line boundaries → rejoining with newlines is exact.
+    expect(chunks.join("\n")).toBe(text);
+  });
+
+  it("hard-splits a single oversized line without losing any characters", () => {
+    const bigLine = "甲".repeat(5000); // ~15000 bytes, no line breaks to split on
+    const chunks = splitLarkAnswerIntoCardChunks(bigLine);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(LARK_OVERFLOW_CARD_MAX_BYTES);
+    }
+    // Hard-split pieces of one line concatenate back with nothing inserted or dropped.
+    expect(chunks.join("")).toBe(bigLine);
+  });
+
+  it("renders a continuation card with a sequence heading and the chunk body, untruncated", () => {
+    const chunks = splitLarkAnswerIntoCardChunks("好".repeat(5000));
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    const card = renderLarkContinuationCard(chunks[1]!, 2, chunks.length, "zh");
+    const elements = (card.body as { elements: Array<{ content?: string }> }).elements;
+    expect(elements[0]?.content).toContain(`接上 · 2/${chunks.length}`);
+    // A splitter chunk is within the element byte budget, so it renders in full (no "…").
+    expect(elements[1]?.content).toBe(chunks[1]);
+    expect(Buffer.byteLength(elements[1]?.content ?? "", "utf8")).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
+    expect(JSON.stringify(renderLarkContinuationCard("body", 2, 3, "en"))).toContain("Continued · 2/3");
   });
 });
