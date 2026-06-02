@@ -1926,6 +1926,25 @@ function removePendingLarkTimelineEvent(
   }
 }
 
+// The owning Lark service process for a state dir, from its instance lock: its pid and
+// when it started (acquiredAt is written once at acquire, never refreshed, so it marks
+// process start). Returns null when there is no readable lock.
+async function readLarkServiceLockState(stateDir: string): Promise<{ pid: number; startedAtMs: number | null } | null> {
+  try {
+    const parsed = JSON.parse(await readFile(resolveLarkServiceLockPath(stateDir), "utf8")) as {
+      pid?: unknown;
+      acquiredAt?: unknown;
+    };
+    if (typeof parsed.pid !== "number") {
+      return null;
+    }
+    const startedAtMs = typeof parsed.acquiredAt === "string" ? new Date(parsed.acquiredAt).getTime() : Number.NaN;
+    return { pid: parsed.pid, startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : null };
+  } catch {
+    return null;
+  }
+}
+
 async function readLarkPendingTurnActivity(stateDir: string): Promise<{
   activeTurnCount: number;
   oldestAcceptedAt?: string;
@@ -1976,11 +1995,40 @@ async function readLarkPendingTurnActivity(stateDir: string): Promise<{
     }
   }
 
+  // Cross-check pending turns against the owning service process so a turn that the
+  // process never finished writing a terminal event for (e.g. SIGTERM/crash mid-turn)
+  // can't masquerade as "active" and block restarts for hours.
+  const lock = await readLarkServiceLockState(stateDir);
+  const ownerAlive = lock ? isProcessAlive(lock.pid) : null;
+  const ownerStartedAtMs = lock?.startedAtMs ?? null;
+
   const freshPending = [...pendingByConversationKey.values()]
     .flat()
     .filter((event) => {
       const timestampMs = event.timestamp ? new Date(event.timestamp).getTime() : Number.NaN;
-      return !Number.isFinite(timestampMs) || Date.now() - timestampMs <= ACTIVE_LARK_TURN_STALE_MS;
+      if (!Number.isFinite(timestampMs)) {
+        return true; // undateable → keep (conservative; don't risk killing a live turn)
+      }
+      // Stale-window backstop: an in-process turn that died without a terminal event
+      // still ages out instead of blocking forever.
+      if (Date.now() - timestampMs > ACTIVE_LARK_TURN_STALE_MS) {
+        return false;
+      }
+      // A turn can only be RUNNING if the process that recorded it is still alive AND the
+      // record postdates that process's start. A turn owned by a dead/previous process
+      // (killed mid-turn so it never wrote turn.completed) is not running. With no
+      // readable lock, fall back to the staleness window alone (prior behavior). This
+      // only ever drops false-actives — a genuinely running turn (live owner, recent
+      // record) is always kept — so it never causes a restart to interrupt a live turn.
+      if (lock) {
+        if (!ownerAlive) {
+          return false;
+        }
+        if (ownerStartedAtMs !== null && timestampMs < ownerStartedAtMs) {
+          return false;
+        }
+      }
+      return true;
     });
 
   const oldestAcceptedAt = freshPending

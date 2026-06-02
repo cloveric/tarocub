@@ -816,6 +816,108 @@ describe("runCli", () => {
     }
   });
 
+  it("does not refuse restart for a phantom turn recorded before the current service process started", async () => {
+    // The owning process was killed mid-turn (so it never wrote turn.completed) and has
+    // since restarted. The leaked input.received predates the new process's lock start, so
+    // it cannot still be running and must not block the restart for hours.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        `${JSON.stringify({
+          timestamp: new Date(Date.now() - 10 * 60_000).toISOString(),
+          type: "input.received",
+          channel: "lark",
+          chatId: 123,
+          conversationKey: "lark:oc_chat",
+          userId: 456,
+          metadata: { larkMessageId: "om_phantom" },
+        })}\n`,
+      );
+      // Live owner (this test process), started AFTER the leaked turn was recorded.
+      await mkdir(path.join(stateDir, "lark-service"), { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark-service", "instance.lock.json"),
+        JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() }),
+      );
+
+      const handled = await runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      });
+
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("still refuses restart for a live turn recorded after the current process started", async () => {
+    // Safety: a genuinely in-flight turn (owned by the live process, recorded after it
+    // started) must still block a non-forced restart so the cross-check never causes a
+    // running turn to be interrupted.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl"),
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "input.received",
+          channel: "lark",
+          chatId: 123,
+          conversationKey: "lark:oc_chat",
+          userId: 456,
+          metadata: { larkMessageId: "om_live" },
+        })}\n`,
+      );
+      await mkdir(path.join(stateDir, "lark-service"), { recursive: true });
+      await writeFile(
+        path.join(stateDir, "lark-service", "instance.lock.json"),
+        JSON.stringify({ pid: process.pid, acquiredAt: new Date(Date.now() - 10 * 60_000).toISOString() }),
+      );
+
+      await expect(runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+
+      expect(stop).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("refuses to stop a Lark service with accepted turns unless forced", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
