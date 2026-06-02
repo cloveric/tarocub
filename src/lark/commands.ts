@@ -2019,6 +2019,11 @@ async function handleLarkGoalCommand(
             try { await clearThreadGoal?.({ ...goalInput }); } catch { /* best-effort */ }
             await runCard.interrupt();
           } else {
+            // Completed (watchThreadGoal only resolves at a terminal status). Clear the
+            // goal from the Codex thread too — previously only the abort path cleared it,
+            // so a finished goal stayed SET in the thread and was silently resumed by, or
+            // bled into, later ordinary messages in the same thread.
+            try { await clearThreadGoal?.({ ...goalInput }); } catch { /* best-effort */ }
             await runCard.finish(watched
               ? renderLarkGoal(watched, locale)
               : locale === "en" ? "Goal finished." : "Goal 已结束。");

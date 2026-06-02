@@ -5355,6 +5355,111 @@ describe("lark service", () => {
     }
   });
 
+  it("clears the Codex thread-goal when the goal completes, not only on abort (no lingering goal)", async () => {
+    // Previously the watcher cleared the goal only on abort; a normally-completed goal
+    // stayed SET in the Codex thread and bled into later ordinary turns. Completion must
+    // clear it too.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-complete-clear-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel(); // updateCard → the live watch path engages
+    const runtime = createLarkServiceRuntime();
+    const clearThreadGoal = vi.fn(async () => ({ cleared: true }));
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      watchThreadGoal: async () => ({
+        goal: {
+          threadId: "t", objective: "ship it", status: "complete" as const,
+          tokenBudget: null, tokensUsed: 1, timeUsedSeconds: 1, createdAt: 0, updatedAt: 0,
+        },
+      }),
+      clearThreadGoal,
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_goal_complete", content: "/goal ship it" }),
+      });
+      // The watch runs detached; the completion branch must clear the goal.
+      await vi.waitFor(() => expect(clearThreadGoal).toHaveBeenCalled());
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears an orphaned Codex thread-goal before a normal turn (no live watcher) so a normal message isn't resumed into a stale goal", async () => {
+    // The operator's case: a goal's watcher was killed by a service restart, leaving the
+    // goal SET in the Codex thread with no watcher. A later NORMAL message must clear it
+    // first, then run as an ordinary turn — not silently resume the old goal.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-orphan-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime(); // NO activeRuns entry → no live watcher
+    const getThreadGoal = vi.fn(async () => ({
+      goal: {
+        threadId: "t", objective: "old goal", status: "active" as const,
+        tokenBudget: null, tokensUsed: 1, timeUsedSeconds: 1, createdAt: 0, updatedAt: 0,
+      },
+    }));
+    const clearThreadGoal = vi.fn(async () => ({ cleared: true }));
+    const handleAuthorizedMessage = vi.fn(async () => ({ text: "normal reply" }));
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      getThreadGoal,
+      clearThreadGoal,
+      handleAuthorizedMessage,
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_normal_after_goal", content: "继续写第二段" }),
+      });
+      // Reconciled (cleared) before the ordinary turn, which still runs.
+      expect(getThreadGoal).toHaveBeenCalled();
+      expect(clearThreadGoal).toHaveBeenCalled();
+      expect(handleAuthorizedMessage).toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clear anything before a normal turn when the thread has no goal", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-goal-none-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const runtime = createLarkServiceRuntime();
+    const getThreadGoal = vi.fn(async () => ({ goal: null }));
+    const clearThreadGoal = vi.fn(async () => ({ cleared: true }));
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      getThreadGoal,
+      clearThreadGoal,
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "normal reply" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_normal_no_goal", content: "写个普通回复" }),
+      });
+      expect(getThreadGoal).toHaveBeenCalled();
+      expect(clearThreadGoal).not.toHaveBeenCalled(); // nothing to clear
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not abort a normal turn on /goal clear — only goal watchers", async () => {
     // Regression guard (the v0.1.117 over-broad abort): /goal clear must target the
     // goal, not kill an unrelated normal turn that happens to occupy the activeRuns

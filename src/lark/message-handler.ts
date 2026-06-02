@@ -1113,6 +1113,35 @@ async function runNormalizedLarkMessage(
         }
       };
 
+      // Reconcile a stale Codex thread-goal before this ordinary turn. If the thread
+      // still carries a goal but no live watcher owns it — the watcher was killed by a
+      // service restart, or the goal finished without being cleared — clear it so a
+      // normal message is never silently resumed into, or shaped by, an old goal. A goal
+      // that IS being actively pursued holds the activeRuns slot and is left untouched;
+      // engines without a structured thread-goal API (Claude/Antigravity native /goal)
+      // expose no get/clearThreadGoal and are skipped. Best-effort — never blocks a turn.
+      if (
+        input.bridge.getThreadGoal
+        && input.bridge.clearThreadGoal
+        && !input.runtime.activeRuns.get(normalized.conversationKey)?.goalWatch
+      ) {
+        const goalReconcileInput = {
+          chatId: normalized.bridgeChatId,
+          userId: normalized.bridgeUserId,
+          chatType: normalized.bridgeChatType,
+          conversationKey: normalized.conversationKey,
+          workspaceOverride,
+        };
+        try {
+          const { goal } = await input.bridge.getThreadGoal(goalReconcileInput);
+          if (goal) {
+            await input.bridge.clearThreadGoal(goalReconcileInput);
+          }
+        } catch {
+          // Best-effort: never block an ordinary turn on goal-state reconciliation.
+        }
+      }
+
       return await runAuthorizedLarkTurnWithReactions(input, normalized, async () => {
         const result = await input.bridge.handleAuthorizedMessage({
           chatId: normalized.bridgeAccessChatId,
