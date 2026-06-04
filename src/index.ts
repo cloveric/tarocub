@@ -27,7 +27,7 @@ import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-e
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
 import { upgradeInstanceAgentInstructions } from "./commands/access.js";
 import { runSearchMcpServer } from "./search/search-mcp-server.js";
-import { loadLarkRuntimeEnv } from "./lark/env-file.js";
+import { applyLarkEnvPassthrough, loadLarkRuntimeEnv } from "./lark/env-file.js";
 import { runLarkService } from "./lark/service.js";
 
 function renderLifecycleError(error: unknown): string {
@@ -55,6 +55,12 @@ async function main(): Promise<void> {
 
     if (argv[0] === "lark" && argv[1] === "run" && !hasHelpFlag(argv.slice(2))) {
       const larkEnv = await loadLarkRuntimeEnv(process.env);
+      // Pass per-instance lark.env extras (e.g. MCP API tokens like IFIND_TOKEN) into
+      // process.env so the spawned engine (claude/codex) inherits them. Names only.
+      const passthroughKeys = await applyLarkEnvPassthrough(larkEnv);
+      if (passthroughKeys.length > 0) {
+        console.error(`[lark] lark.env passthrough → engine env: ${passthroughKeys.join(", ")}`);
+      }
       const abortController = new AbortController();
       const shutdownSigterm = () => abortController.abort("SIGTERM");
       const shutdownSigint = () => abortController.abort("SIGINT");
