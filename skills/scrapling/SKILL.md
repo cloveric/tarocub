@@ -1,6 +1,6 @@
 ---
 name: scrapling
-description: Web scraping that gets past anti-bot — HTTP fetch / stealth (Cloudflare bypass) / JS-render / spider crawl, via the `scrapling` CLI. Use when web_extract is blocked or returns empty, or to scrape a protected/dynamic site or crawl many pages.
+description: Web scraping that gets past anti-bot — HTTP fetch / stealth (Cloudflare bypass) / JS-render / spider crawl, via the `scrapling` CLI. Use when web_extract is blocked or returns empty, or to scrape a protected/dynamic site or crawl many pages. Triggers: scrape / crawl a site, "scrape this page", "the site blocks bots / anti-bot", "bypass Cloudflare", a dynamic/JS page web_extract can't read; 爬 / 爬虫 / 抓取 / 爬一下 / 抓一下这个网站 / 这个站爬不动 / 反爬 / 绕过反爬 / 绕过 Cloudflare / 动态页抓不到 / 批量抓取.
 ---
 
 # Scrapling — anti-bot web scraping (CLI)
