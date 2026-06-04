@@ -299,6 +299,13 @@ function renderLarkAskUserQuestionCard(input: {
     text: { tag: "plain_text", content: locale === "en" ? "Submit" : "提交" },
     type: "primary",
     width: "fill",
+    // A button inside a form container REQUIRES a globally-unique `name` (Feishu Card 2.0
+    // form-button spec: name is required + must be unique within the card). Without it,
+    // Feishu rejects the form SUBMIT with "出错了 code: 200530" (业务错误) BEFORE the
+    // card.action.trigger callback is sent — so the bot never even sees it. The select /
+    // "Other" inputs already carry names (askFormFieldName / askFormOtherFieldName); only
+    // this submit button was missing one.
+    name: "askq_submit",
     form_action_type: "submit",
     behaviors: [callbackBehavior({
       cctb_lark: "ask_user_question",

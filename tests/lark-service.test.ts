@@ -11504,8 +11504,14 @@ describe("lark service", () => {
     await vi.waitFor(() => expect(channel.send).toHaveBeenCalled());
     const payload = JSON.stringify((channel.send.mock.calls[0] as unknown[])?.[1]);
     expect(payload).toContain('"tag":"form"');
+    expect(payload).toContain('"name":"askq_form"');
     expect(payload).toContain('"select_static"');       // single-select question
     expect(payload).toContain('"multi_select_static"');  // multiSelect question
+    expect(payload).toContain('"name":"q0"');
+    expect(payload).toContain('"name":"q1"');
+    expect(payload).toContain('"name":"askq_submit"');
+    expect(payload).toContain('"form_action_type":"submit"');
+    expect(payload).not.toContain('"action_type":"form_submit"');
     expect(payload).toContain('"action":"form_submit"');
     // Option values are per-question indices, not labels — labels aren't unique.
     expect(payload).toContain('"value":"0"');
