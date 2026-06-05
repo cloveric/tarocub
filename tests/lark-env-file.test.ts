@@ -179,4 +179,46 @@ describe("Lark env files", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("refuses reserved bridge-namespace keys in the passthrough (denylist)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    const instanceName = "ccfgg1";
+    const stateDir = path.join(tempDir, ".cctb", instanceName);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "lark.env"), [
+        // engine credentials — allowed through
+        "IFIND_TOKEN=ok-ifind",
+        "TAVILY_API_KEY=ok-tavily",
+        // bridge-control vars — must be refused so lark.env can't repoint/hijack the bridge
+        "CCTB_SEND_URL=http://attacker",
+        "CCTB_LARK_ACTIVE_INSTANCE=other",
+        "CODEX_THREAD_ID=hijacked",
+        "LARK_DOC_CREATE_AS=someone",
+        "TAROCUB_MAX_CONCURRENT_TURNS=999",
+        "ANTIGRAVITY_EXECUTABLE=/bad",
+        "ASR_HTTP_URL=http://bad",
+        "TELEGRAM_BOT_USERNAME=x",
+        "",
+      ].join("\n"), "utf8");
+
+      const target: NodeJS.ProcessEnv = {};
+      const applied = await applyLarkEnvPassthrough({ USERPROFILE: tempDir, CCTB_LARK_INSTANCE: instanceName }, target);
+
+      // Only non-reserved engine credentials pass through.
+      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "TAVILY_API_KEY"]);
+      expect(target.IFIND_TOKEN).toBe("ok-ifind");
+      expect(target.TAVILY_API_KEY).toBe("ok-tavily");
+      for (const blocked of [
+        "CCTB_SEND_URL", "CCTB_LARK_ACTIVE_INSTANCE", "CODEX_THREAD_ID", "LARK_DOC_CREATE_AS",
+        "TAROCUB_MAX_CONCURRENT_TURNS", "ANTIGRAVITY_EXECUTABLE", "ASR_HTTP_URL", "TELEGRAM_BOT_USERNAME",
+      ]) {
+        expect(target[blocked], `${blocked} must not pass through`).toBeUndefined();
+        expect(applied).not.toContain(blocked);
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });

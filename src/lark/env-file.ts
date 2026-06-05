@@ -180,7 +180,12 @@ function parseLarkEnvExtras(content: string): Record<string, string> {
       continue;
     }
     const key = line.slice(0, equalsIndex).trim();
-    if (isSupportedLarkEnvKey(key) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    // Drop whitelisted Lark keys, invalid env-var names, and anything in a reserved
+    // bridge namespace. lark.env extras may ONLY carry engine credentials (MCP API
+    // tokens like IFIND_TOKEN) — they must never be able to set a variable the bridge
+    // itself reads to control its own behaviour (send URL, active-turn state, doc/chat
+    // identity, executables, thread ids, telemetry, …).
+    if (isSupportedLarkEnvKey(key) || isReservedBridgeEnvKey(key) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       continue;
     }
     extras[key] = parseEnvValue(line.slice(equalsIndex + 1).trim());
@@ -201,6 +206,25 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "CCTB_LARK_DEBUG" ||
     key === "TAROCUB_INSTANCE" ||
     key === "CODEX_TELEGRAM_INSTANCE";
+}
+
+// Namespaces the bridge process reads to control its OWN behaviour (transport, active-turn
+// state, doc/chat identity, engine executables/home, thread ids, telemetry, queue tuning).
+// lark.env passthrough must refuse these so an operator can't accidentally repoint or
+// hijack the bridge by dropping a control var in lark.env — extras are engine creds only.
+const RESERVED_BRIDGE_ENV_PREFIXES = [
+  "CCTB_",
+  "TAROCUB_",
+  "LARK_",
+  "CODEX_",
+  "CLAUDE_",
+  "ANTIGRAVITY_",
+  "ASR_",
+  "TELEGRAM_",
+] as const;
+
+function isReservedBridgeEnvKey(key: string): boolean {
+  return RESERVED_BRIDGE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 function parseEnvValue(value: string): string {

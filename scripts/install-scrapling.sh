@@ -12,8 +12,16 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Dir name is historical (it was first set up for an MCP server; we settled on the CLI).
 VENV="${SCRAPLING_VENV:-$HOME/projects/scrapling-mcp/venv}"
-# A directory that is on the bots' PATH (Homebrew default on macOS).
-BIN_DIR="${SCRAPLING_BIN_DIR:-/opt/homebrew/bin}"
+# Directory on the bots' PATH to symlink `scrapling` into. Honor an explicit override,
+# else pick the first existing + writable of: Homebrew (Apple Silicon), /usr/local/bin
+# (Intel / older Homebrew), then ~/.local/bin as a no-permission fallback.
+BIN_DIR="${SCRAPLING_BIN_DIR:-}"
+if [ -z "$BIN_DIR" ]; then
+  for candidate in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+    if [ -d "$candidate" ] && [ -w "$candidate" ]; then BIN_DIR="$candidate"; break; fi
+  done
+  BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+fi
 
 echo "[scrapling] venv: $VENV"
 [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
@@ -22,9 +30,13 @@ echo "[scrapling] venv: $VENV"
 # Browser deps (Camoufox for stealth, Playwright for dynamic). Needed by stealthy-fetch / fetch.
 "$VENV/bin/scrapling" install || echo "[scrapling] WARN: 'scrapling install' (browser deps) failed — stealth/dynamic fetchers may not work"
 
-echo "[scrapling] symlinking 'scrapling' onto PATH ($BIN_DIR)"
+echo "[scrapling] symlinking 'scrapling' into $BIN_DIR"
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV/bin/scrapling" "$BIN_DIR/scrapling"
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;;
+  *) echo "[scrapling] NOTE: $BIN_DIR is not on PATH — add it (e.g. in ~/.zshrc) so 'scrapling' resolves" ;;
+esac
 
 echo "[scrapling] installing the skill for Claude + Codex"
 for dir in "$HOME/.claude/skills/scrapling" "$HOME/.codex/skills/scrapling"; do
