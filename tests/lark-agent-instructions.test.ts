@@ -9,7 +9,7 @@ describe("larkAgentInstructions", () => {
     // Bound covers the optional local-ASR line, which is appended on machines
     // where an ASR backend is actually installed (e.g. the dev box running the
     // suite); CI has neither the env nor the CLI files, so it stays absent there.
-    expect(instructions.length).toBeLessThan(2600);
+    expect(instructions.length).toBeLessThan(2400);
     expect(instructions.split("\n").length).toBeLessThanOrEqual(10);
   });
 

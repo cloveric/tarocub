@@ -33,19 +33,19 @@ export function localAsrAgentInstruction(): string | undefined {
     return undefined;
   }
   const httpUrl = (process.env.ASR_HTTP_URL ?? "").trim() || "http://127.0.0.1:8412/transcribe";
-  return `Local speech-to-text is installed on this machine. When YOU need to transcribe audio/video (a voice or video file, including ones you download or extract from a link), use it FIRST — do NOT default to whisper/mlx_whisper/parakeet, and do NOT conclude "no ASR available". Fast path: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Fall back to video frames / OCR only if transcription genuinely fails.`;
+  return `Local speech-to-text is installed. For audio/video transcription you do yourself, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or say "no ASR available". Fast path: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Fall back to video frames/OCR only if this genuinely fails.`;
 }
 
 export function larkAgentInstructions(): string {
   const lines = [
     "Lark via TaroCub; <lark_context>/<lark_comment_context> are routing only; no secrets.",
-    "Default: concise text reply; no progress placeholder cards. Ask if auth/scopes/tools missing.",
-    "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth — NOT IM on this bot's own chats (lark-cli is a separate Feishu app; group/invite/send here trips 'open_id cross app', use /newgroup + the send tags). Sheets: start `sheets +info`; use structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
+    "Default: concise text reply; no progress placeholder cards; ask if auth/scopes/tools missing.",
+    "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth; NOT IM on this bot's own chats (separate app → open_id cross app; use /newgroup + send tags). Sheets: start `sheets +info`; use structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
     "Bridge tags: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video/send.batch; lark.choice or `request_user_input`; Claude `AskUserQuestion` => Feishu card. Do not call `lark-cli` just to send choice cards. Small text: fenced `file:name.ext`.",
-    "File/image send is workspace-sandboxed: to send one from elsewhere (e.g. ~/.codex/generated_images/), copy it into your workspace first, then send that path — an outside path is refused (a path restriction, not a failure).",
-    "Titled images (小红书 P1/P2 series, etc.): give each image its own title. Via send.batch make each images entry an object {path, caption} (not a bare path); or via [send-image:/path] put the title on the line directly above. A titled batch is then packed into ONE card, each image under its own title.",
+    "File/image send is workspace-sandboxed: an outside path is refused (a path restriction, not a failure) — copy it into your workspace first, then send that path.",
+    "Titled images (小红书 P1/P2): give each image its own title. send.batch images entry an object {path, caption}, or put title on the line directly above [send-image:/path]. A titled batch is packed into ONE card, each image under its own title.",
     "Service ops: use `node dist/src/index.js lark service restart --all`; no manual Lark restart loops. CLI defers current.",
-    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` ISO timezone; recurring (every N min/hrs, or a window like market hours) = exactly ONE standard 5-field `cron` (no seconds/year), e.g. `*/15 13-14 * * *` (fires separately each time, own push) — do NOT add one-shot `in`/`at` for the current minute or end boundary; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
+    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` ISO timezone. Recurring/window = exactly ONE standard 5-field `cron` (no seconds/year), e.g. `*/15 13-14 * * *` (fires separately each time); do NOT add one-shot `in`/`at` for the current minute or end boundary. Manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
     "Exact URLs: read directly with `web_extract`/browser; use `web_search` for discovery/current facts/fallback. Treat <forwarded_lark_messages> as task context.",
   ];
   const asr = localAsrAgentInstruction();
