@@ -167,7 +167,7 @@ export async function deliverLarkResponse(input: {
             reason: "outside-workspace",
             kind: match.preferPhoto ? "image" : "file",
           });
-          await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", locale) }, replyOptions);
+          await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", locale, workspaceRoot) }, replyOptions);
           continue;
         }
         const body = await readFile(real);
@@ -628,7 +628,7 @@ async function sendLarkPath(input: {
       reason: "outside-workspace",
       kind: input.kind,
     });
-    await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", input.locale) }, larkReplyOptions(input.replyTo, input.replyInThread));
+    await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", input.locale, workspaceRoot) }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
   let body: Buffer;
@@ -970,14 +970,17 @@ function larkAnyFilePathAllowed(): boolean {
   return /^(?:1|true|yes|on)$/i.test((process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH ?? "").trim());
 }
 
-function renderLarkFileDeliveryError(reason: "outside-workspace" | "read-error", locale: Locale): string {
+function renderLarkFileDeliveryError(reason: "outside-workspace" | "read-error", locale: Locale, workspaceRoot?: string): string {
+  // Name the exact allowed directory so the agent can self-correct — copy the file there
+  // and resend — instead of guessing. A file left at a stale/elsewhere path otherwise loops.
+  const dir = workspaceRoot ?? (locale === "en" ? "the workspace" : "工作区");
   if (locale === "en") {
     return reason === "outside-workspace"
-      ? "This file is outside the allowed send directories (by default only files in the workspace can be sent) — a path restriction, not a send failure. Copy it into the workspace and resend, or set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 on this instance to allow any path."
+      ? `This file is outside the allowed send directory — a path restriction, not a send failure. Copy it into ${dir} and resend (only files under that directory can be sent), or set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 on this instance to allow any path.`
       : "File was not sent: failed to read the file; details were recorded in logs.";
   }
   return reason === "outside-workspace"
-    ? "该文件不在允许发送的目录内（默认仅工作区内的文件可直接发送）——这是路径限制，不是发送失败。把它复制到工作区后再发即可，或在该实例设置 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 放开任意路径。"
+    ? `该文件不在允许发送的目录内——这是路径限制，不是发送失败。请把文件复制到 ${dir} 再发（只有该目录下的文件可直接发送），或在该实例设置 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 放开任意路径。`
     : "文件未发送：读取文件失败，详细原因已记录到日志。";
 }
 

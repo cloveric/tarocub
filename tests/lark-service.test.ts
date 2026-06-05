@@ -7910,6 +7910,13 @@ describe("lark service", () => {
         { text: expect.stringContaining("不在允许发送的目录内") },
         { replyTo: "om_reject_file" },
       );
+      // The rejection names the exact allowed directory (…/workspace) so the agent can
+      // self-correct (copy the file there + resend) instead of guessing a stale path.
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: expect.stringContaining(`${path.sep}workspace`) },
+        { replyTo: "om_reject_file" },
+      );
       expect(channel.send).not.toHaveBeenCalledWith(
         "oc_chat",
         { file: expect.anything() },
