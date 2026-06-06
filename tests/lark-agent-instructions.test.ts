@@ -66,7 +66,7 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("send.file/send.image/send.audio/send.video");
   });
 
-  it("keeps Lark scheduling and web-current-facts guidance aligned with the mature Telegram transport rules", () => {
+  it("keeps Lark scheduling guidance aligned with the mature Telegram transport rules", () => {
     const instructions = larkAgentInstructions();
 
     expect(instructions).toContain("one of `in`/`at`/`cron`");
@@ -78,8 +78,6 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("list first");
     expect(instructions).toContain("only explicit reminder/schedule requests");
     expect(instructions).toContain("ISO timezone");
-    expect(instructions).toContain("Exact URLs: read directly");
-    expect(instructions).toContain("use `web_search` for discovery/current facts");
   });
 
   it("prefers bridge-managed choice cards and treats lark-cli as required for full Lark-native functionality", () => {
