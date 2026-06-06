@@ -30,10 +30,9 @@ Restart / status / stop / start / logs / doctor for the TaroCub Lark bot fleet, 
 its service manager (`node dist/src/index.js lark service …`). Loaded **on demand**
 when a bot is asked to restart the fleet, check service health, or view logs — so this
 operational guidance stays out of the every-turn injected system prompt (it used to be
-a prompt line; it lives here now). No prerequisites; install with a copy:
+a prompt line; it lives here now). No prerequisites. `scripts/install-skills.sh` installs it — and every other vendored
+skill's doc — into both engines:
 
 ```bash
-for d in ~/.claude/skills/tarocub-service-ops ~/.codex/skills/tarocub-service-ops; do
-  mkdir -p "$d" && cp skills/tarocub-service-ops/SKILL.md "$d/SKILL.md"
-done
+bash scripts/install-skills.sh
 ```
