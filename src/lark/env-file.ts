@@ -22,6 +22,26 @@ export function resolveLarkEnvFilePath(env: Pick<LarkRuntimeEnv, "HOME" | "USERP
   return path.join(resolveLarkStateDir(env), LARK_ENV_FILE_NAME);
 }
 
+/** Shared engine-credential file that sits next to the per-instance state dirs. */
+export const SHARED_ENV_FILE_NAME = "shared.env";
+
+/**
+ * Path to the shared engine-credential file (e.g. `~/.cctb/shared.env`), resolved
+ * from the default cctb root so it is the SAME file for every instance. Engine
+ * credentials placed here (MCP API tokens such as `IFIND_TOKEN`) are inherited by
+ * ALL instances — including newly-created ones — without any per-instance setup, so
+ * a fresh bot is aligned by default. An instance's own lark.env value still wins, so
+ * a per-instance override is always possible. Returns undefined if the root cannot
+ * be resolved (e.g. no HOME), so callers can skip the shared layer gracefully.
+ */
+export function resolveSharedEnvFilePath(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE" | "TAROCUB_INSTANCE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">): string | undefined {
+  try {
+    return path.join(path.dirname(resolveDefaultLarkStateDir(env)), SHARED_ENV_FILE_NAME);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRuntimeEnv> {
   let envPath: string;
   try {
@@ -61,44 +81,69 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
 }
 
 /**
- * Pass non-whitelisted keys from the instance's lark.env through into the process
- * environment so the spawned engine (claude/codex) — which inherits `{ ...process.env }`
- * — can see per-instance secrets such as MCP API tokens (e.g. `IFIND_TOKEN`). The
- * whitelisted Lark keys are owned by loadLarkRuntimeEnv and skipped here; an existing
- * value in the target env always wins (env beats file). Returns the names of the keys
- * applied — names only, since the values are secrets and must never be logged.
+ * Pass non-whitelisted keys (engine credentials such as MCP API tokens like
+ * `IFIND_TOKEN`) through into the process environment so the spawned engine
+ * (claude/codex) — which inherits `{ ...process.env }` — can see them. Two layers are
+ * read, in precedence order: an existing value in `target` (process.env) always wins,
+ * then the instance's own lark.env, then the shared `~/.cctb/shared.env` fills any gaps
+ * — so a freshly-created instance inherits shared tokens by default, while still being
+ * able to override them per-instance. Whitelisted Lark keys and reserved bridge
+ * namespaces are filtered out by parseLarkEnvExtras in BOTH files, so the shared layer
+ * is no weaker than the per-instance one. Returns the names of the keys applied — names
+ * only, since the values are secrets and must never be logged.
  */
 export async function applyLarkEnvPassthrough(
   env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE" | "TAROCUB_INSTANCE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">,
   target: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
-  let envPath: string;
+  const applied: string[] = [];
+  const applyFrom = (content: string): void => {
+    for (const [key, value] of Object.entries(parseLarkEnvExtras(content))) {
+      // Never clobber a value already present (process.env wins; instance wins over shared).
+      if (target[key] !== undefined) {
+        continue;
+      }
+      target[key] = value;
+      applied.push(key);
+    }
+  };
+
+  // Instance lark.env first, so an instance's own token overrides the shared default.
+  let instancePath: string | undefined;
   try {
-    envPath = resolveLarkEnvFilePath(env);
+    instancePath = resolveLarkEnvFilePath(env);
   } catch {
-    return [];
+    instancePath = undefined;
+  }
+  if (instancePath) {
+    const content = await readEnvFileOrUndefined(instancePath);
+    if (content !== undefined) {
+      applyFrom(content);
+    }
   }
 
-  let content: string;
+  // Then the shared engine-cred file fills any gaps a new/basic instance left open,
+  // so a fresh bot inherits shared MCP tokens (IFIND_TOKEN, …) with no per-instance setup.
+  const sharedPath = resolveSharedEnvFilePath(env);
+  if (sharedPath && sharedPath !== instancePath) {
+    const content = await readEnvFileOrUndefined(sharedPath);
+    if (content !== undefined) {
+      applyFrom(content);
+    }
+  }
+
+  return applied;
+}
+
+async function readEnvFileOrUndefined(filePath: string): Promise<string | undefined> {
   try {
-    content = await readFile(envPath, "utf8");
+    return await readFile(filePath, "utf8");
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
+      return undefined;
     }
     throw error;
   }
-
-  const applied: string[] = [];
-  for (const [key, value] of Object.entries(parseLarkEnvExtras(content))) {
-    // Never clobber a value already present in the target env (env beats file).
-    if (target[key] !== undefined) {
-      continue;
-    }
-    target[key] = value;
-    applied.push(key);
-  }
-  return applied;
 }
 
 export async function writeLarkEnvFile(

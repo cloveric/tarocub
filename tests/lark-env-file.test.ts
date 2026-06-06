@@ -221,4 +221,89 @@ describe("Lark env files", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("inherits shared engine credentials from ~/.cctb/shared.env for a new instance with no lark.env", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    try {
+      // A shared file next to the instance dirs carries the common MCP token(s).
+      await mkdir(path.join(tempDir, ".cctb"), { recursive: true });
+      await writeFile(path.join(tempDir, ".cctb", "shared.env"), [
+        "# shared engine creds",
+        "IFIND_TOKEN=ifd-shared-default",
+        "TAVILY_API_KEY=tav-shared",
+        "",
+      ].join("\n"), "utf8");
+
+      // A brand-new instance with NO lark.env of its own still gets the shared tokens.
+      const target: NodeJS.ProcessEnv = {};
+      const applied = await applyLarkEnvPassthrough({
+        USERPROFILE: tempDir,
+        CCTB_LARK_INSTANCE: "ccfgg3",
+      }, target);
+
+      expect(target.IFIND_TOKEN).toBe("ifd-shared-default");
+      expect(target.TAVILY_API_KEY).toBe("tav-shared");
+      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "TAVILY_API_KEY"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets an instance lark.env override the shared default, and fills the rest from shared", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    const instanceName = "ccfgg1";
+    const stateDir = path.join(tempDir, ".cctb", instanceName);
+    try {
+      await mkdir(stateDir, { recursive: true });
+      // Shared defaults for both tokens…
+      await writeFile(path.join(tempDir, ".cctb", "shared.env"), [
+        "IFIND_TOKEN=ifd-shared-default",
+        "TAVILY_API_KEY=tav-shared",
+        "",
+      ].join("\n"), "utf8");
+      // …but this instance pins its own IFIND_TOKEN (and has no Tavily key of its own).
+      await writeFile(path.join(stateDir, "lark.env"), [
+        "IFIND_TOKEN=ifd-instance-own",
+        "",
+      ].join("\n"), "utf8");
+
+      const target: NodeJS.ProcessEnv = {};
+      const applied = await applyLarkEnvPassthrough({
+        USERPROFILE: tempDir,
+        CCTB_LARK_INSTANCE: instanceName,
+      }, target);
+
+      // Instance wins for IFIND_TOKEN; shared fills the gap for TAVILY_API_KEY.
+      expect(target.IFIND_TOKEN).toBe("ifd-instance-own");
+      expect(target.TAVILY_API_KEY).toBe("tav-shared");
+      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "TAVILY_API_KEY"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the same reserved-namespace denylist to the shared engine-cred file", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    try {
+      await mkdir(path.join(tempDir, ".cctb"), { recursive: true });
+      await writeFile(path.join(tempDir, ".cctb", "shared.env"), [
+        "IFIND_TOKEN=ok-shared",
+        // a bridge-control var dropped into the shared file must still be refused
+        "CCTB_SEND_URL=http://attacker",
+        "",
+      ].join("\n"), "utf8");
+
+      const target: NodeJS.ProcessEnv = {};
+      const applied = await applyLarkEnvPassthrough({
+        USERPROFILE: tempDir,
+        CCTB_LARK_INSTANCE: "missing-instance",
+      }, target);
+
+      expect(applied).toEqual(["IFIND_TOKEN"]);
+      expect(target.IFIND_TOKEN).toBe("ok-shared");
+      expect(target.CCTB_SEND_URL).toBeUndefined();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
