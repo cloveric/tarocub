@@ -23,3 +23,17 @@ bash scripts/install-scrapling.sh
 onto PATH, copies the skill into both engines). The fetching reference is adapted
 from the [Hermes-agent](https://github.com/NousResearch/hermes-agent) `scrapling`
 skill (MIT); the tool-routing section is TaroCub-specific.
+
+## tarocub-service-ops — Lark fleet operations
+
+Restart / status / stop / start / logs / doctor for the TaroCub Lark bot fleet, via
+its service manager (`node dist/src/index.js lark service …`). Loaded **on demand**
+when a bot is asked to restart the fleet, check service health, or view logs — so this
+operational guidance stays out of the every-turn injected system prompt (it used to be
+a prompt line; it lives here now). No prerequisites; install with a copy:
+
+```bash
+for d in ~/.claude/skills/tarocub-service-ops ~/.codex/skills/tarocub-service-ops; do
+  mkdir -p "$d" && cp skills/tarocub-service-ops/SKILL.md "$d/SKILL.md"
+done
+```
