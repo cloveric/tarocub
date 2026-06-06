@@ -66,7 +66,7 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("send.file/send.image/send.audio/send.video");
   });
 
-  it("keeps Lark scheduling guidance aligned with the mature Telegram transport rules", () => {
+  it("keeps Lark scheduling and web-routing guidance aligned with the mature Telegram transport rules", () => {
     const instructions = larkAgentInstructions();
 
     expect(instructions).toContain("one of `in`/`at`/`cron`");
@@ -78,6 +78,11 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("list first");
     expect(instructions).toContain("only explicit reminder/schedule requests");
     expect(instructions).toContain("ISO timezone");
+
+    // Web routing mirrors the Telegram transport rules, plus the Scrapling fallback.
+    expect(instructions).toContain("read them directly with `web_extract`");
+    expect(instructions).toContain("fall back to Scrapling");
+    expect(instructions).toContain("`web_search` for discovery/current facts");
   });
 
   it("prefers bridge-managed choice cards and treats lark-cli as required for full Lark-native functionality", () => {
