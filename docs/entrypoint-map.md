@@ -25,6 +25,7 @@ For deeper system context, then read:
 - `docs/event-model.md`
 - `docs/change-rules.md`
 - `docs/release-checklist.md`
+- `docs/lark-permissions.md` — granting a Feishu scope to a Lark bot. 个人版 apps: `申请开通` is INSTANT, there is NO version-publish step — don't hunt a `发布` button.
 
 ## Main Entrypoints
 
