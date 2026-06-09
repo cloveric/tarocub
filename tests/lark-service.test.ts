@@ -6988,11 +6988,11 @@ describe("lark service", () => {
     expect(channel.recallMessage).toHaveBeenCalledWith("om_qcard");
   });
 
-  it("falls back to aborting the active run when the carried task already started", async () => {
+  it("treats a stale queue-card stop tap as a no-op instead of aborting the active run", async () => {
     const runtime = createLarkServiceRuntime();
     const abortController = new AbortController();
     runtime.activeRuns.set("lark:oc_chat", { abortController });
-    vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(false); // task is the running one
+    vi.spyOn(runtime.chatQueue, "cancel").mockReturnValue(false); // taskId no longer queued
     const channel = fakeChannel();
 
     const handled = await handleLarkCardAction({
@@ -7007,7 +7007,15 @@ describe("lark service", () => {
     });
 
     expect(handled).toBe(true);
-    expect(abortController.signal.aborted).toBe(true); // fell back to aborting the active task
+    // A taskId-carrying stop tap targets a QUEUE card. When its task is no longer
+    // pending, the card is stale — it must never abort whatever run is active NOW
+    // (that's /stop or the run card's own taskId-less stop button).
+    expect(abortController.signal.aborted).toBe(false);
+    expect(channel.send).toHaveBeenCalledWith(
+      "oc_chat",
+      { text: expect.stringContaining("已不在队列中") },
+      expect.any(Object),
+    );
   });
 
   it("treats a repeat cancel tap as a no-op and never aborts the active run", async () => {

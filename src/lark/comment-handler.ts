@@ -173,12 +173,48 @@ export async function handleLarkComment(input: {
         runtime: input.runtime,
         locale,
       });
-      await createLarkCommentReply(commentClient, {
-        fileToken: input.event.fileToken,
-        fileType,
-        commentId: input.event.commentId,
-        text: cleaned,
-      });
+      // A long answer is split into sequential replies under a conservative byte
+      // budget (one oversized text_run is rejected by the API and the answer is
+      // lost). A reply failure AFTER the turn succeeded is a DELIVERY failure:
+      // never report it as an engine error — post a short notice carrying the
+      // first undelivered chunk instead.
+      const chunks = chunkLarkCommentReplyText(cleaned);
+      let deliveredChunks = 0;
+      try {
+        for (const chunk of chunks) {
+          await createLarkCommentReply(commentClient, {
+            fileToken: input.event.fileToken,
+            fileType,
+            commentId: input.event.commentId,
+            text: chunk,
+          });
+          deliveredChunks++;
+        }
+      } catch (deliveryError) {
+        await appendLarkCommentTimelineEvent(input.stateDir, {
+          type: "engine.event.delivery_failed",
+          bridgeChatId,
+          bridgeUserId,
+          conversationKey,
+          outcome: "error",
+          detail: redactLarkErrorDetail(deliveryError),
+          event: input.event,
+          fileType,
+          metadata: {
+            phase: "comment-reply",
+            deliveredChunks,
+            totalChunks: chunks.length,
+          },
+        });
+        await createLarkCommentReply(commentClient, {
+          fileToken: input.event.fileToken,
+          fileType,
+          commentId: input.event.commentId,
+          text: [renderLarkCommentDeliveryFailure(locale), chunks[deliveredChunks]]
+            .filter((part): part is string => Boolean(part))
+            .join("\n\n"),
+        }).catch(() => undefined);
+      }
       await appendLarkCommentTimelineEvent(input.stateDir, {
         type: "turn.completed",
         bridgeChatId,
@@ -219,6 +255,73 @@ export async function handleLarkComment(input: {
       }
     }
   });
+}
+
+// Conservative per-reply budget for a doc-comment text_run. The drive comment API
+// rejects oversized bodies; 3000 UTF-8 bytes (~1000 CJK chars) stays well under
+// that while leaving headroom for the delivery-failure notice prefix.
+export const LARK_COMMENT_REPLY_MAX_BYTES = 3000;
+
+/**
+ * Split a comment reply into chunks each at most `maxBytes` UTF-8 bytes,
+ * preferring paragraph then line boundaries (same strategy as the chat-side
+ * markdown chunker) and never splitting inside a surrogate pair.
+ */
+export function chunkLarkCommentReplyText(text: string, maxBytes = LARK_COMMENT_REPLY_MAX_BYTES): string[] {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return [text];
+  }
+  const chunks: string[] = [];
+  let remaining = text;
+  while (Buffer.byteLength(remaining, "utf8") > maxBytes) {
+    const head = utf8PrefixWithinBytes(remaining, maxBytes);
+    let splitAt = head.lastIndexOf("\n\n");
+    if (splitAt <= 0) {
+      splitAt = head.lastIndexOf("\n");
+    }
+    if (splitAt <= 0) {
+      splitAt = head.length;
+    }
+    if (splitAt <= 0) {
+      // maxBytes smaller than one code point: force progress rather than loop.
+      splitAt = 1;
+    }
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
+  }
+  if (remaining) {
+    chunks.push(remaining);
+  }
+  return chunks;
+}
+
+/** Longest prefix of `text` whose UTF-8 encoding fits in `maxBytes`, surrogate-safe. */
+function utf8PrefixWithinBytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return text;
+  }
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (Buffer.byteLength(text.slice(0, mid), "utf8") <= maxBytes) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  let end = lo;
+  const last = text.charCodeAt(end - 1);
+  if (end > 0 && last >= 0xd800 && last <= 0xdbff) {
+    end -= 1;
+  }
+  return text.slice(0, end);
+}
+
+function renderLarkCommentDeliveryFailure(locale: Locale): string {
+  return locale === "en"
+    ? "The answer was generated, but posting it as a comment reply failed. Partial content follows; details were recorded in logs."
+    : "回答已生成，但回贴到评论失败，以下为部分内容；详细原因已记录到日志。";
 }
 
 async function createLarkCommentReply(

@@ -962,7 +962,7 @@ export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<str
   const labels = approvalCardLabels(input.locale ?? "zh");
 
   const elements: unknown[] = [
-    markdownElement(`**Approval requested**\n${input.toolName}${toolInput}`),
+    markdownElement(`**${labels.header}**\n${input.toolName}${toolInput}`),
   ];
   if (input.decidedStatus) {
     // Resolved in place after the operator decided: show the outcome, drop the buttons.
@@ -985,7 +985,7 @@ export function renderLarkApprovalCard(input: LarkApprovalCardInput): Record<str
       summary: {
         content: input.decidedStatus
           ? `${input.decidedStatus} — ${input.toolName}`
-          : `Approval requested: ${input.toolName}`,
+          : labels.summary(input.toolName),
       },
     },
     body: {
@@ -1079,10 +1079,28 @@ export function renderLarkQueueCancelledCard(locale: Locale = "zh"): Record<stri
   };
 }
 
-function approvalCardLabels(locale: Locale): { allowOnce: string; allowSession: string; deny: string } {
+function approvalCardLabels(locale: Locale): {
+  header: string;
+  summary: (toolName: string) => string;
+  allowOnce: string;
+  allowSession: string;
+  deny: string;
+} {
   return locale === "en"
-    ? { allowOnce: "Allow once", allowSession: "Allow for this turn", deny: "Deny" }
-    : { allowOnce: "允许一次", allowSession: "本轮允许", deny: "拒绝" };
+    ? {
+      header: "Approval requested",
+      summary: (toolName) => `Approval requested: ${toolName}`,
+      allowOnce: "Allow once",
+      allowSession: "Allow for this turn",
+      deny: "Deny",
+    }
+    : {
+      header: "请求审批",
+      summary: (toolName) => `请求审批：${toolName}`,
+      allowOnce: "允许一次",
+      allowSession: "本轮允许",
+      deny: "拒绝",
+    };
 }
 
 function markdownElement(content: string): Record<string, unknown> {

@@ -115,11 +115,14 @@ describe("Lark message reactions", () => {
   describe("classifyLarkTurnTermination (the real reaction failure gate) — regression #13", () => {
     it("classifies user-stop and idle-timeout terminations as non-failures", () => {
       expect(classifyLarkTurnTermination(new Error("Task was stopped by user"), undefined).kind).toBe("interrupted");
-      expect(classifyLarkTurnTermination(new Error("aborted"), undefined).kind).toBe("interrupted");
       expect(classifyLarkTurnTermination(new Error("Session inactive after 30 minutes"), undefined).kind).toBe("idle_timeout");
       const aborted = new AbortController();
       aborted.abort();
       expect(classifyLarkTurnTermination(new Error("anything"), aborted.signal).kind).toBe("interrupted");
+      // A bare "aborted" is an engine-INTERNAL AbortError unless the caller's
+      // signal actually fired: without it, it's a real failure (audit finding).
+      expect(classifyLarkTurnTermination(new Error("aborted"), undefined).kind).toBe("error");
+      expect(classifyLarkTurnTermination(new Error("aborted"), aborted.signal).kind).toBe("interrupted");
       // A genuine engine error still classifies as a failure.
       expect(classifyLarkTurnTermination(new Error("ECONNRESET"), undefined).kind).toBe("error");
     });

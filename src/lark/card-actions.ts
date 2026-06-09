@@ -614,6 +614,18 @@ export async function handleLarkCardAction(input: {
       await postCancelledFallback();
       return true;
     }
+    if (taskId) {
+      // A stop tap carrying a taskId comes from a QUEUE card. Its task is no
+      // longer pending (it already started or finished), so the card is stale —
+      // never fall through to abort whatever run is active NOW.
+      await input.channel.send(input.event.chatId, {
+        text: locale === "en" ? "This task is no longer in the queue." : "该任务已不在队列中。",
+      }, {
+        replyTo: input.event.messageId,
+        ...(replyInThread ? { replyInThread: true } : {}),
+      });
+      return true;
+    }
     // Otherwise this is the running task: abort only it; let the queue keep
     // advancing (do not clearPending, which would cancel every queued task too).
     const active = input.runtime.activeRuns.get(value.conversationKey);
@@ -1322,6 +1334,10 @@ async function runLarkCardChoice(input: {
     return;
   }
   await mkdir(requestOutputDir, { recursive: true });
+  // Abort any run already tracked for this conversation before claiming the slot
+  // (e.g. a detached /goal watcher, which holds activeRuns outside the chat
+  // queue) — overwriting it would orphan that run where /stop can't reach it.
+  input.runtime.activeRuns.get(input.conversationKey)?.abortController.abort();
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {
     await appendLarkCardActionTurnEvent(input, {
@@ -1441,7 +1457,11 @@ async function runLarkCardChoice(input: {
       detail: redactLarkErrorDetail(error),
     });
   } finally {
-    input.runtime.activeRuns.delete(input.conversationKey);
+    // Release the slot only if a newer run (e.g. a /goal watcher started while
+    // this turn was finishing) hasn't already replaced it.
+    if (input.runtime.activeRuns.get(input.conversationKey)?.abortController === abortController) {
+      input.runtime.activeRuns.delete(input.conversationKey);
+    }
   }
 }
 
@@ -1493,6 +1513,9 @@ async function runLarkArchiveContinueCardAction(input: {
     return;
   }
   await mkdir(requestOutputDir, { recursive: true });
+  // Same active-run protection as runLarkCardChoice: abort the previous holder
+  // (e.g. a detached /goal watcher) before claiming, never silently orphan it.
+  input.runtime.activeRuns.get(input.conversationKey)?.abortController.abort();
   input.runtime.activeRuns.set(input.conversationKey, { abortController });
   try {
     await appendLarkCardActionTurnEvent(input, {
@@ -1631,7 +1654,10 @@ async function runLarkArchiveContinueCardAction(input: {
       },
     });
   } finally {
-    input.runtime.activeRuns.delete(input.conversationKey);
+    // Release the slot only if a newer run hasn't already replaced it.
+    if (input.runtime.activeRuns.get(input.conversationKey)?.abortController === abortController) {
+      input.runtime.activeRuns.delete(input.conversationKey);
+    }
   }
 }
 

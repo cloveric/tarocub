@@ -75,24 +75,19 @@ export async function deliverLarkResponse(input: {
   const cleanedText = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(input.text)));
   const replyOptions = larkReplyOptions(input.replyTo, input.replyInThread);
   const locale = await resolveLarkLocale(input.stateDir);
-  let hadRejectedTool = false;
 
   for (const match of toolMatches) {
     let toolName = "unknown";
     try {
       const parsed = parseTelegramToolTagPayload(match.payload);
       toolName = parsed.name;
-      const ok = await executeLarkToolTag({
+      await executeLarkToolTag({
         ...input,
         name: parsed.name,
         payload: parsed.payload,
         locale,
       });
-      if (!ok) {
-        hadRejectedTool = true;
-      }
     } catch (error) {
-      hadRejectedTool = true;
       if (!(error instanceof SyntaxError)) {
         await appendLarkToolErrorTimeline(input, toolName, error);
       }
@@ -116,17 +111,13 @@ export async function deliverLarkResponse(input: {
 
   for (const match of cronAddMatches) {
     try {
-      const ok = await executeLarkToolTag({
+      await executeLarkToolTag({
         ...input,
         name: "cron.add",
         payload: match.payload,
         locale,
       });
-      if (!ok) {
-        hadRejectedTool = true;
-      }
     } catch (error) {
-      hadRejectedTool = true;
       await input.channel.send(input.chatId, {
         text: renderLarkUserFacingError(error, "tool", locale),
       }, replyOptions);
@@ -160,7 +151,6 @@ export async function deliverLarkResponse(input: {
           !(outputPrefix && real.startsWith(outputPrefix)) &&
           !(overridePrefix && real.startsWith(overridePrefix))
         ) {
-          hadRejectedTool = true;
           await appendLarkFileRejectedTimeline(input, {
             path: filePath,
             realPath: real,
@@ -195,7 +185,6 @@ export async function deliverLarkResponse(input: {
           });
         }
       } catch (error) {
-        hadRejectedTool = true;
         await appendLarkFileRejectedTimeline(input, {
           path: filePath,
           reason: larkFileRejectReasonFromError(error),
@@ -221,7 +210,10 @@ export async function deliverLarkResponse(input: {
     }
   }
 
-  if (input.sendText !== false && cleanedText && !hadRejectedTool) {
+  // Deliver the cleaned answer text even when a tool tag or file was rejected —
+  // the rejection notices above are sent IN ADDITION to the text (Telegram
+  // parity), never instead of it: one bad tag must not swallow the whole answer.
+  if (input.sendText !== false && cleanedText) {
     await sendLarkMarkdown(input.channel, input.chatId, cleanedText, replyOptions);
   }
 

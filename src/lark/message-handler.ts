@@ -138,7 +138,11 @@ export function classifyLarkTurnTermination(error: unknown, signal: AbortSignal 
   if (idleMatch) {
     return { kind: "idle_timeout", minutes: Number.parseInt(idleMatch[1] ?? "0", 10) || 0 };
   }
-  if (signal?.aborted || /\b(stopped by user|task was stopped|aborted)\b/.test(text)) {
+  // "stopped by user" / "task was stopped" are our adapters' explicit user-stop
+  // messages. A bare "aborted" also appears in engine-INTERNAL AbortErrors (e.g.
+  // reconnect exhaustion), so it only counts as a user interruption when the
+  // caller's abort signal actually fired — which `signal?.aborted` covers.
+  if (signal?.aborted || /\b(stopped by user|task was stopped)\b/.test(text)) {
     return { kind: "interrupted" };
   }
   return { kind: "error" };
@@ -404,8 +408,16 @@ async function runAcceptedLarkMessage(
       // so the run card can take it over (queued → running → done) instead of
       // leaving a stale "queued" card behind once the task starts.
       const existing = input.runtime.queueCards.get(normalized.messageId);
-      if (existing && await updateLarkQueueCardInPlace(input.channel, existing, card)) {
-        return;
+      if (existing) {
+        if (await updateLarkQueueCardInPlace(input.channel, existing, card)) {
+          return;
+        }
+        // In-place refresh failed and a fresh card replaces it below: recall the
+        // stale card so its live Cancel/Wait buttons can't linger and mislead.
+        input.runtime.queueCards.delete(normalized.messageId);
+        if (input.channel.recallMessage) {
+          await input.channel.recallMessage(existing.messageId).catch(() => undefined);
+        }
       }
       // Prefer a CardKit managed card so the cancel tap can flip it to "已取消"
       // IN PLACE (CardKit survives a post-interaction update; im.message.patch
@@ -679,9 +691,13 @@ async function flushBatchedLarkTurn(
       resolve(result);
     }
   } catch (error) {
-    for (const reject of batch.reject) {
-      reject(error);
+    // All waiters belong to ONE merged turn; rejecting them all would make the
+    // service-level catch post N identical error replies. Reject only the newest
+    // waiter (the merged turn replies to its message) and settle the rest silently.
+    for (const resolve of batch.resolve.slice(0, -1)) {
+      resolve(true);
     }
+    batch.reject[batch.reject.length - 1]?.(error);
   }
 }
 
@@ -1435,7 +1451,13 @@ export async function createLarkRunCardController(input: {
       await input.channel.updateCard(input.existingCard.messageId, renderLarkRunCard(state, input.locale));
       sent = { messageId: input.existingCard.messageId, fallback: false };
     } catch {
-      sent = { messageId: input.existingCard.messageId, fallback: true };
+      // Inline take-over failed → recall the orphan (parity with the managed
+      // branch above) so its stale live buttons can't outlive the queue and
+      // later abort the wrong run. A fresh card is sent below.
+      if (input.channel.recallMessage) {
+        await input.channel.recallMessage(input.existingCard.messageId).catch(() => undefined);
+      }
+      sent = { messageId: "", fallback: true };
     }
   }
 
