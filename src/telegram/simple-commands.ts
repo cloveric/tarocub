@@ -96,6 +96,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
         ? [
             `当前模型: ${current}`,
             "用 /model <名称> 选择模型：",
+            "/model fable",
             "/model opus",
             "/model sonnet",
             "/model haiku",
@@ -105,6 +106,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
         : [
             `Current model: ${current}`,
             "Choose a model with /model <name>:",
+            "/model fable",
             "/model opus",
             "/model sonnet",
             "/model haiku",

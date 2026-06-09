@@ -410,6 +410,7 @@ describe("handleSimpleLocalTelegramCommand", () => {
         [
           "Current model: default",
           "Choose a model with /model <name>:",
+          "/model fable",
           "/model opus",
           "/model sonnet",
           "/model haiku",

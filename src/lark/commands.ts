@@ -1601,6 +1601,7 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
       return [
         `Current model: ${current}`,
         "Choose a model with /model <name>:",
+        "/model fable",
         "/model opus",
         "/model sonnet",
         "/model haiku",
@@ -1611,6 +1612,7 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
     return [
       `当前模型: ${current}`,
       "用 /model <名称> 选择模型：",
+      "/model fable",
       "/model opus",
       "/model sonnet",
       "/model haiku",
