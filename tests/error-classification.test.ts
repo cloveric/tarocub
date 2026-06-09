@@ -28,6 +28,12 @@ describe("classifyFailure auth detection", () => {
     expect(classifyFailure(new Error("file not found"))).not.toBe("auth");
     expect(classifyFailure(new Error("network timeout"))).not.toBe("auth");
   });
+
+  it("matches 401 only as a standalone number, not inside larger numbers", () => {
+    expect(classifyFailure(new Error("request failed with status 401"))).toBe("auth");
+    expect(classifyFailure(new Error("turn used 84012 tokens"))).not.toBe("auth");
+    expect(classifyFailure(new Error("context window is 140100 tokens"))).not.toBe("auth");
+  });
 });
 
 describe("classifyFailure specificity", () => {

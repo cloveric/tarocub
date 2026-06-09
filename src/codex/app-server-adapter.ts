@@ -14,6 +14,7 @@ import type {
   EngineStreamEvent,
 } from "./adapter.js";
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
+import { killProcessTree } from "./process-tree.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
@@ -35,6 +36,7 @@ type Writable = {
 };
 
 type AppServerChildProcess = {
+  pid?: number;
   stdin?: Writable;
   stdout?: ProcessStreamLike;
   stderr?: ProcessStreamLike;
@@ -53,6 +55,7 @@ export const CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
 export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 180_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
+export const CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS = 5_000;
 type AppServerApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 
 type JsonRpcId = number | string;
@@ -107,6 +110,10 @@ type PendingTurn = {
   usage?: AdapterUsage;
   errorMessage?: string;
   turnId?: string;
+  /** Cumulative stderr chars seen when this turn started; failure diagnostics
+   * only include stderr produced after this point, so an hours-old tail line
+   * (e.g. a stale 401) cannot misclassify an unrelated later failure. */
+  stderrOffset: number;
   startedAt: number;
   lastActivityAt?: number;
   lastActivityMethod?: string;
@@ -439,6 +446,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private initializeKey: string | null = null;
   private lineBuffer = "";
   private stderrTail = "";
+  /** Cumulative chars ever appended to stderrTail (pre-trim), used as the
+   * per-turn offset baseline for turn-scoped failure diagnostics. */
+  private stderrSeenChars = 0;
   private stdoutDiagnosticTail = "";
   private childGeneration = 0;
   private nextRequestId = 1;
@@ -511,7 +521,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       input.instructions ?? null,
     );
     const prompt = this.buildPrompt(input, instructions);
-    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions);
+    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
     const turn = await this.startTurn(
       threadId,
       prompt,
@@ -763,9 +773,23 @@ export class CodexAppServerAdapter implements CodexAdapter {
     initializeKey: string;
   }): Promise<void> {
     if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
-      await this.waitForIdle();
-      if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
-        this.destroy();
+      try {
+        await this.waitForIdle();
+        if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
+          this.destroy();
+        }
+      } catch (error) {
+        // A long-running turn held the child busy past the idle window. Keep
+        // serving new turns on the existing child with the OLD config —
+        // initializeKey stays unchanged, so re-init is retried on a later
+        // message once idle — instead of hard-failing every new message in
+        // every chat until the long turn ends.
+        if (this.initializePromise) {
+          console.error(
+            `Codex app-server config change deferred while busy: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return this.initializePromise;
+        }
       }
     }
 
@@ -853,7 +877,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       if (this.looksLikeJsonRpcLine(this.lineBuffer)) {
         if (this.lineBuffer.length > MAX_PROTOCOL_LINE_BUFFER_BYTES) {
           this.failAllPending(this.withDiagnostics("Codex app-server JSON-RPC output exceeded maximum buffer size"));
-          this.child?.kill?.();
+          this.terminateChild();
           this.resetChildState();
         }
         return;
@@ -903,13 +927,32 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     if (typeof parsed.method === "string") {
       this.recordNotificationDiagnostic(parsed.method, parsed.params);
+      // Any thread-scoped notification proves the turn is alive (item starts,
+      // command-output deltas, ...), not just the explicitly handled methods —
+      // otherwise a quiet long tool execution trips the inactivity watchdog.
+      const notificationThreadId = this.readString(parsed.params?.threadId);
+      if (notificationThreadId) {
+        this.noteTurnActivity(notificationThreadId, parsed.method);
+      }
+    }
+
+    if (parsed.method === "turn/started") {
+      // Capture the turn id so an abort/inactivity interrupt can address it.
+      const threadId = this.readString(parsed.params?.threadId);
+      const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
+      if (pending && !pending.turnId) {
+        const turn = parsed.params?.turn;
+        if (typeof turn === "object" && turn !== null && typeof (turn as { id?: unknown }).id === "string") {
+          pending.turnId = (turn as { id: string }).id;
+        }
+      }
+      return;
     }
 
     if (parsed.method === "item/agentMessage/delta") {
       const threadId = this.readString(parsed.params?.threadId);
       const delta = this.readString(parsed.params?.delta);
       if (threadId && delta) {
-        this.noteTurnActivity(threadId, parsed.method);
         const pending = this.pendingTurns.get(threadId);
         if (pending) {
           pending.chunks.push(delta);
@@ -929,7 +972,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const threadId = this.readString(parsed.params?.threadId);
       const delta = this.readString(parsed.params?.delta);
       if (threadId && delta) {
-        this.noteTurnActivity(threadId, parsed.method);
         this.emitEngineEvent(threadId, {
           type: "thinking",
           text: delta,
@@ -945,7 +987,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const threadId = this.readString(parsed.params?.threadId);
       const todos = codexPlanTodos((parsed.params as Record<string, unknown> | undefined)?.plan);
       if (threadId && todos) {
-        this.noteTurnActivity(threadId, parsed.method);
         this.emitEngineEvent(threadId, {
           type: "tool_use",
           toolName: "TodoWrite",
@@ -977,9 +1018,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     if (parsed.method === "item/completed") {
       const threadId = this.readString(parsed.params?.threadId);
-      if (threadId) {
-        this.noteTurnActivity(threadId, parsed.method);
-      }
       const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
       const item = parsed.params?.item;
       if (pending && threadId) {
@@ -1043,8 +1081,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
         return;
       }
 
-      this.noteTurnActivity(threadId, parsed.method);
-
       const pending = this.pendingTurns.get(threadId);
       if (!pending) {
         return;
@@ -1057,13 +1093,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const turnErrorMessage = this.readTurnErrorMessage(parsed.params?.turn);
       this.completingTurns += 1;
       if (turnErrorMessage) {
-        pending.reject(this.withDiagnostics(turnErrorMessage));
+        pending.reject(this.withDiagnostics(turnErrorMessage, pending.stderrOffset));
         this.finishCompletingTurn();
         return;
       }
 
       void this.completeTurn(threadId, turnId, pending).catch((error) => {
-        pending.reject(this.withDiagnostics(error instanceof Error ? error.message : String(error)));
+        pending.reject(this.withDiagnostics(error instanceof Error ? error.message : String(error), pending.stderrOffset));
       }).finally(() => {
         this.finishCompletingTurn();
       });
@@ -1072,9 +1108,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     if (parsed.method === "error") {
       const threadId = this.readString(parsed.params?.threadId);
-      if (threadId) {
-        this.noteTurnActivity(threadId, parsed.method);
-      }
       const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
       const errorMessage = this.readErrorMessage(parsed.params?.error);
 
@@ -1293,7 +1326,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     // child is caught by the next thread/resume|read timeout (destroyOnTimeout).
     this.pendingTurns.delete(threadId);
     this.loadedThreads.delete(threadId);
-    pending.reject(this.withDiagnostics(this.withAppServerState(message, threadId, pending)));
+    pending.reject(this.withDiagnostics(this.withAppServerState(message, threadId, pending), pending.stderrOffset));
     this.notifyIdleWaitersIfIdle();
   }
 
@@ -1451,13 +1484,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return resumedThreadId;
   }
 
-  private async resolveThreadForMessage(threadId: string): Promise<string> {
+  private async resolveThreadForMessage(threadId: string, cwd: string = this.cwd): Promise<string> {
     try {
       return await this.ensureThreadLoaded(threadId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/thread not found|no rollout found/i.test(message)) {
-        return await this.startThread();
+        return await this.startThread(cwd);
       }
 
       throw error;
@@ -1472,7 +1505,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return this.retryThreadReadAfterTimeout(
       () => isLogicalTelegramSessionId(sessionId)
         ? this.startThread(cwd)
-        : this.resolveThreadForMessage(sessionId),
+        : this.resolveThreadForMessage(sessionId, cwd),
       runtimeOptions,
     );
   }
@@ -1531,6 +1564,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const pendingTurn: PendingTurn = {
         chunks: [],
         generatedImageTags: [],
+        stderrOffset: this.stderrSeenChars,
         startedAt: Date.now(),
         onProgress,
         onEngineEvent,
@@ -1543,6 +1577,8 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // destroy() the shared child for one turn's timeout/abort — that would
       // kill other concurrent conversations. A truly wedged child is still
       // caught by the next thread/resume|thread/read request (destroyOnTimeout).
+      // turn/interrupt tells the app-server to stop executing server-side too;
+      // without it the engine kept running the turn after /stop.
       const abortTurn = (error: Error) => {
         const pendingTurnState = this.pendingTurns.get(threadId);
         if (pendingTurnState && pendingTurnState !== pendingTurn) {
@@ -1553,6 +1589,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           this.pendingTurns.delete(threadId);
         }
         this.loadedThreads.delete(threadId);
+        this.interruptTurn(threadId, pendingTurn.turnId);
         pendingTurn.reject(error);
         this.notifyIdleWaitersIfIdle();
       };
@@ -1566,6 +1603,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
                 threadId,
                 pendingTurn,
               ),
+              pendingTurn.stderrOffset,
             ),
           );
         }, timeoutMs);
@@ -1601,7 +1639,16 @@ export class CodexAppServerAdapter implements CodexAdapter {
         ],
       }, {
         idleBlocking: false,
-      }).catch((error) => {
+      }).then((result) => {
+        // The turn/start response carries the turn id immediately (the turn
+        // itself runs async); capture it so abort/inactivity can interrupt.
+        if (this.pendingTurns.get(threadId) === pendingTurn && !pendingTurn.turnId) {
+          const turn = (result as { turn?: { id?: unknown } } | null | undefined)?.turn;
+          if (turn && typeof turn.id === "string") {
+            pendingTurn.turnId = turn.id;
+          }
+        }
+      }, (error) => {
         const pendingTurnState = this.pendingTurns.get(threadId);
         if (pendingTurnState !== pendingTurn) {
           this.notifyIdleWaitersIfIdle();
@@ -1661,6 +1708,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         pending.lastInactivityAt = Date.now();
         this.pendingTurns.delete(threadId);
         this.loadedThreads.delete(threadId);
+        this.interruptTurn(threadId, pending.turnId);
         pending.reject(
           this.withDiagnostics(
             this.withAppServerState(
@@ -1668,6 +1716,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
               threadId,
               pending,
             ),
+            pending.stderrOffset,
           ),
         );
         this.notifyIdleWaitersIfIdle();
@@ -1676,6 +1725,24 @@ export class CodexAppServerAdapter implements CodexAdapter {
         // caught by the next thread/resume|read timeout (destroyOnTimeout).
       }
     }, timeoutMs);
+  }
+
+  /**
+   * Best-effort server-side stop for an aborted or inactive turn (verified
+   * protocol method: turn/interrupt, requires threadId + turnId — codex 0.139
+   * app-server JSON schema). Fire-and-forget: the local rejection already
+   * happened; this only stops the engine from continuing to execute. turnId is
+   * briefly unknown until the turn/start response arrives — in that window
+   * there is no addressable turn to interrupt yet, so this is a no-op.
+   */
+  private interruptTurn(threadId: string, turnId: string | undefined): void {
+    if (!turnId || !this.child?.stdin) {
+      return;
+    }
+    void this.request("turn/interrupt", { threadId, turnId }, {
+      idleBlocking: false,
+      timeoutMs: CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS,
+    }).catch(() => {});
   }
 
   private addGeneratedImageTag(pending: PendingTurn, threadId: string, filePath: string): void {
@@ -1797,9 +1864,27 @@ export class CodexAppServerAdapter implements CodexAdapter {
     if (expectedChildGeneration !== undefined && expectedChildGeneration !== this.childGeneration) {
       return;
     }
-    this.child?.kill?.();
+    this.terminateChild();
     this.failAllPending(this.withDiagnostics("Adapter destroyed"));
     this.resetChildState();
+  }
+
+  /**
+   * destroy() fires when the child is presumed wedged; a bare SIGTERM to the
+   * direct child leaves its descendants (shells, MCP servers) running while a
+   * replacement is spawned beside them — so kill the whole tree
+   * (SIGTERM → grace → SIGKILL). Fakes without a pid fall back to kill().
+   */
+  private terminateChild(): void {
+    const child = this.child;
+    if (!child) {
+      return;
+    }
+    if (child.pid) {
+      killProcessTree(child.pid);
+    } else {
+      child.kill?.();
+    }
   }
 
   private failAllPending(error: Error): void {
@@ -1873,6 +1958,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     this.initializeKey = null;
     this.lineBuffer = "";
     this.stderrTail = "";
+    this.stderrSeenChars = 0;
     this.stdoutDiagnosticTail = "";
     this.lastRequestDiagnostic = null;
     this.lastResponseDiagnostic = null;
@@ -1887,6 +1973,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     if (channel === "stderr") {
+      this.stderrSeenChars += this.stderrTail ? normalized.length + 1 : normalized.length;
       this.stderrTail = this.appendTail(this.stderrTail, normalized);
       return;
     }
@@ -1913,14 +2000,28 @@ export class CodexAppServerAdapter implements CodexAdapter {
       : next;
   }
 
-  private withDiagnostics(message: string): Error {
+  /** Stderr produced after the given stderrSeenChars offset (bounded by the
+   * retained tail). Turn-scoped failures use this so stale pre-turn stderr
+   * (e.g. an old "Reconnecting... 2/5" or 401 line) is not attributed to them. */
+  private stderrTailSince(offset: number): string {
+    const newChars = this.stderrSeenChars - offset;
+    if (newChars <= 0) {
+      return "";
+    }
+    return newChars >= this.stderrTail.length
+      ? this.stderrTail
+      : this.stderrTail.slice(this.stderrTail.length - newChars);
+  }
+
+  private withDiagnostics(message: string, stderrOffset?: number): Error {
     if (message.includes("[engine diagnostics]")) {
       return new Error(message);
     }
 
+    const stderrTail = stderrOffset === undefined ? this.stderrTail : this.stderrTailSince(stderrOffset);
     const sections: string[] = [];
-    if (this.stderrTail) {
-      sections.push(`stderr:\n${this.stderrTail}`);
+    if (stderrTail) {
+      sections.push(`stderr:\n${stderrTail}`);
     }
     if (this.stdoutDiagnosticTail) {
       sections.push(`stdout:\n${this.stdoutDiagnosticTail}`);

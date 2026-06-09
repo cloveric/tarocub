@@ -71,7 +71,9 @@ export function classifyFailure(error: unknown): FailureCategory {
     text.includes("failed to authenticate") ||
     text.includes("authentication_error") ||
     text.includes("invalid authentication credentials") ||
-    text.includes("401")
+    // Digit-bounded: a bare substring match also hit token counts like
+    // "84012 tokens" and misclassified unrelated failures as auth.
+    /\b401\b/.test(text)
   ) {
     return "auth";
   }
