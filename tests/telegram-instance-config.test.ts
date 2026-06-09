@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyEngineSelection,
   loadInstanceConfig,
+  readValidatedConfigFile,
   updateInstanceConfig,
 } from "../src/telegram/instance-config.js";
 import { resolveDefaultCronTimezone } from "../src/state/cron-timezone.js";
@@ -101,6 +102,79 @@ describe("loadInstanceConfig", () => {
         },
       });
       expect(errorSpy).toHaveBeenCalledOnce();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps valid fields and drops only the invalid ones when one field fails the schema", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({
+          engine: "claude",
+          locale: "zh",
+          budgetUsd: "5", // invalid: must be a positive number
+          model: "opus[1m]",
+          groupMode: {
+            enabled: true,
+            allowedChatIds: [-100123],
+            listenAllChatIds: [],
+          },
+          customFutureField: { keep: true },
+        }),
+        "utf8",
+      );
+
+      const config = await loadInstanceConfig(root);
+
+      // One poisoned field must not flip the engine to codex or empty the allowlist.
+      expect(config.engine).toBe("claude");
+      expect(config.locale).toBe("zh");
+      expect(config.model).toBe("opus[1m]");
+      expect(config.groupMode.allowedChatIds).toEqual([-100123]);
+      expect(config.budgetUsd).toBeUndefined();
+
+      expect(errorSpy).toHaveBeenCalledOnce();
+      const logged = String(errorSpy.mock.calls[0]?.[0]);
+      expect(logged).toContain("budgetUsd");
+      expect(logged).toContain("dropped invalid field(s)");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("salvages unknown passthrough fields alongside valid known fields", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({
+          engine: "antigravity",
+          verbosity: "loud", // invalid
+          timezone: "Asia/Shanghai",
+          customFutureField: { keep: true },
+        }),
+        "utf8",
+      );
+
+      const salvaged = await readValidatedConfigFile(path.join(root, "config.json")) as Record<string, unknown>;
+      expect(salvaged.engine).toBe("antigravity");
+      expect(salvaged.timezone).toBe("Asia/Shanghai");
+      expect(salvaged.verbosity).toBeUndefined(); // dropped
+      expect(salvaged.customFutureField).toEqual({ keep: true }); // passthrough kept
+
+      const config = await loadInstanceConfig(root);
+      expect(config.engine).toBe("antigravity");
+      expect(config.timezone).toBe("Asia/Shanghai");
+      expect(config.verbosity).toBe(1); // dropped, falls back to default
+      expect(errorSpy).toHaveBeenCalled();
+      expect(String(errorSpy.mock.calls[0]?.[0])).toContain("verbosity");
     } finally {
       await removeTempRoot(root);
     }

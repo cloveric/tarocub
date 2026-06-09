@@ -3354,10 +3354,12 @@ describe("runCli", () => {
     try {
       const accessPath = path.join(tempDir, ".cctb", "alpha", "access.json");
       const store = new AccessStore(accessPath);
-      await store.issuePairingCode({
+      // Real `now` so the pending pair stays unexpired: access mutations prune
+      // expired pending pairs against the wall clock.
+      const issued = await store.issuePairingCode({
         telegramUserId: 42,
         telegramChatId: 84,
-        now: new Date("2026-04-08T00:00:00Z"),
+        now: new Date(),
       });
 
       await runCli(["telegram", "access", "policy", "--instance", "alpha", "allowlist"], {
@@ -3401,8 +3403,8 @@ describe("runCli", () => {
         'Revoked chat 123 for instance "alpha".',
         'Allowed chat 123 for instance "alpha".',
       ]);
-      expect(messages[4]).toMatch(
-        /^Instance: alpha\nPolicy: allowlist\nMulti-chat: off\nPaired users: 0\nAllowlist: 123\nPending pairs: [A-Z2-9]{8} chat 84 expires 2026-04-08T00:05:00\.000Z$/,
+      expect(messages[4]).toBe(
+        `Instance: alpha\nPolicy: allowlist\nMulti-chat: off\nPaired users: 0\nAllowlist: 123\nPending pairs: ${issued.code} chat 84 expires ${issued.expiresAt}`,
       );
     } finally {
       await removeTempRoot(tempDir);

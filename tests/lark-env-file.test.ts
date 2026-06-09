@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -277,6 +277,37 @@ describe("Lark env files", () => {
       expect(target.IFIND_TOKEN).toBe("ifd-instance-own");
       expect(target.TAVILY_API_KEY).toBe("tav-shared");
       expect([...applied].sort()).toEqual(["IFIND_TOKEN", "TAVILY_API_KEY"]);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes lark.env atomically: correct content, no temp file left behind", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    const instanceName = "ccatomic";
+    const stateDir = path.join(tempDir, ".cctb", instanceName);
+    try {
+      // Existing file with an operator MCP token that the rewrite must preserve.
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "lark.env"), "IFIND_TOKEN=ifd-keep-me\n", "utf8");
+
+      const envPath = await writeLarkEnvFile({
+        USERPROFILE: tempDir,
+        CCTB_LARK_INSTANCE: instanceName,
+      }, {
+        appId: "cli_lark",
+        appSecret: "secret",
+      });
+
+      const saved = await readFile(envPath, "utf8");
+      expect(saved).toContain('LARK_APP_ID="cli_lark"');
+      expect(saved).toContain('LARK_APP_SECRET="secret"');
+      expect(saved).toContain('IFIND_TOKEN="ifd-keep-me"');
+
+      // Atomic-shaped write: the temp file is renamed away, never left next to lark.env.
+      const entries = await readdir(stateDir);
+      expect(entries.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+      expect(entries).toContain("lark.env");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

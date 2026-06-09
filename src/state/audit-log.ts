@@ -2,6 +2,7 @@ import { mkdir, open } from "node:fs/promises";
 import path from "node:path";
 
 import { AuditEventSchema, formatAuditSchemaError } from "./audit-log-schema.js";
+import { rotateOnAppendIfNeeded } from "./log-rotation.js";
 import { redactLogMetadata } from "./log-redaction.js";
 import { classifyFailure, type FailureCategory } from "../runtime/error-classification.js";
 import { redactSecrets } from "../runtime/secret-redaction.js";
@@ -74,6 +75,10 @@ export async function appendAuditEvent(stateDir: string, event: AuditEvent): Pro
     throw new Error(`invalid audit event: ${formatAuditSchemaError(result.error)}`);
   }
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  // Best-effort runtime rotation; a rotation failure must never drop the audit event.
+  await rotateOnAppendIfNeeded(filePath).catch((error: unknown) => {
+    console.warn("Failed to rotate audit log:", error instanceof Error ? error.message : error);
+  });
   const line = `${JSON.stringify(result.data)}\n`;
   const handle = await open(filePath, "a", 0o600);
   try {

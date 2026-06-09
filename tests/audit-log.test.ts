@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -9,6 +9,33 @@ import { classifyFailure } from "../src/runtime/error-classification.js";
 import { appendAuditEvent, getLatestFailure, parseAuditEvents, resolveAuditLogPath } from "../src/state/audit-log.js";
 
 describe("audit log", () => {
+  it("rotates an over-cap audit log from the append path during runtime", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+
+    try {
+      const filePath = resolveAuditLogPath(tempDir);
+      // Over the 10 MB default cap; the first append in this process must size-probe
+      // and rotate it instead of growing it forever (the 58 MB timeline.log case).
+      await writeFile(filePath, "x".repeat(10 * 1024 * 1024 + 1), "utf8");
+
+      await appendAuditEvent(tempDir, {
+        type: "access.allow",
+        instanceName: "default",
+        chatId: 123,
+        outcome: "success",
+      });
+
+      const rotated = await readFile(`${filePath}.1`, "utf8");
+      expect(rotated).toHaveLength(10 * 1024 * 1024 + 1);
+      const current = await readFile(filePath, "utf8");
+      const lines = current.trim().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({ type: "access.allow", chatId: 123 });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("appends jsonl events to the instance audit log", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 

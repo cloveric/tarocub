@@ -27,7 +27,7 @@ import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-e
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
 import { upgradeInstanceAgentInstructions } from "./commands/access.js";
 import { runSearchMcpServer } from "./search/search-mcp-server.js";
-import { applyLarkEnvPassthrough, loadLarkRuntimeEnv } from "./lark/env-file.js";
+import { applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir } from "./lark/env-file.js";
 import { runLarkService } from "./lark/service.js";
 
 function renderLifecycleError(error: unknown): string {
@@ -60,6 +60,13 @@ async function main(): Promise<void> {
       const passthroughKeys = await applyLarkEnvPassthrough(larkEnv);
       if (passthroughKeys.length > 0) {
         console.error(`[lark] lark.env passthrough → engine env: ${passthroughKeys.join(", ")}`);
+      }
+      // Mirror the Telegram service boot: rotate the structured instance logs so
+      // Lark instances don't grow audit/timeline logs without bound across restarts.
+      try {
+        await rotateInstanceStructuredLogs(resolveLarkStateDir(larkEnv));
+      } catch (error) {
+        console.error(`[lark] structured log rotation failed: ${renderLifecycleError(error)}`);
       }
       const abortController = new AbortController();
       const shutdownSigterm = () => abortController.abort("SIGTERM");

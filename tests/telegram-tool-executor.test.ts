@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -119,6 +119,124 @@ describe("executeTelegramTool", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("interprets an offset-less at time in the job timezone, not the host timezone", async () => {
+    const previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+        const result = await executeCronAddTool(
+          { at: "2030-01-15T09:00:00", timezone: "Asia/Shanghai", prompt: "morning brief" },
+          {
+            cronRuntime: { store, scheduler },
+            stateDir,
+            chatId: 123,
+            userId: 456,
+            chatType: "private",
+            locale: "en",
+          },
+        );
+
+        expect(result.ok).toBe(true);
+        const jobs = await store.list();
+        expect(jobs).toHaveLength(1);
+        // 09:00 Shanghai wall clock = 01:00 UTC; the old host-TZ parse would give 14:00 UTC.
+        expect(jobs[0]?.targetAt).toBe("2030-01-15T01:00:00.000Z");
+        expect(jobs[0]?.timezone).toBe("Asia/Shanghai");
+      });
+    } finally {
+      if (previousTz === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTz;
+      }
+    }
+  });
+
+  it("keeps explicit-offset at times anchored to their own offset", async () => {
+    const previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+        const result = await executeCronAddTool(
+          { at: "2030-01-15T09:00:00+08:00", timezone: "America/New_York", prompt: "offset wins" },
+          {
+            cronRuntime: { store, scheduler },
+            stateDir,
+            chatId: 123,
+            userId: 456,
+            chatType: "private",
+            locale: "en",
+          },
+        );
+
+        expect(result.ok).toBe(true);
+        const jobs = await store.list();
+        expect(jobs[0]?.targetAt).toBe("2030-01-15T01:00:00.000Z");
+      });
+    } finally {
+      if (previousTz === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTz;
+      }
+    }
+  });
+
+  it("falls back to the instance cron timezone for an offset-less at without a job timezone", async () => {
+    const previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+        await writeFile(
+          path.join(stateDir, "config.json"),
+          JSON.stringify({ timezone: "Asia/Shanghai" }),
+          "utf8",
+        );
+
+        const result = await executeCronAddTool(
+          { at: "2030-06-15T09:00:00", prompt: "instance tz" },
+          {
+            cronRuntime: { store, scheduler },
+            stateDir,
+            chatId: 123,
+            userId: 456,
+            chatType: "private",
+            locale: "en",
+          },
+        );
+
+        expect(result.ok).toBe(true);
+        const jobs = await store.list();
+        expect(jobs[0]?.targetAt).toBe("2030-06-15T01:00:00.000Z");
+      });
+    } finally {
+      if (previousTz === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTz;
+      }
+    }
+  });
+
+  it("still rejects impossible offset-less at component values", async () => {
+    await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+      const result = await executeCronAddTool(
+        { at: "2030-13-01T09:00:00", timezone: "Asia/Shanghai", prompt: "bad month" },
+        {
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          chatType: "private",
+          locale: "en",
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("invalid at timestamp");
+    });
   });
 
   it("renders direct cron.add execution errors as friendly reminder guidance", async () => {

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +7,30 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 import { appendTimelineEvent, parseTimelineEvents, resolveTimelineLogPath, summarizeTimelineEvents } from "../src/state/timeline-log.js";
 
 describe("timeline log", () => {
+  it("rotates an over-cap timeline log from the append path during runtime", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+
+    try {
+      const filePath = resolveTimelineLogPath(tempDir);
+      await writeFile(filePath, "x".repeat(10 * 1024 * 1024 + 1), "utf8");
+
+      await appendTimelineEvent(tempDir, {
+        type: "turn.completed",
+        channel: "telegram",
+        chatId: 7,
+        outcome: "success",
+      });
+
+      const rotated = await readFile(`${filePath}.1`, "utf8");
+      expect(rotated).toHaveLength(10 * 1024 * 1024 + 1);
+      const current = await readFile(filePath, "utf8");
+      const lines = current.trim().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({ type: "turn.completed", chatId: 7 });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
   it("redacts secrets recursively from metadata before writing", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
 

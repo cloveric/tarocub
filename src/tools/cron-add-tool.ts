@@ -4,10 +4,92 @@ import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import type { CronJobInput, CronJobRecord } from "../state/cron-store.js";
 import type { CronDeliveryMode, CronSessionMode } from "../state/cron-store-schema.js";
 import { formatInCronTimezone, normalizeCronTimezone } from "../state/cron-timezone.js";
+import { loadInstanceConfig } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import type { TelegramToolContext, TelegramToolResult } from "./telegram-tool-types.js";
 
 export type CronAddToolContext = TelegramToolContext;
+
+// Wall-clock ISO date-time WITHOUT an explicit offset/Z (optionally date-only).
+// `new Date()` would interpret these in the HOST process timezone, so reminders
+// fire hours off when the host TZ differs from the operator's cron timezone;
+// these are resolved in the job/instance timezone instead.
+const OFFSETLESS_AT_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/;
+
+function timezoneOffsetMs(date: Date, timezone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const pick = (type: string): number => Number(parts.find((part) => part.type === type)?.value ?? "0");
+  const zonedAsUtcMs = Date.UTC(pick("year"), pick("month") - 1, pick("day"), pick("hour"), pick("minute"), pick("second"));
+  return zonedAsUtcMs - Math.floor(date.getTime() / 1000) * 1000;
+}
+
+/** Resolves an offset-less wall-clock time to the instant it names in `timezone`.
+ * Returns null for impossible component values (e.g. month 13). */
+function wallClockInTimezoneToInstant(match: RegExpExecArray, timezone: string): Date | null {
+  const [, year, month, day, hour, minute, second, fraction] = match;
+  const components = {
+    year: Number(year),
+    month: Number(month),
+    day: Number(day),
+    hour: Number(hour ?? "0"),
+    minute: Number(minute ?? "0"),
+    second: Number(second ?? "0"),
+    millisecond: Number((fraction ?? "").padEnd(3, "0") || "0"),
+  };
+  const wallClockAsUtcMs = Date.UTC(
+    components.year,
+    components.month - 1,
+    components.day,
+    components.hour,
+    components.minute,
+    components.second,
+    components.millisecond,
+  );
+  const probe = new Date(wallClockAsUtcMs);
+  if (
+    probe.getUTCFullYear() !== components.year ||
+    probe.getUTCMonth() !== components.month - 1 ||
+    probe.getUTCDate() !== components.day ||
+    probe.getUTCHours() !== components.hour ||
+    probe.getUTCMinutes() !== components.minute
+  ) {
+    return null;
+  }
+  // Two passes converge across DST transitions: the first guess uses the zone
+  // offset at the UTC-interpreted wall clock, the second corrects it.
+  let instantMs = wallClockAsUtcMs;
+  for (let pass = 0; pass < 2; pass++) {
+    instantMs = wallClockAsUtcMs - timezoneOffsetMs(new Date(instantMs), timezone);
+  }
+  return new Date(instantMs);
+}
+
+async function resolveAtInstant(
+  rawAt: string,
+  jobTimezone: string | undefined,
+  stateDir: string,
+): Promise<Date> {
+  const offsetlessMatch = OFFSETLESS_AT_PATTERN.exec(rawAt.trim());
+  if (!offsetlessMatch) {
+    // Offset-carrying (or non-ISO) strings keep the existing Date parsing.
+    return new Date(rawAt);
+  }
+  // The job's own timezone wins; otherwise the instance cron timezone — the same
+  // default CronStore assigns to the stored record.
+  const timezone = jobTimezone ?? (await loadInstanceConfig(stateDir)).timezone;
+  const instant = wallClockInTimezoneToInstant(offsetlessMatch, timezone);
+  return instant ?? new Date(Number.NaN);
+}
 
 function cronExprFromRunAt(iso: string): string {
   const date = new Date(iso);
@@ -112,7 +194,7 @@ function parsePayload(payload: unknown): unknown {
   return typeof payload === "string" ? JSON.parse(payload) : payload;
 }
 
-function buildCronInput(
+async function buildCronInput(
   payload: unknown,
   context: Pick<
     CronAddToolContext,
@@ -126,8 +208,9 @@ function buildCronInput(
     | "larkThreadId"
     | "larkMessageId"
     | "locale"
+    | "stateDir"
   >,
-): CronJobInput {
+): Promise<CronJobInput> {
   const parsedPayload = parsePayload(payload);
   if (!parsedPayload || typeof parsedPayload !== "object" || Array.isArray(parsedPayload)) {
     throw new Error("cron-add payload must be a JSON object");
@@ -177,7 +260,7 @@ function buildCronInput(
   let targetAt: string;
   if (hasAt) {
     const rawAt = asOptionalString(body.at, "at", 120)!;
-    const date = new Date(rawAt);
+    const date = await resolveAtInstant(rawAt, timezone, context.stateDir);
     if (Number.isNaN(date.getTime())) {
       throw new Error(`invalid at timestamp: "${rawAt}"`);
     }
@@ -255,7 +338,7 @@ export async function executeCronAddTool(payload: unknown, context: CronAddToolC
     if (!context.cronRuntime) {
       throw new Error("cron subsystem is not running");
     }
-    const record = await context.cronRuntime.store.add(buildCronInput(payload, context));
+    const record = await context.cronRuntime.store.add(await buildCronInput(payload, context));
     await context.cronRuntime.scheduler.refresh();
     const message = renderAccepted(record, context.locale);
     await appendTimelineEventBestEffort(context.stateDir, {

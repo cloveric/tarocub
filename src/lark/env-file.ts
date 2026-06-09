@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { resolveDefaultLarkStateDir, resolveLarkInstanceName, type LarkRuntimeEnv } from "./config.js";
@@ -182,8 +183,45 @@ export async function writeLarkEnvFile(
     ...Object.entries(preservedExtras).map(([key, value]) => `${key}=${quoteEnvValue(value)}`),
     "",
   ];
-  await writeFile(envPath, lines.join("\n"), { encoding: "utf8", mode: 0o600 });
+  // lark.env is regenerated on EVERY service start and carries LARK_APP_SECRET plus
+  // operator MCP tokens; a crash mid-write would truncate it and the extras-preserving
+  // re-read above would then permanently lose those tokens. Write atomically.
+  await writeFileAtomic(envPath, lines.join("\n"), 0o600);
   return envPath;
+}
+
+/** tmp file + fsync + atomic rename (the JsonStore.write pattern), so a crash mid-write
+ * can never leave a truncated file at the target path. */
+async function writeFileAtomic(filePath: string, content: string, mode: number): Promise<void> {
+  const directoryPath = path.dirname(filePath);
+  const tmpPath = path.join(directoryPath, `${path.basename(filePath)}.${randomUUID()}.tmp`);
+  await writeFile(tmpPath, content, { encoding: "utf8", mode });
+  try {
+    const tmpHandle = await open(tmpPath, "r");
+    try {
+      await tmpHandle.sync();
+    } finally {
+      await tmpHandle.close();
+    }
+    await rename(tmpPath, filePath);
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => {});
+    throw error;
+  }
+  try {
+    const dirHandle = await open(directoryPath, "r");
+    try {
+      await dirHandle.sync();
+    } finally {
+      await dirHandle.close();
+    }
+  } catch (error) {
+    // Windows cannot open/fsync directories; the rename itself is already atomic.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EPERM" && code !== "EINVAL" && code !== "ENOTSUP" && code !== "EISDIR" && code !== "EACCES") {
+      throw error;
+    }
+  }
 }
 
 function parseLarkEnvFile(content: string): Partial<LarkRuntimeEnv> {

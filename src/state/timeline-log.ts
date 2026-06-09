@@ -2,6 +2,7 @@ import { mkdir, open } from "node:fs/promises";
 import path from "node:path";
 
 import { TimelineEventSchema, formatTimelineSchemaError } from "./timeline-log-schema.js";
+import { rotateOnAppendIfNeeded } from "./log-rotation.js";
 import { redactLogMetadata } from "./log-redaction.js";
 import { redactSecrets } from "../runtime/secret-redaction.js";
 
@@ -99,6 +100,10 @@ export async function appendTimelineEvent(stateDir: string, event: TimelineEvent
   }
 
   await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  // Best-effort runtime rotation; a rotation failure must never drop the timeline event.
+  await rotateOnAppendIfNeeded(filePath).catch((error: unknown) => {
+    console.warn("Failed to rotate timeline log:", error instanceof Error ? error.message : error);
+  });
   const line = `${JSON.stringify(result.data)}\n`;
   const handle = await open(filePath, "a", 0o600);
   try {

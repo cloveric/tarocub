@@ -1,5 +1,6 @@
-import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { z } from "zod";
 
 import {
   ConfigFileSchema,
@@ -221,10 +222,36 @@ export async function readValidatedConfigFile(configPath: string): Promise<Confi
 
   const result = ConfigFileSchema.safeParse(parsed);
   if (!result.success) {
+    // One invalid field must not discard the WHOLE config (engine would silently
+    // flip to codex, the group allowlist would empty, ...). Salvage field by field:
+    // keep every known field that validates on its own, drop only the bad ones.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      console.error(
+        `Malformed ${configPath} (${formatSchemaError(result.error)}); running on defaults until this is repaired.`,
+      );
+      return {};
+    }
+    const shape = ConfigFileSchema.shape as Record<string, z.ZodTypeAny | undefined>;
+    const salvaged: Record<string, unknown> = {};
+    const droppedFields: string[] = [];
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const fieldSchema = shape[key];
+      if (!fieldSchema) {
+        // Unknown keys pass through, matching the schema's passthrough behavior.
+        salvaged[key] = value;
+        continue;
+      }
+      const fieldResult = fieldSchema.safeParse(value);
+      if (fieldResult.success) {
+        salvaged[key] = fieldResult.data;
+      } else {
+        droppedFields.push(key);
+      }
+    }
     console.error(
-      `Malformed ${configPath} (${formatSchemaError(result.error)}); running on defaults until this is repaired.`,
+      `Malformed ${configPath} (${formatSchemaError(result.error)}); dropped invalid field(s) [${droppedFields.join(", ")}] and kept the rest until this is repaired.`,
     );
-    return {};
+    return salvaged as ConfigFile;
   }
 
   return result.data;
@@ -282,6 +309,14 @@ export async function updateInstanceConfig(
     const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", "utf8");
     try {
+      // fsync before rename (matching JsonStore.write) so a crash right after the
+      // rename can't leave an empty/truncated config.json behind.
+      const tempHandle = await open(tempPath, "r");
+      try {
+        await tempHandle.sync();
+      } finally {
+        await tempHandle.close();
+      }
       await rename(tempPath, configPath);
     } catch (error) {
       await unlink(tempPath).catch(() => {});

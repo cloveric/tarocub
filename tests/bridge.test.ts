@@ -1051,7 +1051,9 @@ describe("Bridge", () => {
             code: "ABC123",
             telegramUserId: 42,
             telegramChatId: 84,
-            expiresAt: "2026-04-08T00:05:00.000Z",
+            // Must be unexpired relative to the real clock: an EXPIRED pending pair
+            // no longer holds the single-chat lock.
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
           },
         ],
       }),

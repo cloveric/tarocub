@@ -74,6 +74,29 @@ export async function rotateIfNeeded(filePath: string, options: RotateOptions = 
   return true;
 }
 
+export const APPEND_ROTATION_PROBE_INTERVAL = 200;
+
+const appendCountsByPath = new Map<string, number>();
+
+/**
+ * Cheap size-probe rotation for append-by-path logs (audit/timeline). Stats the file
+ * on the FIRST append this process makes and every Nth append thereafter, so a
+ * long-running service rotates an over-cap log during runtime instead of only at the
+ * next restart. The overshoot beyond maxBytes is bounded by ~N appended lines.
+ */
+export async function rotateOnAppendIfNeeded(
+  filePath: string,
+  options: RotateOptions = DEFAULT_ROTATE_OPTIONS,
+  probeInterval: number = APPEND_ROTATION_PROBE_INTERVAL,
+): Promise<boolean> {
+  const count = (appendCountsByPath.get(filePath) ?? 0) + 1;
+  appendCountsByPath.set(filePath, count);
+  if (count !== 1 && count % probeInterval !== 0) {
+    return false;
+  }
+  return rotateIfNeeded(filePath, options);
+}
+
 const STRUCTURED_INSTANCE_LOG_FILES = [
   "audit.log.jsonl",
   "timeline.log.jsonl",

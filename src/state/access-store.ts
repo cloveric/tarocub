@@ -34,15 +34,36 @@ export function findConflictingAuthorizedChatId(state: AccessState, chatId: numb
   return conflict.done ? null : conflict.value;
 }
 
-export function findConflictingLockedChatId(state: AccessState, chatId: number): number | null {
+function isExpiredPendingPair(pair: PendingPair, now: Date): boolean {
+  return new Date(pair.expiresAt).getTime() <= now.getTime();
+}
+
+function activePendingPairs(state: AccessState, now: Date): PendingPair[] {
+  return state.pendingPairs.filter((pair) => !isExpiredPendingPair(pair, now));
+}
+
+/** Drops expired pending pairs in place; returns true when anything was removed. */
+function pruneExpiredPendingPairs(state: AccessState, now: Date): boolean {
+  const active = activePendingPairs(state, now);
+  if (active.length === state.pendingPairs.length) {
+    return false;
+  }
+  state.pendingPairs = active;
+  return true;
+}
+
+export function findConflictingLockedChatId(state: AccessState, chatId: number, now: Date = new Date()): number | null {
   if (state.multiChat) {
     return null;
   }
 
+  // Expired pending pairs must not hold the single-chat lock: the read path
+  // (bridge access check) returns "locked" before any code-issuing mutation can
+  // prune them, so counting them here would lock the instance forever.
   const lockedChatIds = new Set<number>([
     ...state.allowlist,
     ...state.pairedUsers.map((entry) => entry.telegramChatId),
-    ...state.pendingPairs.map((entry) => entry.telegramChatId),
+    ...activePendingPairs(state, now).map((entry) => entry.telegramChatId),
   ]);
   lockedChatIds.delete(chatId);
 
@@ -50,11 +71,11 @@ export function findConflictingLockedChatId(state: AccessState, chatId: number):
   return conflict.done ? null : conflict.value;
 }
 
-function countAuthorizedChats(state: AccessState): number {
+function countAuthorizedChats(state: AccessState, now: Date): number {
   return new Set<number>([
     ...state.allowlist,
     ...state.pairedUsers.map((entry) => entry.telegramChatId),
-    ...state.pendingPairs.map((entry) => entry.telegramChatId),
+    ...activePendingPairs(state, now).map((entry) => entry.telegramChatId),
   ]).size;
 }
 
@@ -113,6 +134,7 @@ export class AccessStore {
   async setPolicy(policy: AccessPolicy): Promise<void> {
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
+      pruneExpiredPendingPairs(state, new Date());
       state.policy = policy;
       await this.store.write(state);
     });
@@ -121,7 +143,9 @@ export class AccessStore {
   async setMultiChat(enabled: boolean): Promise<void> {
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
-      if (!enabled && countAuthorizedChats(state) > 1) {
+      const now = new Date();
+      pruneExpiredPendingPairs(state, now);
+      if (!enabled && countAuthorizedChats(state, now) > 1) {
         throw new Error("cannot disable multi-chat while multiple chats are authorized or pending pairing");
       }
       state.multiChat = enabled;
@@ -132,6 +156,7 @@ export class AccessStore {
   async allowChat(chatId: number): Promise<void> {
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
+      pruneExpiredPendingPairs(state, new Date());
       if (findConflictingAuthorizedChatId(state, chatId) !== null) {
         throw new Error("instance is locked to another chat until multi-chat is enabled");
       }
@@ -143,6 +168,7 @@ export class AccessStore {
   async revokeChat(chatId: number): Promise<void> {
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
+      pruneExpiredPendingPairs(state, new Date());
       state.allowlist = state.allowlist.filter((entry) => entry !== chatId);
       state.pairedUsers = state.pairedUsers.filter((entry) => entry.telegramChatId !== chatId);
       state.pendingPairs = state.pendingPairs.filter((entry) => entry.telegramChatId !== chatId);
@@ -153,6 +179,7 @@ export class AccessStore {
   async allowUser(userId: number): Promise<void> {
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
+      pruneExpiredPendingPairs(state, new Date());
       state.allowlist = [...new Set([...state.allowlist, userId])];
       await this.store.write(state);
     });
@@ -161,6 +188,7 @@ export class AccessStore {
   async revokeUser(userId: number): Promise<void> {
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
+      pruneExpiredPendingPairs(state, new Date());
       state.allowlist = state.allowlist.filter((entry) => entry !== userId);
       state.pairedUsers = state.pairedUsers.filter((entry) => entry.telegramUserId !== userId);
       state.pendingPairs = state.pendingPairs.filter((entry) => entry.telegramUserId !== userId);
@@ -202,16 +230,12 @@ export class AccessStore {
     let issued!: PendingPair;
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
-      const nowTime = now.getTime();
-      state.pendingPairs = state.pendingPairs.filter(
-        (pair) => new Date(pair.expiresAt).getTime() > nowTime,
-      );
+      pruneExpiredPendingPairs(state, now);
 
       const reusablePendingPair = state.pendingPairs.find(
         (pair) =>
           pair.telegramUserId === telegramUserId &&
-          pair.telegramChatId === telegramChatId &&
-          new Date(pair.expiresAt).getTime() > nowTime,
+          pair.telegramChatId === telegramChatId,
       );
 
       if (reusablePendingPair) {
@@ -220,7 +244,7 @@ export class AccessStore {
         return;
       }
 
-      if (findConflictingLockedChatId(state, telegramChatId) !== null) {
+      if (findConflictingLockedChatId(state, telegramChatId, now) !== null) {
         throw new Error("instance is locked to another chat until multi-chat is enabled");
       }
 
@@ -250,15 +274,14 @@ export class AccessStore {
     let pairedUser: PairedUser | null = null;
     await this.enqueueWrite(async () => {
       const state = await this.loadForWrite();
+      const pruned = pruneExpiredPendingPairs(state, now);
       const pendingPair = state.pendingPairs.find((pair) => pair.code === code);
 
       if (!pendingPair) {
-        return;
-      }
-
-      if (new Date(pendingPair.expiresAt).getTime() <= now.getTime()) {
-        state.pendingPairs = state.pendingPairs.filter((pair) => pair.code !== code);
-        await this.store.write(state);
+        // Persist the prune so an expired (or unknown) code's record doesn't linger.
+        if (pruned) {
+          await this.store.write(state);
+        }
         return;
       }
 

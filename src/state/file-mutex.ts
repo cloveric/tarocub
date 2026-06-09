@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 interface LockOwnerRecord {
@@ -7,10 +8,17 @@ interface LockOwnerRecord {
   acquiredAt: string;
   /** Unique per acquisition, used so release only removes the lock it still holds. */
   token?: string;
+  /** Hostname of the acquirer; a pid liveness probe is only meaningful on the same host. */
+  host?: string;
 }
 
 const inProcessQueues = new Map<string, Promise<void>>();
 const DEFAULT_STALE_LOCK_MS = 30_000;
+// A lock whose owner pid is verifiably ALIVE is only age-stolen at a much larger
+// bound than staleLockMs: a live-but-slow owner (host sleep, long GC pause) must
+// not have its lock ripped away at 30s, but a live-yet-wedged process still can't
+// hold the mutex forever.
+const LIVE_OWNER_STALE_MULTIPLIER = 20;
 
 interface FileMutexOptions {
   staleLockMs?: number;
@@ -54,6 +62,46 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Race-safe stale-lock removal. Multiple waiters can judge the SAME lock stale from
+ * the same old owner.json; if each simply rm'd the lock dir, the slower one would
+ * destroy the faster one's freshly re-acquired LIVE lock and both would enter the
+ * critical section. Rename is atomic: only the rename winner proceeds to delete the
+ * trash dir; every loser fails (the path is gone) and goes back to waiting. After the
+ * rename, the dir's owner.json is compared against the record that was judged stale
+ * (tokens are unique per acquisition) so a fresh lock re-created at the same path in
+ * the judge→rename window is restored instead of destroyed.
+ */
+async function removeStaleLock(lockPath: string, judgedOwnerRaw: string | null): Promise<boolean> {
+  const trashPath = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
+  try {
+    await rename(lockPath, trashPath);
+  } catch {
+    // ENOENT: another waiter won the rename. Windows can also report EPERM/EACCES/
+    // EBUSY for a concurrently-touched dir. Either way: not recovered, keep waiting.
+    return false;
+  }
+  let renamedOwnerRaw: string | null = null;
+  try {
+    renamedOwnerRaw = await readFile(`${trashPath}/owner.json`, "utf8");
+  } catch {
+    renamedOwnerRaw = null;
+  }
+  if (renamedOwnerRaw !== judgedOwnerRaw) {
+    // We renamed a LIVE lock that replaced the stale one — put it back. If a third
+    // waiter mkdir'd the path in the meantime the restore fails; discard the trash
+    // then (release() tolerates the loss via its token check).
+    try {
+      await rename(trashPath, lockPath);
+    } catch {
+      await rm(trashPath, { recursive: true, force: true }).catch(() => {});
+    }
+    return false;
+  }
+  await rm(trashPath, { recursive: true, force: true }).catch(() => {});
+  return true;
+}
+
 async function tryRecoverStaleLock(lockPath: string, staleLockMs: number): Promise<boolean> {
   const ownerPath = `${lockPath}/owner.json`;
   try {
@@ -70,8 +118,7 @@ async function tryRecoverStaleLock(lockPath: string, staleLockMs: number): Promi
     const ageMs = Date.now() - lockStats.mtimeMs;
     if (ownerRaw === null) {
       if (ageMs > staleLockMs) {
-        await rm(lockPath, { recursive: true, force: true });
-        return true;
+        return removeStaleLock(lockPath, ownerRaw);
       }
       return false;
     }
@@ -80,7 +127,11 @@ async function tryRecoverStaleLock(lockPath: string, staleLockMs: number): Promi
     try {
       const parsed = JSON.parse(ownerRaw) as Partial<LockOwnerRecord>;
       if (typeof parsed.pid === "number" && typeof parsed.acquiredAt === "string") {
-        owner = { pid: parsed.pid, acquiredAt: parsed.acquiredAt };
+        owner = {
+          pid: parsed.pid,
+          acquiredAt: parsed.acquiredAt,
+          ...(typeof parsed.host === "string" ? { host: parsed.host } : {}),
+        };
       }
     } catch {
       owner = null;
@@ -88,17 +139,31 @@ async function tryRecoverStaleLock(lockPath: string, staleLockMs: number): Promi
 
     if (!owner) {
       if (ageMs > staleLockMs) {
-        await rm(lockPath, { recursive: true, force: true });
-        return true;
+        return removeStaleLock(lockPath, ownerRaw);
       }
       return false;
     }
 
-    const ownerDead = !isProcessAlive(owner.pid);
+    // A pid probe is only meaningful for a same-host owner. Old records carry no
+    // host; assume same host (locks live in the local state dir).
+    const pidVerifiable = owner.host === undefined || owner.host === os.hostname();
+    let ownerAlive: boolean | null = null;
+    if (pidVerifiable) {
+      try {
+        ownerAlive = isProcessAlive(owner.pid);
+      } catch {
+        ownerAlive = null;
+      }
+    }
+    if (ownerAlive === false) {
+      return removeStaleLock(lockPath, ownerRaw);
+    }
     const ownerAgeMs = Date.now() - new Date(owner.acquiredAt).getTime();
-    if (ownerDead || ownerAgeMs > staleLockMs) {
-      await rm(lockPath, { recursive: true, force: true });
-      return true;
+    // Verifiably-alive owner: age-steal only at the much larger bound. Dead or
+    // unverifiable owner: the plain staleLockMs age bound applies.
+    const ageStealMs = ownerAlive === true ? staleLockMs * LIVE_OWNER_STALE_MULTIPLIER : staleLockMs;
+    if (ownerAgeMs > ageStealMs) {
+      return removeStaleLock(lockPath, ownerRaw);
     }
     return false;
   } catch (error) {
@@ -124,6 +189,7 @@ async function acquireFileMutex(
         pid: process.pid,
         acquiredAt: new Date().toISOString(),
         token,
+        host: os.hostname(),
       }), { encoding: "utf8", mode: 0o600 });
       return token;
     } catch (error) {

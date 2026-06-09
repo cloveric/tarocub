@@ -16,7 +16,7 @@ vi.mock("node:crypto", async (importOriginal) => {
   };
 });
 
-import { AccessStore } from "../src/state/access-store.js";
+import { AccessStore, findConflictingLockedChatId } from "../src/state/access-store.js";
 
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
@@ -414,15 +414,143 @@ describe("AccessStore", () => {
 
       await store.setMultiChat(true);
       await store.allowChat(111);
+      // Real `now` so the pending pair is genuinely unexpired when setMultiChat
+      // prunes expired pairs against the wall clock.
       await store.issuePairingCode({
         telegramUserId: 20,
         telegramChatId: 222,
-        now: new Date("2026-04-08T00:02:00Z"),
+        now: new Date(),
       });
 
       await expect(store.setMultiChat(false)).rejects.toThrow(
         "cannot disable multi-chat while multiple chats are authorized or pending pairing",
       );
+    } finally {
+      await removeTempRoot(dir);
+    }
+  });
+
+  it("does not let an expired pending pair lock the instance against a new chat", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    try {
+      setRandomIntSequence([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
+      const store = new AccessStore(path.join(dir, "access.json"));
+
+      await store.issuePairingCode({
+        telegramUserId: 10,
+        telegramChatId: 111,
+        now: new Date("2026-04-08T00:00:00Z"),
+      });
+
+      // 6 minutes later the 5-minute pair for chat 111 is expired; a different chat
+      // must be able to start pairing (previously locked out forever).
+      const issued = await store.issuePairingCode({
+        telegramUserId: 20,
+        telegramChatId: 222,
+        now: new Date("2026-04-08T00:06:00Z"),
+      });
+
+      expect(issued.telegramChatId).toBe(222);
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        pendingPairs: [
+          expect.objectContaining({
+            code: issued.code,
+            telegramChatId: 222,
+            telegramUserId: 20,
+          }),
+        ],
+      }));
+    } finally {
+      await removeTempRoot(dir);
+    }
+  });
+
+  it("ignores expired pending pairs in the locked-chat conflict check but honors unexpired ones", async () => {
+    const state = {
+      multiChat: false,
+      policy: "pairing" as const,
+      pairedUsers: [],
+      allowlist: [],
+      pendingPairs: [
+        {
+          code: "AAAAAAAA",
+          telegramUserId: 10,
+          telegramChatId: 111,
+          expiresAt: "2026-04-08T00:05:00.000Z",
+        },
+      ],
+    };
+
+    expect(findConflictingLockedChatId(state, 222, new Date("2026-04-08T00:06:00Z"))).toBeNull();
+    expect(findConflictingLockedChatId(state, 222, new Date("2026-04-08T00:04:00Z"))).toBe(111);
+  });
+
+  it("prunes expired pending pairs from disk on unrelated mutations", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(dir, "access.json");
+    try {
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          multiChat: true,
+          policy: "pairing",
+          pairedUsers: [],
+          allowlist: [],
+          pendingPairs: [
+            {
+              code: "AAAAAAAA",
+              telegramUserId: 10,
+              telegramChatId: 111,
+              expiresAt: "2020-01-01T00:00:00.000Z",
+            },
+          ],
+        }, null, 2) + "\n",
+        "utf8",
+      );
+
+      const store = new AccessStore(filePath);
+      await store.allowChat(333);
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        allowlist: [333],
+        pendingPairs: [],
+      }));
+    } finally {
+      await removeTempRoot(dir);
+    }
+  });
+
+  it("allows disabling multi-chat once the other chat's pending pair has expired", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(dir, "access.json");
+    try {
+      await writeFile(
+        filePath,
+        JSON.stringify({
+          multiChat: true,
+          policy: "pairing",
+          pairedUsers: [],
+          allowlist: [111],
+          pendingPairs: [
+            {
+              code: "AAAAAAAA",
+              telegramUserId: 20,
+              telegramChatId: 222,
+              expiresAt: "2020-01-01T00:00:00.000Z",
+            },
+          ],
+        }, null, 2) + "\n",
+        "utf8",
+      );
+
+      const store = new AccessStore(filePath);
+      await store.setMultiChat(false);
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        multiChat: false,
+        allowlist: [111],
+        pendingPairs: [],
+      }));
     } finally {
       await removeTempRoot(dir);
     }
