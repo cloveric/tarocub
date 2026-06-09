@@ -26,6 +26,9 @@ export function renderLarkUserFacingError(
     if (category === "engine-cli") {
       return "Error: engine runtime failed. Restart the instance and retry.";
     }
+    if (category === "engine-backend") {
+      return "Error: Codex lost its backend connection (reconnect attempts exhausted). Please retry.";
+    }
 
     switch (phase) {
       case "prepare":
@@ -54,6 +57,9 @@ export function renderLarkUserFacingError(
   }
   if (category === "engine-cli") {
     return "错误：引擎运行失败，请重启实例后重试。";
+  }
+  if (category === "engine-backend") {
+    return "错误：Codex 连接后端失败（重连耗尽），请重试。";
   }
 
   switch (phase) {

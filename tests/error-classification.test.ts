@@ -6,6 +6,7 @@ import {
   getBusErrorSemantics,
   isStaleSessionError,
 } from "../src/runtime/error-classification.js";
+import { renderLarkUserFacingError } from "../src/lark/errors.js";
 
 describe("classifyFailure auth detection", () => {
   it("classifies Claude 401 authentication errors as auth", () => {
@@ -45,6 +46,23 @@ describe("classifyFailure specificity", () => {
     expect(classifyFailure(new Error("claude cli failed"))).toBe("engine-cli");
     expect(classifyFailure(new Error("engine failed during continuation"))).toBe("engine-cli");
     expect(classifyFailure(new Error("claude exited with code 1"))).toBe("engine-cli");
+  });
+
+  it("classifies Codex backend reconnect-exhaustion as engine-backend, distinct from engine-cli", () => {
+    expect(classifyFailure(new Error("Reconnecting... 5/5"))).toBe("engine-backend");
+    expect(classifyFailure(new Error("codex stream error\nReconnecting... 4/5"))).toBe("engine-backend");
+    // a process/startup failure is still engine-cli, not engine-backend
+    expect(classifyFailure(new Error("Codex runtime process failed to start"))).not.toBe("engine-backend");
+    // a bare reconnect mention without an N/M attempt counter is NOT this category
+    expect(classifyFailure(new Error("the websocket is reconnecting"))).toBe("unknown");
+  });
+
+  it("renders a clear retry message for engine-backend instead of the generic run-failed one", () => {
+    const err = new Error("Reconnecting... 5/5");
+    expect(renderLarkUserFacingError(err, "engine", "zh")).toContain("Codex 连接后端失败");
+    expect(renderLarkUserFacingError(err, "engine", "zh")).toContain("请重试");
+    expect(renderLarkUserFacingError(err, "engine", "zh")).not.toContain("本轮运行失败");
+    expect(renderLarkUserFacingError(err, "engine", "en")).toContain("backend connection");
   });
 
   it("does not treat generic archive mentions as file-workflow failures", () => {
@@ -93,6 +111,7 @@ describe("getBusErrorSemantics", () => {
     expect(getBusErrorSemantics("auth")).toEqual({ code: "auth", retryable: false });
     expect(getBusErrorSemantics("telegram-conflict")).toEqual({ code: "telegram_conflict", retryable: true });
     expect(getBusErrorSemantics("workflow-state")).toEqual({ code: "workflow_state", retryable: false });
+    expect(getBusErrorSemantics("engine-backend")).toEqual({ code: "engine_backend", retryable: true });
     expect(getBusErrorSemantics("unknown")).toEqual({ code: "unknown", retryable: true });
   });
 });

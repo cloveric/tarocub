@@ -6,6 +6,7 @@ export type FailureCategory =
   | "telegram-conflict"
   | "telegram-delivery"
   | "engine-cli"
+  | "engine-backend"
   | "file-workflow"
   | "workflow-state"
   | "session-state"
@@ -97,6 +98,15 @@ export function classifyFailure(error: unknown): FailureCategory {
     return "file-workflow";
   }
 
+  // The Codex engine reconnects to its model backend and surfaces
+  // "Reconnecting... N/M" on its stderr; when those attempts are exhausted the
+  // turn fails. This is a transient backend-connectivity fault (retry usually
+  // works), distinct from a process/startup engine-cli failure — so it gets its
+  // own category and a clearer "retry" message instead of the generic one.
+  if (/reconnecting\D{0,8}\d+\s*\/\s*\d+/.test(text)) {
+    return "engine-backend";
+  }
+
   if (hasEngineCliSignal(text)) {
     return "engine-cli";
   }
@@ -161,6 +171,8 @@ export function getBusErrorSemantics(failureCategory: FailureCategory): BusError
       return { code: "telegram_delivery", retryable: true };
     case "engine-cli":
       return { code: "engine_cli", retryable: true };
+    case "engine-backend":
+      return { code: "engine_backend", retryable: true };
     case "file-workflow":
       return { code: "file_workflow", retryable: false };
     case "workflow-state":
