@@ -130,6 +130,7 @@ node dist/src/index.js lark doctor
 |---|---|
 | **Real CLI engines, not a fake chat backend** | Codex, Claude Code, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
 | **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, and Antigravity conversations can be attached from chat and detached later. |
+| **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Want strict sequencing instead? `/q <message>` always queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
 | **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources can be downloaded, locally transcribed, and passed into the engine as normal task context. |
@@ -150,6 +151,7 @@ node dist/src/index.js lark doctor
 | Voice, audio, and video ASR | Yes | Yes | Inspect/debug |
 | File and image delivery | Yes | Yes | `telegram send` / `lark send` |
 | Stop and approvals | Inline buttons | Interactive cards | Service controls |
+| Mid-turn steering + `/q` queue escape | Planned | Yes (Codex engine) | Native in Codex CLI |
 | Plan Mode-style choices | Limited buttons | Rich choice cards | Tool/debug path |
 | Cron reminders and agent jobs | Yes | Yes | Manage/list/run |
 | Board durable tasks | Yes | Yes | Inspect/export |
@@ -196,7 +198,7 @@ node dist/src/index.js lark timeline 20
 node dist/src/index.js lark dashboard
 ```
 
-Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/ws`, `/newgroup`, `/newtopic`, and `/continue`.
+Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/q`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/ws`, `/newgroup`, `/newtopic`, and `/continue`.
 
 Lark group/session semantics:
 

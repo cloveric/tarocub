@@ -38,7 +38,8 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/resume conversation <conversation-id>` | Bind an Antigravity conversation explicitly. | Telegram, Lark |
 | `/detach` | Detach the current resumed Claude session, Codex thread, or Antigravity conversation. | Telegram, Lark |
 | `/reset` | Reset the current chat/session binding. | Telegram, Lark |
-| `/stop` | Stop the current running or queued task. | Telegram, Lark |
+| `/stop` | Stop the current running task (cancel a queued task from its queue card). | Telegram, Lark |
+| `/q <message>` | Force the message to run as its own queued turn. Without it, plain text sent while a Codex turn is running is steered into that turn. | Lark |
 | `/continue` | Continue the latest waiting archive analysis. | Telegram, Lark |
 | `/ws list\|save\|use\|remove` | Manage saved Lark workspace directories; `/ws use` resets the current Lark session binding to avoid stale context. | Lark |
 

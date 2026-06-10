@@ -98,7 +98,7 @@ export LARK_APP_SECRET="..."
 当前 Lark 通道支持：
 
 - p2p/group 消息进入同一条 `Bridge.handleAuthorizedMessage` 路径，并复用 Telegram 侧同一套 pairing/allowlist 访问控制；
-- 基础聊天命令：`/help`、`/status`、`/usage`、`/model`、`/effort`、`/fast`、`/engine`、`/yolo`、`/goal`、`/btw`、`/ask`、`/reset`、`/detach`、Claude/Antigravity `/resume` 扫描选择、显式 `/resume thread ...` / `/resume conversation ...`、`/cron`、`/board`、`/mini`、`/fan`、`/chain`、`/verify`、`/stop`；
+- 基础聊天命令：`/help`、`/status`、`/usage`、`/model`、`/effort`、`/fast`、`/engine`、`/yolo`、`/goal`、`/btw`、`/ask`、`/reset`、`/detach`、Claude/Antigravity `/resume` 扫描选择、显式 `/resume thread ...` / `/resume conversation ...`、`/cron`、`/board`、`/mini`、`/fan`、`/chain`、`/verify`、`/stop`、Lark `/q`（运行中强制排队）；
 - 用 `conversationKey` 隔离话题/thread；
 - streaming interactive card 和 Card 2.0 callback 停止按钮；
 - 引擎权限请求审批卡片，点击审批前会按操作者重新走 bridge 访问控制；
@@ -152,6 +152,7 @@ Lark 专用 tool tag 沿用 Telegram side-channel 的紧凑 JSON 写法：
 
 ## 近期亮点
 
+- **v0.1.149–v0.1.151** — Codex 任务运行中可“边跑边补话”：纯文本直接注入当前 turn（`turn/steer`，OK 表情确认），`/q <消息>` 强制独立排队；`/model fable` 接入 Claude Fable 5；一轮 19 项审计修复（`/stop` 真正中断 Codex、配对码过期锁修复、Lark 日志轮转等）。
 - **v4.6.53** — 收紧飞书/Lark 产品边界：Telegram `service --all` 不再误扫 `~/.cctb/lark`，Lark 临时附件 turn 后清理，`lark send` 必须显式 `--chat`，Docs 默认用 bot 身份创建，doctor 复用统一 secret 脱敏。
 - **v4.6.51–v4.6.52** — 补齐 Lark 主要 parity：直接最终回复、Lark 路由 `/cron`、`/board`、`/mini`、`/fan`、`/chain`、`/verify`、`/goal`，以及 service/audit/dashboard aliases 和 Telegram Markdown 投递加固。
 - **v4.6.42–v4.6.46** — 新增 QR `lark wizard`、`lark provision`、domain-safe PersonalAgent setup、权限/订阅检查，以及飞书云文档评论 @bot 后 in-thread 回复。
