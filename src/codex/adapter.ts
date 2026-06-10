@@ -133,6 +133,11 @@ export interface CodexAdapter {
   supportsTurnScopedEnv?: boolean;
   createSession(chatId: number): Promise<CodexSessionHandle>;
   sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse>;
+  // Inject additional user input into this session's currently running turn
+  // (Codex app-server turn/steer). True only when the engine accepted the
+  // steer; false means no active/addressable turn — the caller must fall back
+  // to delivering the input as a normal queued message so it is never lost.
+  steerActiveTurn?(sessionId: string, input: { text: string }): Promise<boolean>;
   validateExternalSession?(sessionId: string): Promise<void>;
   getThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<CodexThreadGoalResponse>;
   setThreadGoal?(sessionId: string, input: {

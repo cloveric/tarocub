@@ -455,13 +455,49 @@ async function runAcceptedLarkMessage(
     }
   };
 
-  if (shouldBatchLarkMessage(input.runtime, normalized, commandText)) {
-    return await scheduleBatchedLarkTurn(input, normalized, messageLocale, handleConversationQueueWait);
+  const queueEscape = parseLarkQueueEscape(commandText);
+  if (queueEscape?.kind === "bare") {
+    await input.channel.send(normalized.chatId, {
+      text: messageLocale === "zh"
+        ? "用法：/q <消息> — 强制作为独立任务排队执行（不注入当前正在运行的任务）。"
+        : "Usage: /q <message> — force the message to run as its own queued turn (never steered into the running one).",
+    }, {
+      replyTo: normalized.messageId,
+      replyInThread: Boolean(normalized.threadId),
+    });
+    return true;
+  }
+  // /q strips to its payload so the engine sees clean text; the flag below
+  // keeps the steer path off so the message always queues as its own turn.
+  const effectiveNormalized = queueEscape && normalized.text.includes(commandText)
+    ? { ...normalized, text: normalized.text.replace(commandText, queueEscape.payload) }
+    : normalized;
+  const effectiveCommandText = queueEscape ? queueEscape.payload : commandText;
+
+  if (shouldBatchLarkMessage(input.runtime, effectiveNormalized, effectiveCommandText)) {
+    return await scheduleBatchedLarkTurn(input, effectiveNormalized, messageLocale, handleConversationQueueWait);
   }
 
-  preemptActiveLarkTurnIfEnabled(input, normalized, commandText);
+  if (!queueEscape && await trySteerActiveLarkTurn(input, effectiveNormalized, effectiveCommandText, messageLocale)) {
+    return true;
+  }
 
-  return await enqueueLarkTurn(input, normalized, messageLocale, handleConversationQueueWait);
+  // Pass the ORIGINAL command text: a /q message stays slash-shaped here so an
+  // explicit preempt policy does not abort the turn the user asked to queue behind.
+  preemptActiveLarkTurnIfEnabled(input, effectiveNormalized, commandText);
+
+  return await enqueueLarkTurn(input, effectiveNormalized, messageLocale, handleConversationQueueWait);
+}
+
+const LARK_QUEUE_ESCAPE_RE = /^\/(?:q|queue)(?:\s+([\s\S]+))?$/i;
+
+function parseLarkQueueEscape(commandText: string): { kind: "bare" } | { kind: "payload"; payload: string } | null {
+  const match = commandText.trim().match(LARK_QUEUE_ESCAPE_RE);
+  if (!match) {
+    return null;
+  }
+  const payload = match[1]?.trim();
+  return payload ? { kind: "payload", payload } : { kind: "bare" };
 }
 
 async function enqueueLarkTurn(
@@ -609,6 +645,92 @@ function preemptActiveLarkTurnIfEnabled(
   const active = input.runtime.activeRuns.get(normalized.conversationKey);
   active?.abortController.abort();
   input.runtime.chatQueue.clearPending(normalized.conversationKey);
+}
+
+const LARK_STEER_ACK_EMOJI = "OK";
+
+/**
+ * Inject a follow-up message into the conversation's currently running engine
+ * turn instead of queueing it behind the turn (Codex app-server turn/steer;
+ * engines without steer support simply return false here). Only a plain text
+ * message steers: slash commands keep their command semantics, attachments
+ * need the staging pipeline, an explicit preempt policy keeps its
+ * replace-the-turn behavior, and an existing queued backlog keeps FIFO order.
+ * A steer that fails for any reason falls back to the normal queue path so
+ * the message is never lost.
+ */
+async function trySteerActiveLarkTurn(
+  input: {
+    channel: LarkChannelLike;
+    bridge: LarkBridgeLike;
+    runtime: LarkServiceRuntime;
+    stateDir: string;
+  },
+  normalized: LarkNormalizedBridgeMessage,
+  commandText: string,
+  locale: Locale,
+): Promise<boolean> {
+  if (typeof input.bridge.steerActiveTurn !== "function") {
+    return false;
+  }
+  if (input.runtime.queuePolicy.preempt || isSlashCommand(commandText)) {
+    return false;
+  }
+  if (normalized.attachments.length > 0 || !normalized.text.trim()) {
+    return false;
+  }
+  // A quoted reply gets its quoted text composed into the prompt inside
+  // handleAuthorizedMessage; steering passes normalized.text only, which
+  // would silently drop the quote — queue those normally instead.
+  if (normalized.replyContext) {
+    return false;
+  }
+  if (!input.runtime.activeRuns.get(normalized.conversationKey)) {
+    return false;
+  }
+  if (input.runtime.chatQueue.pendingCount(normalized.conversationKey) > 0) {
+    return false;
+  }
+  // The normal path is authorized inside handleAuthorizedMessage; steering
+  // bypasses it, so an explicit check is required here — otherwise an
+  // unauthorized group member could inject text into an authorized user's
+  // running turn. On deny, fall back silently: the queued path renders the
+  // denial exactly as it does today.
+  const accessDecision = input.bridge.checkAccess
+    ? await input.bridge.checkAccess({
+      chatId: normalized.bridgeAccessChatId,
+      conversationChatId: normalized.bridgeChatId,
+      userId: normalized.bridgeUserId,
+      chatType: normalized.bridgeChatType,
+      conversationKey: normalized.conversationKey,
+      locale,
+    })
+    : { kind: "allow" as const };
+  if (accessDecision.kind !== "allow") {
+    return false;
+  }
+  let steered = false;
+  try {
+    steered = await input.bridge.steerActiveTurn({
+      chatId: normalized.bridgeAccessChatId,
+      conversationKey: normalized.conversationKey,
+      text: normalized.text,
+    });
+  } catch {
+    steered = false;
+  }
+  if (!steered) {
+    return false;
+  }
+  if (input.channel.addReaction) {
+    await input.channel.addReaction(normalized.messageId, LARK_STEER_ACK_EMOJI).catch(() => undefined);
+  }
+  await appendLarkTimelineEvent(input.stateDir, normalized, {
+    type: "engine.event",
+    outcome: "success",
+    metadata: { eventType: "engine.turn.steered" },
+  });
+  return true;
 }
 
 function isSlashCommand(text: string): boolean {

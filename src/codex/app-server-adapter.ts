@@ -56,6 +56,7 @@ export const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 180_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS = 5_000;
+export const CODEX_APP_SERVER_TURN_STEER_TIMEOUT_MS = 5_000;
 type AppServerApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 
 type JsonRpcId = number | string;
@@ -1743,6 +1744,38 @@ export class CodexAppServerAdapter implements CodexAdapter {
       idleBlocking: false,
       timeoutMs: CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS,
     }).catch(() => {});
+  }
+
+  /**
+   * Inject additional user input into this session's currently running turn
+   * (verified protocol method: turn/steer, requires threadId + expectedTurnId
+   * + input — codex 0.139 app-server JSON schema). The engine folds the text
+   * into the active turn as a new user message and course-corrects. Returns
+   * false when there is no addressable turn (none running, turnId not yet
+   * known, or expectedTurnId no longer matches because the turn just ended) —
+   * callers fall back to a normal queued message so the input is never lost.
+   * pendingTurns is keyed by threadId; a bound session's id IS its thread id,
+   * so a brand-new chat whose first turn has not persisted a binding yet
+   * simply misses here and queues normally.
+   */
+  async steerActiveTurn(sessionId: string, input: { text: string }): Promise<boolean> {
+    const pending = this.pendingTurns.get(sessionId);
+    if (!pending?.turnId || !this.child?.stdin) {
+      return false;
+    }
+    try {
+      await this.request("turn/steer", {
+        threadId: sessionId,
+        expectedTurnId: pending.turnId,
+        input: [{ type: "text", text: input.text }],
+      }, {
+        idleBlocking: false,
+        timeoutMs: CODEX_APP_SERVER_TURN_STEER_TIMEOUT_MS,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private addGeneratedImageTag(pending: PendingTurn, threadId: string, filePath: string): void {

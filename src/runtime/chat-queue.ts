@@ -86,6 +86,11 @@ export class ChatQueue {
     return hadPending;
   }
 
+  /** Tasks queued behind the currently running one (the running task excluded). */
+  pendingCount(chatId: string | number): number {
+    return this.pendingCounts.get(chatId) ?? 0;
+  }
+
   /**
    * Cancel a single still-queued task by id. Returns true only when the task is
    * currently pending (queued but not yet started); the task is then skipped

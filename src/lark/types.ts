@@ -149,6 +149,12 @@ export interface LarkBridgeLike {
     onTurnPoolWait?: (event: TurnPoolWaitEvent) => void | Promise<void>;
   }): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number; cachedTokens?: number; costUsd?: number } }>;
   validateCodexThread?(threadId: string): Promise<void>;
+  steerActiveTurn?(input: {
+    chatId: number;
+    messageThreadId?: number;
+    conversationKey?: string;
+    text: string;
+  }): Promise<boolean>;
   getThreadGoal?(input: {
     chatId: number;
     userId?: number;

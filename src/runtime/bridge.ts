@@ -483,6 +483,33 @@ export class Bridge {
     };
   }
 
+  /**
+   * Inject a follow-up message into the chat's currently running engine turn
+   * (Codex app-server turn/steer). Returns false when the runtime does not
+   * support steering, the chat has no bound session, or no turn is active —
+   * the caller then delivers the message through the normal turn queue.
+   * Session resolution mirrors handleAuthorizedMessage so the steer targets
+   * exactly the session a queued message would have used.
+   */
+  async steerActiveTurn(input: {
+    chatId: number;
+    messageThreadId?: number;
+    conversationKey?: string;
+    text: string;
+  }): Promise<boolean> {
+    if (!this.adapter.steerActiveTurn || !this.sessionManager.getExistingSession) {
+      return false;
+    }
+    const useConversationScope = input.conversationKey !== undefined || input.messageThreadId !== undefined;
+    const session = await this.sessionManager.getExistingSession(
+      useConversationScope ? this.conversationScope(input) : input.chatId,
+    );
+    if (!session) {
+      return false;
+    }
+    return await this.adapter.steerActiveTurn(session.sessionId, { text: input.text });
+  }
+
   async getThreadGoal(input: {
     chatId: number;
     userId?: number;

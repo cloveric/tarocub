@@ -493,3 +493,76 @@ describe("app-server destroy kills the process tree", () => {
     expect(child.killCalls).toBe(1);
   });
 });
+
+describe("app-server mid-turn steering (turn/steer)", () => {
+  it("steers the active turn with the expected turn id and resolves true", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const controller = new AbortController();
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Rewrite the README",
+      files: [],
+      abortSignal: controller.signal,
+    });
+
+    await driveTurnStart(child);
+    child.stdout.emitData('{"id":3,"result":{"turn":{"id":"turn-1","items":[],"status":"inProgress","error":null}}}\n');
+    await waitFor(() =>
+      Boolean((adapter as unknown as { pendingTurns: Map<string, { turnId?: string }> }).pendingTurns.get("thread-123")?.turnId),
+    );
+
+    const steerPromise = adapter.steerActiveTurn("thread-123", { text: "also write it in English" });
+    await waitFor(() => parsedStdinLines(child).some((line) => line.method === "turn/steer"));
+    const steer = parsedStdinLines(child).find((line) => line.method === "turn/steer") as {
+      id: number;
+      params: Record<string, unknown>;
+    };
+    expect(steer.params).toEqual({
+      threadId: "thread-123",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "also write it in English" }],
+    });
+
+    child.stdout.emitData(`{"id":${steer.id},"result":{}}\n`);
+    await expect(steerPromise).resolves.toBe(true);
+
+    controller.abort();
+    await expect(promise).rejects.toThrow("Codex app-server turn aborted");
+  });
+
+  it("resolves false without writing a steer when no turn is active", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    await expect(adapter.steerActiveTurn("thread-123", { text: "hello" })).resolves.toBe(false);
+    expect(child.stdin.lines.length).toBe(0);
+  });
+
+  it("resolves false when the engine rejects the steer (turn already over)", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const controller = new AbortController();
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Rewrite the README",
+      files: [],
+      abortSignal: controller.signal,
+    });
+
+    await driveTurnStart(child);
+    child.stdout.emitData('{"id":3,"result":{"turn":{"id":"turn-1","items":[],"status":"inProgress","error":null}}}\n');
+    await waitFor(() =>
+      Boolean((adapter as unknown as { pendingTurns: Map<string, { turnId?: string }> }).pendingTurns.get("thread-123")?.turnId),
+    );
+
+    const steerPromise = adapter.steerActiveTurn("thread-123", { text: "late follow-up" });
+    await waitFor(() => parsedStdinLines(child).some((line) => line.method === "turn/steer"));
+    const steer = parsedStdinLines(child).find((line) => line.method === "turn/steer") as { id: number };
+    child.stdout.emitData(`{"id":${steer.id},"error":{"code":-32600,"message":"expected turn id does not match"}}\n`);
+    await expect(steerPromise).resolves.toBe(false);
+
+    controller.abort();
+    await expect(promise).rejects.toThrow("Codex app-server turn aborted");
+  });
+});
