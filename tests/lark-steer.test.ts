@@ -4,6 +4,22 @@ import path from "node:path";
 
 import { removeTempRoot } from "./helpers/temp-files.js";
 
+// The queued file-turn detaches post-turn attachment cleanup that can still be
+// writing when the test ends; under full-suite load the stock 5x20ms retry in
+// removeTempRoot is occasionally not enough (ENOTEMPTY). Retry longer, then
+// swallow: leftover tmp garbage must not fail the suite.
+async function cleanupTempRoot(root: string): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await removeTempRoot(root);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  }
+  await removeTempRoot(root).catch(() => undefined);
+}
+
 import { describe, expect, it, vi } from "vitest";
 
 import { createLarkServiceRuntime, handleLarkMessage } from "../src/lark/service.js";
@@ -48,7 +64,7 @@ describe("lark mid-turn steering", () => {
         metadata: expect.objectContaining({ eventType: "engine.turn.steered" }),
       }));
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -76,7 +92,7 @@ describe("lark mid-turn steering", () => {
       // The message is never lost: it goes through the queued-turn path.
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -102,7 +118,7 @@ describe("lark mid-turn steering", () => {
       expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -129,7 +145,7 @@ describe("lark mid-turn steering", () => {
       // An unauthorized member must never inject text into a running turn.
       expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -171,7 +187,7 @@ describe("lark mid-turn steering", () => {
         replyContext: expect.objectContaining({ messageId: "om_parent" }),
       }));
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -205,7 +221,7 @@ describe("lark mid-turn steering", () => {
       expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -236,7 +252,7 @@ describe("lark mid-turn steering", () => {
       expect(turnText).toContain("干完当前的再做这个任务");
       expect(turnText).not.toContain("/q ");
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -264,7 +280,7 @@ describe("lark mid-turn steering", () => {
       const sentTexts = channel.send.mock.calls.map((call) => JSON.stringify(call[1]));
       expect(sentTexts.some((text) => text.includes("/q <"))).toBe(true);
     } finally {
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 
@@ -327,8 +343,12 @@ describe("lark mid-turn steering", () => {
         message: fakeLarkMessage({ messageId: "om_round3", content: "然后再说一句" }),
       });
 
-      // Give round 2/3 a moment to take their queue decisions.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Wait until round 2/3 have taken their queue decisions (poll instead of
+      // a fixed sleep — attachment staging can be slow under full-suite load).
+      const deadline = Date.now() + 10_000;
+      while (runtime.chatQueue.pendingCount("lark:oc_chat") < 2 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       expect(bridge.steerActiveTurn).toHaveBeenCalledTimes(1);
       expect(runtime.chatQueue.pendingCount("lark:oc_chat")).toBe(2);
 
@@ -339,7 +359,7 @@ describe("lark mid-turn steering", () => {
       expect(turnOrder).toEqual(["file", "text"]);
     } finally {
       releaseRunningTurn();
-      await removeTempRoot(stateDir);
+      await cleanupTempRoot(stateDir);
     }
   });
 });
