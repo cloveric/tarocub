@@ -339,6 +339,7 @@ describe("normalizeUpdate", () => {
           chat: { id: -100123, type: "supergroup" },
           from: { id: 456 },
           message_thread_id: 42,
+          is_topic_message: true,
           text: "topic message",
         },
       }),

@@ -157,6 +157,47 @@ describe("withFileMutex stale-lock recovery", () => {
     }
   }, 20_000);
 
+  it("retries (never throws) when a concurrent recoverer renames the winner's fresh lock dir away", async () => {
+    // The audit race: the acquire loop mkdir's the lock dir, then — before its
+    // writeFile(owner.json) lands — a concurrent stale-lock recoverer renames the
+    // brand-new (still owner-less) dir to trash, judging it abandoned. writeFile
+    // then throws ENOENT. The fix treats that ENOENT like EEXIST and re-enters the
+    // loop; without it the winner's whole store write crashes.
+    //
+    // Reproduce faithfully with several real processes hammering the SAME lock at a
+    // staleLockMs of 0: an owner-less fresh dir is then ALWAYS judged stale (age > 0),
+    // so a peer renames it away in the mkdir→writeFile window. With the fix every
+    // worker finishes its acquisitions; without it a worker exits non-zero on ENOENT.
+    const dir = await mkdtemp(path.join(os.tmpdir(), "file-mutex-"));
+    const targetPath = path.join(dir, "state.json");
+    const scriptPath = path.join(dir, "hammer-mutex.ts");
+    try {
+      await writeFile(scriptPath, [
+        `import { withFileMutex } from '${srcImportUrl("src/state/file-mutex.ts")}';`,
+        "(async () => {",
+        "  const [target, iters] = process.argv.slice(2);",
+        "  for (let i = 0; i < Number(iters); i += 1) {",
+        // staleLockMs 0 makes a fresh, owner-less dir instantly recoverable, so
+        // concurrent workers rename each other's just-mkdir'd dirs away.
+        "    await withFileMutex(target, async () => {}, { staleLockMs: 0 });",
+        "  }",
+        "})().catch((error) => { console.error(error); process.exit(1); });",
+      ].join("\n"), "utf8");
+
+      // Six workers × 60 acquisitions: the ENOENT-in-acquire window is hit many
+      // times over. Any unhandled rethrow exits a worker non-zero → rejects here.
+      await Promise.all(
+        Array.from({ length: 6 }, () => runMutexSubprocess(scriptPath, [targetPath, "60"])),
+      );
+    } finally {
+      // The assertion (every worker exits 0) is already satisfied here. The
+      // staleLockMs:0 rename-to-trash churn can leave a transient lock/trash dir
+      // that races rm's recursive walk (ENOTEMPTY); it's incidental /tmp garbage,
+      // never the thing under test, so don't let cleanup fail the run.
+      await removeTempRoot(dir).catch(() => undefined);
+    }
+  }, 60_000);
+
   it("age-steals an unverifiable (other-host) owner at the basic stale bound", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "file-mutex-"));
     const targetPath = path.join(dir, "state.json");

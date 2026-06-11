@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { loadBusConfig as defaultLoadBusConfig, type BusConfig } from "../bus/bus-config.js";
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
 import type { EngineStreamEvent } from "../codex/adapter.js";
@@ -83,6 +85,7 @@ export interface DelegationCommandBridge {
     workspaceOverride?: string;
     abortSignal?: AbortSignal;
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    sessionIdOverride?: string;
   }): Promise<{
     text: string;
     usage?: {
@@ -129,6 +132,9 @@ export async function handleDelegationTelegramCommand(input: {
         return true;
       }
       const btwChatId = -(2_000_000_000 + Math.floor(Math.random() * 1_000_000_000));
+      // /btw is a one-off side question: run it on a fresh ephemeral session
+      // (sessionIdOverride bypasses getOrCreateSession + bindSession) so it never
+      // resumes a stale prior side-question session and never grows stored sessions.
       const result = await bridge.handleAuthorizedMessage({
         chatId: btwChatId,
         userId: normalized.userId,
@@ -137,6 +143,7 @@ export async function handleDelegationTelegramCommand(input: {
         text: btwCmd.prompt,
         files: [],
         onEngineEvent: context.onEngineEvent,
+        sessionIdOverride: `btw-${randomUUID()}`,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
       const chunks = chunkTelegramMessage(result.text);
@@ -234,7 +241,11 @@ export async function handleDelegationTelegramCommand(input: {
   const fanCommand = parseFanCommand(normalized.text);
   if (fanCommand) {
     const busConfig = await loadBusConfig(stateDir);
-    const targets = busConfig?.parallel ?? [];
+    const currentInstance = context.instanceName ?? "default";
+    // The current instance always runs the prompt locally (selfPromise below), so
+    // drop it from the peer fan-out — otherwise a self-listed bus.parallel entry
+    // would run this instance's turn twice. Mirrors the self-checks in /chain and /ask.
+    const targets = (busConfig?.parallel ?? []).filter((target) => target !== currentInstance);
     if (targets.length === 0) {
       await context.api.sendMessage(
         normalized.chatId,
@@ -245,7 +256,6 @@ export async function handleDelegationTelegramCommand(input: {
       return true;
     }
 
-    const currentInstance = context.instanceName ?? "default";
     if (await maybeReplyWithBudgetExhausted(stateDir, cfg.budgetUsd, locale, context, normalized)) {
       return true;
     }

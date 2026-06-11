@@ -53,7 +53,7 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(json);
 }
 
-const MAX_BODY_BYTES = 256 * 1024;
+export const MAX_BODY_BYTES = 256 * 1024;
 
 export function createBusServer(
   instanceName: string,
@@ -67,16 +67,28 @@ export function createBusServer(
       let totalBytes = 0;
       let aborted = false;
       req.on("data", (chunk: Buffer) => {
+        if (aborted) {
+          return;
+        }
         totalBytes += chunk.length;
         if (totalBytes > MAX_BODY_BYTES) {
           aborted = true;
+          // Flush the 413 fully before tearing down the request. Destroying the
+          // socket immediately (the old behavior) races the response write, so the
+          // client often saw ECONNRESET (a retryable transport error) instead of the
+          // non-retryable request_too_large body. Stop reading, let the response
+          // drain, then end the request once the response has finished.
+          req.pause();
+          res.on("finish", () => {
+            req.resume();
+            req.on("error", () => {});
+          });
           sendJson(res, 413, createBusErrorResponse({
             fromInstance: instanceName,
             error: "Request body too large",
             errorCode: "request_too_large",
             retryable: false,
           }));
-          req.destroy();
           return;
         }
         chunks.push(chunk);

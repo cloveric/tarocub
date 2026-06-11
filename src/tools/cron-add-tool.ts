@@ -14,8 +14,12 @@ export type CronAddToolContext = TelegramToolContext;
 // `new Date()` would interpret these in the HOST process timezone, so reminders
 // fire hours off when the host TZ differs from the operator's cron timezone;
 // these are resolved in the job/instance timezone instead.
+// Month/day/hour/minute/second accept 1-2 digits so non-zero-padded inputs like
+// "2026-6-13 9:00" are still resolved in the cron timezone rather than silently
+// falling through to host-TZ `new Date()` parsing. Out-of-range components are
+// rejected by the round-trip validation in wallClockInTimezoneToInstant.
 const OFFSETLESS_AT_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/;
+  /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d{1,3}))?)?)?$/;
 
 function timezoneOffsetMs(date: Date, timezone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {

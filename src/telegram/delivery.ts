@@ -18,6 +18,31 @@ import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { requestTelegramApproval } from "./approval-requests.js";
 import { getTelegramConversationLogScope } from "./conversation-key.js";
 
+/**
+ * Best-effort eager ack for a callback query. Telegram only spins the button's
+ * loading indicator for a few seconds; if the queued turn that would ack it is
+ * still waiting behind a long-running turn, the press spins to expiry. Acking at
+ * intake — before the turn is queued, and for unknown/stale callback data that
+ * never becomes a turn — stops the spinner immediately. The ack is advisory, so
+ * failures are swallowed.
+ *
+ * NOTE: To fully close finding #7 this must be called at intake from
+ * `processTelegramUpdates` (src/service.ts) for EVERY callback query, including
+ * unrecognized callback data that `normalizeUpdate` drops. That intake wiring
+ * lives in src/service.ts (owned elsewhere) and still needs to call this.
+ */
+export async function ackTelegramCallbackQuery(
+  api: Pick<TelegramApi, "answerCallbackQuery">,
+  callbackQueryId: string,
+  text?: string,
+): Promise<void> {
+  try {
+    await api.answerCallbackQuery(callbackQueryId, text);
+  } catch {
+    // Callback acks are advisory; continuation should still proceed.
+  }
+}
+
 async function updateWorkflowBestEffort(
   workflowStore: FileWorkflowStore,
   workflowRecordId: string,
@@ -178,11 +203,7 @@ export async function handleNormalizedTelegramMessage(
 
   try {
     if (normalized.callbackQueryId) {
-      try {
-        await context.api.answerCallbackQuery(normalized.callbackQueryId);
-      } catch {
-        // Callback acks are advisory; continuation should still proceed.
-      }
+      await ackTelegramCallbackQuery(context.api, normalized.callbackQueryId);
     }
     await appendTimelineEventBestEffort(stateDir, {
       type: "input.received",

@@ -1254,6 +1254,40 @@ describe("runCli", () => {
     }
   });
 
+  it("does not schedule a second Lark deferred restart while one is pending", async () => {
+    // Finding 2 (Lark side): a live pending helper already has a deferred restart
+    // queued; a second --defer must not spawn another helper.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const spawnDetached = vi.fn(() => 7373);
+
+    try {
+      const runDefer = (isProcessAlive: (pid: number) => boolean) =>
+        runCli(["lark", "service", "restart", "--defer"], {
+          env: {
+            USERPROFILE: tempDir,
+            CCTB_LARK_INSTANCE: "alpha",
+            CCTB_LARK_STATE_DIR: stateDir,
+          },
+          logger: { log: (message) => messages.push(message) },
+          larkServiceDeps: { spawnDetached, isProcessAlive },
+        });
+
+      await runDefer((pid) => pid === 7373);
+      await runDefer((pid) => pid === 7373);
+
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(messages.at(-1)).toContain("already pending");
+
+      // After the helper exits, a fresh schedule is allowed again.
+      await runDefer(() => false);
+      expect(spawnDetached).toHaveBeenCalledTimes(2);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("stops duplicate lockless Lark service processes", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

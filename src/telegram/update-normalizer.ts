@@ -70,7 +70,7 @@ function normalizeCallbackQuery(callbackQuery: any, text: string): NormalizedTel
     return null;
   }
 
-  const messageThreadId = typeof message?.message_thread_id === "number" ? message.message_thread_id : undefined;
+  const messageThreadId = resolveTopicThreadId(message);
   return {
     chatId,
     userId,
@@ -81,6 +81,19 @@ function normalizeCallbackQuery(callbackQuery: any, text: string): NormalizedTel
     callbackQueryId: typeof callbackQuery.id === "string" ? callbackQuery.id : undefined,
     attachments: [],
   };
+}
+
+// Telegram also sets `message_thread_id` on ordinary replies in non-forum
+// supergroups (the reply-root message id). Sending with that id 400s "message
+// thread not found", which sinks the answer, the typing action, AND the error
+// reply — total silence. It would also fragment the conversation key per reply
+// chain. Only a genuine forum topic message (`is_topic_message === true`) is a
+// real thread we should route into.
+function resolveTopicThreadId(message: any): number | undefined {
+  if (message?.is_topic_message !== true) {
+    return undefined;
+  }
+  return typeof message?.message_thread_id === "number" ? message.message_thread_id : undefined;
 }
 
 function normalizeReplyContext(message: any): NormalizedTelegramMessage["replyContext"] {
@@ -283,7 +296,7 @@ export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
     return null;
   }
 
-  const messageThreadId = typeof message?.message_thread_id === "number" ? message.message_thread_id : undefined;
+  const messageThreadId = resolveTopicThreadId(message);
   return {
     chatId,
     userId,

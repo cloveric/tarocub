@@ -74,22 +74,23 @@ When choosing the next task without asking:
 
 ## File Delivery: Claude vs Codex Engine Differences
 
-The two engines reference files differently in their output. The delivery layer (`src/telegram/delivery.ts`) must handle **all** formats:
+The two engines surface files differently. The delivery layer (`src/telegram/delivery.ts` → `response-delivery.ts`) handles these formats:
 
-| Engine | Format | Example |
-|--------|--------|---------|
-| Claude | `[send-file:/path]` tag | `[send-file:/Users/me/img.png]` |
-| Codex | Markdown image `![alt](/path)` | `![cover](/Users/me/img.png)` |
-| Codex | Markdown link `[name](/path.ext)` | `[img.png](/Users/me/img.png)` |
-| Both | Inline text file block | `` ```file:report.txt\ncontent\n``` `` |
+| Engine | Format | Example | Notes |
+|--------|--------|---------|-------|
+| Both | `[send-file:/path]` / `[send-image:/path]` tag | `[send-file:/Users/me/img.png]` | The only response-text delivery tag. `[send-image:]` prefers `sendPhoto`. |
+| Both | Inline text file block | `` ```file:report.txt\ncontent\n``` `` | **Only honored when it is the entire response** — a fenced `file:` block surrounded by other text is treated as an explanatory example, not an attachment. |
+| Codex | telegram-out auto-delivery | files written under `workspace/.telegram-out/<req>/` | Codex's primary file path: the message-turn loop auto-delivers files the engine produced in the current request output dir. |
+
+**Codex does NOT use Markdown image/link extraction.** That extraction was removed: `deliverTelegramResponse` leaves Markdown absolute links (`![alt](/path)`, `[name](/path)`) as ordinary chat text (codified by the `"leaves markdown absolute links as ordinary chat text"` test in `tests/telegram-response-delivery.test.ts`). Codex delivers files via telegram-out auto-delivery, generated-image `[send-image:]` tags, and the `cctb send` side channel — not Markdown syntax.
 
 **When modifying file delivery logic:**
 
-1. Always test with BOTH engines — Claude uses explicit bridge tags, Codex uses standard Markdown syntax.
+1. Test both the response-text tag path (`[send-file:]` / `[send-image:]`, both engines) and the Codex telegram-out auto-delivery path.
 2. File path patterns must match both Unix (`/Users/...`) and Windows (`C:\Users\...`) absolute paths.
-3. The `sendFileOrPhoto` helper auto-detects image extensions and uses `sendPhoto` (Telegram compresses) with `sendDocument` fallback.
-4. Multiple images are sent as a Telegram album via `sendMediaGroup`.
-5. Never break the `deliverTelegramResponse` function without re-running the regex test cases (see commit `7dad7a4`).
+3. The `sendFileOrPhoto` helper auto-detects image extensions and uses `sendPhoto` (Telegram compresses) with a `sendDocument` fallback.
+4. Multiple images are sent **one-by-one** (each via `sendFileOrPhoto`). `sendMediaGroup` exists on the API but currently has **zero call sites** — there is no album batching today; do not assume it.
+5. Never break the `deliverTelegramResponse` function without re-running its test cases (`tests/telegram-response-delivery.test.ts`, see commit `7dad7a4`).
 
 ## Security: No Private Data in Commits
 

@@ -70,7 +70,12 @@ import {
   type BusTalkRequest,
   type BusTalkResponse,
 } from "../src/bus/bus-server.js";
-import { delegateToInstance } from "../src/bus/bus-client.js";
+import {
+  delegateToInstance,
+  resolveDefaultDelegationTimeoutMs,
+  DEFAULT_DELEGATION_TIMEOUT_MS,
+} from "../src/bus/bus-client.js";
+import { MAX_BODY_BYTES } from "../src/bus/bus-server.js";
 import { BUS_PROTOCOL_CAPABILITIES, BUS_PROTOCOL_VERSION, BusProtocolError } from "../src/bus/bus-protocol.js";
 
 const require = createRequire(import.meta.url);
@@ -583,6 +588,49 @@ describe("bus server", () => {
     }
   });
 
+  it("flushes a non-retryable 413 body for oversized requests instead of resetting the socket", async () => {
+    // Finding 7: the old code destroyed the request socket immediately after writing
+    // the 413, which raced the response write and surfaced ECONNRESET (a retryable
+    // transport error) to the client. The client must be able to read the full
+    // request_too_large JSON body.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-server-"));
+
+    try {
+      await writeFile(
+        path.join(tempDir, "config.json"),
+        JSON.stringify({ bus: { peers: "*", secret: "test-secret" } }),
+        "utf8",
+      );
+
+      const handler = async (): Promise<BusTalkResponse> => ({
+        success: true,
+        text: "ok",
+        fromInstance: "test",
+      });
+
+      const server = createBusServer("test", tempDir, handler);
+      const port = await startBusServer(server, 0);
+
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/talk`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
+          body: JSON.stringify({ fromInstance: "work", prompt: "x".repeat(MAX_BODY_BYTES + 1024), depth: 0 }),
+        });
+        expect(res.status).toBe(413);
+        await expect(res.json()).resolves.toMatchObject({
+          success: false,
+          errorCode: "request_too_large",
+          retryable: false,
+        });
+      } finally {
+        await stopBusServer(server);
+      }
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("defaults missing request protocolVersion to v1 before invoking the handler", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-server-"));
     const handler = vi.fn(async (req: BusTalkRequest): Promise<BusTalkResponse> => ({
@@ -1011,8 +1059,10 @@ describe("delegateToInstance", () => {
         timeoutMs: 10,
       })).rejects.toMatchObject({
         name: "BusProtocolError",
+        // Timeouts are non-retryable: the remote turn may still be running, so an
+        // auto-retry would double-execute it (Finding 5).
         code: "timeout",
-        retryable: true,
+        retryable: false,
       } satisfies Partial<BusProtocolError>);
     } finally {
       for (const socket of sockets) {
@@ -1022,4 +1072,45 @@ describe("delegateToInstance", () => {
       await removeTempRoot(channelRoot);
     }
   }, 10_000);
+
+  it("defaults the delegation timeout to a long, configurable value (not 60s)", () => {
+    // Finding 5: real engine turns exceed 60s, so the default delegation timeout must
+    // be large (30min), overridable via CCTB_DELEGATION_TIMEOUT_MS.
+    expect(DEFAULT_DELEGATION_TIMEOUT_MS).toBe(30 * 60_000);
+    expect(DEFAULT_DELEGATION_TIMEOUT_MS).toBeGreaterThan(60_000);
+    expect(resolveDefaultDelegationTimeoutMs({})).toBe(DEFAULT_DELEGATION_TIMEOUT_MS);
+    expect(resolveDefaultDelegationTimeoutMs({ CCTB_DELEGATION_TIMEOUT_MS: "120000" })).toBe(120_000);
+    // Invalid / non-positive overrides fall back to the default.
+    expect(resolveDefaultDelegationTimeoutMs({ CCTB_DELEGATION_TIMEOUT_MS: "0" })).toBe(DEFAULT_DELEGATION_TIMEOUT_MS);
+    expect(resolveDefaultDelegationTimeoutMs({ CCTB_DELEGATION_TIMEOUT_MS: "abc" })).toBe(DEFAULT_DELEGATION_TIMEOUT_MS);
+  });
+
+  it("rejects an oversized delegation locally as non-retryable before sending", async () => {
+    // Finding 7: a client-side size pre-check returns the non-retryable request_too_large
+    // error without depending on the server's 413 flush racing a socket teardown.
+    const channelRoot = await mkdtemp(path.join(os.tmpdir(), "bus-client-"));
+    const stateDir = path.join(channelRoot, "work");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ bus: { peers: ["reviewer"], secret: "test-secret" } }),
+      "utf8",
+    );
+
+    try {
+      await expect(delegateToInstance({
+        fromInstance: "work",
+        targetInstance: "reviewer",
+        prompt: "x".repeat(MAX_BODY_BYTES + 1),
+        depth: 0,
+        stateDir,
+      })).rejects.toMatchObject({
+        name: "BusProtocolError",
+        code: "request_too_large",
+        retryable: false,
+      } satisfies Partial<BusProtocolError>);
+    } finally {
+      await removeTempRoot(channelRoot);
+    }
+  });
 });

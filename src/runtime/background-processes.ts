@@ -26,9 +26,16 @@ export interface InstanceGroupProcess {
   role: "engine" | "child" | "orphan";
 }
 
+// Full `command=` output on a busy host is large (verified live: ~27MB of
+// argv across all processes), so the buffer must be generous — at 8MB execFile
+// rejects with ENOBUFS and /bg silently dies. `command=` is kept (not the short
+// `comm=`) because the search args are exactly what makes a leaked turn's worker
+// recognizable in the listing; only the total size, not the line shape, was the bug.
+const PS_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
 function runPs(): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("ps", ["-eo", "pid=,pgid=,ppid=,rss=,etime=,command="], { maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+    execFile("ps", ["-eo", "pid=,pgid=,ppid=,rss=,etime=,command="], { maxBuffer: PS_MAX_BUFFER_BYTES }, (error, stdout) => {
       if (error) {
         reject(error);
         return;
@@ -36,6 +43,25 @@ function runPs(): Promise<string> {
       resolve(stdout);
     });
   });
+}
+
+/** Exported for tests: the ps output buffer bound. */
+export { PS_MAX_BUFFER_BYTES };
+
+/**
+ * Convert `ps` etime (`[[DD-]HH:]MM:SS` or `MM:SS`) to seconds. Returns null for
+ * an unparseable value so callers can decline to compare rather than guess.
+ */
+export function parseEtimeSeconds(etime: string): number | null {
+  const match = etime.trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!match) {
+    return null;
+  }
+  const days = Number(match[1] ?? 0);
+  const hours = Number(match[2] ?? 0);
+  const minutes = Number(match[3]);
+  const seconds = Number(match[4]);
+  return ((days * 24 + hours) * 60 + minutes) * 60 + seconds;
 }
 
 export function parseInstanceProcessGroup(psOutput: string, servicePid: number): InstanceGroupProcess[] {
@@ -60,6 +86,24 @@ export function parseInstanceProcessGroup(psOutput: string, servicePid: number):
   if (!serviceRow) {
     return [];
   }
+  const rowsByPid = new Map(rows.map((row) => [row.pid, row]));
+
+  // The service's own ancestor chain (npm/sh/node wrappers that launched it).
+  // In a foreground/dev launch these share the service's pgid, so without this
+  // they'd be mislabeled "orphan" and a /bg killall would take down the service's
+  // own parent. Walk upward across ALL rows (not just the group) and exclude them.
+  const serviceAncestors = new Set<number>();
+  let cursor: Row | undefined = rowsByPid.get(serviceRow.ppid);
+  for (let hops = 0; cursor && hops <= 64 && !serviceAncestors.has(cursor.pid); hops += 1) {
+    serviceAncestors.add(cursor.pid);
+    cursor = rowsByPid.get(cursor.ppid);
+  }
+
+  // Anything that has been alive LONGER than the service cannot be background
+  // work this service instance started — it predates us. Used to keep an older
+  // wrapper/sibling in the same pgid out of the orphan (kill) class.
+  const serviceEtimeSeconds = parseEtimeSeconds(serviceRow.etime);
+
   const group = rows.filter((row) => row.pgid === serviceRow.pgid && row.pid !== servicePid);
   const groupByPid = new Map(group.map((row) => [row.pid, row]));
 
@@ -74,13 +118,34 @@ export function parseInstanceProcessGroup(psOutput: string, servicePid: number):
     return parent ? reachesService(parent, hops + 1) : false;
   };
 
+  const classify = (row: Row): "engine" | "child" | "orphan" => {
+    if (row.ppid === servicePid) {
+      return "engine";
+    }
+    if (reachesService(row)) {
+      return "child";
+    }
+    // Guard the orphan class: never sweep the service's own ancestor chain, nor a
+    // process that predates the service (parseEtimeSeconds === null → can't prove
+    // it's older, so don't shield it). These would be wrappers/siblings, not the
+    // leaked-background-work the orphan class is meant to capture.
+    const rowEtimeSeconds = parseEtimeSeconds(row.etime);
+    const olderThanService = serviceEtimeSeconds !== null
+      && rowEtimeSeconds !== null
+      && rowEtimeSeconds > serviceEtimeSeconds;
+    if (serviceAncestors.has(row.pid) || olderThanService) {
+      return "child";
+    }
+    return "orphan";
+  };
+
   return group.map((row) => ({
     pid: row.pid,
     ppid: row.ppid,
     rssMb: Math.round(row.rssKb / 1024),
     etime: row.etime,
     command: row.command.length > 120 ? `${row.command.slice(0, 117)}...` : row.command,
-    role: row.ppid === servicePid ? "engine" as const : reachesService(row) ? "child" as const : "orphan" as const,
+    role: classify(row),
   })).sort((a, b) => b.rssMb - a.rssMb);
 }
 

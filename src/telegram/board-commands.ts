@@ -818,8 +818,11 @@ export async function handleBoardTelegramCommand(input: {
 
     if (action.kind === "checkAdd") {
       const task = await store.getTask(action.id);
+      // Pass the existing checklist item objects (not just their text) so
+      // normalizeChecklist preserves each item's done/completedAt/createdAt;
+      // appending a bare string would reset already-checked items to done:false.
       const updated = await store.updateTaskCard(action.id, {
-        checklist: [...(task?.checklist.map((item) => item.text) ?? []), action.text],
+        checklist: [...(task?.checklist ?? []), action.text],
       });
       await replyAndAudit({ stateDir, startedAt, locale, normalized, context, text: `Added checklist item to ${updated.id}`, action: "check-add", metadata: { boardTaskId: updated.id } });
       return true;

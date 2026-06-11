@@ -7,6 +7,7 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../src/commands/cli.js";
+import { scheduleDeferredServiceRestart } from "../src/commands/service.js";
 import { resolveInstanceLockPath } from "../src/state/instance-lock.js";
 
 import { fileURLToPath } from "node:url";
@@ -175,7 +176,7 @@ describe("telegram service commands", () => {
         logger: { log: (message) => messages.push(message) },
         serviceDeps: {
           cwd: REPO_ROOT,
-          spawnDetached: async () => {},
+          spawnDetached: () => {},
           sleep: async () => {
             sleepCalls += 1;
             if (sleepCalls === 2) {
@@ -1795,6 +1796,7 @@ describe("telegram service commands", () => {
         path.join(REPO_ROOT, "dist", "src", "index.js"),
         "alpha",
         "5000",
+        "CODEX_TELEGRAM_INSTANCE,CCTB_SEND_URL,CCTB_SEND_TOKEN,CCTB_SEND_COMMAND,CODEX_THREAD_ID",
       ]);
       expect(spawnDetached.mock.calls[1]?.[2]).toMatchObject({
         cwd: REPO_ROOT,
@@ -1803,7 +1805,7 @@ describe("telegram service commands", () => {
       });
       expect(messages).toEqual([
         'Started instance "beta" with pid 12346.',
-        'Scheduled one-shot deferred restart for current instance "alpha" in 5s.',
+        'Scheduled deferred restart for current instance "alpha" in 5s; it will retry until the active turn finishes.',
       ]);
     } finally {
       await removeTempRoot(tempDir);
@@ -1827,22 +1829,109 @@ describe("telegram service commands", () => {
 
       expect(handled).toBe(true);
       expect(spawnDetached).toHaveBeenCalledTimes(1);
-      expect(spawnDetached).toHaveBeenCalledWith(
-        process.execPath,
-        [
-          "-e",
-          expect.stringContaining("spawnSync(process.execPath, restartArgs"),
-          path.join(REPO_ROOT, "dist", "src", "index.js"),
-          "alpha",
-          "5000",
-        ],
-        {
-          cwd: REPO_ROOT,
-          stdoutPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
-          stderrPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
-        },
+      expect(spawnDetached.mock.calls[0]?.[0]).toBe(process.execPath);
+      expect(spawnDetached.mock.calls[0]?.[1]).toEqual([
+        "-e",
+        expect.stringContaining("spawnSync(process.execPath, restartArgs"),
+        path.join(REPO_ROOT, "dist", "src", "index.js"),
+        "alpha",
+        "5000",
+        "CODEX_TELEGRAM_INSTANCE,CCTB_SEND_URL,CCTB_SEND_TOKEN,CCTB_SEND_COMMAND,CODEX_THREAD_ID",
+      ]);
+      expect(spawnDetached.mock.calls[0]?.[2]).toMatchObject({
+        cwd: REPO_ROOT,
+        stdoutPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
+        stderrPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
+      });
+      expect(messages).toEqual([
+        'Scheduled deferred restart for instance "alpha" in 5s; it will retry until the active turn finishes.',
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("scrubs the turn side-channel env from the deferred-restart helper", async () => {
+    // Finding 1: a restarted long-lived service must not inherit the scheduling turn's
+    // side channel (send URL/token/command, thread id, instance marker).
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const spawnDetached = vi.fn(
+      (_command: string, _args: string[], _options: { env?: NodeJS.ProcessEnv }) => 4242,
+    );
+    const previous: Record<string, string | undefined> = {};
+    const sideChannel = {
+      CODEX_TELEGRAM_INSTANCE: "alpha",
+      CCTB_SEND_URL: "http://127.0.0.1:9999/send",
+      CCTB_SEND_TOKEN: "secret-token",
+      CCTB_SEND_COMMAND: "send",
+      CODEX_THREAD_ID: "thread-7",
+    };
+
+    try {
+      for (const [key, value] of Object.entries(sideChannel)) {
+        previous[key] = process.env[key];
+        process.env[key] = value;
+      }
+
+      await scheduleDeferredServiceRestart(
+        { USERPROFILE: tempDir },
+        "alpha",
+        { cwd: REPO_ROOT, spawnDetached },
       );
-      expect(messages).toEqual(['Scheduled one-shot deferred restart for instance "alpha" in 5s.']);
+
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      const spawnedEnv = spawnDetached.mock.calls[0]?.[2]?.env;
+      // The scrubbed keys must be absent (or explicitly undefined) in the helper env.
+      for (const key of Object.keys(sideChannel)) {
+        expect(spawnedEnv?.[key]).toBeUndefined();
+      }
+      // The helper also receives the scrub-key list so it re-scrubs before restarting.
+      expect(spawnDetached.mock.calls[0]?.[1]).toContain(
+        "CODEX_TELEGRAM_INSTANCE,CCTB_SEND_URL,CCTB_SEND_TOKEN,CCTB_SEND_COMMAND,CODEX_THREAD_ID",
+      );
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("does not schedule a second deferred restart while one is pending", async () => {
+    // Finding 2: a live pending helper means a deferred restart is already queued; a
+    // second schedule call must not spawn another helper (which would double-restart).
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const spawnDetached = vi.fn(() => 5151);
+
+    try {
+      const first = await scheduleDeferredServiceRestart(
+        { USERPROFILE: tempDir },
+        "alpha",
+        { cwd: REPO_ROOT, spawnDetached, isProcessAlive: (pid) => pid === 5151 },
+      );
+      expect(first).toContain("Scheduled deferred restart");
+
+      const second = await scheduleDeferredServiceRestart(
+        { USERPROFILE: tempDir },
+        "alpha",
+        { cwd: REPO_ROOT, spawnDetached, isProcessAlive: (pid) => pid === 5151 },
+      );
+
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(second).toContain("already pending");
+
+      // Once the first helper has exited, a new schedule is allowed again.
+      const third = await scheduleDeferredServiceRestart(
+        { USERPROFILE: tempDir },
+        "alpha",
+        { cwd: REPO_ROOT, spawnDetached, isProcessAlive: () => false },
+      );
+      expect(spawnDetached).toHaveBeenCalledTimes(2);
+      expect(third).toContain("Scheduled deferred restart");
     } finally {
       await removeTempRoot(tempDir);
     }

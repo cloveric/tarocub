@@ -58,6 +58,43 @@ describe("createBusTalkHandler", () => {
     }
   });
 
+  it("runs each bus turn on a fresh ephemeral session that is never resumed", async () => {
+    // Finding 3: bus turns must not key a persisted session. A new handler (as after
+    // a process restart) must not resume a prior bus session, and two bus turns must
+    // not share one. We assert each turn passes a distinct sessionIdOverride, which
+    // bypasses getOrCreateSession (no resume) and bindSession (no persist/growth).
+    const root = await mkdtemp(path.join(os.tmpdir(), "bus-handler-"));
+    await mkdir(root, { recursive: true });
+    const handleAuthorizedMessage = vi.fn().mockResolvedValue({ text: "done" });
+    const bridge = { handleAuthorizedMessage };
+
+    try {
+      const firstHandler = createBusTalkHandler({
+        bridge: bridge as never,
+        stateDir: root,
+        instanceName: "worker",
+      });
+      await firstHandler({ fromInstance: "caller", prompt: "one", depth: 0 });
+
+      // Simulate a process restart: a brand new handler instance (counter reset).
+      const secondHandler = createBusTalkHandler({
+        bridge: bridge as never,
+        stateDir: root,
+        instanceName: "worker",
+      });
+      await secondHandler({ fromInstance: "caller", prompt: "two", depth: 0 });
+
+      expect(handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      const firstOverride = handleAuthorizedMessage.mock.calls[0]?.[0]?.sessionIdOverride;
+      const secondOverride = handleAuthorizedMessage.mock.calls[1]?.[0]?.sessionIdOverride;
+      expect(firstOverride).toMatch(/^bus-/);
+      expect(secondOverride).toMatch(/^bus-/);
+      expect(firstOverride).not.toBe(secondOverride);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("appends a success audit event for bus turns", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "bus-handler-"));
     await mkdir(root, { recursive: true });

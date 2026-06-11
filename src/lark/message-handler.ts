@@ -31,8 +31,10 @@ import {
 import {
   extractLarkMessageBody,
   formatLarkAccessReply,
+  handleLarkBgCommandText,
   handleLarkGroupCommandBeforeAccess,
   handleLarkSimpleCommand,
+  isLarkBgCommand,
   isLarkLocalEngineCommand,
   isStopCommand,
 } from "./commands.js";
@@ -322,6 +324,60 @@ async function runAcceptedLarkMessage(
     return true;
   }
 
+  // Shared access gate for the pre-queue command fast paths below: a denied
+  // sender gets the standard denial reply, an allowed one proceeds. Mirrors the
+  // inline checks the /stop and approval blocks run.
+  const checkPreQueueAccess = async (detail: string): Promise<boolean> => {
+    const accessDecision = input.bridge.checkAccess
+      ? await input.bridge.checkAccess({
+        chatId: normalized.bridgeAccessChatId,
+        conversationChatId: normalized.bridgeChatId,
+        userId: normalized.bridgeUserId,
+        chatType: normalized.bridgeChatType,
+        conversationKey: normalized.conversationKey,
+        locale: messageLocale,
+      })
+      : { kind: "allow" as const };
+    if (accessDecision.kind === "allow") {
+      return true;
+    }
+    await input.channel.send(normalized.chatId, {
+      text: formatLarkDeniedAccessReply(accessDecision.text ?? renderLarkChatAccessDenied(messageLocale), normalized, messageLocale),
+    }, {
+      replyTo: normalized.messageId,
+      replyInThread: Boolean(normalized.threadId),
+    });
+    await appendLarkTimelineEvent(input.stateDir, normalized, {
+      type: "command.handled",
+      outcome: "denied",
+      detail,
+      metadata: { rejected: "unauthorized-user" },
+    });
+    return false;
+  };
+
+  // /bg is instance-scoped process control, independent of the conversation
+  // session — run it pre-queue like /stop so it is never serialized behind the
+  // running turn (a wedged engine turn must not block "what's running / kill it").
+  if (isLarkBgCommand(commandText)) {
+    if (!(await checkPreQueueAccess("/bg"))) {
+      return true;
+    }
+    const message = await handleLarkBgCommandText(commandText, messageLocale);
+    if (message !== null) {
+      await sendLarkMarkdown(input.channel, normalized.chatId, message, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "command.handled",
+        outcome: "success",
+        detail: "/bg",
+      });
+    }
+    return true;
+  }
+
   if (await handleLarkGroupCommandBeforeAccess({ ...input, requestApproval: requestLarkApproval }, normalized, commandText, messageLocale)) {
     return true;
   }
@@ -457,6 +513,11 @@ async function runAcceptedLarkMessage(
 
   const queueEscape = parseLarkQueueEscape(commandText);
   if (queueEscape?.kind === "bare") {
+    // Gate the usage reply behind access like every other post-accept handler:
+    // an unauthorized sender must not be able to probe the bot with a bare /q.
+    if (!(await checkPreQueueAccess("/q"))) {
+      return true;
+    }
     await input.channel.send(normalized.chatId, {
       text: messageLocale === "zh"
         ? "用法：/q <消息> — 强制作为独立任务排队执行（不注入当前正在运行的任务）。"
@@ -467,18 +528,27 @@ async function runAcceptedLarkMessage(
     });
     return true;
   }
-  // /q strips to its payload so the engine sees clean text; the flag below
-  // keeps the steer path off so the message always queues as its own turn.
-  const effectiveNormalized = queueEscape && normalized.text.includes(commandText)
-    ? { ...normalized, text: normalized.text.replace(commandText, queueEscape.payload) }
+  // /q strips its slash prefix so the engine sees clean text. Strip it off
+  // normalized.text directly with a prefix regex rather than .replace(commandText,
+  // payload): a string replacement would interpret $-sequences in the payload
+  // ("/q price $$100" → "$100"), and a mention-normalized commandText ("/q@bot …")
+  // is no longer a substring of the raw text, so the old strip silently no-op'd and
+  // leaked "/q@bot" into the prompt.
+  const effectiveNormalized = queueEscape
+    ? { ...normalized, text: stripLarkQueuePrefix(normalized.text) }
     : normalized;
-  const effectiveCommandText = queueEscape ? queueEscape.payload : commandText;
 
-  if (shouldBatchLarkMessage(input.runtime, effectiveNormalized, effectiveCommandText)) {
+  // A /q message must never batch (preempt-batch mode would merge it into another
+  // turn and break its "runs as its own queued turn" guarantee) and must never
+  // steer. Treat queueEscape like a command for the batch decision and skip the
+  // steer path, so it always lands on the single-turn queued path with preempt
+  // suppressed (preemptActiveLarkTurnIfEnabled gets the original slash-shaped
+  // commandText below, so isSlashCommand keeps it a no-op).
+  if (!queueEscape && shouldBatchLarkMessage(input.runtime, effectiveNormalized, commandText)) {
     return await scheduleBatchedLarkTurn(input, effectiveNormalized, messageLocale, handleConversationQueueWait);
   }
 
-  if (!queueEscape && await trySteerActiveLarkTurn(input, effectiveNormalized, effectiveCommandText, messageLocale)) {
+  if (!queueEscape && await trySteerActiveLarkTurn(input, effectiveNormalized, commandText, messageLocale)) {
     return true;
   }
 
@@ -498,6 +568,30 @@ function parseLarkQueueEscape(commandText: string): { kind: "bare" } | { kind: "
   }
   const payload = match[1]?.trim();
   return payload ? { kind: "payload", payload } : { kind: "bare" };
+}
+
+// Strip a leading "/q" / "/queue" (+ optional "@botname") prefix from the body of
+// normalized.text, leaving the rest verbatim. The body follows the <lark_context>
+// envelope (or starts the string when there is none); anchoring on that boundary
+// keeps the envelope intact and works whether or not the slash command carried a
+// group @-mention. A function-free literal replace would be enough here (no $ in
+// the matched prefix), but we cut the prefix by index to avoid any replacement-
+// string semantics touching the payload.
+const LARK_QUEUE_PREFIX_RE = /^(\s*\/(?:q|queue)(?:@[\w.-]+)?)(?:[ \t]+|(?=\n)|$)/i;
+
+function stripLarkQueuePrefix(text: string): string {
+  const envelopeEnd = text.indexOf("</lark_context>");
+  if (envelopeEnd === -1) {
+    return text.replace(LARK_QUEUE_PREFIX_RE, "");
+  }
+  const boundary = envelopeEnd + "</lark_context>".length;
+  const head = text.slice(0, boundary);
+  const tail = text.slice(boundary);
+  // The body starts after the envelope's trailing whitespace; strip the prefix
+  // from the body and re-join with the original separator preserved.
+  const leadingWs = tail.match(/^\s*/)?.[0] ?? "";
+  const body = tail.slice(leadingWs.length);
+  return `${head}${leadingWs}${body.replace(LARK_QUEUE_PREFIX_RE, "")}`;
 }
 
 async function enqueueLarkTurn(

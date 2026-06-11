@@ -26,6 +26,25 @@ function isMarkdownParseError(error: unknown): boolean {
   );
 }
 
+// A permanent delivery failure (chat blocked / forbidden / not found / bad
+// request) will not be fixed by a plain re-send, so we must not double-send and
+// must surface the original error. Anything else (transient network, rate
+// limit) is worth one last plain attempt.
+function isPermanentSendError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const text = error.message.toLowerCase();
+  return (
+    text.includes("403") ||
+    text.includes("forbidden") ||
+    text.includes("blocked") ||
+    text.includes("chat not found") ||
+    text.includes("400 ") ||
+    text.includes("bad request")
+  );
+}
+
 async function sendMessageWithMarkdown(api: TelegramApi, chatId: number, text: string): Promise<void> {
   try {
     await api.sendMessage(chatId, text, { parseMode: "Markdown" });
@@ -177,20 +196,61 @@ export async function deliverTelegramResponse(
 
   if (cleanedText) {
     const chunks = chunkTelegramMessage(cleanedText);
+    // Best-effort per chunk: a transient mid-delivery failure on one chunk must
+    // not abandon the remaining chunks and the files that follow. Track whether
+    // any chunk failed so we can attempt a last-ditch plain send rather than
+    // leaving the user with nothing.
+    let anyChunkSent = false;
+    let lastChunkError: unknown;
     for (const chunk of chunks) {
-      await sendMessageWithMarkdown(api as TelegramApi, chatId, chunk);
+      try {
+        await sendMessageWithMarkdown(api as TelegramApi, chatId, chunk);
+        anyChunkSent = true;
+      } catch (error) {
+        lastChunkError = error;
+      }
+    }
+    if (!anyChunkSent && lastChunkError !== undefined) {
+      // Nothing of the answer text reached the user. A permanent error (403 /
+      // forbidden / bad request) won't be fixed by re-sending, so re-throw it
+      // without a futile duplicate send. Otherwise try one plain, unformatted
+      // send of the whole text before giving up — that often still lands.
+      if (isPermanentSendError(lastChunkError)) {
+        throw lastChunkError;
+      }
+      try {
+        await (api as TelegramApi).sendMessage(chatId, cleanedText);
+      } catch {
+        throw lastChunkError;
+      }
+    } else if (anyChunkSent && lastChunkError !== undefined) {
+      // Partial delivery: some chunks landed, at least one did not. Best-effort
+      // continue already preserved the rest; tell the user so a silently
+      // truncated answer is not mistaken for the complete response.
+      await (api as TelegramApi)
+        .sendMessage(
+          chatId,
+          locale === "zh"
+            ? "⚠️ 部分回复内容投递失败,上文可能不完整。"
+            : "⚠️ Part of the response failed to deliver; the message above may be incomplete.",
+        )
+        .catch(() => undefined);
     }
   }
 
   const acceptedFiles: Array<{ sourcePath: string; realPath: string; filename: string; contents: Uint8Array | string; preferPhoto: boolean }> = [];
 
   const deliveryStateDir = path.dirname(inboxDir);
-  const workspacePrefix = path.join(deliveryStateDir, "workspace") + path.sep;
-  const telegramOutPrefix = path.join(deliveryStateDir, "workspace", ".telegram-out") + path.sep;
-  const overridePrefix = workspaceOverride ? workspaceOverride + path.sep : null;
-  const requestOutputPrefix = requestOutputDir
-    ? `${await realpath(requestOutputDir).catch(() => requestOutputDir)}${path.sep}`
-    : null;
+  // Candidate paths are realpath-normalized before the startsWith comparison, so
+  // the prefixes must be too — otherwise a workspace reached via a symlinked
+  // component (e.g. /var → /private/var on macOS, or a symlinked project dir)
+  // never matches and every in-workspace [send-file:] is wrongly rejected.
+  const realpathPrefix = async (dir: string): Promise<string> =>
+    `${await realpath(dir).catch(() => dir)}${path.sep}`;
+  const workspacePrefix = await realpathPrefix(path.join(deliveryStateDir, "workspace"));
+  const telegramOutPrefix = await realpathPrefix(path.join(deliveryStateDir, "workspace", ".telegram-out"));
+  const overridePrefix = workspaceOverride ? await realpathPrefix(workspaceOverride) : null;
+  const requestOutputPrefix = requestOutputDir ? await realpathPrefix(requestOutputDir) : null;
 
   for (const { path: filePath, preferPhoto } of fileCandidates) {
     try {

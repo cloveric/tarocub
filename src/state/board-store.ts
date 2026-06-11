@@ -55,10 +55,14 @@ export type BoardReadyResult = {
   unmetDependencies: string[];
 };
 
-export type BoardTaskCardUpdate = Partial<Pick<
+export type BoardTaskCardUpdate = Partial<Omit<Pick<
   BoardTaskInput,
   "description" | "acceptanceCriteria" | "priority" | "labels" | "checklist" | "artifacts"
->>;
+>, "checklist">> & {
+  // Accept existing checklist item objects mixed with new strings so callers
+  // (e.g. /board check add) can preserve done/completedAt while appending.
+  checklist?: Array<string | BoardChecklistItem>;
+};
 
 export type BoardTaskWorkspaceInput = {
   mode: BoardTaskWorkspace["mode"];
@@ -128,7 +132,7 @@ function normalizeArtifacts(values: Array<Pick<BoardArtifact, "kind" | "value">>
     .filter((artifact) => artifact.kind.length > 0 && artifact.value.length > 0);
 }
 
-function normalizeChecklist(values: string[] | BoardChecklistItem[] | undefined, existing: BoardChecklistItem[], timestamp: string): BoardChecklistItem[] {
+function normalizeChecklist(values: Array<string | BoardChecklistItem> | undefined, existing: BoardChecklistItem[], timestamp: string): BoardChecklistItem[] {
   if (!values) {
     return existing.map((item) => ({ ...item }));
   }

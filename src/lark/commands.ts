@@ -265,12 +265,9 @@ export async function handleLarkSimpleCommand(
     return true;
   }
 
-  const bgCommand = parseLarkBgCommand(commandText);
-  if (bgCommand) {
-    const message = await handleLarkBgCommand(bgCommand, commandLocale);
-    await sendLarkCommandMarkdown(input, normalized, "/bg", message);
-    return true;
-  }
+  // /bg is dispatched pre-queue in the message handler (instance-scoped process
+  // control must not be serialized behind the running turn), so it never reaches
+  // here. The predicate/handler are exported for that path.
 
   const engineCommand = parseLarkEngineCommand(commandText);
   if (engineCommand) {
@@ -544,6 +541,21 @@ function parseLarkFastCommand(text: string): { action: string } | null {
 }
 
 type LarkBgCommand = { action: "list" } | { action: "kill"; pid: number } | { action: "killall" } | { action: "usage" };
+
+export function isLarkBgCommand(text: string): boolean {
+  return /^\/bg(?:\s|$)/i.test(text.trim());
+}
+
+/**
+ * Pre-queue /bg entrypoint: instance-scoped background-process control that must
+ * run independently of the conversation session (like /stop), so it is dispatched
+ * ahead of chatQueue rather than inside the queued-turn path. Returns the reply
+ * text, or null when the text is not a /bg command.
+ */
+export async function handleLarkBgCommandText(text: string, locale: Locale): Promise<string | null> {
+  const command = parseLarkBgCommand(text);
+  return command ? await handleLarkBgCommand(command, locale) : null;
+}
 
 function parseLarkBgCommand(text: string): LarkBgCommand | null {
   const match = text.trim().match(/^\/bg(?:\s+([\s\S]+))?$/i);

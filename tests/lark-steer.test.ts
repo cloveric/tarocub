@@ -256,6 +256,137 @@ describe("lark mid-turn steering", () => {
     }
   });
 
+  it("/q preserves $-sequences in the payload (no replacement-string corruption)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-q-dollar-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController() });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string }) => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        // $$ / $& / $` are JS replacement-string specials; a naive .replace would
+        // mangle them. The literal payload must reach the engine untouched.
+        message: fakeLarkMessage({ messageId: "om_q_dollar", content: "/q price $$100 and $& and $`" }),
+      });
+
+      expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const turnText = bridge.handleAuthorizedMessage.mock.calls[0][0].text;
+      expect(turnText).toContain("price $$100 and $& and $`");
+      expect(turnText).not.toContain("/q ");
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("/q@botname strips the mention-shaped prefix and never leaks it into the prompt", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-q-mention-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController() });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string }) => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        // The /q@bot form: extractLarkMessageBody normalizes commandText to "/q …",
+        // so the old substring .replace no-op'd and "/q@bot" leaked into the prompt.
+        message: fakeLarkMessage({ messageId: "om_q_mention", content: "/q@tarocub_bot 排在后面再做" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const turnText = bridge.handleAuthorizedMessage.mock.calls[0][0].text;
+      expect(turnText).toContain("排在后面再做");
+      expect(turnText).not.toContain("/q@tarocub_bot");
+      expect(turnText).not.toContain("/q ");
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("/q never enters batch mode: it queues as its own turn instead of being merged", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-q-batch-"));
+    // Batching ON with a long window and preempt ON: a plain message would batch
+    // and the merged batch would preempt the running turn. A /q must do neither.
+    const runtime = createLarkServiceRuntime({ queuePolicy: { batchWindowMs: 10_000, preempt: true } });
+    const active = { abortController: new AbortController() };
+    runtime.activeRuns.set("lark:oc_chat", active);
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string }) => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_q_batch", content: "/q 干完当前的再做这个" }),
+      });
+
+      // /q runs as its own queued turn immediately — never parked in a batch...
+      expect(runtime.pendingBatches.size).toBe(0);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      // ...never steered...
+      expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
+      // ...and its no-preempt guarantee holds: the running turn was not aborted.
+      expect(active.abortController.signal.aborted).toBe(false);
+      const turnText = bridge.handleAuthorizedMessage.mock.calls[0][0].text;
+      expect(turnText).toContain("干完当前的再做这个");
+      expect(turnText).not.toContain("/q ");
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("bare /q from an unauthorized sender gets no usage text", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-q-bare-denied-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "deny" as const, text: "denied" })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_q_bare_denied", content: "/q" }),
+      });
+
+      const sentTexts = channel.send.mock.calls.map((call) => JSON.stringify(call[1]));
+      // The usage hint is gated behind access now: an unauthorized sender must
+      // not see it — only the denial reply.
+      expect(sentTexts.some((text) => text.includes("/q <"))).toBe(false);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
   it("bare /q replies with a usage hint instead of running a turn", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-q-bare-"));
     const runtime = createLarkServiceRuntime();

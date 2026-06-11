@@ -2267,6 +2267,7 @@ describe("polling helpers", () => {
           message: {
             chat: { id: -100123, type: "supergroup" },
             message_thread_id: 42,
+            is_topic_message: true,
             from: { id: 456 },
             text: "hello",
           },
@@ -2466,6 +2467,7 @@ describe("polling helpers", () => {
           chat: { id: -100123, type: "supergroup" },
           from: { id: 999 },
           message_thread_id: 42,
+          is_topic_message: true,
           text: "/approve",
         },
       }],
@@ -2498,6 +2500,7 @@ describe("polling helpers", () => {
           chat: { id: -100123, type: "supergroup" },
           from: { id: 456 },
           message_thread_id: 42,
+          is_topic_message: true,
           text: "/stop",
         },
       }],
@@ -4026,7 +4029,7 @@ describe("polling helpers", () => {
         },
       );
 
-      expect(api.answerCallbackQuery).toHaveBeenCalledWith("cb-1");
+      expect(api.answerCallbackQuery).toHaveBeenCalledWith("cb-1", undefined);
       expect(api.answerCallbackQuery.mock.invocationCallOrder[0]).toBeLessThan(api.sendMessage.mock.invocationCallOrder[0]);
       expect(api.answerCallbackQuery.mock.invocationCallOrder[0]).toBeLessThan(api.sendMessage.mock.invocationCallOrder[0]);
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(
@@ -4123,7 +4126,7 @@ describe("polling helpers", () => {
         ),
       ).resolves.toBeUndefined();
 
-      expect(api.answerCallbackQuery).toHaveBeenCalledWith("cb-1");
+      expect(api.answerCallbackQuery).toHaveBeenCalledWith("cb-1", undefined);
       expect(api.sendMessage).toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(
         expect.objectContaining({

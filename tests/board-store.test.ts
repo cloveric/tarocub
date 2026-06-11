@@ -342,6 +342,37 @@ describe("BoardStore", () => {
     }
   });
 
+  it("preserves done checklist items when appending a new one via card update", async () => {
+    // Finding 4: /board check <id> add must not wipe done-states. The fix passes the
+    // existing BoardChecklistItem objects (not just their text) alongside the new
+    // string, so normalizeChecklist keeps done/completedAt.
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
+
+    try {
+      const actor = { chatId: -100123, userId: 42, conversationKey: "chat:-100123" };
+      const store = new BoardStore(root);
+      await store.createTask({ title: "Ship docs", createdBy: actor, checklist: ["First item"] });
+
+      const checked = await store.setChecklistItemDone("B1", "C1", true);
+      expect(checked.checklist[0]).toMatchObject({ id: "C1", done: true });
+      const completedAt = checked.checklist[0]?.completedAt;
+      expect(completedAt).toBeTruthy();
+
+      // Simulate /board check add: append a new string to the existing item objects.
+      const existing = await store.getTask("B1");
+      const updated = await store.updateTaskCard("B1", {
+        checklist: [...(existing?.checklist ?? []), "Second item"],
+      });
+
+      expect(updated.checklist).toEqual([
+        expect.objectContaining({ id: "C1", text: "First item", done: true, completedAt }),
+        expect.objectContaining({ id: "C2", text: "Second item", done: false }),
+      ]);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("enforces WIP limits before starting a run", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
 

@@ -346,7 +346,13 @@ export function createDefaultTranscribeVoice(options: {
               transcripts.push(transcript.trim());
             }
           } catch (error) {
-            transcripts.push(`[chunk ${index + 1}/${chunks.length} transcription failed: ${summarizeError(error)}]`);
+            // Per-chunk failures are infrastructure errors, NOT user speech.
+            // Do not blend a "[chunk N/M transcription failed: ...]" marker into
+            // the transcript — the model would treat it as the user's words.
+            // Log it out-of-band and keep the successfully transcribed chunks.
+            console.warn(
+              `ASR chunk ${index + 1}/${chunks.length} transcription failed: ${summarizeError(error)}`,
+            );
           }
         }
         const mergedTranscript = transcripts.join("\n").trim();
@@ -455,11 +461,19 @@ export async function prepareTelegramMessageInput(input: {
 
   let text = normalized.text;
   if (transcribableDownloads.length > 0) {
+    // Track whether any transcribable attachment produced real speech. An empty
+    // or whitespace-only transcript (without throwing) must not silently yield
+    // an empty prompt fed to the engine.
+    let producedAnyTranscript = false;
+    let lastEmptyAttachment: NormalizedTelegramAttachment | undefined;
     for (const media of transcribableDownloads) {
       try {
-        const transcript = await transcribeVoice(media.localPath);
+        const transcript = (await transcribeVoice(media.localPath)).trim();
         if (transcript) {
+          producedAnyTranscript = true;
           text = text ? `${text}\n${transcript}` : transcript;
+        } else {
+          lastEmptyAttachment = media.attachment;
         }
       } catch {
         return {
@@ -467,6 +481,14 @@ export async function prepareTelegramMessageInput(input: {
           text: renderTranscriptionFailureMessage(locale, media.attachment),
         };
       }
+    }
+    // If nothing transcribed and there is no other text, surface a transcription
+    // failure rather than sending an empty prompt to the engine.
+    if (!producedAnyTranscript && !text.trim() && lastEmptyAttachment) {
+      return {
+        kind: "reply",
+        text: renderTranscriptionFailureMessage(locale, lastEmptyAttachment),
+      };
     }
   }
   if (quotedAudioDownloads.length > 0 && normalized.replyContext) {

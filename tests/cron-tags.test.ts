@@ -249,4 +249,42 @@ describe("cron-add fallback tags", () => {
       vi.useRealTimers();
     }
   });
+
+  it("resolves a non-zero-padded offset-less at in the job timezone, not host TZ", async () => {
+    // Finding 8: "2026-6-13 9:00" (non-padded month/day/hour) must be interpreted in
+    // the job timezone, not silently fall through to host-TZ new Date() parsing.
+    // 09:00 Asia/Shanghai (UTC+8) == 01:00 UTC. We set a non-Shanghai host TZ so the
+    // old host-TZ fallback would produce a clearly different instant.
+    const previousTz = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-01T00:00:00.000Z"));
+    try {
+      await withCronRuntime(async ({ stateDir, store, scheduler }) => {
+        await processCronAddTags({
+          text: '[cron-add:{"at":"2026-6-13 9:00","timezone":"Asia/Shanghai","prompt":"看盘"}]',
+          cronRuntime: { store, scheduler },
+          stateDir,
+          chatId: 123,
+          userId: 456,
+          locale: "zh",
+        });
+
+        const jobs = await store.list();
+        expect(jobs).toHaveLength(1);
+        expect(jobs[0]).toEqual(expect.objectContaining({
+          prompt: "看盘",
+          timezone: "Asia/Shanghai",
+          targetAt: "2026-06-13T01:00:00.000Z",
+        }));
+      });
+    } finally {
+      vi.useRealTimers();
+      if (previousTz === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previousTz;
+      }
+    }
+  });
 });

@@ -242,6 +242,7 @@ export async function handleLocalEngineTelegramCommand(input: {
         text: "/compact",
         files: [],
         workspaceOverride: cfg.resume?.workspacePath,
+        abortSignal: context.abortSignal,
       });
 
       const compactMsg = locale === "zh"

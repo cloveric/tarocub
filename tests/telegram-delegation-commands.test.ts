@@ -134,6 +134,96 @@ describe("handleDelegationTelegramCommand", () => {
     }
   });
 
+  it("runs /btw on a fresh ephemeral session", async () => {
+    // Finding 3: /btw is a one-off side question and must not resume or persist a
+    // session. It passes a sessionIdOverride which bypasses getOrCreateSession/bindSession.
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const handleAuthorizedMessage = vi.fn().mockResolvedValue({ text: "side answer" });
+
+    try {
+      await handleDelegationTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/btw hello"),
+        context: { api: api as never, instanceName: "default", updateId: 77 },
+        bridge: { handleAuthorizedMessage } as never,
+        loadBusConfig: vi.fn(),
+        delegateToInstance: vi.fn(),
+      });
+
+      const override = handleAuthorizedMessage.mock.calls[0]?.[0]?.sessionIdOverride;
+      expect(override).toMatch(/^btw-/);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("excludes the current instance from /fan so it does not run twice", async () => {
+    // Finding 6: the current instance already runs the prompt locally, so a self-listed
+    // bus.parallel entry must be dropped from the peer fan-out.
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const handleAuthorizedMessage = vi.fn().mockResolvedValue({ text: "local answer" });
+    const delegateToInstance = vi.fn().mockResolvedValue({ text: "peer answer" });
+
+    try {
+      const handled = await handleDelegationTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/fan hello"),
+        context: { api: api as never, instanceName: "default", updateId: 79 },
+        bridge: { handleAuthorizedMessage } as never,
+        loadBusConfig: vi.fn().mockResolvedValue({ parallel: ["default", "peer"] }),
+        delegateToInstance: delegateToInstance as never,
+      });
+
+      expect(handled).toBe(true);
+      // Local turn runs exactly once; the only delegated peer is "peer", never "default".
+      expect(handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(delegateToInstance).toHaveBeenCalledTimes(1);
+      expect(delegateToInstance).toHaveBeenCalledWith(expect.objectContaining({ targetInstance: "peer" }));
+      expect(delegateToInstance).not.toHaveBeenCalledWith(expect.objectContaining({ targetInstance: "default" }));
+      // "Querying N bots" counts self + remaining peers (1 + 1 = 2).
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Querying 2 bots in parallel...");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("treats /fan as unconfigured when the only parallel target is the current instance", async () => {
+    // Finding 6: a bus.parallel that contains only the current instance has no real
+    // peers after self-exclusion, so /fan reports the not-configured message.
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+
+    try {
+      const handled = await handleDelegationTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: {},
+        normalized: createNormalizedMessage("/fan hello"),
+        context: { api: api as never, instanceName: "default", updateId: 79 },
+        bridge: { handleAuthorizedMessage: vi.fn() } as never,
+        loadBusConfig: vi.fn().mockResolvedValue({ parallel: ["default"] }),
+        delegateToInstance: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "No parallel bots configured. Add instance names to bus.parallel in config.json.",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("reports missing /chain bots", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
     const api = {

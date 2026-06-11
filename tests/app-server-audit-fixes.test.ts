@@ -366,6 +366,53 @@ describe("app-server config change while busy", () => {
       await removeTempRoot(root);
     }
   });
+
+  it("warns once per distinct pending change and names a /goal pursuit holding the session", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeFile(configPath, JSON.stringify({ approvalMode: "normal" }) + "\n", "utf8");
+      const adapter = new CodexAppServerAdapter(
+        "codex", process.cwd(), undefined, (() => new FakeChildProcess()) as never,
+        undefined, undefined, configPath,
+      );
+      // Drive ensureInitialized directly: pretend a child is already running on an
+      // OLD config, and a goal watcher is keeping it non-idle so waitForIdle rejects.
+      const internal = adapter as unknown as {
+        initializeKey: string | null;
+        initializePromise: Promise<void> | null;
+        goalWatchers: Map<string, unknown>;
+        ensureInitialized(opts: { initializeArgs: string[]; initializeKey: string }): Promise<void>;
+        waitForIdle(): Promise<void>;
+      };
+      internal.initializeKey = "old-config";
+      internal.initializePromise = Promise.resolve();
+      internal.goalWatchers.set("thread-goal", {});
+      internal.waitForIdle = () => Promise.reject(new Error("Codex app-server did not become idle within 30000ms"));
+
+      // Two consecutive messages carrying the SAME pending change → ONE warning.
+      await internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" });
+      await internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" });
+
+      const goalWarnings = consoleErrorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("config change deferred while busy"));
+      expect(goalWarnings).toHaveLength(1);
+      // The /goal pursuit is named so the operator knows why the change is stuck.
+      expect(goalWarnings[0]).toContain("/goal");
+
+      // A DIFFERENT pending change warns again (the one-shot latch reset).
+      await internal.ensureInitialized({ initializeArgs: [], initializeKey: "newer-config" });
+      const allWarnings = consoleErrorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("config change deferred while busy"));
+      expect(allWarnings).toHaveLength(2);
+    } finally {
+      consoleErrorSpy.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
 });
 
 describe("app-server per-turn stderr diagnostics", () => {

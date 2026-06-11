@@ -40,6 +40,24 @@ function isMissingError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
+/**
+ * True when a write into the just-created lock dir failed because the dir was
+ * pulled out from under us by a concurrent recoverer's rename. The OS reports
+ * this differently across platforms: ENOENT (the path is simply gone, Linux),
+ * EINVAL (open on a path whose component is mid-rename, macOS), or ENOTDIR (a
+ * component was replaced by a file). All three mean "lost the race" → retry.
+ */
+function isLockDirRacedAwayError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  // ENOTEMPTY: a concurrent recoverer re-populated the lock dir (e.g. restored
+  // owner.json) between our recursive rm's readdir and its final rmdir, so the
+  // rmdir found it non-empty. Same "the dir was mutated under us" class.
+  return code === "ENOENT" || code === "EINVAL" || code === "ENOTDIR" || code === "ENOTEMPTY";
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -193,7 +211,13 @@ async function acquireFileMutex(
       }), { encoding: "utf8", mode: 0o600 });
       return token;
     } catch (error) {
-      if (!isFileExistsError(error)) {
+      // EEXIST: another owner holds the lock — wait/recover normally.
+      // ENOENT/EINVAL/ENOTDIR: we DID win mkdir, but a concurrent stale-lock
+      // recoverer renamed our freshly-created dir away before writeFile(ownerPath)
+      // landed (its owner.json read came back null, so it judged the dir abandoned).
+      // That is not a failure — re-enter the loop and re-acquire, exactly as for
+      // EEXIST. Rethrowing it would crash the winner's whole store write.
+      if (!isFileExistsError(error) && !isLockDirRacedAwayError(error)) {
         throw error;
       }
       notifyWait?.("file_lock");
@@ -243,7 +267,15 @@ async function releaseFileMutex(lockPath: string, token: string): Promise<void> 
     ownsLock = false;
   }
   if (ownsLock) {
-    await rm(lockPath, { recursive: true, force: true });
+    // Best-effort: under heavy contention a concurrent recoverer can rename our
+    // dir to trash (ENOENT) or repopulate it mid-removal (ENOTEMPTY). Releasing
+    // our own lock must never throw out of the critical section over that — any
+    // residual dir is reclaimed later via staleLockMs.
+    await rm(lockPath, { recursive: true, force: true }).catch((error: unknown) => {
+      if (!isLockDirRacedAwayError(error)) {
+        throw error;
+      }
+    });
   }
 }
 

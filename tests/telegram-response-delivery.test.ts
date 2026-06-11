@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, symlink, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -658,6 +658,112 @@ describe("deliverTelegramResponse", () => {
     ).resolves.toBe(0);
     expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "preferred_layout", { parseMode: "Markdown" });
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "preferred_layout");
+  });
+
+  it("falls back to one plain send of the whole text when a transient error sinks every chunk", async () => {
+    // A non-permanent error (network) on the formatted send must not leave the
+    // user with nothing — a single plain send of the whole answer is attempted.
+    const api = {
+      sendMessage: vi.fn()
+        .mockRejectedValueOnce(new Error("Telegram API request failed for sendMessage: fetch failed"))
+        .mockResolvedValueOnce({ message_id: 2 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
+    };
+
+    await expect(
+      deliverTelegramResponse(api as never, 123, "the answer", "/tmp/inbox", undefined, undefined, "en"),
+    ).resolves.toBe(0);
+    // First call: formatted (Markdown). Second call: plain fallback.
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "the answer", { parseMode: "Markdown" });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "the answer");
+  });
+
+  it("does not double-send on a permanent 403 and surfaces the original error", async () => {
+    const api = {
+      sendMessage: vi.fn().mockRejectedValue(new Error("Telegram API request failed for sendMessage: 403 Forbidden")),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
+    };
+
+    await expect(
+      deliverTelegramResponse(api as never, 123, "the answer", "/tmp/inbox", undefined, undefined, "en"),
+    ).rejects.toThrow("403 Forbidden");
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("still delivers workspace files after a transient text-send failure (best effort per chunk)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const filePath = path.join(workspaceDir, "report.txt");
+    const api = {
+      // Formatted send fails (network), plain fallback succeeds; the file must
+      // still be delivered.
+      sendMessage: vi.fn()
+        .mockRejectedValueOnce(new Error("Telegram API request failed for sendMessage: fetch failed"))
+        .mockResolvedValueOnce({ message_id: 2 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 4 }),
+    };
+
+    try {
+      await mkdir(workspaceDir, { recursive: true });
+      await writeFile(filePath, "hello from file", "utf8");
+
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `Done.\n\n[send-file:${filePath}]`,
+        inboxDir,
+        undefined,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(1);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "report.txt", expect.any(Uint8Array));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("accepts an in-workspace file reached through a symlinked workspace component", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    // workspaceOverride points at a symlink whose realpath differs; the file is
+    // referenced via the symlinked path, so the prefix must be realpath'd too.
+    const realProjectDir = path.join(realRoot, "real-project");
+    const symlinkDir = path.join(realRoot, "linked-project");
+    const filePath = path.join(symlinkDir, "out.txt");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await mkdir(realProjectDir, { recursive: true });
+      await symlink(realProjectDir, symlinkDir);
+      await writeFile(path.join(realProjectDir, "out.txt"), "result bytes", "utf8");
+
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `[send-file:${filePath}]`,
+        inboxDir,
+        symlinkDir,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(1);
+      expect(api.sendDocument).toHaveBeenCalledWith(123, "out.txt", expect.any(Uint8Array));
+    } finally {
+      await removeTempRoot(root);
+    }
   });
 
   it("falls back to plain text when Telegram rejects Markdown text URL entities", async () => {

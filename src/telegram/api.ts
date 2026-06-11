@@ -12,6 +12,94 @@ function sanitizeMultipartFilename(filename: string): string {
   return cleaned || "file";
 }
 
+// Telegram caption hard limit; captions are interpolated raw into a multipart
+// form-data value, so CR/LF would let prompt-injected content (the caption can
+// be a derived filename) forge or override sibling form fields. Strip the bytes
+// that can break the part boundary and clamp to Telegram's limit.
+const TELEGRAM_CAPTION_LIMIT = 1024;
+function sanitizeMultipartCaption(caption: string): string {
+  return caption.replace(/[\r\n]/g, " ").slice(0, TELEGRAM_CAPTION_LIMIT);
+}
+
+const MAX_TRANSIENT_RETRIES = 2;
+
+function isTransientFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  // Aborts are intentional cancellations, not transient failures.
+  if (error.name === "AbortError" || /aborted/i.test(error.message)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ECONNREFUSED" || code === "EPIPE") {
+    return true;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("fetch failed") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("network") ||
+    message.includes("socket hang up") ||
+    message.includes("timeout") ||
+    message.includes("timed out")
+  );
+}
+
+// Shared retry wrapper for the multipart endpoints (sendDocument / sendPhoto /
+// sendVoice / sendMediaGroup), which bypass postJson and therefore had zero 429
+// or transient-network handling. A mid-delivery ECONNRESET used to abandon the
+// rest of the answer's files; this gives them parity with postJson.
+async function sendMultipartWithRetry(
+  perform: () => Promise<Response>,
+  method: string,
+  signal?: AbortSignal,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+    if (signal?.aborted) {
+      throw new Error("Telegram API request aborted");
+    }
+    let response: Response;
+    try {
+      response = await perform();
+    } catch (error) {
+      lastError = error;
+      if (attempt < MAX_TRANSIENT_RETRIES && isTransientFetchError(error)) {
+        await delay(transientBackoffMs(attempt), signal);
+        continue;
+      }
+      throw error;
+    }
+
+    if (response.status === 429 && attempt < MAX_TRANSIENT_RETRIES) {
+      const retryAfterSeconds = await readRetryAfterSeconds(response);
+      await delay(retryAfterSeconds * 1000, signal);
+      continue;
+    }
+
+    return response;
+  }
+  throw lastError ?? new Error(`Telegram API request failed for ${method}`);
+}
+
+function transientBackoffMs(attempt: number): number {
+  return Math.min(2000, 250 * 2 ** attempt);
+}
+
+async function readRetryAfterSeconds(response: Response): Promise<number> {
+  try {
+    const errorBody = (await response.clone().json()) as { parameters?: { retry_after?: number } };
+    if (typeof errorBody?.parameters?.retry_after === "number") {
+      return errorBody.parameters.retry_after;
+    }
+  } catch {
+    // Use default retry_after when the body is unreadable.
+  }
+  return 5;
+}
+
 type TelegramOkResponse<T> = {
   ok: true;
   result: T;
@@ -147,39 +235,49 @@ export class TelegramApi {
     validateResult?: (value: unknown) => value is T,
     signal?: AbortSignal,
   ): Promise<T> {
-    return this.postJsonOnce(method, body, validateResult, true, signal);
+    // Retry transient network failures and a couple of 429s with backoff. A
+    // single transient fetch failure mid-delivery used to throw and abandon the
+    // remaining chunks/files of an answer.
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= MAX_TRANSIENT_RETRIES; attempt++) {
+      if (signal?.aborted) {
+        throw new Error("Telegram API request aborted");
+      }
+      let response: Response;
+      try {
+        response = await fetch(this.buildUrl(method), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (error) {
+        lastError = error;
+        if (attempt < MAX_TRANSIENT_RETRIES && isTransientFetchError(error)) {
+          await delay(transientBackoffMs(attempt), signal);
+          continue;
+        }
+        throw error;
+      }
+
+      if (response.status === 429 && attempt < MAX_TRANSIENT_RETRIES) {
+        const retryAfterSeconds = await readRetryAfterSeconds(response);
+        await delay(retryAfterSeconds * 1000, signal);
+        continue;
+      }
+
+      return this.finishPostJson(method, response, validateResult);
+    }
+    throw lastError ?? new Error(`Telegram API request failed for ${method}`);
   }
 
-  private async postJsonOnce<T>(
+  private async finishPostJson<T>(
     method: string,
-    body: Record<string, unknown>,
+    response: Response,
     validateResult: ((value: unknown) => value is T) | undefined,
-    allowRetry: boolean,
-    signal?: AbortSignal,
   ): Promise<T> {
-    const response = await fetch(this.buildUrl(method), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
-
-    if (response.status === 429 && allowRetry) {
-      let retryAfterSeconds = 5;
-      try {
-        const errorBody = await response.json() as { parameters?: { retry_after?: number } };
-        if (typeof errorBody?.parameters?.retry_after === "number") {
-          retryAfterSeconds = errorBody.parameters.retry_after;
-        }
-      } catch {
-        // Use default retry_after
-      }
-      await delay(retryAfterSeconds * 1000, signal);
-      return this.postJsonOnce(method, body, validateResult, false, signal);
-    }
-
     if (!response.ok) {
       const detail = await extractTelegramErrorDetail<T>(response, `${response.status} ${response.statusText}`);
       throw new Error(`Telegram API request failed for ${method}: ${detail}`);
@@ -268,13 +366,13 @@ export class TelegramApi {
       ]),
     );
 
-    const response = await fetch(this.buildUrl("sendDocument"), {
+    const response = await sendMultipartWithRetry(() => fetch(this.buildUrl("sendDocument"), {
       method: "POST",
       headers: {
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
       },
       body,
-    });
+    }), "sendDocument");
 
     if (!response.ok) {
       const detail = await extractTelegramErrorDetail<TelegramMessage>(response, `${response.status} ${response.statusText}`);
@@ -319,13 +417,13 @@ export class TelegramApi {
       ]),
     );
 
-    const response = await fetch(this.buildUrl("sendVoice"), {
+    const response = await sendMultipartWithRetry(() => fetch(this.buildUrl("sendVoice"), {
       method: "POST",
       headers: {
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
       },
       body,
-    });
+    }), "sendVoice");
 
     if (!response.ok) {
       const detail = await extractTelegramErrorDetail<TelegramMessage>(response, `${response.status} ${response.statusText}`);
@@ -369,7 +467,7 @@ export class TelegramApi {
         notificationPart +
         threadPart +
         `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n` +
+        `Content-Disposition: form-data; name="caption"\r\n\r\n${sanitizeMultipartCaption(caption)}\r\n` +
         `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="photo"; filename="${sanitizeMultipartFilename(filename)}"\r\n` +
         `Content-Type: application/octet-stream\r\n\r\n`;
@@ -383,13 +481,13 @@ export class TelegramApi {
       ]),
     );
 
-    const response = await fetch(this.buildUrl("sendPhoto"), {
+    const response = await sendMultipartWithRetry(() => fetch(this.buildUrl("sendPhoto"), {
       method: "POST",
       headers: {
         "Content-Type": `multipart/form-data; boundary=${boundary}`,
       },
       body,
-    });
+    }), "sendPhoto");
 
     if (!response.ok) {
       const detail = await extractTelegramErrorDetail<TelegramMessage>(response, `${response.status} ${response.statusText}`);
@@ -433,9 +531,10 @@ export class TelegramApi {
     return this.postJson("editMessageText", body, isTelegramMessage);
   }
 
-  async answerCallbackQuery(callbackQueryId: string): Promise<void> {
+  async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
     await this.postJson("answerCallbackQuery", {
       callback_query_id: callbackQueryId,
+      ...(typeof text === "string" && text.length > 0 ? { text } : {}),
     });
   }
 
@@ -513,7 +612,7 @@ export class TelegramApi {
     const media = photos.map((photo, index) => ({
       type: "photo" as const,
       media: `attach://photo${index}`,
-      ...(photo.caption ? { caption: photo.caption } : {}),
+      ...(photo.caption ? { caption: sanitizeMultipartCaption(photo.caption) } : {}),
     }));
 
     parts.push(Buffer.from(
@@ -539,11 +638,11 @@ export class TelegramApi {
 
     parts.push(Buffer.from(`--${boundary}--\r\n`, "utf8"));
 
-    const response = await fetch(this.buildUrl("sendMediaGroup"), {
+    const response = await sendMultipartWithRetry(() => fetch(this.buildUrl("sendMediaGroup"), {
       method: "POST",
       headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` },
       body: new Uint8Array(Buffer.concat(parts)),
-    });
+    }), "sendMediaGroup");
 
     if (!response.ok) {
       const detail = await extractTelegramErrorDetail<unknown>(response, `${response.status} ${response.statusText}`);

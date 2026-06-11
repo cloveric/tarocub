@@ -52,7 +52,7 @@ export interface ServiceCommandDeps {
     command: string,
     args: string[],
     options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
-  ) => void;
+  ) => number | void;
   sleep?: (ms: number) => Promise<void>;
   killProcessTree?: (pid: number) => void;
   forceKillProcessTree?: (pid: number) => void;
@@ -152,16 +152,37 @@ const BLOCKING_WORKFLOW_STATUSES = new Set(["preparing", "processing", "failed"]
 const LEGACY_AUTOSTART_LABEL_PREFIX = "com.cloveric.cc-telegram-bridge.";
 const ACTIVE_TURN_STALE_MS = 6 * 60 * 60_000;
 const DEFAULT_DEFERRED_RESTART_DELAY_MS = 5_000;
+// Turn-scoped side-channel env that a long-lived service must never inherit. The
+// scheduling turn exports these (send URL/token/command, thread id, the instance
+// marker); a restarted service that inherited them would target a stale channel.
+// Mirrors the set the Lark deferred-restart path scrubs in cli.ts.
+const DEFERRED_RESTART_SCRUB_ENV_KEYS = [
+  "CODEX_TELEGRAM_INSTANCE",
+  "CCTB_SEND_URL",
+  "CCTB_SEND_TOKEN",
+  "CCTB_SEND_COMMAND",
+  "CODEX_THREAD_ID",
+] as const;
+const DEFERRED_RESTART_PID_FILE = "deferred-restart.pid";
+// The helper waits for the active turn (the one that scheduled the restart) to
+// finish instead of force-killing it: drop --force and retry on the refusal
+// message until the turn queue drains, capped at maxWaitMs. Mirrors the Lark path.
 const DEFERRED_RESTART_HELPER_SCRIPT = `
 const { spawnSync } = require("node:child_process");
 
 const entryPath = process.argv[1];
 const instanceName = process.argv[2];
 const delayMs = Number.parseInt(process.argv[3] ?? "5000", 10);
+const scrubKeys = (process.argv[4] ?? "").split(",").filter(Boolean);
+const retryDelayMs = 30_000;
+const maxWaitMs = 2 * 60 * 60 * 1000;
+const deadline = Date.now() + maxWaitMs;
 
-setTimeout(() => {
+function runRestart() {
   const env = { ...process.env };
-  delete env.CODEX_TELEGRAM_INSTANCE;
+  for (const key of scrubKeys) {
+    delete env[key];
+  }
 
   const restartArgs = [
     entryPath,
@@ -170,15 +191,32 @@ setTimeout(() => {
     "restart",
     "--instance",
     instanceName,
-    "--force",
   ];
   const result = spawnSync(process.execPath, restartArgs, {
     env,
-    stdio: "inherit",
+    encoding: "utf8",
   });
 
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if ((result.status ?? 1) === 0) {
+    process.exit(0);
+  }
+
+  const output = [result.stdout, result.stderr].filter(Boolean).join("\\n");
+  const queueBusy = /active Telegram turn\\(s\\)|Refusing to stop\\/restart without --force/.test(output);
+  if (queueBusy && Date.now() + retryDelayMs <= deadline) {
+    process.stderr.write(
+      \`Deferred restart for "\${instanceName}" is waiting for the active turn to finish; retrying in \${Math.ceil(retryDelayMs / 1000)}s.\\n\`,
+    );
+    setTimeout(runRestart, retryDelayMs);
+    return;
+  }
+
   process.exit(result.status ?? 1);
-}, Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 5000);
+}
+
+setTimeout(runRestart, Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 5000);
 `;
 
 function resolveHomeDir(env: Pick<ServiceCommandEnv, "HOME" | "USERPROFILE">): string {
@@ -285,7 +323,7 @@ function defaultSpawnDetached(
   command: string,
   args: string[],
   options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
-): void {
+): number | void {
   const stdoutFd = openSync(options.stdoutPath, "a");
   const stderrFd = openSync(options.stderrPath, "a");
   const child = spawn(command, args, {
@@ -298,6 +336,7 @@ function defaultSpawnDetached(
   child.unref();
   closeSync(stdoutFd);
   closeSync(stderrFd);
+  return child.pid;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -742,6 +781,39 @@ export async function startServiceInstance(
   throw new Error(`Instance "${paths.instanceName}" did not reach a running state.`);
 }
 
+async function readPendingDeferredRestartPid(
+  pidFilePath: string,
+  isProcessAlive: (pid: number) => boolean,
+): Promise<number | null> {
+  let raw: string;
+  try {
+    raw = await readFile(pidFilePath, "utf8");
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return null;
+    }
+    return null;
+  }
+
+  let pid: number | null = null;
+  try {
+    const parsed = JSON.parse(raw) as { pid?: unknown };
+    pid = typeof parsed.pid === "number" ? parsed.pid : null;
+  } catch {
+    pid = null;
+  }
+
+  if (pid === null || !isProcessAlive(pid)) {
+    return null;
+  }
+  return pid;
+}
+
 export async function scheduleDeferredServiceRestart(
   env: ServiceCommandEnv,
   instanceName: string,
@@ -751,6 +823,7 @@ export async function scheduleDeferredServiceRestart(
   const cwd = deps.cwd ?? process.cwd();
   const paths = resolveServicePaths(env, instanceName, cwd);
   const spawnDetachedProcess = deps.spawnDetached ?? defaultSpawnDetached;
+  const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
   const delayMs = Math.max(1, Math.trunc(options.delayMs ?? DEFAULT_DEFERRED_RESTART_DELAY_MS));
 
   if (!existsSync(paths.entryPath)) {
@@ -759,21 +832,47 @@ export async function scheduleDeferredServiceRestart(
 
   await mkdir(paths.stateDir, { recursive: true });
 
+  // Singleton guard: a live pending helper means a deferred restart is already
+  // scheduled for this instance; spawning a second would double-restart (and kill
+  // a turn that the first helper is waiting on). Verified production-real.
+  const pidFilePath = path.join(paths.stateDir, DEFERRED_RESTART_PID_FILE);
+  const pendingPid = await readPendingDeferredRestartPid(pidFilePath, isProcessAlive);
+  if (pendingPid !== null) {
+    const target = options.current ? "current instance" : "instance";
+    return `Deferred restart for ${target} "${paths.instanceName}" is already pending (pid ${pendingPid}); not scheduling another.`;
+  }
+
+  // Scrub the turn-scoped side channel from the helper's own environment so neither
+  // the helper nor the service it spawns inherits a stale channel. Keys are set to
+  // undefined (not deleted) because defaultSpawnDetached merges over process.env, and
+  // child_process drops undefined-valued keys — a delete here would be re-added by the
+  // merge. The helper script also re-scrubs by name before it restarts the service.
+  const helperEnv: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of DEFERRED_RESTART_SCRUB_ENV_KEYS) {
+    helperEnv[key] = undefined;
+  }
+
   const logPath = path.join(paths.stateDir, "deferred-restart.log");
-  spawnDetachedProcess(process.execPath, [
+  const helperPid = spawnDetachedProcess(process.execPath, [
     "-e",
     DEFERRED_RESTART_HELPER_SCRIPT,
     paths.entryPath,
     paths.instanceName,
     String(delayMs),
+    DEFERRED_RESTART_SCRUB_ENV_KEYS.join(","),
   ], {
     cwd,
     stdoutPath: logPath,
     stderrPath: logPath,
+    env: helperEnv,
   });
 
+  if (typeof helperPid === "number") {
+    await writeFile(pidFilePath, JSON.stringify({ pid: helperPid, scheduledAt: new Date().toISOString() }), "utf8");
+  }
+
   const target = options.current ? "current instance" : "instance";
-  return `Scheduled one-shot deferred restart for ${target} "${paths.instanceName}" in ${Math.ceil(delayMs / 1000)}s.`;
+  return `Scheduled deferred restart for ${target} "${paths.instanceName}" in ${Math.ceil(delayMs / 1000)}s; it will retry until the active turn finishes.`;
 }
 
 export async function stopServiceInstance(

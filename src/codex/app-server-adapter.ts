@@ -468,6 +468,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private readonly loadedThreads = new Set<string>();
   private completingTurns = 0;
   private readonly idleWaiters = new Set<() => void>();
+  // Remembers the initializeKey whose pending config change we have already
+  // warned about, so a deferred re-init logs ONCE per distinct change instead of
+  // on every message that keeps hitting the busy child.
+  private deferredConfigWarningKey: string | null = null;
   private lastRequestDiagnostic: AppServerProtocolDiagnostic | null = null;
   private lastResponseDiagnostic: AppServerProtocolDiagnostic | null = null;
   private lastNotificationDiagnostic: AppServerProtocolDiagnostic | null = null;
@@ -780,19 +784,37 @@ export class CodexAppServerAdapter implements CodexAdapter {
           this.destroy();
         }
       } catch (error) {
-        // A long-running turn held the child busy past the idle window. Keep
-        // serving new turns on the existing child with the OLD config —
-        // initializeKey stays unchanged, so re-init is retried on a later
-        // message once idle — instead of hard-failing every new message in
-        // every chat until the long turn ends.
+        // A long-running turn (or an autonomous /goal pursuit) held the child busy
+        // past the idle window. Keep serving new turns on the existing child with
+        // the OLD config — initializeKey stays unchanged, so re-init is retried on
+        // a later message once idle — instead of hard-failing every new message in
+        // every chat until the activity ends.
+        //
+        // Known limitation: isIdle() treats an outstanding /goal watcher as busy,
+        // so a config change (effort/model/etc.) made WHILE a goal is being pursued
+        // will not apply until the goal finishes. We do NOT destroy() the child to
+        // force it: that would terminate Codex's in-flight autonomous goal run and
+        // lose its progress. The change is surfaced below and applied on the next
+        // message after the goal settles.
         if (this.initializePromise) {
-          console.error(
-            `Codex app-server config change deferred while busy: ${error instanceof Error ? error.message : String(error)}`,
-          );
+          // Surface the deferral once per distinct pending change rather than on
+          // every message, so the operator can see a config change has not taken
+          // effect yet (and why) without log spam.
+          if (this.deferredConfigWarningKey !== runtimeOptions.initializeKey) {
+            this.deferredConfigWarningKey = runtimeOptions.initializeKey;
+            console.error(
+              `Codex app-server config change deferred while busy (will apply once idle${
+                this.goalWatchers.size > 0 ? "; a /goal pursuit is holding the session" : ""
+              }): ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
           return this.initializePromise;
         }
       }
     }
+    // The pending change was applied (or there was nothing to defer): clear the
+    // one-shot warning latch so a future deferral logs again.
+    this.deferredConfigWarningKey = null;
 
     if (!this.initializePromise) {
       this.initializeKey = runtimeOptions.initializeKey;

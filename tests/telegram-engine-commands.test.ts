@@ -534,6 +534,47 @@ describe("handleLocalEngineTelegramCommand", () => {
     }
   });
 
+  it("forwards the abort signal so /stop can cancel /compact", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "compacted" }),
+    };
+    const abortSignal = new AbortController().signal;
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude", resume: { workspacePath: "/tmp/work" } },
+        normalized: createNormalizedMessage("/compact"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 81,
+          abortSignal,
+        },
+        bridge,
+        sessionStore: {
+          removeByChatId: vi.fn(),
+          clearAll: vi.fn(),
+        },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        text: "/compact",
+        abortSignal,
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("returns false for non-engine commands", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
 

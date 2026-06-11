@@ -66,6 +66,59 @@ describe("prepareTelegramMessageInput", () => {
     }
   });
 
+  it("surfaces a transcription-failure reply when a voice-only message transcribes to empty", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    // Voice-only message (no accompanying text) whose transcript comes back
+    // empty must NOT yield an empty prompt fed to the engine.
+    const normalized = createNormalizedMessage("", [{ fileId: "voice-1", kind: "voice" }]);
+    const getFile = vi.fn(async () => ({ file_path: "voice/message.ogg" }));
+    const downloadFile = vi.fn().mockResolvedValue(undefined);
+    const transcribeVoice = vi.fn().mockResolvedValue("   ");
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: { getFile, downloadFile } as never,
+        transcribeVoice,
+      });
+
+      expect(result).toEqual({
+        kind: "reply",
+        text: "Voice transcription failed. Please send a text message.",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps accompanying text when a voice transcript is empty instead of replying", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("please summarize", [{ fileId: "voice-1", kind: "voice" }]);
+    const getFile = vi.fn(async () => ({ file_path: "voice/message.ogg" }));
+    const downloadFile = vi.fn().mockResolvedValue(undefined);
+    const transcribeVoice = vi.fn().mockResolvedValue("");
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: { getFile, downloadFile } as never,
+        transcribeVoice,
+      });
+
+      expect(result).toEqual({
+        kind: "ready",
+        text: "please summarize",
+        downloadedAttachments: [],
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("downloads audio attachments and appends their transcripts to the turn text", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
     const normalized = createNormalizedMessage("please use this", [
@@ -374,9 +427,12 @@ describe("createDefaultTranscribeVoice", () => {
 
     const transcript = await transcribeVoice("/tmp/long-meeting.m4a");
 
+    // Successful chunks are kept; the per-chunk failure marker is NOT blended
+    // into the transcript (it is an infra error, not user speech).
     expect(transcript).toContain("chunk-000 transcript");
-    expect(transcript).toContain("[chunk 2/3 transcription failed:");
     expect(transcript).toContain("chunk-002 transcript");
+    expect(transcript).not.toContain("transcription failed");
+    expect(transcript).not.toContain("chunk 2/3");
   });
 
   it("extracts short video audio to wav before transcription", async () => {

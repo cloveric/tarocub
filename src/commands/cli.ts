@@ -145,7 +145,7 @@ export interface LarkServiceCommandDeps {
     command: string,
     args: string[],
     options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
-  ) => void;
+  ) => number | void;
   sleep?: (ms: number) => Promise<void>;
   inspectApp?: CliOptions["larkInspectApp"];
 }
@@ -1930,7 +1930,7 @@ function defaultSpawnDetached(
   command: string,
   args: string[],
   options: { cwd: string; stdoutPath: string; stderrPath: string; env?: NodeJS.ProcessEnv },
-): void {
+): number | void {
   const stdoutFd = openSync(options.stdoutPath, "a");
   const stderrFd = options.stderrPath === options.stdoutPath ? stdoutFd : openSync(options.stderrPath, "a");
   try {
@@ -1941,6 +1941,7 @@ function defaultSpawnDetached(
       stdio: ["ignore", stdoutFd, stderrFd],
     });
     child.unref();
+    return child.pid;
   } finally {
     closeSync(stdoutFd);
     if (stderrFd !== stdoutFd) {
@@ -1949,15 +1950,47 @@ function defaultSpawnDetached(
   }
 }
 
+async function readPendingLarkDeferredRestartPid(
+  pidFilePath: string,
+  isAlive: (pid: number) => boolean,
+): Promise<number | null> {
+  let raw: string;
+  try {
+    raw = await readFile(pidFilePath, "utf8");
+  } catch {
+    return null;
+  }
+  let pid: number | null = null;
+  try {
+    const parsed = JSON.parse(raw) as { pid?: unknown };
+    pid = typeof parsed.pid === "number" ? parsed.pid : null;
+  } catch {
+    pid = null;
+  }
+  return pid !== null && isAlive(pid) ? pid : null;
+}
+
 async function defaultScheduleDeferredLarkServiceRestart(
   input: LarkServiceCommandInput,
-  deps: Pick<LarkServiceCommandDeps, "spawnDetached"> = {},
+  deps: Pick<LarkServiceCommandDeps, "spawnDetached" | "isProcessAlive"> = {},
   options: { current?: boolean; delayMs?: number } = {},
 ): Promise<string> {
   await mkdir(input.stateDir, { recursive: true });
   const instanceName = resolveLarkInstanceName(input.env);
   const delayMs = Math.max(1, Math.trunc(options.delayMs ?? DEFAULT_LARK_DEFERRED_RESTART_DELAY_MS));
   const logPath = path.join(input.stateDir, "deferred-restart.log");
+  const isAlive = deps.isProcessAlive ?? isProcessAlive;
+
+  // Singleton guard: a live pending helper already has a deferred restart queued for
+  // this instance; a second would double-restart (and fight the turn the first is
+  // draining). Verified production-real.
+  const pidFilePath = path.join(input.stateDir, "deferred-restart.pid");
+  const pendingPid = await readPendingLarkDeferredRestartPid(pidFilePath, isAlive);
+  if (pendingPid !== null) {
+    const target = options.current ? "current Lark instance" : "Lark instance";
+    return `Deferred restart for ${target} "${instanceName}" is already pending (pid ${pendingPid}); not scheduling another.`;
+  }
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CCTB_LARK_STATE_DIR: input.stateDir,
@@ -1971,7 +2004,7 @@ async function defaultScheduleDeferredLarkServiceRestart(
   delete env.CODEX_THREAD_ID;
   clearLarkActiveTurnEnv(env);
 
-  (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [
+  const helperPid = (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [
     "-e",
     DEFERRED_LARK_RESTART_HELPER_SCRIPT,
     input.entrypoint,
@@ -1984,6 +2017,10 @@ async function defaultScheduleDeferredLarkServiceRestart(
     stderrPath: logPath,
     env,
   });
+
+  if (typeof helperPid === "number") {
+    await writeFile(pidFilePath, JSON.stringify({ pid: helperPid, scheduledAt: new Date().toISOString() }), "utf8");
+  }
 
   const target = options.current ? "current Lark instance" : "Lark instance";
   return `Scheduled deferred restart for ${target} "${instanceName}" in ${Math.ceil(delayMs / 1000)}s; it will retry until the Lark turn queue is idle.`;

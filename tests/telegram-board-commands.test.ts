@@ -387,6 +387,39 @@ describe("handleBoardTelegramCommand", () => {
     }
   });
 
+  it("keeps an already-checked item done when /board check add appends another", async () => {
+    // Finding 4: marking C1 done then adding C2 must not reset C1 to done:false.
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const store = new BoardStore(root);
+    await store.createTask({
+      title: "Ship docs",
+      createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+      checklist: ["First item"],
+    });
+
+    try {
+      await store.setChecklistItemDone("B1", "C1", true);
+
+      await expect(handleBoardTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        normalized: normalized("/board check B1 add Second item"),
+        context: { api: api as never, instanceName: "default" },
+      })).resolves.toBe(true);
+
+      await expect(store.getTask("B1")).resolves.toMatchObject({
+        checklist: [
+          expect.objectContaining({ id: "C1", text: "First item", done: true }),
+          expect.objectContaining({ id: "C2", text: "Second item", done: false }),
+        ],
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("configures WIP limits from Telegram commands", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-commands-"));
     const api = {

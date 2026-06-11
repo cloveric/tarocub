@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { Bridge } from "../runtime/bridge.js";
 import { appendAuditEventBestEffort } from "../runtime/audit-events.js";
 import { classifyFailure, getBusErrorSemantics } from "../runtime/error-classification.js";
@@ -15,14 +17,17 @@ export function createBusTalkHandler(input: {
   stateDir: string;
   instanceName: string;
 }): BusTalkHandler {
-  // Process-local synthetic chat IDs for bus turns. These only need to stay
-  // unique within one handler lifetime; if handler lifecycle semantics change
-  // in the future (hot reload / multiple handlers), revisit this allocator.
+  // Process-local synthetic chat IDs for bus turns, used only for timeline/audit
+  // labelling. They must NOT key a persisted session: a per-process counter would
+  // reset to -1 on restart and resume an unrelated previous bus session (context
+  // bleed) while accumulating stored sessions without bound. Each bus turn instead
+  // runs on a fresh ephemeral session via sessionIdOverride (never persisted/resumed).
   let busSessionCounter = 0;
 
   const runBusTurn = async (req: Parameters<BusTalkHandler>[0]): Promise<BusTalkResponse> => {
     const startedAt = Date.now();
     const busChatId = -(++busSessionCounter);
+    const ephemeralSessionId = `bus-${randomUUID()}`;
     await appendTimelineEventBestEffort(input.stateDir, {
       type: "turn.started",
       instanceName: input.instanceName,
@@ -79,6 +84,7 @@ export function createBusTalkHandler(input: {
         chatType: "bus",
         text: req.prompt,
         files: [],
+        sessionIdOverride: ephemeralSessionId,
       });
 
       const recorded = await recordBridgeTurnUsage(input.stateDir, result.usage, budgetUsd);
