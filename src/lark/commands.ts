@@ -31,6 +31,11 @@ import {
   type InstanceEngine,
   type WorkspaceProfile,
 } from "../telegram/instance-config.js";
+import {
+  killInstanceGroupOrphans,
+  killInstanceGroupProcess,
+  listInstanceProcessGroup,
+} from "../runtime/background-processes.js";
 import { renderUsageMessage, type Locale } from "../telegram/message-renderer.js";
 import { handleLocalSessionTelegramCommand } from "../telegram/session-commands.js";
 import type { NormalizedTelegramMessage } from "../telegram/update-normalizer.js";
@@ -257,6 +262,13 @@ export async function handleLarkSimpleCommand(
     const cfg = await loadInstanceConfig(input.stateDir);
     const message = await handleLarkFastCommand(input.stateDir, cfg, fastCommand.action, commandLocale);
     await sendLarkCommandMarkdown(input, normalized, "/fast", message);
+    return true;
+  }
+
+  const bgCommand = parseLarkBgCommand(commandText);
+  if (bgCommand) {
+    const message = await handleLarkBgCommand(bgCommand, commandLocale);
+    await sendLarkCommandMarkdown(input, normalized, "/bg", message);
     return true;
   }
 
@@ -531,6 +543,89 @@ function parseLarkFastCommand(text: string): { action: string } | null {
   return match ? { action: (match[1] ?? "").trim().toLowerCase() || "status" } : null;
 }
 
+type LarkBgCommand = { action: "list" } | { action: "kill"; pid: number } | { action: "killall" } | { action: "usage" };
+
+function parseLarkBgCommand(text: string): LarkBgCommand | null {
+  const match = text.trim().match(/^\/bg(?:\s+([\s\S]+))?$/i);
+  if (!match) {
+    return null;
+  }
+  const args = (match[1] ?? "").trim().toLowerCase();
+  if (!args || args === "list") {
+    return { action: "list" };
+  }
+  if (args === "killall") {
+    return { action: "killall" };
+  }
+  const killMatch = args.match(/^kill\s+(\d+)$/);
+  if (killMatch) {
+    return { action: "kill", pid: Number(killMatch[1]) };
+  }
+  return { action: "usage" };
+}
+
+const LARK_BG_ROLE_LABELS: Record<"zh" | "en", Record<"engine" | "child" | "orphan", string>> = {
+  zh: { engine: "引擎", child: "子进程", orphan: "孤儿" },
+  en: { engine: "engine", child: "child", orphan: "orphan" },
+};
+
+async function handleLarkBgCommand(command: LarkBgCommand, locale: Locale): Promise<string> {
+  const zh = locale === "zh";
+  if (command.action === "usage") {
+    return zh
+      ? "用法：`/bg`（列出本实例的引擎/后台进程）· `/bg kill <pid>` 停掉指定进程树 · `/bg killall` 清掉所有孤儿后台进程"
+      : "Usage: `/bg` (list this instance's engine/background processes) · `/bg kill <pid>` kill that process tree · `/bg killall` remove all orphaned background processes";
+  }
+  if (command.action === "kill") {
+    const result = await killInstanceGroupProcess(command.pid);
+    if (result.killed) {
+      return zh ? `已停止进程树 pid=${command.pid} ✓` : `Killed process tree pid=${command.pid} ✓`;
+    }
+    if (result.reason === "not-in-group") {
+      return zh
+        ? `pid=${command.pid} 不在本实例的进程组里（可能已退出）。先用 /bg 看列表。`
+        : `pid=${command.pid} is not in this instance's process group (it may have exited). Run /bg first.`;
+    }
+    if (result.reason === "is-service") {
+      return zh ? "那是服务进程本体，不能从这里杀。" : "That is the service process itself; refusing.";
+    }
+    return zh ? "当前平台暂不支持 /bg。" : "/bg is not supported on this platform yet.";
+  }
+  if (command.action === "killall") {
+    const result = await killInstanceGroupOrphans();
+    if (result.unsupported) {
+      return zh ? "当前平台暂不支持 /bg。" : "/bg is not supported on this platform yet.";
+    }
+    if (result.killedPids.length === 0) {
+      return zh ? "没有孤儿后台进程，干净的 ✨" : "No orphaned background processes. Clean ✨";
+    }
+    return zh
+      ? `已清理 ${result.killedPids.length} 个孤儿进程树：${result.killedPids.join(", ")}`
+      : `Removed ${result.killedPids.length} orphaned process tree(s): ${result.killedPids.join(", ")}`;
+  }
+
+  const group = await listInstanceProcessGroup();
+  if (group === null) {
+    return zh ? "当前平台暂不支持 /bg。" : "/bg is not supported on this platform yet.";
+  }
+  if (group.length === 0) {
+    return zh ? "本实例没有任何引擎/后台进程在跑。" : "No engine/background processes are running for this instance.";
+  }
+  const labels = LARK_BG_ROLE_LABELS[zh ? "zh" : "en"];
+  const lines = group.slice(0, 15).map((proc) => {
+    const cmd = proc.command.length > 70 ? `${proc.command.slice(0, 67)}...` : proc.command;
+    return `- \`${proc.pid}\` · ${labels[proc.role]} · ${proc.rssMb}MB · ${proc.etime} · ${cmd}`;
+  });
+  const truncated = group.length > 15
+    ? [zh ? `…共 ${group.length} 个，仅显示前 15` : `…${group.length} total, showing 15`]
+    : [];
+  const footer = zh
+    ? "停止：`/bg kill <pid>` · 清理孤儿：`/bg killall`（孤儿 = 任务结束后仍残留的后台进程）"
+    : "Kill one: `/bg kill <pid>` · sweep orphans: `/bg killall` (orphans = background work left behind after its turn ended)";
+  const header = zh ? "**本实例进程组**（服务本体除外，按内存排序）" : "**Instance process group** (service itself excluded, sorted by memory)";
+  return [header, ...lines, ...truncated, "", footer].join("\n");
+}
+
 function parseLarkEngineCommand(text: string): { engine: string; invalid: boolean } | null {
   const match = text.trim().match(/^\/engine(?:\s+(.+))?$/i);
   if (!match) return null;
@@ -773,6 +868,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "- `/resume [n]` pick a local session (`/resume thread …` / `/resume conversation …` bind explicitly) · `/detach` unbind the current thread/conversation",
       "- `/goal […]` set a conversation goal · `/btw <q>` ask aside without touching the session · `/continue` resume a waiting archive analysis",
       "- `/q <message>` force a queued turn — while a Codex turn is running, plain text steers INTO it; `/q` runs it afterwards instead",
+      "- `/bg` list this instance's engine/background processes · `/bg kill <pid>` · `/bg killall` sweep orphans",
       "",
       "**Settings**",
       "- `/config` interactive panel (recommended) · `/usage` usage · `/account` bound Feishu app",
@@ -804,6 +900,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "- `/resume [编号]` 选本地会话（`/resume thread …` / `/resume conversation …` 显式绑定）· `/detach` 解绑当前 thread/会话",
     "- `/goal […]` 设会话目标 · `/btw <问题>` 旁问不影响会话 · `/continue` 继续等待中的压缩包分析",
     "- `/q <消息>` 强制排队 — Codex 任务运行中纯文本会注入当前任务，`/q` 则排在后面单独执行",
+    "- `/bg` 列出本实例引擎/后台进程 · `/bg kill <pid>` 停指定进程树 · `/bg killall` 清理孤儿后台进程",
     "",
     "**设置**",
     "- `/config` 交互配置面板（推荐）· `/usage` 用量 · `/account` 当前绑定的飞书应用",
