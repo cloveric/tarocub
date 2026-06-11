@@ -17,6 +17,7 @@ export type InstanceEngine = "codex" | "claude" | "antigravity";
 
 export const DEFAULT_CLAUDE_MODEL = "opus[1m]";
 export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
+export const DEFAULT_CODEX_EFFORT: EffortLevel = "xhigh";
 
 export interface ResumeState {
   sessionId: string;
@@ -73,6 +74,20 @@ function applyClaudeEngineDefaults(config: Record<string, unknown>, previousEngi
   }
   if (previousEngine !== "claude" || effortOverride === undefined) {
     config.effort = DEFAULT_CLAUDE_EFFORT;
+  }
+}
+
+function applyCodexEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
+  const effortOverride = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel)
+    ? config.effort as EffortLevel
+    : undefined;
+
+  // Pin effort explicitly so a bot's strength cannot silently drift when
+  // ~/.codex/config.toml changes (edits or codex upgrades). The model is
+  // deliberately NOT pinned: codex model names churn with CLI releases, and
+  // following the engine's own current default is the safer behavior there.
+  if (previousEngine !== "codex" || effortOverride === undefined) {
+    config.effort = DEFAULT_CODEX_EFFORT;
   }
 }
 
@@ -182,6 +197,9 @@ export function applyEngineSelection(
   }
   if (engine === "claude") {
     applyClaudeEngineDefaults(config, previousEngine);
+  }
+  if (engine === "codex") {
+    applyCodexEngineDefaults(config, previousEngine);
   }
   if (normalizeApprovalMode(config.approvalMode) === undefined) {
     config.approvalMode = DEFAULT_APPROVAL_MODE;

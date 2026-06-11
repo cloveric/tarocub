@@ -233,7 +233,7 @@ describe("lark mid-turn steering", () => {
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
       steerActiveTurn: vi.fn(async () => true),
-      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string }) => ({ text: "done" })),
     };
 
     try {
@@ -248,7 +248,7 @@ describe("lark mid-turn steering", () => {
       // The user explicitly asked for sequencing: never steer.
       expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
-      const turnText = (bridge.handleAuthorizedMessage.mock.calls[0][0] as { text: string }).text;
+      const turnText = bridge.handleAuthorizedMessage.mock.calls[0][0].text;
       expect(turnText).toContain("干完当前的再做这个任务");
       expect(turnText).not.toContain("/q ");
     } finally {

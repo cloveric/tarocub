@@ -370,6 +370,30 @@ describe("applyEngineSelection", () => {
     });
   });
 
+  it("pins the Codex default effort when selecting Codex, so it cannot drift with ~/.codex/config.toml", () => {
+    const config: Record<string, unknown> = {};
+
+    const result = applyEngineSelection(config, "codex");
+
+    expect(result).toEqual({ clearedModel: false, enabledFullAuto: false });
+    expect(config).toMatchObject({
+      engine: "codex",
+      effort: "xhigh",
+    });
+    // The codex model deliberately keeps following the engine's own default.
+    expect(config.model).toBeUndefined();
+  });
+
+  it("pins the Codex effort when switching from Claude, but preserves a custom effort on re-selecting Codex", () => {
+    const fromClaude: Record<string, unknown> = { engine: "claude", model: "opus[1m]", effort: "max" };
+    applyEngineSelection(fromClaude, "codex");
+    expect(fromClaude.effort).toBe("xhigh");
+
+    const reselect: Record<string, unknown> = { engine: "codex", effort: "medium" };
+    applyEngineSelection(reselect, "codex");
+    expect(reselect.effort).toBe("medium");
+  });
+
   it("defaults fresh engine selections to unsafe bypass, including Antigravity", () => {
     const config: Record<string, unknown> = {
       engine: "codex",
