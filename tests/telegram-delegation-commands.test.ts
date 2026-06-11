@@ -195,11 +195,14 @@ describe("handleDelegationTelegramCommand", () => {
     }
   });
 
-  it("treats /fan as unconfigured when the only parallel target is the current instance", async () => {
-    // Finding 6: a bus.parallel that contains only the current instance has no real
-    // peers after self-exclusion, so /fan reports the not-configured message.
+  it("runs a local-only fan when the only configured parallel target is the current instance", async () => {
+    // Finding 6 + self-review: self is excluded from the peer fan-out so it never
+    // runs twice, but a bus.parallel that lists ONLY the current instance still has
+    // runnable content — it must run locally (once), not error as "unconfigured".
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-delegation-commands-"));
     const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const handleAuthorizedMessage = vi.fn().mockResolvedValue({ text: "local answer" });
+    const delegateToInstance = vi.fn();
 
     try {
       const handled = await handleDelegationTelegramCommand({
@@ -209,16 +212,18 @@ describe("handleDelegationTelegramCommand", () => {
         cfg: {},
         normalized: createNormalizedMessage("/fan hello"),
         context: { api: api as never, instanceName: "default", updateId: 79 },
-        bridge: { handleAuthorizedMessage: vi.fn() } as never,
+        bridge: { handleAuthorizedMessage } as never,
         loadBusConfig: vi.fn().mockResolvedValue({ parallel: ["default"] }),
-        delegateToInstance: vi.fn(),
+        delegateToInstance,
       });
 
       expect(handled).toBe(true);
-      expect(api.sendMessage).toHaveBeenCalledWith(
-        123,
-        "No parallel bots configured. Add instance names to bus.parallel in config.json.",
-      );
+      // Runs locally exactly once, never delegates to itself, never errors.
+      expect(handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(delegateToInstance).not.toHaveBeenCalled();
+      const sent = api.sendMessage.mock.calls.map((call) => String(call[1]));
+      expect(sent.some((text) => text.includes("No parallel bots configured"))).toBe(false);
+      expect(sent.some((text) => text.includes("local answer"))).toBe(true);
     } finally {
       await removeTempRoot(root);
     }

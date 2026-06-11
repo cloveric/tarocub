@@ -164,6 +164,9 @@ const DEFERRED_RESTART_SCRUB_ENV_KEYS = [
   "CODEX_THREAD_ID",
 ] as const;
 const DEFERRED_RESTART_PID_FILE = "deferred-restart.pid";
+// A deferred-restart helper retries for at most ~2h; treat any pidfile older
+// than that (plus slack) as stale so a recycled pid can't block forever.
+const DEFERRED_RESTART_PID_STALE_MS = 3 * 60 * 60 * 1000;
 // The helper waits for the active turn (the one that scheduled the restart) to
 // finish instead of force-killing it: drop --force and retry on the refusal
 // message until the turn queue drains, capped at maxWaitMs. Mirrors the Lark path.
@@ -801,14 +804,24 @@ async function readPendingDeferredRestartPid(
   }
 
   let pid: number | null = null;
+  let scheduledAt: number | null = null;
   try {
-    const parsed = JSON.parse(raw) as { pid?: unknown };
+    const parsed = JSON.parse(raw) as { pid?: unknown; scheduledAt?: unknown };
     pid = typeof parsed.pid === "number" ? parsed.pid : null;
+    const at = typeof parsed.scheduledAt === "string" ? Date.parse(parsed.scheduledAt) : NaN;
+    scheduledAt = Number.isNaN(at) ? null : at;
   } catch {
     pid = null;
   }
 
   if (pid === null || !isProcessAlive(pid)) {
+    return null;
+  }
+  // Time-based staleness: a real helper cannot outlive its own retry deadline,
+  // so a pidfile older than that is stale even if isProcessAlive(pid) is true —
+  // the pid was recycled by an unrelated live process. Without this, recycling
+  // would permanently block every future deferred restart for the instance.
+  if (scheduledAt !== null && Date.now() - scheduledAt > DEFERRED_RESTART_PID_STALE_MS) {
     return null;
   }
   return pid;

@@ -219,7 +219,12 @@ export async function deliverTelegramResponse(
         throw lastChunkError;
       }
       try {
-        await (api as TelegramApi).sendMessage(chatId, cleanedText);
+        // Re-send chunked: cleanedText was split precisely because it can exceed
+        // Telegram's per-message limit, so a single plain send of the whole thing
+        // would 400 ("message is too long") for any multi-chunk answer.
+        for (const chunk of chunks) {
+          await (api as TelegramApi).sendMessage(chatId, chunk);
+        }
       } catch {
         throw lastChunkError;
       }

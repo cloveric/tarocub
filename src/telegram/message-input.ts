@@ -482,9 +482,18 @@ export async function prepareTelegramMessageInput(input: {
         };
       }
     }
-    // If nothing transcribed and there is no other text, surface a transcription
-    // failure rather than sending an empty prompt to the engine.
-    if (!producedAnyTranscript && !text.trim() && lastEmptyAttachment) {
+    // If the voice note was the SOLE content and it transcribed to nothing,
+    // surface a transcription failure rather than sending an empty prompt. Only
+    // short-circuit when there is genuinely nothing else to run on: other text,
+    // a non-voice attachment (image/PDF/…), or a quoted message means the turn
+    // still has real content, so fall through and let the engine have it.
+    if (
+      !producedAnyTranscript &&
+      !text.trim() &&
+      downloadedAttachments.length === 0 &&
+      !normalized.replyContext &&
+      lastEmptyAttachment
+    ) {
       return {
         kind: "reply",
         text: renderTranscriptionFailureMessage(locale, lastEmptyAttachment),

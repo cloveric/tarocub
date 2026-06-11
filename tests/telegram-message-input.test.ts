@@ -119,6 +119,40 @@ describe("prepareTelegramMessageInput", () => {
     }
   });
 
+  it("keeps a non-voice attachment when an accompanying voice transcript is empty (no text)", async () => {
+    // Self-review regression: a silent voice note sent WITH an image and no text
+    // must not short-circuit to a transcription-failure reply and eat the image —
+    // the turn still has real content (the file), so it runs.
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("", [
+      { fileId: "voice-1", kind: "voice" },
+      { fileId: "img-1", kind: "photo" },
+    ]);
+    const getFile = vi.fn(async () => ({ file_path: "files/x" }));
+    const downloadFile = vi.fn().mockResolvedValue(undefined);
+    const transcribeVoice = vi.fn().mockResolvedValue("   ");
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: { getFile, downloadFile } as never,
+        transcribeVoice,
+      });
+
+      expect(result.kind).toBe("ready");
+      if (result.kind === "ready") {
+        // The image survived; only the voice (transcribable) is filtered out.
+        expect(result.downloadedAttachments).toEqual([
+          expect.objectContaining({ attachment: expect.objectContaining({ fileId: "img-1" }) }),
+        ]);
+      }
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("downloads audio attachments and appends their transcripts to the turn text", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
     const normalized = createNormalizedMessage("please use this", [

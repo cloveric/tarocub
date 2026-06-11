@@ -1961,13 +1961,24 @@ async function readPendingLarkDeferredRestartPid(
     return null;
   }
   let pid: number | null = null;
+  let scheduledAt: number | null = null;
   try {
-    const parsed = JSON.parse(raw) as { pid?: unknown };
+    const parsed = JSON.parse(raw) as { pid?: unknown; scheduledAt?: unknown };
     pid = typeof parsed.pid === "number" ? parsed.pid : null;
+    const at = typeof parsed.scheduledAt === "string" ? Date.parse(parsed.scheduledAt) : NaN;
+    scheduledAt = Number.isNaN(at) ? null : at;
   } catch {
     pid = null;
   }
-  return pid !== null && isAlive(pid) ? pid : null;
+  if (pid === null || !isAlive(pid)) {
+    return null;
+  }
+  // A helper cannot outlive its ~2h retry deadline; a pidfile older than that is
+  // stale even if the pid is alive (it was recycled), so don't block forever.
+  if (scheduledAt !== null && Date.now() - scheduledAt > 3 * 60 * 60 * 1000) {
+    return null;
+  }
+  return pid;
 }
 
 async function defaultScheduleDeferredLarkServiceRestart(

@@ -245,8 +245,12 @@ export async function handleDelegationTelegramCommand(input: {
     // The current instance always runs the prompt locally (selfPromise below), so
     // drop it from the peer fan-out — otherwise a self-listed bus.parallel entry
     // would run this instance's turn twice. Mirrors the self-checks in /chain and /ask.
-    const targets = (busConfig?.parallel ?? []).filter((target) => target !== currentInstance);
-    if (targets.length === 0) {
+    const configuredParallel = busConfig?.parallel ?? [];
+    const targets = configuredParallel.filter((target) => target !== currentInstance);
+    // Error only when bus.parallel is genuinely empty. A config that lists only
+    // the current instance (targets now empty after self-exclusion) still runs a
+    // valid local-only fan via selfPromise — don't turn that into an error.
+    if (configuredParallel.length === 0) {
       await context.api.sendMessage(
         normalized.chatId,
         locale === "zh"
