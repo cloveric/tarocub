@@ -298,13 +298,18 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     if (livePlan) {
       elements.push(livePlan);
     }
+    let streamTextIndex = 0;
     for (const group of groupBlocks(state.blocks)) {
       if (group.kind === "text") {
         const cleaned = cleanCardText(group.content);
         if (cleaned) {
           // Cap each streamed text element — a long answer would otherwise
           // overflow Feishu's per-element limit and fail every card update.
-          elements.push(markdownElement(truncate(cleaned, LARK_CARD_ANSWER_MAX)));
+          // Stable element_id lets the live (last) text element be updated via
+          // the CardKit element-content endpoint (native typewriter) instead of
+          // re-sending the whole card on every delta.
+          elements.push(markdownElement(truncate(cleaned, LARK_CARD_ANSWER_MAX), streamTextElementId(streamTextIndex)));
+          streamTextIndex += 1;
         }
       } else {
         for (const element of renderToolGroup(group.tools, false, labels)) {
@@ -390,6 +395,75 @@ export const LARK_CARD_ANSWER_MAX = 3000;
 const COMPACT_ANSWER_MAX = LARK_CARD_ANSWER_MAX;
 const PROCESS_PANEL_MAX = 3000;
 const TASK_NOTIFICATION_PREVIEW_MAX = 650;
+
+function streamTextElementId(index: number): string {
+  return `md_${index}`;
+}
+
+/**
+ * The run card's live streaming text element: the LAST block group while the
+ * turn is running, only when that group is text (a trailing tool group means
+ * new deltas will open a NEW text element, so there is nothing live to stream
+ * into). Content goes through the exact same truncation as markdownElement so
+ * an element-level update and a full-card patch always agree byte-for-byte.
+ */
+export function liveRunCardStreamElement(state: LarkRunState): { elementId: string; content: string } | null {
+  if (state.status !== "running") {
+    return null;
+  }
+  const groups = [...groupBlocks(state.blocks)];
+  const last = groups[groups.length - 1];
+  if (!last || last.kind !== "text") {
+    return null;
+  }
+  let textIndex = -1;
+  for (const group of groups) {
+    if (group.kind === "text" && cleanCardText(group.content)) {
+      textIndex += 1;
+    }
+  }
+  const cleaned = cleanCardText(last.content);
+  if (!cleaned || textIndex < 0) {
+    return null;
+  }
+  return {
+    elementId: streamTextElementId(textIndex),
+    content: truncateBytes(truncate(cleaned, LARK_CARD_ANSWER_MAX), ELEMENT_CONTENT_MAX_BYTES),
+  };
+}
+
+/**
+ * Trim streaming text to the last "safe" markdown boundary so a half-open
+ * code fence or a mid-sentence fragment is never rendered by the typewriter:
+ * cut inside an unclosed ``` fence back to before the fence, then cut at the
+ * last newline / sentence-ending punctuation. When no boundary exists yet,
+ * flush anyway once enough text has accumulated (long unpunctuated runs must
+ * not stall the stream forever).
+ */
+export function trimToStreamSafeBoundary(text: string, forceFlushChars = 48): string {
+  let candidate = text;
+  const fenceCount = (candidate.match(/```/g) ?? []).length;
+  const fenceOpen = fenceCount % 2 === 1;
+  if (fenceOpen) {
+    candidate = candidate.slice(0, candidate.lastIndexOf("```"));
+  }
+  let boundary = -1;
+  for (let i = candidate.length - 1; i >= 0; i -= 1) {
+    if ("\n。！？；…!?.;".includes(candidate[i])) {
+      boundary = i;
+      break;
+    }
+  }
+  if (boundary >= 0) {
+    return candidate.slice(0, boundary + 1);
+  }
+  // No boundary at all: force-flush long runs, but never while a fence is open
+  // (flushing would expose the raw half-open fence).
+  if (!fenceOpen && candidate.length >= forceFlushChars) {
+    return candidate;
+  }
+  return "";
+}
 
 /** The canonical final answer: the engine's result text, or the last non-empty text block. */
 function finalAnswerText(state: LarkRunState): string {
@@ -1103,10 +1177,11 @@ function approvalCardLabels(locale: Locale): {
     };
 }
 
-function markdownElement(content: string): Record<string, unknown> {
+function markdownElement(content: string, elementId?: string): Record<string, unknown> {
   return {
     tag: "markdown",
     content: truncateBytes(content, ELEMENT_CONTENT_MAX_BYTES),
+    ...(elementId ? { element_id: elementId } : {}),
   };
 }
 

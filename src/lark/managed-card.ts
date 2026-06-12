@@ -19,6 +19,12 @@ interface CardKitRawClient {
           data: { card: { type: string; data: string }; sequence: number; uuid?: string };
         }) => Promise<unknown>;
       };
+      cardElement?: {
+        content?: (req: {
+          path: { card_id: string; element_id: string };
+          data: { content: string; sequence: number; uuid?: string };
+        }) => Promise<unknown>;
+      };
     };
   };
   im?: {
@@ -202,6 +208,49 @@ export async function updateManagedCard(
   // Keep the chain alive even if a link rejects so one failure can't wedge every
   // later update to the card. deliver() already swallows its own errors, so this
   // is belt-and-suspenders.
+  handle.updateChain = next.catch(() => {});
+  await next;
+  return result;
+}
+
+/**
+ * Update ONE element's text content in place (CardKit element-content PUT).
+ * Feishu diffs the new text against what the element already shows and renders
+ * the delta with its native typewriter effect — this is the streaming fast
+ * path: tiny payload per tick instead of re-sending the whole card JSON.
+ *
+ * Shares the SAME per-handle sequence space and delivery chain as
+ * updateManagedCard, so element ticks and full-card patches can never land
+ * out of order. Returns false when CardKit/element API is unavailable or the
+ * update failed — the caller then falls back to full-card patching.
+ */
+export async function updateManagedCardElement(
+  channel: unknown,
+  handle: ManagedCardHandle,
+  elementId: string,
+  content: string,
+): Promise<boolean> {
+  const updateContent = cardKitRawClient(channel)?.cardkit?.v1?.cardElement?.content;
+  if (!updateContent) {
+    return false;
+  }
+  const deliver = async (): Promise<boolean> => {
+    const sequence = (handle.sequence += 1);
+    try {
+      await updateContent({
+        path: { card_id: handle.cardId, element_id: elementId },
+        data: { content, sequence, uuid: `e_${handle.cardId}_${sequence}` },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const prior = handle.updateChain ?? Promise.resolve();
+  let result = false;
+  const next = prior.then(async () => {
+    result = await deliver();
+  });
   handle.updateChain = next.catch(() => {});
   await next;
   return result;

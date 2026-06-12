@@ -20,12 +20,14 @@ import {
   applyLarkEngineEvent,
   cleanCardText,
   initialLarkRunState,
+  liveRunCardStreamElement,
   renderLarkContinuationCard,
   renderLarkQueueWaitCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
   renderLarkRunCardMinimal,
   splitLarkAnswerIntoCardChunks,
+  trimToStreamSafeBoundary,
   type LarkRunState,
 } from "./card-renderer.js";
 import {
@@ -70,7 +72,7 @@ import {
   type LarkIncomingMessage,
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
-import { sendManagedCard, updateManagedCard, type ManagedCardHandle } from "./managed-card.js";
+import { sendManagedCard, updateManagedCard, updateManagedCardElement, type ManagedCardHandle } from "./managed-card.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { verifyLarkNumericIds } from "./id-map.js";
 import type { LarkQueueCardRef, LarkServiceRuntime } from "./runtime.js";
@@ -1734,9 +1736,48 @@ export async function createLarkRunCardController(input: {
       return false;
     }
   };
+  // Element-level streaming fast path: while only the live (last) text element
+  // is growing, push just that element's text through the CardKit
+  // element-content endpoint (Feishu renders the delta with its native
+  // typewriter) instead of re-sending the whole card JSON. Structural changes
+  // (new tool group, status/footer changes, finalize) still go through the
+  // full-card patch path. Any element-update failure permanently degrades back
+  // to full-card patching for this turn — the previous behavior, never worse.
+  // 250ms ≈ 4 ticks/s: comfortably under Feishu's ~5 QPS per-card update
+  // limit. A faster tick (150ms ≈ 6.7/s) would trip rate limiting exactly
+  // during fast token streams — and a rate-limit error permanently degrades
+  // the turn to full-card patching, self-disabling the feature when it
+  // matters most.
+  const ELEMENT_STREAM_THROTTLE_MS = 250;
+  const elementStreamEnabled = Boolean(handle) &&
+    !["off", "0", "false"].includes((process.env.CCTB_LARK_ELEMENT_STREAM ?? "").trim().toLowerCase());
+  let elementStreamBroken = false;
+  let remoteStructureSig: string | null = null;
+  let remoteLiveElementId: string | null = null;
+  let lastElementContentSent = "";
+  let elementTimer: ReturnType<typeof setTimeout> | undefined;
+  // The card minus the live element's text: when this is unchanged since the
+  // last successful full patch, the remote card's structure matches ours and an
+  // element-content update is addressable + sufficient.
+  const structureSignatureOf = (card: Record<string, unknown>, liveElementId: string | null): string => {
+    const body = card.body as { elements?: Array<Record<string, unknown>> } | undefined;
+    const elements = (body?.elements ?? []).map((element) =>
+      liveElementId !== null && element.element_id === liveElementId ? { ...element, content: "" } : element);
+    return JSON.stringify({ ...card, body: { ...body, elements } });
+  };
   const update = async (): Promise<void> => {
     if (!degraded) {
-      if (await tryUpdate(renderLarkRunCard(state, input.locale))) {
+      // Snapshot the live element from the SAME synchronous state the card was
+      // rendered from, BEFORE the network await — deltas keep arriving during
+      // tryUpdate, and recording the newer state would claim the remote shows
+      // content it never received (the monotonic guard would then skip sends
+      // and freeze the streamed text until finalize).
+      const card = renderLarkRunCard(state, input.locale);
+      const liveAtRender = liveRunCardStreamElement(state);
+      if (await tryUpdate(card)) {
+        remoteLiveElementId = liveAtRender?.elementId ?? null;
+        remoteStructureSig = structureSignatureOf(card, remoteLiveElementId);
+        lastElementContentSent = liveAtRender?.content ?? "";
         return;
       }
       degraded = true;
@@ -1761,10 +1802,41 @@ export async function createLarkRunCardController(input: {
     updateTimer = undefined;
     void enqueuePatch(update);
   };
+  const flushElementStream = (): void => {
+    elementTimer = undefined;
+    void enqueuePatch(async () => {
+      if (!handle || elementStreamBroken || degraded) {
+        return;
+      }
+      const live = liveRunCardStreamElement(state);
+      if (!live || live.elementId !== remoteLiveElementId) {
+        // Structure moved on while this tick was queued; the full path owns it.
+        scheduleFullUpdate();
+        return;
+      }
+      const card = renderLarkRunCard(state, input.locale);
+      if (structureSignatureOf(card, live.elementId) !== remoteStructureSig) {
+        scheduleFullUpdate();
+        return;
+      }
+      const trimmed = trimToStreamSafeBoundary(live.content);
+      // Monotonic only: the element shows everything sent so far; a shorter
+      // boundary-trimmed payload would visually roll the typewriter back.
+      if (trimmed.length <= lastElementContentSent.length) {
+        return;
+      }
+      if (await updateManagedCardElement(input.channel, handle, live.elementId, trimmed)) {
+        lastElementContentSent = trimmed;
+      } else {
+        elementStreamBroken = true;
+        scheduleFullUpdate();
+      }
+    });
+  };
   // Leading edge: the very first live update fires immediately so the card
   // shows progress without waiting a full throttle interval; the rest coalesce.
   let firstLiveUpdateDone = false;
-  const scheduleUpdate = (): void => {
+  const scheduleFullUpdate = (): void => {
     if (!firstLiveUpdateDone) {
       firstLiveUpdateDone = true;
       void enqueuePatch(update);
@@ -1776,10 +1848,30 @@ export async function createLarkRunCardController(input: {
     updateTimer = setTimeout(flushUpdate, THROTTLE_MS);
     updateTimer.unref?.();
   };
+  const scheduleUpdate = (): void => {
+    if (
+      elementStreamEnabled && !elementStreamBroken && !degraded &&
+      remoteStructureSig !== null && firstLiveUpdateDone
+    ) {
+      const live = liveRunCardStreamElement(state);
+      if (live && live.elementId === remoteLiveElementId) {
+        if (!elementTimer) {
+          elementTimer = setTimeout(flushElementStream, ELEMENT_STREAM_THROTTLE_MS);
+          elementTimer.unref?.();
+        }
+        return;
+      }
+    }
+    scheduleFullUpdate();
+  };
   const cancelScheduledUpdate = (): void => {
     if (updateTimer) {
       clearTimeout(updateTimer);
       updateTimer = undefined;
+    }
+    if (elementTimer) {
+      clearTimeout(elementTimer);
+      elementTimer = undefined;
     }
   };
   // Terminal update: guarantee the card leaves the "running" state and the
