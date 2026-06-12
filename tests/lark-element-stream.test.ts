@@ -243,6 +243,28 @@ describe("run card element-stream fast path", () => {
     await controller!.finish("done");
   });
 
+  it("respects /stream off (elementStream: false controller input) — full patches only", async () => {
+    const { channel, elementContent, cardUpdate } = managedChannel();
+    const { createLarkRunCardController } = await import("../src/lark/message-handler.js");
+    const controller = await createLarkRunCardController({
+      channel: channel as never,
+      chatId: "oc_chat",
+      conversationKey: "lark:oc_chat",
+      bridgeChatType: "private",
+      locale: "zh",
+      elementStream: false,
+    });
+
+    await controller!.apply({ type: "assistant_text", text: "第一句。" });
+    await flushTimers(20);
+    await controller!.apply({ type: "assistant_text", text: "第二句。" });
+    await flushTimers(450);
+
+    expect(elementContent).not.toHaveBeenCalled();
+    expect(cardUpdate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    await controller!.finish("done");
+  });
+
   it("respects the CCTB_LARK_ELEMENT_STREAM=off kill switch", async () => {
     process.env.CCTB_LARK_ELEMENT_STREAM = "off";
     try {

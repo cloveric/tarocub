@@ -1214,6 +1214,7 @@ async function runNormalizedLarkMessage(
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
         locale,
+        elementStream: cfg.larkElementStream !== false,
         ...(queuedRef ? { existingCard: queuedRef } : {}),
         ...(normalized.goalObjective ? { goalObjective: normalized.goalObjective } : {}),
       });
@@ -1637,6 +1638,9 @@ export async function createLarkRunCardController(input: {
   existingCard?: LarkQueueCardRef;
   /** When set, frames the card as an autonomous /goal pursuit (🎯 banner). */
   goalObjective?: string;
+  /** Element-level streaming (native typewriter). Default on; pass false when
+   * the instance config has larkElementStream === false (/stream off). */
+  elementStream?: boolean;
 }): Promise<LarkRunCardController | undefined> {
   if (!input.channel.updateCard) {
     return undefined;
@@ -1752,6 +1756,7 @@ export async function createLarkRunCardController(input: {
   // concurrently streaming cards exceed the app-level 1000 req/min budget.
   const ELEMENT_STREAM_THROTTLE_MS = 150;
   const elementStreamEnabled = Boolean(handle) &&
+    input.elementStream !== false &&
     !["off", "0", "false"].includes((process.env.CCTB_LARK_ELEMENT_STREAM ?? "").trim().toLowerCase());
   let elementStreamBroken = false;
   let remoteStructureSig: string | null = null;

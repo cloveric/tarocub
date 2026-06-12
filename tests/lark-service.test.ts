@@ -3790,6 +3790,49 @@ describe("lark service", () => {
     }
   });
 
+  it("toggles Lark element streaming via /stream off|status|on and persists the instance config", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stream-toggle-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "claude",
+      locale: "zh",
+    }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const dispatch = async (messageId: string, content: string) => {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId, content }),
+      });
+    };
+    const configuredStream = async () => {
+      const cfg = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      return cfg.larkElementStream;
+    };
+
+    try {
+      await dispatch("om_stream_off", "/stream off");
+      expect(await configuredStream()).toBe(false);
+      await dispatch("om_stream_status", "/stream");
+      await dispatch("om_stream_on", "/stream on");
+      // "on" is the default → the override is removed rather than stored.
+      expect(await configuredStream()).toBeUndefined();
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const markdowns = (channel.send.mock.calls as unknown[][]).map((call) => ((call[1] ?? {}) as { markdown?: string }).markdown ?? "");
+      expect(markdowns[0]).toContain("已关闭");
+      expect(markdowns[1]).toContain("流式打字机：关闭");
+      expect(markdowns[2]).toContain("已开启");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers Lark local config commands in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({

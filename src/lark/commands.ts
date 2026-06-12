@@ -265,6 +265,14 @@ export async function handleLarkSimpleCommand(
     return true;
   }
 
+  const streamCommand = parseLarkStreamCommand(commandText);
+  if (streamCommand) {
+    const cfg = await loadInstanceConfig(input.stateDir);
+    const message = await handleLarkStreamCommand(input.stateDir, cfg, streamCommand.action, commandLocale);
+    await sendLarkCommandMarkdown(input, normalized, "/stream", message);
+    return true;
+  }
+
   // /bg is dispatched pre-queue in the message handler (instance-scoped process
   // control must not be serialized behind the running turn), so it never reaches
   // here. The predicate/handler are exported for that path.
@@ -537,6 +545,11 @@ function parseLarkEffortCommand(text: string): { level: string } | null {
 
 function parseLarkFastCommand(text: string): { action: string } | null {
   const match = text.trim().match(/^\/fast(?:\s+(.*))?$/i);
+  return match ? { action: (match[1] ?? "").trim().toLowerCase() || "status" } : null;
+}
+
+function parseLarkStreamCommand(text: string): { action: string } | null {
+  const match = text.trim().match(/^\/stream(?:\s+(.*))?$/i);
   return match ? { action: (match[1] ?? "").trim().toLowerCase() || "status" } : null;
 }
 
@@ -885,6 +898,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "**Settings**",
       "- `/config` interactive panel (recommended) · `/usage` usage · `/account` bound Feishu app",
       "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex Fast Mode · `/yolo` approval mode",
+      "- `/stream [on|off]` typewriter streaming on run cards (off = full-card refresh)",
       "",
       "**Workspace & groups**",
       "- `/ws list|save|use|remove` workspace directories",
@@ -917,6 +931,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "**设置**",
     "- `/config` 交互配置面板（推荐）· `/usage` 用量 · `/account` 当前绑定的飞书应用",
     "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex 快速模式 · `/yolo` 审批模式",
+    "- `/stream [on|off]` 回答卡片打字机流式开关（off = 整卡刷新）",
     "",
     "**工作区与群**",
     "- `/ws list|save|use|remove` 工作区目录",
@@ -1853,6 +1868,42 @@ async function handleLarkFastCommand(stateDir: string, cfg: InstanceConfig, acti
   return locale === "en" ? "Usage: /fast [on|off|status]" : "用法: /fast [on|off|status]";
 }
 
+// /stream toggles Lark element-level streaming (the native typewriter on run
+// cards). Off = every update goes through the full-card patch path — the
+// pre-v0.1.160 behavior. Instance-level, persisted; applies from the NEXT
+// turn (the running turn's controller already captured the flag).
+async function handleLarkStreamCommand(stateDir: string, cfg: InstanceConfig, action: string, locale: Locale): Promise<string> {
+  const envOff = ["off", "0", "false"].includes((process.env.CCTB_LARK_ELEMENT_STREAM ?? "").trim().toLowerCase());
+  const envNote = locale === "en"
+    ? "\nNote: env CCTB_LARK_ELEMENT_STREAM=off currently force-disables streaming regardless of this setting."
+    : "\n注意：环境变量 CCTB_LARK_ELEMENT_STREAM=off 当前强制关闭流式，此设置暂不生效。";
+  if (action === "on" || action === "enable") {
+    await updateInstanceConfig(stateDir, (config) => {
+      delete config.larkElementStream;
+    });
+    return (locale === "en"
+      ? "Element streaming (typewriter) enabled. Takes effect from the next turn."
+      : "流式打字机已开启，下一轮回答生效。") + (envOff ? envNote : "");
+  }
+  if (action === "off" || action === "disable") {
+    await updateInstanceConfig(stateDir, (config) => {
+      config.larkElementStream = false;
+    });
+    return locale === "en"
+      ? "Element streaming disabled — answers update via full-card refresh (the pre-typewriter behavior). Takes effect from the next turn."
+      : "流式打字机已关闭，回答改回整卡刷新模式（打字机之前的行为），下一轮回答生效。";
+  }
+  if (action === "status") {
+    const configured = cfg.larkElementStream !== false;
+    const effective = configured && !envOff;
+    if (locale === "en") {
+      return `Element streaming (typewriter): ${effective ? "on" : "off"}${configured && envOff ? envNote : ""}`;
+    }
+    return `流式打字机：${effective ? "开启" : "关闭"}${configured && envOff ? envNote : ""}`;
+  }
+  return locale === "en" ? "Usage: /stream [on|off|status]" : "用法: /stream [on|off|status]";
+}
+
 async function handleLarkEngineCommand(
   stateDir: string,
   cfg: InstanceConfig,
@@ -2091,6 +2142,7 @@ async function handleLarkGoalCommand(
   // detached so the command returns immediately while the card updates in the
   // background. Falls back to plain set-and-confirm when watch/CardKit is unavailable.
   if (input.bridge.watchThreadGoal && input.createRunCard) {
+    const goalCfg = await loadInstanceConfig(input.stateDir);
     const runCard = await input.createRunCard({
       channel: input.channel,
       chatId: normalized.chatId,
@@ -2100,6 +2152,7 @@ async function handleLarkGoalCommand(
       replyInThread: Boolean(normalized.threadId),
       locale,
       goalObjective: action.objective,
+      elementStream: goalCfg.larkElementStream !== false,
     });
     if (runCard) {
       // Bind to the bridge: a bare `const fn = input.bridge.watchThreadGoal` loses

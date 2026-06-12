@@ -112,6 +112,7 @@ export function buildLarkCronExecutor(input: {
         conversationKey,
         bridgeChatType,
 	        locale,
+        elementStream: cfg.larkElementStream !== false,
         ...(replyFields.replyTo
           ? { replyTo: replyFields.replyTo, replyInThread: replyFields.replyInThread ?? false }
           : {}),

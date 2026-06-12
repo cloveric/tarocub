@@ -38,6 +38,8 @@ export interface InstanceConfig {
   effort: EffortLevel | undefined;
   model: string | undefined;
   codexServiceTier: "fast" | undefined;
+  /** Lark element-level streaming (native typewriter). undefined = on (default); false = /stream off. */
+  larkElementStream: boolean | undefined;
   timezone: string;
   resume: ResumeState | undefined;
   workspacePath: string | undefined;
@@ -113,6 +115,7 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   effort: undefined,
   model: undefined,
   codexServiceTier: undefined,
+  larkElementStream: undefined,
   timezone: resolveDefaultCronTimezone(),
   resume: undefined,
   workspacePath: undefined,
@@ -288,6 +291,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     effort,
     model: typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined,
     codexServiceTier: config.codexServiceTier === "fast" ? "fast" : undefined,
+    larkElementStream: typeof config.larkElementStream === "boolean" ? config.larkElementStream : undefined,
     timezone: normalizeCronTimezone(config.timezone) ?? DEFAULT_INSTANCE_CONFIG.timezone,
     resume: parseResumeState(config.resume),
     workspacePath: typeof config.workspacePath === "string" && config.workspacePath.trim()

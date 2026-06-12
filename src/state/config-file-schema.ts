@@ -31,6 +31,7 @@ export const ConfigFileSchema = z.object({
   effort: z.enum(EFFORT_LEVELS).optional(),
   model: z.string().optional(),
   codexServiceTier: z.literal("fast").optional(),
+  larkElementStream: z.boolean().optional(),
   timezone: z.string().optional(),
   resume: ResumeStateFileSchema.optional(),
   workspacePath: z.string().optional(),
