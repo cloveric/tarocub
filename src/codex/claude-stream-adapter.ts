@@ -148,7 +148,12 @@ const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 // non-JSON runaway output hard-fails at MAX_LINE_BUFFER_BYTES.
 const MAX_STRUCTURED_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_STDERR_TAIL_CHARS = 20_000;
-const DEFAULT_IDLE_WORKER_TTL_MS = 30 * 60 * 1000;
+// A cold Claude worker spawn costs ~5-7s before the first token (measured),
+// which is the single biggest "bot feels slower than the CLI" factor — the
+// operator's usage pattern is bursts separated by hours, so a 30min TTL made
+// most comebacks pay the cold start. 2h keeps those warm while still bounding
+// how long an idle worker's memory is held on a 16GB host.
+const DEFAULT_IDLE_WORKER_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
