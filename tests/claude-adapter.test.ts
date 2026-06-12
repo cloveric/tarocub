@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -112,14 +112,6 @@ describe("ProcessClaudeAdapter", () => {
         files: ["a.ts"],
       });
       await waitForSpawn(calls);
-
-      child.stdout.emitData('{"type":"result","result":"Looks good","session_id":"session-123"}');
-      child.close(0);
-
-      await expect(promise).resolves.toEqual({
-        text: "Looks good",
-        sessionId: "session-123",
-      });
       expect(calls[0]?.command).toBe("claude");
       expect(calls[0]?.args).toEqual([
         "-p",
@@ -130,13 +122,27 @@ describe("ProcessClaudeAdapter", () => {
         "session-123",
         "--permission-mode",
         "bypassPermissions",
+        "--append-system-prompt-file",
+        expect.stringContaining("instructions.md"),
         "--add-dir",
         workspacePath,
       ]);
       expect(calls[0]?.options.cwd).toBe(workspacePath);
       expect(calls[0]?.options.windowsHide).toBe(true);
-      expect(child.stdin.written).toContain("[Agent Instructions]\nYou are a reviewer.");
+      const promptFilePath = calls[0]?.args[calls[0].args.indexOf("--append-system-prompt-file") + 1];
+      expect(promptFilePath).toBeTruthy();
+      await expect(readFile(promptFilePath!, "utf8")).resolves.toContain("You are a reviewer.");
+      expect(calls[0]?.args.join(" ")).not.toContain("You are a reviewer.");
+      expect(child.stdin.written).not.toContain("You are a reviewer.");
       expect(child.stdin.written).toContain("Review this\nAttachment: a.ts");
+
+      child.stdout.emitData('{"type":"result","result":"Looks good","session_id":"session-123"}');
+      child.close(0);
+
+      await expect(promise).resolves.toEqual({
+        text: "Looks good",
+        sessionId: "session-123",
+      });
     } finally {
       await removeTempRoot(root);
     }
@@ -218,15 +224,21 @@ describe("ProcessClaudeAdapter", () => {
         instructions: "[Telegram Bridge Capabilities]\nUse file blocks.",
       });
       await waitForSpawn(calls);
+      expect(calls[0]?.args).not.toContain("--system-prompt");
+      expect(calls[0]?.args).not.toContain("--append-system-prompt");
+      expect(calls[0]?.args).toContain("--append-system-prompt-file");
+      const promptFilePath = calls[0]?.args[calls[0].args.indexOf("--append-system-prompt-file") + 1];
+      expect(promptFilePath).toBeTruthy();
+      const promptFile = await readFile(promptFilePath!, "utf8");
+      expect(promptFile).toContain("You are a reviewer.");
+      expect(promptFile).toContain("[Telegram Bridge Capabilities]");
+      expect(calls[0]?.args.join(" ")).not.toContain("You are a reviewer.");
+      expect(child.stdin.written).not.toContain("[Agent Instructions]");
+      expect(child.stdin.written).not.toContain("[Bridge Instructions]");
 
       child.stdout.emitData('{"type":"result","result":"ok","session_id":"session-abc"}');
       child.close(0);
       await promise;
-
-      expect(calls[0]?.args).not.toContain("--system-prompt");
-      expect(calls[0]?.args).not.toContain("--append-system-prompt");
-      expect(child.stdin.written).toContain("[Agent Instructions]\nYou are a reviewer.");
-      expect(child.stdin.written).toContain("[Bridge Instructions]\n[Telegram Bridge Capabilities]");
     } finally {
       await removeTempRoot(root);
     }

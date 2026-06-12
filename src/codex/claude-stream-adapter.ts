@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
+import { createClaudeInstructionsFile, type ClaudeInstructionsFile } from "./claude-instructions-file.js";
 // Use the shared kill helper (SIGTERM then grace + SIGKILL escalation) rather
 // than a local SIGTERM-only copy, so a Claude CLI (and its MCP/sandbox children)
 // that ignores SIGTERM is still force-killed — matching the other adapters.
@@ -135,6 +136,7 @@ type ClaudeWorker = {
   suppressNextTaskNotificationAssistant: boolean;
   lastActivityAt: number;
   instructions: string | null;
+  instructionsFile: ClaudeInstructionsFile | null;
   approvalMode: ApprovalMode;
   engineOptionsKey: string;
   sessionApprovedKeys: Set<string>;
@@ -169,18 +171,6 @@ function looksLikeClaudeStreamJsonLine(value: string): boolean {
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
-}
-
-function prependClaudeInstructionsToPrompt(prompt: string, agentInstructions: string | null, bridgeInstructions: string | null): string {
-  const parts: string[] = [];
-  if (agentInstructions) {
-    parts.push(`[Agent Instructions]\n${agentInstructions}\n[End Agent Instructions]`);
-  }
-  if (bridgeInstructions) {
-    parts.push(`[Bridge Instructions]\n${bridgeInstructions}\n[End Bridge Instructions]`);
-  }
-  parts.push(prompt);
-  return parts.join("\n\n");
 }
 
 function normalizeExecutableCommand(command: string): string {
@@ -519,10 +509,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const engineOptions = this.configPath ? await this.loadEngineOptions() : {};
     const prompt = this.buildPrompt(input);
     const effectiveWorkspace = input.workspaceOverride ?? this.workspacePath;
-    const worker = this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, effectiveWorkspace, engineOptions);
+    const worker = await this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, effectiveWorkspace, engineOptions);
     worker.onEngineEvent = input.onEngineEvent;
 
-    const response = await this.sendTurn(worker, prependClaudeInstructionsToPrompt(prompt, agentInstructions, bridgeInstructions), input);
+    const response = await this.sendTurn(worker, prompt, input);
     const nextSessionId = response.sessionId;
     if (nextSessionId && nextSessionId !== sessionId) {
       this.workers.delete(sessionId);
@@ -544,7 +534,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     return parts.join("\n");
   }
 
-  private getOrCreateWorker(sessionId: string, agentInstructions: string | null, bridgeInstructions: string | null, approvalMode: ApprovalMode, workspacePath: string | undefined, engineOptions?: { effort?: string; model?: string }): ClaudeWorker {
+  private async getOrCreateWorker(sessionId: string, agentInstructions: string | null, bridgeInstructions: string | null, approvalMode: ApprovalMode, workspacePath: string | undefined, engineOptions?: { effort?: string; model?: string }): Promise<ClaudeWorker> {
     const combinedKey = combineInstructions(agentInstructions, bridgeInstructions);
     const optionsKey = `${engineOptions?.effort ?? ""}:${engineOptions?.model ?? ""}`;
     const existing = this.workers.get(sessionId);
@@ -602,14 +592,25 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       args.push("--add-dir", workspacePath);
     }
 
+    const instructionsFile = combinedKey ? await createClaudeInstructionsFile(combinedKey) : null;
+    if (instructionsFile) {
+      args.push("--append-system-prompt-file", instructionsFile.path);
+    }
+
     const invocation = buildCommandInvocation(this.claudeExecutable, args);
-    const child = this.spawnClaude(invocation.command, invocation.args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: invocation.shell,
-      env: this.childEnv,
-      cwd: workspacePath,
-      windowsHide: true,
-    });
+    let child: ClaudeChildProcess;
+    try {
+      child = this.spawnClaude(invocation.command, invocation.args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: invocation.shell,
+        env: this.childEnv,
+        cwd: workspacePath,
+        windowsHide: true,
+      });
+    } catch (error) {
+      await instructionsFile?.cleanup().catch(() => {});
+      throw error;
+    }
 
     const worker: ClaudeWorker = {
       child,
@@ -624,6 +625,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       suppressNextTaskNotificationAssistant: false,
       lastActivityAt: Date.now(),
       instructions: combinedKey,
+      instructionsFile,
       approvalMode,
       engineOptionsKey: optionsKey,
       sessionApprovedKeys: new Set(),
@@ -1176,5 +1178,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         this.workers.delete(key);
       }
     }
+    void worker.instructionsFile?.cleanup().catch(() => {});
   }
 }

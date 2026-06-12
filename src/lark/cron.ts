@@ -100,7 +100,7 @@ export function buildLarkCronExecutor(input: {
       if (!job.mute) {
         await sendLarkMarkdown(input.channel, job.larkChatId, budgetExhausted.message, replyFields);
       }
-      throw new Error("budget exhausted");
+      return;
     }
     // Render the AI task's result into a run card (same UX as a chat reply): open
     // the card, run the turn, then finish it with the answer. Skipped for muted

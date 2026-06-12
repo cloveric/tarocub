@@ -323,12 +323,19 @@ describe("app-server config change while busy", () => {
         files: [],
       });
 
-      // The second turn is rejected instead of silently running on the old config.
-      await expect(secondPromise).rejects.toThrow("Codex app-server is busy");
+      // The second turn keeps serving on the old config instead of turning the
+      // whole instance into a temporary failure storm while a long turn/goal runs.
+      await waitFor(() => childA.stdin.lines.length >= 4);
+      const startThreadB = JSON.parse(childA.stdin.lines[3] ?? "{}");
+      childA.stdout.emitData(`{"id":${startThreadB.id},"result":{"thread":{"id":"thread-b"}}}\n`);
+      await waitFor(() => childA.stdin.lines.length >= 5);
+      childA.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-b","item":{"type":"agentMessage","text":"second ok"}}}\n');
+      childA.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-b","turn":{"id":"turn-b","items":[],"status":"completed","error":null}}}\n');
+      await expect(secondPromise).resolves.toEqual({ text: "second ok", sessionId: "thread-b" });
       expect(calls).toHaveLength(1);
       expect(childA.killCalls).toBe(0);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("config change rejected while busy"),
+        expect.stringContaining("config change deferred while busy"),
       );
 
       childA.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-a","item":{"type":"agentMessage","text":"first ok"}}}\n');
@@ -383,22 +390,23 @@ describe("app-server config change while busy", () => {
       internal.goalWatchers.set("thread-goal", {});
       internal.waitForIdle = () => Promise.reject(new Error("Codex app-server did not become idle within 30000ms"));
 
-      // Two consecutive messages carrying the SAME pending change → ONE warning.
-      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).rejects.toThrow("busy");
-      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).rejects.toThrow("busy");
+      // Two consecutive messages carrying the SAME pending change → ONE warning,
+      // but both calls resolve so normal turns can continue on the old config.
+      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
+      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
 
       const goalWarnings = consoleErrorSpy.mock.calls
         .map((call) => String(call[0]))
-        .filter((line) => line.includes("config change rejected while busy"));
+        .filter((line) => line.includes("config change deferred while busy"));
       expect(goalWarnings).toHaveLength(1);
       // The /goal pursuit is named so the operator knows why the change is stuck.
       expect(goalWarnings[0]).toContain("/goal");
 
       // A DIFFERENT pending change warns again (the one-shot latch reset).
-      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "newer-config" })).rejects.toThrow("busy");
+      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "newer-config" })).resolves.toBeUndefined();
       const allWarnings = consoleErrorSpy.mock.calls
         .map((call) => String(call[0]))
-        .filter((line) => line.includes("config change rejected while busy"));
+        .filter((line) => line.includes("config change deferred while busy"));
       expect(allWarnings).toHaveLength(2);
     } finally {
       consoleErrorSpy.mockRestore();

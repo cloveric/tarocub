@@ -777,6 +777,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     initializeArgs: string[];
     initializeKey: string;
   }): Promise<void> {
+    let deferredConfigChange = false;
     if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
       try {
         await this.waitForIdle();
@@ -788,18 +789,20 @@ export class CodexAppServerAdapter implements CodexAdapter {
           if (this.deferredConfigWarningKey !== runtimeOptions.initializeKey) {
             this.deferredConfigWarningKey = runtimeOptions.initializeKey;
             console.error(
-              `Codex app-server config change rejected while busy (retry once idle${
+              `Codex app-server config change deferred while busy; continuing on the old config until idle${
                 this.goalWatchers.size > 0 ? "; a /goal pursuit is holding the session" : ""
               }): ${error instanceof Error ? error.message : String(error)}`,
             );
           }
-          throw new Error("Codex app-server is busy; config changes must be retried after the current turn is idle.");
+          deferredConfigChange = true;
         }
       }
     }
     // The pending change was applied (or there was nothing to defer): clear the
     // one-shot warning latch so a future deferral logs again.
-    this.deferredConfigWarningKey = null;
+    if (!deferredConfigChange) {
+      this.deferredConfigWarningKey = null;
+    }
 
     if (!this.initializePromise) {
       this.initializeKey = runtimeOptions.initializeKey;

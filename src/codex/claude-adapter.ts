@@ -14,6 +14,7 @@ import {
   startClaudePermissionHookServer,
   type ClaudePermissionHookServer,
 } from "./claude-permission-hook.js";
+import { createClaudeInstructionsFile } from "./claude-instructions-file.js";
 import { killProcessTree } from "./process-tree.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
@@ -73,18 +74,6 @@ const MAX_INSTRUCTIONS_CHARS = 16_000;
 
 function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
-}
-
-function prependClaudeInstructionsToPrompt(prompt: string, agentInstructions: string | null, bridgeInstructions: string | null): string {
-  const parts: string[] = [];
-  if (agentInstructions) {
-    parts.push(`[Agent Instructions]\n${agentInstructions}\n[End Agent Instructions]`);
-  }
-  if (bridgeInstructions) {
-    parts.push(`[Bridge Instructions]\n${bridgeInstructions}\n[End Bridge Instructions]`);
-  }
-  parts.push(prompt);
-  return parts.join("\n\n");
 }
 
 function normalizeExecutableCommand(command: string): string {
@@ -358,6 +347,12 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       args.push("--model", engineOptions.model);
     }
 
+    const combinedInstructions = combineInstructions(agentInstructions, bridgeInstructions);
+    const instructionsFile = combinedInstructions ? await createClaudeInstructionsFile(combinedInstructions) : null;
+    if (instructionsFile) {
+      args.push("--append-system-prompt-file", instructionsFile.path);
+    }
+
     // Workspace directory (where CLAUDE.md lives)
     const effectiveWorkspace = input.workspaceOverride ?? this.workspacePath;
     if (effectiveWorkspace) {
@@ -379,9 +374,9 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       );
     }
 
-    const safePrompt = prependClaudeInstructionsToPrompt(prompt, agentInstructions, bridgeInstructions);
-    const result = await this.runClaudeCommand(args, safePrompt, input.abortSignal, effectiveWorkspace, input.extraEnv).finally(async () => {
+    const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace, input.extraEnv).finally(async () => {
       await permissionHookServer?.close();
+      await instructionsFile?.cleanup().catch(() => {});
     });
     const parsed = this.parseResult(result.stdout, {
       stderr: result.stderr,

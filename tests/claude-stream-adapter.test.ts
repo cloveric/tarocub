@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -14,7 +14,11 @@ async function waitFor(condition: () => boolean): Promise<void> {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    if ((vi as unknown as { isFakeTimers?: () => boolean }).isFakeTimers?.()) {
+      await vi.advanceTimersByTimeAsync(0);
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   }
 
   throw new Error("Condition was not met in time");
@@ -191,8 +195,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(1);
-      expect(children[0].stdin.lines).toHaveLength(1);
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');
       await expect(first).resolves.toEqual({
@@ -207,7 +210,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(2);
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
       expect(calls[1]?.args).toContain("-r");
       expect(calls[1]?.args).toContain("session-123");
       children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
@@ -236,15 +239,14 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(1);
-      expect(children[0].stdin.lines).toHaveLength(1);
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       await vi.advanceTimersByTimeAsync(100);
 
       const second = adapter.sendUserMessage("telegram-67890", {
         text: "Another session",
         files: [],
       });
-      expect(children).toHaveLength(2);
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
 
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');
@@ -396,8 +398,14 @@ describe("ClaudeStreamAdapter", () => {
 
       await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
       expect(calls[1]?.args).not.toContain("--system-prompt");
+      expect(calls[1]?.args).not.toContain("--append-system-prompt");
+      expect(calls[1]?.args).toContain("--append-system-prompt-file");
+      const secondPromptFilePath = calls[1]?.args[calls[1].args.indexOf("--append-system-prompt-file") + 1];
+      expect(secondPromptFilePath).toBeTruthy();
+      await expect(readFile(secondPromptFilePath!, "utf8")).resolves.toContain("You are v2.");
+      expect(calls[1]?.args.join(" ")).not.toContain("You are v2.");
       const secondTurn = JSON.parse(children[1].stdin.lines[0] ?? "{}");
-      expect(secondTurn.message.content[0].text).toContain("[Agent Instructions]\nYou are v2.");
+      expect(secondTurn.message.content[0].text).toBe("Second");
       expect(calls[1]?.args).toContain("--permission-mode");
       expect(calls[1]?.args).toContain("bypassPermissions");
       expect(calls[1]?.args).toContain("-r");
@@ -432,9 +440,14 @@ describe("ClaudeStreamAdapter", () => {
       await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       expect(calls[0]?.args).not.toContain("--system-prompt");
       expect(calls[0]?.args).not.toContain("--append-system-prompt");
+      expect(calls[0]?.args).toContain("--append-system-prompt-file");
+      const promptFilePath = calls[0]?.args[calls[0].args.indexOf("--append-system-prompt-file") + 1];
+      expect(promptFilePath).toBeTruthy();
+      const promptFile = await readFile(promptFilePath!, "utf8");
+      expect(promptFile).toContain("You are v1.");
+      expect(promptFile).toContain("[Telegram Bridge Capabilities]");
       const turn = JSON.parse(children[0].stdin.lines[0] ?? "{}");
-      expect(turn.message.content[0].text).toContain("[Agent Instructions]\nYou are v1.");
-      expect(turn.message.content[0].text).toContain("[Bridge Instructions]\n[Telegram Bridge Capabilities]");
+      expect(turn.message.content[0].text).toBe("Hello");
 
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"OK","session_id":"session-123"}\n');
@@ -896,7 +909,7 @@ describe("ClaudeStreamAdapter", () => {
         },
       });
 
-      expect(children).toHaveLength(1);
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
       children[0].stdout.emitData(JSON.stringify({
@@ -1029,7 +1042,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(1);
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
@@ -1042,7 +1055,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(1);
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 2);
       children[0].stdout.emitData(JSON.stringify({
         type: "system",
         subtype: "task_notification",
@@ -1091,7 +1104,7 @@ describe("ClaudeStreamAdapter", () => {
       files: [],
       instructions: "changed instructions",
     })).rejects.toThrow("Cannot reconfigure Claude session while background tasks are active");
-    expect(children).toHaveLength(1);
+    await waitFor(() => children.length === 1);
   });
 
   it("clears background tasks when a foreground result arrives between task notification events", async () => {
@@ -1109,7 +1122,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(1);
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
@@ -1133,7 +1146,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(2);
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
       children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Fresh worker.","session_id":"session-123"}\n');
       await third;
@@ -1159,7 +1172,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(1);
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
@@ -1172,7 +1185,7 @@ describe("ClaudeStreamAdapter", () => {
         files: [],
       });
 
-      expect(children).toHaveLength(2);
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
       children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Fresh worker.","session_id":"session-123"}\n');
       await second;
@@ -1237,7 +1250,7 @@ describe("ClaudeStreamAdapter", () => {
       files: [],
     });
 
-    expect(children).toHaveLength(1);
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
     children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"done after a long time","session_id":"session-long"}\n');
 
     await expect(promise).resolves.toEqual({

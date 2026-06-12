@@ -253,11 +253,17 @@ async function sendLarkMarkdownBestEffort(
         chatId,
         text: chunk,
       });
-      await channel.send(chatId, { markdown: resolvedChunk }, options);
+      try {
+        await channel.send(chatId, { markdown: resolvedChunk }, options);
+      } catch {
+        await channel.send(chatId, { markdown: resolvedChunk }, options);
+      }
     } catch {
       // Delivery is post-turn best-effort. A later chunk failure must not turn a
       // successful engine run into a failed run card; earlier chunks are already
       // visible and the delivery error is surfaced by the channel/runtime logs.
+      // Retry once so a transient per-chunk send failure does not silently punch
+      // a hole in the middle of a long answer.
     }
   }
 }

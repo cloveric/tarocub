@@ -158,6 +158,45 @@ describe("lark audit fixes", () => {
     }
   });
 
+  it("retries a transient Lark markdown chunk failure instead of losing the middle chunk", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audit-markdown-retry-"));
+    const sentMarkdown: string[] = [];
+    let sendCalls = 0;
+    const channel = fakeChannel({
+      send: vi.fn(async (_to: string, payload: { markdown?: string }) => {
+        sendCalls++;
+        if (sendCalls === 2) {
+          throw new Error("temporary Lark send failure");
+        }
+        if (typeof payload.markdown === "string") {
+          sentMarkdown.push(payload.markdown);
+        }
+        return { messageId: `sent_${sendCalls}` };
+      }),
+    });
+    const chunks = [
+      "A".repeat(3400),
+      "B".repeat(3400),
+      "C".repeat(3400),
+    ];
+    const text = chunks.join("\n\n");
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text,
+        stateDir,
+      });
+
+      expect(channel.send).toHaveBeenCalledTimes(4);
+      expect(sentMarkdown.join("")).toBe(text);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   // Finding 3: card-choice runs claim activeRuns guarded, like /goal watchers.
   it("card choice aborts the previous active-run holder and releases only its own claim", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audit-choice-claim-"));

@@ -1363,6 +1363,48 @@ describe("runCli", () => {
     }
   });
 
+  it("does not report a Lark service stop failure when a lingering pid is recycled after force kill", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const operations: string[] = [];
+    let commandLine = "node /x/dist/src/index.js lark run --instance alpha";
+
+    try {
+      const handled = await runCli(["lark", "service", "stop"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: () => undefined },
+        larkServiceDeps: {
+          findProcessIds: async () => [54321],
+          isProcessAlive: (pid: number) => pid === 54321,
+          readProcessCommandLine: async () => commandLine,
+          killProcess: (pid: number, signal = "SIGTERM") => {
+            operations.push(`${signal}:${pid}`);
+            if (signal === "SIGKILL") {
+              commandLine = "node /usr/local/bin/unrelated-daemon";
+            }
+          },
+          sleep: async () => undefined,
+          stopGraceMs: 0,
+          forceStopGraceMs: 0,
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(operations).toEqual([
+        "SIGTERM:54321",
+        "SIGKILL:54321",
+      ]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("removes a stale Lark service lock when stopping a non-running service", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

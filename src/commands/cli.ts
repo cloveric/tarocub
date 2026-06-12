@@ -1860,7 +1860,15 @@ async function defaultStopLarkService(
   while (Date.now() < forceDeadline && lingeringProcessIds.some((processId) => isAlive(processId))) {
     await sleepProcess(100);
   }
-  const stillAliveProcessIds = lingeringProcessIds.filter((processId) => isAlive(processId));
+  const stillAliveProcessIds: number[] = [];
+  for (const processId of lingeringProcessIds) {
+    if (
+      isAlive(processId) &&
+      await isExpectedLarkServicePid(processId, input.stateDir, instanceName, deps.readProcessCommandLine, isAlive)
+    ) {
+      stillAliveProcessIds.push(processId);
+    }
+  }
   if (stillAliveProcessIds.length > 0) {
     throw new Error(`Lark service process(es) did not exit: ${stillAliveProcessIds.join(", ")}`);
   }
