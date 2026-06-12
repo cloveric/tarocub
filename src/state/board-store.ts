@@ -444,6 +444,33 @@ export class BoardStore {
     });
   }
 
+  async appendAcceptanceCriterion(id: string, criterion: string): Promise<BoardTaskRecord> {
+    const normalizedId = requireBoardTaskId(id);
+    const normalizedCriterion = criterion.trim();
+    if (!normalizedCriterion) {
+      throw new Error("board acceptance criterion is required");
+    }
+    return await this.updateTask(normalizedId, (_state, task) => {
+      task.acceptanceCriteria = normalizeStringList([...task.acceptanceCriteria, normalizedCriterion]);
+      task.updatedAt = nowIso();
+      return task;
+    });
+  }
+
+  async appendChecklistItem(id: string, text: string): Promise<BoardTaskRecord> {
+    const normalizedId = requireBoardTaskId(id);
+    const normalizedText = text.trim();
+    if (!normalizedText) {
+      throw new Error("board checklist item text is required");
+    }
+    return await this.updateTask(normalizedId, (_state, task) => {
+      const timestamp = nowIso();
+      task.checklist = normalizeChecklist([...task.checklist, normalizedText], task.checklist, timestamp);
+      task.updatedAt = timestamp;
+      return task;
+    });
+  }
+
   async setChecklistItemDone(id: string, checklistItemId: string, done: boolean): Promise<BoardTaskRecord> {
     const normalizedId = requireBoardTaskId(id);
     const normalizedChecklistItemId = requireChecklistItemId(checklistItemId);

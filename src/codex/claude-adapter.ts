@@ -75,6 +75,18 @@ function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
 }
 
+function prependClaudeInstructionsToPrompt(prompt: string, agentInstructions: string | null, bridgeInstructions: string | null): string {
+  const parts: string[] = [];
+  if (agentInstructions) {
+    parts.push(`[Agent Instructions]\n${agentInstructions}\n[End Agent Instructions]`);
+  }
+  if (bridgeInstructions) {
+    parts.push(`[Bridge Instructions]\n${bridgeInstructions}\n[End Bridge Instructions]`);
+  }
+  parts.push(prompt);
+  return parts.join("\n\n");
+}
+
 function normalizeExecutableCommand(command: string): string {
   const trimmed = command.trim();
 
@@ -321,16 +333,6 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     // Build args
     const args: string[] = ["-p", "--verbose", "--output-format", "stream-json"];
 
-    // Agent personality from agent.md → --system-prompt
-    if (agentInstructions) {
-      args.push("--system-prompt", agentInstructions);
-    }
-
-    // Bridge capabilities → --append-system-prompt (trusted, not confused with injection)
-    if (bridgeInstructions) {
-      args.push("--append-system-prompt", bridgeInstructions);
-    }
-
     // Resume existing session
     if (!isLogicalTelegramSessionId(sessionId)) {
       args.push("-r", sessionId);
@@ -377,7 +379,8 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       );
     }
 
-    const result = await this.runClaudeCommand(args, prompt, input.abortSignal, effectiveWorkspace, input.extraEnv).finally(async () => {
+    const safePrompt = prependClaudeInstructionsToPrompt(prompt, agentInstructions, bridgeInstructions);
+    const result = await this.runClaudeCommand(args, safePrompt, input.abortSignal, effectiveWorkspace, input.extraEnv).finally(async () => {
       await permissionHookServer?.close();
     });
     const parsed = this.parseResult(result.stdout, {

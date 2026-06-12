@@ -109,6 +109,14 @@ export function classifyFailure(error: unknown): FailureCategory {
     return "engine-backend";
   }
 
+  if (
+    text.includes("api error: 529") ||
+    text.includes("api_error_status=529") ||
+    (text.includes("overloaded") && (text.includes("api error") || text.includes("claude") || text.includes("codex")))
+  ) {
+    return "engine-backend";
+  }
+
   if (hasEngineCliSignal(text)) {
     return "engine-cli";
   }

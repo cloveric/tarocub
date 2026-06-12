@@ -214,7 +214,7 @@ export async function deliverLarkResponse(input: {
   // the rejection notices above are sent IN ADDITION to the text (Telegram
   // parity), never instead of it: one bad tag must not swallow the whole answer.
   if (input.sendText !== false && cleanedText) {
-    await sendLarkMarkdown(input.channel, input.chatId, cleanedText, replyOptions);
+    await sendLarkMarkdownBestEffort(input.channel, input.chatId, cleanedText, replyOptions);
   }
 
   if (matches.length === 0) {
@@ -236,6 +236,29 @@ export async function sendLarkMarkdown(
       text: chunk,
     });
     await channel.send(chatId, { markdown: resolvedChunk }, options);
+  }
+}
+
+async function sendLarkMarkdownBestEffort(
+  channel: LarkChannelLike,
+  chatId: string,
+  markdown: string,
+  options: LarkSendOptions | undefined,
+): Promise<void> {
+  for (const chunk of chunkLarkMarkdown(markdown)) {
+    try {
+      const resolvedChunk = await resolveLarkMentionsInText({
+        enabled: shouldResolveLarkMentions(process.env),
+        channel,
+        chatId,
+        text: chunk,
+      });
+      await channel.send(chatId, { markdown: resolvedChunk }, options);
+    } catch {
+      // Delivery is post-turn best-effort. A later chunk failure must not turn a
+      // successful engine run into a failed run card; earlier chunks are already
+      // visible and the delivery error is surfaced by the channel/runtime logs.
+    }
   }
 }
 
@@ -940,18 +963,28 @@ async function sendLarkImageWithFileFallback(input: {
     });
   }
 
-  await input.channel.send(input.chatId, {
-    file: {
-      source: input.body,
+  try {
+    await input.channel.send(input.chatId, {
+      file: {
+        source: input.body,
+        fileName: path.basename(input.realPath),
+      },
+    }, replyOptions);
+    await appendLarkFileAcceptedTimeline(input, {
       fileName: path.basename(input.realPath),
-    },
-  }, replyOptions);
-  await appendLarkFileAcceptedTimeline(input, {
-    fileName: path.basename(input.realPath),
-    bytes: input.body.length,
-    kind: "file",
-    fallbackFrom: "image",
-  });
+      bytes: input.body.length,
+      kind: "file",
+      fallbackFrom: "image",
+    });
+  } catch (error) {
+    await appendLarkFileRejectedTimeline(input, {
+      path: input.originalPath,
+      realPath: input.realPath,
+      reason: larkFileRejectReasonFromError(error),
+      detail: `image file fallback failed: ${errorDetail(error)}`,
+      kind: "file",
+    });
+  }
 }
 
 function larkAnyFilePathAllowed(): boolean {

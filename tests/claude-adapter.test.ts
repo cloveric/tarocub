@@ -126,8 +126,6 @@ describe("ProcessClaudeAdapter", () => {
         "--verbose",
         "--output-format",
         "stream-json",
-        "--system-prompt",
-        "You are a reviewer.",
         "-r",
         "session-123",
         "--permission-mode",
@@ -137,7 +135,8 @@ describe("ProcessClaudeAdapter", () => {
       ]);
       expect(calls[0]?.options.cwd).toBe(workspacePath);
       expect(calls[0]?.options.windowsHide).toBe(true);
-      expect(child.stdin.written).toBe("Review this\nAttachment: a.ts");
+      expect(child.stdin.written).toContain("[Agent Instructions]\nYou are a reviewer.");
+      expect(child.stdin.written).toContain("Review this\nAttachment: a.ts");
     } finally {
       await removeTempRoot(root);
     }
@@ -224,12 +223,10 @@ describe("ProcessClaudeAdapter", () => {
       child.close(0);
       await promise;
 
-      expect(calls[0]?.args).toContain("--system-prompt");
-      const systemPrompt = calls[0]?.args[calls[0].args.indexOf("--system-prompt") + 1];
-      expect(systemPrompt).toContain("You are a reviewer.");
-      expect(calls[0]?.args).toContain("--append-system-prompt");
-      const appendPrompt = calls[0]?.args[calls[0].args.indexOf("--append-system-prompt") + 1];
-      expect(appendPrompt).toContain("[Telegram Bridge Capabilities]");
+      expect(calls[0]?.args).not.toContain("--system-prompt");
+      expect(calls[0]?.args).not.toContain("--append-system-prompt");
+      expect(child.stdin.written).toContain("[Agent Instructions]\nYou are a reviewer.");
+      expect(child.stdin.written).toContain("[Bridge Instructions]\n[Telegram Bridge Capabilities]");
     } finally {
       await removeTempRoot(root);
     }

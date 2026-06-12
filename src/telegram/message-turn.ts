@@ -640,6 +640,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
           workspaceOverride: cfg.resume?.workspacePath,
           requestOutputDir: state.telegramOutDirPath,
           source: "stream-event",
+          allowAnyAbsolutePath: false,
           notifyRejected: false,
           deliverTelegramResponse,
           onFileAccepted: (sourcePath) => {
@@ -877,6 +878,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
           workspaceOverride: cfg.resume?.workspacePath,
           requestOutputDir: state.telegramOutDirPath,
           source: "post-turn",
+          allowAnyAbsolutePath: false,
           notifyRejected: false,
           deliverTelegramResponse,
           onDeliveryAccepted: (receipt) => {

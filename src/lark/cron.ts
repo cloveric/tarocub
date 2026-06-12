@@ -1,10 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
-import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
+import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { CronAccessDeniedError } from "../runtime/cron-errors.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
+import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkReminderCard } from "./card-renderer.js";
 import { sendLarkMarkdown } from "./delivery.js";
@@ -92,6 +93,15 @@ export function buildLarkCronExecutor(input: {
     const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
     await mkdir(requestOutputDir, { recursive: true });
     const replyFields = larkCronReplyFields(job);
+    const locale = job.locale === "en" ? "en" : "zh";
+    const cfg = await loadInstanceConfig(input.stateDir);
+    const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+    if (budgetExhausted) {
+      if (!job.mute) {
+        await sendLarkMarkdown(input.channel, job.larkChatId, budgetExhausted.message, replyFields);
+      }
+      throw new Error("budget exhausted");
+    }
     // Render the AI task's result into a run card (same UX as a chat reply): open
     // the card, run the turn, then finish it with the answer. Skipped for muted
     // jobs (no card) and when no run-card factory is wired (older callers).
@@ -101,7 +111,7 @@ export function buildLarkCronExecutor(input: {
         chatId: job.larkChatId,
         conversationKey,
         bridgeChatType,
-        locale: job.locale === "en" ? "en" : "zh",
+	        locale,
         ...(replyFields.replyTo
           ? { replyTo: replyFields.replyTo, replyInThread: replyFields.replyInThread ?? false }
           : {}),
@@ -136,7 +146,7 @@ export function buildLarkCronExecutor(input: {
       }
       throw error;
     }
-    await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
+    await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
     if (job.mute) {
       return;
     }

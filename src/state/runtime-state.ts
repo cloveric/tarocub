@@ -1,4 +1,5 @@
 import { JsonStore } from "./json-store.js";
+import { withFileMutex } from "./file-mutex.js";
 import { RuntimeStateSchema } from "./runtime-state-schema.js";
 
 export interface RuntimeState {
@@ -17,9 +18,11 @@ export function createDefaultRuntimeState(): RuntimeState {
 
 export class RuntimeStateStore {
   private readonly store: JsonStore<RuntimeState>;
+  private readonly filePath: string;
   private pendingWrite: Promise<void> = Promise.resolve();
 
   constructor(filePath: string) {
+    this.filePath = filePath;
     this.store = new JsonStore<RuntimeState>(filePath, (value) => {
       const result = RuntimeStateSchema.safeParse(value);
       if (result.success) {
@@ -109,7 +112,10 @@ export class RuntimeStateStore {
   }
 
   private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.pendingWrite.then(task, task);
+    const run = this.pendingWrite.then(
+      () => withFileMutex(this.filePath, task),
+      () => withFileMutex(this.filePath, task),
+    );
     this.pendingWrite = run.then(
       () => undefined,
       () => undefined,

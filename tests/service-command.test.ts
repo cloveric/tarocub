@@ -1323,7 +1323,7 @@ describe("telegram service commands", () => {
             let calls = 0;
             return (pid: number) => {
               calls += 1;
-              return pid === 54321 && calls < 2;
+              return pid === 54321 && calls < 3;
             };
           })(),
           isExpectedServiceProcess: (pid) => pid === 54321,

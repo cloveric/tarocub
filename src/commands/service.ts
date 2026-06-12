@@ -329,17 +329,25 @@ function defaultSpawnDetached(
 ): number | void {
   const stdoutFd = openSync(options.stdoutPath, "a");
   const stderrFd = openSync(options.stderrPath, "a");
+  const env = { ...process.env, ...(options.env ?? {}) };
+  scrubTurnScopedServiceEnv(env);
   const child = spawn(command, args, {
     cwd: options.cwd,
     detached: true,
     stdio: ["ignore", stdoutFd, stderrFd],
-    env: options.env ? { ...process.env, ...options.env } : undefined,
+    env,
     ...(process.platform === "win32" ? { windowsHide: true } : {}),
   });
   child.unref();
   closeSync(stdoutFd);
   closeSync(stderrFd);
   return child.pid;
+}
+
+function scrubTurnScopedServiceEnv(env: NodeJS.ProcessEnv): void {
+  for (const key of DEFERRED_RESTART_SCRUB_ENV_KEYS) {
+    delete env[key];
+  }
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -933,11 +941,13 @@ export async function stopServiceInstance(
   }
 
   for (const pid of pidsToStop) {
-    killProcessTree(pid);
+    if (isProcessAlive(pid) && isExpectedServiceProcess(pid, paths.entryPath, paths.instanceName)) {
+      killProcessTree(pid);
+    }
   }
 
   for (let attempt = 0; attempt < 20; attempt++) {
-    if ([...pidsToStop].every((pid) => !isProcessAlive(pid))) {
+    if ([...pidsToStop].every((pid) => !isProcessAlive(pid) || !isExpectedServiceProcess(pid, paths.entryPath, paths.instanceName))) {
       return `Stopped instance "${paths.instanceName}".${legacyLaunchdWarning}`;
     }
 
@@ -946,13 +956,13 @@ export async function stopServiceInstance(
 
   if (options.force) {
     for (const pid of pidsToStop) {
-      if (isProcessAlive(pid)) {
+      if (isProcessAlive(pid) && isExpectedServiceProcess(pid, paths.entryPath, paths.instanceName)) {
         forceKillProcessTree(pid);
       }
     }
 
     for (let attempt = 0; attempt < 20; attempt++) {
-      if ([...pidsToStop].every((pid) => !isProcessAlive(pid))) {
+      if ([...pidsToStop].every((pid) => !isProcessAlive(pid) || !isExpectedServiceProcess(pid, paths.entryPath, paths.instanceName))) {
         return `Stopped instance "${paths.instanceName}".${legacyLaunchdWarning}`;
       }
 

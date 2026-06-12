@@ -4,12 +4,13 @@ import path from "node:path";
 import type { CommentEvent } from "@larksuiteoapi/node-sdk";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
-import { recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
+import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { extractCronAddTagMatches, stripCronAddTags } from "../telegram/cron-tags.js";
 import { extractDeliveryTagMatches, stripDeliveryTags } from "../telegram/delivery-tags.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { extractTelegramToolTagMatches, parseTelegramToolTagPayload, stripTelegramToolTags } from "../telegram/tool-tags.js";
+import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import type { LarkCommentContext, LarkCommentFileType } from "./comment-client.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
@@ -107,6 +108,28 @@ export async function handleLarkComment(input: {
         event: input.event,
         fileType,
       });
+      const cfg = await loadInstanceConfig(input.stateDir);
+      const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+      if (budgetExhausted) {
+        await createLarkCommentReply(commentClient, {
+          fileToken: input.event.fileToken,
+          fileType,
+          commentId: input.event.commentId,
+          text: budgetExhausted.message,
+        });
+        await appendLarkCommentTimelineEvent(input.stateDir, {
+          type: "turn.completed",
+          bridgeChatId,
+          bridgeUserId,
+          conversationKey,
+          outcome: "noop",
+          detail: "budget exhausted",
+          event: input.event,
+          fileType,
+          metadata: { phase: "budget", budgetUsd: budgetExhausted.budgetUsd, totalCostUsd: budgetExhausted.usage.totalCostUsd },
+        });
+        return true;
+      }
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
         await appendLarkCommentTimelineEvent(input.stateDir, {
           type: "engine.event",
@@ -167,7 +190,7 @@ export async function handleLarkComment(input: {
         instructions: larkAgentInstructions(),
         onEngineEvent: handleEngineEvent,
       });
-      await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
+      await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
       const cleaned = await renderLarkCommentReplyFromEngineText({
         rawText: result.text,
         runtime: input.runtime,

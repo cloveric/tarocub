@@ -1838,9 +1838,12 @@ async function defaultStopLarkService(
     await rm(resolveLarkServiceLockPath(input.stateDir), { force: true });
   }
 
+  const instanceName = resolveLarkInstanceName(input.env);
   for (const processId of pidsToStop) {
-    killProcess(processId);
-    stopped = true;
+    if (await isExpectedLarkServicePid(processId, input.stateDir, instanceName, deps.readProcessCommandLine, isAlive)) {
+      killProcess(processId);
+      stopped = true;
+    }
   }
   const deadline = Date.now() + stopGraceMs;
   while (Date.now() < deadline && [...pidsToStop].some((processId) => isAlive(processId))) {
@@ -1849,7 +1852,9 @@ async function defaultStopLarkService(
 
   const lingeringProcessIds = [...pidsToStop].filter((processId) => isAlive(processId));
   for (const processId of lingeringProcessIds) {
-    killProcess(processId, "SIGKILL");
+    if (await isExpectedLarkServicePid(processId, input.stateDir, instanceName, deps.readProcessCommandLine, isAlive)) {
+      killProcess(processId, "SIGKILL");
+    }
   }
   const forceDeadline = Date.now() + forceStopGraceMs;
   while (Date.now() < forceDeadline && lingeringProcessIds.some((processId) => isAlive(processId))) {
@@ -2533,6 +2538,7 @@ async function runLarkServiceCommand(
       }
       if (restartFailures.length > 0) {
         logger.log(`${restartFailures.length} Lark instance(s) skipped (busy or misconfigured): ${restartFailures.join(", ")}. Re-run after resolving, or pass --force.`);
+        throw new Error(`${restartFailures.length} Lark instance(s) failed to restart: ${restartFailures.join(", ")}`);
       }
       return true;
     }
@@ -3771,6 +3777,10 @@ async function runServiceCommand(
           continue;
         }
         if (subcommand === "restart") {
+          if (defer) {
+            logger.log(await scheduleDeferredServiceRestart(env, currentInstanceName, serviceDeps));
+            continue;
+          }
           await stopServiceInstance(env, currentInstanceName, serviceDeps, { force });
           logger.log(await startServiceInstance(env, currentInstanceName, serviceDeps));
           continue;

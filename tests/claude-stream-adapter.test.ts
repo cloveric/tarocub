@@ -395,8 +395,9 @@ describe("ClaudeStreamAdapter", () => {
       });
 
       await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
-      expect(calls[1]?.args).toContain("--system-prompt");
-      expect(calls[1]?.args).toContain("You are v2.");
+      expect(calls[1]?.args).not.toContain("--system-prompt");
+      const secondTurn = JSON.parse(children[1].stdin.lines[0] ?? "{}");
+      expect(secondTurn.message.content[0].text).toContain("[Agent Instructions]\nYou are v2.");
       expect(calls[1]?.args).toContain("--permission-mode");
       expect(calls[1]?.args).toContain("bypassPermissions");
       expect(calls[1]?.args).toContain("-r");
@@ -429,12 +430,11 @@ describe("ClaudeStreamAdapter", () => {
       });
 
       await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
-      const systemPromptIndex = calls[0]?.args.indexOf("--system-prompt") ?? -1;
-      expect(systemPromptIndex).toBeGreaterThan(-1);
-      expect(calls[0]?.args[systemPromptIndex + 1]).toContain("You are v1.");
-      const appendIndex = calls[0]?.args.indexOf("--append-system-prompt") ?? -1;
-      expect(appendIndex).toBeGreaterThan(-1);
-      expect(calls[0]?.args[appendIndex + 1]).toContain("[Telegram Bridge Capabilities]");
+      expect(calls[0]?.args).not.toContain("--system-prompt");
+      expect(calls[0]?.args).not.toContain("--append-system-prompt");
+      const turn = JSON.parse(children[0].stdin.lines[0] ?? "{}");
+      expect(turn.message.content[0].text).toContain("[Agent Instructions]\nYou are v1.");
+      expect(turn.message.content[0].text).toContain("[Bridge Instructions]\n[Telegram Bridge Capabilities]");
 
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"OK","session_id":"session-123"}\n');
@@ -748,6 +748,59 @@ describe("ClaudeStreamAdapter", () => {
       "type" in event &&
       event.type === "task_notification"
     )).toHaveLength(1);
+  });
+
+  it("emits Claude background task notifications when the task result is empty but metadata has a summary", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: unknown[] = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Run in background",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+    await expect(promise).resolves.toEqual({
+      text: "Started in the background.",
+      sessionId: "session-123",
+    });
+
+    children[0].stdout.emitData(JSON.stringify({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-empty",
+      status: "completed",
+      summary: "Background audit finished.",
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "",
+      task_id: "task-empty",
+      session_id: "session-123",
+      origin: { kind: "task-notification" },
+    }) + "\n");
+
+    await waitFor(() => events.some((event) =>
+      typeof event === "object" &&
+      event !== null &&
+      "type" in event &&
+      event.type === "task_notification"
+    ));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "task_notification",
+      text: "Background audit finished.",
+      taskId: "task-empty",
+      status: "completed",
+    }));
   });
 
   it("does not resolve an active user turn with a Claude background task notification result", async () => {

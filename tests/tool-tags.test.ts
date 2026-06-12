@@ -222,7 +222,7 @@ describe("telegram tool tags", () => {
     });
   });
 
-  it("allows explicit send.file tool tags to deliver readable absolute paths outside the workspace", async () => {
+  it("rejects explicit send.file tool tags for absolute paths outside the workspace by default", async () => {
     await withContext(async ({ stateDir, store, scheduler, inboxDir, api }) => {
       const outsidePath = path.join(path.dirname(stateDir), "desktop-report.txt");
       await writeFile(outsidePath, "hello", "utf8");
@@ -243,8 +243,8 @@ describe("telegram tool tags", () => {
         },
       });
 
-      expect(text).toContain("File delivered");
-      expect(api.sendDocument).toHaveBeenCalledWith(123, "desktop-report.txt", expect.any(Uint8Array));
+      expect(text).toContain("outside-workspace");
+      expect(api.sendDocument).not.toHaveBeenCalled();
     });
   });
 

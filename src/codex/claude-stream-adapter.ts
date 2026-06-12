@@ -171,6 +171,18 @@ function isLogicalTelegramSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
 }
 
+function prependClaudeInstructionsToPrompt(prompt: string, agentInstructions: string | null, bridgeInstructions: string | null): string {
+  const parts: string[] = [];
+  if (agentInstructions) {
+    parts.push(`[Agent Instructions]\n${agentInstructions}\n[End Agent Instructions]`);
+  }
+  if (bridgeInstructions) {
+    parts.push(`[Bridge Instructions]\n${bridgeInstructions}\n[End Bridge Instructions]`);
+  }
+  parts.push(prompt);
+  return parts.join("\n\n");
+}
+
 function normalizeExecutableCommand(command: string): string {
   const trimmed = command.trim();
 
@@ -510,7 +522,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const worker = this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, effectiveWorkspace, engineOptions);
     worker.onEngineEvent = input.onEngineEvent;
 
-    const response = await this.sendTurn(worker, prompt, input);
+    const response = await this.sendTurn(worker, prependClaudeInstructionsToPrompt(prompt, agentInstructions, bridgeInstructions), input);
     const nextSessionId = response.sessionId;
     if (nextSessionId && nextSessionId !== sessionId) {
       this.workers.delete(sessionId);
@@ -571,12 +583,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     ];
     for (const toolName of this.disallowedTools) {
       args.push("--disallowedTools", toolName);
-    }
-    if (agentInstructions) {
-      args.push("--system-prompt", agentInstructions);
-    }
-    if (bridgeInstructions) {
-      args.push("--append-system-prompt", bridgeInstructions);
     }
     if (!isLogicalTelegramSessionId(sessionId)) {
       args.push("-r", sessionId);
@@ -738,7 +744,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       if (taskId) {
         worker.backgroundTasks.delete(taskId);
       }
-      const text = parsed.result?.trim();
+      const text = renderBackgroundTaskTurnResult(metadata, parsed.result);
       if (text) {
         const settlesCurrentTurn = metadata.turnId !== undefined && worker.pendingTurn?.turnId === metadata.turnId;
         this.emitEngineEvent(worker, {

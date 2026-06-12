@@ -450,6 +450,7 @@ export async function handleCrewTelegramWorkflow(input: {
         depth: 0,
         stateDir,
         timeoutMs: delegateInput.timeoutMs,
+        abortSignal: context.abortSignal,
       });
       return { text: result.text };
     });

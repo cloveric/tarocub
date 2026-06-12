@@ -14,6 +14,7 @@ export interface BusDelegateInput {
   depth: number;
   stateDir: string;
   timeoutMs?: number;
+  abortSignal?: AbortSignal;
 }
 
 // A delegated turn runs a full engine turn on the remote instance, which routinely
@@ -95,6 +96,12 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? resolveDefaultDelegationTimeoutMs();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  if (input.abortSignal?.aborted) {
+    onAbort();
+  } else {
+    input.abortSignal?.addEventListener("abort", onAbort, { once: true });
+  }
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (target.secret) {
@@ -164,5 +171,6 @@ export async function delegateToInstance(input: BusDelegateInput): Promise<BusTa
     });
   } finally {
     clearTimeout(timeout);
+    input.abortSignal?.removeEventListener("abort", onAbort);
   }
 }

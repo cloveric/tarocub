@@ -845,6 +845,14 @@ export async function handleLarkCardAction(input: {
     }
     const approvalConversationKey = pending.conversationKey ?? `lark:${pending.chatId}`;
     const approvalBridgeChatType = pending.bridgeChatType ?? "private";
+    if (!pendingLarkApprovalMatchesEvent(pending, input.event, approvalConversationKey)) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: renderApprovalNoPending(locale) },
+        larkReplyOptions(input.event.messageId, replyInThread),
+      );
+      return true;
+    }
     if (
       !await ensureLarkCardActionAccess({
         ...input,
@@ -1020,6 +1028,14 @@ export async function handleLarkCardAction(input: {
     }
     const approvalConversationKey = pending.conversationKey ?? `lark:${pending.chatId}`;
     const approvalBridgeChatType = pending.bridgeChatType ?? "private";
+    if (!pendingLarkApprovalMatchesEvent(pending, input.event, approvalConversationKey)) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: renderApprovalNoPending(locale) },
+        larkReplyOptions(input.event.messageId, replyInThread),
+      );
+      return true;
+    }
     if (
       !await ensureLarkCardActionAccess({
         ...input,
@@ -1300,6 +1316,23 @@ async function ensureLarkCardActionAccess(input: {
   return false;
 }
 
+function pendingLarkApprovalMatchesEvent(
+  pending: PendingLarkApproval,
+  event: { chatId: string; messageId: string },
+  conversationKey: string,
+): boolean {
+  const expectedChatId = conversationKey.startsWith("lark:")
+    ? conversationKey.slice("lark:".length)
+    : pending.chatId;
+  if (event.chatId !== pending.chatId && event.chatId !== expectedChatId) {
+    return false;
+  }
+  if (pending.managedCard?.messageId && pending.managedCard.messageId !== event.messageId) {
+    return false;
+  }
+  return true;
+}
+
 async function runLarkCardChoice(input: {
   channel: LarkChannelLike;
   bridge: LarkBridgeLike;
@@ -1420,7 +1453,7 @@ async function runLarkCardChoice(input: {
       instructions: larkAgentInstructions(),
       onEngineEvent: handleEngineEvent,
     });
-    await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
+    await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
     await deliverLarkResponse({
       channel: input.channel,
       runtime: input.runtime,
@@ -1606,7 +1639,7 @@ async function runLarkArchiveContinueCardAction(input: {
       instructions: larkAgentInstructions(),
       onEngineEvent: handleEngineEvent,
     });
-    await recordBridgeTurnUsage(input.stateDir, result.usage, undefined);
+    await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
     await deliverLarkResponse({
       channel: input.channel,
       runtime: input.runtime,

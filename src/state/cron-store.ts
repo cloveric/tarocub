@@ -263,11 +263,26 @@ export class CronStore {
   }
 
   async toggleEnabled(id: string): Promise<CronJobRecord | null> {
-    const job = await this.get(id);
-    if (!job) {
-      return null;
-    }
-    return this.update(id, { enabled: !job.enabled });
+    return this.enqueueWrite(async () => {
+      const state = await this.store.read(createDefaultState());
+      const index = state.jobs.findIndex((job) => job.id === id);
+      if (index === -1) {
+        return null;
+      }
+      const existing = state.jobs[index]!;
+      if (!existing.enabled) {
+        this.assertEnabledJobLimit(state.jobs, existing.chatId, true, existing.id, existing.messageThreadId);
+      }
+      const updated = CronJobRecordSchema.parse({
+        ...existing,
+        enabled: !existing.enabled,
+        updatedAt: nowIso(),
+      });
+      state.jobs = [...state.jobs];
+      state.jobs[index] = updated;
+      await this.store.write(state);
+      return updated;
+    });
   }
 
   async recordRun(id: string, result: CronRunResult): Promise<CronJobRecord | null> {

@@ -199,6 +199,7 @@ export async function handleDelegationTelegramCommand(input: {
         prompt: askCommand.prompt,
         depth: 0,
         stateDir,
+        abortSignal: context.abortSignal,
       });
 
       const askResponse = locale === "zh"
@@ -282,6 +283,7 @@ export async function handleDelegationTelegramCommand(input: {
         files: [],
         workspaceOverride: cfg.resume?.workspacePath,
         onEngineEvent: context.onEngineEvent,
+        abortSignal: context.abortSignal,
       })
         .then(async (r) => {
           await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, r.usage);
@@ -290,7 +292,7 @@ export async function handleDelegationTelegramCommand(input: {
         .catch((e) => ({ name: currentInstance, text: "", error: e instanceof Error ? e.message : String(e) }));
 
       const peerPromises = targets.map((target) =>
-        delegateToInstance({ fromInstance: currentInstance, targetInstance: target, prompt: fanCommand.prompt, depth: 0, stateDir })
+        delegateToInstance({ fromInstance: currentInstance, targetInstance: target, prompt: fanCommand.prompt, depth: 0, stateDir, abortSignal: context.abortSignal })
           .then((r) => ({ name: target, text: r.text, error: null as string | null }))
           .catch((e) => ({ name: target, text: "", error: e instanceof Error ? e.message : String(e) })),
       );
@@ -379,6 +381,7 @@ export async function handleDelegationTelegramCommand(input: {
           prompt: stagePrompt,
           depth: 0,
           stateDir,
+          abortSignal: context.abortSignal,
         });
 
         sections.push(
@@ -468,6 +471,7 @@ export async function handleDelegationTelegramCommand(input: {
         files: [],
         workspaceOverride: cfg.resume?.workspacePath,
         onEngineEvent: context.onEngineEvent,
+        abortSignal: context.abortSignal,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
 
@@ -484,6 +488,7 @@ export async function handleDelegationTelegramCommand(input: {
           : `Please verify the correctness and quality of this response:\n\nOriginal question: ${verifyCommand.prompt}\n\nResponse: ${result.text}`,
         depth: 0,
         stateDir,
+        abortSignal: context.abortSignal,
       });
 
       const verifyResponse = [

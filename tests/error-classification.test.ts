@@ -57,6 +57,8 @@ describe("classifyFailure specificity", () => {
   it("classifies Codex backend reconnect-exhaustion as engine-backend, distinct from engine-cli", () => {
     expect(classifyFailure(new Error("Reconnecting... 5/5"))).toBe("engine-backend");
     expect(classifyFailure(new Error("codex stream error\nReconnecting... 4/5"))).toBe("engine-backend");
+    expect(classifyFailure(new Error("API Error: 529 Overloaded"))).toBe("engine-backend");
+    expect(classifyFailure(new Error("Claude reported an error (api_error_status=529)"))).toBe("engine-backend");
     // a process/startup failure is still engine-cli, not engine-backend
     expect(classifyFailure(new Error("Codex runtime process failed to start"))).not.toBe("engine-backend");
     // a bare reconnect mention without an N/M attempt counter is NOT this category

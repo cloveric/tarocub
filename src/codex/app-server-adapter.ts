@@ -784,31 +784,16 @@ export class CodexAppServerAdapter implements CodexAdapter {
           this.destroy();
         }
       } catch (error) {
-        // A long-running turn (or an autonomous /goal pursuit) held the child busy
-        // past the idle window. Keep serving new turns on the existing child with
-        // the OLD config — initializeKey stays unchanged, so re-init is retried on
-        // a later message once idle — instead of hard-failing every new message in
-        // every chat until the activity ends.
-        //
-        // Known limitation: isIdle() treats an outstanding /goal watcher as busy,
-        // so a config change (effort/model/etc.) made WHILE a goal is being pursued
-        // will not apply until the goal finishes. We do NOT destroy() the child to
-        // force it: that would terminate Codex's in-flight autonomous goal run and
-        // lose its progress. The change is surfaced below and applied on the next
-        // message after the goal settles.
         if (this.initializePromise) {
-          // Surface the deferral once per distinct pending change rather than on
-          // every message, so the operator can see a config change has not taken
-          // effect yet (and why) without log spam.
           if (this.deferredConfigWarningKey !== runtimeOptions.initializeKey) {
             this.deferredConfigWarningKey = runtimeOptions.initializeKey;
             console.error(
-              `Codex app-server config change deferred while busy (will apply once idle${
+              `Codex app-server config change rejected while busy (retry once idle${
                 this.goalWatchers.size > 0 ? "; a /goal pursuit is holding the session" : ""
               }): ${error instanceof Error ? error.message : String(error)}`,
             );
           }
-          return this.initializePromise;
+          throw new Error("Codex app-server is busy; config changes must be retried after the current turn is idle.");
         }
       }
     }

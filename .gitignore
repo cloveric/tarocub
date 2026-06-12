@@ -7,3 +7,4 @@ coverage/
 .codex-state/
 .worktrees/
 .cctb-send/
+hibor_auth.json
