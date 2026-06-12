@@ -1743,12 +1743,14 @@ export async function createLarkRunCardController(input: {
   // (new tool group, status/footer changes, finalize) still go through the
   // full-card patch path. Any element-update failure permanently degrades back
   // to full-card patching for this turn — the previous behavior, never worse.
-  // 250ms ≈ 4 ticks/s: comfortably under Feishu's ~5 QPS per-card update
-  // limit. A faster tick (150ms ≈ 6.7/s) would trip rate limiting exactly
-  // during fast token streams — and a rate-limit error permanently degrades
-  // the turn to full-card patching, self-disabling the feature when it
-  // matters most.
-  const ELEMENT_STREAM_THROTTLE_MS = 250;
+  // 150ms ≈ 6.7 ticks/s. The documented per-card-entity limit for card and
+  // component OpenAPIs is 10/s (open.feishu.cn cardkit-v1
+  // streaming-updates-openapi-overview, and streaming mode is explicitly
+  // built for continuous updates), so this keeps a 1/3 headroom — important
+  // because a rate-limit error permanently degrades the turn to full-card
+  // patching. Going to 100ms (10/s, zero margin) would also let two
+  // concurrently streaming cards exceed the app-level 1000 req/min budget.
+  const ELEMENT_STREAM_THROTTLE_MS = 150;
   const elementStreamEnabled = Boolean(handle) &&
     !["off", "0", "false"].includes((process.env.CCTB_LARK_ELEMENT_STREAM ?? "").trim().toLowerCase());
   let elementStreamBroken = false;

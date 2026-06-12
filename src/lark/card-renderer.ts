@@ -376,6 +376,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     schema: "2.0",
     config: {
       streaming_mode: state.status === "running",
+      ...(state.status === "running" ? { streaming_config: LARK_STREAMING_CONFIG } : {}),
       update_multi: true,
       summary: { content: cardSummary(state, locale) },
     },
@@ -386,6 +387,22 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     },
   };
 }
+
+// Feishu's native typewriter defaults to 70ms per character (~14 chars/s) —
+// far slower than the engines' token streams, so with defaults the text lags
+// behind generation and the card FEELS slower than the old 400ms full-card
+// jumps. 25ms × 3 chars ≈ 120 chars/s deliberately outruns generation: the
+// animation always catches up within a push interval, so the last char is
+// visible no later than the old full-card path while still easing in — the
+// operator's requirement is efficiency first, smoothness second. "fast"
+// renders any remaining backlog immediately on the next push instead of
+// queuing it behind the animation. Custom params need Feishu client ≥ 7.23;
+// older clients silently fall back to the defaults.
+const LARK_STREAMING_CONFIG = {
+  print_frequency_ms: { default: 25, android: 25, ios: 25, pc: 25 },
+  print_step: { default: 3, android: 3, ios: 3, pc: 3 },
+  print_strategy: "fast",
+} as const;
 
 // Feishu rejects a card whose single markdown element exceeds its limit (ErrCode
 // 11310, byte-ish, so CJK counts ~3x). Cap every markdown element well under it;

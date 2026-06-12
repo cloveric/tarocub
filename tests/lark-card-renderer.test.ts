@@ -400,6 +400,8 @@ describe("lark card renderer", () => {
     const card = renderLarkRunCard(state) as any;
     const serialized = JSON.stringify(card);
     expect(card.config.streaming_mode).toBe(false);
+    // streaming_config rides only on running cards.
+    expect(card.config.streaming_config).toBeUndefined();
     expect(serialized).toContain("已被中断");
     expect(serialized).not.toContain("停止");
   });
@@ -424,6 +426,14 @@ describe("lark card renderer", () => {
     const serialized = JSON.stringify(card);
 
     expect(card.config.streaming_mode).toBe(true);
+    // The native typewriter is tuned to ~120 chars/s — faster than engine
+    // token streams, so the animation never makes text visible later than the
+    // old 400ms full-card path did (operator requirement: efficiency first).
+    expect(card.config.streaming_config).toEqual({
+      print_frequency_ms: { default: 25, android: 25, ios: 25, pc: 25 },
+      print_step: { default: 3, android: 3, ios: 3, pc: 3 },
+      print_strategy: "fast",
+    });
     expect(serialized).toContain("任务处理中");
     expect(serialized).not.toContain("CC Telegram Bridge is working");
     expect(serialized).toContain("停止");
