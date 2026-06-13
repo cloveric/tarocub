@@ -66,6 +66,30 @@ interface LarkRawChatClient {
   im: { v1: { chat: { get(args: { path: { chat_id: string } }): Promise<{ data?: Record<string, unknown> }> } } };
 }
 
+/**
+ * Timestamp every SDK log line. The SDK's ws lifecycle logs ("ws client
+ * ready", "reconnect", "closed manually") carry no timestamps, which made it
+ * impossible to correlate a transient WS disconnect with a failed card
+ * callback (the stop-button 108002 incident: the tap died inside a reconnect
+ * window nobody could date). Exported for tests.
+ */
+export function createTimestampedSdkLogger(logger: LarkServiceLogger): {
+  error: (...msg: unknown[]) => void;
+  warn: (...msg: unknown[]) => void;
+  info: (...msg: unknown[]) => void;
+  debug: (...msg: unknown[]) => void;
+  trace: (...msg: unknown[]) => void;
+} {
+  const stamp = (level: string, msg: unknown[]): unknown[] => [`${new Date().toISOString()} [lark-sdk:${level}]`, ...msg];
+  return {
+    error: (...msg: unknown[]) => logger.error(...stamp("error", msg)),
+    warn: (...msg: unknown[]) => logger.log(...stamp("warn", msg)),
+    info: (...msg: unknown[]) => logger.log(...stamp("info", msg)),
+    debug: (...msg: unknown[]) => logger.log(...stamp("debug", msg)),
+    trace: (...msg: unknown[]) => logger.log(...stamp("trace", msg)),
+  };
+}
+
 export async function runLarkService(
   env: LarkRuntimeEnv = process.env,
   options: {
@@ -172,6 +196,7 @@ export async function runLarkService(
       appSecret: config.appSecret,
       transport: "websocket",
       source: "tarocub",
+      logger: createTimestampedSdkLogger(logger),
       // The SDK's normalizeCardAction drops action.form_value, so AskUserQuestion
       // form submits (select/dropdown picks) would otherwise arrive empty. Keep
       // the raw event body on every normalized event so the card-action handler
@@ -334,7 +359,7 @@ export async function runLarkService(
       await cronScheduler.start();
       runtime.cronRuntime = { store: cronStore, scheduler: cronScheduler };
     }
-    logger.log(`Lark channel connected; stateDir=${stateDir}; lock=${serviceLock.filePath}`);
+    logger.log(`${new Date().toISOString()} Lark channel connected; stateDir=${stateDir}; lock=${serviceLock.filePath}`);
     logLifecycleEvent({
       type: "service.started",
       outcome: "success",

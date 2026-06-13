@@ -7,7 +7,7 @@ import { Domain } from "@larksuiteoapi/node-sdk";
 
 import { acquireInstanceLock } from "../src/state/instance-lock.js";
 import { DEFAULT_INSTANCE_AGENT_INSTRUCTIONS } from "../src/commands/access.js";
-import { createLarkServiceRuntime, resolveLarkServiceLockDir, runLarkService } from "../src/lark/service.js";
+import { createLarkServiceRuntime, createTimestampedSdkLogger, resolveLarkServiceLockDir, runLarkService } from "../src/lark/service.js";
 import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import { SERVICE_LIFECYCLE_LOG_FILE } from "../src/runtime/service-lifecycle-log.js";
@@ -1178,6 +1178,145 @@ describe("runLarkService", () => {
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("records a stop card-action receipt in the timeline (the 108002 diagnosability gap)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-stop-receipt-"));
+    const abortController = new AbortController();
+    const handlers = new Map<string, (payload: any) => Promise<void> | void>();
+    const channel = {
+      on: vi.fn((name: string, handler: (payload: any) => Promise<void> | void) => {
+        handlers.set(name, handler);
+        return () => undefined;
+      }),
+      connect: vi.fn(async () => {
+        await handlers.get("cardAction")?.({
+          messageId: "om_stop_tap",
+          chatId: "oc_group",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "stop",
+              conversationKey: "lark:oc_group:omt_topic",
+              bridgeChatType: "group",
+              replyInThread: true,
+            },
+          },
+        });
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel: vi.fn(() => channel),
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+          },
+        }),
+        signal: abortController.signal,
+        logger: silentLogger(),
+      });
+
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event",
+        channel: "lark",
+        conversationKey: "lark:oc_group:omt_topic",
+        outcome: "received",
+        detail: "stop_button",
+        metadata: expect.objectContaining({
+          source: "card_action",
+          action: "stop",
+          larkMessageId: "om_stop_tap",
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes a timestamping SDK logger into channel options and timestamps the connected line", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-runtime-sdk-logger-"));
+    const abortController = new AbortController();
+    const logger = silentLogger();
+    const channel = {
+      on: vi.fn(() => () => undefined),
+      connect: vi.fn(async () => {
+        abortController.abort();
+      }),
+      disconnect: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ messageId: "sent_1" })),
+      stream: vi.fn(async () => ({ messageId: "stream_1" })),
+      updateCard: vi.fn(async () => undefined),
+      downloadResource: vi.fn(async () => Buffer.from("")),
+    };
+    const createChannel = vi.fn(() => channel);
+
+    try {
+      await runLarkService({
+        HOME: os.homedir(),
+        LARK_APP_ID: "cli_a",
+        LARK_APP_SECRET: "secret",
+        CCTB_LARK_STATE_DIR: stateDir,
+      }, {
+        createChannel,
+        createBridge: async () => ({
+          stateDir,
+          bridge: {
+            handleAuthorizedMessage: vi.fn(),
+          },
+        }),
+        signal: abortController.signal,
+        logger,
+      });
+
+      // The SDK channel receives a logger that stamps every line ("ws client
+      // ready", "reconnect", ...) so WS lifecycle events are datable.
+      const channelOptions = (createChannel.mock.calls as unknown[][])[0][0] as { logger?: { info: (...msg: unknown[]) => void } };
+      expect(channelOptions.logger).toBeDefined();
+      channelOptions.logger!.info("ws client ready");
+      const stamped = logger.log.mock.calls.find((call) => String(call[0]).includes("[lark-sdk:info]"));
+      expect(stamped).toBeDefined();
+      expect(String(stamped![0])).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[lark-sdk:info\]$/);
+      expect(stamped![1]).toBe("ws client ready");
+
+      // Our own "channel connected" line is timestamped too.
+      const connected = logger.log.mock.calls.map((call) => String(call[0])).find((line) => line.includes("Lark channel connected"));
+      expect(connected).toBeDefined();
+      expect(connected!).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z Lark channel connected;/);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("createTimestampedSdkLogger", () => {
+  it("routes error to logger.error and everything else to logger.log, each ISO-stamped", () => {
+    const base = silentLogger();
+    const sdkLogger = createTimestampedSdkLogger(base);
+
+    sdkLogger.error("boom");
+    sdkLogger.warn("careful");
+
+    expect(base.error.mock.calls.length).toBe(1);
+    expect(String(base.error.mock.calls[0][0])).toMatch(/^\d{4}-\d{2}-\d{2}T.*\[lark-sdk:error\]$/);
+    expect(base.error.mock.calls[0][1]).toBe("boom");
+    expect(base.log.mock.calls.length).toBe(1);
+    expect(String(base.log.mock.calls[0][0])).toMatch(/^\d{4}-\d{2}-\d{2}T.*\[lark-sdk:warn\]$/);
+    expect(base.log.mock.calls[0][1]).toBe("careful");
   });
 });
 

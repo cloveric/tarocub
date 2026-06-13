@@ -575,6 +575,26 @@ export async function handleLarkCardAction(input: {
     })) {
       return true;
     }
+    // Receipt record, BEFORE acting: a stop tap used to leave no trace in the
+    // timeline, so when Feishu reported 108002 (callback ack timeout) there was
+    // no way to tell "callback never reached us" from "we received it and
+    // failed". One entry per arrival makes that question answerable.
+    if (input.stateDir) {
+      await appendLarkCardActionEngineEvent({
+        stateDir: input.stateDir,
+        chatId: input.event.chatId,
+        replyTo: input.event.messageId,
+        conversationKey: value.conversationKey,
+        bridgeChatType,
+        userId: stableLarkNumericId(`user:${larkOperatorRawId(input.event.operator)}`),
+      }, {
+        type: "engine.event",
+        action: "stop",
+        outcome: "received",
+        detail: "stop_button",
+        ...(typeof value.taskId === "string" ? { metadata: { taskId: value.taskId } } : {}),
+      });
+    }
     // A queue card carries the id of its own still-queued task. If that task is
     // still pending, cancel just it (the user can still /stop the running one).
     const taskId = typeof value.taskId === "string" ? value.taskId : undefined;
