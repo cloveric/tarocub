@@ -1495,18 +1495,19 @@ describe("lark service", () => {
 
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.stream).not.toHaveBeenCalled();
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: expect.stringContaining("Archive summary: repo.zip") },
-        { replyTo: "om_zip", replyInThread: false },
-      );
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: expect.stringContaining("README.md") },
-        { replyTo: "om_zip", replyInThread: false },
-      );
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("continue_archive");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Continue Analysis");
+      // One localized card carries the summary AND the Continue button (zh
+      // default locale). No separate English plain-text blob anymore.
+      const sent = JSON.stringify(channel.send.mock.calls);
+      expect(sent).toContain("压缩包摘要");
+      expect(sent).toContain("repo.zip");
+      expect(sent).toContain("README.md");
+      expect(sent).toContain("continue_archive");
+      expect(sent).toContain("继续分析");
+      // The old English plain-text summary line is no longer delivered to Lark.
+      expect(sent).not.toContain("Archive summary: repo.zip");
+      // It is a card, not a markdown message.
+      const cardCalls = (channel.send.mock.calls as unknown[][]).filter((call) => ((call[1] ?? {}) as { card?: unknown }).card);
+      expect(cardCalls.length).toBeGreaterThanOrEqual(1);
 
       const workflowState = JSON.parse(await readFile(path.join(stateDir, "file-workflow.json"), "utf8")) as {
         records: Array<{ kind: string; status: string; chatId: number; summary: string }>;
@@ -1553,9 +1554,94 @@ describe("lark service", () => {
       });
 
       const calls = JSON.stringify(channel.send.mock.calls);
-      expect(calls).toContain("Archive summary generated");
+      expect(calls).toContain("Archive Summary");
       expect(calls).toContain("Continue Analysis");
-      expect(calls).not.toContain("压缩包摘要已生成");
+      expect(calls).toContain("repo.zip");
+      expect(calls).not.toContain("压缩包摘要");
+      expect(calls).not.toContain("继续分析");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("takes over a lingering queued card with the archive summary instead of recalling it", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-takeover-"));
+    const zipBuffer = createZipBuffer({ "README.md": "# hello", "src/index.ts": "x" });
+    const channel = fakeChannel({ downloadResource: vi.fn(async () => zipBuffer) });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const runtime = createLarkServiceRuntime();
+    // Simulate the upload having waited in the queue: a "queued" card is already
+    // tracked for this message (inline card → no managed handle).
+    runtime.queueCards.set("om_zip", { messageId: "om_queue_card" });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_zip",
+          content: "分析这个压缩包",
+          resources: [{ type: "file", fileKey: "file_zip", fileName: "repo.zip" }],
+        }),
+      });
+
+      // The queued card was transitioned IN PLACE to the summary — no recall, no
+      // fresh card send, and the tracked entry is cleared so the finally-block's
+      // lingering-card settle can't recall it afterward.
+      expect(channel.updateCard).toHaveBeenCalledWith(
+        "om_queue_card",
+        expect.objectContaining({ schema: "2.0" }),
+      );
+      expect(channel.recallMessage).not.toHaveBeenCalled();
+      expect(runtime.queueCards.get("om_zip")).toBeUndefined();
+      const updatedCard = JSON.stringify(channel.updateCard.mock.calls);
+      expect(updatedCard).toContain("压缩包摘要");
+      expect(updatedCard).toContain("continue_archive");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recalls the stale queued card and posts a fresh summary when the in-place take-over fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-takeover-fail-"));
+    const zipBuffer = createZipBuffer({ "README.md": "# hello" });
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => zipBuffer),
+      // The in-place update is rejected (e.g. CardKit hiccup).
+      updateCard: vi.fn(async () => { throw new Error("update rejected"); }),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const runtime = createLarkServiceRuntime();
+    runtime.queueCards.set("om_zip", { messageId: "om_queue_card" });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_zip",
+          content: "分析这个压缩包",
+          resources: [{ type: "file", fileKey: "file_zip", fileName: "repo.zip" }],
+        }),
+      });
+
+      // Take-over failed → the stale queued card is recalled (finally-block) AND
+      // a fresh summary card is posted, so no orphaned "排队中" card is left.
+      expect(channel.recallMessage).toHaveBeenCalledWith("om_queue_card");
+      const freshCard = JSON.stringify(channel.send.mock.calls);
+      expect(freshCard).toContain("压缩包摘要");
+      expect(freshCard).toContain("continue_archive");
+      expect(runtime.queueCards.get("om_zip")).toBeUndefined();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

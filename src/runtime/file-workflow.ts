@@ -25,11 +25,26 @@ export interface FileWorkflowDirectResult {
   suppressReplyContext?: boolean;
 }
 
+/**
+ * Structured archive summary, exposed alongside the plain-text `text` so a
+ * channel can render a localized card instead of forwarding the English blob.
+ * The Telegram path ignores this and keeps using `text`; Lark renders a card.
+ */
+export interface ArchiveSummaryData {
+  archiveName: string;
+  fileCount: number;
+  keyFiles: string[];
+  topExtensions: Array<[string, number]>;
+  treeLines: string[];
+}
+
 export interface FileWorkflowReplyResult {
   kind: "reply";
   text: string;
   workflowRecordId?: string;
   failureHint?: string;
+  /** Present only for an archive-summary reply (the .zip upload path). */
+  archive?: ArchiveSummaryData;
 }
 
 export type FileWorkflowResult = FileWorkflowDirectResult | FileWorkflowReplyResult;
@@ -253,7 +268,7 @@ async function collectTreeLines(rootDir: string, maxLines = MAX_TREE_LINES): Pro
   return lines;
 }
 
-async function summarizeArchive(archivePath: string, extractedRoot: string): Promise<{ summary: string; topExtensions: Array<[string, number]> }> {
+async function summarizeArchive(archivePath: string, extractedRoot: string): Promise<{ summary: string; topExtensions: Array<[string, number]>; data: ArchiveSummaryData }> {
   await extractArchiveToDirectory(archivePath, extractedRoot);
 
   let fileCount = 0;
@@ -301,6 +316,13 @@ async function summarizeArchive(archivePath: string, extractedRoot: string): Pro
   return {
     summary: summaryLines.join("\n"),
     topExtensions,
+    data: {
+      archiveName: path.basename(archivePath),
+      fileCount,
+      keyFiles: [...keyFiles],
+      topExtensions,
+      treeLines,
+    },
   };
 }
 
@@ -375,7 +397,7 @@ export async function prepareAttachmentWorkflow(input: {
     }
 
     try {
-      const { summary } = await summarizeArchive(stagedFiles[0]!, extractedRoot);
+      const { summary, data } = await summarizeArchive(stagedFiles[0]!, extractedRoot);
       await store.update(uploadId, (current) => {
         current.status = "awaiting_continue";
         current.summary = summary;
@@ -384,6 +406,7 @@ export async function prepareAttachmentWorkflow(input: {
         kind: "reply",
         text: summary,
         workflowRecordId: uploadId,
+        archive: data,
       };
     } catch (error) {
       try {

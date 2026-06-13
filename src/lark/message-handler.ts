@@ -60,7 +60,7 @@ import {
   cleanupLarkMessageArtifacts,
   downloadLarkAttachments,
   prepareLarkFileWorkflow,
-  renderLarkArchiveContinueCard,
+  renderLarkArchiveSummaryCard,
   safeSegment,
   type DownloadedLarkAttachment,
 } from "./files.js";
@@ -1115,6 +1115,59 @@ async function runNormalizedLarkMessage(
         });
       }
       if (workflowResult?.kind === "reply") {
+        // An archive-summary reply gets ONE localized card (summary + inline
+        // Continue button). If a "queued" card is still showing for this upload
+        // (it arrived while the bot was busy), TAKE IT OVER in place so the
+        // queued→summary transition happens on the same card — no "撤回了一条
+        // 回复" recall, no plain-text English blob, no duplicate continue card.
+        if (workflowResult.workflowRecordId && workflowResult.archive) {
+          const summaryCard = renderLarkArchiveSummaryCard({
+            data: workflowResult.archive,
+            uploadId: workflowResult.workflowRecordId,
+            conversationKey: normalized.conversationKey,
+            bridgeChatType: normalized.bridgeChatType,
+            replyInThread: Boolean(normalized.threadId),
+            locale,
+          });
+          const queuedRef = input.runtime.queueCards.get(normalized.messageId);
+          let delivered = false;
+          if (queuedRef) {
+            delivered = await updateLarkQueueCardInPlace(input.channel, queuedRef, summaryCard);
+            if (delivered) {
+              // Taken over in place → drop tracking so the finally-block's
+              // lingering-card settle won't recall the card we just reused.
+              input.runtime.queueCards.delete(normalized.messageId);
+            }
+            // If the in-place update failed, leave it tracked: the finally-block
+            // recalls the stale queued card and we post a fresh summary below
+            // (no orphaned "排队中" card left behind).
+          }
+          if (!delivered) {
+            await sendLarkCardWithFallback({
+              channel: input.channel,
+              chatId: normalized.chatId,
+              card: summaryCard,
+              fallbackText: boundLarkArchiveSummary(workflowResult.text),
+              options: {
+                replyTo: normalized.messageId,
+                replyInThread: Boolean(normalized.threadId),
+              },
+              locale,
+            });
+          }
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "turn.completed",
+            outcome: "success",
+            metadata: {
+              responseChars: workflowResult.text.length,
+              attachments: normalized.attachments.length,
+              workflowRecordId: workflowResult.workflowRecordId,
+              archiveCard: true,
+            },
+          });
+          return true;
+        }
+        // Non-archive reply (e.g. "too many active file tasks"): plain markdown.
         const deliveryText = workflowResult.workflowRecordId
           ? boundLarkArchiveSummary(workflowResult.text)
           : workflowResult.text;
@@ -1122,27 +1175,6 @@ async function runNormalizedLarkMessage(
           replyTo: normalized.messageId,
           replyInThread: Boolean(normalized.threadId),
         });
-        if (workflowResult.workflowRecordId) {
-          await sendLarkCardWithFallback({
-            channel: input.channel,
-            chatId: normalized.chatId,
-            card: renderLarkArchiveContinueCard({
-              uploadId: workflowResult.workflowRecordId,
-              conversationKey: normalized.conversationKey,
-              bridgeChatType: normalized.bridgeChatType,
-              replyInThread: Boolean(normalized.threadId),
-              locale,
-            }),
-            fallbackText: locale === "en"
-              ? `Archive prepared. Continue with /resume ${workflowResult.workflowRecordId}`
-              : `压缩包已准备好。继续处理请使用 /resume ${workflowResult.workflowRecordId}`,
-            options: {
-              replyTo: normalized.messageId,
-              replyInThread: Boolean(normalized.threadId),
-            },
-            locale,
-          });
-        }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "turn.completed",
           outcome: "success",

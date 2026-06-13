@@ -5,9 +5,11 @@ import {
   boundArchiveSummaryForTelegram,
   prepareArchiveContinueWorkflow,
   prepareAttachmentWorkflow,
+  type ArchiveSummaryData,
   type DownloadedAttachment,
   type FileWorkflowResult,
 } from "../runtime/file-workflow.js";
+import { ELEMENT_CONTENT_MAX_BYTES, truncateBytes } from "./card-renderer.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import type { NormalizedTelegramAttachment } from "../telegram/update-normalizer.js";
 import type { LarkChannelLike, LarkMessageResourceType, LarkRawClientLike } from "./types.js";
@@ -137,37 +139,78 @@ export function boundLarkArchiveSummary(text: string): string {
   return boundArchiveSummaryForTelegram(text);
 }
 
-export function renderLarkArchiveContinueCard(input: {
+// Keep the rendered card body well under Feishu's per-element markdown limit
+// (ErrCode 11310). CJK counts ~3 bytes, so cap the displayed tree generously.
+const ARCHIVE_CARD_TREE_MAX_LINES = 24;
+const ARCHIVE_CARD_BODY_MAX = 2000;
+
+/**
+ * One self-contained, localized card for an archive-summary reply: the summary
+ * (file count, key files, top extensions, file tree) PLUS the Continue Analysis
+ * button inline. Replaces the old "plain English markdown message + separate
+ * continue card" pair on the Lark side. The shared Telegram path is untouched —
+ * it still forwards the plain-text summary.
+ */
+export function renderLarkArchiveSummaryCard(input: {
+  data: ArchiveSummaryData;
   uploadId: string;
   conversationKey: string;
   bridgeChatType: "private" | "group";
   replyInThread?: boolean;
   locale?: Locale;
-}): object {
+}): Record<string, unknown> {
   const locale = input.locale ?? "zh";
+  const { data } = input;
+  const en = locale === "en";
+
+  const treeLines = data.treeLines.slice(0, ARCHIVE_CARD_TREE_MAX_LINES);
+  const treeTruncated = data.treeLines.length > treeLines.length;
+  const extensions = data.topExtensions.length > 0
+    ? data.topExtensions.map(([extension, count]) => `${extension} (${count})`).join(", ")
+    : (en ? "none" : "无");
+  const keyFiles = data.keyFiles.length > 0
+    ? data.keyFiles.join(", ")
+    : (en ? "none detected" : "未检测到");
+
+  const lines = [
+    en ? `**📦 Archive Summary** · ${data.archiveName}` : `**📦 压缩包摘要** · ${data.archiveName}`,
+    en ? `Files: ${data.fileCount}` : `文件数：${data.fileCount}`,
+    en ? `Key files: ${keyFiles}` : `关键文件：${keyFiles}`,
+    en ? `Top extensions: ${extensions}` : `主要类型：${extensions}`,
+    "",
+    en ? "Tree:" : "目录：",
+    ...treeLines,
+    ...(treeTruncated ? [en ? `… (+${data.treeLines.length - treeLines.length} more)` : `… (还有 ${data.treeLines.length - treeLines.length} 项)`] : []),
+  ];
+  // Bound by chars first (keeps the visible card compact), then by bytes so the
+  // element obeys the same Feishu per-element limit as every other Lark card
+  // (CJK is ~3 bytes/char, so a char-only cap could still overflow on bytes).
+  let content = lines.join("\n");
+  if (content.length > ARCHIVE_CARD_BODY_MAX) {
+    content = `${content.slice(0, ARCHIVE_CARD_BODY_MAX)}\n…`;
+  }
+  content = truncateBytes(content, ELEMENT_CONTENT_MAX_BYTES);
+
   return {
     schema: "2.0",
     config: {
       update_multi: true,
-      summary: {
-        content: "Continue archive analysis",
-      },
+      summary: { content: en ? "Archive summary" : "压缩包摘要" },
     },
     body: {
       direction: "vertical",
+      padding: "12px 12px 12px 12px",
       elements: [
+        { tag: "markdown", content },
         {
           tag: "markdown",
-          content: locale === "en"
-            ? "Archive summary generated. To continue deeper analysis, click the button or reply with `/continue`."
-            : "压缩包摘要已生成。需要继续深入分析时，点击按钮或直接回复 `/continue`。",
+          content: en
+            ? "Continue deeper analysis below, or reply `/continue`."
+            : "需要继续深入分析，点下方按钮或回复 `/continue`。",
         },
         {
           tag: "button",
-          text: {
-            tag: "plain_text",
-            content: "Continue Analysis",
-          },
+          text: { tag: "plain_text", content: en ? "Continue Analysis" : "继续分析" },
           type: "primary",
           behaviors: [{
             type: "callback",

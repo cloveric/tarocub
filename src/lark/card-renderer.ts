@@ -1312,7 +1312,7 @@ function truncate(s: string, max: number): string {
 // is too big for the card and must be delivered out-of-band (Doc/overflow), so a
 // long CJK answer (≈3 bytes/char) is never silently lost.
 export const ELEMENT_CONTENT_MAX_BYTES = 7000;
-function truncateBytes(s: string, maxBytes: number): string {
+export function truncateBytes(s: string, maxBytes: number): string {
   if (Buffer.byteLength(s, "utf8") <= maxBytes) {
     return s;
   }
