@@ -940,12 +940,19 @@ export function cleanCardText(content: string): string {
  * which looks oversized and noisy inside a chat card — especially for answers
  * with many `##` sections. Downgrade headings to bold so they keep their
  * structure at normal body size.
+ *
+ * Headings can sit behind a blockquote marker (`> ## Title`), which Feishu
+ * renders as a grey callout box AROUND the oversized heading — the exact
+ * "font suddenly large + grey + clashes with body" report. Match an optional
+ * blockquote prefix and preserve it, downgrading only the heading inside.
  */
 function downgradeMarkdownHeadings(text: string): string {
-  return text.replace(/^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*$/gm, (_match, title: string) => {
+  return text.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)[ \t]*#*$/gm, (_match, quote: string, title: string) => {
     const trimmed = title.trim();
-    // Avoid double-bolding a title that is already fully bold.
-    return /^\*\*.*\*\*$/.test(trimmed) ? trimmed : `**${trimmed}**`;
+    // Don't wrap in ** when the title already contains a ** span (fully bold,
+    // or an inner bold like `…的**逐笔成交明细**`) — an outer ** would create
+    // unbalanced/nested markers. Drop the heading marker and keep the text.
+    return trimmed.includes("**") ? `${quote}${trimmed}` : `${quote}**${trimmed}**`;
   });
 }
 

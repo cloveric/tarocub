@@ -393,6 +393,26 @@ describe("lark card renderer", () => {
     expect(body).toContain("正文内容");
   });
 
+  it("downgrades a heading inside a blockquote (> ##) without losing the callout, and keeps inner bold balanced", () => {
+    // The real bug: Fable emitted `> ## 🥇 …的**逐笔成交明细**` — a level-2
+    // heading inside a blockquote with an inner bold span. The old regex only
+    // matched headings at line start, so the `>`-prefixed heading escaped the
+    // downgrade and Feishu rendered it oversized (grey callout + giant font).
+    const raw = "> ## 🥇 只需要这个的**逐笔成交明细**\n> 正文在引用里";
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: raw });
+    state = applyLarkEngineEvent(state, { type: "result", text: raw });
+    const body = JSON.stringify((renderLarkRunCard(state) as any).body);
+    // No oversized heading marker survives.
+    expect(body).not.toContain("## 🥇");
+    // The blockquote callout is preserved.
+    expect(body).toContain(">");
+    // The inner bold span stays intact and balanced — no outer ** was added
+    // around a title that already contained **.
+    expect(body).toContain("🥇 只需要这个的**逐笔成交明细**");
+    expect(body).not.toContain("**🥇");
+  });
+
   it("renders an interrupted terminal marker without a stop button", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, { type: "assistant_text", text: "partial" });
