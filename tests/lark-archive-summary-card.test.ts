@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { renderLarkArchiveSummaryCard } from "../src/lark/files.js";
+import { renderLarkArchiveSummaryCard, renderLarkArchiveSummaryText } from "../src/lark/files.js";
 import type { ArchiveSummaryData } from "../src/runtime/file-workflow.js";
 
 function findElements(card: Record<string, unknown>): Array<Record<string, unknown>> {
@@ -86,5 +86,31 @@ describe("renderLarkArchiveSummaryCard", () => {
     expect(summaryElement.content).toContain("…");
     // The continue button survives truncation (it is a separate element).
     expect(elements.some((element) => element.tag === "button")).toBe(true);
+  });
+});
+
+describe("renderLarkArchiveSummaryText (card-delivery fallback)", () => {
+  it("is the same localized summary as the card, minus markdown bold", () => {
+    const zh = renderLarkArchiveSummaryText(baseData, "zh");
+    // Localized fields, no English blob, no markdown bold markers.
+    expect(zh).toContain("📦 压缩包摘要 · 生益科技ticket-0418-0526.zip");
+    expect(zh).toContain("文件数：6");
+    expect(zh).toContain("主要类型：.xlsx (6)");
+    expect(zh).toContain("生益科技 ticket-0418.xlsx");
+    expect(zh).not.toContain("**");
+    expect(zh).not.toContain("Archive summary:");
+
+    const en = renderLarkArchiveSummaryText(baseData, "en");
+    expect(en).toContain("📦 Archive Summary");
+    expect(en).toContain("Files: 6");
+    expect(en).not.toContain("压缩包摘要");
+    expect(en).not.toContain("**");
+  });
+
+  it("stays under the Feishu per-element byte limit on a huge tree", () => {
+    const treeLines = Array.from({ length: 200 }, (_unused, index) => `超长中文文件名_${index}_${"占位".repeat(20)}.xlsx`);
+    const text = renderLarkArchiveSummaryText({ ...baseData, treeLines }, "zh");
+    expect(text.length).toBeLessThanOrEqual(2002);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(7000);
   });
 });

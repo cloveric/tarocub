@@ -145,6 +145,49 @@ const ARCHIVE_CARD_TREE_MAX_LINES = 24;
 const ARCHIVE_CARD_BODY_MAX = 2000;
 
 /**
+ * The localized summary body shared by the card and the plain-text fallback, so
+ * the two never drift. `boldHeader` wraps the title label in ** for the card's
+ * markdown element; the plain-text fallback passes false. Bounded by chars (to
+ * stay compact) then bytes (same Feishu per-element limit as every Lark card).
+ */
+function archiveSummaryBody(data: ArchiveSummaryData, en: boolean, boldHeader: boolean): string {
+  const treeLines = data.treeLines.slice(0, ARCHIVE_CARD_TREE_MAX_LINES);
+  const treeTruncated = data.treeLines.length > treeLines.length;
+  const extensions = data.topExtensions.length > 0
+    ? data.topExtensions.map(([extension, count]) => `${extension} (${count})`).join(", ")
+    : (en ? "none" : "无");
+  const keyFiles = data.keyFiles.length > 0
+    ? data.keyFiles.join(", ")
+    : (en ? "none detected" : "未检测到");
+
+  const label = en ? "📦 Archive Summary" : "📦 压缩包摘要";
+  const lines = [
+    `${boldHeader ? `**${label}**` : label} · ${data.archiveName}`,
+    en ? `Files: ${data.fileCount}` : `文件数：${data.fileCount}`,
+    en ? `Key files: ${keyFiles}` : `关键文件：${keyFiles}`,
+    en ? `Top extensions: ${extensions}` : `主要类型：${extensions}`,
+    "",
+    en ? "Tree:" : "目录：",
+    ...treeLines,
+    ...(treeTruncated ? [en ? `… (+${data.treeLines.length - treeLines.length} more)` : `… (还有 ${data.treeLines.length - treeLines.length} 项)`] : []),
+  ];
+  let content = lines.join("\n");
+  if (content.length > ARCHIVE_CARD_BODY_MAX) {
+    content = `${content.slice(0, ARCHIVE_CARD_BODY_MAX)}\n…`;
+  }
+  return truncateBytes(content, ELEMENT_CONTENT_MAX_BYTES);
+}
+
+/**
+ * Plain-text localized archive summary — the fallback when the card itself can't
+ * be delivered. Keeps the operator on the same short, localized summary instead
+ * of dropping back to the English Telegram blob.
+ */
+export function renderLarkArchiveSummaryText(data: ArchiveSummaryData, locale: Locale = "zh"): string {
+  return archiveSummaryBody(data, locale === "en", false);
+}
+
+/**
  * One self-contained, localized card for an archive-summary reply: the summary
  * (file count, key files, top extensions, file tree) PLUS the Continue Analysis
  * button inline. Replaces the old "plain English markdown message + separate
@@ -162,34 +205,7 @@ export function renderLarkArchiveSummaryCard(input: {
   const locale = input.locale ?? "zh";
   const { data } = input;
   const en = locale === "en";
-
-  const treeLines = data.treeLines.slice(0, ARCHIVE_CARD_TREE_MAX_LINES);
-  const treeTruncated = data.treeLines.length > treeLines.length;
-  const extensions = data.topExtensions.length > 0
-    ? data.topExtensions.map(([extension, count]) => `${extension} (${count})`).join(", ")
-    : (en ? "none" : "无");
-  const keyFiles = data.keyFiles.length > 0
-    ? data.keyFiles.join(", ")
-    : (en ? "none detected" : "未检测到");
-
-  const lines = [
-    en ? `**📦 Archive Summary** · ${data.archiveName}` : `**📦 压缩包摘要** · ${data.archiveName}`,
-    en ? `Files: ${data.fileCount}` : `文件数：${data.fileCount}`,
-    en ? `Key files: ${keyFiles}` : `关键文件：${keyFiles}`,
-    en ? `Top extensions: ${extensions}` : `主要类型：${extensions}`,
-    "",
-    en ? "Tree:" : "目录：",
-    ...treeLines,
-    ...(treeTruncated ? [en ? `… (+${data.treeLines.length - treeLines.length} more)` : `… (还有 ${data.treeLines.length - treeLines.length} 项)`] : []),
-  ];
-  // Bound by chars first (keeps the visible card compact), then by bytes so the
-  // element obeys the same Feishu per-element limit as every other Lark card
-  // (CJK is ~3 bytes/char, so a char-only cap could still overflow on bytes).
-  let content = lines.join("\n");
-  if (content.length > ARCHIVE_CARD_BODY_MAX) {
-    content = `${content.slice(0, ARCHIVE_CARD_BODY_MAX)}\n…`;
-  }
-  content = truncateBytes(content, ELEMENT_CONTENT_MAX_BYTES);
+  const content = archiveSummaryBody(data, en, true);
 
   return {
     schema: "2.0",

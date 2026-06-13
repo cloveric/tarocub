@@ -61,6 +61,7 @@ import {
   downloadLarkAttachments,
   prepareLarkFileWorkflow,
   renderLarkArchiveSummaryCard,
+  renderLarkArchiveSummaryText,
   safeSegment,
   type DownloadedLarkAttachment,
 } from "./files.js";
@@ -1147,7 +1148,9 @@ async function runNormalizedLarkMessage(
               channel: input.channel,
               chatId: normalized.chatId,
               card: summaryCard,
-              fallbackText: boundLarkArchiveSummary(workflowResult.text),
+              // Card delivery failed → keep the operator on the same short,
+              // localized summary, not the English Telegram blob.
+              fallbackText: renderLarkArchiveSummaryText(workflowResult.archive, locale),
               options: {
                 replyTo: normalized.messageId,
                 replyInThread: Boolean(normalized.threadId),
