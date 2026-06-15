@@ -10,6 +10,7 @@ import {
   initialLarkRunState,
   renderLarkApprovalCard,
   renderLarkContinuationCard,
+  renderLarkNotificationCard,
   renderLarkReminderCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
@@ -618,5 +619,41 @@ describe("long-answer continuation cards", () => {
     expect(body).toContain("大标题");
     expect(body).toContain("正文内容");
     expect(body).toContain("更多正文");
+  });
+});
+
+describe("renderLarkNotificationCard", () => {
+  it("renders a header + cleaned-markdown body in one card", () => {
+    const card = renderLarkNotificationCard("后台任务完成", "✅ v2.8.9 发布\n\n## 腾讯加层\n- 一条\n今晚 `evening.py` 复盘。");
+    expect(card).not.toBeNull();
+    const elements = (card as any).body.elements as Array<{ tag: string; content: string }>;
+    expect(elements[0].content).toBe("**后台任务完成**");
+    // Heading downgraded to bold (no oversized Feishu title), inline code kept.
+    expect(elements[1].content).toContain("**腾讯加层**");
+    expect(elements[1].content).not.toContain("## 腾讯");
+    expect(elements[1].content).toContain("`evening.py`");
+    // The chat-list preview summary is the header.
+    expect((card as any).config.summary.content).toBe("后台任务完成");
+  });
+
+  it("returns null when the body is empty (nothing to show)", () => {
+    expect(renderLarkNotificationCard("后台任务完成", "   \n  ")).toBeNull();
+  });
+
+  it("returns null when the body is too large for one card element (caller keeps plain text)", () => {
+    const huge = "中".repeat(LARK_CARD_ANSWER_MAX + 1);
+    expect(renderLarkNotificationCard("后台任务完成", huge)).toBeNull();
+  });
+
+  it("strips delivery tags from the body so they never leak as literal text", () => {
+    const card = renderLarkNotificationCard("后台任务完成", "结果在这里。\n[send-file:/tmp/report.txt]");
+    expect(JSON.stringify(card)).not.toContain("[send-file:");
+    expect(JSON.stringify(card)).toContain("结果在这里。");
+  });
+
+  it("declines the card when the body is a fenced file: block (delivered as a file by the plain path, not echoed)", () => {
+    // A whole-response ```file:…``` block must NOT be both attached and shown in
+    // the card; returning null routes it to the plain/file delivery path instead.
+    expect(renderLarkNotificationCard("后台任务完成", "```file:report.txt\nhello world\n```")).toBeNull();
   });
 });

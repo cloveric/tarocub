@@ -504,6 +504,45 @@ function renderTaskNotificationPreview(text: string): string {
 }
 
 /**
+ * A standalone notification card for an out-of-band background-task completion —
+ * a `task_notification` that arrives AFTER its originating turn's run card has
+ * already finalized, so there is no live card to render into. Header + cleaned
+ * markdown body in one card, matching the bot's card-based UX instead of a bare
+ * plain-text message. Returns null when the body is empty or too large for a
+ * single card element, so the caller keeps the chunked plain-text path and a
+ * long notification is never truncated.
+ */
+export function renderLarkNotificationCard(headerText: string, bodyText: string): Record<string, unknown> | null {
+  // A fenced ```file:name\n…``` block is a "deliver this as a file" directive,
+  // not card prose: cleanCardText doesn't strip it (it would render as a raw code
+  // block), and the plain-text path delivers it correctly. Decline the card so
+  // the caller's fallback handles it — and so it can't be both attached AND
+  // echoed in the card.
+  if (/```file:[^\n`]+\n[\s\S]*?```/.test(bodyText)) {
+    return null;
+  }
+  const cleaned = cleanCardText(bodyText);
+  if (!cleaned) {
+    return null;
+  }
+  if (cleaned.length > LARK_CARD_ANSWER_MAX || Buffer.byteLength(cleaned, "utf8") > ELEMENT_CONTENT_MAX_BYTES) {
+    return null;
+  }
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: headerText } },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [
+        markdownElement(`**${headerText}**`),
+        markdownElement(cleaned),
+      ],
+    },
+  };
+}
+
+/**
  * A single collapsed panel summarizing a finished turn's process — thinking,
  * intermediate narration, and tool calls in order. The final answer is shown
  * above the panel, so the matching text block is skipped here (no duplication);

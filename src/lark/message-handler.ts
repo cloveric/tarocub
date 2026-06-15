@@ -22,6 +22,7 @@ import {
   initialLarkRunState,
   liveRunCardStreamElement,
   renderLarkContinuationCard,
+  renderLarkNotificationCard,
   renderLarkQueueWaitCard,
   renderLarkRunCard,
   renderLarkRunCardCompact,
@@ -1275,29 +1276,46 @@ async function runNormalizedLarkMessage(
           return;
         }
 
-        const notificationText = [
-          renderLarkBackgroundTaskHeader(locale),
-          event.text.trim(),
-        ].filter(Boolean).join("\n");
+        const headerText = renderLarkBackgroundTaskHeader(locale);
+        const notificationText = [headerText, event.text.trim()].filter(Boolean).join("\n");
+        // Render the out-of-band background-task notification as a card to match
+        // the bot's card-based UX. Falls back to the chunked plain-text path when
+        // the body is too long for one card (no truncation) — and within the card
+        // path, sendLarkCardWithFallback drops to plain text if the card send fails.
+        const notificationCard = renderLarkNotificationCard(headerText, event.text);
+        const deliverArgs = {
+          channel: input.channel,
+          runtime: input.runtime,
+          chatId: normalized.chatId,
+          replyTo: normalized.messageId,
+          replyInThread: Boolean(normalized.threadId),
+          stateDir: input.stateDir,
+          requestOutputDir,
+          workspaceOverride,
+          conversationKey: normalized.conversationKey,
+          bridgeChatType: normalized.bridgeChatType,
+          bridgeChatId: normalized.bridgeChatId,
+          bridgeUserId: normalized.bridgeUserId,
+          larkThreadId: normalized.threadId,
+          larkMessageId: normalized.messageId,
+          instanceName: input.instanceName,
+        };
         try {
-          await deliverLarkResponse({
-            channel: input.channel,
-            runtime: input.runtime,
-            chatId: normalized.chatId,
-            replyTo: normalized.messageId,
-            replyInThread: Boolean(normalized.threadId),
-            text: notificationText,
-            stateDir: input.stateDir,
-            requestOutputDir,
-            workspaceOverride,
-            conversationKey: normalized.conversationKey,
-            bridgeChatType: normalized.bridgeChatType,
-            bridgeChatId: normalized.bridgeChatId,
-            bridgeUserId: normalized.bridgeUserId,
-            larkThreadId: normalized.threadId,
-            larkMessageId: normalized.messageId,
-            instanceName: input.instanceName,
-          });
+          if (notificationCard) {
+            // Still deliver any files/images/tool-tags embedded in the
+            // notification (sendText: false), then post the card carrying the text.
+            await deliverLarkResponse({ ...deliverArgs, text: event.text, sendText: false });
+            await sendLarkCardWithFallback({
+              channel: input.channel,
+              chatId: normalized.chatId,
+              card: notificationCard,
+              fallbackText: notificationText,
+              options: larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
+              locale,
+            });
+          } else {
+            await deliverLarkResponse({ ...deliverArgs, text: notificationText });
+          }
         } catch (error) {
           await appendLarkTimelineEvent(input.stateDir, normalized, {
             type: "engine.event.delivery_failed",

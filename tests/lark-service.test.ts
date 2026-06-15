@@ -915,10 +915,21 @@ describe("lark service", () => {
       });
 
       expect(channel.stream).not.toHaveBeenCalled();
-      expect(channel.send).toHaveBeenCalledWith(
+      // The out-of-band notification is delivered as a CARD (matching the bot's
+      // card UX), not a bare plain-text message.
+      const notificationCardCall = (channel.send.mock.calls as unknown[][]).find((call) => {
+        const payload = call[1] as { card?: { body?: { elements?: Array<{ content?: string }> } } };
+        return payload?.card && JSON.stringify(payload.card).includes("后台任务完成");
+      });
+      expect(notificationCardCall).toBeDefined();
+      const notificationCard = JSON.stringify((notificationCardCall![1] as { card: unknown }).card);
+      expect(notificationCard).toContain("**后台任务完成**");
+      expect(notificationCard).toContain("后台命令已经完成。");
+      // It is NOT sent as a plain markdown message anymore.
+      expect(channel.send).not.toHaveBeenCalledWith(
         "oc_chat",
         { markdown: "后台任务完成\n后台命令已经完成。" },
-        { replyTo: "om_task" },
+        expect.anything(),
       );
       expectLarkFinalAnswer(channel, "任务已启动。");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
@@ -935,6 +946,45 @@ describe("lark service", () => {
           larkMessageId: "om_task",
         }),
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to chunked plain text for a background notification too long for one card", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-long-"));
+    const channel = fakeChannel();
+    const longBody = "这是一段很长的后台任务报告。".repeat(400); // well past the single-card cap
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({ type: "task_notification", text: longBody });
+        return { text: "任务已启动。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_task_long", content: "跑一个长后台任务" }),
+      });
+
+      // No card was sent for the notification (too long); it went out as plain
+      // markdown instead, and the content was NOT truncated into a card element.
+      const calls = channel.send.mock.calls as unknown[][];
+      const notificationCard = calls.find((call) => {
+        const payload = call[1] as { card?: unknown };
+        return payload?.card && JSON.stringify(payload.card).includes("后台任务完成");
+      });
+      expect(notificationCard).toBeUndefined();
+      const markdownCalls = calls
+        .map((call) => call[1] as { markdown?: string })
+        .filter((payload) => typeof payload?.markdown === "string" && payload.markdown.includes("后台任务完成"));
+      expect(markdownCalls.length).toBeGreaterThanOrEqual(1);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -1012,11 +1062,15 @@ describe("lark service", () => {
 
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).not.toContain("后台任务完成");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { markdown: "Background task completed\nBackground command finished." },
-        { replyTo: "om_task_en" },
-      );
+      // Delivered as a card with the English header + body.
+      const cardCall = (channel.send.mock.calls as unknown[][]).find((call) => {
+        const payload = call[1] as { card?: unknown };
+        return payload?.card && JSON.stringify(payload.card).includes("Background task completed");
+      });
+      expect(cardCall).toBeDefined();
+      const card = JSON.stringify((cardCall![1] as { card: unknown }).card);
+      expect(card).toContain("**Background task completed**");
+      expect(card).toContain("Background command finished.");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
