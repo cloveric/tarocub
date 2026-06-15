@@ -990,6 +990,97 @@ describe("lark service", () => {
     }
   });
 
+  it("delivers a background notification whole file block as a file, not as a markdown code block", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-file-block-"));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({
+          type: "task_notification",
+          text: "```file:report.md\n# Report\n\nAll clear.\n```",
+        });
+        return { text: "任务已启动。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_task_file_block", content: "跑一个后台文件任务" }),
+      });
+
+      const calls = channel.send.mock.calls as unknown[][];
+      expect(calls).toContainEqual([
+        "oc_chat",
+        {
+          file: {
+            source: Buffer.from("# Report\n\nAll clear.\n", "utf8"),
+            fileName: "report.md",
+          },
+        },
+        { replyTo: "om_task_file_block" },
+      ]);
+      expect(calls.some((call) => {
+        const payload = call[1] as { markdown?: string; text?: string };
+        return payload.markdown?.includes("```file:report.md") || payload.text?.includes("```file:report.md");
+      })).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose delivery tags when a background notification card falls back to text", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-card-fallback-tags-"));
+    const reportPath = path.join(stateDir, "workspace", "report.txt");
+    await mkdir(path.dirname(reportPath), { recursive: true });
+    await writeFile(reportPath, "report body", "utf8");
+    const channel = fakeChannel({
+      send: vi.fn(async (_chatId: string, payload: { card?: unknown }) => {
+        if (payload.card) {
+          throw new Error("card send failed");
+        }
+        return { messageId: "sent_1" };
+      }),
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({
+          type: "task_notification",
+          text: `报告已生成。\n[send-file:${reportPath}]`,
+        });
+        return { text: "任务已启动。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_task_card_fallback_tags", content: "跑一个后台报告任务" }),
+      });
+
+      const calls = channel.send.mock.calls as unknown[][];
+      expect(calls.some((call) => Boolean((call[1] as { file?: unknown }).file))).toBe(true);
+      const fallbackTexts = calls
+        .map((call) => call[1] as { text?: string })
+        .filter((payload) => typeof payload.text === "string")
+        .map((payload) => payload.text!);
+      expect(fallbackTexts.some((text) => text.includes("报告已生成。"))).toBe(true);
+      expect(fallbackTexts.join("\n")).not.toContain("[send-file:");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not send a duplicate Lark notification when a background task settles the active turn", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-terminal-task-notification-"));
     const channel = fakeChannel();

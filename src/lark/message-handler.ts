@@ -99,6 +99,11 @@ function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | 
   return replyInThread ? { replyTo, replyInThread: true } : { replyTo };
 }
 
+function isWholeResponseFileBlockText(text: string): boolean {
+  const fileMatch = text.match(/```file:([^\n`]+)\n([\s\S]*?)```/);
+  return Boolean(fileMatch && text.replace(fileMatch[0], "").trim().length === 0);
+}
+
 // Deliver chunks 2..N of a long answer as standalone continuation cards (card 1, the
 // run card, already carries chunk 1). Each is its own push so it lands in order and as a
 // separate notification; sendLarkCardWithFallback drops to plain text per card so a
@@ -1278,6 +1283,7 @@ async function runNormalizedLarkMessage(
 
         const headerText = renderLarkBackgroundTaskHeader(locale);
         const notificationText = [headerText, event.text.trim()].filter(Boolean).join("\n");
+        const notificationFallbackText = [headerText, cleanCardText(event.text)].filter(Boolean).join("\n");
         // Render the out-of-band background-task notification as a card to match
         // the bot's card-based UX. Falls back to the chunked plain-text path when
         // the body is too long for one card (no truncation) — and within the card
@@ -1309,12 +1315,15 @@ async function runNormalizedLarkMessage(
               channel: input.channel,
               chatId: normalized.chatId,
               card: notificationCard,
-              fallbackText: notificationText,
+              fallbackText: notificationFallbackText,
               options: larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
               locale,
             });
           } else {
-            await deliverLarkResponse({ ...deliverArgs, text: notificationText });
+            await deliverLarkResponse({
+              ...deliverArgs,
+              text: isWholeResponseFileBlockText(event.text) ? event.text : notificationText,
+            });
           }
         } catch (error) {
           await appendLarkTimelineEvent(input.stateDir, normalized, {
