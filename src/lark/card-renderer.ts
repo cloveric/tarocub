@@ -33,7 +33,6 @@ export interface LarkRunState {
   /** Latest TodoWrite/Codex plan (the `{ todos: [...] }` input); rendered as the plan panel. */
   plan?: unknown;
   footer: "thinking" | "tool_running" | "streaming" | null;
-  taskNotifications: string[];
   resultText: string;
   errorText: string;
   idleTimeoutMinutes?: number;
@@ -82,7 +81,6 @@ export function initialLarkRunState(conversationKey: string, bridgeChatType?: "p
     blocks: [],
     reasoning: { content: "", active: false },
     footer: "thinking",
-    taskNotifications: [],
     resultText: "",
     errorText: "",
   };
@@ -153,10 +151,13 @@ export function applyLarkEngineEvent(
     case "result":
       return finalizeWithResult(state, event.text);
     case "task_notification":
-      return {
-        ...state,
-        taskNotifications: [...state.taskNotifications, event.text].slice(-20),
-      };
+      // No-op for the run card: a background-task notification is surfaced on
+      // its own — a settling one finalizes the turn as the formal answer (the
+      // adapter emits a `result` with the full text), a non-settling one is
+      // delivered as its own standalone card. The run card used to ALSO echo a
+      // 650-char "后台任务" preview here, which truncated real content and read
+      // as a stray section; that preview was removed (operator request).
+      return state;
     case "session":
       return state;
   }
@@ -346,15 +347,6 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     elements.push(markdownElement(`_${labels.empty}_`));
   }
 
-  if (state.taskNotifications.length > 0) {
-    const previews = state.taskNotifications
-      .slice(-3)
-      .map(renderTaskNotificationPreview)
-      .filter(Boolean)
-      .join("\n\n");
-    elements.push(noteElement(`**${labels.background}**\n${previews}`));
-  }
-
   if (state.status === "running") {
     if (state.footer) {
       elements.push(noteElement(footerStatusText(state.footer, labels)));
@@ -411,7 +403,6 @@ const LARK_STREAMING_CONFIG = {
 export const LARK_CARD_ANSWER_MAX = 3000;
 const COMPACT_ANSWER_MAX = LARK_CARD_ANSWER_MAX;
 const PROCESS_PANEL_MAX = 3000;
-const TASK_NOTIFICATION_PREVIEW_MAX = 650;
 
 function streamTextElementId(index: number): string {
   return `md_${index}`;
@@ -491,16 +482,6 @@ function finalAnswerText(state: LarkRunState): string {
     (block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0,
   );
   return lastText?.content ?? "";
-}
-
-function renderTaskNotificationPreview(text: string): string {
-  const cleaned = cleanCardText(text)
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^\s{0,3}#{1,6}\s+/, ""))
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return truncate(cleaned, TASK_NOTIFICATION_PREVIEW_MAX);
 }
 
 /**
@@ -1033,7 +1014,6 @@ function runCardLabels(locale: Locale): {
   plan: string;
   noOutput: string;
   toolRunning: string;
-  background: string;
   empty: string;
   interrupted: string;
   interruptedTitle: string;
@@ -1058,7 +1038,6 @@ function runCardLabels(locale: Locale): {
       plan: "📋 Plan",
       noOutput: "no output",
       toolRunning: "running…",
-      background: "Background",
       empty: "(no content returned)",
       interrupted: "Interrupted",
       interruptedTitle: "Interrupted",
@@ -1082,7 +1061,6 @@ function runCardLabels(locale: Locale): {
       plan: "📋 计划",
       noOutput: "无输出",
       toolRunning: "运行中…",
-      background: "后台任务",
       empty: "（未返回内容）",
       interrupted: "已被中断",
       interruptedTitle: "已中断",

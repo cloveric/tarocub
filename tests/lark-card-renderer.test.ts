@@ -131,7 +131,7 @@ describe("lark card renderer", () => {
     expect(JSON.stringify(renderLarkReminderCard("check the market", "en"))).toContain("⏰ Reminder");
   });
 
-  it("renders background task notifications as compact small-note previews, not full markdown headings", () => {
+  it("does not render a '后台任务' preview section for a task_notification (content is surfaced as the answer / its own card)", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, {
       type: "task_notification",
@@ -140,15 +140,13 @@ describe("lark card renderer", () => {
     });
 
     const card = renderLarkRunCard(state, "zh");
-    const background = findMarkdownElement(card, "后台任务");
-
-    expect(background).toBeDefined();
-    expect(background?.text_size).toBe("notation");
-    expect(background?.content).toContain("审计完成");
-    expect(background?.content).toContain("高危");
-    expect(background?.content).not.toContain("# 审计完成");
-    expect(background?.content).not.toContain("## 高危");
-    expect(String(background?.content ?? "").length).toBeLessThan(800);
+    // The stray, truncating "后台任务" preview box was removed: a task_notification
+    // no longer echoes a 650-char preview into the run card. The real content is
+    // delivered on its own path (settling → the formal answer; non-settling → a
+    // standalone notification card), so nothing here truncates it.
+    expect(findMarkdownElement(card, "后台任务")).toBeUndefined();
+    expect(JSON.stringify(card)).not.toContain("后台任务");
+    expect(JSON.stringify(card)).not.toContain("内容内容内容");
   });
 
   it("caps every card markdown element so a long answer cannot overflow Feishu's element limit", () => {
