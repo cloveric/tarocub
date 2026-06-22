@@ -73,6 +73,26 @@ describe("classifyFailure specificity", () => {
     expect(renderLarkUserFacingError(err, "engine", "en")).toContain("backend connection");
   });
 
+  it("classifies the single-turn time-cap timeout as engine-timeout, distinct from engine-cli", () => {
+    expect(classifyFailure(new Error("Codex app-server turn timed out after 60 minutes"))).toBe("engine-timeout");
+    expect(classifyFailure(new Error("Antigravity process turn timed out after 60 minutes\n[state]"))).toBe("engine-timeout");
+    // a process/startup failure (no "turn timed out after N minutes") stays engine-cli
+    expect(classifyFailure(new Error("Codex runtime process failed to start"))).toBe("engine-cli");
+    // engine-timeout is NOT auto-retryable (rerunning the same long task times out again)
+    expect(getBusErrorSemantics("engine-timeout")).toEqual({ code: "engine_timeout", retryable: false });
+  });
+
+  it("renders an accurate time-cap message pointing at /timeout, not the misleading 'restart' one", () => {
+    const err = new Error("Codex app-server turn timed out after 60 minutes");
+    const zh = renderLarkUserFacingError(err, "engine", "zh");
+    expect(zh).toContain("60 分钟");
+    expect(zh).toContain("/timeout off");
+    expect(zh).not.toContain("请重启实例后重试");      // the misleading advice is gone
+    const en = renderLarkUserFacingError(err, "engine", "en");
+    expect(en).toContain("/timeout off");
+    expect(en).not.toContain("Restart the instance");
+  });
+
   it("does not treat generic archive mentions as file-workflow failures", () => {
     expect(classifyFailure(new Error("archive the previous messages for me"))).toBe("unknown");
   });

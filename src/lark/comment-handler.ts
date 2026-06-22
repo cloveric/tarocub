@@ -187,6 +187,7 @@ export async function handleLarkComment(input: {
         files: [],
         requestOutputDir,
         workspaceOverride: input.workspaceOverride,
+        disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
         instructions: larkAgentInstructions(),
         onEngineEvent: handleEngineEvent,
       });

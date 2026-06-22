@@ -4064,6 +4064,66 @@ describe("lark service", () => {
     }
   });
 
+  it("toggles the single-turn time cap via /timeout off|status|on and persists the instance config", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-timeout-toggle-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex", locale: "zh" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    const dispatch = async (messageId: string, content: string) => {
+      await handleLarkMessage({
+        channel, bridge, runtime: createLarkServiceRuntime(), stateDir,
+        message: fakeLarkMessage({ messageId, content }),
+      });
+    };
+    const configured = async () => {
+      const cfg = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      return cfg.disableRuntimeTimeout;
+    };
+
+    try {
+      await dispatch("om_to_off", "/timeout off");
+      expect(await configured()).toBe(true);            // cap lifted
+      await dispatch("om_to_status", "/timeout");
+      await dispatch("om_to_on", "/timeout on");
+      expect(await configured()).toBeUndefined();        // back to default → override removed
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const markdowns = (channel.send.mock.calls as unknown[][]).map((call) => ((call[1] ?? {}) as { markdown?: string }).markdown ?? "");
+      expect(markdowns[0]).toContain("已放开");
+      expect(markdowns[1]).toContain("已放开");          // status reflects the lifted cap
+      expect(markdowns[2]).toContain("已恢复");
+      // codex engine → no Claude note
+      expect(markdowns.join("\n")).not.toContain("Claude 引擎");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("notes /timeout is Codex/Antigravity-only on a Claude instance (Claude has no single-turn cap)", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-timeout-claude-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude", locale: "zh" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    try {
+      await handleLarkMessage({
+        channel, bridge, runtime: createLarkServiceRuntime(), stateDir,
+        message: fakeLarkMessage({ messageId: "om_to_claude", content: "/timeout off" }),
+      });
+      const md = (channel.send.mock.calls as unknown[][]).map((c) => ((c[1] ?? {}) as { markdown?: string }).markdown ?? "").join("\n");
+      // The flag is still persisted, but the message is honest about Claude having no cap.
+      expect(md).toContain("Claude 引擎");
+      expect(md).toContain("Codex/Antigravity");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers Lark local config commands in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({

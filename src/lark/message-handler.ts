@@ -1452,6 +1452,7 @@ async function runNormalizedLarkMessage(
           requestOutputDir,
           workspaceOverride,
           abortSignal: runController.signal,
+          disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
           onApprovalRequest: async (request) => await requestLarkApproval({
             channel: input.channel,
             runtime: input.runtime,

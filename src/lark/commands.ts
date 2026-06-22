@@ -273,6 +273,14 @@ export async function handleLarkSimpleCommand(
     return true;
   }
 
+  const timeoutCommand = parseLarkTimeoutCommand(commandText);
+  if (timeoutCommand) {
+    const cfg = await loadInstanceConfig(input.stateDir);
+    const message = await handleLarkTimeoutCommand(input.stateDir, cfg, timeoutCommand.action, commandLocale);
+    await sendLarkCommandMarkdown(input, normalized, "/timeout", message);
+    return true;
+  }
+
   // /bg is dispatched pre-queue in the message handler (instance-scoped process
   // control must not be serialized behind the running turn), so it never reaches
   // here. The predicate/handler are exported for that path.
@@ -550,6 +558,11 @@ function parseLarkFastCommand(text: string): { action: string } | null {
 
 function parseLarkStreamCommand(text: string): { action: string } | null {
   const match = text.trim().match(/^\/stream(?:\s+(.*))?$/i);
+  return match ? { action: (match[1] ?? "").trim().toLowerCase() || "status" } : null;
+}
+
+function parseLarkTimeoutCommand(text: string): { action: string } | null {
+  const match = text.trim().match(/^\/timeout(?:\s+(.*))?$/i);
   return match ? { action: (match[1] ?? "").trim().toLowerCase() || "status" } : null;
 }
 
@@ -899,6 +912,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "- `/config` interactive panel (recommended) · `/usage` usage · `/account` bound Feishu app",
       "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex Fast Mode · `/yolo` approval mode",
       "- `/stream [on|off]` typewriter streaming on run cards (off = full-card refresh)",
+      "- `/timeout [on|off]` single-turn 60-min time cap (off = lift it for long tasks)",
       "",
       "**Workspace & groups**",
       "- `/ws list|save|use|remove` workspace directories",
@@ -932,6 +946,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "- `/config` 交互配置面板（推荐）· `/usage` 用量 · `/account` 当前绑定的飞书应用",
     "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex 快速模式 · `/yolo` 审批模式",
     "- `/stream [on|off]` 回答卡片打字机流式开关（off = 整卡刷新）",
+    "- `/timeout [on|off]` 单轮 60 分钟时间上限（off = 长任务放开上限）",
     "",
     "**工作区与群**",
     "- `/ws list|save|use|remove` 工作区目录",
@@ -1902,6 +1917,47 @@ async function handleLarkStreamCommand(stateDir: string, cfg: InstanceConfig, ac
     return `流式打字机：${effective ? "开启" : "关闭"}${configured && envOff ? envNote : ""}`;
   }
   return locale === "en" ? "Usage: /stream [on|off|status]" : "用法: /stream [on|off|status]";
+}
+
+// /timeout toggles the single-turn runtime time cap (60 min). The cap auto-stops
+// a turn that runs too long; lifting it lets a genuinely long task (full test
+// suites, big migrations) run to completion, at the cost of no auto-recovery if
+// a turn truly hangs. Instance-level, persisted; applies from the next turn.
+// "on" = cap enforced (default, safe); "off" = cap lifted (long tasks allowed).
+async function handleLarkTimeoutCommand(stateDir: string, cfg: InstanceConfig, action: string, locale: Locale): Promise<string> {
+  // The single-turn cap only exists on Codex/Antigravity; the Claude adapter has
+  // no turn timeout (it runs indefinitely). On Claude, say so honestly instead of
+  // claiming a cap was lifted — the flag is still persisted so it applies if the
+  // instance later switches to Codex.
+  const claudeNote = cfg.engine === "claude"
+    ? (locale === "en"
+      ? " (Note: this instance runs Claude, which has no single-turn cap; this toggle only affects Codex/Antigravity.)"
+      : "（注意：当前是 Claude 引擎，本就无单轮超时，此开关只对 Codex/Antigravity 生效。）")
+    : "";
+  if (action === "off" || action === "disable" || action === "long" || action === "unlimited") {
+    await updateInstanceConfig(stateDir, (config) => {
+      config.disableRuntimeTimeout = true;
+    });
+    return (locale === "en"
+      ? "Single-turn time cap lifted — long tasks can run without the 60-min limit. Note: a truly hung turn won't auto-recover. Takes effect from the next turn."
+      : "已放开单轮时间上限——长任务不再受 60 分钟限制。注意：真卡死的回合不会自动恢复。下一轮生效。") + claudeNote;
+  }
+  if (action === "on" || action === "enable" || action === "default") {
+    await updateInstanceConfig(stateDir, (config) => {
+      delete config.disableRuntimeTimeout;
+    });
+    return (locale === "en"
+      ? "Single-turn time cap re-enabled (60 min, default). Takes effect from the next turn."
+      : "已恢复单轮时间上限（60 分钟，默认）。下一轮生效。") + claudeNote;
+  }
+  if (action === "status") {
+    const lifted = cfg.disableRuntimeTimeout === true;
+    if (locale === "en") {
+      return `Single-turn time cap: ${lifted ? "lifted (no limit — /timeout on to restore)" : "60 min (default — /timeout off to lift for long tasks)"}` + claudeNote;
+    }
+    return `单轮时间上限：${lifted ? "已放开（无限制，/timeout on 恢复）" : "60 分钟（默认，长任务用 /timeout off 放开）"}` + claudeNote;
+  }
+  return locale === "en" ? "Usage: /timeout [on|off|status]" : "用法: /timeout [on|off|status]";
 }
 
 async function handleLarkEngineCommand(

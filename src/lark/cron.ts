@@ -131,6 +131,7 @@ export function buildLarkCronExecutor(input: {
         requestOutputDir,
         workspaceOverride: input.workspaceOverride,
         abortSignal,
+        disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
         instructions: input.agentInstructions?.(),
       });
     } catch (error) {

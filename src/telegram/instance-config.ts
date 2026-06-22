@@ -40,6 +40,8 @@ export interface InstanceConfig {
   codexServiceTier: "fast" | undefined;
   /** Lark element-level streaming (native typewriter). undefined = on (default); false = /stream off. */
   larkElementStream: boolean | undefined;
+  /** Lift the single-turn runtime time cap (60 min). undefined/false = cap enforced (default); true = /timeout off. */
+  disableRuntimeTimeout: boolean | undefined;
   timezone: string;
   resume: ResumeState | undefined;
   workspacePath: string | undefined;
@@ -116,6 +118,7 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   model: undefined,
   codexServiceTier: undefined,
   larkElementStream: undefined,
+  disableRuntimeTimeout: undefined,
   timezone: resolveDefaultCronTimezone(),
   resume: undefined,
   workspacePath: undefined,
@@ -292,6 +295,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     model: typeof config.model === "string" && config.model.trim() ? config.model.trim() : undefined,
     codexServiceTier: config.codexServiceTier === "fast" ? "fast" : undefined,
     larkElementStream: typeof config.larkElementStream === "boolean" ? config.larkElementStream : undefined,
+    disableRuntimeTimeout: typeof config.disableRuntimeTimeout === "boolean" ? config.disableRuntimeTimeout : undefined,
     timezone: normalizeCronTimezone(config.timezone) ?? DEFAULT_INSTANCE_CONFIG.timezone,
     resume: parseResumeState(config.resume),
     workspacePath: typeof config.workspacePath === "string" && config.workspacePath.trim()

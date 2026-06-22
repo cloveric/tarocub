@@ -595,6 +595,42 @@ describe("Bridge", () => {
     }));
   });
 
+  it("disables the runtime timeout when the input flag is set (the /timeout off config toggle), no keyword needed", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        multiChat: false,
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "把整套测试跑完",        // no "不设超时" keyword — the flag carries it
+      replyContext: undefined,
+      files: [],
+      disableRuntimeTimeout: true,
+    });
+
+    expect(adapter.sendUserMessage).toHaveBeenCalledWith("telegram-84", expect.objectContaining({
+      disableRuntimeTimeout: true,
+    }));
+  });
+
   it("keeps runtime timeout enabled for ordinary execution requests", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

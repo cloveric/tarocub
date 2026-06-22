@@ -7,6 +7,7 @@ export type FailureCategory =
   | "telegram-delivery"
   | "engine-cli"
   | "engine-backend"
+  | "engine-timeout"
   | "file-workflow"
   | "workflow-state"
   | "session-state"
@@ -117,6 +118,15 @@ export function classifyFailure(error: unknown): FailureCategory {
     return "engine-backend";
   }
 
+  // A long turn cut by the single-turn time cap ("... turn timed out after N
+  // minutes") is NOT a crash — restarting won't help, it would just time out
+  // again. Its own category gets an accurate message pointing at the /timeout
+  // toggle that lifts the cap. Checked before the generic engine-cli signal,
+  // which "timed out"+"turn" would otherwise match.
+  if (/\bturn timed out after \d+\s*minute/.test(text)) {
+    return "engine-timeout";
+  }
+
   if (hasEngineCliSignal(text)) {
     return "engine-cli";
   }
@@ -183,6 +193,9 @@ export function getBusErrorSemantics(failureCategory: FailureCategory): BusError
       return { code: "engine_cli", retryable: true };
     case "engine-backend":
       return { code: "engine_backend", retryable: true };
+    case "engine-timeout":
+      // Re-running the same long task as-is just times out again; not auto-retryable.
+      return { code: "engine_timeout", retryable: false };
     case "file-workflow":
       return { code: "file_workflow", retryable: false };
     case "workflow-state":

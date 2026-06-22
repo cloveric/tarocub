@@ -283,6 +283,9 @@ export class Bridge {
     sideChannelCommand?: string;
     extraEnv?: Record<string, string>;
     abortSignal?: AbortSignal;
+    /** Lift the single-turn runtime time cap for this turn (from the instance's
+     * /timeout config). OR'd with the per-message "不设超时 / no timeout" keyword. */
+    disableRuntimeTimeout?: boolean;
     sessionIdOverride?: string;
     turnLockWaitNotifyAfterMs?: number;
     onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
@@ -314,7 +317,7 @@ export class Bridge {
       : input.text;
     const text = baseText;
     const turnEnvSupported = this.adapter.supportsTurnScopedEnv !== false;
-    const disableRuntimeTimeout = shouldDisableRuntimeTimeout(input.text);
+    const disableRuntimeTimeout = input.disableRuntimeTimeout === true || shouldDisableRuntimeTimeout(input.text);
     let boundSessionIdFromEvent: string | undefined;
     const pendingSessionBinds = new Map<string, Promise<void>>();
     const bindEngineSession = async (sessionId: string): Promise<void> => {

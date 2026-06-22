@@ -32,6 +32,7 @@ export const ConfigFileSchema = z.object({
   model: z.string().optional(),
   codexServiceTier: z.literal("fast").optional(),
   larkElementStream: z.boolean().optional(),
+  disableRuntimeTimeout: z.boolean().optional(),
   timezone: z.string().optional(),
   resume: ResumeStateFileSchema.optional(),
   workspacePath: z.string().optional(),

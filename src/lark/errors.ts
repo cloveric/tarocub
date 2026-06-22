@@ -29,6 +29,9 @@ export function renderLarkUserFacingError(
     if (category === "engine-backend") {
       return "Error: Codex lost its backend connection (reconnect attempts exhausted). Please retry.";
     }
+    if (category === "engine-timeout") {
+      return "⏱️ This turn hit the single-turn time cap (60 min) and was stopped — not a crash, so restarting won't help. For a genuinely long task, send `/timeout off` to lift the cap and rerun, or split it into smaller steps.";
+    }
 
     switch (phase) {
       case "prepare":
@@ -60,6 +63,9 @@ export function renderLarkUserFacingError(
   }
   if (category === "engine-backend") {
     return "错误：Codex 连接后端失败（重连耗尽），请重试。";
+  }
+  if (category === "engine-timeout") {
+    return "⏱️ 本轮撞了单轮 60 分钟时间上限被自动终止——不是崩溃，重启没用。任务确实很长的话，发 `/timeout off` 放开上限后重跑，或把任务拆小。";
   }
 
   switch (phase) {
