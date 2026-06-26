@@ -396,11 +396,13 @@ const LARK_STREAMING_CONFIG = {
   print_strategy: "fast",
 } as const;
 
-// Feishu rejects a card whose single markdown element exceeds its limit (ErrCode
-// 11310, byte-ish, so CJK counts ~3x). Cap every markdown element well under it;
-// when the answer is longer it is truncated in the card and the full text is
-// delivered as a separate message (see LARK_CARD_ANSWER_MAX usage in the handler).
-export const LARK_CARD_ANSWER_MAX = 3000;
+// Per-element cap for the answer text. Feishu's real ceilings are: per-element
+// ~11310 (raised over time — a 15KB / 5000-CJK single element renders fine as of
+// 2026-06-26, where 9KB used to 11310) and whole-card 30KB. 5000 chars (≈15KB for
+// CJK) keeps one answer element comfortably under the per-element limit while
+// leaving whole-card room for the process/reasoning panels; longer answers are
+// truncated in the card and the full text spills to continuation cards / a Doc.
+export const LARK_CARD_ANSWER_MAX = 5000;
 const COMPACT_ANSWER_MAX = LARK_CARD_ANSWER_MAX;
 const PROCESS_PANEL_MAX = 3000;
 
@@ -1323,12 +1325,15 @@ function truncate(s: string, max: number): string {
 // panels (the collapsed tool summary, the todo plan) aggregate unboundedly, so
 // e.g. max reasoning effort can overflow one element and fail the whole card.
 // Byte-cap every element's content at the factory level as a final safety net.
-// Kept comfortably below Feishu's ~11310-byte element limit: 9000 still produced
-// frequent ErrCode 11310 in practice (card overhead + multiple elements summing
-// up), freezing long-reply cards. The handler also uses this to decide an answer
-// is too big for the card and must be delivered out-of-band (Doc/overflow), so a
+// Per-element byte ceiling. Feishu raised the single-element limit since the
+// 9000→7000 era (2026-06-02): a 15KB single CJK element now renders cleanly
+// (verified live 2026-06-26). 16000 lets a full 5000-char CJK answer (≈15KB)
+// through without byte-truncation; the other panels are char-capped (process
+// 3000, reasoning 1500), so no second element can also reach 16KB — keeping the
+// whole card under Feishu's 30KB limit. The handler also uses this to decide an
+// answer is too big for the card and must spill out-of-band (Doc/overflow), so a
 // long CJK answer (≈3 bytes/char) is never silently lost.
-export const ELEMENT_CONTENT_MAX_BYTES = 7000;
+export const ELEMENT_CONTENT_MAX_BYTES = 16000;
 export function truncateBytes(s: string, maxBytes: number): string {
   if (Buffer.byteLength(s, "utf8") <= maxBytes) {
     return s;

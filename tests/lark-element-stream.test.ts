@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  ELEMENT_CONTENT_MAX_BYTES,
+  LARK_CARD_ANSWER_MAX,
   applyLarkEngineEvent,
   initialLarkRunState,
   liveRunCardStreamElement,
@@ -174,12 +176,12 @@ describe("run card element-stream fast path", () => {
     const controller = await createController(channel);
 
     // Establish the element with a first delta, then stream far past both the
-    // 3000-char and (for CJK) the 7000-byte caps.
+    // char cap and (for CJK) the byte cap.
     await controller!.apply({ type: "assistant_text", text: "开头。" });
     await flushTimers(20);
     const fullAfterFirst = cardUpdate.mock.calls.length;
     for (let i = 0; i < 6; i += 1) {
-      await controller!.apply({ type: "assistant_text", text: `${"超长中文内容".repeat(120)}。` });
+      await controller!.apply({ type: "assistant_text", text: `${"超长中文内容".repeat(300)}。` });
       await flushTimers(320);
     }
 
@@ -189,8 +191,8 @@ describe("run card element-stream fast path", () => {
     let previous = "";
     for (const call of elementContent.mock.calls) {
       const content = (call[0] as { data: { content: string } }).data.content;
-      expect(content.length).toBeLessThanOrEqual(3001);
-      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(7000);
+      expect(content.length).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
+      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
       expect(content.startsWith(previous)).toBe(true);
       previous = content;
     }

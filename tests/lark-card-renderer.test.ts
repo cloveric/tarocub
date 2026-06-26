@@ -189,9 +189,19 @@ describe("lark card renderer", () => {
     }
     state = applyLarkEngineEvent(state, { type: "result", text: "答".repeat(20000) });
 
-    // No single card element may exceed Feishu's per-element byte limit (11310).
-    expect(maxBytes(renderLarkRunCard(state))).toBeLessThanOrEqual(11310);
-    expect(maxBytes(renderLarkRunCardCompact(state))).toBeLessThanOrEqual(11310);
+    // No single card element may exceed our per-element byte cap (the safety
+    // bound under Feishu's raised per-element limit).
+    expect(maxBytes(renderLarkRunCard(state))).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
+    expect(maxBytes(renderLarkRunCardCompact(state))).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
+  });
+
+  it("keeps the byte cap ≥ 3× the char cap so a max-length CJK answer never byte-truncates", () => {
+    // CJK is ≈3 bytes/char, so a full LARK_CARD_ANSWER_MAX answer of CJK is ≈3× that in
+    // bytes. Keeping ELEMENT_CONTENT_MAX_BYTES ≥ that makes the char cap the single binding
+    // constraint for any 1–3-byte text: the byte cap is a defensive net, never a silent
+    // mid-answer truncator. (Lowering the byte cap below 3× the char cap would re-introduce
+    // the old "fits char cap but byte-truncated" bug.)
+    expect(ELEMENT_CONTENT_MAX_BYTES).toBeGreaterThanOrEqual(LARK_CARD_ANSWER_MAX * 3);
   });
 
   it("renders a guaranteed-tiny terminal card pointing to the full reply", () => {

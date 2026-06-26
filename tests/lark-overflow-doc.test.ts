@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { LARK_CARD_ANSWER_MAX } from "../src/lark/card-renderer.js";
 import {
   LARK_OVERFLOW_DOC_MIN_CHARS,
   larkOverflowDocFileName,
@@ -84,6 +85,6 @@ describe("postLarkOverflowAnswerDoc", () => {
   });
 
   it("uses the card answer cap as the doc threshold (overflow == doc-worthy)", () => {
-    expect(LARK_OVERFLOW_DOC_MIN_CHARS).toBe(3000);
+    expect(LARK_OVERFLOW_DOC_MIN_CHARS).toBe(LARK_CARD_ANSWER_MAX);
   });
 });
