@@ -51,6 +51,7 @@ import { renderLarkResumeScanCard, renderLarkStatusCard } from "./command-cards.
 import { isLarkConfigCommand, renderLarkConfigCard } from "./config-card.js";
 import { sendLarkMarkdown } from "./delivery.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
+import { checkGroupMsgScope, renderGroupMsgScopeWarning } from "./group-scope-check.js";
 import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig, renderLarkCronRuntimeMissing, renderLarkUserAccessDenied, resolveLarkLocale } from "./locale.js";
 import { stableLarkNumericId, type LarkNormalizedBridgeMessage } from "./message-normalizer.js";
@@ -1397,14 +1398,31 @@ async function renderAndApplyLarkGroupCommand(
     return status;
   }
   if (action === "all" || action === "listen-all") {
-    if (locale === "en") {
-      return normalized.bridgeChatType === "group"
-        ? `${status}\n\nCurrent group switched to ordinary group messages.`
-        : `${status}\n\nSend /group all inside the Lark group you want to switch.`;
+    if (normalized.bridgeChatType !== "group") {
+      return locale === "en"
+        ? `${status}\n\nSend /group all inside the Lark group you want to switch.`
+        : `${status}\n\n请在要开启全量监听的飞书群里发送 /group all。`;
     }
-    return normalized.bridgeChatType === "group"
-      ? `${status}\n\n当前飞书群已切到：监听所有普通消息。`
-      : `${status}\n\n请在要开启全量监听的飞书群里发送 /group all。`;
+    const base = locale === "en"
+      ? `${status}\n\nCurrent group switched to ordinary group messages.`
+      : `${status}\n\n当前飞书群已切到：监听所有普通消息。`;
+    // Proactively warn if the app lacks im:message.group_msg — without it,
+    // non-@ group messages never arrive, so listen-all has no effect. Best-effort:
+    // "unknown" (no creds / API failure) stays silent.
+    const scopeStatus = await checkGroupMsgScope({
+      appId: input.runtime.appInfo?.appId ?? process.env.LARK_APP_ID,
+      appSecret: process.env.LARK_APP_SECRET,
+      domain: input.runtime.appInfo?.domain,
+    });
+    if (scopeStatus === "missing") {
+      const warning = renderGroupMsgScopeWarning(
+        locale === "en" ? "en" : "zh",
+        input.runtime.appInfo?.appId,
+        input.runtime.appInfo?.domain,
+      );
+      return `${base}\n\n${warning}`;
+    }
+    return base;
   }
   if (action === "at" || action === "mention" || action === "mentions" || action === "listen-mentions") {
     if (locale === "en") {
