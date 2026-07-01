@@ -63,14 +63,21 @@ describe("renderGroupMsgScopeWarning", () => {
   it("names the scope, the restart + doctor steps, and the console link (zh)", () => {
     const w = renderGroupMsgScopeWarning("zh", "cli_x", "feishu");
     expect(w).toContain(GROUP_MSG_SCOPE);
-    expect(w).toContain("lark service restart");
+    expect(w).toContain("lark service restart --all");
     expect(w).toContain("lark doctor");
     expect(w).toContain("控制台");
   });
 
+  it("targets the current instance when the instance name is known (zh)", () => {
+    const w = renderGroupMsgScopeWarning("zh", "cli_x", "feishu", "ccfgg2");
+    expect(w).toContain("lark service restart --instance ccfgg2");
+    expect(w).not.toContain("lark service restart --all");
+  });
+
   it("localizes to English", () => {
-    const w = renderGroupMsgScopeWarning("en", "cli_x", "feishu");
+    const w = renderGroupMsgScopeWarning("en", "cli_x", "feishu", "ccfcc1");
     expect(w).toContain(GROUP_MSG_SCOPE);
+    expect(w).toContain("lark service restart --instance ccfcc1");
     expect(w).toContain("Console:");
     expect(w).not.toContain("控制台");
   });

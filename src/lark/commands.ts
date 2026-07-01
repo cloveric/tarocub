@@ -1419,6 +1419,7 @@ async function renderAndApplyLarkGroupCommand(
         locale === "en" ? "en" : "zh",
         input.runtime.appInfo?.appId,
         input.runtime.appInfo?.domain,
+        input.instanceName,
       );
       return `${base}\n\n${warning}`;
     }

@@ -69,12 +69,16 @@ export function renderGroupMsgScopeWarning(
   locale: "en" | "zh",
   appId?: string,
   domain?: string,
+  instanceName?: string,
 ): string {
   const consoleUrl = appId ? formatLarkPermissionConsoleUrl(appId, domain) : undefined;
+  const restartCommand = instanceName?.trim()
+    ? `node dist/src/index.js lark service restart --instance ${instanceName.trim()}`
+    : "node dist/src/index.js lark service restart --all";
   if (locale === "en") {
     const lines = [
       `⚠️ But this app hasn't been granted \`${GROUP_MSG_SCOPE}\` yet — non-\`@\` group messages won't actually arrive, so this switch has no effect until you grant it.`,
-      "Fix: Developer Console → Permissions & Scopes → add `im:message.group_msg` → grant it (personal-edition apps take effect instantly; enterprise apps must publish a version). Then restart the instance: `node dist/src/index.js lark service restart`.",
+      `Fix: Developer Console → Permissions & Scopes → add \`im:message.group_msg\` → grant it (personal-edition apps take effect instantly; enterprise apps must publish a version). Then restart this instance: \`${restartCommand}\`.`,
       "Recheck: `node dist/src/index.js lark doctor`.",
     ];
     if (consoleUrl) lines.push(`Console: ${consoleUrl}`);
@@ -82,7 +86,7 @@ export function renderGroupMsgScopeWarning(
   }
   const lines = [
     `⚠️ 但当前应用还没有 \`${GROUP_MSG_SCOPE}\` 权限——非 \`@\` 群消息其实收不到,这一步现在不会真正生效。`,
-    "补权限:开发者后台 → 权限管理 → 添加 `im:message.group_msg` → 授权(个人版点\"申请开通\"即时生效;企业版需发布版本)。然后重启实例:`node dist/src/index.js lark service restart`。",
+    `补权限:开发者后台 → 权限管理 → 添加 \`im:message.group_msg\` → 授权(个人版点"申请开通"即时生效;企业版需发布版本)。然后重启当前实例:\`${restartCommand}\`。`,
     "复查:`node dist/src/index.js lark doctor`。",
   ];
   if (consoleUrl) lines.push(`控制台:${consoleUrl}`);
