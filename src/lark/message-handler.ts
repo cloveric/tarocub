@@ -19,6 +19,7 @@ import {
   LARK_MAX_OVERFLOW_CARDS,
   applyLarkEngineEvent,
   cleanCardText,
+  hasLarkFileBlockDirective,
   initialLarkRunState,
   liveRunCardStreamElement,
   renderLarkContinuationCard,
@@ -1285,10 +1286,20 @@ async function runNormalizedLarkMessage(
         const notificationText = [headerText, event.text.trim()].filter(Boolean).join("\n");
         const notificationFallbackText = [headerText, cleanCardText(event.text)].filter(Boolean).join("\n");
         // Render the out-of-band background-task notification as a card to match
-        // the bot's card-based UX. Falls back to the chunked plain-text path when
-        // the body is too long for one card (no truncation) — and within the card
-        // path, sendLarkCardWithFallback drops to plain text if the card send fails.
+        // the bot's card-based UX. An oversize body spills into continuation cards —
+        // the same card 1 + "↪ 接上" flow as a long main answer — instead of dropping
+        // to a plain-text dump; only a document-sized body (over the overflow-card
+        // budget) or a file-block directive still takes the plain-text path. Within
+        // the card path, sendLarkCardWithFallback drops to plain text per card.
         const notificationCard = renderLarkNotificationCard(headerText, event.text);
+        let notificationChunks: string[] | undefined;
+        if (!notificationCard && !hasLarkFileBlockDirective(event.text)) {
+          const cleanedNotification = cleanCardText(event.text);
+          const chunks = cleanedNotification ? splitLarkAnswerIntoCardChunks(cleanedNotification) : [];
+          if (chunks.length > 1 && chunks.length <= LARK_MAX_OVERFLOW_CARDS) {
+            notificationChunks = chunks;
+          }
+        }
         const deliverArgs = {
           channel: input.channel,
           runtime: input.runtime,
@@ -1319,6 +1330,32 @@ async function runNormalizedLarkMessage(
               options: larkReplyOptions(normalized.messageId, Boolean(normalized.threadId)),
               locale,
             });
+          } else if (notificationChunks) {
+            // Oversize notification → notification card carrying chunk 1, then the
+            // remaining chunks as continuation cards (chunks are pre-sized to fit a
+            // card, so the chunk-1 render cannot decline for size).
+            await deliverLarkResponse({ ...deliverArgs, text: event.text, sendText: false });
+            const replyOptions = larkReplyOptions(normalized.messageId, Boolean(normalized.threadId));
+            const firstCard = renderLarkNotificationCard(headerText, notificationChunks[0]!);
+            if (firstCard) {
+              await sendLarkCardWithFallback({
+                channel: input.channel,
+                chatId: normalized.chatId,
+                card: firstCard,
+                fallbackText: [headerText, notificationChunks[0]!].filter(Boolean).join("\n"),
+                options: replyOptions,
+                locale,
+              });
+              await deliverLarkContinuationCards({
+                channel: input.channel,
+                chatId: normalized.chatId,
+                chunks: notificationChunks,
+                replyOptions,
+                locale,
+              });
+            } else {
+              await deliverLarkResponse({ ...deliverArgs, text: notificationText });
+            }
           } else {
             await deliverLarkResponse({
               ...deliverArgs,

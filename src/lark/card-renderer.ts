@@ -495,13 +495,16 @@ function finalAnswerText(state: LarkRunState): string {
  * single card element, so the caller keeps the chunked plain-text path and a
  * long notification is never truncated.
  */
+// A fenced ```file:name\n…``` block is a "deliver this as a file" directive,
+// not card prose: cleanCardText doesn't strip it (it would render as a raw code
+// block), and the plain-text path delivers it correctly. Cards decline such
+// bodies so the block can't be both attached AND echoed in a card.
+export function hasLarkFileBlockDirective(text: string): boolean {
+  return /```file:[^\n`]+\n[\s\S]*?```/.test(text);
+}
+
 export function renderLarkNotificationCard(headerText: string, bodyText: string): Record<string, unknown> | null {
-  // A fenced ```file:name\n…``` block is a "deliver this as a file" directive,
-  // not card prose: cleanCardText doesn't strip it (it would render as a raw code
-  // block), and the plain-text path delivers it correctly. Decline the card so
-  // the caller's fallback handles it — and so it can't be both attached AND
-  // echoed in the card.
-  if (/```file:[^\n`]+\n[\s\S]*?```/.test(bodyText)) {
+  if (hasLarkFileBlockDirective(bodyText)) {
     return null;
   }
   const cleaned = cleanCardText(bodyText);

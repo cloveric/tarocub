@@ -951,10 +951,11 @@ describe("lark service", () => {
     }
   });
 
-  it("falls back to chunked plain text for a background notification too long for one card", async () => {
+  it("spills an oversize background notification into continuation cards, not a plain-text dump", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-long-"));
     const channel = fakeChannel();
-    const longBody = "这是一段很长的后台任务报告。".repeat(400); // well past the single-card cap
+    // Over the single-card cap but within the overflow-card budget → card 1 + "↪ 接上".
+    const longBody = `开头标记 ${"这是一段很长的后台任务报告。".repeat(400)} 结尾标记`;
     const bridge = {
       handleAuthorizedMessage: vi.fn(async (input: {
         onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
@@ -973,8 +974,51 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_task_long", content: "跑一个长后台任务" }),
       });
 
-      // No card was sent for the notification (too long); it went out as plain
-      // markdown instead, and the content was NOT truncated into a card element.
+      const calls = channel.send.mock.calls as unknown[][];
+      const cardPayloads = calls
+        .map((call) => call[1] as { card?: unknown })
+        .filter((payload) => payload?.card)
+        .map((payload) => JSON.stringify(payload.card));
+      // The notification card carries chunk 1, and the tail follows as at least
+      // one continuation card — same flow as a long main answer.
+      expect(cardPayloads.some((card) => card.includes("后台任务完成") && card.includes("开头标记"))).toBe(true);
+      expect(cardPayloads.some((card) => card.includes("接上"))).toBe(true);
+      // Nothing lost: the cards jointly cover the body through its very end.
+      expect(cardPayloads.some((card) => card.includes("结尾标记"))).toBe(true);
+      // And no plain-markdown dump of the notification.
+      const markdownCalls = calls
+        .map((call) => call[1] as { markdown?: string })
+        .filter((payload) => typeof payload?.markdown === "string" && payload.markdown.includes("后台任务完成"));
+      expect(markdownCalls.length).toBe(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still falls back to chunked plain text for a document-sized background notification", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-doc-"));
+    const channel = fakeChannel();
+    // Over the overflow-card budget (LARK_MAX_OVERFLOW_CARDS × card cap) — a stream
+    // of 7+ cards would be worse than text, so the plain-text path still applies.
+    const hugeBody = "这是一段很长的后台任务报告。".repeat(2500);
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({ type: "task_notification", text: hugeBody });
+        return { text: "任务已启动。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_task_doc", content: "跑一个超长后台任务" }),
+      });
+
       const calls = channel.send.mock.calls as unknown[][];
       const notificationCard = calls.find((call) => {
         const payload = call[1] as { card?: unknown };
