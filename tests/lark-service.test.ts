@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -1120,6 +1120,113 @@ describe("lark service", () => {
         .map((payload) => payload.text!);
       expect(fallbackTexts.some((text) => text.includes("报告已生成。"))).toBe(true);
       expect(fallbackTexts.join("\n")).not.toContain("[send-file:");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the file and the 30MB cap when a [send-file:] target exceeds Feishu's upload limit", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-file-too-large-"));
+    const bigPath = path.join(stateDir, "workspace", "books_bundle.zip");
+    await mkdir(path.dirname(bigPath), { recursive: true });
+    await writeFile(bigPath, "");
+    await truncate(bigPath, 31 * 1024 * 1024); // sparse 31MB — instant to create
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: `打包好了。[send-file:${bigPath}]` })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_file_too_large", content: "把书包发我" }),
+      });
+
+      const calls = channel.send.mock.calls as unknown[][];
+      // Rejected up front — no upload attempt at all.
+      expect(calls.some((call) => Boolean((call[1] as { file?: unknown }).file))).toBe(false);
+      const texts = calls
+        .map((call) => call[1] as { text?: string })
+        .map((payload) => payload.text)
+        .filter((text): text is string => typeof text === "string");
+      const notice = texts.find((text) => text.includes("books_bundle.zip"));
+      expect(notice).toBeDefined();
+      expect(notice).toContain("31MB");
+      expect(notice).toContain("30MB");
+      expect(notice).not.toContain("读取文件失败");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("says the file does not exist (with its name) when a [send-file:] target was never created", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-file-not-found-"));
+    await mkdir(path.join(stateDir, "workspace"), { recursive: true });
+    const ghostPath = path.join(stateDir, "workspace", "ghost_summary.md");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: `复盘完成。[send-file:${ghostPath}]` })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_file_ghost", content: "发我复盘" }),
+      });
+
+      const texts = (channel.send.mock.calls as unknown[][])
+        .map((call) => call[1] as { text?: string })
+        .map((payload) => payload.text)
+        .filter((text): text is string => typeof text === "string");
+      const notice = texts.find((text) => text.includes("ghost_summary.md"));
+      expect(notice).toBeDefined();
+      expect(notice).toContain("文件不存在");
+      expect(notice).not.toContain("读取文件失败");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("says Feishu rejected the upload when the file read fine but the send failed", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-file-upload-failed-"));
+    const reportPath = path.join(stateDir, "workspace", "report_pack.zip");
+    await mkdir(path.dirname(reportPath), { recursive: true });
+    await writeFile(reportPath, "small but rejected", "utf8");
+    const channel = fakeChannel({
+      send: vi.fn(async (_chatId: string, payload: { file?: unknown }) => {
+        if (payload.file) {
+          throw new Error("file upload failed");
+        }
+        return { messageId: "sent_x" };
+      }),
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: `发包。[send-file:${reportPath}]` })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_file_upload_fail", content: "发我" }),
+      });
+
+      const texts = (channel.send.mock.calls as unknown[][])
+        .map((call) => call[1] as { text?: string })
+        .map((payload) => payload.text)
+        .filter((text): text is string => typeof text === "string");
+      const notice = texts.find((text) => text.includes("report_pack.zip"));
+      expect(notice).toBeDefined();
+      expect(notice).toContain("上传被飞书拒绝");
+      expect(notice).not.toContain("读取文件失败");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -8354,7 +8461,7 @@ describe("lark service", () => {
       expect(rendered).not.toContain("Done, file sent.");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { text: "文件未发送：读取文件失败，详细原因已记录到日志。" },
+        { text: "文件未发送：文件不存在（cctb-lark-missing-report.txt）。发送方引用了一个从未生成的路径。" },
         { replyTo: "om_missing_file" },
       );
     } finally {
@@ -8387,7 +8494,7 @@ describe("lark service", () => {
       expect(rendered).not.toContain("All files sent.");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { text: "文件未发送：读取文件失败，详细原因已记录到日志。" },
+        { text: "文件未发送：文件不存在（cctb-lark-missing-batch.txt）。发送方引用了一个从未生成的路径。" },
         { replyTo: "om_missing_batch" },
       );
     } finally {

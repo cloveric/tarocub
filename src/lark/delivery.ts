@@ -1,4 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
@@ -30,7 +30,12 @@ import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 
 type LarkSendPathKind = "file" | "image" | "audio" | "video";
-type LarkFileRejectReason = "outside-workspace" | "not-found" | "permission-denied" | "read-error";
+type LarkFileRejectReason = "outside-workspace" | "not-found" | "permission-denied" | "read-error" | "too-large" | "upload-failed";
+
+// Feishu rejects bot file uploads above ~30MB (HTTP 400 with no useful message).
+// Checked up front so an oversize file gets a precise "split it" notice instead
+// of a generic upload failure — the 31MB-archive case that confused the operator.
+export const LARK_FILE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
 const LARK_MARKDOWN_CHUNK_LIMIT = 3500;
 
 export async function deliverLarkResponse(input: {
@@ -157,7 +162,21 @@ export async function deliverLarkResponse(input: {
             reason: "outside-workspace",
             kind: match.preferPhoto ? "image" : "file",
           });
-          await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", locale, workspaceRoot) }, replyOptions);
+          await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", locale, { workspaceRoot }) }, replyOptions);
+          continue;
+        }
+        const fileSize = (await stat(real)).size;
+        if (fileSize > LARK_FILE_UPLOAD_MAX_BYTES) {
+          await appendLarkFileRejectedTimeline(input, {
+            path: filePath,
+            realPath: real,
+            reason: "too-large",
+            detail: `${fileSize} bytes > ${LARK_FILE_UPLOAD_MAX_BYTES}`,
+            kind: match.preferPhoto ? "image" : "file",
+          });
+          await input.channel.send(input.chatId, {
+            text: renderLarkFileDeliveryError("too-large", locale, { fileName: path.basename(real), fileBytes: fileSize }),
+          }, replyOptions);
           continue;
         }
         const body = await readFile(real);
@@ -172,12 +191,28 @@ export async function deliverLarkResponse(input: {
             originalPath: filePath,
           });
         } else {
-          await input.channel.send(input.chatId, {
-            file: {
-              source: body,
-              fileName: path.basename(real),
-            },
-          }, replyOptions);
+          try {
+            await input.channel.send(input.chatId, {
+              file: {
+                source: body,
+                fileName: path.basename(real),
+              },
+            }, replyOptions);
+          } catch (error) {
+            // The file was read fine — Feishu rejected the upload. Say so instead
+            // of the misleading "failed to read the file".
+            await appendLarkFileRejectedTimeline(input, {
+              path: filePath,
+              realPath: real,
+              reason: "upload-failed",
+              detail: errorDetail(error),
+              kind: "file",
+            });
+            await input.channel.send(input.chatId, {
+              text: renderLarkFileDeliveryError("upload-failed", locale, { fileName: path.basename(real) }),
+            }, replyOptions);
+            continue;
+          }
           await appendLarkFileAcceptedTimeline(input, {
             fileName: path.basename(real),
             bytes: body.length,
@@ -185,14 +220,15 @@ export async function deliverLarkResponse(input: {
           });
         }
       } catch (error) {
+        const reason = larkFileRejectReasonFromError(error);
         await appendLarkFileRejectedTimeline(input, {
           path: filePath,
-          reason: larkFileRejectReasonFromError(error),
+          reason,
           detail: errorDetail(error),
           kind: match.preferPhoto ? "image" : "file",
         });
         await input.channel.send(input.chatId, {
-          text: renderLarkFileDeliveryError("read-error", locale),
+          text: renderLarkFileDeliveryError(reason, locale, { fileName: path.basename(filePath) }),
         }, replyOptions);
       }
     }
@@ -631,14 +667,15 @@ async function sendLarkPath(input: {
   try {
     real = await realpath(input.filePath);
   } catch (error) {
+    const reason = larkFileRejectReasonFromError(error);
     await appendLarkFileRejectedTimeline(input, {
       path: input.filePath,
-      reason: larkFileRejectReasonFromError(error),
+      reason,
       detail: errorDetail(error),
       kind: input.kind,
     });
     await input.channel.send(input.chatId, {
-      text: renderLarkFileDeliveryError("read-error", input.locale),
+      text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(input.filePath) }),
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
@@ -649,22 +686,37 @@ async function sendLarkPath(input: {
       reason: "outside-workspace",
       kind: input.kind,
     });
-    await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", input.locale, workspaceRoot) }, larkReplyOptions(input.replyTo, input.replyInThread));
+    await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", input.locale, { workspaceRoot }) }, larkReplyOptions(input.replyTo, input.replyInThread));
+    return false;
+  }
+  const pathFileSize = await stat(real).then((s) => s.size).catch(() => undefined);
+  if (pathFileSize !== undefined && pathFileSize > LARK_FILE_UPLOAD_MAX_BYTES) {
+    await appendLarkFileRejectedTimeline(input, {
+      path: input.filePath,
+      realPath: real,
+      reason: "too-large",
+      detail: `${pathFileSize} bytes > ${LARK_FILE_UPLOAD_MAX_BYTES}`,
+      kind: input.kind,
+    });
+    await input.channel.send(input.chatId, {
+      text: renderLarkFileDeliveryError("too-large", input.locale, { fileName: path.basename(real), fileBytes: pathFileSize }),
+    }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
   let body: Buffer;
   try {
     body = await readFile(real);
   } catch (error) {
+    const reason = larkFileRejectReasonFromError(error);
     await appendLarkFileRejectedTimeline(input, {
       path: input.filePath,
       realPath: real,
-      reason: larkFileRejectReasonFromError(error),
+      reason,
       detail: errorDetail(error),
       kind: input.kind,
     });
     await input.channel.send(input.chatId, {
-      text: renderLarkFileDeliveryError("read-error", input.locale),
+      text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(real) }),
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
@@ -698,13 +750,32 @@ async function sendLarkPath(input: {
     });
     return true;
   }
-  if (input.kind === "audio") {
+  // The payload was read fine — a throw from here on is Feishu rejecting the
+  // upload, so report "upload-failed" (with the file's name), not "read failed".
+  const reportUploadFailure = async (error: unknown): Promise<false> => {
+    await appendLarkFileRejectedTimeline(input, {
+      path: input.filePath,
+      realPath: real,
+      reason: "upload-failed",
+      detail: errorDetail(error),
+      kind: input.kind,
+    });
     await input.channel.send(input.chatId, {
-      audio: {
-        source: body,
-        fileName: path.basename(real),
-      },
+      text: renderLarkFileDeliveryError("upload-failed", input.locale, { fileName: path.basename(real) }),
     }, larkReplyOptions(input.replyTo, input.replyInThread));
+    return false;
+  };
+  if (input.kind === "audio") {
+    try {
+      await input.channel.send(input.chatId, {
+        audio: {
+          source: body,
+          fileName: path.basename(real),
+        },
+      }, larkReplyOptions(input.replyTo, input.replyInThread));
+    } catch (error) {
+      return reportUploadFailure(error);
+    }
     await appendLarkFileAcceptedTimeline(input, {
       fileName: path.basename(real),
       bytes: body.length,
@@ -713,12 +784,16 @@ async function sendLarkPath(input: {
     return true;
   }
   if (input.kind === "video") {
-    await input.channel.send(input.chatId, {
-      video: {
-        source: body,
-        fileName: path.basename(real),
-      },
-    }, larkReplyOptions(input.replyTo, input.replyInThread));
+    try {
+      await input.channel.send(input.chatId, {
+        video: {
+          source: body,
+          fileName: path.basename(real),
+        },
+      }, larkReplyOptions(input.replyTo, input.replyInThread));
+    } catch (error) {
+      return reportUploadFailure(error);
+    }
     await appendLarkFileAcceptedTimeline(input, {
       fileName: path.basename(real),
       bytes: body.length,
@@ -726,12 +801,16 @@ async function sendLarkPath(input: {
     });
     return true;
   }
-  await input.channel.send(input.chatId, {
-    file: {
-      source: body,
-      fileName: path.basename(real),
-    },
-  }, larkReplyOptions(input.replyTo, input.replyInThread));
+  try {
+    await input.channel.send(input.chatId, {
+      file: {
+        source: body,
+        fileName: path.basename(real),
+      },
+    }, larkReplyOptions(input.replyTo, input.replyInThread));
+  } catch (error) {
+    return reportUploadFailure(error);
+  }
   await appendLarkFileAcceptedTimeline(input, {
     fileName: path.basename(real),
     bytes: body.length,
@@ -1001,18 +1080,48 @@ function larkAnyFilePathAllowed(): boolean {
   return /^(?:1|true|yes|on)$/i.test((process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH ?? "").trim());
 }
 
-function renderLarkFileDeliveryError(reason: "outside-workspace" | "read-error", locale: Locale, workspaceRoot?: string): string {
-  // Name the exact allowed directory so the agent can self-correct — copy the file there
-  // and resend — instead of guessing. A file left at a stale/elsewhere path otherwise loops.
-  const dir = workspaceRoot ?? (locale === "en" ? "the workspace" : "工作区");
+function renderLarkFileDeliveryError(
+  reason: LarkFileRejectReason,
+  locale: Locale,
+  context: { workspaceRoot?: string; fileName?: string; fileBytes?: number } = {},
+): string {
+  // Name the exact failure (which file, why) so the operator and the agent can
+  // self-correct — a generic "read failed" hides not-found vs oversize vs a
+  // platform rejection and sends the operator to the logs for every incident.
+  const dir = context.workspaceRoot ?? (locale === "en" ? "the workspace" : "工作区");
+  const name = context.fileName;
+  const sizeMb = context.fileBytes !== undefined ? Math.ceil(context.fileBytes / (1024 * 1024)) : undefined;
+  const capMb = Math.floor(LARK_FILE_UPLOAD_MAX_BYTES / (1024 * 1024));
   if (locale === "en") {
-    return reason === "outside-workspace"
-      ? `This file is outside the allowed send directory — a path restriction, not a send failure. Copy it into ${dir} and resend (only files under that directory can be sent), or set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 on this instance to allow any path.`
-      : "File was not sent: failed to read the file; details were recorded in logs.";
+    switch (reason) {
+      case "outside-workspace":
+        return `This file is outside the allowed send directory — a path restriction, not a send failure. Copy it into ${dir} and resend (only files under that directory can be sent), or set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 on this instance to allow any path.`;
+      case "not-found":
+        return `File was not sent: the file does not exist${name ? ` (${name})` : ""}. The sender referenced a path that was never created.`;
+      case "permission-denied":
+        return `File was not sent: no permission to read it${name ? ` (${name})` : ""}.`;
+      case "too-large":
+        return `File was not sent: ${name ?? "the file"} is ${sizeMb ?? "?"}MB, over Feishu's ${capMb}MB bot upload limit. Split it into smaller parts or compress it further, then resend.`;
+      case "upload-failed":
+        return `File was not sent: Feishu rejected the upload${name ? ` (${name})` : ""}; details were recorded in logs.`;
+      default:
+        return "File was not sent: failed to read the file; details were recorded in logs.";
+    }
   }
-  return reason === "outside-workspace"
-    ? `该文件不在允许发送的目录内——这是路径限制，不是发送失败。请把文件复制到 ${dir} 再发（只有该目录下的文件可直接发送），或在该实例设置 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 放开任意路径。`
-    : "文件未发送：读取文件失败，详细原因已记录到日志。";
+  switch (reason) {
+    case "outside-workspace":
+      return `该文件不在允许发送的目录内——这是路径限制，不是发送失败。请把文件复制到 ${dir} 再发（只有该目录下的文件可直接发送），或在该实例设置 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 放开任意路径。`;
+    case "not-found":
+      return `文件未发送：文件不存在${name ? `（${name}）` : ""}。发送方引用了一个从未生成的路径。`;
+    case "permission-denied":
+      return `文件未发送：没有读取权限${name ? `（${name}）` : ""}。`;
+    case "too-large":
+      return `文件未发送：${name ?? "该文件"} 有 ${sizeMb ?? "?"}MB，超过飞书机器人 ${capMb}MB 上传上限。请拆分成多个小包或进一步压缩后重发。`;
+    case "upload-failed":
+      return `文件未发送：上传被飞书拒绝${name ? `（${name}）` : ""}，详细原因已记录到日志。`;
+    default:
+      return "文件未发送：读取文件失败，详细原因已记录到日志。";
+  }
 }
 
 async function appendLarkFileAcceptedTimeline(
