@@ -18,6 +18,26 @@ afterEach(() => {
 });
 
 describe("loadInstanceConfig", () => {
+  it("loads Codex GPT-5.6 ultra effort without dropping it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({ engine: "codex", model: "gpt-5.6-terra", effort: "ultra" }) + "\n",
+        "utf8",
+      );
+
+      await expect(loadInstanceConfig(root)).resolves.toMatchObject({
+        engine: "codex",
+        model: "gpt-5.6-terra",
+        effort: "ultra",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("returns defaults when config.json is missing", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
 

@@ -7,12 +7,13 @@ import {
   EFFORT_LEVELS,
   formatSchemaError,
   type ConfigFile,
+  type EffortLevel,
 } from "../state/config-file-schema.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode } from "../state/approval-mode.js";
 import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron-timezone.js";
 import { withFileMutex } from "../state/file-mutex.js";
 
-export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+export type { EffortLevel };
 export type InstanceEngine = "codex" | "claude" | "antigravity";
 
 export const DEFAULT_CLAUDE_MODEL = "opus[1m]";
@@ -62,12 +63,13 @@ export interface GroupModeConfig {
 }
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
+const VALID_CLAUDE_EFFORT_LEVELS: EffortLevel[] = VALID_EFFORT_LEVELS.filter((level) => level !== "ultra");
 
 function applyClaudeEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
   const modelOverride = typeof config.model === "string" && config.model.trim().length > 0
     ? config.model.trim()
     : undefined;
-  const effortOverride = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel)
+  const effortOverride = VALID_CLAUDE_EFFORT_LEVELS.includes(config.effort as EffortLevel)
     ? config.effort as EffortLevel
     : undefined;
 

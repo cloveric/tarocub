@@ -1371,7 +1371,7 @@ Telegram users can also use:
 
 - `/status`
 - `/engine [claude|codex|antigravity]` — switch engine for the current instance (the bridge resets stale bindings automatically)
-- `/effort [low|medium|high|xhigh|max|off]` — set reasoning effort level (`max` is Claude-only; Codex uses `xhigh` instead)
+- `/effort [low|medium|high|xhigh|max|ultra|off]` — set reasoning effort level (Codex GPT-5.6 Sol/Terra support `ultra`; Luna supports up to `max`)
 - `/model [name|off]` — switch model for Codex/Claude; Antigravity explains the `agy --print` limitation and does not forward `/model` as chat
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
 - `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex stores the budget structurally when one is provided, while Claude Code and Antigravity receive explicit budgets as native goal guidance. Codex also supports `/goal status` and `/goal clear`.

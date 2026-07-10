@@ -915,6 +915,41 @@ describe("ProcessCodexAdapter", () => {
     }
   });
 
+  it("forwards GPT-5.6 model and ultra effort into process startup config", async () => {
+    const { spawnCodex, child, calls } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, JSON.stringify({ model: "gpt-5.6-sol", effort: "ultra" }) + "\n", "utf8");
+      const adapter = new ProcessCodexAdapter("codex", spawnCodex, undefined, undefined, configPath);
+
+      const promise = adapter.sendUserMessage("telegram-12345", {
+        text: "Hello",
+        files: [],
+      });
+
+      await waitForSpawn(calls);
+      expect(calls[0]?.args).toEqual([
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-c",
+        'model_reasoning_effort="ultra"',
+        "-m",
+        "gpt-5.6-sol",
+        "-",
+      ]);
+
+      child.stdout.emitData('{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n');
+      child.close(0);
+      await promise;
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("rejects when the overall Codex process turn exceeds the runtime timeout", async () => {
     vi.useFakeTimers();
     const { spawnCodex } = createSpawnHarness();

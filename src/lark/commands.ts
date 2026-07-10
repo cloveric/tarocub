@@ -9,6 +9,13 @@ import type {
 import {
   loadCodexUserDefaults,
 } from "../codex/user-defaults.js";
+import {
+  CODEX_EFFORT_COMPATIBILITY_EN,
+  CODEX_EFFORT_COMPATIBILITY_ZH,
+  CODEX_MODEL_CHOICES,
+  knownCodexModelMaxEffort,
+  knownCodexModelSupportsEffort,
+} from "../codex/model-capabilities.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
@@ -61,7 +68,7 @@ import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
-const VALID_LARK_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+const VALID_LARK_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
 const LARK_ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "antigravity"];
 
 type RequestLarkApproval = (input: {
@@ -549,7 +556,7 @@ function parseLarkModelCommand(text: string): { model: string } | null {
 
 function parseLarkEffortCommand(text: string): { level: string } | null {
   const match = text.trim().match(/^\/effort(?:\s+(\S+))?$/i);
-  return match ? { level: match[1] ?? "" } : null;
+  return match ? { level: match[1]?.toLowerCase() ?? "" } : null;
 }
 
 function parseLarkFastCommand(text: string): { action: string } | null {
@@ -1785,19 +1792,17 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
       return [
         `Current model: ${current}`,
         "Choose a model with /model <name>:",
-        "/model gpt-5.4",
-        "/model gpt-5.3-codex",
-        "/model o3",
+        ...CODEX_MODEL_CHOICES.map((model) => `/model ${model}`),
         "/model off",
+        CODEX_EFFORT_COMPATIBILITY_EN,
       ].join("\n");
     }
     return [
       `当前模型: ${current}`,
       "用 /model <名称> 选择模型：",
-      "/model gpt-5.4",
-      "/model gpt-5.3-codex",
-      "/model o3",
+      ...CODEX_MODEL_CHOICES.map((model) => `/model ${model}`),
       "/model off",
+      CODEX_EFFORT_COMPATIBILITY_ZH,
     ].join("\n");
   }
   if (locale === "en") {
@@ -1835,6 +1840,16 @@ async function handleLarkModelCommand(
     });
     return locale === "en" ? "Model reset to default." : "模型已恢复默认。";
   }
+  if (
+    cfg.engine === "codex" &&
+    cfg.effort &&
+    knownCodexModelSupportsEffort(model, cfg.effort) === false
+  ) {
+    const maxEffort = knownCodexModelMaxEffort(model);
+    return locale === "en"
+      ? `${model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
+      : `${model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`;
+  }
   await updateInstanceConfig(stateDir, (config) => {
     config.model = model;
   });
@@ -1861,18 +1876,29 @@ async function handleLarkEffortCommand(
     });
     return locale === "en" ? "Effort reset to default." : "Effort 已恢复默认。";
   }
+  if (cfg.engine === "claude" && level === "ultra") {
+    return locale === "en"
+      ? "Claude does not support ultra; use max for its highest effort."
+      : "Claude 不支持 ultra；最高可用 max。";
+  }
   if (!VALID_LARK_EFFORT_LEVELS.includes(level as EffortLevel)) {
     return locale === "en"
-      ? "Usage: /effort [low|medium|high|xhigh|max|off]"
-      : "用法: /effort [low|medium|high|xhigh|max|off]";
+      ? "Usage: /effort [low|medium|high|xhigh|max|ultra|off]"
+      : "用法: /effort [low|medium|high|xhigh|max|ultra|off]";
   }
-  const effectiveLevel = cfg.engine !== "claude" && level === "max" ? "xhigh" : level;
+  if (
+    cfg.engine === "codex" &&
+    knownCodexModelSupportsEffort(cfg.model, level as EffortLevel) === false
+  ) {
+    const maxEffort = knownCodexModelMaxEffort(cfg.model);
+    return locale === "en"
+      ? `${cfg.model} does not support ${level}; its highest effort is ${maxEffort}.`
+      : `${cfg.model} 不支持 ${level}；最高可用 ${maxEffort}。`;
+  }
   await updateInstanceConfig(stateDir, (config) => {
-    config.effort = effectiveLevel;
+    config.effort = level;
   });
-  return cfg.engine !== "claude" && level === "max"
-    ? locale === "en" ? "Codex does not support max effort; using xhigh instead." : "Codex 不支持 max，已改用 xhigh。"
-    : locale === "en" ? `Effort set to ${level}.` : `Effort 已设为 ${level}。`;
+  return locale === "en" ? `Effort set to ${level}.` : `Effort 已设为 ${level}。`;
 }
 
 async function handleLarkFastCommand(stateDir: string, cfg: InstanceConfig, action: string, locale: Locale): Promise<string> {

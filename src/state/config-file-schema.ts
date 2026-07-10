@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export type EffortLevel = typeof EFFORT_LEVELS[number];
 
 export const ResumeStateFileSchema = z.object({
   sessionId: z.string(),

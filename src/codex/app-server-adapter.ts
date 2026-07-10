@@ -715,8 +715,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     if (effort) {
-      const codexEffort = effort === "max" ? "xhigh" : effort;
-      initializeArgs.push("-c", `model_reasoning_effort="${codexEffort}"`);
+      initializeArgs.push("-c", `model_reasoning_effort="${effort}"`);
     }
 
     if (model) {

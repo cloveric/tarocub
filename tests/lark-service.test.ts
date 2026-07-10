@@ -4101,6 +4101,73 @@ describe("lark service", () => {
     }
   });
 
+  it("sets GPT-5.6 Sol with case-insensitive ultra effort from Lark", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_model_sol", content: "/model gpt-5.6-sol" }),
+      });
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_effort_ultra", content: "/effort Ultra" }),
+      });
+
+      const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.model).toBe("gpt-5.6-sol");
+      expect(config.effort).toBe("ultra");
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 gpt-5.6-sol");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Effort 已设为 ultra");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects Lark ultra effort for GPT-5.6 Luna without changing config", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "codex",
+      model: "gpt-5.6-luna",
+      effort: "max",
+    }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_effort_luna_ultra", content: "/effort ultra" }),
+      });
+
+      const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.effort).toBe("max");
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("gpt-5.6-luna 不支持 ultra；最高可用 max");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers Lark fast status in Chinese when Lark locale is Chinese", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-fast-status-zh-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
@@ -4291,6 +4358,10 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).toContain("Current model: default");
+      expect(rendered).toContain("/model gpt-5.6-sol");
+      expect(rendered).toContain("/model gpt-5.6-terra");
+      expect(rendered).toContain("/model gpt-5.6-luna");
+      expect(rendered).toContain("Luna supports max but not ultra");
       expect(rendered).toContain("Current effort: high");
       expect(rendered).toContain("Codex Fast Mode: off");
       expect(rendered).toContain("Current engine: codex");

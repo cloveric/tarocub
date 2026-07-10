@@ -1,3 +1,11 @@
+import {
+  CODEX_EFFORT_COMPATIBILITY_EN,
+  CODEX_EFFORT_COMPATIBILITY_ZH,
+  CODEX_MODEL_CHOICES,
+  knownCodexModelMaxEffort,
+  knownCodexModelSupportsEffort,
+} from "../codex/model-capabilities.js";
+import { EFFORT_LEVELS, type EffortLevel } from "../state/config-file-schema.js";
 import { UsageStore } from "../state/usage-store.js";
 import {
   renderTelegramHelpMessage,
@@ -12,9 +20,7 @@ import {
 import type { InstanceEngine } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
-type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
-
-const VALID_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max"];
+const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
 
 function renderAntigravityNativeEffortMessage(locale: Locale): string {
   return locale === "zh"
@@ -43,7 +49,7 @@ function isStatusCommand(text: string): boolean {
 function parseEffortCommand(text: string): { level: string } | null {
   const match = text.trim().match(/^\/effort(?:@\w+)?(?:\s+(\S+))?$/i);
   if (!match) return null;
-  return { level: match[1] ?? "" };
+  return { level: match[1]?.toLowerCase() ?? "" };
 }
 
 function parseModelCommand(text: string): { model: string } | null {
@@ -120,18 +126,16 @@ export async function handleSimpleLocalTelegramCommand(input: {
         ? [
             `当前模型: ${current}`,
             "用 /model <名称> 选择模型：",
-            "/model gpt-5.4",
-            "/model gpt-5.3-codex",
-            "/model o3",
+            ...CODEX_MODEL_CHOICES.map((model) => `/model ${model}`),
             "/model off",
+            CODEX_EFFORT_COMPATIBILITY_ZH,
           ].join("\n")
         : [
             `Current model: ${current}`,
             "Choose a model with /model <name>:",
-            "/model gpt-5.4",
-            "/model gpt-5.3-codex",
-            "/model o3",
+            ...CODEX_MODEL_CHOICES.map((model) => `/model ${model}`),
             "/model off",
+            CODEX_EFFORT_COMPATIBILITY_EN,
           ].join("\n");
     }
 
@@ -210,19 +214,27 @@ export async function handleSimpleLocalTelegramCommand(input: {
       const current = cfg.effort ?? "default";
       effortMessage = locale === "zh" ? `当前 effort: ${current}` : `Current effort: ${current}`;
       await context.api.sendMessage(normalized.chatId, effortMessage);
+    } else if (cfg.engine === "claude" && effortCmd.level === "ultra") {
+      auditValue = "unsupported-claude-ultra";
+      effortMessage = locale === "zh"
+        ? "Claude 不支持 ultra；最高可用 max。"
+        : "Claude does not support ultra; use max for its highest effort.";
+      await context.api.sendMessage(normalized.chatId, effortMessage);
+    } else if (
+      VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel) &&
+      cfg.engine === "codex" &&
+      knownCodexModelSupportsEffort(cfg.model, effortCmd.level as EffortLevel) === false
+    ) {
+      auditValue = "unsupported-model-effort";
+      const maxEffort = knownCodexModelMaxEffort(cfg.model);
+      effortMessage = locale === "zh"
+        ? `${cfg.model} 不支持 ${effortCmd.level}；最高可用 ${maxEffort}。`
+        : `${cfg.model} does not support ${effortCmd.level}; its highest effort is ${maxEffort}.`;
+      await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel)) {
-      const effectiveLevel = cfg.engine !== "claude" && effortCmd.level === "max" ? "xhigh" : effortCmd.level;
-      auditValue = effectiveLevel;
-      await updateInstanceConfig((c) => { c.effort = effectiveLevel; });
-      effortMessage = cfg.engine !== "claude" && effortCmd.level === "max"
-        ? cfg.engine === "codex"
-          ? locale === "zh"
-            ? "Codex 不支持 max，已改用 xhigh。"
-            : "Codex does not support max effort; using xhigh instead."
-          : locale === "zh"
-            ? "当前引擎不支持 max，已改用 xhigh。"
-            : "The current engine does not support max effort; using xhigh instead."
-        : locale === "zh" ? `Effort 已设为 ${effortCmd.level}。` : `Effort set to ${effortCmd.level}.`;
+      auditValue = effortCmd.level;
+      await updateInstanceConfig((c) => { c.effort = effortCmd.level; });
+      effortMessage = locale === "zh" ? `Effort 已设为 ${effortCmd.level}。` : `Effort set to ${effortCmd.level}.`;
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (effortCmd.level === "off" || effortCmd.level === "default") {
       await updateInstanceConfig((c) => { delete c.effort; });
@@ -230,8 +242,8 @@ export async function handleSimpleLocalTelegramCommand(input: {
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else {
       effortMessage = locale === "zh"
-        ? "用法: /effort [low|medium|high|xhigh|max|off]"
-        : "Usage: /effort [low|medium|high|xhigh|max|off]";
+        ? "用法: /effort [low|medium|high|xhigh|max|ultra|off]"
+        : "Usage: /effort [low|medium|high|xhigh|max|ultra|off]";
       await context.api.sendMessage(normalized.chatId, effortMessage);
     }
 
@@ -264,6 +276,18 @@ export async function handleSimpleLocalTelegramCommand(input: {
     } else if (modelCmd.model === "off" || modelCmd.model === "default") {
       await updateInstanceConfig((c) => { delete c.model; });
       modelMessage = locale === "zh" ? "模型已恢复默认。" : "Model reset to default.";
+      await context.api.sendMessage(normalized.chatId, modelMessage);
+    } else if (
+      cfg.engine === "codex" &&
+      cfg.effort &&
+      VALID_EFFORT_LEVELS.includes(cfg.effort as EffortLevel) &&
+      knownCodexModelSupportsEffort(modelCmd.model, cfg.effort as EffortLevel) === false
+    ) {
+      auditValue = "unsupported-model-effort";
+      const maxEffort = knownCodexModelMaxEffort(modelCmd.model);
+      modelMessage = locale === "zh"
+        ? `${modelCmd.model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
+        : `${modelCmd.model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`;
       await context.api.sendMessage(normalized.chatId, modelMessage);
     } else {
       await updateInstanceConfig((c) => { c.model = modelCmd.model; });

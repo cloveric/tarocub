@@ -997,7 +997,7 @@ describe("CodexAppServerAdapter", () => {
     const configPath = path.join(root, "config.json");
 
     try {
-      await writeFile(configPath, JSON.stringify({ model: "gpt-5.4", effort: "max", codexServiceTier: "fast" }) + "\n", "utf8");
+      await writeFile(configPath, JSON.stringify({ model: "gpt-5.6-luna", effort: "max", codexServiceTier: "fast" }) + "\n", "utf8");
       const adapter = new CodexAppServerAdapter(
         "codex",
         process.cwd(),
@@ -1019,9 +1019,9 @@ describe("CodexAppServerAdapter", () => {
         "-c",
         'sandbox_mode="danger-full-access"',
         "-c",
-        'model_reasoning_effort="xhigh"',
+        'model_reasoning_effort="max"',
         "-c",
-        'model="gpt-5.4"',
+        'model="gpt-5.6-luna"',
         "--enable",
         "fast_mode",
         "-c",
