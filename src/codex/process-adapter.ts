@@ -16,6 +16,7 @@ import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } fro
 import { killProcessTree } from "./process-tree.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
+import { readValidatedConfigFile } from "../telegram/instance-config.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -531,17 +532,12 @@ export class ProcessCodexAdapter implements CodexAdapter {
       return {};
     }
 
-    try {
-      const raw = await readFile(this.configPath, "utf8");
-      const parsed = JSON.parse(raw) as { effort?: string; model?: string; codexServiceTier?: string };
-      return {
-        effort: typeof parsed.effort === "string" ? parsed.effort : undefined,
-        model: typeof parsed.model === "string" ? parsed.model : undefined,
-        codexServiceTier: parsed.codexServiceTier === "fast" ? "fast" : undefined,
-      };
-    } catch {
-      return {};
-    }
+    const parsed = await readValidatedConfigFile(this.configPath);
+    return {
+      effort: typeof parsed.effort === "string" ? parsed.effort : undefined,
+      model: typeof parsed.model === "string" ? parsed.model : undefined,
+      codexServiceTier: parsed.codexServiceTier === "fast" ? "fast" : undefined,
+    };
   }
 
   private async loadInstructions(): Promise<string | null> {

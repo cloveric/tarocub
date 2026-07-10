@@ -4168,6 +4168,62 @@ describe("lark service", () => {
     }
   });
 
+  it("rejects Lark max effort until an explicit compatible Codex model is selected", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_effort_default_max", content: "/effort max" }),
+      });
+
+      const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.effort).toBeUndefined();
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("请先选择明确兼容的模型再设置 max");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects restoring the default Lark model while ultra still depends on Sol", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "codex",
+      model: "gpt-5.6-sol",
+      effort: "ultra",
+    }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_model_off_ultra", content: "/model off" }),
+      });
+
+      const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.model).toBe("gpt-5.6-sol");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("当前 effort 为 ultra，不能恢复默认模型");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers Lark fast status in Chinese when Lark locale is Chinese", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-fast-status-zh-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({

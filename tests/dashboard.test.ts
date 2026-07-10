@@ -108,6 +108,19 @@ describe("collectInstanceSnapshots", () => {
     expect(html).not.toContain("telegram configure &lt;token&gt;");
   });
 
+  it("escapes model and other config labels before rendering dashboard html", () => {
+    const payload = "<svg/onload=globalThis.__dashboardXss=1>";
+    const html = renderHtml([{
+      ...baseSnapshot(),
+      model: payload,
+      policy: payload,
+      locale: payload,
+    }]);
+
+    expect(html).not.toContain(payload);
+    expect(html).toContain("&lt;svg/onload=globalThis.__dashboardXss=1&gt;");
+  });
+
   it("uses CODEX_TELEGRAM_STATE_DIR as the dashboard source and does not treat a bare .env as a configured token", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const customStateDir = path.join(tempDir, "custom-alpha");

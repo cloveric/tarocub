@@ -778,22 +778,34 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }): Promise<void> {
     let deferredConfigChange = false;
     if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
-      try {
-        await this.waitForIdle();
-        if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
-          this.destroy();
+      if (!this.isIdle() && this.initializePromise) {
+        if (this.deferredConfigWarningKey !== runtimeOptions.initializeKey) {
+          this.deferredConfigWarningKey = runtimeOptions.initializeKey;
+          console.error(
+            `Codex app-server config change deferred while busy; continuing on the old config until idle${
+              this.goalWatchers.size > 0 ? "; a /goal pursuit is holding the session" : ""
+            }`,
+          );
         }
-      } catch (error) {
-        if (this.initializePromise) {
-          if (this.deferredConfigWarningKey !== runtimeOptions.initializeKey) {
-            this.deferredConfigWarningKey = runtimeOptions.initializeKey;
-            console.error(
-              `Codex app-server config change deferred while busy; continuing on the old config until idle${
-                this.goalWatchers.size > 0 ? "; a /goal pursuit is holding the session" : ""
-              }): ${error instanceof Error ? error.message : String(error)}`,
-            );
+        deferredConfigChange = true;
+      } else {
+        try {
+          await this.waitForIdle();
+          if (this.initializeKey !== null && this.initializeKey !== runtimeOptions.initializeKey) {
+            this.destroy();
           }
-          deferredConfigChange = true;
+        } catch (error) {
+          if (this.initializePromise) {
+            if (this.deferredConfigWarningKey !== runtimeOptions.initializeKey) {
+              this.deferredConfigWarningKey = runtimeOptions.initializeKey;
+              console.error(
+                `Codex app-server config change deferred while busy; continuing on the old config until idle${
+                  this.goalWatchers.size > 0 ? "; a /goal pursuit is holding the session" : ""
+                }): ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+            deferredConfigChange = true;
+          }
         }
       }
     }

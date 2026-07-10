@@ -12,6 +12,7 @@ import {
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode } from "../state/approval-mode.js";
 import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron-timezone.js";
 import { withFileMutex } from "../state/file-mutex.js";
+import { isExtendedCodexEffort, knownCodexModelSupportsEffort } from "../codex/model-capabilities.js";
 
 export type { EffortLevel };
 export type InstanceEngine = "codex" | "claude" | "antigravity";
@@ -48,6 +49,25 @@ export interface InstanceConfig {
   workspacePath: string | undefined;
   workspaceProfiles: WorkspaceProfile[];
   groupMode: GroupModeConfig;
+}
+
+function sanitizeConfigCompatibility(config: ConfigFile, configPath: string): ConfigFile {
+  const effort = config.effort as EffortLevel | undefined;
+  const engine = config.engine ?? "codex";
+  const invalidCodexEffort = engine === "codex" &&
+    isExtendedCodexEffort(effort) &&
+    knownCodexModelSupportsEffort(config.model, effort) !== true;
+  const invalidClaudeEffort = engine === "claude" && effort === "ultra";
+  if (!invalidCodexEffort && !invalidClaudeEffort) {
+    return config;
+  }
+
+  const sanitized = { ...config };
+  delete sanitized.effort;
+  console.error(
+    `Ignored incompatible effort ${effort} in ${configPath}; select a compatible explicit model before restoring that effort.`,
+  );
+  return sanitized;
 }
 
 export interface WorkspaceProfile {
@@ -277,10 +297,10 @@ export async function readValidatedConfigFile(configPath: string): Promise<Confi
     console.error(
       `Malformed ${configPath} (${formatSchemaError(result.error)}); dropped invalid field(s) [${droppedFields.join(", ")}] and kept the rest until this is repaired.`,
     );
-    return salvaged as ConfigFile;
+    return sanitizeConfigCompatibility(salvaged as ConfigFile, configPath);
   }
 
-  return result.data;
+  return sanitizeConfigCompatibility(result.data, configPath);
 }
 
 export async function loadInstanceConfig(stateDir: string): Promise<InstanceConfig> {

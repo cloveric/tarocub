@@ -2,6 +2,7 @@ import {
   CODEX_EFFORT_COMPATIBILITY_EN,
   CODEX_EFFORT_COMPATIBILITY_ZH,
   CODEX_MODEL_CHOICES,
+  isExtendedCodexEffort,
   knownCodexModelMaxEffort,
   knownCodexModelSupportsEffort,
 } from "../codex/model-capabilities.js";
@@ -220,17 +221,26 @@ export async function handleSimpleLocalTelegramCommand(input: {
         ? "Claude 不支持 ultra；最高可用 max。"
         : "Claude does not support ultra; use max for its highest effort.";
       await context.api.sendMessage(normalized.chatId, effortMessage);
-    } else if (
-      VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel) &&
-      cfg.engine === "codex" &&
-      knownCodexModelSupportsEffort(cfg.model, effortCmd.level as EffortLevel) === false
-    ) {
-      auditValue = "unsupported-model-effort";
-      const maxEffort = knownCodexModelMaxEffort(cfg.model);
-      effortMessage = locale === "zh"
-        ? `${cfg.model} 不支持 ${effortCmd.level}；最高可用 ${maxEffort}。`
-        : `${cfg.model} does not support ${effortCmd.level}; its highest effort is ${maxEffort}.`;
-      await context.api.sendMessage(normalized.chatId, effortMessage);
+    } else if (VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel) && cfg.engine === "codex") {
+      const effort = effortCmd.level as EffortLevel;
+      const support = knownCodexModelSupportsEffort(cfg.model, effort);
+      if (support === false || (support === undefined && isExtendedCodexEffort(effort))) {
+        const maxEffort = knownCodexModelMaxEffort(cfg.model);
+        auditValue = support === false ? "unsupported-model-effort" : "unknown-model-effort";
+        effortMessage = maxEffort
+          ? locale === "zh"
+            ? `${cfg.model} 不支持 ${effort}；最高可用 ${maxEffort}。`
+            : `${cfg.model} does not support ${effort}; its highest effort is ${maxEffort}.`
+          : locale === "zh"
+            ? `请先选择明确兼容的模型再设置 ${effort}（例如 /model gpt-5.6-sol）。`
+            : `Select an explicit compatible model before setting ${effort} (for example, /model gpt-5.6-sol).`;
+        await context.api.sendMessage(normalized.chatId, effortMessage);
+      } else {
+        auditValue = effort;
+        await updateInstanceConfig((c) => { c.effort = effort; });
+        effortMessage = locale === "zh" ? `Effort 已设为 ${effort}。` : `Effort set to ${effort}.`;
+        await context.api.sendMessage(normalized.chatId, effortMessage);
+      }
     } else if (VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel)) {
       auditValue = effortCmd.level;
       await updateInstanceConfig((c) => { c.effort = effortCmd.level; });
@@ -273,6 +283,16 @@ export async function handleSimpleLocalTelegramCommand(input: {
         ? "用法: /model <单个模型名|off>"
         : "Usage: /model <single-token-name|off>";
       await context.api.sendMessage(normalized.chatId, modelMessage);
+    } else if (
+      (modelCmd.model === "off" || modelCmd.model === "default") &&
+      cfg.engine === "codex" &&
+      isExtendedCodexEffort(cfg.effort as EffortLevel | undefined)
+    ) {
+      auditValue = "default-model-incompatible-effort";
+      modelMessage = locale === "zh"
+        ? `当前 effort 为 ${cfg.effort}，不能恢复默认模型；请先重置 /effort。`
+        : `Cannot restore the default model while effort is ${cfg.effort}; reset /effort first.`;
+      await context.api.sendMessage(normalized.chatId, modelMessage);
     } else if (modelCmd.model === "off" || modelCmd.model === "default") {
       await updateInstanceConfig((c) => { delete c.model; });
       modelMessage = locale === "zh" ? "模型已恢复默认。" : "Model reset to default.";
@@ -281,13 +301,19 @@ export async function handleSimpleLocalTelegramCommand(input: {
       cfg.engine === "codex" &&
       cfg.effort &&
       VALID_EFFORT_LEVELS.includes(cfg.effort as EffortLevel) &&
-      knownCodexModelSupportsEffort(modelCmd.model, cfg.effort as EffortLevel) === false
+      (knownCodexModelSupportsEffort(modelCmd.model, cfg.effort as EffortLevel) === false ||
+        (knownCodexModelSupportsEffort(modelCmd.model, cfg.effort as EffortLevel) === undefined &&
+          isExtendedCodexEffort(cfg.effort as EffortLevel)))
     ) {
       auditValue = "unsupported-model-effort";
       const maxEffort = knownCodexModelMaxEffort(modelCmd.model);
-      modelMessage = locale === "zh"
-        ? `${modelCmd.model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
-        : `${modelCmd.model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`;
+      modelMessage = maxEffort
+        ? locale === "zh"
+          ? `${modelCmd.model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
+          : `${modelCmd.model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
+        : locale === "zh"
+          ? `无法确认 ${modelCmd.model} 是否支持 ${cfg.effort}；请先降低 /effort 或选择列表中的模型。`
+          : `Compatibility between ${modelCmd.model} and effort ${cfg.effort} is unknown; lower /effort or choose a listed model first.`;
       await context.api.sendMessage(normalized.chatId, modelMessage);
     } else {
       await updateInstanceConfig((c) => { c.model = modelCmd.model; });

@@ -722,7 +722,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
 
     const auditRows = inst.recentAudit.map(ev => {
       const c = ev.outcome === "error" ? "#C1392B" : ev.outcome === "success" ? "#2D8B46" : "#6B7280";
-      return `<tr><td class="au-t">${ft(ev.timestamp)}</td><td style="color:${c}">${esc(ev.type)}</td><td style="color:${c}">${ev.outcome}</td></tr>`;
+      return `<tr><td class="au-t">${ft(ev.timestamp)}</td><td style="color:${c}">${esc(ev.type)}</td><td style="color:${c}">${esc(ev.outcome)}</td></tr>`;
     }).join("");
     const timelineRows = inst.recentTimeline.map(ev => {
       const c = ev.outcome === "error" ? "#C1392B" : ev.outcome === "success" ? "#2D8B46" : ev.outcome === "retry" ? "#8B6914" : "#6B7280";
@@ -770,7 +770,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
           <h2>${esc(inst.name)}</h2>
           <div class="card-meta">
             <span class="tag" style="background:${statusColor}">${statusText}</span>
-            <span class="tag tag-outline">${engLabel}${modelLabel}${effortLabel}${yoloLabel}</span>
+            <span class="tag tag-outline">${esc(`${engLabel}${modelLabel}${effortLabel}${yoloLabel}`)}</span>
           </div>
         </div>
 
@@ -779,7 +779,7 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
         <section class="task">
           <div class="task-head">
             <span>Current Task</span>
-            <strong style="color:${taskColor}">${task.status}</strong>
+            <strong style="color:${taskColor}">${esc(task.status)}</strong>
           </div>
           ${taskBits ? `<div class="task-meta">${esc(taskBits)}</div>` : ""}
           <div class="task-grid">${taskRows}</div>
@@ -808,12 +808,12 @@ export function renderHtml(instances: InstanceSnapshot[], options: RenderOptions
           <div>Sessions <strong>${inst.sessionBindings}</strong></div>
           <div>Paired <strong>${inst.pairedUsers}</strong></div>
           <div>Known chats <strong>${inst.knownChatCount}</strong></div>
-          <div>Policy <strong>${inst.policy}</strong></div>
-          <div>Locale <strong>${inst.locale}</strong></div>
-          <div>Bus <strong>${inst.bus}</strong></div>
+          <div>Policy <strong>${esc(inst.policy)}</strong></div>
+          <div>Locale <strong>${esc(inst.locale)}</strong></div>
+          <div>Bus <strong>${esc(inst.bus)}</strong></div>
           <div>Budget <strong>${inst.budgetUsd !== null ? `$${inst.budgetUsd}` : "--"}</strong></div>
-          <div>Crew <strong>${inst.crewLatestRunStatus !== null ? `${inst.crewLatestRunStatus}/${inst.crewLatestRunStage}` : "--"}</strong></div>
-          <div>Crew run <strong>${inst.crewLatestRunId ?? "--"}</strong></div>
+          <div>Crew <strong>${esc(inst.crewLatestRunStatus !== null ? `${inst.crewLatestRunStatus}/${inst.crewLatestRunStage}` : "--")}</strong></div>
+          <div>Crew run <strong>${esc(inst.crewLatestRunId ?? "--")}</strong></div>
           <div>Last OK <strong style="color:#2D8B46">${ft(inst.lastSuccess)}</strong></div>
           <div>Last Err <strong style="color:#C1392B">${ft(inst.lastFailure)}</strong></div>
           <div>Verbosity <strong>${inst.verbosity}</strong></div>

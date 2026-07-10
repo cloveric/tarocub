@@ -1,6 +1,6 @@
 {
   "name": "tarocub",
-  "version": "0.1.176",
+  "version": "0.1.177",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.66.1",
+    "@larksuiteoapi/node-sdk": "^1.70.0",
     "@types/adm-zip": "^0.5.8",
     "adm-zip": "^0.5.17",
     "croner": "^10.0.1",
@@ -21,11 +21,19 @@
     "qrcode-terminal": "^0.12.0",
     "zod": "^4.1.5"
   },
+  "overrides": {
+    "axios": "1.18.1",
+    "esbuild": "0.28.1",
+    "form-data": "4.0.6",
+    "postcss": "8.5.16",
+    "protobufjs": "7.6.5",
+    "vite": "7.3.6"
+  },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/qrcode-terminal": "^0.12.2",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.7"
   }
 }

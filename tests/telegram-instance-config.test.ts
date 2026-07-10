@@ -38,6 +38,28 @@ describe("loadInstanceConfig", () => {
     }
   });
 
+  it("drops a manually persisted extended effort when no compatible model is pinned", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({ engine: "codex", effort: "max" }) + "\n",
+        "utf8",
+      );
+
+      await expect(loadInstanceConfig(root)).resolves.toMatchObject({
+        engine: "codex",
+        model: undefined,
+        effort: undefined,
+      });
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Ignored incompatible effort max"));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("returns defaults when config.json is missing", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
 

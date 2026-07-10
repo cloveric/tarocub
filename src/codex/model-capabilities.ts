@@ -40,3 +40,7 @@ export function knownCodexModelMaxEffort(model: string | undefined): EffortLevel
   if (!model) return undefined;
   return CODEX_MODEL_MAX_EFFORT[model.trim().toLowerCase()];
 }
+
+export function isExtendedCodexEffort(effort: EffortLevel | undefined): effort is "max" | "ultra" {
+  return effort === "max" || effort === "ultra";
+}

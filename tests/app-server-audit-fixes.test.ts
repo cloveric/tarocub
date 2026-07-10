@@ -291,18 +291,6 @@ describe("app-server config change while busy", () => {
         undefined,
         configPath,
       );
-      // Simulate the 30s waitForIdle timeout without waiting 30s of real time.
-      const internal = adapter as unknown as { waitForIdle(): Promise<void> };
-      const originalWaitForIdle = internal.waitForIdle.bind(adapter);
-      let failNextWaitForIdle = true;
-      internal.waitForIdle = () => {
-        if (failNextWaitForIdle) {
-          failNextWaitForIdle = false;
-          return Promise.reject(new Error("Codex app-server did not become idle within 30000ms"));
-        }
-        return originalWaitForIdle();
-      };
-
       const firstPromise = adapter.sendUserMessage("telegram-100", {
         text: "First (long-running)",
         files: [],
@@ -388,12 +376,14 @@ describe("app-server config change while busy", () => {
       internal.initializeKey = "old-config";
       internal.initializePromise = Promise.resolve();
       internal.goalWatchers.set("thread-goal", {});
-      internal.waitForIdle = () => Promise.reject(new Error("Codex app-server did not become idle within 30000ms"));
+      const waitForIdle = vi.fn(() => Promise.reject(new Error("Codex app-server did not become idle within 30000ms")));
+      internal.waitForIdle = waitForIdle;
 
       // Two consecutive messages carrying the SAME pending change → ONE warning,
-      // but both calls resolve so normal turns can continue on the old config.
+      // no idle wait, and both calls resolve so turns continue on the old config.
       await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
       await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
+      expect(waitForIdle).not.toHaveBeenCalled();
 
       const goalWarnings = consoleErrorSpy.mock.calls
         .map((call) => String(call[0]))
@@ -404,6 +394,7 @@ describe("app-server config change while busy", () => {
 
       // A DIFFERENT pending change warns again (the one-shot latch reset).
       await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "newer-config" })).resolves.toBeUndefined();
+      expect(waitForIdle).not.toHaveBeenCalled();
       const allWarnings = consoleErrorSpy.mock.calls
         .map((call) => String(call[0]))
         .filter((line) => line.includes("config change deferred while busy"));

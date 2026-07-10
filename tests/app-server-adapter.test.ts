@@ -1039,7 +1039,7 @@ describe("CodexAppServerAdapter", () => {
     }
   });
 
-  it("waits for in-flight turns to finish before restarting for config changes", async () => {
+  it("keeps serving while busy and applies config changes on the next idle turn", async () => {
     const childA = new FakeChildProcess();
     const childB = new FakeChildProcess();
     const children = [childA, childB];
@@ -1090,11 +1090,29 @@ describe("CodexAppServerAdapter", () => {
       expect(calls).toHaveLength(1);
       expect(childA.killCalls).toBe(0);
 
+      // Busy config changes are deferred immediately. The second chat keeps
+      // running on the old child/config instead of waiting up to 30 seconds.
+      await waitFor(() => childA.stdin.lines.length >= 4);
+      const startThreadBOnOldConfig = JSON.parse(childA.stdin.lines[3] ?? "{}");
+      childA.stdout.emitData(`{"id":${startThreadBOnOldConfig.id},"result":{"thread":{"id":"thread-b-old"}}}\n`);
+      await waitFor(() => childA.stdin.lines.length >= 5);
+      childA.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-b-old","item":{"type":"agentMessage","text":"second ok"}}}\n');
+      childA.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-b-old","turn":{"id":"turn-b","items":[],"status":"completed","error":null}}}\n');
+      await expect(secondPromise).resolves.toEqual({
+        text: "second ok",
+        sessionId: "thread-b-old",
+      });
+
       childA.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-a","item":{"type":"agentMessage","text":"first ok"}}}\n');
       childA.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-a","turn":{"id":"turn-a","items":[],"status":"completed","error":null}}}\n');
       await expect(firstPromise).resolves.toEqual({
         text: "first ok",
         sessionId: "thread-a",
+      });
+
+      const thirdPromise = adapter.sendUserMessage("telegram-300", {
+        text: "Third",
+        files: [],
       });
 
       await waitFor(() => childB.stdin.lines.length >= 1);
@@ -1104,15 +1122,15 @@ describe("CodexAppServerAdapter", () => {
       const initB = JSON.parse(childB.stdin.lines[0] ?? "{}");
       childB.stdout.emitData(`{"id":${initB.id},"result":{"platformOs":"windows"}}\n`);
       await waitFor(() => childB.stdin.lines.length >= 2);
-      const startThreadB = JSON.parse(childB.stdin.lines[1] ?? "{}");
-      childB.stdout.emitData(`{"id":${startThreadB.id},"result":{"thread":{"id":"thread-b"}}}\n`);
+      const startThreadC = JSON.parse(childB.stdin.lines[1] ?? "{}");
+      childB.stdout.emitData(`{"id":${startThreadC.id},"result":{"thread":{"id":"thread-c"}}}\n`);
       await waitFor(() => childB.stdin.lines.length >= 3);
-      childB.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-b","item":{"type":"agentMessage","text":"second ok"}}}\n');
-      childB.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-b","turn":{"id":"turn-b","items":[],"status":"completed","error":null}}}\n');
+      childB.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-c","item":{"type":"agentMessage","text":"third ok"}}}\n');
+      childB.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-c","turn":{"id":"turn-c","items":[],"status":"completed","error":null}}}\n');
 
-      await expect(secondPromise).resolves.toEqual({
-        text: "second ok",
-        sessionId: "thread-b",
+      await expect(thirdPromise).resolves.toEqual({
+        text: "third ok",
+        sessionId: "thread-c",
       });
     } finally {
       await removeTempRoot(root);

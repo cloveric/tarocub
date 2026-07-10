@@ -13,6 +13,7 @@ import {
   CODEX_EFFORT_COMPATIBILITY_EN,
   CODEX_EFFORT_COMPATIBILITY_ZH,
   CODEX_MODEL_CHOICES,
+  isExtendedCodexEffort,
   knownCodexModelMaxEffort,
   knownCodexModelSupportsEffort,
 } from "../codex/model-capabilities.js";
@@ -1835,6 +1836,11 @@ async function handleLarkModelCommand(
     return locale === "en" ? "Usage: /model <single-token-name|off>" : "用法: /model <单个模型名|off>";
   }
   if (model === "off" || model === "default") {
+    if (cfg.engine === "codex" && isExtendedCodexEffort(cfg.effort)) {
+      return locale === "en"
+        ? `Cannot restore the default model while effort is ${cfg.effort}; reset /effort first.`
+        : `当前 effort 为 ${cfg.effort}，不能恢复默认模型；请先重置 /effort。`;
+    }
     await updateInstanceConfig(stateDir, (config) => {
       delete config.model;
     });
@@ -1843,12 +1849,17 @@ async function handleLarkModelCommand(
   if (
     cfg.engine === "codex" &&
     cfg.effort &&
-    knownCodexModelSupportsEffort(model, cfg.effort) === false
+    (knownCodexModelSupportsEffort(model, cfg.effort) === false ||
+      (knownCodexModelSupportsEffort(model, cfg.effort) === undefined && isExtendedCodexEffort(cfg.effort)))
   ) {
     const maxEffort = knownCodexModelMaxEffort(model);
-    return locale === "en"
-      ? `${model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
-      : `${model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`;
+    return maxEffort
+      ? locale === "en"
+        ? `${model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
+        : `${model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
+      : locale === "en"
+        ? `Compatibility between ${model} and effort ${cfg.effort} is unknown; lower /effort or choose a listed model first.`
+        : `无法确认 ${model} 是否支持 ${cfg.effort}；请先降低 /effort 或选择列表中的模型。`;
   }
   await updateInstanceConfig(stateDir, (config) => {
     config.model = model;
@@ -1886,14 +1897,19 @@ async function handleLarkEffortCommand(
       ? "Usage: /effort [low|medium|high|xhigh|max|ultra|off]"
       : "用法: /effort [low|medium|high|xhigh|max|ultra|off]";
   }
-  if (
-    cfg.engine === "codex" &&
-    knownCodexModelSupportsEffort(cfg.model, level as EffortLevel) === false
-  ) {
-    const maxEffort = knownCodexModelMaxEffort(cfg.model);
-    return locale === "en"
-      ? `${cfg.model} does not support ${level}; its highest effort is ${maxEffort}.`
-      : `${cfg.model} 不支持 ${level}；最高可用 ${maxEffort}。`;
+  if (cfg.engine === "codex") {
+    const effort = level as EffortLevel;
+    const support = knownCodexModelSupportsEffort(cfg.model, effort);
+    if (support === false || (support === undefined && isExtendedCodexEffort(effort))) {
+      const maxEffort = knownCodexModelMaxEffort(cfg.model);
+      return maxEffort
+        ? locale === "en"
+          ? `${cfg.model} does not support ${level}; its highest effort is ${maxEffort}.`
+          : `${cfg.model} 不支持 ${level}；最高可用 ${maxEffort}。`
+        : locale === "en"
+          ? `Select an explicit compatible model before setting ${level} (for example, /model gpt-5.6-sol).`
+          : `请先选择明确兼容的模型再设置 ${level}（例如 /model gpt-5.6-sol）。`;
+    }
   }
   await updateInstanceConfig(stateDir, (config) => {
     config.effort = level;

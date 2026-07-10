@@ -91,16 +91,12 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
-  it("keeps Codex /effort max unchanged for GPT-5.6 models", async () => {
+  it("rejects Codex /effort max until an explicit compatible model is selected", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
-    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, string>) => void) => {
-      const cfg: Record<string, string> = {};
-      mutate(cfg);
-      expect(cfg.effort).toBe("max");
-    });
+    const updateInstanceConfig = vi.fn();
 
     try {
       const handled = await handleSimpleLocalTelegramCommand({
@@ -118,8 +114,11 @@ describe("handleSimpleLocalTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
-      expect(updateInstanceConfig).toHaveBeenCalledOnce();
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Effort set to max.");
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Select an explicit compatible model before setting max (for example, /model gpt-5.6-sol).",
+      );
 
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({
@@ -127,9 +126,42 @@ describe("handleSimpleLocalTelegramCommand", () => {
         outcome: "success",
         metadata: expect.objectContaining({
           command: "effort",
-          value: "max",
+          value: "unknown-model-effort",
         }),
       }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("rejects /model off when the current extended effort needs the explicit model", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const updateInstanceConfig = vi.fn();
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex", model: "gpt-5.6-sol", effort: "ultra" },
+        normalized: createNormalizedMessage("/model off"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 80,
+        },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Cannot restore the default model while effort is ultra; reset /effort first.",
+      );
     } finally {
       await removeTempRoot(root);
     }

@@ -16,6 +16,7 @@ import { gzipSync, gunzipSync } from "node:zlib";
 
 const ARCHIVE_VERSION = 1;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB per file cap to avoid runaway backups
+const MAX_HEADER_SIZE = 16 * 1024 * 1024;
 
 interface ArchiveHeader {
   version: number;
@@ -26,6 +27,72 @@ interface ArchiveHeader {
     size: number;
     contentOffset: number;
   }>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSafeArchiveRootName(value: string): boolean {
+  return value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    !value.includes("\0") &&
+    path.posix.basename(value) === value &&
+    path.win32.basename(value) === value;
+}
+
+function parseArchiveHeader(buffer: Buffer): { header: ArchiveHeader; bodyStart: number } {
+  if (buffer.length < 8) {
+    throw new Error("Archive is truncated before its header");
+  }
+  const headerLength = buffer.readUInt32BE(4);
+  if (headerLength === 0 || headerLength > MAX_HEADER_SIZE || headerLength > buffer.length - 8) {
+    throw new Error("Archive has an invalid header length");
+  }
+
+  const bodyStart = 8 + headerLength;
+  const parsed = JSON.parse(buffer.subarray(8, bodyStart).toString("utf8")) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error("Archive header must be an object");
+  }
+  if (typeof parsed.version !== "number" || !Number.isInteger(parsed.version) || parsed.version < 1) {
+    throw new Error("Archive has an invalid version");
+  }
+  if (parsed.version > ARCHIVE_VERSION) {
+    throw new Error(`Archive version ${parsed.version} is newer than supported version ${ARCHIVE_VERSION}. Upgrade the bridge.`);
+  }
+  if (typeof parsed.rootName !== "string" || !isSafeArchiveRootName(parsed.rootName)) {
+    throw new Error("Archive contains an unsafe archive root name");
+  }
+  if (!Array.isArray(parsed.files)) {
+    throw new Error("Archive header has an invalid file list");
+  }
+
+  const bodyLength = buffer.length - bodyStart;
+  const files = parsed.files.map((entry, index): ArchiveHeader["files"][number] => {
+    if (!isRecord(entry) || typeof entry.path !== "string" || entry.path.length === 0) {
+      throw new Error(`Archive file ${index} has an invalid path`);
+    }
+    if (
+      typeof entry.size !== "number" || !Number.isSafeInteger(entry.size) || entry.size < 0 ||
+      typeof entry.contentOffset !== "number" || !Number.isSafeInteger(entry.contentOffset) || entry.contentOffset < 0 ||
+      entry.contentOffset > bodyLength || entry.size > bodyLength - entry.contentOffset
+    ) {
+      throw new Error(`Archive file ${index} has an invalid file range`);
+    }
+    return { path: entry.path, size: entry.size, contentOffset: entry.contentOffset };
+  });
+
+  return {
+    header: {
+      version: parsed.version,
+      createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",
+      rootName: parsed.rootName,
+      files,
+    },
+    bodyStart,
+  };
 }
 
 async function walkDirectory(root: string, current: string = root): Promise<string[]> {
@@ -115,38 +182,35 @@ export async function extractArchive(archivePath: string, destinationRoot: strin
     throw new Error(`Not a cc-telegram-bridge archive (bad magic: ${magic})`);
   }
 
-  const headerLength = buffer.readUInt32BE(4);
-  const headerStart = 8;
-  const headerEnd = headerStart + headerLength;
-  const headerJson = buffer.subarray(headerStart, headerEnd).toString("utf8");
-  const header = JSON.parse(headerJson) as ArchiveHeader;
-
-  if (header.version > ARCHIVE_VERSION) {
-    throw new Error(`Archive version ${header.version} is newer than supported version ${ARCHIVE_VERSION}. Upgrade the bridge.`);
+  const { header, bodyStart } = parseArchiveHeader(buffer);
+  const resolvedDestinationRoot = path.resolve(destinationRoot);
+  const targetRoot = path.resolve(resolvedDestinationRoot, header.rootName);
+  if (path.dirname(targetRoot) !== resolvedDestinationRoot) {
+    throw new Error("Archive contains an unsafe archive root name");
   }
-
-  const bodyStart = headerEnd;
-  const targetRoot = path.join(destinationRoot, header.rootName);
   // Instance state directories contain bot tokens, access policy, session
   // transcripts, and audit logs — all per-user-private. Create root dir
   // owner-only (0o700) on restore; fall through if chmod fails (e.g. on
   // a filesystem without POSIX perms).
-  await mkdir(targetRoot, { recursive: true });
-  try { await chmod(targetRoot, 0o700); } catch { /* non-POSIX fs */ }
-
-  const createdDirs = new Set<string>([path.resolve(targetRoot)]);
-
-  for (const file of header.files) {
-    // Path traversal safety: reject absolute paths or "..", and resolve only inside targetRoot.
+  const plannedFiles = header.files.map((file) => {
     if (path.isAbsolute(file.path) || file.path.split(/[/\\]/).some((segment) => segment === "..")) {
       throw new Error(`Archive contains unsafe path: ${file.path}`);
     }
     const fullPath = path.join(targetRoot, file.path);
     const resolved = path.resolve(fullPath);
-    const relativeToRoot = path.relative(path.resolve(targetRoot), resolved);
+    const relativeToRoot = path.relative(targetRoot, resolved);
     if (relativeToRoot === "" || relativeToRoot.startsWith("..") || path.isAbsolute(relativeToRoot)) {
       throw new Error(`Archive path escapes target: ${file.path}`);
     }
+    return { file, fullPath };
+  });
+
+  await mkdir(targetRoot, { recursive: true });
+  try { await chmod(targetRoot, 0o700); } catch { /* non-POSIX fs */ }
+
+  const createdDirs = new Set<string>([path.resolve(targetRoot)]);
+
+  for (const { file, fullPath } of plannedFiles) {
     const parentDir = path.dirname(fullPath);
     await mkdir(parentDir, { recursive: true });
     const resolvedParent = path.resolve(parentDir);
