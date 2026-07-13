@@ -134,11 +134,21 @@ function parseDotEnvEntry(rawLine: string): { key: string; value: string } | nul
   const rawValue = trimmed.slice(separatorIndex + 1).trim();
 
   if (rawValue.startsWith("\"")) {
-    return { key, value: JSON.parse(rawValue) as string };
+    try {
+      const parsed = JSON.parse(rawValue) as unknown;
+      return typeof parsed === "string" ? { key, value: parsed } : null;
+    } catch {
+      // One malformed optional line must not crash the whole instance. Skip it;
+      // a malformed bot-token line then becomes the normal actionable
+      // "TELEGRAM_BOT_TOKEN is required" error instead of a JSON parser crash.
+      return null;
+    }
   }
 
-  if (rawValue.startsWith("'") && rawValue.endsWith("'")) {
-    return { key, value: rawValue.slice(1, -1) };
+  if (rawValue.startsWith("'")) {
+    return rawValue.endsWith("'") && rawValue.length >= 2
+      ? { key, value: rawValue.slice(1, -1) }
+      : null;
   }
 
   return { key, value: rawValue };

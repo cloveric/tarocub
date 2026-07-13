@@ -4,6 +4,7 @@ import path from "node:path";
 import { unlinkSync, readFileSync } from "node:fs";
 
 import { InstanceLockRecordSchema } from "./instance-lock-schema.js";
+import { withFileMutex } from "./file-mutex.js";
 
 const INSTANCE_LOCK_FILENAME = "instance.lock.json";
 
@@ -112,36 +113,43 @@ export async function acquireInstanceLock(stateDir: string, pid: number = proces
   const token = randomUUID();
   const serializedRecord = formatLockRecord(pid, token);
 
-  for (;;) {
-    try {
-      await writeExclusiveLock(filePath, serializedRecord);
-      break;
-    } catch (error) {
-      if (!isFileExistsError(error)) {
-        throw error;
-      }
-    }
-
-    let existing: InstanceLockRecord | null;
-    try {
-      existing = await readLockRecord(filePath);
-    } catch (error) {
-      if (isRepairableLockError(error)) {
-        await removeStaleLock(filePath);
-        continue;
-      }
+  try {
+    await writeExclusiveLock(filePath, serializedRecord);
+  } catch (error) {
+    if (!isFileExistsError(error)) {
       throw error;
     }
+    // Serialize the read-check-remove-create recovery sequence. Without this,
+    // two starters can both judge the same old record stale; the slower one may
+    // then unlink the faster one's newly-created live lock and both proceed.
+    await withFileMutex(`${filePath}.acquire`, async () => {
+      try {
+        await writeExclusiveLock(filePath, serializedRecord);
+        return;
+      } catch (retryError) {
+        if (!isFileExistsError(retryError)) {
+          throw retryError;
+        }
+      }
 
-    if (existing === null) {
-      continue;
-    }
+      let existing: InstanceLockRecord | null;
+      try {
+        existing = await readLockRecord(filePath);
+      } catch (readError) {
+        if (!isRepairableLockError(readError)) {
+          throw readError;
+        }
+        await removeStaleLock(filePath);
+        await writeExclusiveLock(filePath, serializedRecord);
+        return;
+      }
 
-    if (isProcessAlive(existing.pid)) {
-      throw new Error(`Instance lock already held by pid ${existing.pid}`);
-    }
-
-    await removeStaleLock(filePath);
+      if (existing && isProcessAlive(existing.pid)) {
+        throw new Error(`Instance lock already held by pid ${existing.pid}`);
+      }
+      await removeStaleLock(filePath);
+      await writeExclusiveLock(filePath, serializedRecord);
+    });
   }
 
   const release = async (): Promise<void> => {

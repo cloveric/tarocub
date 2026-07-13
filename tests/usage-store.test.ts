@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { childProcessTestEnv, removeTempRoot } from "./helpers/temp-files.js";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { UsageStore } from "../src/state/usage-store.js";
 
@@ -48,25 +48,22 @@ describe("UsageStore", () => {
     }
   });
 
-  it("rejects (quarantines + resets) non-object persisted usage state", async () => {
+  it("fails closed on corrupt usage state when no last-good backup exists", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new UsageStore(stateDir);
 
     try {
       await writeFile(path.join(stateDir, "usage.json"), "null\n", "utf8");
-      // Corrupt content is not accepted; it is quarantined and counters reset to
-      // zero so budget checks / recording keep working instead of throwing.
-      const recovered = await store.load();
-      expect(recovered.totalCostUsd).toBe(0);
-      expect(recovered.requestCount).toBe(0);
+      await expect(store.load()).rejects.toThrow("Usage state is corrupt");
+      await expect(store.load()).rejects.toThrow("Usage state is corrupt");
       const files = await readdir(stateDir);
-      expect(files.some((f) => f.includes("usage.json.corrupt.") && f.endsWith(".bak"))).toBe(true);
+      expect(files).toContain("usage.json");
     } finally {
       await removeTempRoot(stateDir);
     }
   });
 
-  it("rejects (quarantines + resets) non-integer usage counters", async () => {
+  it("fails closed on invalid usage counters", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new UsageStore(stateDir);
 
@@ -84,11 +81,48 @@ describe("UsageStore", () => {
         "utf8",
       );
 
-      const recovered = await store.load();
-      expect(recovered.totalInputTokens).toBe(0); // bad fractional counter rejected, not accepted
-      expect(recovered.totalCostUsd).toBe(0);
+      await expect(store.load()).rejects.toThrow("Usage state is corrupt");
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
+  it("restores a corrupt primary ledger from the last-good snapshot", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new UsageStore(stateDir);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await store.record({ inputTokens: 10, outputTokens: 2, costUsd: 0.25 });
+      await writeFile(path.join(stateDir, "usage.json"), "{bad json\n", "utf8");
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        totalInputTokens: 10,
+        totalOutputTokens: 2,
+        totalCostUsd: 0.25,
+        requestCount: 1,
+      }));
       const files = await readdir(stateDir);
       expect(files.some((f) => f.includes("usage.json.corrupt.") && f.endsWith(".bak"))).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+      await removeTempRoot(stateDir);
+    }
+  });
+
+  it("rejects invalid turn usage before it can corrupt the persisted ledger", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new UsageStore(stateDir);
+
+    try {
+      await store.record({ inputTokens: 5, outputTokens: 1, costUsd: 0.1 });
+      await expect(store.record({ inputTokens: Number.NaN, outputTokens: 1, costUsd: 0.1 }))
+        .rejects.toThrow("invalid usage state");
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        totalInputTokens: 5,
+        requestCount: 1,
+        totalCostUsd: 0.1,
+      }));
     } finally {
       await removeTempRoot(stateDir);
     }

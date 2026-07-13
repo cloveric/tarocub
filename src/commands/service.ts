@@ -208,9 +208,12 @@ function runRestart() {
 
   const output = [result.stdout, result.stderr].filter(Boolean).join("\\n");
   const queueBusy = /active Telegram turn\\(s\\)|Refusing to stop\\/restart without --force/.test(output);
-  if (queueBusy && Date.now() + retryDelayMs <= deadline) {
+  if (Date.now() + retryDelayMs <= deadline) {
+    const reason = queueBusy
+      ? "is waiting for the active turn to finish"
+      : \`failed with status \${result.status ?? "unknown"}\`;
     process.stderr.write(
-      \`Deferred restart for "\${instanceName}" is waiting for the active turn to finish; retrying in \${Math.ceil(retryDelayMs / 1000)}s.\\n\`,
+      \`Deferred restart for "\${instanceName}" \${reason}; retrying in \${Math.ceil(retryDelayMs / 1000)}s.\\n\`,
     );
     setTimeout(runRestart, retryDelayMs);
     return;

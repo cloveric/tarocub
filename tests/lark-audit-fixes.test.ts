@@ -414,6 +414,16 @@ describe("lark audit fixes", () => {
       const fulfilled = settled.filter((entry): entry is PromiseFulfilledResult<boolean> => entry.status === "fulfilled");
       expect(fulfilled).toHaveLength(1);
       expect(fulfilled[0]!.value).toBe(true);
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "command.handled",
+        outcome: "error",
+        detail: "batch-merged",
+        metadata: expect.objectContaining({
+          larkMessageId: "om_batch_1",
+          mergedInto: "om_batch_2",
+        }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

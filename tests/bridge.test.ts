@@ -129,6 +129,78 @@ describe("Bridge", () => {
     expect(startedTurns).toEqual(["first", "second"]);
   });
 
+  it("keeps session resolution inside the logical conversation lock", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: `logical-session-${Date.now()}` }),
+      bindSession: vi.fn(),
+    };
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const adapterA: CodexAdapter = {
+      sendUserMessage: vi.fn(async () => {
+        await firstCanFinish;
+        return { text: "first" };
+      }),
+      createSession: vi.fn(),
+    };
+    const adapterB: CodexAdapter = {
+      sendUserMessage: vi.fn(async () => ({ text: "second" })),
+      createSession: vi.fn(),
+    };
+    const conversationKey = `lark:oc_cron_race_${Date.now()}`;
+    const firstBridge = new Bridge(accessStore, sessionManager, adapterA);
+    const secondBridge = new Bridge(accessStore, sessionManager, adapterB);
+    const waitEvents: unknown[] = [];
+
+    const first = firstBridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      conversationKey,
+      text: "chat turn",
+      files: [],
+    });
+    await vi.waitFor(() => expect(adapterA.sendUserMessage).toHaveBeenCalledTimes(1));
+    const second = secondBridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      conversationKey,
+      text: "cron turn",
+      files: [],
+      turnLockWaitNotifyAfterMs: 0,
+      onTurnLockWait: async (event) => {
+        waitEvents.push(event);
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(waitEvents).toContainEqual(expect.objectContaining({
+        sessionId: `conversation-scope:${conversationKey}`,
+      }));
+    });
+    try {
+      // Before the fix, cron resolved the same conversation's session while the
+      // first turn was still running, creating a stale-id TOCTOU window.
+      expect(sessionManager.getOrCreateSession).toHaveBeenCalledTimes(1);
+      expect(adapterB.sendUserMessage).not.toHaveBeenCalled();
+    } finally {
+      releaseFirst();
+      await Promise.allSettled([first, second]);
+    }
+    expect(sessionManager.getOrCreateSession).toHaveBeenCalledTimes(2);
+    expect(adapterB.sendUserMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("notifies a waiting turn when another entry is using the same engine session", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

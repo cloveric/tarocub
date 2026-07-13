@@ -86,6 +86,7 @@ import {
   type LarkProvisioningResult,
 } from "../lark/provisioning.js";
 import { redactLarkSensitiveText } from "../lark/redaction.js";
+import { DEFAULT_ROTATE_OPTIONS } from "../state/log-rotation.js";
 
 const execFile = promisify(execFileCallback);
 const LARK_SETUP_TMUX_SESSION_PREFIX = "cctb-lark-setup-";
@@ -1925,9 +1926,12 @@ function runRestart() {
 
   const output = [result.stdout, result.stderr].filter(Boolean).join("\\n");
   const queueBusy = /active or queued Lark turn\\(s\\)|Refusing to restart without --force/.test(output);
-  if (queueBusy && Date.now() + retryDelayMs <= deadline) {
+  if (Date.now() + retryDelayMs <= deadline) {
+    const reason = queueBusy
+      ? "is waiting for the turn queue to drain"
+      : \`failed with status \${result.status ?? "unknown"}\`;
     process.stderr.write(
-      \`Deferred Lark restart for "\${instanceName}" is waiting for the turn queue to drain; retrying in \${Math.ceil(retryDelayMs / 1000)}s.\\n\`,
+      \`Deferred Lark restart for "\${instanceName}" \${reason}; retrying in \${Math.ceil(retryDelayMs / 1000)}s.\\n\`,
     );
     setTimeout(runRestart, retryDelayMs);
     return;
@@ -2102,20 +2106,34 @@ async function readLarkPendingTurnActivity(
   activeTurnCount: number;
   oldestAcceptedAt?: string;
 }> {
-  let raw: string;
-  try {
-    raw = await readFile(resolveTimelineLogPath(stateDir), "utf8");
-  } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return { activeTurnCount: 0 };
+  const timelinePath = resolveTimelineLogPath(stateDir);
+  const rawParts: string[] = [];
+  // A long-running turn may start just before the 10 MB timeline rotates and
+  // finish in the new current file. Read retained rotations oldest-first so the
+  // restart guard can pair that start with its terminal event across files.
+  for (const candidate of [
+    ...Array.from({ length: DEFAULT_ROTATE_OPTIONS.keepCount }, (_value, index) =>
+      `${timelinePath}.${DEFAULT_ROTATE_OPTIONS.keepCount - index}`),
+    timelinePath,
+  ]) {
+    try {
+      rawParts.push(await readFile(candidate, "utf8"));
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        continue;
+      }
+      throw error;
     }
-    throw error;
   }
+  if (rawParts.length === 0) {
+    return { activeTurnCount: 0 };
+  }
+  const raw = rawParts.join("\n");
 
   const pendingByConversationKey = new Map<string, TimelineEvent[]>();
   for (const event of parseTimelineEvents(raw)) {

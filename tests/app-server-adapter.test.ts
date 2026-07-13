@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS,
   CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
+  CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS,
   CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS,
   CODEX_APP_SERVER_TURN_TIMEOUT_MS,
   CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS,
@@ -311,6 +312,36 @@ describe("CodexAppServerAdapter", () => {
       promise.then((result) => result.goal?.status ?? "missing-goal"),
       new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 20)),
     ])).resolves.toBe("active");
+  });
+
+  it("times out a wedged goal RPC instead of leaving the watcher permanently busy", async () => {
+    vi.useFakeTimers();
+    try {
+      const { child, spawnFn } = createSpawnHarness();
+      const adapter = new CodexAppServerAdapter("codex", "/tmp/default-workspace", spawnFn);
+      const promise = adapter.watchThreadGoal("telegram-12345", {
+        objective: "bounded goal rpc",
+        workspaceOverride: "/tmp/project",
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+      child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+      child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-goal-timeout"}}}\n`);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(JSON.parse(child.stdin.lines[2] ?? "{}").method).toBe("thread/goal/clear");
+
+      const assertion = expect(promise).rejects.toThrow(/thread\/goal\/set|not running/);
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(0);
+      await assertion;
+      expect(child.killCalls).toBe(1);
+      expect((adapter as unknown as { isIdle(): boolean }).isIdle()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("times out and destroys app-server when initialize never replies", async () => {

@@ -57,6 +57,7 @@ export const CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS = 180_000;
 export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS = 5_000;
 export const CODEX_APP_SERVER_TURN_STEER_TIMEOUT_MS = 5_000;
+export const CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS = 60_000;
 type AppServerApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 
 type JsonRpcId = number | string;
@@ -385,6 +386,10 @@ function isTerminalGoalStatus(status: CodexThreadGoal["status"]): boolean {
  * "busy" and refuses to restart. Polling guarantees the watch resolves when the goal ends.
  */
 const GOAL_WATCH_POLL_MS = 30_000;
+const GOAL_RPC_REQUEST_OPTIONS = {
+  timeoutMs: CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS,
+  destroyOnTimeout: true,
+} as const;
 
 function readClearedResponse(value: unknown): boolean {
   return typeof value === "object" &&
@@ -532,7 +537,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
       prompt,
       input.onProgress,
       input.onEngineEvent,
-      runtimeOptions.approvalMode,
+      // A config change may be deferred while the shared child is busy. Gate
+      // approvals with the mode that actually spawned the running child, not
+      // the newly-read config, so policy and sandbox never become half-applied.
+      this.currentApprovalMode,
       input.onApprovalRequest,
       input.abortSignal,
       input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
@@ -549,7 +557,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     const runtimeOptions = await this.loadRuntimeOptions();
     await this.ensureInitialized(runtimeOptions);
     const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
-    const result = await this.request("thread/goal/get", { threadId });
+    const result = await this.request("thread/goal/get", { threadId }, GOAL_RPC_REQUEST_OPTIONS);
     return {
       ...readGoalResponse(result),
       sessionId: threadId !== sessionId ? threadId : undefined,
@@ -568,7 +576,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       threadId,
       objective: input.objective,
       tokenBudget: input.tokenBudget ?? null,
-    });
+    }, GOAL_RPC_REQUEST_OPTIONS);
     return {
       ...readGoalResponse(result),
       sessionId: threadId !== sessionId ? threadId : undefined,
@@ -610,12 +618,12 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // watch would resolve instantly showing the PREVIOUS run's stats (e.g. a brand-new
       // "review the bugs" goal reporting 432937 tokens / 1430s as already done). Clearing
       // makes the new objective start fresh as "active" so Codex actually pursues it.
-      await this.request("thread/goal/clear", { threadId }).catch(() => {});
+      await this.request("thread/goal/clear", { threadId }, GOAL_RPC_REQUEST_OPTIONS).catch(() => {});
       const setResult = await this.request("thread/goal/set", {
         threadId,
         objective: input.objective,
         tokenBudget: input.tokenBudget ?? null,
-      });
+      }, GOAL_RPC_REQUEST_OPTIONS);
       const setGoal = readGoalResponse(setResult).goal;
       if (setGoal) {
         watcher.latestGoal = setGoal;
@@ -627,7 +635,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // thread/goal/updated event is missed (otherwise the caller's active-run slot
       // leaks and the instance looks permanently busy — observed on a long goal).
       pollTimer = setInterval(() => {
-        void this.request("thread/goal/get", { threadId })
+        void this.request("thread/goal/get", { threadId }, GOAL_RPC_REQUEST_OPTIONS)
           .then((response) => {
             const goal = readGoalResponse(response).goal;
             if (goal) {
@@ -659,7 +667,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     const runtimeOptions = await this.loadRuntimeOptions();
     await this.ensureInitialized(runtimeOptions);
     const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
-    const result = await this.request("thread/goal/clear", { threadId });
+    const result = await this.request("thread/goal/clear", { threadId }, GOAL_RPC_REQUEST_OPTIONS);
     // End any live watcher for this thread so its run card finalizes instead of
     // hanging: clearing the goal stops Codex's autonomous pursuit but emits no
     // terminal thread/goal/updated for the watcher to key off.
@@ -702,7 +710,6 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     const parsed = await readValidatedConfigFile(this.configPath);
     const approvalMode: ApprovalMode = normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
-    this.currentApprovalMode = approvalMode;
     const effort = typeof parsed.effort === "string" ? parsed.effort : undefined;
     const model = typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : undefined;
     const codexServiceTier = parsed.codexServiceTier === "fast" ? "fast" : undefined;
@@ -773,6 +780,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private async ensureInitialized(runtimeOptions: {
+    approvalMode: ApprovalMode;
     initializeArgs: string[];
     initializeKey: string;
   }): Promise<void> {
@@ -816,6 +824,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     if (!this.initializePromise) {
+      this.currentApprovalMode = runtimeOptions.approvalMode;
       this.initializeKey = runtimeOptions.initializeKey;
       this.initializePromise = this.startChildAndInitialize(runtimeOptions.initializeArgs);
     }

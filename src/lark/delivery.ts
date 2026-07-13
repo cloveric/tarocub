@@ -58,17 +58,47 @@ export async function deliverLarkResponse(input: {
   sendText?: boolean;
   allowAnyAbsolutePath?: boolean;
 }): Promise<void> {
+  const locale = await resolveLarkLocale(input.stateDir);
   const wholeFileBlock = extractWholeResponseFileBlock(input.text);
   if (wholeFileBlock) {
-    await input.channel.send(input.chatId, {
-      file: {
-        source: Buffer.from(wholeFileBlock.body, "utf8"),
-        fileName: wholeFileBlock.fileName,
-      },
-    }, larkReplyOptions(input.replyTo, input.replyInThread));
+    const body = Buffer.from(wholeFileBlock.body, "utf8");
+    if (body.length > LARK_FILE_UPLOAD_MAX_BYTES) {
+      await appendLarkFileRejectedTimeline(input, {
+        path: wholeFileBlock.fileName,
+        reason: "too-large",
+        detail: `${body.length} bytes > ${LARK_FILE_UPLOAD_MAX_BYTES}`,
+        kind: "file",
+      });
+      await input.channel.send(input.chatId, {
+        text: renderLarkFileDeliveryError("too-large", locale, {
+          fileName: wholeFileBlock.fileName,
+          fileBytes: body.length,
+        }),
+      }, larkReplyOptions(input.replyTo, input.replyInThread));
+      return;
+    }
+    try {
+      await input.channel.send(input.chatId, {
+        file: {
+          source: body,
+          fileName: wholeFileBlock.fileName,
+        },
+      }, larkReplyOptions(input.replyTo, input.replyInThread));
+    } catch (error) {
+      await appendLarkFileRejectedTimeline(input, {
+        path: wholeFileBlock.fileName,
+        reason: "upload-failed",
+        detail: errorDetail(error),
+        kind: "file",
+      });
+      await input.channel.send(input.chatId, {
+        text: renderLarkFileDeliveryError("upload-failed", locale, { fileName: wholeFileBlock.fileName }),
+      }, larkReplyOptions(input.replyTo, input.replyInThread));
+      return;
+    }
     await appendLarkFileAcceptedTimeline(input, {
       fileName: wholeFileBlock.fileName,
-      bytes: Buffer.byteLength(wholeFileBlock.body, "utf8"),
+      bytes: body.length,
       kind: "file",
     });
     return;
@@ -79,7 +109,6 @@ export async function deliverLarkResponse(input: {
   const matches = extractDeliveryTagMatches(input.text);
   const cleanedText = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(input.text)));
   const replyOptions = larkReplyOptions(input.replyTo, input.replyInThread);
-  const locale = await resolveLarkLocale(input.stateDir);
 
   for (const match of toolMatches) {
     let toolName = "unknown";
@@ -235,7 +264,7 @@ export async function deliverLarkResponse(input: {
 
     if (pendingImages.length > 0) {
       try {
-        await deliverLarkPendingImages(input, pendingImages, replyOptions);
+        await deliverLarkPendingImages({ ...input, locale }, pendingImages, replyOptions);
       } catch {
         // Best-effort: image delivery must never abort the text reply or the rest of
         // the turn. (Previously this call sat outside the per-match try/catch, so a
@@ -742,13 +771,12 @@ async function sendLarkPath(input: {
         return true;
       }
     }
-    await sendLarkImageWithFileFallback({
+    return await sendLarkImageWithFileFallback({
       ...input,
       body,
       realPath: real,
       originalPath: input.filePath,
     });
-    return true;
   }
   // The payload was read fine — a throw from here on is Feishu rejecting the
   // upload, so report "upload-failed" (with the file's name), not "read failed".
@@ -943,6 +971,7 @@ type LarkImageDeliveryInput = {
   bridgeUserId?: number;
   bridgeChatType?: "private" | "group";
   larkMessageId?: string;
+  locale: Locale;
 };
 
 /**
@@ -1025,10 +1054,11 @@ async function sendLarkImageWithFileFallback(input: {
   bridgeUserId?: number;
   bridgeChatType?: "private" | "group";
   larkMessageId?: string;
+  locale: Locale;
   body: Buffer;
   realPath: string;
   originalPath: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const replyOptions = larkReplyOptions(input.replyTo, input.replyInThread);
   try {
     await input.channel.send(input.chatId, { image: { source: input.body } }, replyOptions);
@@ -1037,7 +1067,7 @@ async function sendLarkImageWithFileFallback(input: {
       bytes: input.body.length,
       kind: "image",
     });
-    return;
+    return true;
   } catch (error) {
     await appendLarkFileRejectedTimeline(input, {
       path: input.originalPath,
@@ -1061,6 +1091,7 @@ async function sendLarkImageWithFileFallback(input: {
       kind: "file",
       fallbackFrom: "image",
     });
+    return true;
   } catch (error) {
     await appendLarkFileRejectedTimeline(input, {
       path: input.originalPath,
@@ -1069,6 +1100,10 @@ async function sendLarkImageWithFileFallback(input: {
       detail: `image file fallback failed: ${errorDetail(error)}`,
       kind: "file",
     });
+    await input.channel.send(input.chatId, {
+      text: renderLarkFileDeliveryError("upload-failed", input.locale, { fileName: path.basename(input.realPath) }),
+    }, replyOptions).catch(() => undefined);
+    return false;
   }
 }
 

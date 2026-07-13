@@ -20,7 +20,7 @@ import {
   type LarkStreamControllerLike,
   requestLarkApproval,
 } from "../src/lark/service.js";
-import { deliverLarkResponse } from "../src/lark/delivery.js";
+import { deliverLarkResponse, LARK_FILE_UPLOAD_MAX_BYTES } from "../src/lark/delivery.js";
 import { LarkCliError } from "../src/lark/lark-cli-error.js";
 import { createLarkRunCardController } from "../src/lark/message-handler.js";
 import { LarkGroupModeStore } from "../src/lark/group-mode-store.js";
@@ -2521,6 +2521,31 @@ describe("lark service", () => {
         "oc_chat",
         expect.objectContaining({ markdown: expect.stringContaining("已移除用户 Target") }),
         { replyTo: "om_remove_user" },
+      );
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_invite_user_with_bot_mention",
+          chatType: "group",
+          content: "/invite user @Target",
+          mentionedBot: true,
+          mentions: [
+            { id: { openId: "ou_bot" }, name: "TaroCub", isBot: true },
+            { id: { openId: "ou_target" }, name: "Target", isBot: false },
+          ],
+        }),
+      });
+      await expect(new AccessStore(path.join(stateDir, "access.json")).load()).resolves.toEqual(expect.objectContaining({
+        allowlist: expect.arrayContaining([targetUserId]),
+      }));
+      expect(channel.send).toHaveBeenLastCalledWith(
+        "oc_chat",
+        expect.objectContaining({ markdown: expect.stringContaining("已邀请用户 Target") }),
+        { replyTo: "om_invite_user_with_bot_mention" },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -8306,6 +8331,10 @@ describe("lark service", () => {
         return typeof payload?.markdown === "string" && payload.markdown.includes("答案文本");
       });
       expect(textSent).toBe(true);
+      expect((channel.send.mock.calls as unknown[][]).some((c) => {
+        const payload = c[1] as { text?: string } | undefined;
+        return payload?.text?.includes("上传被飞书拒绝") === true;
+      })).toBe(true);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -9591,6 +9620,38 @@ describe("lark service", () => {
     }
   });
 
+  it("rejects an oversized whole-response file block before calling the Lark upload API", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-fenced-file-oversize-"));
+    const channel = fakeChannel();
+    try {
+      const body = "x".repeat(LARK_FILE_UPLOAD_MAX_BYTES + 1);
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: `\`\`\`file:too-large.bin\n${body}\n\`\`\``,
+        stateDir,
+      });
+
+      expect((channel.send.mock.calls as unknown[][]).some((call) => {
+        const payload = call[1] as { file?: unknown } | undefined;
+        return payload?.file !== undefined;
+      })).toBe(false);
+      expect((channel.send.mock.calls as unknown[][]).some((call) => {
+        const payload = call[1] as { text?: string } | undefined;
+        return payload?.text?.includes("30MB") === true;
+      })).toBe(true);
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.rejected",
+        outcome: "rejected",
+        metadata: expect.objectContaining({ reason: "too-large", path: "too-large.bin" }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("cleans up transient Lark attachment downloads after the turn finishes", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-attachment-cleanup-"));
     const downloadedPath = path.join(stateDir, "workspace", ".lark-files", "om_cleanup", "input", "report.txt");
@@ -9925,6 +9986,102 @@ describe("lark service", () => {
         return typeof payload?.markdown === "string" && payload.markdown.includes("final answer");
       });
       expect(markdownSends).toHaveLength(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an engine-complete turn successful when continuation delivery fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-post-engine-delivery-"));
+    let initialCardSent = false;
+    const channel = fakeChannel({
+      send: vi.fn(async (_chatId: string, payload: { card?: unknown; markdown?: string; text?: string }) => {
+        if (payload.card && !initialCardSent) {
+          initialCardSent = true;
+          return { messageId: "run_card" };
+        }
+        if (payload.card || payload.markdown || payload.text) {
+          throw new Error("continuation delivery failed");
+        }
+        return { messageId: "sent_other" };
+      }),
+      addReaction: vi.fn(async (_messageId: string, emoji: string) => `reaction_${emoji}`),
+      removeReaction: vi.fn(async () => undefined),
+    });
+    const answer = `start ${"long answer segment ".repeat(500)} end`;
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: answer })),
+    };
+
+    try {
+      await expect(handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        reactionSettings: { processingEmoji: null, doneEmoji: "DONE", failureEmoji: "ERROR" },
+        message: fakeLarkMessage({ messageId: "om_post_delivery", content: "produce a long answer" }),
+      })).resolves.toBe(true);
+
+      expect(channel.addReaction).toHaveBeenCalledWith("om_post_delivery", "DONE");
+      expect(channel.addReaction).not.toHaveBeenCalledWith("om_post_delivery", "ERROR");
+      expect(JSON.stringify(channel.updateCard.mock.calls)).not.toContain("执行失败");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event.delivery_failed",
+        detail: "continuation delivery failed",
+        metadata: expect.objectContaining({ phase: "post-engine", larkMessageId: "om_post_delivery" }),
+      }));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "partial",
+        metadata: expect.objectContaining({ larkMessageId: "om_post_delivery" }),
+      }));
+      expect(timeline).not.toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "error",
+        metadata: expect.objectContaining({ larkMessageId: "om_post_delivery" }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks a turn partial when the engine fails after streaming answer text", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stream-then-fail-"));
+    const channel = fakeChannel({
+      addReaction: vi.fn(async (_messageId: string, emoji: string) => `reaction_${emoji}`),
+      removeReaction: vi.fn(async () => undefined),
+    });
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: "发言稿初稿已完成。" }));
+        throw new Error("Selected model is at capacity. Please try a different model.");
+      }),
+    };
+
+    try {
+      await expect(handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        reactionSettings: { processingEmoji: null, doneEmoji: "DONE", failureEmoji: "ERROR" },
+        message: fakeLarkMessage({ messageId: "om_stream_then_fail", content: "write the speech" }),
+      })).resolves.toBe(true);
+
+      const updates = JSON.stringify(channel.updateCard.mock.calls);
+      expect(updates).toContain("部分完成");
+      expect(updates).toContain("发言稿初稿已完成。");
+      expect(updates).toContain("以上内容可能不完整");
+      expect(updates).not.toContain("执行失败");
+      expect(channel.addReaction).toHaveBeenCalledWith("om_stream_then_fail", "ERROR");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "partial",
+        metadata: expect.objectContaining({ larkMessageId: "om_stream_then_fail" }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -10369,6 +10526,16 @@ describe("lark service", () => {
       expect(batchText).toContain("first dense message");
       expect(batchText).toContain("#2");
       expect(batchText).toContain("second dense message");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "command.handled",
+        outcome: "success",
+        detail: "batch-merged",
+        metadata: expect.objectContaining({
+          larkMessageId: "om_batch_1",
+          mergedInto: "om_batch_2",
+        }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

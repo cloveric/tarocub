@@ -69,6 +69,16 @@ export interface WorkflowAwareTurnConfig {
   };
 }
 
+function isWholeResponseFileBlockText(text: string): boolean {
+  const match = text.match(/```file:([^\n`]+)\n([\s\S]*?)```/);
+  return Boolean(
+    match
+    && match[1]?.trim()
+    && Buffer.byteLength(match[2] ?? "", "utf8") > 0
+    && text.replace(match[0], "").trim().length === 0,
+  );
+}
+
 export interface WorkflowAwareTurnContext {
   api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice" | "getFile" | "downloadFile">;
   bridge: {
@@ -544,10 +554,12 @@ export async function executeWorkflowAwareTelegramTurn(input: {
     });
 
     if (event.type === "task_notification" && !event.settlesCurrentTurn) {
-      const notificationText = [
-        locale === "zh" ? "后台任务完成" : "Background task completed",
-        event.text.trim(),
-      ].filter(Boolean).join("\n");
+      const notificationText = isWholeResponseFileBlockText(event.text)
+        ? event.text
+        : [
+            locale === "zh" ? "后台任务完成" : "Background task completed",
+            event.text.trim(),
+          ].filter(Boolean).join("\n");
       const delivery = deliverTelegramResponse(
         context.api,
         normalized.chatId,

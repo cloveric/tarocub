@@ -32,6 +32,7 @@ access.json
 session.json
 runtime-state.json
 usage.json
+usage.last-good.json
 file-workflow.json
 cron-jobs.json
 board.json
@@ -87,6 +88,7 @@ These help with auditability and debugging, but the instance should not need the
 - `workspace/`
 - `inbox/`
 - backup archives
+- `usage.last-good.json` (validated recovery snapshot for `usage.json`)
 - migration leftovers
 - `instance.lock.json`
 - `.bus-registry.json`
@@ -426,18 +428,23 @@ This file is authoritative for user-visible cumulative usage and budget comparis
 ### Write rules
 
 - read-modify-write
-- writes are serialized per `UsageStore` instance
+- candidate records are schema-validated before persistence
+- writes are serialized both in-process and across processes
+- a successful write updates `usage.json`, then `usage.last-good.json`
 
 Important nuance:
 
-the serialization is instance-local in memory. Callers should avoid creating many unrelated `UsageStore` instances for the same concurrent hot path if they expect strong same-process coordination.
+`usage.last-good.json` is recovery state, not a second independently mutable
+ledger. Callers must always read and mutate through `UsageStore`.
 
 ### Recovery rules
 
 - missing file -> zeroed counters
-- invalid file throws
-
-There is currently no dedicated auto-repair path.
+- invalid primary + valid `usage.last-good.json` -> quarantine the primary,
+  restore the validated snapshot, and continue
+- invalid primary + missing/invalid backup -> throw `UsageStateCorruptError`
+  and leave the corrupt primary in place (fail closed; never reset budget usage
+  to zero)
 
 ### Sensitivity
 

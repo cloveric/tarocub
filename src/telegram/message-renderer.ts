@@ -452,6 +452,7 @@ export function renderCategorizedErrorMessage(
       normalizedDetail.includes("telegram attachment is too large to download via bot api") ||
       normalizedDetail.includes("getfile: bad request: file is too big")
     );
+  const timeoutMinutes = detail.match(/(?:timed out|became inactive) after\s+(\d+)\s*minute/i)?.[1];
 
   if (locale === "zh") {
     if (category === "write-permission") {
@@ -470,6 +471,13 @@ export function renderCategorizedErrorMessage(
       return isTelegramFormattingError
         ? "错误：回复内容的格式被 Telegram 拒绝了。我已记录具体原因，请稍后重试或让运维检查日志。"
         : "错误：Telegram 投递暂时不可用，请稍后重试。";
+    }
+    if (category === "engine-backend") {
+      return "错误：引擎服务暂时过载或连接中断，请稍后再试；无需重启实例。";
+    }
+    if (category === "engine-timeout") {
+      const duration = timeoutMinutes ? `${timeoutMinutes} 分钟` : "配置的时限";
+      return `错误：任务达到${duration}上限或长时间无响应，已自动停止。直接原样重试通常还会超时；请拆分任务，或先用 \`/timeout\` 调整时限。`;
     }
     if (category === "engine-cli") {
       if (isUnsupportedAntigravityFlag) {
@@ -514,6 +522,13 @@ export function renderCategorizedErrorMessage(
     return isTelegramFormattingError
       ? "Error: Telegram rejected the reply formatting. The detailed parse error has been logged; retry the request or inspect the logs."
       : "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.";
+  }
+  if (category === "engine-backend") {
+    return "Error: The engine backend is temporarily overloaded or disconnected. Retry later; restarting the instance is not required.";
+  }
+  if (category === "engine-timeout") {
+    const duration = timeoutMinutes ? `${timeoutMinutes}-minute` : "configured";
+    return `Error: The task hit the ${duration} runtime/inactivity limit and was stopped. Retrying unchanged will likely time out again; split the task or adjust \`/timeout\` first.`;
   }
   if (category === "engine-cli") {
     if (isUnsupportedAntigravityFlag) {

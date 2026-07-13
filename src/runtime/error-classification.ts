@@ -123,7 +123,7 @@ export function classifyFailure(error: unknown): FailureCategory {
   // again. Its own category gets an accurate message pointing at the /timeout
   // toggle that lifts the cap. Checked before the generic engine-cli signal,
   // which "timed out"+"turn" would otherwise match.
-  if (/\bturn timed out after \d+\s*minute/.test(text)) {
+  if (/\bturn (?:timed out|became inactive) after \d+\s*minute/.test(text)) {
     return "engine-timeout";
   }
 
@@ -146,7 +146,8 @@ export function classifyFailure(error: unknown): FailureCategory {
 
   if (
     text.includes("invalid file workflow state") ||
-    text.includes("file workflow state unreadable")
+    text.includes("file workflow state unreadable") ||
+    text.includes("usage state is corrupt")
   ) {
     return "workflow-state";
   }

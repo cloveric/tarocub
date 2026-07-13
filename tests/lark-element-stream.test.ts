@@ -144,9 +144,14 @@ describe("run card element-stream fast path", () => {
     await controller!.finish("第一句。第二句。done");
   });
 
-  it("degrades permanently to full patches when an element update fails", async () => {
+  it("falls back to a full patch after an element failure and retries streaming after cooldown", async () => {
+    let attempt = 0;
     const elementContent = vi.fn(async () => {
-      throw new Error("element update rejected");
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("element update rejected");
+      }
+      return {};
     });
     const { channel, cardUpdate } = managedChannel({ elementContent });
     const controller = await createController(channel);
@@ -163,10 +168,55 @@ describe("run card element-stream fast path", () => {
     await flushTimers(450);
     expect(cardUpdate.mock.calls.length).toBeGreaterThan(fullAfterFirst);
 
-    // Later deltas never try the element endpoint again.
+    // A later delta after the cooldown retries the element endpoint instead of
+    // leaving a long turn permanently degraded because of one network wobble.
+    await flushTimers(1_050);
     await controller!.apply({ type: "assistant_text", text: "第三句。" });
     await flushTimers(320);
-    expect(elementContent).toHaveBeenCalledTimes(1);
+    expect(elementContent).toHaveBeenCalledTimes(2);
+
+    await controller!.finish("done");
+  });
+
+  it("returns partial when the engine fails after streaming usable output", async () => {
+    const { channel, cardUpdate } = managedChannel();
+    const controller = await createController(channel);
+    expect(controller).toBeDefined();
+
+    await controller!.apply({ type: "assistant_text", text: "已完成的正文。" });
+    await flushTimers(20);
+    expect(await controller!.fail("模型容量不足。" )).toBe("partial");
+
+    const updates = JSON.stringify(cardUpdate.mock.calls);
+    expect(updates).toContain("部分完成");
+    expect(updates).toContain("已完成的正文。");
+    expect(updates).toContain("以上内容可能不完整");
+  });
+
+  it("keeps the full run card after one transient full-patch failure", async () => {
+    let attempt = 0;
+    const cardUpdate = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("temporary card update failure");
+      }
+      return {};
+    });
+    const { channel } = managedChannel({ cardUpdate });
+    const controller = await createController(channel);
+
+    await controller!.apply({ type: "assistant_text", text: "第一句。" });
+    await flushTimers(20);
+    expect(cardUpdate).toHaveBeenCalledTimes(1);
+
+    await controller!.apply({ type: "assistant_text", text: "第二句。" });
+    await flushTimers(450);
+    expect(cardUpdate.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const recoveredCall = (cardUpdate.mock.calls as unknown[][]).at(-1)![0] as {
+      data: { card: { data: string } };
+    };
+    const recoveredCard = JSON.parse(recoveredCall.data.card.data) as object;
+    expect(JSON.stringify(recoveredCard)).toContain('"cctb_lark":"stop"');
 
     await controller!.finish("done");
   });

@@ -819,6 +819,48 @@ describe("runCli", () => {
     }
   });
 
+  it("finds an active Lark turn whose start record moved into a rotated timeline", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        path.join(stateDir, "timeline.log.jsonl.1"),
+        `${JSON.stringify({
+          timestamp: new Date().toISOString(),
+          type: "input.received",
+          channel: "lark",
+          chatId: 123,
+          conversationKey: "lark:oc_rotated",
+          userId: 456,
+          metadata: { larkMessageId: "om_rotated_active" },
+        })}\n`,
+      );
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), "");
+
+      await expect(runCli(["lark", "service", "restart"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "secret",
+          CCTB_LARK_INSTANCE: "alpha",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+
+      expect(stop).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("does not refuse restart for a phantom turn recorded before the current service process started", async () => {
     // The owning process was killed mid-turn (so it never wrote turn.completed) and has
     // since restarted. The leaked input.received predates the new process's lock start, so
@@ -1229,6 +1271,7 @@ describe("runCli", () => {
       const helperScript = spawnDetached.mock.calls[0]?.[1]?.[1];
       expect(helperScript).toContain("active or queued Lark turn");
       expect(helperScript).toContain("retrying in");
+      expect(helperScript).toContain("failed with status");
       const spawnedEnv = spawnDetached.mock.calls[0]?.[2]?.env;
       expect(spawnedEnv?.LARK_APP_ID).toBeUndefined();
       expect(spawnedEnv?.LARK_APP_SECRET).toBeUndefined();

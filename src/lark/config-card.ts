@@ -15,6 +15,7 @@ import {
 } from "../telegram/instance-config.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
+import { checkGroupMsgScope, renderGroupMsgScopeWarning } from "./group-scope-check.js";
 import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig } from "./locale.js";
 import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
@@ -159,10 +160,11 @@ export async function applyLarkConfigCardAction(
   value: LarkConfigCardActionValue,
   locale: Locale,
   formValue?: Record<string, unknown>,
+  scopeContext?: { appId?: string; appSecret?: string; domain?: string; instanceName?: string },
 ): Promise<string> {
   const labels = larkConfigLabels(locale);
   if (value.action === "submit") {
-    return await applySubmitAction(stateDir, value, formValue, locale);
+    return await applySubmitAction(stateDir, value, formValue, locale, scopeContext);
   }
   if (value.action === "refresh") {
     return labels.refreshed;
@@ -180,7 +182,7 @@ export async function applyLarkConfigCardAction(
     return await applyLocaleAction(stateDir, value.value, locale);
   }
   if (value.action === "group") {
-    return await applyGroupAction(stateDir, value, locale);
+    return await applyGroupAction(stateDir, value, locale, scopeContext);
   }
   return locale === "en" ? "Unsupported config action." : "不支持的配置操作。";
 }
@@ -190,6 +192,7 @@ async function applySubmitAction(
   value: LarkConfigCardActionValue,
   formValue: Record<string, unknown> | undefined,
   locale: Locale,
+  scopeContext?: { appId?: string; appSecret?: string; domain?: string; instanceName?: string },
 ): Promise<string> {
   // larkCardActionFormValue never returns undefined — it yields `{}` when the submit
   // carried no picks — so guarding only `!formValue` was dead and an empty submit fell
@@ -219,11 +222,18 @@ async function applySubmitAction(
   if (value.bridgeChatType === "group") {
     const groupAction = stringFormValue(formValue.group);
     if (groupAction && groupAction !== "keep") {
-      notices.push(await applyGroupAction(stateDir, { ...value, action: "group", value: groupAction }, noticeLocale));
+      notices.push(await applyGroupAction(
+        stateDir,
+        { ...value, action: "group", value: groupAction },
+        noticeLocale,
+        scopeContext,
+      ));
     }
   }
 
-  const compact = notices.filter(Boolean).slice(0, 3).join("；");
+  // There are at most five compact notices. Keep all of them so the group-scope
+  // warning cannot be truncated when the form submits every field at once.
+  const compact = notices.filter(Boolean).join("；");
   if (noticeLocale === "en") {
     return compact ? `Saved. ${compact}` : "Saved.";
   }
@@ -324,6 +334,7 @@ async function applyGroupAction(
   stateDir: string,
   value: LarkConfigCardActionValue,
   locale: Locale,
+  scopeContext?: { appId?: string; appSecret?: string; domain?: string; instanceName?: string },
 ): Promise<string> {
   if (value.bridgeChatType !== "group" || !value.larkChatId) {
     return locale === "en" ? "Group settings are available only inside a Lark group." : "群聊设置只能在飞书群里使用。";
@@ -346,7 +357,21 @@ async function applyGroupAction(
       }
     });
     await store.setListenAll(value.larkChatId, true);
-    return locale === "en" ? "Current group now accepts ordinary messages." : "当前群已切到监听普通消息。";
+    const notice = locale === "en" ? "Current group now accepts ordinary messages." : "当前群已切到监听普通消息。";
+    const scopeStatus = await checkGroupMsgScope({
+      appId: scopeContext?.appId,
+      appSecret: scopeContext?.appSecret,
+      domain: scopeContext?.domain,
+    });
+    if (scopeStatus !== "missing") {
+      return notice;
+    }
+    return `${notice}\n\n${renderGroupMsgScopeWarning(
+      locale === "en" ? "en" : "zh",
+      scopeContext?.appId,
+      scopeContext?.domain,
+      scopeContext?.instanceName,
+    )}`;
   }
   if (groupAction === "at") {
     await updateGroupMode(stateDir, (groupMode) => {

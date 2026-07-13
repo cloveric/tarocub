@@ -27,7 +27,7 @@ export type LarkRunBlock =
 export interface LarkRunState {
   conversationKey: string;
   bridgeChatType?: "private" | "group";
-  status: "running" | "done" | "error" | "interrupted" | "idle_timeout";
+  status: "running" | "done" | "partial" | "error" | "interrupted" | "idle_timeout";
   blocks: LarkRunBlock[];
   reasoning: { content: string; active: boolean };
   /** Latest TodoWrite/Codex plan (the `{ todos: [...] }` input); rendered as the plan panel. */
@@ -341,8 +341,9 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   } else if (state.status === "idle_timeout") {
     const mins = state.idleTimeoutMinutes ?? 0;
     elements.push(noteElement(`_⏱ ${labels.idleTimeout(mins)}_`));
-  } else if (state.status === "error" && state.errorText.trim()) {
-    elements.push(markdownElement(`⚠️ ${truncate(state.errorText.trim(), LARK_CARD_ANSWER_MAX)}`));
+  } else if ((state.status === "error" || state.status === "partial") && state.errorText.trim()) {
+    const prefix = state.status === "partial" ? `${labels.partialWarning}\n\n` : "";
+    elements.push(markdownElement(`⚠️ ${truncate(prefix + state.errorText.trim(), LARK_CARD_ANSWER_MAX)}`));
   } else if (state.status === "done" && elements.length === 1) {
     elements.push(markdownElement(`_${labels.empty}_`));
   }
@@ -544,8 +545,8 @@ function condensedProcessPanel(
     parts.push(`🧠 ${truncate(state.reasoning.content.trim(), 600)}`);
   }
   let toolCount = 0;
-  let answerSkipped = false;
-  for (const block of state.blocks) {
+  const finalTextBlockIndex = findFinalAnswerBlockIndex(state.blocks, answer);
+  for (const [blockIndex, block] of state.blocks.entries()) {
     if (block.kind === "tool") {
       // TodoWrite shows as the dedicated plan panel, not in the process list.
       if (block.tool.toolName === "TodoWrite") {
@@ -559,10 +560,14 @@ function condensedProcessPanel(
     if (!text) {
       continue;
     }
-    // Skip the one block that is the final answer (shown above), but keep any
-    // earlier intermediate narration.
-    if (!answerSkipped && answer && text === answer) {
-      answerSkipped = true;
+    // The streamed block can be only a prefix of resultText when the terminal
+    // result arrives after the last card patch. Strip that overlap from the
+    // final text block while preserving narration that preceded it.
+    if (blockIndex === finalTextBlockIndex) {
+      const processText = stripFinalAnswerOverlap(text, answer);
+      if (processText) {
+        parts.push(truncate(processText, 400));
+      }
       continue;
     }
     parts.push(truncate(text, 400));
@@ -577,6 +582,48 @@ function condensedProcessPanel(
     color: "grey",
     body: truncate(parts.join("\n\n"), PROCESS_PANEL_MAX),
   });
+}
+
+function findFinalAnswerBlockIndex(blocks: LarkRunBlock[], answer: string): number {
+  if (!answer) {
+    return -1;
+  }
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block?.kind !== "text") {
+      continue;
+    }
+    const text = cleanCardText(block.content).trim();
+    if (text && finalAnswerOverlapLength(text, answer) > 0) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function stripFinalAnswerOverlap(text: string, answer: string): string {
+  const overlap = finalAnswerOverlapLength(text, answer);
+  return overlap > 0 ? text.slice(0, text.length - overlap).trim() : text;
+}
+
+function finalAnswerOverlapLength(text: string, answer: string): number {
+  if (!text || !answer) {
+    return 0;
+  }
+  if (answer.startsWith(text)) {
+    return text.length;
+  }
+  const maxOverlap = Math.min(text.length, answer.length);
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    if (text.endsWith(answer.slice(0, length))) {
+      // Short incidental word matches are common in narration. Exact answers
+      // are safe at any length; partial overlaps need enough signal.
+      if (length === answer.length || length >= Math.min(24, answer.length)) {
+        return length;
+      }
+    }
+  }
+  return 0;
 }
 
 /**
@@ -612,8 +659,9 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
     elements.push(noteElement(`_⏹ ${labels.interrupted}_`));
   } else if (state.status === "idle_timeout") {
     elements.push(noteElement(`_⏱ ${labels.idleTimeout(state.idleTimeoutMinutes ?? 0)}_`));
-  } else if (state.status === "error" && state.errorText.trim()) {
-    elements.push(markdownElement(`⚠️ ${truncate(state.errorText.trim(), 600)}`));
+  } else if ((state.status === "error" || state.status === "partial") && state.errorText.trim()) {
+    const prefix = state.status === "partial" ? `${labels.partialWarning}\n\n` : "";
+    elements.push(markdownElement(`⚠️ ${truncate(prefix + state.errorText.trim(), 600)}`));
   } else if (!answer) {
     elements.push(markdownElement(`_${labels.empty}_`));
   }
@@ -647,8 +695,9 @@ export function renderLarkRunCardMinimal(state: LarkRunState, locale: Locale = "
     elements.push(noteElement(`_⏹ ${labels.interrupted}_`));
   } else if (state.status === "idle_timeout") {
     elements.push(noteElement(`_⏱ ${labels.idleTimeout(state.idleTimeoutMinutes ?? 0)}_`));
-  } else if (state.status === "error" && state.errorText.trim()) {
-    elements.push(markdownElement(`⚠️ ${truncate(state.errorText.trim(), 400)}`));
+  } else if ((state.status === "error" || state.status === "partial") && state.errorText.trim()) {
+    const prefix = state.status === "partial" ? `${labels.partialWarning}\n\n` : "";
+    elements.push(markdownElement(`⚠️ ${truncate(prefix + state.errorText.trim(), 400)}`));
   } else {
     elements.push(noteElement(locale === "en" ? "_Full reply sent as a message below._" : "_完整回复见下方消息。_"));
   }
@@ -990,6 +1039,7 @@ function runCardStatusLabel(
   labels: ReturnType<typeof runCardLabels>,
 ): string {
   if (status === "running") return labels.running;
+  if (status === "partial") return labels.partial;
   if (status === "error") return labels.error;
   if (status === "interrupted") return labels.interruptedTitle;
   if (status === "idle_timeout") return labels.idleTimeoutTitle;
@@ -1008,6 +1058,8 @@ function footerStatusText(
 function runCardLabels(locale: Locale): {
   running: string;
   done: string;
+  partial: string;
+  partialWarning: string;
   error: string;
   stop: string;
   thinkingActive: string;
@@ -1032,6 +1084,8 @@ function runCardLabels(locale: Locale): {
     ? {
       running: "Task is running...",
       done: "Done",
+      partial: "Partially completed",
+      partialWarning: "The engine failed after producing output; the content above may be incomplete.",
       error: "Failed",
       stop: "Stop",
       thinkingActive: "🧠 Thinking",
@@ -1055,6 +1109,8 @@ function runCardLabels(locale: Locale): {
     : {
       running: "任务处理中...",
       done: "已完成",
+      partial: "部分完成",
+      partialWarning: "引擎在输出内容后失败，以上内容可能不完整。",
       error: "执行失败",
       stop: "停止",
       thinkingActive: "🧠 思考中",
@@ -1479,6 +1535,9 @@ function cardSummary(state: LarkRunState, locale: Locale): string {
   }
   if (state.status === "error") {
     return locale === "en" ? "Failed" : "执行失败";
+  }
+  if (state.status === "partial") {
+    return locale === "en" ? "Partially completed" : "部分完成";
   }
   if (state.status === "interrupted") {
     return locale === "en" ? "Interrupted" : "已中断";

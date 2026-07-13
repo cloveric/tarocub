@@ -53,6 +53,33 @@ describe("instance lock", () => {
     }
   });
 
+  it("allows only one winner when many starters race to replace the same stale lock", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const lockPath = resolveInstanceLockPath(root);
+
+    try {
+      await writeFile(lockPath, JSON.stringify({
+        pid: 99_999_999,
+        token: "stale-token",
+        acquiredAt: "2026-04-08T00:00:00.000Z",
+      }), "utf8");
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 12 }, () => acquireInstanceLock(root)),
+      );
+      const winners = results.filter((result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof acquireInstanceLock>>> =>
+        result.status === "fulfilled");
+      expect(winners).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toHaveLength(11);
+
+      const onDisk = JSON.parse(await readFile(lockPath, "utf8")) as { pid: number };
+      expect(onDisk.pid).toBe(process.pid);
+      await winners[0]!.value.release();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("rejects a live lock", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const lockPath = resolveInstanceLockPath(root);

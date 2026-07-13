@@ -288,6 +288,39 @@ describe("lark card renderer", () => {
     expect(body).toContain("Read");
   });
 
+  it("labels an engine failure after streamed output as partial instead of fully failed", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "已生成的正文内容。" });
+    state = {
+      ...state,
+      status: "partial",
+      footer: null,
+      errorText: "所选模型当前容量不足。",
+    };
+
+    const body = JSON.stringify((renderLarkRunCard(state, "zh") as any).body);
+    expect(body).toContain("部分完成");
+    expect(body).toContain("已生成的正文内容。");
+    expect(body).toContain("以上内容可能不完整");
+    expect(body).not.toContain("执行失败");
+  });
+
+  it("does not repeat a streamed answer prefix when the terminal result adds a suffix", () => {
+    const streamed = "The final answer starts here and is still streaming";
+    const result = `${streamed}, then the terminal event adds this suffix.`;
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "I checked the implementation first." });
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Read", toolInput: { file_path: "src/a.ts" }, toolUseId: "t1" });
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "t1", output: "ok" });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: streamed });
+    state = applyLarkEngineEvent(state, { type: "result", text: result });
+
+    const body = JSON.stringify((renderLarkRunCard(state) as any).body);
+    expect(body.split(streamed).length - 1).toBe(1);
+    expect(body).toContain("I checked the implementation first.");
+    expect(body).toContain("Read");
+  });
+
   it("renders a TodoWrite tool as a checklist with progress", () => {
     let state = initialLarkRunState("lark:oc_chat", "group");
     state = applyLarkEngineEvent(state, {

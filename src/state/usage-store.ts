@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { withFileMutex } from "./file-mutex.js";
@@ -34,6 +35,13 @@ const defaultUsage: UsageRecord = {
   requestCount: 0,
   lastUpdatedAt: "",
 };
+
+export class UsageStateCorruptError extends Error {
+  constructor(filePath: string, cause?: unknown) {
+    super(`Usage state is corrupt and no valid last-good backup is available: ${filePath}`, { cause });
+    this.name = "UsageStateCorruptError";
+  }
+}
 
 export interface TurnUsage {
   inputTokens: number;
@@ -77,19 +85,16 @@ function isRepairableUsageStateError(error: unknown): boolean {
 
 export class UsageStore {
   private readonly store: JsonStore<UsageRecord>;
+  private readonly backupStore: JsonStore<UsageRecord>;
   private static pendingWrites = new Map<string, Promise<void>>();
   private readonly filePath: string;
+  private readonly backupPath: string;
 
   constructor(stateDir: string) {
     this.filePath = path.join(stateDir, "usage.json");
-    this.store = new JsonStore<UsageRecord>(this.filePath, (value) => {
-      const result = UsageRecordSchema.safeParse(value);
-      if (result.success) {
-        return result.data;
-      }
-
-      throw new Error("invalid usage state");
-    });
+    this.backupPath = path.join(stateDir, "usage.last-good.json");
+    this.store = new JsonStore<UsageRecord>(this.filePath, parseUsageRecord);
+    this.backupStore = new JsonStore<UsageRecord>(this.backupPath, parseUsageRecord);
   }
 
   async load(): Promise<UsageRecord> {
@@ -101,12 +106,18 @@ export class UsageStore {
         // than silently losing usage history.
         throw error;
       }
-      // Genuine corruption: quarantine and reset to zero so a single bad write
-      // doesn't crash every turn (checkBudgetAvailability calls load()) or wedge
-      // usage recording. Counters reset (history is lost — logged loudly).
-      console.error(`Corrupt ${this.filePath}; quarantining and resetting usage counters to zero:`, error instanceof Error ? error.message : error);
-      await this.store.quarantineCurrentFile("corrupt");
-      return { ...defaultUsage };
+      // Never reset a corrupt budget ledger to zero: that silently re-opens spend.
+      // Recover from an independently persisted last-good snapshot when possible;
+      // otherwise keep the corrupt file in place and fail closed on every request.
+      try {
+        const recovered = parseUsageRecord(JSON.parse(await readFile(this.backupPath, "utf8")) as unknown);
+        console.error(`Corrupt ${this.filePath}; restoring the last-good usage snapshot:`, error instanceof Error ? error.message : error);
+        await this.store.quarantineCurrentFile("corrupt");
+        await this.store.write(recovered);
+        return recovered;
+      } catch (backupError) {
+        throw new UsageStateCorruptError(this.filePath, backupError);
+      }
     }
   }
 
@@ -124,7 +135,9 @@ export class UsageStore {
         current.monthly[monthKey] ??= createEmptyBucket();
         addTurnUsage(current.daily[dayKey], turn, timestamp);
         addTurnUsage(current.monthly[monthKey], turn, timestamp);
-        await this.store.write(current);
+        const validated = parseUsageRecord(current);
+        await this.store.write(validated);
+        await this.backupStore.write(validated);
       });
     };
     const previous = UsageStore.pendingWrites.get(this.filePath) ?? Promise.resolve();
@@ -150,7 +163,9 @@ export class UsageStore {
         current.monthly[monthKey] ??= createEmptyBucket();
         addUnmeteredUsage(current.daily[dayKey], timestamp);
         addUnmeteredUsage(current.monthly[monthKey], timestamp);
-        await this.store.write(current);
+        const validated = parseUsageRecord(current);
+        await this.store.write(validated);
+        await this.backupStore.write(validated);
       });
     };
     const previous = UsageStore.pendingWrites.get(this.filePath) ?? Promise.resolve();
@@ -161,4 +176,12 @@ export class UsageStore {
     ));
     await run;
   }
+}
+
+function parseUsageRecord(value: unknown): UsageRecord {
+  const result = UsageRecordSchema.safeParse(value);
+  if (!result.success) {
+    throw new Error("invalid usage state");
+  }
+  return result.data;
 }

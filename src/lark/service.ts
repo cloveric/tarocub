@@ -163,7 +163,11 @@ export async function runLarkService(
   });
   const telemetry = await loadTelemetryAdapterFromEnv(bridgeEnv);
   runtime.commentClient ??= createLarkCommentClient(config);
-  runtime.appInfo ??= { appId: config.appId, ...(config.domain !== undefined ? { domain: String(config.domain) } : {}) };
+  runtime.appInfo ??= {
+    appId: config.appId,
+    appSecret: config.appSecret,
+    ...(config.domain !== undefined ? { domain: String(config.domain) } : {}),
+  };
   const serviceLock = await acquireLarkServiceLock(stateDir);
   let channel: LarkRuntimeChannelLike | undefined;
   let connected = false;
@@ -349,6 +353,7 @@ export async function runLarkService(
           agentInstructions: larkAgentInstructions,
           deliverResponse: deliverLarkResponse,
           createRunCard: createLarkRunCardController,
+          requestApproval: requestLarkApproval,
         }),
         stateDir,
         instanceName,

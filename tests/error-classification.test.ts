@@ -7,6 +7,7 @@ import {
   isStaleSessionError,
 } from "../src/runtime/error-classification.js";
 import { renderLarkUserFacingError } from "../src/lark/errors.js";
+import { renderCategorizedErrorMessage } from "../src/telegram/message-renderer.js";
 
 describe("classifyFailure auth detection", () => {
   it("classifies Claude 401 authentication errors as auth", () => {
@@ -76,6 +77,7 @@ describe("classifyFailure specificity", () => {
   it("classifies the single-turn time-cap timeout as engine-timeout, distinct from engine-cli", () => {
     expect(classifyFailure(new Error("Codex app-server turn timed out after 60 minutes"))).toBe("engine-timeout");
     expect(classifyFailure(new Error("Antigravity process turn timed out after 60 minutes\n[state]"))).toBe("engine-timeout");
+    expect(classifyFailure(new Error("Claude turn became inactive after 30 minutes"))).toBe("engine-timeout");
     // a process/startup failure (no "turn timed out after N minutes") stays engine-cli
     expect(classifyFailure(new Error("Codex runtime process failed to start"))).toBe("engine-cli");
     // engine-timeout is NOT auto-retryable (rerunning the same long task times out again)
@@ -93,8 +95,23 @@ describe("classifyFailure specificity", () => {
     expect(en).not.toContain("Restart the instance");
   });
 
+  it("renders Telegram engine timeouts with /timeout guidance instead of blind retry advice", () => {
+    const err = new Error("Claude turn became inactive after 30 minutes");
+    const zh = renderCategorizedErrorMessage("engine-timeout", err.message, "zh");
+    expect(zh).toContain("/timeout");
+    expect(zh).not.toContain("请重试");
+    const en = renderCategorizedErrorMessage("engine-timeout", err.message, "en");
+    expect(en).toContain("/timeout");
+    expect(en).not.toContain("try again");
+  });
+
   it("does not treat generic archive mentions as file-workflow failures", () => {
     expect(classifyFailure(new Error("archive the previous messages for me"))).toBe("unknown");
+  });
+
+  it("classifies a corrupt usage ledger as workflow state so budget checks fail visibly", () => {
+    expect(classifyFailure(new Error("Usage state is corrupt and no valid last-good backup is available")))
+      .toBe("workflow-state");
   });
 
   it("classifies file workflow preparation errors by type", () => {

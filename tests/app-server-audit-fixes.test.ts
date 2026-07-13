@@ -369,8 +369,13 @@ describe("app-server config change while busy", () => {
       const internal = adapter as unknown as {
         initializeKey: string | null;
         initializePromise: Promise<void> | null;
+        currentApprovalMode: "normal" | "full-auto" | "bypass";
         goalWatchers: Map<string, unknown>;
-        ensureInitialized(opts: { initializeArgs: string[]; initializeKey: string }): Promise<void>;
+        ensureInitialized(opts: {
+          approvalMode: "normal" | "full-auto" | "bypass";
+          initializeArgs: string[];
+          initializeKey: string;
+        }): Promise<void>;
         waitForIdle(): Promise<void>;
       };
       internal.initializeKey = "old-config";
@@ -381,8 +386,8 @@ describe("app-server config change while busy", () => {
 
       // Two consecutive messages carrying the SAME pending change → ONE warning,
       // no idle wait, and both calls resolve so turns continue on the old config.
-      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
-      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
+      await expect(internal.ensureInitialized({ approvalMode: "normal", initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
+      await expect(internal.ensureInitialized({ approvalMode: "normal", initializeArgs: [], initializeKey: "new-config" })).resolves.toBeUndefined();
       expect(waitForIdle).not.toHaveBeenCalled();
 
       const goalWarnings = consoleErrorSpy.mock.calls
@@ -393,12 +398,51 @@ describe("app-server config change while busy", () => {
       expect(goalWarnings[0]).toContain("/goal");
 
       // A DIFFERENT pending change warns again (the one-shot latch reset).
-      await expect(internal.ensureInitialized({ initializeArgs: [], initializeKey: "newer-config" })).resolves.toBeUndefined();
+      await expect(internal.ensureInitialized({ approvalMode: "normal", initializeArgs: [], initializeKey: "newer-config" })).resolves.toBeUndefined();
       expect(waitForIdle).not.toHaveBeenCalled();
       const allWarnings = consoleErrorSpy.mock.calls
         .map((call) => String(call[0]))
         .filter((line) => line.includes("config change deferred while busy"));
       expect(allWarnings).toHaveLength(2);
+    } finally {
+      consoleErrorSpy.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps the running child's approval mode when a yolo-to-normal change is deferred", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeFile(configPath, JSON.stringify({ approvalMode: "normal" }) + "\n", "utf8");
+      const adapter = new CodexAppServerAdapter(
+        "codex", process.cwd(), undefined, (() => new FakeChildProcess()) as never,
+        undefined, undefined, configPath,
+      );
+      const internal = adapter as unknown as {
+        initializeKey: string | null;
+        initializePromise: Promise<void> | null;
+        currentApprovalMode: "normal" | "full-auto" | "bypass";
+        goalWatchers: Map<string, unknown>;
+        ensureInitialized(opts: {
+          approvalMode: "normal" | "full-auto" | "bypass";
+          initializeArgs: string[];
+          initializeKey: string;
+        }): Promise<void>;
+      };
+      internal.initializeKey = "old-bypass";
+      internal.initializePromise = Promise.resolve();
+      internal.currentApprovalMode = "bypass";
+      internal.goalWatchers.set("busy-goal", {});
+
+      await internal.ensureInitialized({
+        approvalMode: "normal",
+        initializeArgs: ["app-server"],
+        initializeKey: "new-normal",
+      });
+
+      expect(internal.currentApprovalMode).toBe("bypass");
     } finally {
       consoleErrorSpy.mockRestore();
       await removeTempRoot(root);

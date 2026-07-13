@@ -59,6 +59,36 @@ export interface BridgeAccessInput {
   locale?: Locale;
 }
 
+export interface BridgeAuthorizedMessageInput {
+  chatId: number;
+  userId: number;
+  chatType: string;
+  locale?: Locale;
+  text: string;
+  replyContext?: {
+    messageId: number | string;
+    text: string;
+  };
+  messageThreadId?: number;
+  conversationKey?: string;
+  files: string[];
+  onProgress?: (partialText: string) => void;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  requestOutputDir?: string;
+  workspaceOverride?: string;
+  instructions?: string;
+  sideChannelCommand?: string;
+  extraEnv?: Record<string, string>;
+  abortSignal?: AbortSignal;
+  disableRuntimeTimeout?: boolean;
+  sessionIdOverride?: string;
+  turnLockWaitNotifyAfterMs?: number;
+  onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
+  turnPoolWaitNotifyAfterMs?: number;
+  onTurnPoolWait?: (event: TurnPoolWaitEvent) => void | Promise<void>;
+}
+
 export interface BridgeGroupJoinInput {
   chatId: number;
   userId: number;
@@ -83,6 +113,12 @@ function shouldDisableRuntimeTimeout(text: string): boolean {
     "disable timeout",
     "without timeout",
   ].some((keyword) => normalized.includes(keyword));
+}
+
+function bridgeConversationLockId(scope: BridgeConversationScope): string {
+  const logicalScope = scope.conversationKey
+    ?? `telegram:${scope.chatId}:${scope.messageThreadId ?? "root"}`;
+  return `conversation-scope:${logicalScope}`;
 }
 
 function isAuthorizedGroupUser(
@@ -261,37 +297,7 @@ export class Bridge {
       : { enabled: true, allowedChatIds: [], listenAllChatIds: [] };
   }
 
-  async handleAuthorizedMessage(input: {
-    chatId: number;
-    userId: number;
-    chatType: string;
-    locale?: Locale;
-    text: string;
-    replyContext?: {
-      messageId: number | string;
-      text: string;
-    };
-    messageThreadId?: number;
-    conversationKey?: string;
-    files: string[];
-    onProgress?: (partialText: string) => void;
-    onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
-    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
-    requestOutputDir?: string;
-    workspaceOverride?: string;
-    instructions?: string;
-    sideChannelCommand?: string;
-    extraEnv?: Record<string, string>;
-    abortSignal?: AbortSignal;
-    /** Lift the single-turn runtime time cap for this turn (from the instance's
-     * /timeout config). OR'd with the per-message "不设超时 / no timeout" keyword. */
-    disableRuntimeTimeout?: boolean;
-    sessionIdOverride?: string;
-    turnLockWaitNotifyAfterMs?: number;
-    onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
-    turnPoolWaitNotifyAfterMs?: number;
-    onTurnPoolWait?: (event: TurnPoolWaitEvent) => void | Promise<void>;
-  }) {
+  async handleAuthorizedMessage(input: BridgeAuthorizedMessageInput) {
     const turnStartedAt = Date.now();
     const decision = await this.checkAccess(input);
     if (decision.kind === "deny") {
@@ -308,6 +314,25 @@ export class Bridge {
       messageThreadId: input.messageThreadId,
       conversationKey: input.conversationKey,
     };
+    // Keep session resolution, engine execution, and the eventual session bind in
+    // one logical-conversation critical section. Otherwise a cron entry can resolve
+    // the old session id while a chat turn is rebinding it, then run a second turn
+    // against the stale id after the existing session lock is released.
+    return await withBridgeTurnLock(
+      bridgeConversationLockId(sessionScope),
+      async () => await this.handleAuthorizedTurn(input, turnStartedAt, sessionScope),
+      {
+        waitNotifyAfterMs: input.turnLockWaitNotifyAfterMs,
+        onWait: input.onTurnLockWait,
+      },
+    );
+  }
+
+  private async handleAuthorizedTurn(
+    input: BridgeAuthorizedMessageInput,
+    turnStartedAt: number,
+    sessionScope: BridgeConversationScope,
+  ) {
     const useConversationScope = input.conversationKey !== undefined || input.messageThreadId !== undefined;
     const session = input.sessionIdOverride
       ? { sessionId: input.sessionIdOverride }

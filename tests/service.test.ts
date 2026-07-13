@@ -172,6 +172,32 @@ describe("readInstanceBotTokenFromEnvFile", () => {
       await removeTempRoot(root);
     }
   });
+
+  it("skips malformed quoted .env lines without crashing the whole instance parser", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(envPath, [
+        'OPTIONAL_BAD="unterminated',
+        'ASR_HTTP_URL="http://127.0.0.1:8412"',
+        'TELEGRAM_BOT_TOKEN="secret-token"',
+        "",
+      ].join("\n"), "utf8");
+
+      await expect(readInstanceBotTokenFromEnvFile({
+        USERPROFILE: root,
+        CODEX_TELEGRAM_INSTANCE: "alpha",
+      })).resolves.toBe("secret-token");
+      await expect(readInstanceServiceEnvFromEnvFile({
+        USERPROFILE: root,
+        CODEX_TELEGRAM_INSTANCE: "alpha",
+      })).resolves.toMatchObject({ ASR_HTTP_URL: "http://127.0.0.1:8412" });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
 });
 
 describe("createServiceDependenciesForInstance", () => {
