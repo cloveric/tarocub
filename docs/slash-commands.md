@@ -24,6 +24,10 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/fast [on\|off\|status]` | Toggle Codex Fast Mode. | Telegram, Lark |
 | `/yolo [on\|off\|unsafe]` | Inspect or switch approval mode. | Telegram, Lark |
 | `/config` | Open the interactive settings card. | Lark |
+| `/stream [on\|off]` | Toggle element-level typewriter streaming for answer cards (off = whole-card refresh). | Lark |
+| `/timeout [on\|off]` | Single-turn 60-min time cap; `off` lifts it for long tasks (Codex/Antigravity only). | Lark |
+| `/steer [on\|off\|<seconds>\|unlimited]` | Mid-turn steering eligibility window (default 30s). Within the window a plain-text follow-up injects into the running Codex turn (OK reaction); past it (or `off`) messages queue as their own turn. | Lark |
+| `/account` | Show the Feishu app this instance is bound to. | Lark |
 
 ## Goals And Sessions
 
@@ -39,7 +43,8 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/detach` | Detach the current resumed Claude session, Codex thread, or Antigravity conversation. | Telegram, Lark |
 | `/reset` | Reset the current chat/session binding. | Telegram, Lark |
 | `/stop` | Stop the current running task (cancel a queued task from its queue card). | Telegram, Lark |
-| `/q <message>` | Force the message to run as its own queued turn. Without it, plain text sent while a Codex turn is running is steered into that turn. | Lark |
+| `/q <message>` | Force the message to run as its own queued turn. Without it, plain text sent while a Codex turn is running is steered into that turn (within the `/steer` eligibility window, default 30s). | Lark |
+| `/bg` | List engine/background processes for this instance; `/bg kill <pid>` stops a process tree; `/bg killall` cleans orphans. | Lark |
 | `/continue` | Continue the latest waiting archive analysis. | Telegram, Lark |
 | `/ws list\|save\|use\|remove` | Manage saved Lark workspace directories; `/ws use` resets the current Lark session binding to avoid stale context. | Lark |
 
@@ -49,6 +54,7 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 |---|---|---|
 | `/context` | Show Claude context details where available. | Telegram, Lark |
 | `/compact` | Trigger Claude context compaction workflow. | Telegram, Lark |
+| `/code-review` | Run the Claude code-review flow on the current branch. | Telegram, Lark |
 | `/ultrareview` | Run the dedicated deep review path for supported Claude models. | Telegram, Lark |
 
 ## Scheduled And Durable Work
@@ -95,6 +101,7 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/group deny` | Deny the current group/thread context. | Telegram, Lark |
 | `/group all` | Let ordinary non-mention group messages enter the bridge queue. | Telegram, Lark |
 | `/group at` | Return to mention-required mode. | Telegram, Lark |
+| `/invite group\|user @person` / `/remove group\|user @person` | Grant / revoke group or per-user authorization by @-mention. | Lark |
 | `/newgroup <name>` | Create a fresh Lark group for a project/session space. | Lark |
 | `/newgroup topic <name>` | Create a fresh Lark topic group. | Lark |
 | `/newtopic <name>` | Shortcut for creating a Lark topic group. | Lark |

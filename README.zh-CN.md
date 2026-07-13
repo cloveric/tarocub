@@ -1204,6 +1204,73 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 
 ---
 
+## 聊天内命令一览
+
+完整命令面,按组分类。未标 **Lark** 的命令两个通道都可用。(带示例的同款清单:[Slash Command Index](./docs/slash-commands.md)。)
+
+**会话与任务**
+
+| 命令 | 作用 |
+|---|---|
+| `/status` | 当前引擎、会话绑定、运行状态 |
+| `/stop` | 停止当前任务(排队任务在各自排队卡片上取消) |
+| `/reset` | 重置会话绑定 |
+| `/resume [编号]` · `/resume thread <id>` · `/resume conversation <id>` | 续接本地 Claude 会话 / 显式绑定 Codex thread / Antigravity conversation |
+| `/detach` | 解绑当前会话/thread/conversation |
+| `/goal <目标>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | 会话目标(Codex 上自主推进) |
+| `/btw <问题>` | 旁问,不动当前会话 |
+| `/q <消息>` | **Lark** — 强制排队(跳过中途注入) |
+| `/steer [on\|off\|<秒数>\|unlimited]` | **Lark** — 任务中途引导的资格窗口(默认 30 秒,超窗自动排队) |
+| `/continue` | 继续等待中的压缩包分析 |
+| `/bg` · `/bg kill <pid>` · `/bg killall` | **Lark** — 查看/停止引擎与后台进程 |
+
+**设置**
+
+| 命令 | 作用 |
+|---|---|
+| `/config` | **Lark** — 交互配置卡片(推荐) |
+| `/engine [claude\|codex\|antigravity]` | 查看/切换后端引擎 |
+| `/model [名称\|off]` | 查看/设置模型 |
+| `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | 推理强度(视模型而定) |
+| `/fast [on\|off]` | Codex 快速模式 |
+| `/yolo [on\|off\|unsafe]` | 审批模式 |
+| `/stream [on\|off]` | **Lark** — 回答卡片打字机流式 |
+| `/timeout [on\|off]` | 单轮 60 分钟上限(`off` = 长任务放开) |
+| `/usage` | 本实例累计用量 |
+| `/account` | **Lark** — 当前绑定的飞书应用 |
+
+**群与授权**
+
+| 命令 | 作用 |
+|---|---|
+| `/group [status\|allow\|deny\|all\|at]` | 群授权与回复模式(`all`=不@也回,`at`=只@才回) |
+| `/invite group\|user @某人` · `/remove …` | **Lark** — 授予/撤销群或用户授权 |
+| `/newgroup <名>` · `/newgroup topic <名>` · `/newtopic <名>` | **Lark** — 新建项目群 / 话题群 |
+
+**定时与持久任务**
+
+| 命令 | 作用 |
+|---|---|
+| `/cron …`(`list`/`add`/`rm`/`toggle`/`mode`/`run`) | 定时提醒、周期任务、计划 agent 任务 |
+| `/board …`(`add`/`plan`/`list`/`show`/`run`/`heartbeat`/`recover`/`worktree`) | 模型记忆之外的持久 Kanban 任务板 |
+
+**多 Agent 协作**
+
+| 命令 | 作用 |
+|---|---|
+| `/ask <实例> <提示>` | 委托一条提示给别的 bot |
+| `/fan` · `/chain` · `/verify` | Agent Bus 并行 / 串联 / 验证 |
+| `/mini …`(`here`/`ask`/`fan`/`chain`/`verify`/`crew`) | topic/thread 级 peer agent |
+
+**Claude 工具与审批**
+
+| 命令 | 作用 |
+|---|---|
+| `/context` · `/compact` | Claude 上下文 / 压缩 |
+| `/code-review` · `/ultrareview` | 代码审查 / 深度多 agent 审查 |
+| `/approve [session]` · `/deny` | 审批按钮不可用时的文字兜底 |
+| `/ws list\|save\|use\|remove` | **Lark** — 工作区目录管理 |
+
 ## 服务运维
 
 | 命令 | 说明 |

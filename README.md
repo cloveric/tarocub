@@ -130,7 +130,7 @@ node dist/src/index.js lark doctor
 |---|---|
 | **Real CLI engines, not a fake chat backend** | Codex, Claude Code, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
 | **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, and Antigravity conversations can be attached from chat and detached later. |
-| **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Want strict sequencing instead? `/q <message>` always queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
+| **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
 | **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources can be downloaded, locally transcribed, and passed into the engine as normal task context. |
@@ -260,7 +260,70 @@ When `lark service restart --all` is run from inside an active Lark turn, the cu
 
 ### In-chat slash commands
 
-See the full [Slash Command Index](./docs/slash-commands.md) for command groups, Telegram/Lark support, and examples.
+The complete command surface, grouped. Unless marked **Lark**, commands work on both channels. (Same list with examples: [Slash Command Index](./docs/slash-commands.md).)
+
+**Sessions & tasks**
+
+| Command | What it does |
+|---|---|
+| `/status` | Current engine, session binding, runtime state |
+| `/stop` | Stop the running task (queued tasks cancel from their queue card) |
+| `/reset` | Reset the chat/session binding |
+| `/resume [n]` · `/resume thread <id>` · `/resume conversation <id>` | Resume local Claude sessions / bind a Codex thread / an Antigravity conversation |
+| `/detach` | Detach the resumed session/thread/conversation |
+| `/goal <objective>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | Conversation goal (autonomous pursuit on Codex) |
+| `/btw <question>` | Side question without touching the session |
+| `/q <message>` | **Lark** — force a queued turn (skip mid-turn steering) |
+| `/steer [on\|off\|<seconds>\|unlimited]` | **Lark** — mid-turn steering eligibility window (default 30s; past it messages queue) |
+| `/continue` | Continue the waiting archive analysis |
+| `/bg` · `/bg kill <pid>` · `/bg killall` | **Lark** — list/stop engine & background processes |
+
+**Settings**
+
+| Command | What it does |
+|---|---|
+| `/config` | **Lark** — interactive settings card (recommended) |
+| `/engine [claude\|codex\|antigravity]` | Inspect/switch backend engine |
+| `/model [name\|off]` | Inspect/set engine model |
+| `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Reasoning effort (model-dependent) |
+| `/fast [on\|off]` | Codex Fast Mode |
+| `/yolo [on\|off\|unsafe]` | Approval mode |
+| `/stream [on\|off]` | **Lark** — typewriter streaming for answer cards |
+| `/timeout [on\|off]` | Single-turn 60-min cap (`off` = lift for long tasks) |
+| `/usage` | Cumulative usage for this instance |
+| `/account` | **Lark** — bound Feishu app |
+
+**Groups & access**
+
+| Command | What it does |
+|---|---|
+| `/group [status\|allow\|deny\|all\|at]` | Group authorization & reply mode (`all` = reply without @, `at` = @-only) |
+| `/invite group\|user @person` · `/remove …` | **Lark** — grant/revoke group or per-user access |
+| `/newgroup <name>` · `/newgroup topic <name>` · `/newtopic <name>` | **Lark** — create project groups / topic groups |
+
+**Scheduled & durable work**
+
+| Command | What it does |
+|---|---|
+| `/cron …` (`list`/`add`/`rm`/`toggle`/`mode`/`run`) | Reminders, recurring jobs, scheduled agent tasks |
+| `/board …` (`add`/`plan`/`list`/`show`/`run`/`heartbeat`/`recover`/`worktree`) | Durable Kanban tasks outside model memory |
+
+**Multi-agent**
+
+| Command | What it does |
+|---|---|
+| `/ask <instance> <prompt>` | Delegate one prompt to a peer bot |
+| `/fan` · `/chain` · `/verify` | Agent Bus parallel / sequential / verify |
+| `/mini …` (`here`/`ask`/`fan`/`chain`/`verify`/`crew`) | Topic/thread-level peer agents |
+
+**Claude utilities & approvals**
+
+| Command | What it does |
+|---|---|
+| `/context` · `/compact` | Claude context details / compaction |
+| `/code-review` · `/ultrareview` | Code review / deep multi-agent review |
+| `/approve [session]` · `/deny` | Text fallback when approval buttons are unavailable |
+| `/ws list\|save\|use\|remove` | **Lark** — saved workspace directories |
 
 ## Safety Model
 
