@@ -34,6 +34,13 @@ export interface LarkActiveRun {
    * falsely reported as "goal cleared", by `/goal clear`.
    */
   goalWatch?: boolean;
+  /**
+   * Epoch ms when the run was claimed. Steering is only eligible within the
+   * first LARK_STEER_ELIGIBILITY_WINDOW_MS of a run (operator decision: a task
+   * deep in progress should not be derailed mid-flight — later messages queue
+   * as their own turn instead). Absent → treated as steer-eligible.
+   */
+  startedAt?: number;
 }
 
 export interface LarkQueuePolicy {
@@ -43,6 +50,7 @@ export interface LarkQueuePolicy {
 
 export interface PendingLarkBatch {
   normalized: LarkNormalizedBridgeMessage;
+  members: LarkNormalizedBridgeMessage[];
   texts: string[];
   timer: ReturnType<typeof setTimeout>;
   resolve: Array<(value: boolean) => void>;
@@ -127,7 +135,7 @@ export interface LarkServiceRuntime {
    * stay silent (no duplicate "skipped" notice).
    */
   cancelledQueueTaskIds: Set<string>;
-  appInfo?: { appId: string; domain?: string };
+  appInfo?: { appId: string; appSecret?: string; domain?: string };
   cronRuntime?: LarkCronRuntime;
   busRuntime?: LarkBusRuntime;
   miniRuntime?: LarkMiniRuntime;

@@ -46,6 +46,7 @@ export function buildLarkCronExecutor(input: {
   deliverResponse?: LarkCronDeliverResponse;
   /** Factory for the run card an AI-task cron renders its result into (injected to avoid a cron→message-handler import cycle). */
   createRunCard?: typeof import("./message-handler.js")["createLarkRunCardController"];
+  requestApproval?: typeof import("./card-actions.js")["requestLarkApproval"];
 }): CronExecutor {
   return async (job: CronJobRecord, abortSignal?: AbortSignal): Promise<void> => {
     if (job.channel !== "lark") {
@@ -90,100 +91,137 @@ export function buildLarkCronExecutor(input: {
       return;
     }
 
-    const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
-    await mkdir(requestOutputDir, { recursive: true });
-    const replyFields = larkCronReplyFields(job);
-    const locale = job.locale === "en" ? "en" : "zh";
-    const cfg = await loadInstanceConfig(input.stateDir);
-    const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
-    if (budgetExhausted) {
-      if (!job.mute) {
-        await sendLarkMarkdown(input.channel, job.larkChatId, budgetExhausted.message, replyFields);
+    const runCronTurn = async (): Promise<void> => {
+      const controller = new AbortController();
+      const forwardAbort = () => controller.abort();
+      if (abortSignal?.aborted) {
+        controller.abort();
+      } else {
+        abortSignal?.addEventListener("abort", forwardAbort, { once: true });
       }
-      return;
-    }
-    // Render the AI task's result into a run card (same UX as a chat reply): open
-    // the card, run the turn, then finish it with the answer. Skipped for muted
-    // jobs (no card) and when no run-card factory is wired (older callers).
-    const runCard = !job.mute && input.createRunCard
-      ? await input.createRunCard({
-        channel: input.channel,
-        chatId: job.larkChatId,
-        conversationKey,
-        bridgeChatType,
-	        locale,
-        elementStream: cfg.larkElementStream !== false,
-        ...(replyFields.replyTo
-          ? { replyTo: replyFields.replyTo, replyInThread: replyFields.replyInThread ?? false }
-          : {}),
-      })
-      : undefined;
-    let result: Awaited<ReturnType<typeof input.bridge.handleAuthorizedMessage>>;
-    try {
-      result = await input.bridge.handleAuthorizedMessage({
-        chatId: accessChatId,
-        userId: job.userId,
-        chatType: bridgeChatType,
-        text: job.prompt,
-        conversationKey,
-        locale: job.locale ?? "zh",
-        files: [],
-        requestOutputDir,
-        workspaceOverride: input.workspaceOverride,
-        abortSignal,
-        disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
-        instructions: input.agentInstructions?.(),
-      });
-    } catch (error) {
-      // Don't leave the AI-task run card stuck on "running" when the engine errors
-      // or times out: flip it to interrupted (job aborted, e.g. /stop) or failed,
-      // then rethrow so the scheduler still records the failure, retries, and sends
-      // its own failure notification (which carries the error detail).
-      if (runCard) {
-        if (abortSignal?.aborted) {
-          await runCard.interrupt().catch(() => {});
-        } else {
-          await runCard.fail(job.locale === "en" ? "Scheduled task failed." : "定时任务执行失败。").catch(() => {});
+      const previous = input.runtime.activeRuns.get(conversationKey);
+      if (previous?.goalWatch) {
+        previous.abortController.abort();
+      }
+      input.runtime.activeRuns.set(conversationKey, { abortController: controller, startedAt: Date.now() });
+
+      try {
+        const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
+        await mkdir(requestOutputDir, { recursive: true });
+        const replyFields = larkCronReplyFields(job);
+        const locale = job.locale === "en" ? "en" : "zh";
+        const cfg = await loadInstanceConfig(input.stateDir);
+        const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+        if (budgetExhausted) {
+          if (!job.mute) {
+            await sendLarkMarkdown(input.channel, job.larkChatId!, budgetExhausted.message, replyFields);
+          }
+          return;
+        }
+        // Render the AI task's result into a run card (same UX as a chat reply):
+        // open the card, run the turn, then finish it with the answer.
+        const runCard = !job.mute && input.createRunCard
+          ? await input.createRunCard({
+              channel: input.channel,
+              chatId: job.larkChatId!,
+              conversationKey,
+              bridgeChatType,
+              locale,
+              elementStream: cfg.larkElementStream !== false,
+              ...(replyFields.replyTo
+                ? { replyTo: replyFields.replyTo, replyInThread: replyFields.replyInThread ?? false }
+                : {}),
+            })
+          : undefined;
+        const activeRun = input.runtime.activeRuns.get(conversationKey);
+        if (activeRun?.abortController === controller) {
+          activeRun.hasRunCard = Boolean(runCard);
+        }
+        let result: Awaited<ReturnType<typeof input.bridge.handleAuthorizedMessage>>;
+        try {
+          result = await input.bridge.handleAuthorizedMessage({
+            chatId: accessChatId,
+            userId: job.userId,
+            chatType: bridgeChatType,
+            text: job.prompt,
+            conversationKey,
+            locale: job.locale ?? "zh",
+            files: [],
+            requestOutputDir,
+            workspaceOverride: input.workspaceOverride,
+            abortSignal: controller.signal,
+            disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
+            instructions: input.agentInstructions?.(),
+            onApprovalRequest: input.requestApproval
+              ? async (request) => await input.requestApproval!({
+                  channel: input.channel,
+                  runtime: input.runtime,
+                  chatId: job.larkChatId!,
+                  conversationKey,
+                  bridgeChatType,
+                  ...replyFields,
+                  locale,
+                  request,
+                  abortSignal: controller.signal,
+                })
+              : undefined,
+          });
+        } catch (error) {
+          if (runCard) {
+            if (controller.signal.aborted) {
+              await runCard.interrupt().catch(() => {});
+            } else {
+              await runCard.fail(job.locale === "en" ? "Scheduled task failed." : "定时任务执行失败。").catch(() => {});
+            }
+          }
+          throw error;
+        }
+
+        await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
+        if (job.mute) {
+          return;
+        }
+        let answerShownInCard = false;
+        if (runCard) {
+          answerShownInCard = (await runCard.finish(result.text || renderLarkEmptyCronAgentReply(job))).shown;
+        }
+        if (input.deliverResponse) {
+          await input.deliverResponse({
+            channel: input.channel,
+            runtime: input.runtime,
+            chatId: job.larkChatId!,
+            text: result.text,
+            stateDir: input.stateDir,
+            requestOutputDir,
+            workspaceOverride: input.workspaceOverride,
+            conversationKey,
+            bridgeChatType,
+            bridgeChatId: job.chatId,
+            bridgeUserId: job.userId,
+            larkThreadId: job.larkThreadId,
+            larkMessageId: job.larkMessageId,
+            sendText: runCard ? !answerShownInCard : true,
+            ...replyFields,
+          });
+          return;
+        }
+        if (!runCard) {
+          await sendLarkMarkdown(input.channel, job.larkChatId!, result.text || renderLarkEmptyCronAgentReply(job), {
+            ...replyFields,
+          });
+        }
+      } finally {
+        abortSignal?.removeEventListener("abort", forwardAbort);
+        if (input.runtime.activeRuns.get(conversationKey)?.abortController === controller) {
+          input.runtime.activeRuns.delete(conversationKey);
         }
       }
-      throw error;
-    }
-    await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
-    if (job.mute) {
-      return;
-    }
-    // Finish the card with the answer; finish() reports whether the full answer
-    // fit, which decides if deliverResponse should still send the text — it always
-    // delivers file/image tags + any overflow regardless.
-    let answerShownInCard = false;
-    if (runCard) {
-      answerShownInCard = (await runCard.finish(result.text || renderLarkEmptyCronAgentReply(job))).shown;
-    }
-    if (input.deliverResponse) {
-      await input.deliverResponse({
-        channel: input.channel,
-        runtime: input.runtime,
-        chatId: job.larkChatId,
-        text: result.text,
-        stateDir: input.stateDir,
-        requestOutputDir,
-        workspaceOverride: input.workspaceOverride,
-        conversationKey,
-        bridgeChatType,
-        bridgeChatId: job.chatId,
-        bridgeUserId: job.userId,
-        larkThreadId: job.larkThreadId,
-        larkMessageId: job.larkMessageId,
-        sendText: runCard ? !answerShownInCard : true,
-        ...replyFields,
-      });
-      return;
-    }
-    if (!runCard) {
-      await sendLarkMarkdown(input.channel, job.larkChatId, result.text || renderLarkEmptyCronAgentReply(job), {
-        ...replyFields,
-      });
-    }
+    };
+
+    // Scheduled AI turns share the same conversation queue as chat messages.
+    // This prevents cron from racing a user turn before the bridge session bind is
+    // visible, and makes the run card's Stop button target the cron controller.
+    await input.runtime.chatQueue.enqueue(conversationKey, runCronTurn);
   };
 }
 

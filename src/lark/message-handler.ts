@@ -7,7 +7,7 @@ import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
-import { loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
+import { LARK_STEER_DEFAULT_WINDOW_SECONDS, loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { handleLarkCrewWorkflow } from "./bus.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
@@ -78,7 +78,7 @@ import {
 import { sendManagedCard, updateManagedCard, updateManagedCardElement, type ManagedCardHandle } from "./managed-card.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { verifyLarkNumericIds } from "./id-map.js";
-import type { LarkQueueCardRef, LarkServiceRuntime } from "./runtime.js";
+import type { LarkQueueCardRef, LarkServiceRuntime, PendingLarkBatch } from "./runtime.js";
 import { type LarkReactionSettings, withLarkMessageReactions } from "./reactions.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkFetchedMessage, LarkSendOptions } from "./types.js";
 import type { Locale } from "../telegram/message-renderer.js";
@@ -102,7 +102,12 @@ function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | 
 
 function isWholeResponseFileBlockText(text: string): boolean {
   const fileMatch = text.match(/```file:([^\n`]+)\n([\s\S]*?)```/);
-  return Boolean(fileMatch && text.replace(fileMatch[0], "").trim().length === 0);
+  return Boolean(
+    fileMatch
+    && fileMatch[1]?.trim()
+    && Buffer.byteLength(fileMatch[2] ?? "", "utf8") > 0
+    && text.replace(fileMatch[0], "").trim().length === 0,
+  );
 }
 
 // Deliver chunks 2..N of a long answer as standalone continuation cards (card 1, the
@@ -759,7 +764,8 @@ const LARK_STEER_ACK_EMOJI = "OK";
  * engines without steer support simply return false here). Only a plain text
  * message steers: slash commands keep their command semantics, attachments
  * need the staging pipeline, an explicit preempt policy keeps its
- * replace-the-turn behavior, and an existing queued backlog keeps FIFO order.
+ * replace-the-turn behavior, an existing queued backlog keeps FIFO order, and
+ * a run older than LARK_STEER_ELIGIBILITY_WINDOW_MS no longer accepts steers.
  * A steer that fails for any reason falls back to the normal queue path so
  * the message is never lost.
  */
@@ -789,7 +795,25 @@ async function trySteerActiveLarkTurn(
   if (normalized.replyContext) {
     return false;
   }
-  if (!input.runtime.activeRuns.get(normalized.conversationKey)) {
+  const activeRun = input.runtime.activeRuns.get(normalized.conversationKey);
+  if (!activeRun) {
+    return false;
+  }
+  // Steering policy is instance config (/steer command): off → always queue;
+  // window N seconds (default 30, operator decision 2026-07-12: a task deep in
+  // progress must not be derailed mid-flight) → later messages queue as their
+  // own turn; 0 → unlimited (steer any time). Loaded only when a turn is
+  // actually active, so the idle path stays free of the config read.
+  const steerCfg = await loadInstanceConfig(input.stateDir);
+  if (steerCfg.larkSteerEnabled === false) {
+    return false;
+  }
+  const steerWindowSeconds = steerCfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS;
+  if (
+    steerWindowSeconds > 0 &&
+    activeRun.startedAt !== undefined &&
+    Date.now() - activeRun.startedAt > steerWindowSeconds * 1000
+  ) {
     return false;
   }
   if (input.runtime.chatQueue.pendingCount(normalized.conversationKey) > 0) {
@@ -834,6 +858,12 @@ async function trySteerActiveLarkTurn(
     outcome: "success",
     metadata: { eventType: "engine.turn.steered" },
   });
+  await appendLarkTimelineEvent(input.stateDir, normalized, {
+    type: "command.handled",
+    outcome: "success",
+    detail: "steer",
+    metadata: { eventType: "engine.turn.steered" },
+  });
   return true;
 }
 
@@ -865,6 +895,7 @@ function scheduleBatchedLarkTurn(
       text: mergeBatchedTexts([...existing.texts, normalized.text]),
     };
     existing.texts.push(normalized.text);
+    existing.members.push(normalized);
     return new Promise<boolean>((resolve, reject) => {
       existing.resolve.push(resolve);
       existing.reject.push(reject);
@@ -882,6 +913,7 @@ function scheduleBatchedLarkTurn(
     timer.unref?.();
     input.runtime.pendingBatches.set(normalized.conversationKey, {
       normalized: { ...normalized },
+      members: [normalized],
       texts: [normalized.text],
       timer,
       resolve: [resolve],
@@ -913,6 +945,7 @@ async function flushBatchedLarkTurn(
   try {
     preemptActiveLarkTurnIfEnabled(input, batch.normalized, batch.normalized.text);
     const result = await enqueueLarkTurn(input, batch.normalized, locale, onWait);
+    await markMergedBatchMembersTerminal(input.stateDir, batch, "success");
     for (const resolve of batch.resolve) {
       resolve(result);
     }
@@ -920,11 +953,31 @@ async function flushBatchedLarkTurn(
     // All waiters belong to ONE merged turn; rejecting them all would make the
     // service-level catch post N identical error replies. Reject only the newest
     // waiter (the merged turn replies to its message) and settle the rest silently.
+    await markMergedBatchMembersTerminal(input.stateDir, batch, "error");
     for (const resolve of batch.resolve.slice(0, -1)) {
       resolve(true);
     }
     batch.reject[batch.reject.length - 1]?.(error);
   }
+}
+
+async function markMergedBatchMembersTerminal(
+  stateDir: string,
+  batch: PendingLarkBatch,
+  outcome: "success" | "error",
+): Promise<void> {
+  const mergedInto = batch.normalized.messageId;
+  // The newest member owns the actual merged turn and gets its turn.completed
+  // event there. Earlier inputs were consumed into that turn, so terminalize
+  // them explicitly to keep startup recovery from calling them interrupted.
+  await Promise.allSettled(batch.members.slice(0, -1).map(async (member) => {
+    await appendLarkTimelineEvent(stateDir, member, {
+      type: "command.handled",
+      outcome,
+      detail: "batch-merged",
+      metadata: { mergedInto },
+    });
+  }));
 }
 
 function mergeBatchedTexts(texts: string[]): string {
@@ -1037,7 +1090,7 @@ async function runNormalizedLarkMessage(
         active.abortController.abort();
       }
       abortController = new AbortController();
-      input.runtime.activeRuns.set(normalized.conversationKey, { abortController });
+      input.runtime.activeRuns.set(normalized.conversationKey, { abortController, startedAt: Date.now() });
     }
     return abortController;
   };
@@ -1241,6 +1294,8 @@ async function runNormalizedLarkMessage(
     }
 
     let runCard: LarkRunCardController | undefined;
+    let completedEngineText: string | undefined;
+    let runCardFinished = false;
     try {
       // If a "queued" card was already shown for this conversation, take it over
       // as the run card so it transitions in place instead of being orphaned: a
@@ -1513,6 +1568,7 @@ async function runNormalizedLarkMessage(
             CCTB_LARK_ACTIVE_STATE_DIR: input.stateDir,
           },
         });
+        completedEngineText = result.text;
         // A reply too long for one card spills into continuation cards (card 2 continues
         // card 1) rather than a Feishu Doc, which the operator finds more natural to read
         // inline. The run card becomes card 1 (chunk 1); the rest follow as their own
@@ -1533,6 +1589,7 @@ async function runNormalizedLarkMessage(
         const finishResult = runCard
           ? await runCard.finish(spillToContinuationCards ? answerChunks[0]! : cardDisplayText)
           : undefined;
+        runCardFinished = Boolean(runCard);
         const answerShownInCard = finishResult?.shown ?? false;
         if (finishResult) {
           // Record whether the answer actually landed in a card (and why) — card-vs-text
@@ -1644,15 +1701,58 @@ async function runNormalizedLarkMessage(
           },
         });
         return true;
+      }, undefined, async (error) => {
+        if (completedEngineText === undefined) {
+          throw error;
+        }
+        if (runCard && !runCardFinished) {
+          await runCard.finish(completedEngineText).catch(() => undefined);
+        }
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "engine.event.delivery_failed",
+          outcome: "error",
+          detail: redactLarkErrorDetail(error),
+          metadata: { phase: "post-engine" },
+        });
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "turn.completed",
+          outcome: "partial",
+          detail: "engine completed; post-engine delivery failed",
+          metadata: { responseChars: completedEngineText.length },
+        });
+        return true;
       });
     } catch (error) {
+      if (completedEngineText !== undefined) {
+        // The engine already completed successfully. A failure in card finishing,
+        // continuation delivery, file upload, usage recording, or workflow cleanup
+        // must not rewrite that completed run as "execution failed" and encourage a
+        // duplicate rerun. Preserve/finish the card and record a partial delivery.
+        if (runCard && !runCardFinished) {
+          await runCard.finish(completedEngineText).catch(() => undefined);
+        }
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "engine.event.delivery_failed",
+          outcome: "error",
+          detail: redactLarkErrorDetail(error),
+          metadata: { phase: "post-engine" },
+        });
+        await appendLarkTimelineEvent(input.stateDir, normalized, {
+          type: "turn.completed",
+          outcome: "partial",
+          detail: "engine completed; post-engine delivery failed",
+          metadata: { responseChars: completedEngineText.length },
+        });
+        return true;
+      }
       const terminal = classifyLarkTurnTermination(error, runController.signal);
+      let engineFailureOutcome: "error" | "partial" = "error";
       if (terminal.kind === "interrupted") {
         await runCard?.interrupt();
       } else if (terminal.kind === "idle_timeout") {
         await runCard?.idleTimeout(terminal.minutes);
       } else {
-        await runCard?.fail(renderLarkUserFacingError(error, "engine", locale));
+        engineFailureOutcome = await runCard?.fail(renderLarkUserFacingError(error, "engine", locale)) ?? "error";
       }
       // The run card already surfaces the terminal state; only send a separate
       // message when no card is present (fallback) so we don't duplicate it.
@@ -1672,7 +1772,11 @@ async function runNormalizedLarkMessage(
       }
       await appendLarkTimelineEvent(input.stateDir, normalized, {
         type: "turn.completed",
-        outcome: terminal.kind === "interrupted" ? "interrupted" : terminal.kind === "idle_timeout" ? "idle_timeout" : "error",
+        outcome: terminal.kind === "interrupted"
+          ? "interrupted"
+          : terminal.kind === "idle_timeout"
+            ? "idle_timeout"
+            : engineFailureOutcome,
         detail: redactLarkErrorDetail(error),
       });
       return true;
@@ -1720,7 +1824,7 @@ export interface LarkRunCardController {
   apply(event: EngineStreamEvent): Promise<void>;
   /** Finalize with the answer; resolves to whether/how the answer was shown in a card. */
   finish(text: string): Promise<LarkRunFinishResult>;
-  fail(text: string): Promise<void>;
+  fail(text: string): Promise<"error" | "partial">;
   interrupt(): Promise<void>;
   idleTimeout(minutes: number): Promise<void>;
 }
@@ -1814,6 +1918,8 @@ export async function createLarkRunCardController(input: {
   // fails; switch to the compact render so live progress (and finalization)
   // keep landing instead of freezing the card in its "running" state.
   let degraded = false;
+  let consecutiveFullUpdateFailures = 0;
+  const FULL_UPDATE_DEGRADE_THRESHOLD = 2;
   const tryUpdate = async (card: Record<string, unknown>): Promise<boolean> => {
     if (handle) {
       return await updateManagedCard(input.channel, handle, card);
@@ -1858,7 +1964,7 @@ export async function createLarkRunCardController(input: {
   const elementStreamEnabled = Boolean(handle) &&
     input.elementStream !== false &&
     !["off", "0", "false"].includes((process.env.CCTB_LARK_ELEMENT_STREAM ?? "").trim().toLowerCase());
-  let elementStreamBroken = false;
+  let elementStreamRetryAt = 0;
   let remoteStructureSig: string | null = null;
   let remoteLiveElementId: string | null = null;
   let lastElementContentSent = "";
@@ -1882,9 +1988,17 @@ export async function createLarkRunCardController(input: {
       const card = renderLarkRunCard(state, input.locale);
       const liveAtRender = liveRunCardStreamElement(state);
       if (await tryUpdate(card)) {
+        consecutiveFullUpdateFailures = 0;
         remoteLiveElementId = liveAtRender?.elementId ?? null;
         remoteStructureSig = structureSignatureOf(card, remoteLiveElementId);
         lastElementContentSent = liveAtRender?.content ?? "";
+        return;
+      }
+      consecutiveFullUpdateFailures += 1;
+      // One failed patch is commonly a transient network/rate-limit wobble.
+      // Keep the full run card (including Stop + process stream) for one retry;
+      // only repeated failures indicate the card itself is persistently invalid.
+      if (consecutiveFullUpdateFailures < FULL_UPDATE_DEGRADE_THRESHOLD) {
         return;
       }
       degraded = true;
@@ -1912,7 +2026,7 @@ export async function createLarkRunCardController(input: {
   const flushElementStream = (): void => {
     elementTimer = undefined;
     void enqueuePatch(async () => {
-      if (!handle || elementStreamBroken || degraded) {
+      if (!handle || Date.now() < elementStreamRetryAt || degraded) {
         return;
       }
       const live = liveRunCardStreamElement(state);
@@ -1933,9 +2047,12 @@ export async function createLarkRunCardController(input: {
         return;
       }
       if (await updateManagedCardElement(input.channel, handle, live.elementId, trimmed)) {
+        elementStreamRetryAt = 0;
         lastElementContentSent = trimmed;
       } else {
-        elementStreamBroken = true;
+        // Retry element streaming after a short cooldown. A single transient
+        // failure must not disable native streaming for the rest of a long turn.
+        elementStreamRetryAt = Date.now() + 1_000;
         scheduleFullUpdate();
       }
     });
@@ -1957,7 +2074,7 @@ export async function createLarkRunCardController(input: {
   };
   const scheduleUpdate = (): void => {
     if (
-      elementStreamEnabled && !elementStreamBroken && !degraded &&
+      elementStreamEnabled && Date.now() >= elementStreamRetryAt && !degraded &&
       remoteStructureSig !== null && firstLiveUpdateDone
     ) {
       const live = liveRunCardStreamElement(state);
@@ -1998,6 +2115,7 @@ export async function createLarkRunCardController(input: {
       || (text.length <= LARK_CARD_ANSWER_MAX && Buffer.byteLength(text, "utf8") <= ELEMENT_CONTENT_MAX_BYTES);
     const fitReason: LarkRunFinishReason = answerFitsCard ? "fit" : "too-big";
     if (!degraded && await tryUpdate(renderLarkRunCard(state, input.locale))) {
+      consecutiveFullUpdateFailures = 0;
       return { shown: answerFitsCard, reason: fitReason };
     }
     degraded = true;
@@ -2058,14 +2176,18 @@ export async function createLarkRunCardController(input: {
       return await enqueuePatch(() => finalize(text));
     },
     fail: async (text) => {
+      const failureStatus = state.blocks.some(
+        (block) => block.kind === "text" && cleanCardText(block.content).trim().length > 0,
+      ) ? "partial" : "error";
       state = {
         ...state,
-        status: "error",
+        status: failureStatus,
         errorText: text,
         footer: null,
       };
       cancelScheduledUpdate();
       await enqueuePatch(() => finalize());
+      return failureStatus;
     },
     interrupt: async () => {
       state = { ...state, status: "interrupted", footer: null };
@@ -2087,16 +2209,27 @@ async function runAuthorizedLarkTurnWithReactions<T>(
   },
   normalized: LarkNormalizedBridgeMessage,
   run: () => Promise<T>,
+  isFailure?: (error: unknown) => boolean,
+  recoverError?: (error: unknown) => Promise<T> | T,
 ): Promise<T> {
+  const protectedRun = recoverError
+    ? async (): Promise<T> => {
+        try {
+          return await run();
+        } catch (error) {
+          return await recoverError(error);
+        }
+      }
+    : run;
   if (!input.reactionSettings) {
-    return await run();
+    return await protectedRun();
   }
   return await withLarkMessageReactions({
     channel: input.channel,
     messageId: normalized.messageId,
     settings: input.reactionSettings,
-    isFailure: (error) => classifyLarkTurnTermination(error, undefined).kind === "error",
-    run,
+    isFailure: isFailure ?? ((error) => classifyLarkTurnTermination(error, undefined).kind === "error"),
+    run: protectedRun,
   });
 }
 

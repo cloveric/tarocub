@@ -20,6 +20,10 @@ export type InstanceEngine = "codex" | "claude" | "antigravity";
 export const DEFAULT_CLAUDE_MODEL = "opus[1m]";
 export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
 export const DEFAULT_CODEX_EFFORT: EffortLevel = "xhigh";
+// Default steer eligibility window: a running turn accepts mid-turn steering for
+// its first 30s; later messages queue as their own turn. /steer <seconds> tunes it,
+// 0 = unlimited, /steer off disables steering entirely.
+export const LARK_STEER_DEFAULT_WINDOW_SECONDS = 30;
 
 export interface ResumeState {
   sessionId: string;
@@ -44,6 +48,10 @@ export interface InstanceConfig {
   larkElementStream: boolean | undefined;
   /** Lift the single-turn runtime time cap (60 min). undefined/false = cap enforced (default); true = /timeout off. */
   disableRuntimeTimeout: boolean | undefined;
+  /** Mid-turn steering. undefined/true = enabled (default); false = /steer off (mid-turn messages always queue). */
+  larkSteerEnabled: boolean | undefined;
+  /** Steer eligibility window in seconds. undefined = default (30); 0 = unlimited (steer any time). */
+  larkSteerWindowSeconds: number | undefined;
   timezone: string;
   resume: ResumeState | undefined;
   workspacePath: string | undefined;
@@ -141,6 +149,8 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   codexServiceTier: undefined,
   larkElementStream: undefined,
   disableRuntimeTimeout: undefined,
+  larkSteerEnabled: undefined,
+  larkSteerWindowSeconds: undefined,
   timezone: resolveDefaultCronTimezone(),
   resume: undefined,
   workspacePath: undefined,
@@ -318,6 +328,10 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
     codexServiceTier: config.codexServiceTier === "fast" ? "fast" : undefined,
     larkElementStream: typeof config.larkElementStream === "boolean" ? config.larkElementStream : undefined,
     disableRuntimeTimeout: typeof config.disableRuntimeTimeout === "boolean" ? config.disableRuntimeTimeout : undefined,
+    larkSteerEnabled: typeof config.larkSteerEnabled === "boolean" ? config.larkSteerEnabled : undefined,
+    larkSteerWindowSeconds: typeof config.larkSteerWindowSeconds === "number" && Number.isInteger(config.larkSteerWindowSeconds) && config.larkSteerWindowSeconds >= 0
+      ? config.larkSteerWindowSeconds
+      : undefined,
     timezone: normalizeCronTimezone(config.timezone) ?? DEFAULT_INSTANCE_CONFIG.timezone,
     resume: parseResumeState(config.resume),
     workspacePath: typeof config.workspacePath === "string" && config.workspacePath.trim()

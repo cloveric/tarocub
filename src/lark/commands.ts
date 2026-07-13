@@ -38,6 +38,7 @@ import {
   type InstanceConfig,
   type InstanceEngine,
   type WorkspaceProfile,
+  LARK_STEER_DEFAULT_WINDOW_SECONDS,
 } from "../telegram/instance-config.js";
 import {
   killInstanceGroupOrphans,
@@ -287,6 +288,14 @@ export async function handleLarkSimpleCommand(
     const cfg = await loadInstanceConfig(input.stateDir);
     const message = await handleLarkTimeoutCommand(input.stateDir, cfg, timeoutCommand.action, commandLocale);
     await sendLarkCommandMarkdown(input, normalized, "/timeout", message);
+    return true;
+  }
+
+  const steerCommand = parseLarkSteerCommand(commandText);
+  if (steerCommand) {
+    const cfg = await loadInstanceConfig(input.stateDir);
+    const message = await handleLarkSteerCommand(input.stateDir, cfg, steerCommand.action, commandLocale);
+    await sendLarkCommandMarkdown(input, normalized, "/steer", message);
     return true;
   }
 
@@ -572,6 +581,11 @@ function parseLarkStreamCommand(text: string): { action: string } | null {
 
 function parseLarkTimeoutCommand(text: string): { action: string } | null {
   const match = text.trim().match(/^\/timeout(?:\s+(.*))?$/i);
+  return match ? { action: (match[1] ?? "").trim().toLowerCase() || "status" } : null;
+}
+
+function parseLarkSteerCommand(text: string): { action: string } | null {
+  const match = text.trim().match(/^\/steer(?:\s+(.*))?$/i);
   return match ? { action: (match[1] ?? "").trim().toLowerCase() || "status" } : null;
 }
 
@@ -922,6 +936,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex Fast Mode · `/yolo` approval mode",
       "- `/stream [on|off]` typewriter streaming on run cards (off = full-card refresh)",
       "- `/timeout [on|off]` single-turn 60-min time cap (off = lift it for long tasks)",
+      "- `/steer [on|off|<seconds>|unlimited]` mid-turn steering window (default 30s; later messages queue)",
       "",
       "**Workspace & groups**",
       "- `/ws list|save|use|remove` workspace directories",
@@ -956,6 +971,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex 快速模式 · `/yolo` 审批模式",
     "- `/stream [on|off]` 回答卡片打字机流式开关（off = 整卡刷新）",
     "- `/timeout [on|off]` 单轮 60 分钟时间上限（off = 长任务放开上限）",
+    "- `/steer [on|off|<秒数>|unlimited]` 任务中途引导的资格窗口（默认 30 秒，超窗排队）",
     "",
     "**工作区与群**",
     "- `/ws list|save|use|remove` 工作区目录",
@@ -1291,6 +1307,12 @@ function renderLarkInviteRemoveUserResult(
 function extractFirstLarkMentionTarget(mentions: unknown[]): { label: string; bridgeUserId: number } | null {
   for (const mention of mentions) {
     const record = isRecord(mention) ? mention : {};
+    // The SDK includes the bot itself in mentions for commands such as
+    // `@Bot /remove user @Alice`. Never treat that routing mention as the user
+    // target, otherwise the command reports success while Alice remains allowed.
+    if (record.isBot === true || record.is_bot === true) {
+      continue;
+    }
     const idRecord = isRecord(record.id) ? record.id : {};
     const rawId = firstString(
       idRecord.openId,
@@ -1419,7 +1441,7 @@ async function renderAndApplyLarkGroupCommand(
     // "unknown" (no creds / API failure) stays silent.
     const scopeStatus = await checkGroupMsgScope({
       appId: input.runtime.appInfo?.appId ?? process.env.LARK_APP_ID,
-      appSecret: process.env.LARK_APP_SECRET,
+      appSecret: input.runtime.appInfo?.appSecret ?? process.env.LARK_APP_SECRET,
       domain: input.runtime.appInfo?.domain,
     });
     if (scopeStatus === "missing") {
@@ -2021,6 +2043,84 @@ async function handleLarkTimeoutCommand(stateDir: string, cfg: InstanceConfig, a
   return locale === "en" ? "Usage: /timeout [on|off|status]" : "用法: /timeout [on|off|status]";
 }
 
+/**
+ * /steer — mid-turn steering policy (instance-level, like /stream and /timeout).
+ * A running turn accepts injected follow-ups only within its eligibility window
+ * (default 30s); later messages queue as their own turn. `off` disables steering
+ * entirely, `<seconds>` tunes the window, `unlimited` (=0) restores steer-any-time.
+ */
+async function handleLarkSteerCommand(stateDir: string, cfg: InstanceConfig, action: string, locale: Locale): Promise<string> {
+  const en = locale === "en";
+  // Steering is implemented only by the Codex app-server adapter; on Claude the
+  // setting persists but mid-turn messages always queue regardless. Say so
+  // honestly instead of implying the toggle changes anything here.
+  const claudeNote = cfg.engine === "claude"
+    ? (en
+      ? " (Note: this instance runs Claude, which doesn't support mid-turn steering — messages during a turn always queue; this setting only takes effect if the instance switches to Codex.)"
+      : "（注意：当前是 Claude 引擎，不支持任务中途注入——进行中收到的消息本就一律排队；此设置仅在切换到 Codex 引擎后生效。）")
+    : "";
+  const describe = (enabled: boolean, windowSeconds: number): string => {
+    if (!enabled) {
+      return en
+        ? "Steering: off — mid-turn messages always queue as their own turn (/steer on to re-enable)."
+        : "引导：已关闭——任务进行中发的消息一律排队作为独立任务执行（/steer on 重新开启）。";
+    }
+    if (windowSeconds === 0) {
+      return en
+        ? "Steering: on, unlimited window — messages inject into the running turn at any time (/steer 30 to restore the window)."
+        : "引导：开启，不限时——任何时刻发消息都注入当前任务（/steer 30 可恢复窗口限制）。";
+    }
+    return en
+      ? `Steering: on, window ${windowSeconds}s — a running turn accepts steering only within its first ${windowSeconds}s; later messages queue. (/steer <seconds> to tune, /steer unlimited to lift, /steer off to disable)`
+      : `引导：开启，资格窗口 ${windowSeconds} 秒——任务开跑 ${windowSeconds} 秒内的消息注入当前任务，之后的消息排队独立执行。（/steer <秒数> 调整，/steer unlimited 不限时，/steer off 关闭）`;
+  };
+  if (action === "off" || action === "disable") {
+    await updateInstanceConfig(stateDir, (config) => {
+      config.larkSteerEnabled = false;
+    });
+    return describe(false, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+  }
+  if (action === "on" || action === "enable") {
+    await updateInstanceConfig(stateDir, (config) => {
+      delete config.larkSteerEnabled;
+    });
+    return describe(true, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+  }
+  if (action === "unlimited" || action === "always" || action === "不限" || action === "0") {
+    await updateInstanceConfig(stateDir, (config) => {
+      delete config.larkSteerEnabled;
+      config.larkSteerWindowSeconds = 0;
+    });
+    return describe(true, 0) + claudeNote;
+  }
+  if (action === "default" || action === "reset") {
+    await updateInstanceConfig(stateDir, (config) => {
+      delete config.larkSteerEnabled;
+      delete config.larkSteerWindowSeconds;
+    });
+    return describe(true, LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+  }
+  const secondsMatch = action.match(/^(\d+)\s*(s|秒)?$/) ?? action.match(/^(\d+)\s*(m|分|分钟)$/);
+  if (secondsMatch) {
+    const raw = Number.parseInt(secondsMatch[1]!, 10);
+    const seconds = /m|分/.test(secondsMatch[2] ?? "") ? raw * 60 : raw;
+    if (seconds < 1 || seconds > 86_400) {
+      return en ? "Window must be 1s–24h (or `unlimited`)." : "窗口需在 1 秒～24 小时之间（或用 `unlimited` 不限时）。";
+    }
+    await updateInstanceConfig(stateDir, (config) => {
+      delete config.larkSteerEnabled;
+      config.larkSteerWindowSeconds = seconds;
+    });
+    return describe(true, seconds) + claudeNote;
+  }
+  if (action === "status") {
+    return describe(cfg.larkSteerEnabled !== false, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+  }
+  return en
+    ? "Usage: /steer [on|off|<seconds>|unlimited|default|status]"
+    : "用法: /steer [on|off|<秒数>|unlimited|default|status]";
+}
+
 async function handleLarkEngineCommand(
   stateDir: string,
   cfg: InstanceConfig,
@@ -2286,7 +2386,7 @@ async function handleLarkGoalCommand(
       // otherwise overwriting activeRuns would orphan it (untracked; /stop can't reach
       // it). Guarantees exactly one tracked active run per conversation.
       input.runtime.activeRuns.get(conversationKey)?.abortController.abort();
-      input.runtime.activeRuns.set(conversationKey, { abortController: abort, hasRunCard: true, goalWatch: true });
+      input.runtime.activeRuns.set(conversationKey, { abortController: abort, hasRunCard: true, goalWatch: true, startedAt: Date.now() });
       void (async () => {
         try {
           const { goal: watched } = await watchThreadGoal({

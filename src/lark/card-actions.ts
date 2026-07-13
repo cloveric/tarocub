@@ -721,7 +721,18 @@ export async function handleLarkCardAction(input: {
       return true;
     }
 
-    const notice = await applyLarkConfigCardAction(input.stateDir, value, locale, larkCardActionFormValue(input.event));
+    const notice = await applyLarkConfigCardAction(
+      input.stateDir,
+      value,
+      locale,
+      larkCardActionFormValue(input.event),
+      {
+        appId: input.runtime.appInfo?.appId,
+        appSecret: input.runtime.appInfo?.appSecret,
+        domain: input.runtime.appInfo?.domain,
+        instanceName: input.instanceName,
+      },
+    );
     const bridgeChatId = typeof value.bridgeChatId === "number" && Number.isInteger(value.bridgeChatId)
       ? value.bridgeChatId
       : stableLarkNumericId(value.conversationKey);
@@ -1391,7 +1402,7 @@ async function runLarkCardChoice(input: {
   // (e.g. a detached /goal watcher, which holds activeRuns outside the chat
   // queue) — overwriting it would orphan that run where /stop can't reach it.
   input.runtime.activeRuns.get(input.conversationKey)?.abortController.abort();
-  input.runtime.activeRuns.set(input.conversationKey, { abortController });
+  input.runtime.activeRuns.set(input.conversationKey, { abortController, startedAt: Date.now() });
   try {
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.started",
@@ -1569,7 +1580,7 @@ async function runLarkArchiveContinueCardAction(input: {
   // Same active-run protection as runLarkCardChoice: abort the previous holder
   // (e.g. a detached /goal watcher) before claiming, never silently orphan it.
   input.runtime.activeRuns.get(input.conversationKey)?.abortController.abort();
-  input.runtime.activeRuns.set(input.conversationKey, { abortController });
+  input.runtime.activeRuns.set(input.conversationKey, { abortController, startedAt: Date.now() });
   try {
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.started",

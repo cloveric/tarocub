@@ -23,6 +23,7 @@ async function cleanupTempRoot(root: string): Promise<void> {
 import { describe, expect, it, vi } from "vitest";
 
 import { createLarkServiceRuntime, handleLarkMessage } from "../src/lark/service.js";
+import { updateInstanceConfig } from "../src/telegram/instance-config.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 
 describe("lark mid-turn steering", () => {
@@ -63,6 +64,187 @@ describe("lark mid-turn steering", () => {
         outcome: "success",
         metadata: expect.objectContaining({ eventType: "engine.turn.steered" }),
       }));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "command.handled",
+        outcome: "success",
+        detail: "steer",
+        metadata: expect.objectContaining({ larkMessageId: "om_steer" }),
+      }));
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("steers within the 30s eligibility window of a fresh run", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-fresh-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController(), startedAt: Date.now() - 5_000 });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_steer_fresh", content: "补充一点" }),
+      });
+
+      expect(bridge.steerActiveTurn).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("does not steer a run older than the 30s eligibility window — the message queues as its own turn", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-window-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController(), startedAt: Date.now() - 31_000 });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_steer_late", content: "换个方向" }),
+      });
+
+      // Past the window: no injection attempt, no OK ack — the message runs as
+      // its own queued turn after the active one.
+      expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
+      expect(channel.addReaction).not.toHaveBeenCalledWith("om_steer_late", "OK");
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("/steer off disables steering entirely — even a fresh run queues", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-off-"));
+    await updateInstanceConfig(stateDir, (config) => {
+      config.larkSteerEnabled = false;
+    });
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController(), startedAt: Date.now() });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_steer_disabled", content: "补一句" }),
+      });
+
+      expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("a configured window widens eligibility: 45s-old run steers under /steer 120", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-wide-"));
+    await updateInstanceConfig(stateDir, (config) => {
+      config.larkSteerWindowSeconds = 120;
+    });
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController(), startedAt: Date.now() - 45_000 });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_steer_wide", content: "补一句" }),
+      });
+
+      expect(bridge.steerActiveTurn).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("window 0 (unlimited) steers a run of any age", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-unlimited-"));
+    await updateInstanceConfig(stateDir, (config) => {
+      config.larkSteerWindowSeconds = 0;
+    });
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController(), startedAt: Date.now() - 3 * 60 * 60 * 1000 });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_steer_any", content: "补一句" }),
+      });
+
+      expect(bridge.steerActiveTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
+  it("/steer command round-trip: set 60s, status reflects it, off disables, unlimited lifts", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-cmd-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+    const send = async (content: string, messageId: string) => {
+      await handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage({ messageId, content }) });
+    };
+    const sentText = () => JSON.stringify(channel.send.mock.calls);
+
+    try {
+      await send("/steer 60", "om_cmd_60");
+      expect(sentText()).toContain("60 秒");
+      await send("/steer", "om_cmd_status");
+      expect(sentText()).toContain("资格窗口 60 秒");
+      await send("/steer off", "om_cmd_off");
+      expect(sentText()).toContain("引导：已关闭");
+      await send("/steer unlimited", "om_cmd_unlimited");
+      expect(sentText()).toContain("不限时");
+      // Commands never reach the engine.
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
       await cleanupTempRoot(stateDir);
     }
