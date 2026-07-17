@@ -756,14 +756,37 @@ function shouldBatchLarkMessage(
   normalized: LarkNormalizedBridgeMessage,
   commandText: string,
 ): boolean {
-  return runtime.queuePolicy.batchWindowMs > 0 &&
-    // Only batch in private chats. In a group, messages on one conversationKey
-    // can come from DIFFERENT users; merging them would run a second user's text
-    // under the first sender's authorization (and attribution). p2p has a single
-    // sender, so coalescing is safe there.
+  if (isSlashCommand(commandText)) {
+    return false;
+  }
+  // Opt-in text batching (batch / preempt-batch queue modes): private chats
+  // only. In a group, text on one conversationKey can come from DIFFERENT
+  // users; merging would run a second user's text under the first sender's
+  // authorization (and attribution). p2p has a single sender, so it's safe.
+  if (
+    runtime.queuePolicy.batchWindowMs > 0 &&
     normalized.bridgeChatType === "private" &&
-    !isSlashCommand(commandText) &&
-    normalized.attachments.length === 0;
+    normalized.attachments.length === 0
+  ) {
+    return true;
+  }
+  // Always-on attachment-burst coalescing (p2p AND groups): an
+  // attachment-bearing message opens (or joins) a short quiet window, and a
+  // follow-up from the SAME sender (typically the caption text) joins it.
+  // Group safety: only one sender's burst ever merges — a different sender
+  // neither joins nor disturbs the pending burst. Quoted replies keep their
+  // own path (their composed quote would be lost in a merge).
+  if (normalized.replyContext) {
+    return false;
+  }
+  const pending = runtime.pendingBatches.get(normalized.conversationKey);
+  if (pending && pending.normalized.senderId !== normalized.senderId) {
+    return false;
+  }
+  if (normalized.attachments.length > 0) {
+    return true;
+  }
+  return pending !== undefined;
 }
 
 function preemptActiveLarkTurnIfEnabled(
@@ -778,6 +801,12 @@ function preemptActiveLarkTurnIfEnabled(
   active?.abortController.abort();
   input.runtime.chatQueue.clearPending(normalized.conversationKey);
 }
+
+// Always-on quiet window that coalesces an attachment burst (e.g. a multi-image
+// send from the mobile picker, which arrives as N separate messages) plus the
+// same sender's caption text into ONE turn — instead of N turns where only one
+// carries the question. Independent of the opt-in batch queue mode.
+const LARK_ATTACHMENT_BURST_WINDOW_MS = 1_000;
 
 const LARK_STEER_ACK_EMOJI = "OK";
 
@@ -816,6 +845,11 @@ async function trySteerActiveLarkTurn(
   // handleAuthorizedMessage; steering passes normalized.text only, which
   // would silently drop the quote — queue those normally instead.
   if (normalized.replyContext) {
+    return false;
+  }
+  // A pending attachment burst owns same-conversation follow-ups: the caption
+  // text must join its images, not be steered into the running turn.
+  if (input.runtime.pendingBatches.get(normalized.conversationKey)) {
     return false;
   }
   const activeRun = input.runtime.activeRuns.get(normalized.conversationKey);
@@ -909,6 +943,18 @@ function scheduleBatchedLarkTurn(
   locale: "zh" | "en",
   onWait: (event: ChatQueueWaitEvent) => Promise<void>,
 ): Promise<boolean> {
+  // Batch-mode uses the configured window; the always-on attachment burst uses
+  // its own quiet window when batch mode is off.
+  const windowMs = input.runtime.queuePolicy.batchWindowMs > 0
+    ? input.runtime.queuePolicy.batchWindowMs
+    : LARK_ATTACHMENT_BURST_WINDOW_MS;
+  // Stamp each attachment with its carrier message: after a merge the batch's
+  // messageId is the NEWEST member, but Feishu resource downloads require the
+  // original carrier message_id for each file_key.
+  const stampedAttachments = normalized.attachments.map((attachment) => ({
+    ...attachment,
+    sourceMessageId: attachment.sourceMessageId ?? normalized.messageId,
+  }));
   const existing = input.runtime.pendingBatches.get(normalized.conversationKey);
   if (existing) {
     clearTimeout(existing.timer);
@@ -916,6 +962,7 @@ function scheduleBatchedLarkTurn(
       ...existing.normalized,
       messageId: normalized.messageId,
       text: mergeBatchedTexts([...existing.texts, normalized.text]),
+      attachments: [...existing.normalized.attachments, ...stampedAttachments],
     };
     existing.texts.push(normalized.text);
     existing.members.push(normalized);
@@ -924,7 +971,7 @@ function scheduleBatchedLarkTurn(
       existing.reject.push(reject);
       existing.timer = setTimeout(() => {
         void flushBatchedLarkTurn(input, normalized.conversationKey, locale, onWait);
-      }, input.runtime.queuePolicy.batchWindowMs);
+      }, windowMs);
       existing.timer.unref?.();
     });
   }
@@ -932,10 +979,10 @@ function scheduleBatchedLarkTurn(
   return new Promise<boolean>((resolve, reject) => {
     const timer = setTimeout(() => {
       void flushBatchedLarkTurn(input, normalized.conversationKey, locale, onWait);
-    }, input.runtime.queuePolicy.batchWindowMs);
+    }, windowMs);
     timer.unref?.();
     input.runtime.pendingBatches.set(normalized.conversationKey, {
-      normalized: { ...normalized },
+      normalized: { ...normalized, attachments: stampedAttachments },
       members: [normalized],
       texts: [normalized.text],
       timer,
@@ -1004,8 +1051,14 @@ async function markMergedBatchMembersTerminal(
 }
 
 function mergeBatchedTexts(texts: string[]): string {
-  return texts
-    .map((text, index) => `#${index + 1}\n${text.trim()}`)
+  // Image-only burst members contribute empty text — numbering those would
+  // render "#1" headers over nothing. Keep numbering only when 2+ real texts merge.
+  const nonEmpty = texts.map((text) => text.trim()).filter((text) => text.length > 0);
+  if (nonEmpty.length <= 1) {
+    return nonEmpty[0] ?? "";
+  }
+  return nonEmpty
+    .map((text, index) => `#${index + 1}\n${text}`)
     .join("\n\n");
 }
 

@@ -84,7 +84,7 @@ export async function downloadLarkAttachments(input: {
   await mkdir(dir, { recursive: true });
   const files: DownloadedLarkAttachment[] = [];
   for (const [index, attachment] of input.attachments.entries()) {
-    const body = await downloadLarkAttachmentBody(input.channel, input.messageId, attachment);
+    const body = await downloadLarkAttachmentBody(input.channel, attachment.sourceMessageId ?? input.messageId, attachment);
     const fileName = attachment.fileName ?? `${attachment.kind}-${index + 1}${defaultExtension(attachment.kind)}`;
     const filePath = path.join(dir, safeFileName(fileName));
     await writeFile(filePath, body);

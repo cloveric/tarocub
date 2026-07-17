@@ -605,6 +605,95 @@ describe("lark service", () => {
     }
   });
 
+  it("coalesces a multi-image burst and its caption into ONE turn, downloading each image from its carrier message", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-img-burst-"));
+    const resourceCalls: Array<{ messageId: string; fileKey: string }> = [];
+    const channel = fakeChannel({
+      rawClient: {
+        im: {
+          v1: {
+            messageResource: {
+              get: vi.fn(async (args: { path: { message_id: string; file_key: string } }) => {
+                resourceCalls.push({ messageId: args.path.message_id, fileKey: args.path.file_key });
+                return { getReadableStream: () => Readable.from([Buffer.from("img-bytes")]) };
+              }),
+            },
+          },
+        },
+      },
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: { text: string; files: string[] }) => ({ text: `收到 ${input.files.length} 图` })),
+    };
+    const runtime = createLarkServiceRuntime();
+    const send = (overrides: Parameters<typeof fakeLarkMessage>[0]) =>
+      handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage(overrides) });
+
+    try {
+      // Mobile multi-select: two image messages arrive back-to-back, then the
+      // caption as its own text message — all inside the burst quiet window.
+      const turns = [
+        send({ messageId: "om_img1", content: "", rawContentType: "image", resources: [{ type: "image", fileKey: "key_1" }] }),
+        send({ messageId: "om_img2", content: "", rawContentType: "image", resources: [{ type: "image", fileKey: "key_2" }] }),
+        send({ messageId: "om_cap", content: "对比这两张图", rawContentType: "text" }),
+      ];
+      await Promise.all(turns);
+
+      // ONE merged turn carrying both images and the caption.
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const input = bridge.handleAuthorizedMessage.mock.calls[0]![0] as { text: string; files: string[] };
+      expect(input.files).toHaveLength(2);
+      expect(input.text).toContain("对比这两张图");
+      // Each image was fetched from its ORIGINAL carrier message, not the
+      // merged turn's (newest) messageId — Feishu rejects mismatched pairs.
+      expect(resourceCalls).toContainEqual({ messageId: "om_img1", fileKey: "key_1" });
+      expect(resourceCalls).toContainEqual({ messageId: "om_img2", fileKey: "key_2" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("does not merge another sender's message into a group attachment burst", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-img-burst-group-"));
+    const channel = fakeChannel({
+      rawClient: {
+        im: {
+          v1: {
+            messageResource: {
+              get: vi.fn(async () => ({ getReadableStream: () => Readable.from([Buffer.from("img")]) })),
+            },
+          },
+        },
+      },
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "ok" })),
+    };
+    const runtime = createLarkServiceRuntime();
+    const send = (overrides: Parameters<typeof fakeLarkMessage>[0]) =>
+      handleLarkMessage({ channel, bridge, runtime, stateDir, requireMentionInGroup: false, message: fakeLarkMessage(overrides) });
+
+    try {
+      const turns = [
+        send({ chatId: "oc_g", chatType: "group", messageId: "om_a_img", senderId: "ou_alice", mentionedBot: true, content: "", rawContentType: "image", resources: [{ type: "image", fileKey: "key_a" }] }),
+        send({ chatId: "oc_g", chatType: "group", messageId: "om_b_text", senderId: "ou_bob", mentionedBot: true, content: "我是另一个人的消息", rawContentType: "text" }),
+      ];
+      await Promise.all(turns);
+
+      // Two separate turns: Bob's text must NOT ride into Alice's image burst.
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      const texts = (bridge.handleAuthorizedMessage.mock.calls as unknown[][]).map((call) => (call[0] as { text: string }).text);
+      const aliceTurn = texts.find((text) => !text.includes("我是另一个人的消息"));
+      const bobTurn = texts.find((text) => text.includes("我是另一个人的消息"));
+      expect(aliceTurn).toBeDefined();
+      expect(bobTurn).toBeDefined();
+      expect(bobTurn).not.toContain("#2");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("notifies Lark users and records a timeline event when a turn waits on the shared engine lock", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-lock-wait-"));
     const channel = fakeChannel();
@@ -12329,7 +12418,7 @@ describe("lark service", () => {
       await expect(pending).resolves.toEqual({ behavior: "deny" });
       // The managed card was flipped in place to the timed-out state.
       await vi.waitFor(() => {
-        const flipped = update.mock.calls.map((call) => JSON.stringify(call[0])).join("\n");
+        const flipped = (update.mock.calls as unknown[][]).map((call) => JSON.stringify(call[0])).join("\n");
         expect(flipped).toContain("选择已超时");
         expect(flipped).toContain("已按默认选项继续");
       });

@@ -37,6 +37,13 @@ export interface LarkNormalizedAttachment {
   kind: "image" | "file" | "audio" | "video";
   fileKey: string;
   fileName?: string;
+  /**
+   * The Lark message that actually carries this resource. Set when an
+   * attachment-burst merge moves attachments onto a merged message whose
+   * messageId differs — Feishu's messageResource.get requires the ORIGINAL
+   * carrier message_id for the file_key, so downloads must prefer this.
+   */
+  sourceMessageId?: string;
 }
 
 export interface LarkNormalizedBridgeMessage {

@@ -597,7 +597,7 @@ describe("lark mid-turn steering", () => {
     }
   });
 
-  it("handles a mixed text→file→text sequence: steer once, then strict FIFO queueing", async () => {
+  it("handles a mixed text→file→text sequence: steer once, then the file burst absorbs the caption", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-mixed-"));
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
@@ -646,8 +646,9 @@ describe("lark mid-turn steering", () => {
           resources: [{ type: "file", fileKey: "file_1", fileName: "note.txt" }],
         },
       });
-      // Round 3: plain text again — but the file already queued, so FIFO wins
-      // over steering and this text queues BEHIND the file.
+      // Round 3: plain text right after the file — the file opened an
+      // attachment-burst window, and a same-sender follow-up (the caption)
+      // JOINS it instead of steering or queueing separately.
       const round3 = handleLarkMessage({
         channel,
         bridge,
@@ -656,20 +657,24 @@ describe("lark mid-turn steering", () => {
         message: fakeLarkMessage({ messageId: "om_round3", content: "然后再说一句" }),
       });
 
-      // Wait until round 2/3 have taken their queue decisions (poll instead of
-      // a fixed sleep — attachment staging can be slow under full-suite load).
+      // Wait until the burst flushes into the queue (poll instead of a fixed
+      // sleep — the burst quiet window plus staging can be slow under load).
       const deadline = Date.now() + 10_000;
-      while (runtime.chatQueue.pendingCount("lark:oc_chat") < 2 && Date.now() < deadline) {
+      while (runtime.chatQueue.pendingCount("lark:oc_chat") < 1 && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(bridge.steerActiveTurn).toHaveBeenCalledTimes(1);
-      expect(runtime.chatQueue.pendingCount("lark:oc_chat")).toBe(2);
+      // ONE merged turn: the file and its trailing caption ride together.
+      expect(runtime.chatQueue.pendingCount("lark:oc_chat")).toBe(1);
 
-      // The running turn finishes; the backlog drains in order: file, then text.
+      // The running turn finishes; the merged turn drains as a single turn.
       releaseRunningTurn();
       await Promise.all([round2, round3]);
-      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
-      expect(turnOrder).toEqual(["file", "text"]);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(turnOrder).toEqual(["file"]);
+      const mergedText = (bridge.handleAuthorizedMessage.mock.calls[0]![0] as { text: string }).text;
+      expect(mergedText).toContain("看这个文件");
+      expect(mergedText).toContain("然后再说一句");
     } finally {
       releaseRunningTurn();
       await cleanupTempRoot(stateDir);
