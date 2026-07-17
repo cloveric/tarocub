@@ -455,7 +455,16 @@ async function runAcceptedLarkMessage(
     // re-render a "queued" wait card. The cancel tap terminalizes the card to
     // "cancelled"; a wait notification that fires just after (in-flight) would
     // otherwise overwrite it back to "queued" — the reported flicker-then-revert.
-    if (input.runtime.cancelledQueueTaskIds.has(normalized.messageId)) {
+    const taskStillPending = (): boolean => {
+      const queue = input.runtime.chatQueue as typeof input.runtime.chatQueue & {
+        isPending?: (chatId: string | number, taskId: string) => boolean;
+      };
+      // Preserve compatibility with lightweight queue stubs used by embedders.
+      // The real ChatQueue exposes isPending and closes the async send race.
+      return typeof queue.isPending !== "function"
+        || queue.isPending(normalized.conversationKey, normalized.messageId);
+    };
+    if (input.runtime.cancelledQueueTaskIds.has(normalized.messageId) || !taskStillPending()) {
       return;
     }
     await appendLarkTimelineEvent(input.stateDir, normalized, {
@@ -481,6 +490,10 @@ async function runAcceptedLarkMessage(
       const existing = input.runtime.queueCards.get(normalized.messageId);
       if (existing) {
         if (await updateLarkQueueCardInPlace(input.channel, existing, card)) {
+          if (!taskStillPending()) {
+            input.runtime.queueCards.delete(normalized.messageId);
+            await settleLingeringLarkQueueCard(input.channel, existing, messageLocale);
+          }
           return;
         }
         // In-place refresh failed and a fresh card replaces it below: recall the
@@ -499,7 +512,12 @@ async function runAcceptedLarkMessage(
         ...(normalized.threadId ? { replyInThread: true } : {}),
       });
       if (managed) {
-        input.runtime.queueCards.set(normalized.messageId, { messageId: managed.messageId, handle: managed });
+        const ref = { messageId: managed.messageId, handle: managed };
+        if (!taskStillPending()) {
+          await settleLingeringLarkQueueCard(input.channel, ref, messageLocale);
+          return;
+        }
+        input.runtime.queueCards.set(normalized.messageId, ref);
         return;
       }
       const sent = await sendLarkCardWithFallback({
@@ -511,7 +529,12 @@ async function runAcceptedLarkMessage(
         locale: messageLocale,
       });
       if (!sent.fallback) {
-        input.runtime.queueCards.set(normalized.messageId, { messageId: sent.messageId });
+        const ref = { messageId: sent.messageId };
+        if (!taskStillPending()) {
+          await settleLingeringLarkQueueCard(input.channel, ref, messageLocale);
+          return;
+        }
+        input.runtime.queueCards.set(normalized.messageId, ref);
       }
     } catch (error) {
       await appendLarkTimelineEvent(input.stateDir, normalized, {
@@ -1961,6 +1984,9 @@ export async function createLarkRunCardController(input: {
   // patching. Going to 100ms (10/s, zero margin) would also let two
   // concurrently streaming cards exceed the app-level 1000 req/min budget.
   const ELEMENT_STREAM_THROTTLE_MS = 150;
+  // Cadence for rolling-tail refreshes once the live text outgrows the element
+  // cap (each tick replaces the whole element instead of appending).
+  const ROLLING_STREAM_THROTTLE_MS = 3_000;
   const elementStreamEnabled = Boolean(handle) &&
     input.elementStream !== false &&
     !["off", "0", "false"].includes((process.env.CCTB_LARK_ELEMENT_STREAM ?? "").trim().toLowerCase());
@@ -1986,7 +2012,7 @@ export async function createLarkRunCardController(input: {
       // content it never received (the monotonic guard would then skip sends
       // and freeze the streamed text until finalize).
       const card = renderLarkRunCard(state, input.locale);
-      const liveAtRender = liveRunCardStreamElement(state);
+      const liveAtRender = liveRunCardStreamElement(state, input.locale);
       if (await tryUpdate(card)) {
         consecutiveFullUpdateFailures = 0;
         remoteLiveElementId = liveAtRender?.elementId ?? null;
@@ -2029,7 +2055,7 @@ export async function createLarkRunCardController(input: {
       if (!handle || Date.now() < elementStreamRetryAt || degraded) {
         return;
       }
-      const live = liveRunCardStreamElement(state);
+      const live = liveRunCardStreamElement(state, input.locale);
       if (!live || live.elementId !== remoteLiveElementId) {
         // Structure moved on while this tick was queued; the full path owns it.
         scheduleFullUpdate();
@@ -2040,10 +2066,12 @@ export async function createLarkRunCardController(input: {
         scheduleFullUpdate();
         return;
       }
-      const trimmed = trimToStreamSafeBoundary(live.content);
-      // Monotonic only: the element shows everything sent so far; a shorter
-      // boundary-trimmed payload would visually roll the typewriter back.
-      if (trimmed.length <= lastElementContentSent.length) {
+      // Pre-cap: monotonic typewriter — the element shows everything sent so
+      // far, and a shorter boundary-trimmed payload would visually roll it
+      // back. Past the cap (rolling tail): payloads are full replacements that
+      // are NOT extensions of each other, so send whenever the content changed.
+      const trimmed = live.rolling ? live.content : trimToStreamSafeBoundary(live.content);
+      if (live.rolling ? trimmed === lastElementContentSent : trimmed.length <= lastElementContentSent.length) {
         return;
       }
       if (await updateManagedCardElement(input.channel, handle, live.elementId, trimmed)) {
@@ -2077,10 +2105,16 @@ export async function createLarkRunCardController(input: {
       elementStreamEnabled && Date.now() >= elementStreamRetryAt && !degraded &&
       remoteStructureSig !== null && firstLiveUpdateDone
     ) {
-      const live = liveRunCardStreamElement(state);
+      const live = liveRunCardStreamElement(state, input.locale);
       if (live && live.elementId === remoteLiveElementId) {
         if (!elementTimer) {
-          elementTimer = setTimeout(flushElementStream, ELEMENT_STREAM_THROTTLE_MS);
+          // Rolling-tail mode replaces the whole element each tick, so slow the
+          // cadence down — a 3s tail refresh reads fine and stays well inside
+          // CardKit rate limits; the pre-cap typewriter keeps its fast tick.
+          elementTimer = setTimeout(
+            flushElementStream,
+            live.rolling ? ROLLING_STREAM_THROTTLE_MS : ELEMENT_STREAM_THROTTLE_MS,
+          );
           elementTimer.unref?.();
         }
         return;

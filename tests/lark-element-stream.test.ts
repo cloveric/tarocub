@@ -221,41 +221,54 @@ describe("run card element-stream fast path", () => {
     await controller!.finish("done");
   });
 
-  it("freezes at the per-element cap on very long CJK text without erroring or spamming", async () => {
+  it("switches to a rolling tail past the per-element cap so a long turn never looks frozen", async () => {
     const { channel, elementContent, cardUpdate } = managedChannel();
     const controller = await createController(channel);
 
-    // Establish the element with a first delta, then stream far past both the
-    // char cap and (for CJK) the byte cap.
+    // Establish the element with a first delta, stream to just under the cap on
+    // the fast pre-cap cadence, then cross it (rolling ticks run on the slower
+    // 3s cadence).
     await controller!.apply({ type: "assistant_text", text: "开头。" });
     await flushTimers(20);
     const fullAfterFirst = cardUpdate.mock.calls.length;
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < 2; i += 1) {
       await controller!.apply({ type: "assistant_text", text: `${"超长中文内容".repeat(300)}。` });
       await flushTimers(320);
     }
+    await controller!.apply({ type: "assistant_text", text: `${"超长中文内容".repeat(300)}。` });
+    await flushTimers(3_200);
 
-    // Element ticks happened, every payload respects the caps, and the content
-    // is monotonic (a capped tick never rolls the typewriter back).
+    // Every payload respects the caps; pre-cap payloads are monotonic, and past
+    // the cap the payload carries the omission notice instead of freezing.
     expect(elementContent.mock.calls.length).toBeGreaterThanOrEqual(1);
     let previous = "";
+    let sawRolling = false;
     for (const call of elementContent.mock.calls) {
       const content = (call[0] as { data: { content: string } }).data.content;
       expect(content.length).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
       expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
-      expect(content.startsWith(previous)).toBe(true);
-      previous = content;
+      if (content.includes("实时预览仅显示最新输出")) {
+        sawRolling = true;
+      } else if (!sawRolling) {
+        expect(content.startsWith(previous)).toBe(true);
+        previous = content;
+      }
     }
-    // Once frozen at the cap, ticks stop instead of re-sending identical text.
-    const capped = elementContent.mock.calls.length;
-    await controller!.apply({ type: "assistant_text", text: "尾巴。" });
-    await flushTimers(320);
-    expect(elementContent.mock.calls.length).toBe(capped);
-    // The overflow decision itself is finalize's (full-path) job — untouched here.
+    expect(sawRolling).toBe(true);
+
+    // The rolling tail keeps FOLLOWING new text: a late marker shows up in a
+    // later tick instead of the element staying frozen at the cap.
+    const before = elementContent.mock.calls.length;
+    await controller!.apply({ type: "assistant_text", text: "独特结尾标记。" });
+    await flushTimers(3_200);
+    expect(elementContent.mock.calls.length).toBeGreaterThan(before);
+    const lastContent = (elementContent.mock.calls.at(-1)![0] as { data: { content: string } }).data.content;
+    expect(lastContent).toContain("独特结尾标记");
+    // Rolling stays on the element path — no full-card churn.
     expect(cardUpdate.mock.calls.length).toBe(fullAfterFirst);
 
     await controller!.finish("done");
-  });
+  }, 20_000);
 
   it("hands off to the full path around AskUserQuestion and resumes element streaming after", async () => {
     const { channel, elementContent, cardUpdate } = managedChannel();

@@ -16,6 +16,7 @@ import {
   renderLarkRunCardCompact,
   renderLarkRunCardMinimal,
   splitLarkAnswerIntoCardChunks,
+  liveRunCardStreamElement,
 } from "../src/lark/card-renderer.js";
 
 function maxMarkdownElementLength(card: unknown): number {
@@ -202,6 +203,22 @@ describe("lark card renderer", () => {
     // mid-answer truncator. (Lowering the byte cap below 3× the char cap would re-introduce
     // the old "fits char cap but byte-truncated" bug.)
     expect(ELEMENT_CONTENT_MAX_BYTES).toBeGreaterThanOrEqual(LARK_CARD_ANSWER_MAX * 3);
+  });
+
+  it("renders the live oversize text group as a rolling tail that matches the element stream byte-for-byte", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "早期内容。".repeat(1200) + "最新进展标记。" });
+    const live = liveRunCardStreamElement(state);
+    expect(live?.rolling).toBe(true);
+    // The rolling tail shows the omission notice and the NEWEST text, not a frozen prefix.
+    expect(live!.content).toContain("实时预览仅显示最新输出");
+    expect(live!.content).toContain("最新进展标记");
+    expect(live!.content.length).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
+    // The full-card patch renders the SAME content for that element, so a
+    // structure update never rewinds the preview to the old frozen prefix.
+    const card = renderLarkRunCard(state) as { body: { elements: Array<Record<string, unknown>> } };
+    const element = card.body.elements.find((el) => el.element_id === live!.elementId);
+    expect(element?.content).toBe(live!.content);
   });
 
   it("renders a guaranteed-tiny terminal card pointing to the full reply", () => {

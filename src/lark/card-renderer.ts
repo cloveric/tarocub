@@ -299,8 +299,10 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     if (livePlan) {
       elements.push(livePlan);
     }
+    const runningGroups = [...groupBlocks(state.blocks)];
+    const lastGroup = runningGroups[runningGroups.length - 1];
     let streamTextIndex = 0;
-    for (const group of groupBlocks(state.blocks)) {
+    for (const group of runningGroups) {
       if (group.kind === "text") {
         const cleaned = cleanCardText(group.content);
         if (cleaned) {
@@ -308,8 +310,17 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
           // overflow Feishu's per-element limit and fail every card update.
           // Stable element_id lets the live (last) text element be updated via
           // the CardKit element-content endpoint (native typewriter) instead of
-          // re-sending the whole card on every delta.
-          elements.push(markdownElement(truncate(cleaned, LARK_CARD_ANSWER_MAX), streamTextElementId(streamTextIndex)));
+          // re-sending the whole card on every delta. The LIVE (last) group
+          // past the cap renders the rolling tail — the exact content the
+          // element stream sends — so a full patch never rewinds the preview
+          // to a frozen prefix.
+          const isLiveGroup = group === lastGroup;
+          elements.push(markdownElement(
+            isLiveGroup && cleaned.length > LARK_CARD_ANSWER_MAX
+              ? rollingTailContent(cleaned, locale)
+              : truncate(cleaned, LARK_CARD_ANSWER_MAX),
+            streamTextElementId(streamTextIndex),
+          ));
           streamTextIndex += 1;
         }
       } else {
@@ -411,6 +422,38 @@ function streamTextElementId(index: number): string {
   return `md_${index}`;
 }
 
+// Rolling-tail live preview: once a streamed text group outgrows the per-element
+// cap, the live element stops being a frozen prefix (which made hours-long turns
+// look stuck) and instead always shows the MOST RECENT slice of the narration,
+// prefixed with an omission notice. The full text still arrives at finalize via
+// continuation cards, so nothing is lost — this only changes the live preview.
+const LARK_STREAM_TAIL_TARGET = 4000;
+
+export function rollingTailContent(cleaned: string, locale: Locale = "zh"): string {
+  let start = Math.max(0, cleaned.length - LARK_STREAM_TAIL_TARGET);
+  // Prefer starting at a line boundary so the tail doesn't open mid-word, as
+  // long as that doesn't eat most of the window.
+  const newline = cleaned.indexOf("\n", start);
+  if (newline >= 0 && newline < cleaned.length - 200) {
+    start = newline + 1;
+  }
+  let tail = cleaned.slice(start);
+  // Fence parity: if the cut fell inside a ``` block (odd fence count in the
+  // dropped prefix), reopen it so the tail renders as code; if the tail itself
+  // ends with an open fence (writer mid-code), close it for this tick.
+  const prefixFences = (cleaned.slice(0, start).match(/```/g) ?? []).length;
+  if (prefixFences % 2 === 1) {
+    tail = "```\n" + tail;
+  }
+  if (((tail.match(/```/g) ?? []).length) % 2 === 1) {
+    tail = tail + "\n```";
+  }
+  const notice = locale === "en"
+    ? `_… live preview shows the latest output only (${start} earlier chars arrive in full when the task finishes) …_`
+    : `_…实时预览仅显示最新输出（前 ${start} 字将在任务结束后完整发出）…_`;
+  return truncateBytes(truncate(`${notice}\n\n${tail}`, LARK_CARD_ANSWER_MAX), ELEMENT_CONTENT_MAX_BYTES);
+}
+
 /**
  * The run card's live streaming text element: the LAST block group while the
  * turn is running, only when that group is text (a trailing tool group means
@@ -418,7 +461,10 @@ function streamTextElementId(index: number): string {
  * into). Content goes through the exact same truncation as markdownElement so
  * an element-level update and a full-card patch always agree byte-for-byte.
  */
-export function liveRunCardStreamElement(state: LarkRunState): { elementId: string; content: string } | null {
+export function liveRunCardStreamElement(
+  state: LarkRunState,
+  locale: Locale = "zh",
+): { elementId: string; content: string; rolling: boolean } | null {
   if (state.status !== "running") {
     return null;
   }
@@ -437,9 +483,13 @@ export function liveRunCardStreamElement(state: LarkRunState): { elementId: stri
   if (!cleaned || textIndex < 0) {
     return null;
   }
+  const rolling = cleaned.length > LARK_CARD_ANSWER_MAX;
   return {
     elementId: streamTextElementId(textIndex),
-    content: truncateBytes(truncate(cleaned, LARK_CARD_ANSWER_MAX), ELEMENT_CONTENT_MAX_BYTES),
+    content: rolling
+      ? rollingTailContent(cleaned, locale)
+      : truncateBytes(cleaned, ELEMENT_CONTENT_MAX_BYTES),
+    rolling,
   };
 }
 
