@@ -12291,6 +12291,73 @@ describe("lark service", () => {
     await pending.catch(() => undefined);
   });
 
+  it("flips an unanswered AskUserQuestion card to a timed-out state and says the task continued", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = createLarkServiceRuntime();
+      const create = vi.fn(async () => ({ data: { card_id: "card_timeout" } }));
+      const update = vi.fn(async () => ({ code: 0 }));
+      const contentUpdate = vi.fn(async () => ({ code: 0 }));
+      const channel = fakeChannel({
+        rawClient: {
+          cardkit: { v1: { card: { create, update }, cardElement: { content: contentUpdate } } },
+          im: { v1: { message: { reply: vi.fn(async () => ({ data: { message_id: "om_mc" } })) } } },
+        },
+      });
+      const pending = requestLarkApproval({
+        channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+        request: {
+          engine: "claude",
+          toolName: "AskUserQuestion",
+          toolInput: {
+            questions: [
+              { question: "Which mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }, { label: "Careful" }] },
+            ],
+          },
+        } satisfies EngineApprovalRequest,
+      });
+      // Let the managed-card send settle so pending.managedCard is tracked
+      // (create being called isn't enough — the handle lands after the async
+      // send resolves).
+      const requestId = [...runtime.pendingApprovals.keys()][0]!;
+      await vi.waitFor(() => {
+        expect(runtime.pendingApprovals.get(requestId)?.managedCard).toBeTruthy();
+      });
+
+      await vi.advanceTimersByTimeAsync(29 * 60 * 1000 + 50);
+      // The pending resolves as deny (default path continues).
+      await expect(pending).resolves.toEqual({ behavior: "deny" });
+      // The managed card was flipped in place to the timed-out state.
+      await vi.waitFor(() => {
+        const flipped = update.mock.calls.map((call) => JSON.stringify(call[0])).join("\n");
+        expect(flipped).toContain("选择已超时");
+        expect(flipped).toContain("已按默认选项继续");
+      });
+      // And the audible notice says what actually happened (not just "expired").
+      const texts = (channel.send.mock.calls as unknown[][])
+        .map((call) => (call[1] as { text?: string }).text)
+        .filter((text): text is string => typeof text === "string");
+      expect(texts.some((text) => text.includes("选择已超时") && text.includes("默认选项继续"))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("explains an expired choice card on a late form submit instead of 'no pending approval'", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId: "req_gone" }, form_value: { q0: "0" } } },
+    });
+    const texts = (channel.send.mock.calls as unknown[][])
+      .map((call) => (call[1] as { text?: string }).text)
+      .filter((text): text is string => typeof text === "string");
+    expect(texts.some((text) => text.includes("选择卡已过期") && text.includes("默认选项继续"))).toBe(true);
+    expect(texts.join("\n")).not.toContain("没有待处理的审批");
+  });
+
   it("resolves every AskUserQuestion answer from a single form submit", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();

@@ -39,7 +39,7 @@ import {
   renderLarkStopResult,
   resolveLarkLocale,
 } from "./locale.js";
-import { sendManagedCard, settleThenUpdateManagedCard } from "./managed-card.js";
+import { sendManagedCard, settleThenUpdateManagedCard, updateManagedCard } from "./managed-card.js";
 import { larkAccessChatIdFromConversationKey, larkAccessConversationKeyFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime, PendingLarkApproval } from "./runtime.js";
@@ -100,9 +100,22 @@ export async function requestLarkApproval(input: {
       }
       cleanup();
       pending.resolve({ behavior: "deny" });
+      const locale = input.locale ?? "zh";
+      // Flip the pending card read-only IN PLACE so it stops looking answerable
+      // (a silent in-place edit doesn't push-notify, so the text notice below
+      // still goes out as the audible signal).
+      if (pending.managedCard) {
+        void updateManagedCard(input.channel, pending.managedCard, renderLarkPendingTimedOutCard(pending, locale))
+          .catch(() => undefined);
+      }
+      const expiredText = isAskUserQuestionRequest(input.request)
+        ? (locale === "en"
+          ? "Choice timed out (29 min) — the task continued with the default option. To adjust, just send a message."
+          : "选择已超时（29 分钟未提交），任务已按默认选项继续。要调整的话直接发消息说明即可。")
+        : renderLarkApprovalExpired(locale);
       void input.channel.send(
         input.chatId,
-        { text: renderLarkApprovalExpired(input.locale ?? "zh") },
+        { text: expiredText },
         larkReplyOptions(input.replyTo, input.replyInThread),
       ).catch(() => undefined);
     }, TELEGRAM_APPROVAL_TIMEOUT_MS);
@@ -370,6 +383,41 @@ function renderLarkAskUserQuestionSubmittedCard(
       direction: "vertical",
       padding: "12px 12px 12px 12px",
       elements: [{ tag: "markdown", content: lines || none }],
+    },
+  };
+}
+
+/**
+ * Read-only replacement for a pending card whose 29-minute wait expired. The
+ * form/buttons visually "die" in place — without this the expired card kept
+ * looking answerable, and a late submit only produced an easily-missed text
+ * reply (the operator hit exactly that: picked options an hour later and
+ * concluded the submit button was broken).
+ */
+function renderLarkPendingTimedOutCard(
+  pending: { askUserQuestionInput?: unknown; approvalToolName?: string },
+  locale: Locale,
+): Record<string, unknown> {
+  const isAsk = pending.askUserQuestionInput !== undefined;
+  const en = locale === "en";
+  const title = isAsk
+    ? (en ? "Choice timed out" : "选择已超时")
+    : (en ? "Approval timed out" : "审批已超时");
+  const body = isAsk
+    ? (en
+      ? "No submission within 29 minutes — the task continued with the default option. To adjust, just send a message describing what you want."
+      : "29 分钟内未收到提交，任务已按默认选项继续。要调整的话，直接发消息说明你的选择即可。")
+    : (en
+      ? `No decision within 29 minutes — the request${pending.approvalToolName ? ` (${pending.approvalToolName})` : ""} was denied and the turn moved on.`
+      : `29 分钟内未作决定，该请求${pending.approvalToolName ? `（${pending.approvalToolName}）` : ""}已按拒绝处理。`);
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: title } },
+    header: { title: { tag: "plain_text", content: `⏳ ${title}` } },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [{ tag: "markdown", content: body }],
     },
   };
 }
@@ -867,9 +915,15 @@ export async function handleLarkCardAction(input: {
   ) {
     const pending = input.runtime.pendingApprovals.get(value.requestId);
     if (!pending) {
+      // A late submit on an expired form: say what actually happened instead of
+      // the terse "no pending approval" (which reads as a broken button).
       await input.channel.send(
         input.event.chatId,
-        { text: renderApprovalNoPending(locale) },
+        {
+          text: locale === "en"
+            ? "This choice card expired (no submission within 29 minutes) — the task already continued with the default option. To adjust, just send a message describing what you want."
+            : "这张选择卡已过期（29 分钟内未提交），任务当时已按默认选项继续。要调整的话，直接发消息说明你的选择即可。",
+        },
         larkReplyOptions(input.event.messageId, replyInThread),
       );
       return true;
