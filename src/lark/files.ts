@@ -83,10 +83,25 @@ export async function downloadLarkAttachments(input: {
   const dir = path.join(input.stateDir, "workspace", ".lark-files", safeSegment(input.messageId), "input");
   await mkdir(dir, { recursive: true });
   const files: DownloadedLarkAttachment[] = [];
+  const usedNames = new Set<string>();
   for (const [index, attachment] of input.attachments.entries()) {
     const body = await downloadLarkAttachmentBody(input.channel, attachment.sourceMessageId ?? input.messageId, attachment);
     const fileName = attachment.fileName ?? `${attachment.kind}-${index + 1}${defaultExtension(attachment.kind)}`;
-    const filePath = path.join(dir, safeFileName(fileName));
+    // A merged attachment burst downloads several messages' files into ONE
+    // directory — same-named files (e.g. two cameras' IMG_001.jpg) would
+    // silently overwrite each other. Suffix duplicates instead.
+    let safeName = safeFileName(fileName);
+    if (usedNames.has(safeName)) {
+      const ext = path.extname(safeName);
+      const stem = safeName.slice(0, safeName.length - ext.length);
+      let counter = 2;
+      while (usedNames.has(`${stem}-${counter}${ext}`)) {
+        counter += 1;
+      }
+      safeName = `${stem}-${counter}${ext}`;
+    }
+    usedNames.add(safeName);
+    const filePath = path.join(dir, safeName);
     await writeFile(filePath, body);
     files.push({ attachment, localPath: filePath });
   }

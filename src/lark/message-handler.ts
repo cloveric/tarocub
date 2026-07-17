@@ -805,8 +805,11 @@ function preemptActiveLarkTurnIfEnabled(
 // Always-on quiet window that coalesces an attachment burst (e.g. a multi-image
 // send from the mobile picker, which arrives as N separate messages) plus the
 // same sender's caption text into ONE turn — instead of N turns where only one
-// carries the question. Independent of the opt-in batch queue mode.
-const LARK_ATTACHMENT_BURST_WINDOW_MS = 1_000;
+// carries the question. Independent of the opt-in batch queue mode. 500ms
+// (operator-tuned): a drag-drop batch arrives back-to-back over one WS
+// connection, and the window RESETS on every join, so only the gap between
+// consecutive messages must fit — while a lone image only costs 0.5s latency.
+const LARK_ATTACHMENT_BURST_WINDOW_MS = 500;
 
 const LARK_STEER_ACK_EMOJI = "OK";
 

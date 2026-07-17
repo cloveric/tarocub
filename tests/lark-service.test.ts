@@ -653,6 +653,52 @@ describe("lark service", () => {
     }
   }, 15_000);
 
+  it("keeps same-named files from a merged burst distinct instead of overwriting", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-burst-collide-"));
+    const channel = fakeChannel({
+      rawClient: {
+        im: {
+          v1: {
+            messageResource: {
+              get: vi.fn(async (args: { path: { file_key: string } }) => ({
+                getReadableStream: () => Readable.from([Buffer.from(`content-of-${args.path.file_key}`)]),
+              })),
+            },
+          },
+        },
+      },
+    });
+    // Post-turn cleanup removes the staged files, so capture their contents
+    // DURING the turn (same pattern as the base attachment test).
+    let stagedContents: string[] = [];
+    let stagedPaths: string[] = [];
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: { files: string[] }) => {
+        stagedPaths = input.files;
+        stagedContents = await Promise.all(input.files.map((file) => readFile(file, "utf8")));
+        return { text: "ok" };
+      }),
+    };
+    const runtime = createLarkServiceRuntime();
+    const send = (overrides: Parameters<typeof fakeLarkMessage>[0]) =>
+      handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage(overrides) });
+
+    try {
+      await Promise.all([
+        send({ messageId: "om_f1", content: "", rawContentType: "file", resources: [{ type: "file", fileKey: "key_f1", fileName: "IMG_001.jpg" }] }),
+        send({ messageId: "om_f2", content: "", rawContentType: "file", resources: [{ type: "file", fileKey: "key_f2", fileName: "IMG_001.jpg" }] }),
+      ]);
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      // Distinct paths, each preserving its own bytes — no silent overwrite.
+      expect(stagedPaths).toHaveLength(2);
+      expect(new Set(stagedPaths).size).toBe(2);
+      expect([...stagedContents].sort()).toEqual(["content-of-key_f1", "content-of-key_f2"]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("does not merge another sender's message into a group attachment burst", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-img-burst-group-"));
     const channel = fakeChannel({
