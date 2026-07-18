@@ -1806,7 +1806,10 @@ describe("lark service", () => {
           type: "file",
         },
       });
-      expect(transcribeMedia).toHaveBeenCalledWith(expect.stringMatching(/audio-1\.ogg$/));
+      expect(transcribeMedia).toHaveBeenCalledWith(
+        expect.stringMatching(/audio-1\.ogg$/),
+        expect.objectContaining({ stateDir }),
+      );
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         files: [],
         text: expect.stringContaining("transcript:audio-1.ogg"),

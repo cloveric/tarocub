@@ -178,7 +178,10 @@ describe("prepareTelegramMessageInput", () => {
         downloadedAttachments: [],
       });
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
-      expect(transcribeVoice).toHaveBeenCalledWith(expect.stringMatching(/brief\.m4a$/));
+      expect(transcribeVoice).toHaveBeenCalledWith(
+        expect.stringMatching(/brief\.m4a$/),
+        expect.objectContaining({ messageText: "please use this", stateDir: root }),
+      );
     } finally {
       await removeTempRoot(root);
     }
@@ -209,7 +212,10 @@ describe("prepareTelegramMessageInput", () => {
         downloadedAttachments: [],
       });
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
-      expect(transcribeVoice).toHaveBeenCalledWith(expect.stringMatching(/lesson\.mp4$/));
+      expect(transcribeVoice).toHaveBeenCalledWith(
+        expect.stringMatching(/lesson\.mp4$/),
+        expect.objectContaining({ messageText: "make subtitles", stateDir: root }),
+      );
     } finally {
       await removeTempRoot(root);
     }

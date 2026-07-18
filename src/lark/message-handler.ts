@@ -1259,7 +1259,12 @@ async function runNormalizedLarkMessage(
         const transcribeMedia = input.runtime.transcribeMedia ?? defaultTranscribeLarkMedia;
         for (const media of mediaDownloads) {
           try {
-            const transcript = await transcribeMedia(media.localPath);
+            // Message text enables the 强制云端转写/强制本地转写 routing
+            // overrides; stateDir hosts cloud ASR job dirs (`asr-jobs/`).
+            const transcript = await transcribeMedia(media.localPath, {
+              messageText: normalized.text,
+              stateDir: input.stateDir,
+            });
             if (transcript.trim()) {
               requestText = requestText.trim() ? `${requestText.trim()}\n${transcript.trim()}` : transcript.trim();
             }

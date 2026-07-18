@@ -113,6 +113,10 @@ const INSTANCE_SERVICE_ENV_KEYS = new Set([
   "ASR_SERVICE_COMMAND",
   "ASR_RESTART_AFTER_FAILURES",
   "ASR_RESTART_COOLDOWN_MS",
+  // Long-audio cloud transcription (Aliyun Tingwu) — see src/runtime/asr-cloud.ts.
+  "TINGWU_ASR_DIR",
+  "ASR_CLOUD_THRESHOLD_SECONDS",
+  "ASR_CLOUD_TASK_TIMEOUT_SECONDS",
 ]);
 
 function parseDotEnvEntry(rawLine: string): { key: string; value: string } | null {

@@ -3,6 +3,12 @@ import { access, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import {
+  detectCloudAsrOverride,
+  readCloudAsrConfig,
+  transcribeViaTingwuCloud,
+  type TranscribeMediaOptions,
+} from "../runtime/asr-cloud.js";
 import type { DownloadedAttachment } from "../runtime/file-workflow.js";
 import type { TelegramApi } from "./api.js";
 import { createAsrWatchdogFromEnv, type AsrWatchdog } from "./asr-watchdog.js";
@@ -254,7 +260,16 @@ export function createDefaultTranscribeVoice(options: {
   httpTimeoutMs?: number;
   chunkAfterSeconds?: number;
   chunkSeconds?: number;
-} = {}): (audioPath: string) => Promise<string> {
+  /**
+   * Env source for the long-audio cloud ASR config (TINGWU_ASR_DIR,
+   * ASR_CLOUD_THRESHOLD_SECONDS, ASR_CLOUD_TASK_TIMEOUT_SECONDS). Read at
+   * CALL time — not captured here — so the feature can be configured without
+   * rebuilding the transcribe function.
+   */
+  env?: NodeJS.ProcessEnv;
+  /** Fallback state dir for cloud ASR job dirs when the call carries none. */
+  stateDir?: string;
+} = {}): (audioPath: string, callOptions?: TranscribeMediaOptions) => Promise<string> {
   const httpUrl = options.httpUrl ?? ASR_HTTP_URL;
   const cliPython = options.cliPython ?? ASR_CLI_PYTHON;
   const cliScript = options.cliScript ?? ASR_CLI_SCRIPT;
@@ -266,6 +281,8 @@ export function createDefaultTranscribeVoice(options: {
   const httpTimeoutMs = options.httpTimeoutMs ?? ASR_HTTP_TIMEOUT_MS;
   const chunkAfterSeconds = options.chunkAfterSeconds ?? ASR_CHUNK_AFTER_SECONDS;
   const chunkSeconds = Math.min(options.chunkSeconds ?? ASR_CHUNK_SECONDS, MAX_ASR_CHUNK_SECONDS);
+  const cloudEnv = options.env ?? process.env;
+  const factoryStateDir = options.stateDir;
 
   async function recordHttpSuccess(): Promise<void> {
     try {
@@ -326,8 +343,7 @@ export function createDefaultTranscribeVoice(options: {
     });
   }
 
-  return async function defaultTranscribeVoice(audioPath: string): Promise<string> {
-    const duration = await probeAudioDurationSeconds(audioPath, execFileImpl, ffprobePath);
+  async function transcribeLocally(audioPath: string, duration: number | null): Promise<string> {
     const shouldExtractOrChunk = isLikelyVideoFile(audioPath) || (duration !== null && duration > chunkAfterSeconds);
     if (shouldExtractOrChunk) {
       const { chunks, cleanup } = await splitAudioIntoChunks(audioPath, {
@@ -369,10 +385,41 @@ export function createDefaultTranscribeVoice(options: {
     }
 
     return transcribeSingleFile(audioPath);
+  }
+
+  return async function defaultTranscribeVoice(audioPath: string, callOptions?: TranscribeMediaOptions): Promise<string> {
+    const duration = await probeAudioDurationSeconds(audioPath, execFileImpl, ffprobePath);
+
+    // Long-audio cloud routing (Aliyun Tingwu). Env is read per call so the
+    // feature can be enabled/disabled without rebuilding the transcriber.
+    // Unknown duration routes local exactly as today unless the user forced
+    // the cloud path explicitly.
+    const cloudConfig = readCloudAsrConfig(cloudEnv);
+    const override = detectCloudAsrOverride(callOptions?.messageText);
+    const shouldUseCloud = cloudConfig !== null &&
+      override !== "local" &&
+      (override === "cloud" || (duration !== null && duration >= cloudConfig.thresholdSeconds));
+    if (shouldUseCloud && cloudConfig !== null) {
+      const jobStateDir = callOptions?.stateDir ?? factoryStateDir;
+      const jobRootDir = jobStateDir
+        ? path.join(jobStateDir, "asr-jobs")
+        : path.join(os.tmpdir(), "cctb-asr-jobs");
+      try {
+        return await transcribeViaTingwuCloud(audioPath, { config: cloudConfig, jobRootDir });
+      } catch (error) {
+        // ANY cloud failure falls back to a local transcription attempt. The
+        // error messages from asr-cloud.ts carry no stderr content and no
+        // env values, so this warn cannot leak signed URLs or credentials.
+        console.warn(`ASR cloud transcription failed; falling back to local ASR: ${summarizeError(error)}`);
+      }
+    }
+
+    return transcribeLocally(audioPath, duration);
   };
 }
 
-const defaultTranscribeVoice = (audioPath: string): Promise<string> => createDefaultTranscribeVoice()(audioPath);
+const defaultTranscribeVoice = (audioPath: string, callOptions?: TranscribeMediaOptions): Promise<string> =>
+  createDefaultTranscribeVoice()(audioPath, callOptions);
 
 async function defaultDownloadAttachments(
   api: Pick<TelegramApi, "getFile" | "downloadFile">,
@@ -459,6 +506,14 @@ export async function prepareTelegramMessageInput(input: {
     ? await downloadAttachments(api, inboxDir, [normalized.replyContext.audioAttachment])
     : [];
 
+  // Message text enables the 强制云端转写/强制本地转写 routing overrides; the
+  // state dir (inboxDir's parent, same convention as audit events) hosts
+  // cloud ASR job dirs under `<stateDir>/asr-jobs/`.
+  const transcribeOptions: TranscribeMediaOptions = {
+    messageText: normalized.text,
+    stateDir: path.dirname(path.resolve(inboxDir)),
+  };
+
   let text = normalized.text;
   if (transcribableDownloads.length > 0) {
     // Track whether any transcribable attachment produced real speech. An empty
@@ -468,7 +523,7 @@ export async function prepareTelegramMessageInput(input: {
     let lastEmptyAttachment: NormalizedTelegramAttachment | undefined;
     for (const media of transcribableDownloads) {
       try {
-        const transcript = (await transcribeVoice(media.localPath)).trim();
+        const transcript = (await transcribeVoice(media.localPath, transcribeOptions)).trim();
         if (transcript) {
           producedAnyTranscript = true;
           text = text ? `${text}\n${transcript}` : transcript;
@@ -503,7 +558,7 @@ export async function prepareTelegramMessageInput(input: {
   if (quotedAudioDownloads.length > 0 && normalized.replyContext) {
     for (const quotedAudio of quotedAudioDownloads) {
       try {
-        const transcript = await transcribeVoice(quotedAudio.localPath);
+        const transcript = await transcribeVoice(quotedAudio.localPath, transcribeOptions);
         if (transcript) {
           appendQuotedAudioTranscript(normalized.replyContext, transcript);
         }

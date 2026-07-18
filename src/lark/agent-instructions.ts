@@ -33,7 +33,13 @@ export function localAsrAgentInstruction(): string | undefined {
     return undefined;
   }
   const httpUrl = (process.env.ASR_HTTP_URL ?? "").trim() || "http://127.0.0.1:8412/transcribe";
-  return `Local speech-to-text is installed. For audio/video transcription you do yourself, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or say "no ASR available". Fast path: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Fall back to video frames/OCR only if this genuinely fails.`;
+  // Cloud long-audio path (Aliyun Tingwu): advertised only when the instance is
+  // actually configured, so the instruction never overpromises.
+  const tingwuDir = (process.env.TINGWU_ASR_DIR ?? "").trim();
+  const cloudNote = tingwuDir
+    ? " Long audio (>=15 min by default) is ALSO supported: the bridge auto-routes it to Aliyun Tingwu cloud transcription before you see the message, so never claim long recordings can't be transcribed. Users can force a path with 强制本地转写 / 强制云端转写 in the message."
+    : "";
+  return `Local speech-to-text is installed. For audio/video transcription you do yourself, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or say "no ASR available". Fast path: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Fall back to video frames/OCR only if this genuinely fails.${cloudNote}`;
 }
 
 export function larkAgentInstructions(): string {

@@ -1,6 +1,7 @@
 import type { EngineApprovalDecision } from "../codex/adapter.js";
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig as defaultLoadBusConfig } from "../bus/bus-config.js";
+import type { TranscribeMediaOptions } from "../runtime/asr-cloud.js";
 import { ChatQueue } from "../runtime/chat-queue.js";
 import type { CronScheduler } from "../runtime/cron-scheduler.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
@@ -141,7 +142,7 @@ export interface LarkServiceRuntime {
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;
   commentClient?: LarkCommentClientLike;
-  transcribeMedia?: (filePath: string) => Promise<string>;
+  transcribeMedia?: (filePath: string, options?: TranscribeMediaOptions) => Promise<string>;
   detectLarkCli: () => Promise<LarkCliStatus>;
   createChat: (input: LarkChatCreateInput) => Promise<LarkChatCreateResult>;
   createDocument: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
@@ -155,7 +156,7 @@ export function createLarkServiceRuntime(options: {
   busRuntime?: LarkBusRuntime;
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;
-  transcribeMedia?: (filePath: string) => Promise<string>;
+  transcribeMedia?: (filePath: string, options?: TranscribeMediaOptions) => Promise<string>;
   detectLarkCli?: () => Promise<LarkCliStatus>;
   queuePolicy?: Partial<LarkQueuePolicy>;
 } = {}): LarkServiceRuntime {
