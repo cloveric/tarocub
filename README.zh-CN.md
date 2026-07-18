@@ -528,7 +528,14 @@ npm run dev -- telegram budget clear --instance work    # 移除上限
 
 ## 语音输入（ASR）
 
-在 Telegram 中发送语音消息 — 桥接器会在本地转写后将文本发送给 AI 引擎。无需云端 ASR 服务。
+在 Telegram 中发送语音消息 — 桥接器会在本地转写后将文本发送给 AI 引擎。短音频无需任何云端服务。
+
+**长音频自动走云端（通义听悟，可选）**：配置后，**≥ 15 分钟**的音频/视频自动路由到阿里云通义听悟离线转写（30 分钟音频约 40 秒出全文），短音频仍走本地。未配置时行为完全不变。
+
+- 激活：在实例的 `lark.env` 里指向已配好的听悟脚本目录 —— `TINGWU_ASR_DIR=/path/to/tingwu_asr`（脚本自带 OSS 上传/任务轮询/临时对象清理，密钥留在该目录的 `.env.local`，桥不读取也不记录）
+- 阈值/超时：`ASR_CLOUD_THRESHOLD_SECONDS`（默认 900）、`ASR_CLOUD_TASK_TIMEOUT_SECONDS`（默认 7200）
+- **消息内开关**：随音频附上「强制本地转写」或「强制云端转写」可覆盖自动判定（冲突时本地优先）
+- 云端失败自动回退本地；任务产物（原始 JSON/日志/纯文本）保存在 `<state>/asr-jobs/<id>/` 便于追溯
 
 **工作原理：**
 
@@ -1270,6 +1277,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `/code-review` · `/ultrareview` | 代码审查 / 深度多 agent 审查 |
 | `/approve [session]` · `/deny` | 审批按钮不可用时的文字兜底 |
 | `/ws list\|save\|use\|remove` | **Lark** — 工作区目录管理 |
+| 强制本地转写 · 强制云端转写 | 消息关键词（非命令）：与音频/视频一起发送，强制走本地或云端转写 |
 
 ## 服务运维
 

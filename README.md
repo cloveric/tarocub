@@ -133,7 +133,7 @@ node dist/src/index.js lark doctor
 | **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
-| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources can be downloaded, locally transcribed, and passed into the engine as normal task context. |
+| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources are downloaded and transcribed automatically: short audio locally, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** via Aliyun Tingwu cloud transcription — a 30-min file transcribes in ~40s, with automatic local fallback on any cloud failure. Message keywords 强制本地转写 / 强制云端转写 override the routing; threshold via `ASR_CLOUD_THRESHOLD_SECONDS` (default 900). |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
 | **Agent Bus** | Multiple bot instances can call each other as local workers for delegation, fan-out, chain, verifier, and coordinator-led crew workflows. |
@@ -324,6 +324,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | `/code-review` · `/ultrareview` | Code review / deep multi-agent review |
 | `/approve [session]` · `/deny` | Text fallback when approval buttons are unavailable |
 | `/ws list\|save\|use\|remove` | **Lark** — saved workspace directories |
+| 强制本地转写 · 强制云端转写 | Message keywords (not commands): send alongside an audio/video file to force the local or cloud ASR path |
 
 ## Safety Model
 
