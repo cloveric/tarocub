@@ -274,7 +274,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | `/goal <objective>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | Conversation goal (autonomous pursuit on Codex) |
 | `/btw <question>` | Side question without touching the session |
 | `/q <message>` | **Lark** — force a queued turn (skip mid-turn steering) |
-| `/steer [on\|off\|<seconds>\|unlimited]` | **Lark** — mid-turn steering eligibility window (default 30s; past it messages queue) |
+| `/steer [on\|off\|<seconds>\|unlimited\|default]` | **Lark** — mid-turn steering eligibility window (default 30s; past it messages queue; accepts `5m` minutes, `0`=unlimited) |
 | `/continue` | Continue the waiting archive analysis |
 | `/bg` · `/bg kill <pid>` · `/bg killall` | **Lark** — list/stop engine & background processes |
 

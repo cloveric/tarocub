@@ -114,7 +114,13 @@ The Telegram path is now intentionally layered.
 - `src/lark/runtime.ts`
   Lark-owned in-memory run, queue, batch, card, and callback state.
 - `src/lark/service-lifecycle.ts`
-  Lark process discovery, stop/start/restart, deferred restart, and fleet operations.
+  Lark service lock-path helpers. The actual lifecycle/fleet/deferred-restart logic
+  (start/stop/restart, `--all`, the deferred-restart helper) lives in
+  `src/commands/cli.ts` (`runLarkServiceCommand`) and `src/commands/service.ts`.
+- `src/lark/comment-handler.ts`
+  Feishu doc-comment @mention turns: comment-thread context, engine turn, threaded replies.
+- `src/lark/bus.ts`
+  Lark board (`/board`), mini-bus (`/mini`), and delegation (`/ask`, `/fan`, `/chain`, `/verify`) wiring.
 
 ## Shared Runtime Helpers
 

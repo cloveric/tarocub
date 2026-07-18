@@ -25,8 +25,8 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/yolo [on\|off\|unsafe]` | Inspect or switch approval mode. | Telegram, Lark |
 | `/config` | Open the interactive settings card. | Lark |
 | `/stream [on\|off]` | Toggle element-level typewriter streaming for answer cards (off = whole-card refresh). | Lark |
-| `/timeout [on\|off]` | Single-turn 60-min time cap; `off` lifts it for long tasks (Codex/Antigravity only). | Lark |
-| `/steer [on\|off\|<seconds>\|unlimited]` | Mid-turn steering eligibility window (default 30s). Within the window a plain-text follow-up injects into the running Codex turn (OK reaction); past it (or `off`) messages queue as their own turn. | Lark |
+| `/timeout [on\|off]` | Single-turn 60-min time cap; `off` lifts it for long tasks (Codex/Antigravity only). Lark also accepts `status\|unlimited\|default`. | Telegram, Lark |
+| `/steer [on\|off\|<seconds>\|unlimited\|default\|status]` | Mid-turn steering eligibility window (default 30s). Accepts seconds (`60`, `60s`) or minutes (`5m`/`5分钟`); `unlimited`/`0` lifts the window, `default` restores 30s. Within the window a plain-text follow-up injects into the running Codex turn (OK reaction); past it (or `off`) messages queue as their own turn. | Lark |
 | `/account` | Show the Feishu app this instance is bound to. | Lark |
 
 ## Goals And Sessions
@@ -66,7 +66,7 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/cron add ...` | Create a one-shot or recurring scheduled job. | Telegram, Lark |
 | `/cron rm <job-id>` | Remove a job by id. | Telegram, Lark |
 | `/cron toggle <job-id>` | Enable or disable a job. | Telegram, Lark |
-| `/cron mode <job-id> <same_session\|new_per_run>` | Change recurring job execution mode. | Telegram, Lark |
+| `/cron mode <job-id> <reuse\|new_per_run>` | Change recurring job execution mode. | Telegram, Lark |
 | `/cron run <job-id>` | Run a job immediately. | Telegram, Lark |
 | `/board ...` | Manage durable Kanban tasks outside model memory. | Telegram, Lark |
 | `/board add <task>` | Create a durable task. | Telegram, Lark |

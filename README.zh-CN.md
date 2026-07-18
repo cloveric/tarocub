@@ -1220,7 +1220,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `/goal <目标>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | 会话目标(Codex 上自主推进) |
 | `/btw <问题>` | 旁问,不动当前会话 |
 | `/q <消息>` | **Lark** — 强制排队(跳过中途注入) |
-| `/steer [on\|off\|<秒数>\|unlimited]` | **Lark** — 任务中途引导的资格窗口(默认 30 秒,超窗自动排队) |
+| `/steer [on\|off\|<秒数>\|unlimited\|default]` | **Lark** — 任务中途引导的资格窗口(默认 30 秒,超窗自动排队;支持 `5m` 分钟写法,`0`=不限时) |
 | `/continue` | 继续等待中的压缩包分析 |
 | `/bg` · `/bg kill <pid>` · `/bg killall` | **Lark** — 查看/停止引擎与后台进程 |
 
