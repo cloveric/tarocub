@@ -206,7 +206,8 @@ export function formatLarkProvisioningResult(
 }
 
 export function formatLarkPermissionConsoleUrl(appId: string, domain?: string): string {
-  const host = domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
+  const international = domain ? /lark|larksuite|\.us|\.eu/i.test(domain) : false;
+  const host = international ? "https://open.larksuite.com" : "https://open.feishu.cn";
   return `${host}/app/${encodeURIComponent(appId)}/auth`;
 }
 

@@ -372,10 +372,10 @@ describe("AccessStore", () => {
     }
   });
 
-  it("blocks issuing a second pairing code while another chat already holds the single-chat lock", async () => {
+  it("lets multiple chats request codes but lets only the first redemption acquire the single-chat lock", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
-      setRandomIntSequence([0, 0, 0, 0, 0, 0, 0, 0]);
+      setRandomIntSequence([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
       const store = new AccessStore(path.join(dir, "access.json"));
 
       const firstCode = await store.issuePairingCode({
@@ -384,29 +384,28 @@ describe("AccessStore", () => {
         now: new Date("2026-04-08T00:00:00Z"),
       });
 
-      await expect(
-        store.issuePairingCode({
-          telegramUserId: 20,
-          telegramChatId: 222,
-          now: new Date("2026-04-08T00:02:00Z"),
-        }),
-      ).rejects.toThrow("instance is locked to another chat until multi-chat is enabled");
+      const secondCode = await store.issuePairingCode({
+        telegramUserId: 20,
+        telegramChatId: 222,
+        now: new Date("2026-04-08T00:02:00Z"),
+      });
+
+      await expect(store.redeemPairingCode(firstCode.code, new Date("2026-04-08T00:03:00Z"))).resolves.toMatchObject({
+        telegramChatId: 111,
+      });
+      await expect(store.redeemPairingCode(secondCode.code, new Date("2026-04-08T00:03:30Z")))
+        .rejects.toThrow("instance is locked to another chat until multi-chat is enabled");
 
       await expect(store.load()).resolves.toEqual(expect.objectContaining({
-        pendingPairs: [
-          expect.objectContaining({
-            code: firstCode.code,
-            telegramChatId: 111,
-            telegramUserId: 10,
-          }),
-        ],
+        pairedUsers: [expect.objectContaining({ telegramChatId: 111, telegramUserId: 10 })],
+        pendingPairs: [expect.objectContaining({ code: secondCode.code, telegramChatId: 222, telegramUserId: 20 })],
       }));
     } finally {
       await removeTempRoot(dir);
     }
   });
 
-  it("refuses to disable multi-chat while another chat is still pending pairing", async () => {
+  it("allows disabling multi-chat while only unredeemed pairing codes exist", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     try {
       mockRandomInt.mockReturnValue(0);
@@ -414,17 +413,15 @@ describe("AccessStore", () => {
 
       await store.setMultiChat(true);
       await store.allowChat(111);
-      // Real `now` so the pending pair is genuinely unexpired when setMultiChat
-      // prunes expired pairs against the wall clock.
+      // An unredeemed code is not authorization and must not prevent returning
+      // to single-chat mode while only one chat is actually authorized.
       await store.issuePairingCode({
         telegramUserId: 20,
         telegramChatId: 222,
         now: new Date(),
       });
 
-      await expect(store.setMultiChat(false)).rejects.toThrow(
-        "cannot disable multi-chat while multiple chats are authorized or pending pairing",
-      );
+      await expect(store.setMultiChat(false)).resolves.toBeUndefined();
     } finally {
       await removeTempRoot(dir);
     }
@@ -465,7 +462,7 @@ describe("AccessStore", () => {
     }
   });
 
-  it("ignores expired pending pairs in the locked-chat conflict check but honors unexpired ones", async () => {
+  it("never treats unredeemed pairing codes as a single-chat lock", async () => {
     const state = {
       multiChat: false,
       policy: "pairing" as const,
@@ -482,7 +479,7 @@ describe("AccessStore", () => {
     };
 
     expect(findConflictingLockedChatId(state, 222, new Date("2026-04-08T00:06:00Z"))).toBeNull();
-    expect(findConflictingLockedChatId(state, 222, new Date("2026-04-08T00:04:00Z"))).toBe(111);
+    expect(findConflictingLockedChatId(state, 222, new Date("2026-04-08T00:04:00Z"))).toBeNull();
   });
 
   it("prunes expired pending pairs from disk on unrelated mutations", async () => {

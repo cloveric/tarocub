@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeUpdate } from "../src/telegram/update-normalizer.js";
+import { coalesceTelegramMediaGroupUpdates, normalizeUpdate } from "../src/telegram/update-normalizer.js";
+
+describe("normalizeUpdate media groups", () => {
+  it("coalesces an album into one message with every attachment and the caption", () => {
+    const updates = coalesceTelegramMediaGroupUpdates([
+      { update_id: 10, message: { chat: { id: 1, type: "private" }, from: { id: 2 }, media_group_id: "album", photo: [{ file_id: "p1" }] } },
+      { update_id: 11, message: { chat: { id: 1, type: "private" }, from: { id: 2 }, media_group_id: "album", caption: "分析这些图", photo: [{ file_id: "p2" }] } },
+    ]);
+    expect(updates).toHaveLength(1);
+    expect((updates[0] as { update_id: number }).update_id).toBe(11);
+    expect(normalizeUpdate(updates[0])).toMatchObject({
+      text: "分析这些图",
+      attachments: [{ fileId: "p1", kind: "photo" }, { fileId: "p2", kind: "photo" }],
+    });
+  });
+});
 
 describe("normalizeUpdate message_thread_id handling", () => {
   it("ignores message_thread_id on an ordinary reply in a non-forum supergroup", () => {

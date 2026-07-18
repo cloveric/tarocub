@@ -87,6 +87,7 @@ import {
 } from "../lark/provisioning.js";
 import { redactLarkSensitiveText } from "../lark/redaction.js";
 import { DEFAULT_ROTATE_OPTIONS } from "../state/log-rotation.js";
+import { withFileMutex } from "../state/file-mutex.js";
 
 const execFile = promisify(execFileCallback);
 const LARK_SETUP_TMUX_SESSION_PREFIX = "cctb-lark-setup-";
@@ -2013,45 +2014,47 @@ async function defaultScheduleDeferredLarkServiceRestart(
   // this instance; a second would double-restart (and fight the turn the first is
   // draining). Verified production-real.
   const pidFilePath = path.join(input.stateDir, "deferred-restart.pid");
-  const pendingPid = await readPendingLarkDeferredRestartPid(pidFilePath, isAlive);
-  if (pendingPid !== null) {
+  return await withFileMutex(`${pidFilePath}.schedule`, async () => {
+    const pendingPid = await readPendingLarkDeferredRestartPid(pidFilePath, isAlive);
+    if (pendingPid !== null) {
+      const target = options.current ? "current Lark instance" : "Lark instance";
+      return `Deferred restart for ${target} "${instanceName}" is already pending (pid ${pendingPid}); not scheduling another.`;
+    }
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CCTB_LARK_STATE_DIR: input.stateDir,
+      CCTB_LARK_INSTANCE: instanceName,
+      TAROCUB_INSTANCE: instanceName,
+    };
+    clearDirectLarkAppCredentials(env);
+    delete env.CCTB_SEND_URL;
+    delete env.CCTB_SEND_TOKEN;
+    delete env.CCTB_SEND_COMMAND;
+    delete env.CODEX_THREAD_ID;
+    clearLarkActiveTurnEnv(env);
+
+    const helperPid = (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [
+      "-e",
+      DEFERRED_LARK_RESTART_HELPER_SCRIPT,
+      input.entrypoint,
+      input.stateDir,
+      instanceName,
+      String(delayMs),
+    ], {
+      cwd: input.cwd,
+      stdoutPath: logPath,
+      stderrPath: logPath,
+      env,
+    });
+
+    if (typeof helperPid === "number") {
+      await writeFile(pidFilePath, JSON.stringify({ pid: helperPid, scheduledAt: new Date().toISOString() }), "utf8");
+    }
+
     const target = options.current ? "current Lark instance" : "Lark instance";
-    return `Deferred restart for ${target} "${instanceName}" is already pending (pid ${pendingPid}); not scheduling another.`;
-  }
-
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    CCTB_LARK_STATE_DIR: input.stateDir,
-    CCTB_LARK_INSTANCE: instanceName,
-    TAROCUB_INSTANCE: instanceName,
-  };
-  clearDirectLarkAppCredentials(env);
-  delete env.CCTB_SEND_URL;
-  delete env.CCTB_SEND_TOKEN;
-  delete env.CCTB_SEND_COMMAND;
-  delete env.CODEX_THREAD_ID;
-  clearLarkActiveTurnEnv(env);
-
-  const helperPid = (deps.spawnDetached ?? defaultSpawnDetached)(process.execPath, [
-    "-e",
-    DEFERRED_LARK_RESTART_HELPER_SCRIPT,
-    input.entrypoint,
-    input.stateDir,
-    instanceName,
-    String(delayMs),
-  ], {
-    cwd: input.cwd,
-    stdoutPath: logPath,
-    stderrPath: logPath,
-    env,
+    return `Scheduled deferred restart for ${target} "${instanceName}" in ${Math.ceil(delayMs / 1000)}s; it will retry until the Lark turn queue is idle.`;
   });
-
-  if (typeof helperPid === "number") {
-    await writeFile(pidFilePath, JSON.stringify({ pid: helperPid, scheduledAt: new Date().toISOString() }), "utf8");
-  }
-
-  const target = options.current ? "current Lark instance" : "Lark instance";
-  return `Scheduled deferred restart for ${target} "${instanceName}" in ${Math.ceil(delayMs / 1000)}s; it will retry until the Lark turn queue is idle.`;
 }
 
 function getLarkTimelineMessageId(event: TimelineEvent): string | undefined {

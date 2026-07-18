@@ -1147,7 +1147,7 @@ describe("Bridge", () => {
     }));
   });
 
-  it("blocks a different private chat when another chat already has a pending pairing code", async () => {
+  it("does not let an unredeemed pairing code lock out a different private chat", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
         multiChat: false,
@@ -1159,13 +1159,11 @@ describe("Bridge", () => {
             code: "ABC123",
             telegramUserId: 42,
             telegramChatId: 84,
-            // Must be unexpired relative to the real clock: an EXPIRED pending pair
-            // no longer holds the single-chat lock.
             expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
           },
         ],
       }),
-      issuePairingCode: vi.fn(),
+      issuePairingCode: vi.fn().mockResolvedValue({ code: "XYZ789" }),
     };
     const sessionManager: SessionManagerLike = {
       getOrCreateSession: vi.fn(),
@@ -1187,10 +1185,14 @@ describe("Bridge", () => {
         files: [],
       }),
     ).resolves.toEqual({
-      text: "This instance is locked to another chat. Enable multi-chat before pairing or allowing a different chat.",
+      text: "Pair this private chat with code XYZ789",
     });
 
-    expect(accessStore.issuePairingCode).not.toHaveBeenCalled();
+    expect(accessStore.issuePairingCode).toHaveBeenCalledWith({
+      telegramUserId: 99,
+      telegramChatId: 99,
+      now: expect.any(Date),
+    });
     expect(sessionManager.getOrCreateSession).not.toHaveBeenCalled();
     expect(adapter.sendUserMessage).not.toHaveBeenCalled();
   });

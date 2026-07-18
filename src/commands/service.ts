@@ -9,6 +9,7 @@ import { resolveInstanceLockPath, type InstanceLockRecord } from "../state/insta
 import { InstanceLockRecordSchema } from "../state/instance-lock-schema.js";
 import { RuntimeStateStore } from "../state/runtime-state.js";
 import { RuntimeStateSchema } from "../state/runtime-state-schema.js";
+import { withFileMutex } from "../state/file-mutex.js";
 import { AccessStore } from "../state/access-store.js";
 import {
   getLatestFailure,
@@ -860,43 +861,42 @@ export async function scheduleDeferredServiceRestart(
   // scheduled for this instance; spawning a second would double-restart (and kill
   // a turn that the first helper is waiting on). Verified production-real.
   const pidFilePath = path.join(paths.stateDir, DEFERRED_RESTART_PID_FILE);
-  const pendingPid = await readPendingDeferredRestartPid(pidFilePath, isProcessAlive);
-  if (pendingPid !== null) {
+  return await withFileMutex(`${pidFilePath}.schedule`, async () => {
+    const pendingPid = await readPendingDeferredRestartPid(pidFilePath, isProcessAlive);
+    if (pendingPid !== null) {
+      const target = options.current ? "current instance" : "instance";
+      return `Deferred restart for ${target} "${paths.instanceName}" is already pending (pid ${pendingPid}); not scheduling another.`;
+    }
+
+    // Scrub the turn-scoped side channel from the helper's own environment so neither
+    // the helper nor the service it spawns inherits a stale channel.
+    const helperEnv: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of DEFERRED_RESTART_SCRUB_ENV_KEYS) {
+      helperEnv[key] = undefined;
+    }
+
+    const logPath = path.join(paths.stateDir, "deferred-restart.log");
+    const helperPid = spawnDetachedProcess(process.execPath, [
+      "-e",
+      DEFERRED_RESTART_HELPER_SCRIPT,
+      paths.entryPath,
+      paths.instanceName,
+      String(delayMs),
+      DEFERRED_RESTART_SCRUB_ENV_KEYS.join(","),
+    ], {
+      cwd,
+      stdoutPath: logPath,
+      stderrPath: logPath,
+      env: helperEnv,
+    });
+
+    if (typeof helperPid === "number") {
+      await writeFile(pidFilePath, JSON.stringify({ pid: helperPid, scheduledAt: new Date().toISOString() }), "utf8");
+    }
+
     const target = options.current ? "current instance" : "instance";
-    return `Deferred restart for ${target} "${paths.instanceName}" is already pending (pid ${pendingPid}); not scheduling another.`;
-  }
-
-  // Scrub the turn-scoped side channel from the helper's own environment so neither
-  // the helper nor the service it spawns inherits a stale channel. Keys are set to
-  // undefined (not deleted) because defaultSpawnDetached merges over process.env, and
-  // child_process drops undefined-valued keys — a delete here would be re-added by the
-  // merge. The helper script also re-scrubs by name before it restarts the service.
-  const helperEnv: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of DEFERRED_RESTART_SCRUB_ENV_KEYS) {
-    helperEnv[key] = undefined;
-  }
-
-  const logPath = path.join(paths.stateDir, "deferred-restart.log");
-  const helperPid = spawnDetachedProcess(process.execPath, [
-    "-e",
-    DEFERRED_RESTART_HELPER_SCRIPT,
-    paths.entryPath,
-    paths.instanceName,
-    String(delayMs),
-    DEFERRED_RESTART_SCRUB_ENV_KEYS.join(","),
-  ], {
-    cwd,
-    stdoutPath: logPath,
-    stderrPath: logPath,
-    env: helperEnv,
+    return `Scheduled deferred restart for ${target} "${paths.instanceName}" in ${Math.ceil(delayMs / 1000)}s; it will retry until the active turn finishes.`;
   });
-
-  if (typeof helperPid === "number") {
-    await writeFile(pidFilePath, JSON.stringify({ pid: helperPid, scheduledAt: new Date().toISOString() }), "utf8");
-  }
-
-  const target = options.current ? "current instance" : "instance";
-  return `Scheduled deferred restart for ${target} "${paths.instanceName}" in ${Math.ceil(delayMs / 1000)}s; it will retry until the active turn finishes.`;
 }
 
 export async function stopServiceInstance(

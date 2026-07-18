@@ -52,18 +52,18 @@ function pruneExpiredPendingPairs(state: AccessState, now: Date): boolean {
   return true;
 }
 
-export function findConflictingLockedChatId(state: AccessState, chatId: number, now: Date = new Date()): number | null {
+export function findConflictingLockedChatId(state: AccessState, chatId: number, _now: Date = new Date()): number | null {
   if (state.multiChat) {
     return null;
   }
 
-  // Expired pending pairs must not hold the single-chat lock: the read path
-  // (bridge access check) returns "locked" before any code-issuing mutation can
-  // prune them, so counting them here would lock the instance forever.
+  // Pairing codes are only untrusted claims, not authorization. Let multiple
+  // chats request codes; the first successfully redeemed code acquires the
+  // single-chat lock. Otherwise any stranger could message a fresh bot first
+  // and deny the operator access for the full pairing TTL.
   const lockedChatIds = new Set<number>([
     ...state.allowlist,
     ...state.pairedUsers.map((entry) => entry.telegramChatId),
-    ...activePendingPairs(state, now).map((entry) => entry.telegramChatId),
   ]);
   lockedChatIds.delete(chatId);
 
@@ -71,11 +71,10 @@ export function findConflictingLockedChatId(state: AccessState, chatId: number, 
   return conflict.done ? null : conflict.value;
 }
 
-function countAuthorizedChats(state: AccessState, now: Date): number {
+function countAuthorizedChats(state: AccessState): number {
   return new Set<number>([
     ...state.allowlist,
     ...state.pairedUsers.map((entry) => entry.telegramChatId),
-    ...activePendingPairs(state, now).map((entry) => entry.telegramChatId),
   ]).size;
 }
 
@@ -145,8 +144,8 @@ export class AccessStore {
       const state = await this.loadForWrite();
       const now = new Date();
       pruneExpiredPendingPairs(state, now);
-      if (!enabled && countAuthorizedChats(state, now) > 1) {
-        throw new Error("cannot disable multi-chat while multiple chats are authorized or pending pairing");
+      if (!enabled && countAuthorizedChats(state) > 1) {
+        throw new Error("cannot disable multi-chat while multiple chats are authorized");
       }
       state.multiChat = enabled;
       await this.store.write(state);

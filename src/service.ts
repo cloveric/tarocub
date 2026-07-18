@@ -17,9 +17,9 @@ import { SessionStore } from "./state/session-store.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
 import { resolveApprovalMode, type ApprovalMode } from "./state/approval-mode.js";
 import { TelegramApi, withTelegramMessageThread } from "./telegram/api.js";
-import { handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
+import { ackTelegramCallbackQuery, handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
 import { handleTelegramApprovalCommand, isTelegramApprovalCommand } from "./telegram/approval-requests.js";
-import { normalizeUpdate, type NormalizedTelegramMessage } from "./telegram/update-normalizer.js";
+import { coalesceTelegramMediaGroupUpdates, normalizeUpdate, type NormalizedTelegramMessage } from "./telegram/update-normalizer.js";
 import { getNormalizedTelegramConversationKey, getTelegramConversationLogScope } from "./telegram/conversation-key.js";
 import { SessionManager } from "./runtime/session-manager.js";
 import { normalizeInstanceName } from "./instance.js";
@@ -43,6 +43,7 @@ export interface PollTelegramUpdatesOptions {
   botUsername?: string;
   fetchErrorRecycleThreshold?: number;
   recreateApi?: (api: TelegramApi) => TelegramApi;
+  mediaGroupSettleMs?: number;
 }
 
 export interface ResolvedInstanceEnv extends EnvSource {
@@ -1297,11 +1298,15 @@ export async function processTelegramUpdates(
     await flushCompletedUpdateIds();
   };
 
-  for (const update of updates) {
+  for (const update of coalesceTelegramMediaGroupUpdates(updates)) {
     const updateId = getUpdateId(update);
     const completedOffset = updateId === undefined ? undefined : updateId + 1;
 
     try {
+      const callbackQueryId = (update as { callback_query?: { id?: unknown } } | null)?.callback_query?.id;
+      if (typeof callbackQueryId === "string") {
+        await ackTelegramCallbackQuery(context.api, callbackQueryId);
+      }
       if (updateId !== undefined && enqueuedUpdateIds.has(updateId)) {
         nextOffset = advanceOffset(nextOffset, completedOffset);
         continue;
@@ -1628,6 +1633,42 @@ export async function getLastHandledUpdateId(inboxDir: string): Promise<number |
   return state.lastHandledUpdateId;
 }
 
+function hasTelegramMediaGroupUpdate(updates: unknown[]): boolean {
+  return updates.some((update) => {
+    const mediaGroupId = (update as { message?: { media_group_id?: unknown } } | null)?.message?.media_group_id;
+    return typeof mediaGroupId === "string" && mediaGroupId.length > 0;
+  });
+}
+
+function mergeTelegramUpdateBatches(first: unknown[], second: unknown[]): unknown[] {
+  const seenUpdateIds = new Set<number>();
+  const merged: unknown[] = [];
+  for (const update of [...first, ...second]) {
+    const updateId = getUpdateId(update);
+    if (updateId !== undefined) {
+      if (seenUpdateIds.has(updateId)) {
+        continue;
+      }
+      seenUpdateIds.add(updateId);
+    }
+    merged.push(update);
+  }
+  return merged;
+}
+
+async function waitForTelegramMediaGroupSettle(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
 export async function pollTelegramUpdatesOnce(
   api: TelegramApi,
   bridge: Bridge,
@@ -1638,7 +1679,18 @@ export async function pollTelegramUpdatesOnce(
   options: PollTelegramUpdatesOptions = {},
 ): Promise<{ offset: number | undefined; hadFetchError: boolean; hadUpdates: boolean; conflict: boolean }> {
   try {
-    const updates = await api.getUpdates(offset, signal);
+    let updates = await api.getUpdates(offset, signal);
+    if (hasTelegramMediaGroupUpdate(updates)) {
+      await waitForTelegramMediaGroupSettle(options.mediaGroupSettleMs ?? 500, signal);
+      if (!signal?.aborted) {
+        try {
+          const settledUpdates = await api.getUpdates(offset, signal, 0);
+          updates = mergeTelegramUpdateBatches(updates, settledUpdates);
+        } catch (error) {
+          logger.error(formatErrorMessage("Failed to settle Telegram media group; processing received items", error));
+        }
+      }
+    }
     // Fire-and-forget: process updates in background so polling loop can
     // immediately fetch new updates (needed for /stop to work mid-task).
     // Offset is NOT advanced here — processTelegramUpdates marks handled

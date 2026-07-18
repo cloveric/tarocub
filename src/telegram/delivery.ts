@@ -26,10 +26,8 @@ import { getTelegramConversationLogScope } from "./conversation-key.js";
  * never becomes a turn — stops the spinner immediately. The ack is advisory, so
  * failures are swallowed.
  *
- * NOTE: To fully close finding #7 this must be called at intake from
- * `processTelegramUpdates` (src/service.ts) for EVERY callback query, including
- * unrecognized callback data that `normalizeUpdate` drops. That intake wiring
- * lives in src/service.ts (owned elsewhere) and still needs to call this.
+ * `processTelegramUpdates` calls this before normalization so unknown and stale
+ * callback data is acknowledged too.
  */
 export async function ackTelegramCallbackQuery(
   api: Pick<TelegramApi, "answerCallbackQuery">,
@@ -267,6 +265,7 @@ export async function handleNormalizedTelegramMessage(
         effort: cfg.effort,
         model: cfg.model,
         codexServiceTier: cfg.codexServiceTier,
+        disableRuntimeTimeout: cfg.disableRuntimeTimeout,
         resume: cfg.resume,
       },
       normalized,

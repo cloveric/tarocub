@@ -70,6 +70,12 @@ function parseFastCommand(text: string): { action: string } | null {
   return { action: action || "status" };
 }
 
+function parseTimeoutCommand(text: string): { action: "status" | "on" | "off" } | null {
+  const match = text.trim().match(/^\/timeout(?:@\w+)?(?:\s+(on|off))?$/i);
+  if (!match) return null;
+  return { action: (match[1]?.toLowerCase() ?? "status") as "status" | "on" | "off" };
+}
+
 export async function handleSimpleLocalTelegramCommand(input: {
   stateDir: string;
   startedAt: number;
@@ -79,6 +85,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
     effort?: string;
     model?: string;
     codexServiceTier?: "fast";
+    disableRuntimeTimeout?: boolean;
   };
   normalized: NormalizedTelegramMessage;
   context: TelegramTurnContext;
@@ -199,6 +206,37 @@ export async function handleSimpleLocalTelegramCommand(input: {
       startedAt,
       command: "status",
       responseText: statusMessage,
+    });
+    return true;
+  }
+
+  const timeoutCmd = parseTimeoutCommand(normalized.text);
+  if (timeoutCmd) {
+    const currentlyEnabled = cfg.disableRuntimeTimeout !== true;
+    let timeoutEnabled = currentlyEnabled;
+    if (timeoutCmd.action !== "status") {
+      timeoutEnabled = timeoutCmd.action === "on";
+      await updateInstanceConfig((config) => {
+        config.disableRuntimeTimeout = !timeoutEnabled;
+      });
+    }
+    const timeoutMessage = locale === "zh"
+      ? timeoutCmd.action === "status"
+        ? `单轮 60 分钟上限当前${timeoutEnabled ? "已启用" : "已关闭"}。用 /timeout on 或 /timeout off 调整。`
+        : timeoutEnabled
+          ? "已启用单轮 60 分钟上限。"
+          : "已关闭单轮 60 分钟上限；长任务仍受无响应看门狗保护。"
+      : timeoutCmd.action === "status"
+        ? `The 60-minute per-turn cap is currently ${timeoutEnabled ? "enabled" : "disabled"}. Use /timeout on or /timeout off.`
+        : timeoutEnabled
+          ? "Enabled the 60-minute per-turn cap."
+          : "Disabled the 60-minute per-turn cap; the inactivity watchdog still protects stalled tasks.";
+    await context.api.sendMessage(normalized.chatId, timeoutMessage);
+    await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+      startedAt,
+      command: "timeout",
+      responseText: timeoutMessage,
+      metadata: { value: timeoutCmd.action === "status" ? (timeoutEnabled ? "on" : "off") : timeoutCmd.action },
     });
     return true;
   }

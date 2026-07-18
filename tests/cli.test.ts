@@ -1331,6 +1331,25 @@ describe("runCli", () => {
     }
   });
 
+  it("atomically schedules only one Lark deferred restart under concurrent calls", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const spawnDetached = vi.fn(() => 7474);
+    const messages: string[] = [];
+    try {
+      const run = () => runCli(["lark", "service", "restart", "--defer"], {
+        env: { USERPROFILE: tempDir, CCTB_LARK_INSTANCE: "alpha", CCTB_LARK_STATE_DIR: stateDir },
+        logger: { log: (message) => messages.push(message) },
+        larkServiceDeps: { spawnDetached, isProcessAlive: (pid) => pid === 7474 },
+      });
+      await Promise.all([run(), run(), run()]);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(messages.filter((value) => value.includes("already pending"))).toHaveLength(2);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("stops duplicate lockless Lark service processes", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

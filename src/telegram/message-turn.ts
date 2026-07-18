@@ -64,6 +64,7 @@ export interface WorkflowAwareTurnState {
 export interface WorkflowAwareTurnConfig {
   engine: InstanceEngine;
   budgetUsd?: number;
+  disableRuntimeTimeout?: boolean;
   resume?: {
     workspacePath: string;
   };
@@ -100,6 +101,7 @@ export interface WorkflowAwareTurnContext {
       sideChannelCommand?: string;
       extraEnv?: Record<string, string>;
       abortSignal?: AbortSignal;
+      disableRuntimeTimeout?: boolean;
       sessionIdOverride?: string;
       turnLockWaitNotifyAfterMs?: number;
       onTurnLockWait?: (event: BridgeTurnLockWaitEvent) => void | Promise<void>;
@@ -849,6 +851,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       sideChannelCommand,
       extraEnv: sideChannelEnv,
       abortSignal: context.abortSignal,
+      disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
       sessionIdOverride: context.sessionIdOverride,
       onTurnLockWait: handleTurnLockWait,
       turnPoolWaitNotifyAfterMs: 10_000,
@@ -1037,6 +1040,37 @@ export async function executeWorkflowAwareTelegramTurn(input: {
           via: "telegram-out",
         },
       });
+    }
+
+    if (limitedFiles.skipped.length > 0) {
+      for (const file of limitedFiles.skipped) {
+        await appendTimelineEventBestEffort(stateDir, {
+          type: "file.rejected",
+          instanceName: context.instanceName,
+          channel: "telegram",
+          chatId: normalized.chatId,
+          ...logScope,
+          userId: normalized.userId,
+          updateId: context.updateId,
+          outcome: "rejected",
+          detail: "telegram-out auto-delivery limit exceeded",
+          metadata: {
+            path: file.path,
+            fileName: file.name,
+            bytes: file.size,
+            reason: file.size > TELEGRAM_OUT_AUTO_DELIVERY_LIMITS.maxFileBytes ? "too-large" : "batch-limit",
+            via: "telegram-out",
+          },
+        });
+      }
+      const names = limitedFiles.skipped.slice(0, 5).map((file) => file.name).join(", ");
+      const suffix = limitedFiles.skipped.length > 5 ? ` +${limitedFiles.skipped.length - 5}` : "";
+      await context.api.sendMessage(
+        normalized.chatId,
+        locale === "zh"
+          ? `有 ${limitedFiles.skipped.length} 个自动生成文件未发送，因为超过 Telegram 自动投递限制：${names}${suffix}`
+          : `${limitedFiles.skipped.length} generated file(s) were not sent because they exceed Telegram auto-delivery limits: ${names}${suffix}`,
+      );
     }
   }
 

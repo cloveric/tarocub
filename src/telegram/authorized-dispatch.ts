@@ -32,6 +32,7 @@ export interface AuthorizedTelegramDispatchConfig {
   effort?: string;
   model?: string;
   codexServiceTier?: "fast";
+  disableRuntimeTimeout?: boolean;
   resume?: ResumeState;
 }
 
@@ -83,6 +84,7 @@ export interface AuthorizedTelegramDispatchContext {
       sideChannelCommand?: string;
       extraEnv?: Record<string, string>;
       abortSignal?: AbortSignal;
+      disableRuntimeTimeout?: boolean;
       sessionIdOverride?: string;
     }): Promise<{
       text: string;
@@ -296,6 +298,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
       effort: cfg.effort,
       model: cfg.model,
       codexServiceTier: cfg.codexServiceTier,
+      disableRuntimeTimeout: cfg.disableRuntimeTimeout,
     },
     normalized,
     context,
@@ -417,6 +420,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     cfg: {
       engine: cfg.engine,
       budgetUsd: cfg.budgetUsd,
+      disableRuntimeTimeout: cfg.disableRuntimeTimeout,
       resume: cfg.resume,
     },
     normalized,

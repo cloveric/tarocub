@@ -2546,6 +2546,55 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("notifies and logs when telegram-out files are skipped by auto-delivery limits", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined,
+      failureHint: undefined,
+      telegramOutDirPath: path.join(root, "workspace", ".telegram-out", "req"),
+    };
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "zh",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("generate files"),
+        context: {
+          api: api as never,
+          bridge: { handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "done" }) } as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 110,
+        },
+        workflowStore: { update: vi.fn() } as never,
+        downloadedAttachments: [],
+        state,
+        describeTelegramOutFiles: vi.fn().mockResolvedValue([
+          { path: path.join(state.telegramOutDirPath, "huge.bin"), name: "huge.bin", size: 50_000_001 },
+        ]),
+        applyTelegramOutLimits: vi.fn().mockReturnValue({
+          accepted: [],
+          skipped: [{ path: path.join(state.telegramOutDirPath, "huge.bin"), name: "huge.bin", size: 50_000_001 }],
+        }),
+        deliverTelegramResponse: vi.fn().mockResolvedValue(0),
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("huge.bin"));
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.rejected",
+        outcome: "rejected",
+        metadata: expect.objectContaining({ reason: "too-large", via: "telegram-out" }),
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("auto-delivers telegram-out image batches beyond the legacy small-file limit", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const state = {

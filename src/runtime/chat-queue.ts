@@ -91,6 +91,10 @@ export class ChatQueue {
     return this.pendingCounts.get(chatId) ?? 0;
   }
 
+  isPending(chatId: string | number, taskId: string): boolean {
+    return this.pendingTaskIds.get(chatId)?.has(taskId) === true;
+  }
+
   /**
    * Cancel a single still-queued task by id. Returns true only when the task is
    * currently pending (queued but not yet started); the task is then skipped

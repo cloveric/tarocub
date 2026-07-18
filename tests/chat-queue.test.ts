@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatQueue } from "../src/runtime/chat-queue.js";
 
 describe("ChatQueue", () => {
+  it("reports a task as pending only until it starts", async () => {
+    const queue = new ChatQueue();
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const first = queue.enqueue("chat", async () => await gate);
+    const second = queue.enqueue("chat", async () => "done", { taskId: "task-2" });
+    expect(queue.isPending("chat", "task-2")).toBe(true);
+    releaseFirst();
+    await first;
+    await second;
+    expect(queue.isPending("chat", "task-2")).toBe(false);
+  });
   it("serializes jobs per chat", async () => {
     const queue = new ChatQueue();
     const events: string[] = [];

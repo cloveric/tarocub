@@ -91,6 +91,31 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("configures and reports the Telegram turn timeout", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
+      const cfg: Record<string, unknown> = {};
+      mutate(cfg);
+      expect(cfg.disableRuntimeTimeout).toBe(true);
+    });
+    try {
+      await expect(handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "zh",
+        cfg: { disableRuntimeTimeout: false },
+        normalized: createNormalizedMessage("/timeout off"),
+        context: { api: api as never, instanceName: "default", updateId: 78 },
+        updateInstanceConfig,
+      })).resolves.toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("已关闭"));
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("rejects Codex /effort max until an explicit compatible model is selected", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {

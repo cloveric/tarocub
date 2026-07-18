@@ -5,6 +5,7 @@ import {
   REQUIRED_LARK_CALLBACKS,
   REQUIRED_LARK_EVENTS,
   REQUIRED_LARK_SCOPES,
+  formatLarkPermissionConsoleUrl,
   formatLarkProvisioningResult,
   formatLarkScopeImportJson,
   formatLarkTenantScopeImportJson,
@@ -13,6 +14,14 @@ import {
   withLarkProvisioningTimeout,
   type LarkProvisioningClient,
 } from "../src/lark/provisioning.js";
+
+describe("formatLarkPermissionConsoleUrl", () => {
+  it("uses the international console for LarkSuite domain variants", () => {
+    expect(formatLarkPermissionConsoleUrl("cli_x", "larksuite")).toContain("open.larksuite.com");
+    expect(formatLarkPermissionConsoleUrl("cli_x", "https://open.larksuite.com")).toContain("open.larksuite.com");
+    expect(formatLarkPermissionConsoleUrl("cli_x", "feishu")).toContain("open.feishu.cn");
+  });
+});
 
 describe("withLarkProvisioningTimeout", () => {
   it("rejects a stalled Feishu call with an actionable message instead of hanging", async () => {

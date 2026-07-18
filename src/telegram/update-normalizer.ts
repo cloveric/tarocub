@@ -26,6 +26,50 @@ export interface NormalizedTelegramMessage {
   attachments: NormalizedTelegramAttachment[];
 }
 
+const CCTB_MEDIA_GROUP_MESSAGES = "__cctbMediaGroupMessages";
+
+export function coalesceTelegramMediaGroupUpdates(updates: unknown[]): unknown[] {
+  const groups = new Map<string, any[]>();
+  for (const update of updates) {
+    const candidate = update as any;
+    const message = candidate?.message;
+    const mediaGroupId = message?.media_group_id;
+    if (typeof mediaGroupId !== "string" || typeof message?.chat?.id !== "number" || typeof message?.from?.id !== "number") {
+      continue;
+    }
+    const key = `${message.chat.id}:${message.from.id}:${message.message_thread_id ?? "root"}:${mediaGroupId}`;
+    const group = groups.get(key) ?? [];
+    group.push(candidate);
+    groups.set(key, group);
+  }
+
+  const emitted = new Set<string>();
+  const result: unknown[] = [];
+  for (const update of updates) {
+    const candidate = update as any;
+    const message = candidate?.message;
+    const mediaGroupId = message?.media_group_id;
+    if (typeof mediaGroupId !== "string" || typeof message?.chat?.id !== "number" || typeof message?.from?.id !== "number") {
+      result.push(update);
+      continue;
+    }
+    const key = `${message.chat.id}:${message.from.id}:${message.message_thread_id ?? "root"}:${mediaGroupId}`;
+    if (emitted.has(key)) {
+      continue;
+    }
+    emitted.add(key);
+    const group = groups.get(key) ?? [candidate];
+    const captioned = group.find((item) => typeof item?.message?.text === "string" || typeof item?.message?.caption === "string") ?? group[0];
+    const updateIds = group.map((item) => item?.update_id).filter((value): value is number => typeof value === "number");
+    result.push({
+      ...captioned,
+      ...(updateIds.length > 0 ? { update_id: Math.max(...updateIds) } : {}),
+      [CCTB_MEDIA_GROUP_MESSAGES]: group.map((item) => item.message),
+    });
+  }
+  return result;
+}
+
 function normalizeCallbackCommand(data: string): string | null {
   const approval = data.match(/^approval:([A-Za-z0-9_-]+):(once|session|deny)$/i);
   if (approval) {
@@ -287,7 +331,12 @@ export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
     }
   }
 
-  const message = update?.message;
+  const groupedMessages = Array.isArray(update?.[CCTB_MEDIA_GROUP_MESSAGES])
+    ? update[CCTB_MEDIA_GROUP_MESSAGES].filter((item: unknown) => item && typeof item === "object")
+    : [];
+  const message = groupedMessages.find((item: any) => typeof item?.text === "string" || typeof item?.caption === "string")
+    ?? update?.message;
+  const attachmentMessages = groupedMessages.length > 0 ? groupedMessages : [message];
   const chatId = message?.chat?.id;
   const userId = message?.from?.id;
   const chatType = message?.chat?.type;
@@ -310,13 +359,13 @@ export function normalizeUpdate(update: any): NormalizedTelegramMessage | null {
           ? message.caption
           : "",
     replyContext: normalizeReplyContext(message),
-    attachments: [
-      ...normalizeAudioAttachment(message),
-      ...normalizeDocumentAttachment(message),
-      ...normalizePhotoAttachment(message),
-      ...normalizeVideoAttachment(message),
-      ...normalizeVideoNoteAttachment(message),
-      ...normalizeVoiceAttachment(message),
-    ],
+    attachments: attachmentMessages.flatMap((attachmentMessage: any) => [
+      ...normalizeAudioAttachment(attachmentMessage),
+      ...normalizeDocumentAttachment(attachmentMessage),
+      ...normalizePhotoAttachment(attachmentMessage),
+      ...normalizeVideoAttachment(attachmentMessage),
+      ...normalizeVideoNoteAttachment(attachmentMessage),
+      ...normalizeVoiceAttachment(attachmentMessage),
+    ]),
   };
 }

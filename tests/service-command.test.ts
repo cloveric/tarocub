@@ -1937,6 +1937,23 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("atomically schedules only one deferred restart under concurrent calls", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const spawnDetached = vi.fn(() => 6161);
+    try {
+      const run = () => scheduleDeferredServiceRestart(
+        { USERPROFILE: tempDir },
+        "alpha",
+        { cwd: REPO_ROOT, spawnDetached, isProcessAlive: (pid) => pid === 6161 },
+      );
+      const results = await Promise.all([run(), run(), run()]);
+      expect(spawnDetached).toHaveBeenCalledTimes(1);
+      expect(results.filter((value) => value.includes("already pending"))).toHaveLength(2);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("rejects combining service --all with --instance", async () => {
     await expect(
       runCli(["telegram", "service", "restart", "--all", "--instance", "alpha"], {
