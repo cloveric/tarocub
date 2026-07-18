@@ -100,6 +100,23 @@ describe("ClaudeStreamAdapter", () => {
     });
   });
 
+  it("propagates the result's usage so /usage and budget enforcement see Claude spend", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    const turn = adapter.sendUserMessage("telegram-12345", { text: "count me", files: [] });
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-usage"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-usage","usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3},"total_cost_usd":0.0012}\n');
+
+    // The worker resolves with usage — sendUserMessage must not drop it (it
+    // previously did, making every Claude turn invisible to usage/budget).
+    await expect(turn).resolves.toMatchObject({
+      text: "ONE",
+      usage: { inputTokens: 11, outputTokens: 7, cachedTokens: 3, costUsd: 0.0012 },
+    });
+  });
+
   it("keeps a persistent Claude session alive across multiple turns", async () => {
     const { children, calls, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {

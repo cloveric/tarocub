@@ -527,6 +527,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     return {
       text: response.text,
       sessionId: nextSessionId && nextSessionId !== sessionId ? nextSessionId : undefined,
+      // Usage must ride the return: dropping it made every Claude turn invisible
+      // to /usage, budget enforcement, and telemetry (they all read result.usage).
+      usage: response.usage,
     };
   }
 
