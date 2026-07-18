@@ -67,7 +67,7 @@ import { CronStore } from "../state/cron-store.js";
 import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir, writeLarkEnvFile } from "../lark/env-file.js";
 import { resolveDefaultLarkStateDir } from "../lark/config.js";
 import { LarkGroupModeStore } from "../lark/group-mode-store.js";
-import { createLarkServiceRuntime, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
+import { createLarkServiceRuntime, readLarkTimelineLogWithRotations, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
@@ -86,7 +86,6 @@ import {
   type LarkProvisioningResult,
 } from "../lark/provisioning.js";
 import { redactLarkSensitiveText } from "../lark/redaction.js";
-import { DEFAULT_ROTATE_OPTIONS } from "../state/log-rotation.js";
 import { withFileMutex } from "../state/file-mutex.js";
 
 const execFile = promisify(execFileCallback);
@@ -2063,6 +2062,20 @@ function getLarkTimelineMessageId(event: TimelineEvent): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function getLarkTimelineCronJobId(event: TimelineEvent): string | undefined {
+  const value = event.metadata?.cronJobId;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function isLarkCommentTimelineEvent(event: TimelineEvent): boolean {
+  return event.metadata?.larkSurface === "comment";
+}
+
+function getLarkTimelineCommentPairingKey(event: TimelineEvent): string {
+  const commentId = event.metadata?.commentId;
+  return `${event.conversationKey ?? ""} ${typeof commentId === "string" ? commentId : ""}`;
+}
+
 function removePendingLarkTimelineEvent(
   pendingByConversationKey: Map<string, TimelineEvent[]>,
   conversationKey: string,
@@ -2109,36 +2122,17 @@ async function readLarkPendingTurnActivity(
   activeTurnCount: number;
   oldestAcceptedAt?: string;
 }> {
-  const timelinePath = resolveTimelineLogPath(stateDir);
-  const rawParts: string[] = [];
   // A long-running turn may start just before the 10 MB timeline rotates and
   // finish in the new current file. Read retained rotations oldest-first so the
   // restart guard can pair that start with its terminal event across files.
-  for (const candidate of [
-    ...Array.from({ length: DEFAULT_ROTATE_OPTIONS.keepCount }, (_value, index) =>
-      `${timelinePath}.${DEFAULT_ROTATE_OPTIONS.keepCount - index}`),
-    timelinePath,
-  ]) {
-    try {
-      rawParts.push(await readFile(candidate, "utf8"));
-    } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        (error as NodeJS.ErrnoException).code === "ENOENT"
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  if (rawParts.length === 0) {
+  const raw = await readLarkTimelineLogWithRotations(stateDir);
+  if (raw === null) {
     return { activeTurnCount: 0 };
   }
-  const raw = rawParts.join("\n");
 
   const pendingByConversationKey = new Map<string, TimelineEvent[]>();
+  const pendingCronRunsByJobId = new Map<string, TimelineEvent[]>();
+  const pendingCommentTurnsByKey = new Map<string, TimelineEvent[]>();
   for (const event of parseTimelineEvents(raw)) {
     if (event.channel !== "lark") {
       continue;
@@ -2152,7 +2146,50 @@ async function readLarkPendingTurnActivity(
       continue;
     }
 
+    // Cron agent turns never log input.received; the scheduler logs
+    // cron.triggered and terminates each run with cron.completed (success or
+    // error), so pair those by job id. cron.skipped is emitted for runs that
+    // never triggered (overlap/limits) and must NOT settle an in-flight run.
+    if (event.type === "cron.triggered") {
+      const cronJobId = getLarkTimelineCronJobId(event);
+      if (cronJobId) {
+        const pending = pendingCronRunsByJobId.get(cronJobId) ?? [];
+        pending.push(event);
+        pendingCronRunsByJobId.set(cronJobId, pending);
+      }
+      continue;
+    }
+    if (event.type === "cron.completed") {
+      const cronJobId = getLarkTimelineCronJobId(event);
+      const pending = cronJobId ? pendingCronRunsByJobId.get(cronJobId) : undefined;
+      pending?.shift();
+      if (cronJobId && pending && pending.length === 0) {
+        pendingCronRunsByJobId.delete(cronJobId);
+      }
+      continue;
+    }
+
+    // Doc-comment turns log turn.started/turn.completed (comment-handler) with
+    // larkSurface "comment" instead of input.received; pair those per comment.
+    if (event.type === "turn.started" && isLarkCommentTimelineEvent(event)) {
+      const key = getLarkTimelineCommentPairingKey(event);
+      const pending = pendingCommentTurnsByKey.get(key) ?? [];
+      pending.push(event);
+      pendingCommentTurnsByKey.set(key, pending);
+      continue;
+    }
+
     if (event.type !== "turn.completed" && event.type !== "command.handled") {
+      continue;
+    }
+
+    if (isLarkCommentTimelineEvent(event)) {
+      const key = getLarkTimelineCommentPairingKey(event);
+      const pending = pendingCommentTurnsByKey.get(key);
+      pending?.shift();
+      if (pending && pending.length === 0) {
+        pendingCommentTurnsByKey.delete(key);
+      }
       continue;
     }
 
@@ -2178,8 +2215,11 @@ async function readLarkPendingTurnActivity(
   const ownerAlive = lock ? await isExpectedLarkServicePid(lock.pid, stateDir, instanceName, readCommandLine) : null;
   const ownerStartedAtMs = lock?.startedAtMs ?? null;
 
-  const freshPending = [...pendingByConversationKey.values()]
-    .flat()
+  const freshPending = [
+    ...[...pendingByConversationKey.values()].flat(),
+    ...[...pendingCronRunsByJobId.values()].flat(),
+    ...[...pendingCommentTurnsByKey.values()].flat(),
+  ]
     .filter((event) => {
       const timestampMs = event.timestamp ? new Date(event.timestamp).getTime() : Number.NaN;
       if (!Number.isFinite(timestampMs)) {
@@ -4517,6 +4557,15 @@ async function runInstanceCommand(
   throw new Error("Usage: telegram instance <list|rename|delete> ...");
 }
 
+// Codex/Antigravity never report dollar cost (and the repo carries no token
+// pricing), so a budget on those engines can never trip. Say so instead of
+// letting the operator believe they are protected.
+function renderNonClaudeBudgetNote(locale: unknown): string {
+  return locale === "zh"
+    ? "注意：Codex/Antigravity 引擎不上报美元成本，预算上限目前只对 Claude 生效。"
+    : "Note: Codex/Antigravity engines do not report dollar costs; the budget cap currently only takes effect on the Claude engine.";
+}
+
 async function runBudgetCommand(
   argv: string[],
   env: InstanceTokenEnv,
@@ -4525,6 +4574,7 @@ async function runBudgetCommand(
   const { instanceName, args } = extractInstanceOption(argv.slice(1));
   const configPath = resolveConfigJsonPath(env, instanceName);
   const config = await readInstanceConfig(configPath);
+  const nonClaudeEngine = config.engine !== "claude";
 
   if (args.length === 0 || args[0] === "show") {
     const budget = typeof config.budgetUsd === "number" ? config.budgetUsd : null;
@@ -4538,6 +4588,9 @@ async function runBudgetCommand(
       const pct = budget > 0 ? Math.round((used / budget) * 100) : 0;
       const remaining = Math.max(0, budget - used);
       logger.log(`Instance "${instanceName}": $${used.toFixed(4)} / $${budget.toFixed(2)} (${pct}%). Remaining: $${remaining.toFixed(4)}`);
+      if (nonClaudeEngine) {
+        logger.log(renderNonClaudeBudgetNote(config.locale));
+      }
     }
     return true;
   }
@@ -4551,6 +4604,9 @@ async function runBudgetCommand(
       config.budgetUsd = amount;
     });
     logger.log(`Instance "${instanceName}": budget set to $${amount.toFixed(2)}. Bot will block new requests when the budget is exhausted.`);
+    if (nonClaudeEngine) {
+      logger.log(renderNonClaudeBudgetNote(config.locale));
+    }
     return true;
   }
 

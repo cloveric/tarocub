@@ -9,7 +9,7 @@ import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { LARK_STEER_DEFAULT_WINDOW_SECONDS, loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
-import { handleLarkCrewWorkflow } from "./bus.js";
+import { LarkGoalRunController, claimLarkRunSlot, handleLarkCrewWorkflow } from "./bus.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
@@ -592,7 +592,7 @@ async function runAcceptedLarkMessage(
 
   // Pass the ORIGINAL command text: a /q message stays slash-shaped here so an
   // explicit preempt policy does not abort the turn the user asked to queue behind.
-  preemptActiveLarkTurnIfEnabled(input, effectiveNormalized, commandText);
+  await preemptActiveLarkTurnIfEnabled(input, effectiveNormalized, commandText, messageLocale);
 
   return await enqueueLarkTurn(input, effectiveNormalized, messageLocale, handleConversationQueueWait);
 }
@@ -789,16 +789,47 @@ function shouldBatchLarkMessage(
   return pending !== undefined;
 }
 
-function preemptActiveLarkTurnIfEnabled(
-  input: { runtime: LarkServiceRuntime },
+async function preemptActiveLarkTurnIfEnabled(
+  input: { bridge: LarkBridgeLike; runtime: LarkServiceRuntime },
   normalized: LarkNormalizedBridgeMessage,
   commandText: string,
-): void {
+  locale: Locale,
+): Promise<void> {
   if (!input.runtime.queuePolicy.preempt || isSlashCommand(commandText)) {
     return;
   }
   const active = input.runtime.activeRuns.get(normalized.conversationKey);
-  active?.abortController.abort();
+  if (!active && input.runtime.chatQueue.pendingCount(normalized.conversationKey) === 0) {
+    return; // nothing to preempt or clear — skip the access round-trip
+  }
+  // Authorization BEFORE the abort (same bridge.checkAccess pattern as the
+  // steer path): preempting used to run pre-access, so in preempt mode an
+  // unauthorized group member's message could kill an authorized user's active
+  // turn. On deny, do nothing here — the queued path renders the denial reply
+  // exactly as it does today.
+  const accessDecision = input.bridge.checkAccess
+    ? await input.bridge.checkAccess({
+      chatId: normalized.bridgeAccessChatId,
+      conversationChatId: normalized.bridgeChatId,
+      userId: normalized.bridgeUserId,
+      chatType: normalized.bridgeChatType,
+      conversationKey: normalized.conversationKey,
+      locale,
+    })
+    : { kind: "allow" as const };
+  if (accessDecision.kind !== "allow") {
+    return;
+  }
+  if (active?.goalWatch) {
+    // A pursued /goal survives ordinary traffic even under an explicit preempt
+    // policy (only /stop and /goal clear end it): replace just the concurrently
+    // running ordinary turn, if one is attached — never the pursuit itself.
+    if (active.abortController instanceof LarkGoalRunController) {
+      active.abortController.liveConcurrentTurn()?.abortController.abort();
+    }
+  } else {
+    active?.abortController.abort();
+  }
   input.runtime.chatQueue.clearPending(normalized.conversationKey);
 }
 
@@ -841,7 +872,12 @@ async function trySteerActiveLarkTurn(
   if (input.runtime.queuePolicy.preempt || isSlashCommand(commandText)) {
     return false;
   }
-  if (normalized.attachments.length > 0 || !normalized.text.trim()) {
+  // Gate on the BODY (commandText = extractLarkMessageBody output), not on
+  // normalized.text: the latter always carries the <lark_context> envelope, so
+  // it is never empty and the empty-message guard was dead — a content-less
+  // message (e.g. a sticker/unsupported type) would "steer" pure envelope
+  // metadata into the running turn.
+  if (normalized.attachments.length > 0 || !normalized.text.trim() || !commandText.trim()) {
     return false;
   }
   // A quoted reply gets its quoted text composed into the prompt inside
@@ -1016,7 +1052,7 @@ async function flushBatchedLarkTurn(
   }
   input.runtime.pendingBatches.delete(conversationKey);
   try {
-    preemptActiveLarkTurnIfEnabled(input, batch.normalized, batch.normalized.text);
+    await preemptActiveLarkTurnIfEnabled(input, batch.normalized, batch.normalized.text, locale);
     const result = await enqueueLarkTurn(input, batch.normalized, locale, onWait);
     await markMergedBatchMembersTerminal(input.stateDir, batch, "success");
     for (const resolve of batch.resolve) {
@@ -1161,15 +1197,25 @@ async function runNormalizedLarkMessage(
 
   const commandText = extractLarkMessageBody(normalized.text);
 
+  // Claim the conversation's activeRuns slot — or, when a live /goal pursuit
+  // holds it, ATTACH this turn to the pursuit instead (claimLarkRunSlot /
+  // LarkGoalRunController in bus.ts document the full design). An ordinary
+  // message used to abort the goal watcher here, whose abort path cleared the
+  // goal — a casual "how's it going?" silently killed the pursuit. Now:
+  // - the pursuit keeps the slot and its goalWatch handle for its whole life;
+  // - this turn runs on its OWN controller (attached, not slotted);
+  // - /stop or a stop button abort() the slot's controller, which routes to
+  //   this attached turn first and to the pursuit only when nothing else runs;
+  // - /goal clear (abortGoal) still always ends the pursuit.
   let abortController: AbortController | undefined;
+  let releaseRunSlot: (() => void) | undefined;
   const activateRun = (): AbortController => {
     if (!abortController) {
-      const active = input.runtime.activeRuns.get(normalized.conversationKey);
-      if (active?.goalWatch) {
-        active.abortController.abort();
-      }
       abortController = new AbortController();
-      input.runtime.activeRuns.set(normalized.conversationKey, { abortController, startedAt: Date.now() });
+      releaseRunSlot = claimLarkRunSlot(input.runtime, normalized.conversationKey, {
+        abortController,
+        startedAt: Date.now(),
+      });
     }
     return abortController;
   };
@@ -1396,8 +1442,10 @@ async function runNormalizedLarkMessage(
       });
       // Record whether a live run card exists so the stop handlers can skip the
       // redundant "已停止。" text — the card itself updates in place to "已中断".
+      // Guarded on ownership: when this turn is ATTACHED to a /goal pursuit the
+      // slot (and its hasRunCard flag) belongs to the goal's card, not ours.
       const activeHandle = input.runtime.activeRuns.get(normalized.conversationKey);
-      if (activeHandle) {
+      if (activeHandle?.abortController === runController) {
         activeHandle.hasRunCard = Boolean(runCard);
       }
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
@@ -1824,6 +1872,30 @@ async function runNormalizedLarkMessage(
         });
         return true;
       }
+      // The turn failed after a file workflow flipped its record to "processing"
+      // — mark it failed (parity with telegram/turn-error.ts) so the leaked
+      // record doesn't stay "processing" forever and count against the
+      // active-file-task cap. Best-effort: never mask the turn error itself.
+      if (workflowRecordId) {
+        try {
+          await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
+            if (
+              record.status === "preparing" ||
+              record.status === "processing" ||
+              record.status === "awaiting_continue"
+            ) {
+              record.status = "failed";
+            }
+          });
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "workflow.failed",
+            detail: "workflow marked failed",
+            metadata: { workflowRecordId },
+          });
+        } catch {
+          // best-effort cleanup only
+        }
+      }
       const terminal = classifyLarkTurnTermination(error, runController.signal);
       let engineFailureOutcome: "error" | "partial" = "error";
       if (terminal.kind === "interrupted") {
@@ -1861,12 +1933,10 @@ async function runNormalizedLarkMessage(
       return true;
     }
   } finally {
-    if (abortController) {
-      const active = input.runtime.activeRuns.get(normalized.conversationKey);
-      if (active?.abortController === abortController) {
-        input.runtime.activeRuns.delete(normalized.conversationKey);
-      }
-    }
+    // Guarded release from claimLarkRunSlot: detaches from a /goal pursuit when
+    // attached, and deletes the slot only while this turn still owns it (a
+    // newer claim is never clobbered).
+    releaseRunSlot?.();
     // A "queued" card is normally taken over by the run card, whose creation
     // deletes this entry. If it's still tracked, the task finished via an
     // early-return path that never reached that hand-off — most commonly a queued
@@ -2266,9 +2336,22 @@ export async function createLarkRunCardController(input: {
       return await enqueuePatch(() => finalize(text));
     },
     fail: async (text) => {
-      const failureStatus = state.blocks.some(
-        (block) => block.kind === "text" && cleanCardText(block.content).trim().length > 0,
-      ) ? "partial" : "error";
+      // "partial" must mean "part of the ANSWER already arrived": only when the
+      // latest text block landed AFTER the last tool event was the engine
+      // already writing its reply when it died (text→crash with no tools also
+      // qualifies). Text that only PRECEDES the last tool call is pre-tool
+      // narration ("let me check…") — a crash there is a plain error, not a
+      // partial answer the operator can trust.
+      let lastTextIndex = -1;
+      let lastToolIndex = -1;
+      state.blocks.forEach((block, index) => {
+        if (block.kind === "tool") {
+          lastToolIndex = index;
+        } else if (cleanCardText(block.content).trim().length > 0) {
+          lastTextIndex = index;
+        }
+      });
+      const failureStatus = lastTextIndex > lastToolIndex ? "partial" : "error";
       state = {
         ...state,
         status: failureStatus,

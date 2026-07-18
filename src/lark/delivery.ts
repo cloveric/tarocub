@@ -1536,15 +1536,15 @@ function decorateRawLarkCard(
   bridgeChatType: "private" | "group" | undefined,
   replyInThread: boolean | undefined,
 ): Record<string, unknown> {
-  if (!conversationKey) {
-    return card;
-  }
+  // Runs even without a conversationKey: the decoration also SANITIZES
+  // engine-authored cctb_lark callbacks, and skipping it would ship them
+  // verbatim (see the security note in decorateLarkCardNode).
   return decorateLarkCardNode(card, conversationKey, bridgeChatType, replyInThread) as Record<string, unknown>;
 }
 
 function decorateLarkCardNode(
   value: unknown,
-  conversationKey: string,
+  conversationKey: string | undefined,
   bridgeChatType: "private" | "group" | undefined,
   replyInThread: boolean | undefined,
 ): unknown {
@@ -1570,7 +1570,7 @@ function decorateLarkCardNode(
       decorated.behaviors = [
         callbackBehavior({
           cctb_lark: "choice",
-          conversationKey,
+          ...(conversationKey ? { conversationKey } : {}),
           ...(bridgeChatType ? { bridgeChatType } : {}),
           ...(replyInThread ? { replyInThread: true } : {}),
           label,
@@ -1578,16 +1578,18 @@ function decorateLarkCardNode(
         }),
       ];
       delete decorated.value;
-    } else if (currentValue?.cctb_lark && !existingCallback?.cctb_lark) {
-      decorated.behaviors = [
-        ...behaviors,
-        callbackBehavior(withLarkThreadRouting(currentValue, replyInThread)),
-      ];
-      delete decorated.value;
-    } else if (currentValue?.cctb_lark && existingCallback?.cctb_lark) {
-      delete decorated.value;
-    } else if (existingCallback?.cctb_lark && replyInThread) {
-      decorated.behaviors = behaviors.map((behavior) => {
+    } else if (currentValue?.cctb_lark || existingCallback?.cctb_lark) {
+      // SECURITY (confused deputy): this card came from ENGINE output, so any
+      // cctb_lark callback in it is engine-authored. Honoring it verbatim would
+      // let a prompt-injected engine ship an innocuous-looking button that runs
+      // a privileged bridge action (config / board / resume / …) — or targets
+      // another conversation — on one operator tap. Rewrite EVERY cctb_lark
+      // callback to the harmless "choice" shape and pin conversationKey to the
+      // delivering conversation. Bridge-authored cards (config, board, run,
+      // approval cards) are built by our own renderers and never pass through
+      // this engine-raw-card decoration, so their privileged callbacks keep
+      // working untouched.
+      const rewritten = behaviors.map((behavior) => {
         if (!behavior || typeof behavior !== "object" || Array.isArray(behavior)) {
           return behavior;
         }
@@ -1601,17 +1603,44 @@ function decorateLarkCardNode(
         }
         return {
           ...entry,
-          value: withLarkThreadRouting(callbackValue, replyInThread),
+          value: sanitizedEngineChoiceCallback(callbackValue, decorated, conversationKey, bridgeChatType, replyInThread),
         };
       });
+      if (currentValue?.cctb_lark && !existingCallback?.cctb_lark) {
+        rewritten.push(callbackBehavior(sanitizedEngineChoiceCallback(currentValue, decorated, conversationKey, bridgeChatType, replyInThread)));
+      }
+      decorated.behaviors = rewritten;
+      if (currentValue?.cctb_lark) {
+        delete decorated.value;
+      }
     }
   }
 
   return decorated;
 }
 
-function withLarkThreadRouting(value: Record<string, unknown>, replyInThread: boolean | undefined): Record<string, unknown> {
-  return replyInThread ? { ...value, replyInThread: true } : value;
+/**
+ * Rebuilds an engine-authored cctb_lark button callback as a plain "choice"
+ * callback bound to the delivering conversation. Only label/value survive;
+ * privileged fields (action, command, decision, requestId, …) and any
+ * engine-chosen conversationKey are dropped.
+ */
+function sanitizedEngineChoiceCallback(
+  raw: Record<string, unknown>,
+  button: Record<string, unknown>,
+  conversationKey: string | undefined,
+  bridgeChatType: "private" | "group" | undefined,
+  replyInThread: boolean | undefined,
+): Record<string, unknown> {
+  const label = stringValue(raw.label) ?? extractButtonLabel(button);
+  return {
+    cctb_lark: "choice",
+    ...(conversationKey ? { conversationKey } : {}),
+    ...(bridgeChatType ? { bridgeChatType } : {}),
+    ...(replyInThread ? { replyInThread: true } : {}),
+    label,
+    value: raw.value ?? label,
+  };
 }
 
 function callbackBehavior(value: Record<string, unknown>): Record<string, unknown> {

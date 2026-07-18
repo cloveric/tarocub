@@ -12,7 +12,9 @@ import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { loadTelemetryAdapterFromEnv } from "../runtime/telemetry.js";
 import { CronStore } from "../state/cron-store.js";
+import { DEFAULT_ROTATE_OPTIONS } from "../state/log-rotation.js";
 import { parseTimelineEvents, resolveTimelineLogPath, type TimelineEvent } from "../state/timeline-log.js";
+import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 import { handleLarkComment, normalizeLarkCommentFileType } from "./comment-handler.js";
@@ -342,7 +344,11 @@ export async function runLarkService(
       telemetry,
     });
     if (!runtime.cronRuntime) {
-      const cronStore = new CronStore(stateDir);
+      // Schedule recurring jobs in the operator-configured instance timezone
+      // (config.json `timezone`), matching the Telegram boot — otherwise Lark
+      // cron jobs silently run in the host timezone.
+      const instanceConfig = await loadInstanceConfig(stateDir);
+      const cronStore = new CronStore(stateDir, { defaultTimezone: instanceConfig.timezone });
       cronScheduler = new CronScheduler({
         store: cronStore,
         executor: buildLarkCronExecutor({
@@ -468,15 +474,42 @@ function parseNonNegativeIntegerEnv(value: string | undefined): number | undefin
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-async function recoverInterruptedLarkTurns(stateDir: string, instanceName: string): Promise<number> {
-  let raw: string;
-  try {
-    raw = await readFile(resolveTimelineLogPath(stateDir), "utf8");
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
+/**
+ * Read the instance timeline including retained rotations, oldest-first
+ * (`.5` → `.1` → current). A turn accepted just before a 10 MB rotation has its
+ * input.received in a rotated file while its terminal event (if any) lands in
+ * the current file, so any pairing pass must see the concatenation. Returns
+ * null when no timeline file exists yet. Shared with the CLI restart guard.
+ */
+export async function readLarkTimelineLogWithRotations(stateDir: string): Promise<string | null> {
+  const timelinePath = resolveTimelineLogPath(stateDir);
+  const rawParts: string[] = [];
+  for (const candidate of [
+    ...Array.from({ length: DEFAULT_ROTATE_OPTIONS.keepCount }, (_value, index) =>
+      `${timelinePath}.${DEFAULT_ROTATE_OPTIONS.keepCount - index}`),
+    timelinePath,
+  ]) {
+    try {
+      rawParts.push(await readFile(candidate, "utf8"));
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        continue;
+      }
+      throw error;
     }
-    throw error;
+  }
+  return rawParts.length > 0 ? rawParts.join("\n") : null;
+}
+
+async function recoverInterruptedLarkTurns(stateDir: string, instanceName: string): Promise<number> {
+  const raw = await readLarkTimelineLogWithRotations(stateDir);
+  if (raw === null) {
+    return 0;
   }
 
   const pendingByConversationKey = new Map<string, TimelineEvent[]>();

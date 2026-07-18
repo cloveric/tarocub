@@ -40,6 +40,7 @@ import {
   resolveLarkLocale,
 } from "./locale.js";
 import { sendManagedCard, settleThenUpdateManagedCard, updateManagedCard } from "./managed-card.js";
+import { claimLarkRunSlot } from "./bus.js";
 import { larkAccessChatIdFromConversationKey, larkAccessConversationKeyFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime, PendingLarkApproval } from "./runtime.js";
@@ -140,6 +141,14 @@ export async function requestLarkApproval(input: {
       pending.abortHandler = () => {
         cleanup();
         resolve({ behavior: "deny" });
+        // Same treatment as the timeout: flip the pending card read-only IN
+        // PLACE so it visibly dies with the turn (/stop, stop button, preempt,
+        // goal abort) instead of lingering fully answerable. No extra text
+        // notice here — the stop flow already posts its own confirmation.
+        if (pending.managedCard) {
+          void updateManagedCard(input.channel, pending.managedCard, renderLarkPendingInterruptedCard(pending, input.locale ?? "zh"))
+            .catch(() => undefined);
+        }
       };
       input.abortSignal.addEventListener("abort", pending.abortHandler, { once: true });
     }
@@ -410,10 +419,40 @@ function renderLarkPendingTimedOutCard(
     : (en
       ? `No decision within 29 minutes — the request${pending.approvalToolName ? ` (${pending.approvalToolName})` : ""} was denied and the turn moved on.`
       : `29 分钟内未作决定，该请求${pending.approvalToolName ? `（${pending.approvalToolName}）` : ""}已按拒绝处理。`);
+  return renderLarkPendingClosedCard("⏳", title, body);
+}
+
+/**
+ * Read-only replacement for a pending card whose turn was aborted (/stop, the
+ * stop button, a preempting turn, or a goal abort). Same treatment as the
+ * timeout flip: the form/buttons visibly die in place instead of lingering
+ * answerable after the task is already gone.
+ */
+function renderLarkPendingInterruptedCard(
+  pending: { askUserQuestionInput?: unknown; approvalToolName?: string },
+  locale: Locale,
+): Record<string, unknown> {
+  const isAsk = pending.askUserQuestionInput !== undefined;
+  const en = locale === "en";
+  const title = isAsk
+    ? (en ? "Choice cancelled" : "选择已取消")
+    : (en ? "Approval cancelled" : "审批已取消");
+  const body = isAsk
+    ? (en
+      ? "The task was stopped, so this choice no longer applies. To continue, just send a message describing what you want."
+      : "任务已停止，这次选择不再需要。想继续的话，直接发消息说明你的选择即可。")
+    : (en
+      ? `The task was stopped, so this request${pending.approvalToolName ? ` (${pending.approvalToolName})` : ""} no longer needs a decision.`
+      : `任务已停止，该请求${pending.approvalToolName ? `（${pending.approvalToolName}）` : ""}无需再审批。`);
+  return renderLarkPendingClosedCard("⏹", title, body);
+}
+
+/** Shared read-only shell for the timed-out / interrupted pending-card flips. */
+function renderLarkPendingClosedCard(icon: string, title: string, body: string): Record<string, unknown> {
   return {
     schema: "2.0",
     config: { update_multi: true, summary: { content: title } },
-    header: { title: { tag: "plain_text", content: `⏳ ${title}` } },
+    header: { title: { tag: "plain_text", content: `${icon} ${title}` } },
     body: {
       direction: "vertical",
       padding: "12px 12px 12px 12px",
@@ -915,15 +954,14 @@ export async function handleLarkCardAction(input: {
   ) {
     const pending = input.runtime.pendingApprovals.get(value.requestId);
     if (!pending) {
-      // A late submit on an expired form: say what actually happened instead of
-      // the terse "no pending approval" (which reads as a broken button).
+      // A late submit on a dead form: say what actually happened instead of the
+      // terse "no pending approval" (which reads as a broken button). The copy
+      // stays cause-neutral — this handler can't tell a 29-minute timeout from
+      // a /stop-style abort, and claiming "expired, task continued with the
+      // default option" is a fabrication when the turn was stopped.
       await input.channel.send(
         input.event.chatId,
-        {
-          text: locale === "en"
-            ? "This choice card expired (no submission within 29 minutes) — the task already continued with the default option. To adjust, just send a message describing what you want."
-            : "这张选择卡已过期（29 分钟内未提交），任务当时已按默认选项继续。要调整的话，直接发消息说明你的选择即可。",
-        },
+        { text: renderLarkChoiceNoLongerActive(locale) },
         larkReplyOptions(input.event.messageId, replyInThread),
       );
       return true;
@@ -1019,6 +1057,20 @@ export async function handleLarkCardAction(input: {
       await input.channel.send(
         input.event.chatId,
         { text: locale === "en" ? `Please choose an answer for: ${names}` : `请先选择：${names}` },
+        replyOpts,
+      );
+      return true;
+    }
+
+    // Re-check AFTER the access-check awaits: the 29-minute timer or a turn
+    // abort may have settled this approval inside that window (both delete the
+    // entry via cleanup). The resolve below would then be a silent no-op —
+    // flipping the card to "已提交" would acknowledge a decision the engine
+    // never received. Treat it as the no-pending case instead.
+    if (!input.runtime.pendingApprovals.has(value.requestId)) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: renderLarkChoiceNoLongerActive(locale) },
         replyOpts,
       );
       return true;
@@ -1130,6 +1182,17 @@ export async function handleLarkCardAction(input: {
         action: "approval",
       })
     ) {
+      return true;
+    }
+    // Same race guard as the AskUserQuestion form submit: if the timeout or an
+    // abort settled this approval during the access-check awaits, don't flip
+    // the card to a decided state the engine never received.
+    if (!input.runtime.pendingApprovals.has(value.requestId)) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: renderApprovalNoPending(locale) },
+        larkReplyOptions(input.event.messageId, replyInThread),
+      );
       return true;
     }
     cleanupPendingApproval(input.runtime, value.requestId);
@@ -1452,11 +1515,15 @@ async function runLarkCardChoice(input: {
     return;
   }
   await mkdir(requestOutputDir, { recursive: true });
-  // Abort any run already tracked for this conversation before claiming the slot
-  // (e.g. a detached /goal watcher, which holds activeRuns outside the chat
-  // queue) — overwriting it would orphan that run where /stop can't reach it.
-  input.runtime.activeRuns.get(input.conversationKey)?.abortController.abort();
-  input.runtime.activeRuns.set(input.conversationKey, { abortController, startedAt: Date.now() });
+  // A live NON-goal run would be orphaned by overwriting (where /stop can't
+  // reach it) — abort it before claiming. A pursued /goal is NOT aborted:
+  // claimLarkRunSlot attaches this turn to the pursuit so the goal survives a
+  // card-triggered turn, same as ordinary messages and crons.
+  const activeBeforeClaim = input.runtime.activeRuns.get(input.conversationKey);
+  if (activeBeforeClaim && !activeBeforeClaim.goalWatch) {
+    activeBeforeClaim.abortController.abort();
+  }
+  const releaseRunSlot = claimLarkRunSlot(input.runtime, input.conversationKey, { abortController, startedAt: Date.now() });
   try {
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.started",
@@ -1577,9 +1644,7 @@ async function runLarkCardChoice(input: {
   } finally {
     // Release the slot only if a newer run (e.g. a /goal watcher started while
     // this turn was finishing) hasn't already replaced it.
-    if (input.runtime.activeRuns.get(input.conversationKey)?.abortController === abortController) {
-      input.runtime.activeRuns.delete(input.conversationKey);
-    }
+    releaseRunSlot();
   }
 }
 
@@ -1631,10 +1696,13 @@ async function runLarkArchiveContinueCardAction(input: {
     return;
   }
   await mkdir(requestOutputDir, { recursive: true });
-  // Same active-run protection as runLarkCardChoice: abort the previous holder
-  // (e.g. a detached /goal watcher) before claiming, never silently orphan it.
-  input.runtime.activeRuns.get(input.conversationKey)?.abortController.abort();
-  input.runtime.activeRuns.set(input.conversationKey, { abortController, startedAt: Date.now() });
+  // Same active-run protection as runLarkCardChoice: abort a live non-goal
+  // holder (never orphan it), attach to a pursued /goal instead of killing it.
+  const activeBeforeClaim = input.runtime.activeRuns.get(input.conversationKey);
+  if (activeBeforeClaim && !activeBeforeClaim.goalWatch) {
+    activeBeforeClaim.abortController.abort();
+  }
+  const releaseRunSlot = claimLarkRunSlot(input.runtime, input.conversationKey, { abortController, startedAt: Date.now() });
   try {
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.started",
@@ -1773,9 +1841,7 @@ async function runLarkArchiveContinueCardAction(input: {
     });
   } finally {
     // Release the slot only if a newer run hasn't already replaced it.
-    if (input.runtime.activeRuns.get(input.conversationKey)?.abortController === abortController) {
-      input.runtime.activeRuns.delete(input.conversationKey);
-    }
+    releaseRunSlot();
   }
 }
 
@@ -1973,6 +2039,18 @@ function renderTextApprovalDecision(choice: LarkApprovalChoice): EngineApprovalD
 
 function renderApprovalNoPending(locale: Locale): string {
   return locale === "en" ? "No pending approval." : "没有待处理的审批。";
+}
+
+/**
+ * Cause-neutral notice for a submit on a choice card that is no longer
+ * pending. Deliberately does NOT claim "expired / the task continued with the
+ * default option": the pending entry is also gone after a /stop-style abort,
+ * where neither is true.
+ */
+function renderLarkChoiceNoLongerActive(locale: Locale): string {
+  return locale === "en"
+    ? "This choice is no longer active (it timed out or the task already ended/stopped). To continue, just send a message describing what you want."
+    : "该选择已失效（超时或任务已结束/停止）。想继续的话，直接发消息说明你的选择即可。";
 }
 
 function renderApprovalDifferentConversation(locale: Locale): string {

@@ -323,7 +323,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     if (approvalMode === "normal" && input.onApprovalRequest) {
       const decision = await input.onApprovalRequest({
         engine: "antigravity",
-        toolName: "Antigravity full-auto turn",
+        toolName: "Antigravity full-auto turn (grants the WHOLE turn, not one command)",
         toolInput: { prompt },
         cwd: input.workspaceOverride ?? this.workspacePath,
         abortSignal: input.abortSignal,

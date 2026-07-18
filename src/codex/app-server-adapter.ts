@@ -390,6 +390,21 @@ const GOAL_RPC_REQUEST_OPTIONS = {
   timeoutMs: CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS,
   destroyOnTimeout: true,
 } as const;
+/**
+ * The background goal poll shares the child with every concurrent turn, so a
+ * single slow poll must never destroy it — destroyOnTimeout there would reject
+ * ALL unrelated pending turns for one thread's laggy goal read, contradicting
+ * the adapter's thread-scoped-failure policy. Interactive goal RPCs keep
+ * GOAL_RPC_REQUEST_OPTIONS (an operator command on a wedged child must not
+ * shadow-fail); the poll escalates to destroy only after
+ * GOAL_POLL_TIMEOUTS_BEFORE_DESTROY consecutive timeouts, which indicates a
+ * genuinely wedged child rather than momentary load.
+ */
+const GOAL_POLL_REQUEST_OPTIONS = {
+  timeoutMs: CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS,
+  destroyOnTimeout: false,
+} as const;
+const GOAL_POLL_TIMEOUTS_BEFORE_DESTROY = 2;
 
 function readClearedResponse(value: unknown): boolean {
   return typeof value === "object" &&
@@ -634,9 +649,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // Poll fallback so the watch always resolves even if the live terminal
       // thread/goal/updated event is missed (otherwise the caller's active-run slot
       // leaks and the instance looks permanently busy — observed on a long goal).
+      // A timed-out poll is retried without destroying the shared child (see
+      // GOAL_POLL_REQUEST_OPTIONS); only consecutive timeouts escalate, and a
+      // successful poll resets the counter.
+      let consecutivePollTimeouts = 0;
       pollTimer = setInterval(() => {
-        void this.request("thread/goal/get", { threadId }, GOAL_RPC_REQUEST_OPTIONS)
+        void this.request("thread/goal/get", { threadId }, GOAL_POLL_REQUEST_OPTIONS)
           .then((response) => {
+            consecutivePollTimeouts = 0;
             const goal = readGoalResponse(response).goal;
             if (goal) {
               watcher.latestGoal = goal;
@@ -645,7 +665,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
               }
             }
           })
-          .catch(() => {});
+          .catch((error) => {
+            if (!(error instanceof CodexAppServerRequestTimeoutError)) {
+              return;
+            }
+            consecutivePollTimeouts += 1;
+            if (consecutivePollTimeouts >= GOAL_POLL_TIMEOUTS_BEFORE_DESTROY) {
+              this.destroy(error.childGeneration);
+            }
+          });
       }, GOAL_WATCH_POLL_MS);
       pollTimer.unref?.();
       const finalGoal = await terminal;
@@ -844,11 +872,24 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     this.child = child;
     const childGeneration = ++this.childGeneration;
+    // Generation-guard the data handlers exactly like close/error below: a
+    // destroyed child gets SIGTERM with a grace period, so it can still flush
+    // buffered output after its replacement spawned. Without the guard those
+    // stale chunks land in the NEW generation's shared line buffer and
+    // thread-keyed state — corrupting JSON framing, settling fresh turns with
+    // stale turn/* notifications (the retry path re-resumes the same
+    // threadId), and answering stale approval requests on the new child's stdin.
     child.stdout?.on("data", (chunk) => {
+      if (childGeneration !== this.childGeneration) {
+        return;
+      }
       this.handleStdout(chunk.toString());
     });
 
     child.stderr?.on("data", (chunk) => {
+      if (childGeneration !== this.childGeneration) {
+        return;
+      }
       // App-server emits JSON-RPC over stdout. Keep a bounded stderr tail so
       // stalled-turn errors carry the underlying runtime context.
       this.appendDiagnostic("stderr", chunk.toString());
@@ -1120,6 +1161,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
       pending.inactivityTimeout && clearTimeout(pending.inactivityTimeout);
       pending.inactivityTimeout = undefined;
+      // The total-turn timer must die with the turn: completeTurn may still be
+      // settling (a thread/read for empty streamed text takes up to 180s), and
+      // a total-timeout firing in that window would fall through abortTurn's
+      // stale-turn guard (the map entry is already gone), rejecting the
+      // already-completed turn as "timed out" and discarding its result and
+      // usage. A user /stop still works during the settle — its abort is
+      // signal-driven, not timer-driven.
+      pending.timeout && clearTimeout(pending.timeout);
+      pending.timeout = undefined;
       this.pendingTurns.delete(threadId);
       const turnErrorMessage = this.readTurnErrorMessage(parsed.params?.turn);
       this.completingTurns += 1;

@@ -299,10 +299,8 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     if (livePlan) {
       elements.push(livePlan);
     }
-    const runningGroups = [...groupBlocks(state.blocks)];
-    const lastGroup = runningGroups[runningGroups.length - 1];
     let streamTextIndex = 0;
-    for (const group of runningGroups) {
+    for (const group of groupBlocks(state.blocks)) {
       if (group.kind === "text") {
         const cleaned = cleanCardText(group.content);
         if (cleaned) {
@@ -310,13 +308,13 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
           // overflow Feishu's per-element limit and fail every card update.
           // Stable element_id lets the live (last) text element be updated via
           // the CardKit element-content endpoint (native typewriter) instead of
-          // re-sending the whole card on every delta. The LIVE (last) group
-          // past the cap renders the rolling tail — the exact content the
-          // element stream sends — so a full patch never rewinds the preview
-          // to a frozen prefix.
-          const isLiveGroup = group === lastGroup;
+          // re-sending the whole card on every delta. EVERY group past the
+          // answer budget renders the rolling tail: the live one so a full
+          // patch agrees byte-for-byte with the element stream, and finished
+          // ones so a tool call arriving after a long narration doesn't snap
+          // the element from the newest tail back to the ancient prefix.
           elements.push(markdownElement(
-            isLiveGroup && cleaned.length > LARK_CARD_ANSWER_MAX
+            exceedsCardAnswerBudget(cleaned)
               ? rollingTailContent(cleaned, locale)
               : truncate(cleaned, LARK_CARD_ANSWER_MAX),
             streamTextElementId(streamTextIndex),
@@ -364,16 +362,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
       elements.push(noteElement(footerStatusText(state.footer, labels)));
     }
     elements.push({ tag: "hr" });
-    elements.push({
-      tag: "button",
-      text: { tag: "plain_text", content: labels.stop },
-      type: "danger",
-      behaviors: [callbackBehavior({
-        cctb_lark: "stop",
-        conversationKey: state.conversationKey,
-        ...(state.bridgeChatType ? { bridgeChatType: state.bridgeChatType } : {}),
-      })],
-    });
+    elements.push(stopButtonElement(state, labels));
   }
 
   return {
@@ -418,15 +407,27 @@ export const LARK_CARD_ANSWER_MAX = 5000;
 const COMPACT_ANSWER_MAX = LARK_CARD_ANSWER_MAX;
 const PROCESS_PANEL_MAX = 3000;
 
+// The dual answer-element budget, mirroring the rule finalize's answerFitsCard
+// check documents: an answer element is capped in chars (LARK_CARD_ANSWER_MAX)
+// AND bytes (ELEMENT_CONTENT_MAX_BYTES). Every rolling/spill decision must test
+// BOTH axes — keying on chars alone would let byte-dense content hit the byte
+// cap first and freeze the preview until the char cap caught up.
+export function exceedsCardAnswerBudget(cleaned: string): boolean {
+  return cleaned.length > LARK_CARD_ANSWER_MAX
+    || Buffer.byteLength(cleaned, "utf8") > ELEMENT_CONTENT_MAX_BYTES;
+}
+
 function streamTextElementId(index: number): string {
   return `md_${index}`;
 }
 
-// Rolling-tail live preview: once a streamed text group outgrows the per-element
-// cap, the live element stops being a frozen prefix (which made hours-long turns
+// Rolling-tail live preview: once a streamed text group outgrows the answer
+// budget, its element stops being a frozen prefix (which made hours-long turns
 // look stuck) and instead always shows the MOST RECENT slice of the narration,
-// prefixed with an omission notice. The full text still arrives at finalize via
-// continuation cards, so nothing is lost — this only changes the live preview.
+// prefixed with an omission notice. Only the FINAL answer is re-delivered in
+// full at finalize (continuation cards / a Doc); a mid-turn narration group
+// ends up truncated in the finished card's process panel — so the notice only
+// says the earlier chars are omitted, never promising full delivery later.
 const LARK_STREAM_TAIL_TARGET = 4000;
 
 export function rollingTailContent(cleaned: string, locale: Locale = "zh"): string {
@@ -449,8 +450,8 @@ export function rollingTailContent(cleaned: string, locale: Locale = "zh"): stri
     tail = tail + "\n```";
   }
   const notice = locale === "en"
-    ? `_… live preview shows the latest output only (${start} earlier chars arrive in full when the task finishes) …_`
-    : `_…实时预览仅显示最新输出（前 ${start} 字将在任务结束后完整发出）…_`;
+    ? `_… live preview shows the latest output only (${start} earlier chars omitted) …_`
+    : `_…实时预览仅显示最新输出（前 ${start} 字已省略）…_`;
   return truncateBytes(truncate(`${notice}\n\n${tail}`, LARK_CARD_ANSWER_MAX), ELEMENT_CONTENT_MAX_BYTES);
 }
 
@@ -483,7 +484,11 @@ export function liveRunCardStreamElement(
   if (!cleaned || textIndex < 0) {
     return null;
   }
-  const rolling = cleaned.length > LARK_CARD_ANSWER_MAX;
+  // Rolling keys on the dual budget (chars AND bytes) — the char cap alone
+  // would let byte-dense content hit ELEMENT_CONTENT_MAX_BYTES first, and the
+  // monotonic guard would then freeze the byte-truncated preview until the
+  // char count also crossed the cap.
+  const rolling = exceedsCardAnswerBudget(cleaned);
   return {
     elementId: streamTextElementId(textIndex),
     content: rolling
@@ -562,7 +567,7 @@ export function renderLarkNotificationCard(headerText: string, bodyText: string)
   if (!cleaned) {
     return null;
   }
-  if (cleaned.length > LARK_CARD_ANSWER_MAX || Buffer.byteLength(cleaned, "utf8") > ELEMENT_CONTENT_MAX_BYTES) {
+  if (exceedsCardAnswerBudget(cleaned)) {
     return null;
   }
   return {
@@ -702,7 +707,16 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
   }
   const answer = cleanCardText(finalAnswerText(state));
   if (answer) {
-    elements.push(markdownElement(truncate(answer, COMPACT_ANSWER_MAX)));
+    // Degrade commonly hits MID-RUN on exactly the long, tool-heavy turns the
+    // rolling tail shipped for (their full card breaches Feishu's 30KB
+    // whole-card limit) — so a running compact card keeps the rolling-tail
+    // preview past the answer budget instead of re-freezing on a truncated
+    // prefix. Terminal compact cards keep the plain truncated answer.
+    elements.push(markdownElement(
+      state.status === "running" && exceedsCardAnswerBudget(answer)
+        ? rollingTailContent(answer, locale)
+        : truncate(answer, COMPACT_ANSWER_MAX),
+    ));
   }
 
   if (state.status === "interrupted") {
@@ -712,8 +726,15 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
   } else if ((state.status === "error" || state.status === "partial") && state.errorText.trim()) {
     const prefix = state.status === "partial" ? `${labels.partialWarning}\n\n` : "";
     elements.push(markdownElement(`⚠️ ${truncate(prefix + state.errorText.trim(), 600)}`));
-  } else if (!answer) {
+  } else if (state.status !== "running" && !answer) {
     elements.push(markdownElement(`_${labels.empty}_`));
+  }
+
+  if (state.status === "running") {
+    // Same Stop element the full card carries: degrading a long turn must not
+    // take away the operator's only in-card way to stop it.
+    elements.push({ tag: "hr" });
+    elements.push(stopButtonElement(state, labels));
   }
 
   return {
@@ -1105,6 +1126,26 @@ function footerStatusText(
   return labels.footerStreaming;
 }
 
+/**
+ * The 停止 button every running card carries — shared by the full and compact
+ * renders so degrading mid-run never takes away the operator's stop control.
+ */
+function stopButtonElement(
+  state: LarkRunState,
+  labels: ReturnType<typeof runCardLabels>,
+): Record<string, unknown> {
+  return {
+    tag: "button",
+    text: { tag: "plain_text", content: labels.stop },
+    type: "danger",
+    behaviors: [callbackBehavior({
+      cctb_lark: "stop",
+      conversationKey: state.conversationKey,
+      ...(state.bridgeChatType ? { bridgeChatType: state.bridgeChatType } : {}),
+    })],
+  };
+}
+
 function runCardLabels(locale: Locale): {
   running: string;
   done: string;
@@ -1477,9 +1518,14 @@ export const LARK_OVERFLOW_CARD_MAX_CHARS = LARK_CARD_ANSWER_MAX - 80;
 export const LARK_OVERFLOW_CARD_MAX_BYTES = ELEMENT_CONTENT_MAX_BYTES - 400;
 export const LARK_MAX_OVERFLOW_CARDS = 6;
 
+// Headroom reserved while packing so the seam fence markers ("```\n" prefix /
+// "\n```" suffix, ≤ 8 chars = 8 bytes) balanceChunkFenceParity may add can
+// never push a balanced chunk past the card budgets.
+const CHUNK_FENCE_HEADROOM = 8;
+
 function fitsCardChunk(s: string): boolean {
-  return s.length <= LARK_OVERFLOW_CARD_MAX_CHARS
-    && Buffer.byteLength(s, "utf8") <= LARK_OVERFLOW_CARD_MAX_BYTES;
+  return s.length <= LARK_OVERFLOW_CARD_MAX_CHARS - CHUNK_FENCE_HEADROOM
+    && Buffer.byteLength(s, "utf8") <= LARK_OVERFLOW_CARD_MAX_BYTES - CHUNK_FENCE_HEADROOM;
 }
 
 // Hard-split a single oversized line into budget-sized pieces without cutting a code
@@ -1490,8 +1536,7 @@ function hardSplitCardLine(line: string): string[] {
   let buf = "";
   for (const ch of line) {
     const next = buf + ch;
-    if (next.length > LARK_OVERFLOW_CARD_MAX_CHARS
-      || Buffer.byteLength(next, "utf8") > LARK_OVERFLOW_CARD_MAX_BYTES) {
+    if (!fitsCardChunk(next)) {
       if (buf) {
         pieces.push(buf);
       }
@@ -1544,7 +1589,35 @@ export function splitLarkAnswerIntoCardChunks(text: string): string[] {
     }
   }
   flush();
-  return chunks.length > 0 ? chunks : [""];
+  return chunks.length > 0 ? balanceChunkFenceParity(chunks) : [""];
+}
+
+// Fence parity at chunk seams — the same balancing rollingTailContent applies
+// to its cut. Splitting on line boundaries alone lets a ``` code block span a
+// seam: card N would end with an unclosed fence (everything after renders as
+// code) and card N+1 would open mid-block (code renders as prose and gets
+// heading-downgraded). Close the block at the end of any chunk that leaves one
+// open and reopen it at the top of the next. A single chunk has no seam and is
+// returned untouched. Packing reserves CHUNK_FENCE_HEADROOM, so the added
+// markers never push a chunk past the card caps.
+function balanceChunkFenceParity(chunks: string[]): string[] {
+  if (chunks.length <= 1) {
+    return chunks;
+  }
+  let insideFence = false;
+  return chunks.map((chunk) => {
+    const fenceCount = (chunk.match(/```/g) ?? []).length;
+    const openAtEnd = fenceCount % 2 === 1 ? !insideFence : insideFence;
+    let balanced = chunk;
+    if (insideFence) {
+      balanced = `\`\`\`\n${balanced}`;
+    }
+    if (openAtEnd) {
+      balanced = `${balanced}\n\`\`\``;
+    }
+    insideFence = openAtEnd;
+    return balanced;
+  });
 }
 
 // A terminal card carrying one continuation chunk of a long answer. The heading marks

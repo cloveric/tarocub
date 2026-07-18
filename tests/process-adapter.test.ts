@@ -470,7 +470,7 @@ describe("ProcessCodexAdapter", () => {
     expect(approvals).toHaveLength(1);
     expect(approvals[0]).toMatchObject({
       engine: "codex",
-      toolName: "Codex full-auto turn",
+      toolName: "Codex full-auto turn (grants the WHOLE turn, not one command)",
       cwd: "/tmp/workspace",
       toolInput: {
         prompt: "Delete the temporary file\nAttachment: notes.txt",

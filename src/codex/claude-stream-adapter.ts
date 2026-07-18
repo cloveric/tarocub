@@ -17,6 +17,7 @@ import type {
   CodexUserMessageInput,
 } from "./adapter.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
+import { readValidatedConfigFile } from "../telegram/instance-config.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -476,13 +477,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       return "normal";
     }
 
-    try {
-      const raw = await readFile(this.configPath, "utf8");
-      const parsed = JSON.parse(raw) as { approvalMode?: string };
-      return normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
-    } catch {
-      return DEFAULT_APPROVAL_MODE;
-    }
+    // The shared validated reader tolerates a missing/corrupt file (it returns
+    // {}), so absent-file behavior still falls back to DEFAULT_APPROVAL_MODE.
+    const parsed = await readValidatedConfigFile(this.configPath);
+    return normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
   }
 
   private async loadEngineOptions(): Promise<{ effort?: string; model?: string }> {
@@ -490,16 +488,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       return {};
     }
 
-    try {
-      const raw = await readFile(this.configPath, "utf8");
-      const parsed = JSON.parse(raw) as { effort?: string; model?: string };
-      return {
-        effort: typeof parsed.effort === "string" ? parsed.effort : undefined,
-        model: typeof parsed.model === "string" ? parsed.model : undefined,
-      };
-    } catch {
-      return {};
-    }
+    // Go through the shared validated reader (readValidatedConfigFile →
+    // sanitizeConfigCompatibility) like the other adapters, so a stale
+    // incompatible effort (e.g. `effort:"ultra"` beside `engine:"claude"`)
+    // never reaches the CLI as a raw --effort flag.
+    const parsed = await readValidatedConfigFile(this.configPath);
+    return {
+      effort: typeof parsed.effort === "string" ? parsed.effort : undefined,
+      model: typeof parsed.model === "string" ? parsed.model : undefined,
+    };
   }
 
   async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
@@ -517,6 +514,14 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     if (nextSessionId && nextSessionId !== sessionId) {
       this.workers.delete(sessionId);
       this.workers.set(nextSessionId, worker);
+      // Drop any other alias keys still pointing at this worker (earlier
+      // re-keys of the same process), so the map stays bounded to one live key
+      // per worker. removeWorker/reapIdleWorkers tolerate aliases either way.
+      for (const [key, candidate] of this.workers.entries()) {
+        if (candidate === worker && key !== nextSessionId) {
+          this.workers.delete(key);
+        }
+      }
     }
 
     return {

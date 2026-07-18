@@ -6304,13 +6304,18 @@ describe("lark service", () => {
     }
   });
 
-  it("aborts an active goal watcher before a normal Lark turn claims the conversation", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-normal-preempts-goal-"));
+  it("keeps an active goal watcher alive when a normal Lark turn arrives (the turn runs alongside it)", async () => {
+    // Reversal of the old semantics (which aborted the watcher here): a pursued
+    // /goal must survive ordinary messages — the operator's "how's it going?"
+    // used to kill the watcher, whose abort path erased the goal. The ordinary
+    // turn still runs (on its own controller); the pursuit keeps the slot.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-normal-keeps-goal-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
     const channel = fakeChannel();
     const runtime = createLarkServiceRuntime();
     const goalAbort = new AbortController();
-    runtime.activeRuns.set("lark:oc_chat", { abortController: goalAbort, hasRunCard: true, goalWatch: true });
+    // startedAt far in the past so the message can't try to steer into the goal.
+    runtime.activeRuns.set("lark:oc_chat", { abortController: goalAbort, hasRunCard: true, goalWatch: true, startedAt: Date.now() - 120_000 });
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
       handleAuthorizedMessage: vi.fn(async () => ({ text: "normal answer" })),
@@ -6325,9 +6330,10 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_normal_after_goal", content: "hello" }),
       });
 
-      expect(goalAbort.signal.aborted).toBe(true);
+      expect(goalAbort.signal.aborted).toBe(false);
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalled();
-      expect(runtime.activeRuns.size).toBe(0);
+      // The pursuit still owns the conversation's activeRuns slot.
+      expect(runtime.activeRuns.get("lark:oc_chat")?.abortController).toBe(goalAbort);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -12489,8 +12495,12 @@ describe("lark service", () => {
     const texts = (channel.send.mock.calls as unknown[][])
       .map((call) => (call[1] as { text?: string }).text)
       .filter((text): text is string => typeof text === "string");
-    expect(texts.some((text) => text.includes("选择卡已过期") && text.includes("默认选项继续"))).toBe(true);
+    // Cause-neutral copy: the pending entry is also gone after a /stop-style
+    // abort, so the notice must not fabricate "expired + continued with the
+    // default option".
+    expect(texts.some((text) => text.includes("该选择已失效") && text.includes("超时或任务已结束"))).toBe(true);
     expect(texts.join("\n")).not.toContain("没有待处理的审批");
+    expect(texts.join("\n")).not.toContain("默认选项继续");
   });
 
   it("resolves every AskUserQuestion answer from a single form submit", async () => {

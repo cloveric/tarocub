@@ -150,6 +150,15 @@ const TELEGRAM_OUT_AUTO_DELIVERY_LIMITS = {
   maxTotalBytes: 500_000_000,
 };
 
+// Once-per-process latch for the usage-ledger failure notice. A corrupt usage
+// store fails on EVERY turn until an operator repairs the file, so the notice
+// must warn once instead of spamming the chat on each completed turn.
+let usageLedgerFailureNoticed = false;
+
+export function resetUsageLedgerFailureNoticeForTest(): void {
+  usageLedgerFailureNoticed = false;
+}
+
 function extractSendFilePaths(text: string): string[] {
   return extractDeliveryTagMatches(text).map((match) => match.path);
 }
@@ -863,7 +872,42 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       replyContext,
       files: requestFiles,
     });
-    await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+    try {
+      await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+    } catch (error) {
+      // The engine already completed this turn. A broken usage ledger (corrupt
+      // usage.json with no valid last-good backup) must not destroy the answer —
+      // Lark survives via its completed-engine-text partial path, so Telegram
+      // must too. Log the accounting failure loudly and keep delivering.
+      await appendTimelineEventBestEffort(stateDir, {
+        type: "service.error",
+        instanceName: context.instanceName,
+        channel: "telegram",
+        chatId: normalized.chatId,
+        ...logScope,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        outcome: "error",
+        detail: `usage recording failed after completed turn: ${error instanceof Error ? error.message : String(error)}`,
+        metadata: {
+          phase: "usage-recording",
+        },
+      }, "usage recording failure timeline event");
+      if (!usageLedgerFailureNoticed) {
+        usageLedgerFailureNoticed = true;
+        const noticeText = locale === "zh"
+          ? "注意：本实例的用量账本写入失败（usage.json 损坏？）。回答不受影响，但用量/预算统计已停摆，请运维尽快修复。"
+          : "Notice: this instance's usage ledger failed to record (corrupt usage.json?). Answers are unaffected, but usage/budget accounting is broken until an operator repairs it.";
+        try {
+          await context.api.sendMessage(normalized.chatId, noticeText, {
+            disableNotification: true,
+            ...(typeof normalized.messageThreadId === "number" ? { messageThreadId: normalized.messageThreadId } : {}),
+          });
+        } catch {
+          // Best effort — the ledger notice must never fail the turn either.
+        }
+      }
+    }
 
     await Promise.allSettled(streamDeliveryPromises);
     deliveredText = stripDeliveredStreamTextFragments(

@@ -331,6 +331,37 @@ describe("lark mid-turn steering", () => {
     }
   });
 
+  it("does not steer an empty-body message even though normalized.text carries the envelope", async () => {
+    // The old guard checked normalized.text, which ALWAYS contains the
+    // <lark_context> envelope — so a content-less message (sticker/unsupported
+    // type) slipped past and "steered" pure metadata into the running turn.
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-empty-"));
+    const runtime = createLarkServiceRuntime();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: new AbortController(), startedAt: Date.now() });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      steerActiveTurn: vi.fn(async () => true),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_steer_empty", content: "" }),
+      });
+
+      // No injection, no OK ack — the message body is empty.
+      expect(bridge.steerActiveTurn).not.toHaveBeenCalled();
+      expect(channel.addReaction).not.toHaveBeenCalledWith("om_steer_empty", "OK");
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
   it("does not steer a quoted reply (the quote is composed only on the queued path)", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-quote-"));
     const runtime = createLarkServiceRuntime();

@@ -861,6 +861,129 @@ describe("runCli", () => {
     }
   });
 
+  it("refuses to restart a Lark service with an in-flight cron run unless it completed", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const env = {
+      USERPROFILE: tempDir,
+      LARK_APP_ID: "cli_a",
+      LARK_APP_SECRET: "secret",
+      CCTB_LARK_INSTANCE: "alpha",
+      CCTB_LARK_STATE_DIR: stateDir,
+    };
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      const triggered = JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "cron.triggered",
+        channel: "lark",
+        chatId: 123,
+        userId: 456,
+        metadata: { cronJobId: "cron_1", cronExpr: "0 9 * * *" },
+      });
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), `${triggered}\n`);
+
+      // Cron agent turns never write input.received; an unmatched cron.triggered
+      // is a live turn and must block a non-forced restart.
+      await expect(runCli(["lark", "service", "restart"], {
+        env,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+      expect(stop).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+
+      // Once the scheduler wrote the terminal cron.completed for the same job,
+      // the run is settled and the restart proceeds without --force.
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), `${triggered}\n${JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "cron.completed",
+        channel: "lark",
+        chatId: 123,
+        userId: 456,
+        outcome: "error",
+        detail: "engine failed",
+        metadata: { cronJobId: "cron_1" },
+      })}\n`);
+
+      const handled = await runCli(["lark", "service", "restart"], {
+        env,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      });
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("refuses to restart a Lark service with an in-flight doc-comment turn unless it completed", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const env = {
+      USERPROFILE: tempDir,
+      LARK_APP_ID: "cli_a",
+      LARK_APP_SECRET: "secret",
+      CCTB_LARK_INSTANCE: "alpha",
+      CCTB_LARK_STATE_DIR: stateDir,
+    };
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      const started = JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "turn.started",
+        channel: "lark",
+        chatId: 123,
+        userId: 456,
+        conversationKey: "lark:doc:tok",
+        metadata: { larkSurface: "comment", commentId: "cmt_1", fileToken: "tok", fileType: "docx" },
+      });
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), `${started}\n`);
+
+      // Doc-comment turns log turn.started (comment-handler) instead of
+      // input.received; an unmatched one must block a non-forced restart.
+      await expect(runCli(["lark", "service", "restart"], {
+        env,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+      expect(stop).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), `${started}\n${JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "turn.completed",
+        channel: "lark",
+        chatId: 123,
+        userId: 456,
+        conversationKey: "lark:doc:tok",
+        outcome: "success",
+        metadata: { larkSurface: "comment", commentId: "cmt_1", fileToken: "tok", fileType: "docx" },
+      })}\n`);
+
+      const handled = await runCli(["lark", "service", "restart"], {
+        env,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      });
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalled();
+      expect(start).toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("does not refuse restart for a phantom turn recorded before the current service process started", async () => {
     // The owning process was killed mid-turn (so it never wrote turn.completed) and has
     // since restarted. The leaked input.received predates the new process's lock start, so
@@ -3003,7 +3126,7 @@ describe("runCli", () => {
       expect(output).toContain("Feishu/Lark Developer Console");
       expect(output).toContain("Permissions");
       expect(output).toContain("bulk import");
-      expect(output).toContain("Publish the app version");
+      expect(output).toContain("Enterprise apps: publish the app version");
       expect(output).toContain("node dist/src/index.js lark provision");
       expect(output).toContain("node dist/src/index.js lark doctor");
       expect(output).toContain('"im:message.group_msg"');
@@ -3056,7 +3179,7 @@ describe("runCli", () => {
       expect(output).toContain("Lark missing scopes JSON");
       expect(output).toContain('"im:message.group_msg"');
       expect(output).toContain('"tenant":["im:message.group_msg"]');
-      expect(output).toContain("Publish the app version");
+      expect(output).toContain("Enterprise apps: publish the app version");
       expect(output).toContain("node dist/src/index.js lark provision");
       expect(output).toContain("node dist/src/index.js lark doctor");
       expect(output).not.toContain('"im:message:send_as_bot"');
@@ -4569,6 +4692,49 @@ describe("runCli", () => {
         locale: "zh",
         verbosity: 2,
       });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("warns that the budget cap is Claude-only when setting or showing a budget on a non-Claude engine", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const env = { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir, TAROCUB_INSTANCE: "lark-alpha" };
+    const expectedNote = "Note: Codex/Antigravity engines do not report dollar costs; the budget cap currently only takes effect on the Claude engine.";
+
+    try {
+      // Fresh instance defaults to the codex engine: the budget can never trip.
+      const setMessages: string[] = [];
+      await runCli(["lark", "budget", "set", "5"], {
+        env,
+        logger: { log: (message) => setMessages.push(message) },
+      });
+      expect(setMessages).toContain('Instance "lark-alpha": budget set to $5.00. Bot will block new requests when the budget is exhausted.');
+      expect(setMessages).toContain(expectedNote);
+
+      const showMessages: string[] = [];
+      await runCli(["lark", "budget", "show"], {
+        env,
+        logger: { log: (message) => showMessages.push(message) },
+      });
+      expect(showMessages).toContain(expectedNote);
+
+      // On the Claude engine the cap is real, so the note must not appear.
+      await runCli(["lark", "engine", "claude"], {
+        env,
+        logger: { log: () => undefined },
+      });
+      const claudeMessages: string[] = [];
+      await runCli(["lark", "budget", "set", "5"], {
+        env,
+        logger: { log: (message) => claudeMessages.push(message) },
+      });
+      await runCli(["lark", "budget", "show"], {
+        env,
+        logger: { log: (message) => claudeMessages.push(message) },
+      });
+      expect(claudeMessages).not.toContain(expectedNote);
     } finally {
       await removeTempRoot(tempDir);
     }

@@ -68,6 +68,14 @@ async function main(): Promise<void> {
       } catch (error) {
         console.error(`[lark] structured log rotation failed: ${renderLifecycleError(error)}`);
       }
+      // Parity with the Telegram boot path below: a service crash/restart can
+      // leak file-workflow records stuck in "preparing"/"processing" — without
+      // this they count against the active-file-task cap forever on Lark.
+      try {
+        await new FileWorkflowStore(resolveLarkStateDir(larkEnv)).failInterruptedProcessing();
+      } catch (error) {
+        console.error(`[lark] file-workflow recovery failed: ${renderLifecycleError(error)}`);
+      }
       const abortController = new AbortController();
       const shutdownSigterm = () => abortController.abort("SIGTERM");
       const shutdownSigint = () => abortController.abort("SIGINT");

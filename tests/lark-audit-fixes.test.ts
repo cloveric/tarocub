@@ -198,17 +198,63 @@ describe("lark audit fixes", () => {
   });
 
   // Finding 3: card-choice runs claim activeRuns guarded, like /goal watchers.
-  it("card choice aborts the previous active-run holder and releases only its own claim", async () => {
+  it("card choice attaches to a pursued /goal instead of killing it", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audit-choice-goal-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const goal = new AbortController();
+    runtime.activeRuns.set("lark:oc_chat", { abortController: goal, hasRunCard: true, goalWatch: true });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => {
+        // The pursuit must survive a card-triggered turn — same rule as ordinary
+        // messages and crons (the turn attaches; it does not steal the slot).
+        expect(goal.signal.aborted).toBe(false);
+        return { text: "choice done" };
+      }),
+    };
+
+    try {
+      await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          messageId: "om_choice_goal",
+          chatId: "oc_chat",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "choice",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              label: "Option A",
+              value: "A",
+            },
+          },
+        },
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(goal.signal.aborted).toBe(false);
+      // The goal still owns the slot after the card turn released its claim.
+      expect(runtime.activeRuns.get("lark:oc_chat")?.abortController).toBe(goal);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("card choice aborts a previous NON-goal holder and releases only its own claim", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audit-choice-claim-"));
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
     const previous = new AbortController();
-    runtime.activeRuns.set("lark:oc_chat", { abortController: previous, hasRunCard: true, goalWatch: true });
+    runtime.activeRuns.set("lark:oc_chat", { abortController: previous, hasRunCard: true });
     const replacement = new AbortController();
     const bridge = {
       handleAuthorizedMessage: vi.fn(async () => {
-        // The previous holder (e.g. a detached /goal watcher) was aborted before
-        // this turn claimed the slot — never silently orphaned.
+        // The previous non-goal holder was aborted before this turn claimed the
+        // slot — never silently orphaned.
         expect(previous.signal.aborted).toBe(true);
         // Simulate a newer run replacing the slot while this turn is running.
         runtime.activeRuns.set("lark:oc_chat", { abortController: replacement });

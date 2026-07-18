@@ -5,7 +5,7 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { executeWorkflowAwareTelegramTurn } from "../src/telegram/message-turn.js";
+import { executeWorkflowAwareTelegramTurn, resetUsageLedgerFailureNoticeForTest } from "../src/telegram/message-turn.js";
 import {
   clearActiveCronRuntimeForTest,
   setActiveCronRuntimeForTest,
@@ -116,6 +116,96 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         }),
       ]));
     } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("still delivers the completed answer when the usage ledger is corrupt, with a single operator notice", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    resetUsageLedgerFailureNoticeForTest();
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: "final response",
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(0);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1 });
+
+    try {
+      // Corrupt ledger with no last-good backup: every usage record throws
+      // UsageStateCorruptError until an operator repairs the file.
+      await writeFile(path.join(root, "usage.json"), "{corrupt", "utf8");
+
+      const runTurn = async () => {
+        await executeWorkflowAwareTelegramTurn({
+          stateDir: root,
+          startedAt: Date.now() - 10,
+          locale: "en",
+          cfg: { engine: "codex" },
+          normalized: createNormalizedMessage("hello"),
+          context: {
+            api: {
+              sendMessage,
+              getFile: vi.fn(),
+              downloadFile: vi.fn(),
+            } as never,
+            bridge: bridge as never,
+            inboxDir: path.join(root, "inbox"),
+            instanceName: "default",
+            updateId: 77,
+          },
+          workflowStore: {
+            update: vi.fn(),
+          } as never,
+          downloadedAttachments: [],
+          state,
+          deliverTelegramResponse,
+          sendTelegramOutFile: vi.fn(),
+        });
+      };
+
+      // The accounting failure must not destroy the completed engine answer.
+      await runTurn();
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        "final response",
+        expect.any(String),
+        undefined,
+        expect.stringContaining(path.join("workspace", ".telegram-out")),
+        "en",
+      );
+
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "service.error",
+        channel: "telegram",
+        outcome: "error",
+        detail: expect.stringContaining("usage recording failed after completed turn"),
+        metadata: expect.objectContaining({ phase: "usage-recording" }),
+      }));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        channel: "telegram",
+        outcome: "success",
+      }));
+
+      const noticeCalls = () => sendMessage.mock.calls.filter(
+        (call) => typeof call[1] === "string" && call[1].includes("usage ledger failed to record"),
+      );
+      expect(noticeCalls()).toHaveLength(1);
+
+      // The ledger stays broken on every later turn; the notice must not repeat.
+      await runTurn();
+      expect(deliverTelegramResponse).toHaveBeenCalledTimes(2);
+      expect(noticeCalls()).toHaveLength(1);
+    } finally {
+      resetUsageLedgerFailureNoticeForTest();
       await removeTempRoot(root);
     }
   });

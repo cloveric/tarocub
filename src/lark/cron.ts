@@ -6,6 +6,7 @@ import { CronAccessDeniedError } from "../runtime/cron-errors.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
+import { claimLarkRunSlot } from "./bus.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkReminderCard } from "./card-renderer.js";
 import { sendLarkMarkdown } from "./delivery.js";
@@ -99,11 +100,15 @@ export function buildLarkCronExecutor(input: {
       } else {
         abortSignal?.addEventListener("abort", forwardAbort, { once: true });
       }
-      const previous = input.runtime.activeRuns.get(conversationKey);
-      if (previous?.goalWatch) {
-        previous.abortController.abort();
-      }
-      input.runtime.activeRuns.set(conversationKey, { abortController: controller, startedAt: Date.now() });
+      // Claim the conversation's activeRuns slot — or ATTACH to a live /goal
+      // pursuit instead of aborting it (a scheduled firing used to kill the
+      // pursuit exactly like an ordinary message did; a pursued goal must
+      // survive cron traffic and only /stop or /goal clear may end it). See
+      // claimLarkRunSlot / LarkGoalRunController in bus.ts for the stop routing.
+      const releaseRunSlot = claimLarkRunSlot(input.runtime, conversationKey, {
+        abortController: controller,
+        startedAt: Date.now(),
+      });
 
       try {
         const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", `cron-${job.id}`);
@@ -212,9 +217,9 @@ export function buildLarkCronExecutor(input: {
         }
       } finally {
         abortSignal?.removeEventListener("abort", forwardAbort);
-        if (input.runtime.activeRuns.get(conversationKey)?.abortController === controller) {
-          input.runtime.activeRuns.delete(conversationKey);
-        }
+        // Guarded release (claimLarkRunSlot): detaches from a pursuit when
+        // attached; deletes the slot only while this cron turn still owns it.
+        releaseRunSlot();
       }
     };
 

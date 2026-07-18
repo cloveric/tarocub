@@ -231,6 +231,100 @@ describe("createServiceDependenciesForInstance", () => {
     }
   });
 
+  it("parses quoted .env values with a trailing comment instead of dropping them", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(envPath, [
+        'ASR_HTTP_URL="http://127.0.0.1:8412" # local Qwen3 ASR server',
+        'TELEGRAM_BOT_TOKEN="secret-token" # main bot',
+        "",
+      ].join("\n"), "utf8");
+
+      await expect(readInstanceBotTokenFromEnvFile({
+        USERPROFILE: root,
+        CODEX_TELEGRAM_INSTANCE: "alpha",
+      })).resolves.toBe("secret-token");
+      await expect(readInstanceServiceEnvFromEnvFile({
+        USERPROFILE: root,
+        CODEX_TELEGRAM_INSTANCE: "alpha",
+      })).resolves.toMatchObject({ ASR_HTTP_URL: "http://127.0.0.1:8412" });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("salvages a simple quoted value with inline junk and warns naming only the key", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      // Windows path with unescaped backslashes: not valid JSON, but still one
+      // plain quoted value that must not silently vanish.
+      await writeFile(envPath, [
+        'ASR_CLI_SCRIPT="C:\\Users\\op\\transcribe.py"',
+        'TELEGRAM_BOT_TOKEN="secret-token"',
+        "",
+      ].join("\n"), "utf8");
+
+      await expect(readInstanceServiceEnvFromEnvFile({
+        USERPROFILE: root,
+        CODEX_TELEGRAM_INSTANCE: "alpha",
+      })).resolves.toMatchObject({ ASR_CLI_SCRIPT: "C:\\Users\\op\\transcribe.py" });
+
+      const salvageWarnings = warn.mock.calls
+        .map((call) => String(call[0]))
+        .filter((message) => message.includes("ASR_CLI_SCRIPT"));
+      expect(salvageWarnings.length).toBeGreaterThan(0);
+      // The warning names the key only; the value stays out of logs.
+      for (const message of salvageWarnings) {
+        expect(message).not.toContain("C:\\Users");
+      }
+    } finally {
+      warn.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
+
+  it("warns naming only the key when a quoted .env line is beyond salvage", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const envPath = path.join(root, ".cctb", "alpha", ".env");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await mkdir(path.dirname(envPath), { recursive: true });
+      await writeFile(envPath, [
+        'OPTIONAL_BAD="broken"midway"line"',
+        'TELEGRAM_BOT_TOKEN="secret-token"',
+        "",
+      ].join("\n"), "utf8");
+
+      await expect(readInstanceBotTokenFromEnvFile({
+        USERPROFILE: root,
+        CODEX_TELEGRAM_INSTANCE: "alpha",
+      })).resolves.toBe("secret-token");
+      await expect(readInstanceServiceEnvFromEnvFile({
+        USERPROFILE: root,
+        CODEX_TELEGRAM_INSTANCE: "alpha",
+      })).resolves.not.toHaveProperty("OPTIONAL_BAD");
+
+      const skipWarnings = warn.mock.calls
+        .map((call) => String(call[0]))
+        .filter((message) => message.includes("OPTIONAL_BAD"));
+      expect(skipWarnings.length).toBeGreaterThan(0);
+      for (const message of skipWarnings) {
+        expect(message).not.toContain("broken");
+      }
+    } finally {
+      warn.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
+
   it("does not mutate process.env.TELEGRAM_BOT_TOKEN directly", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const envPath = path.join(root, ".cctb", "alpha", ".env");

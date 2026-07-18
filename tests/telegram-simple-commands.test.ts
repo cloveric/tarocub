@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -52,6 +52,69 @@ describe("handleSimpleLocalTelegramCommand", () => {
           chunkCount: expect.any(Number),
         }),
       }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("appends the Claude-only budget note to /usage on non-Claude engines with a budget set", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const expectedNote = "Note: Codex/Antigravity engines do not report dollar costs; the budget cap currently only takes effect on the Claude engine.";
+
+    try {
+      await writeFile(path.join(root, "config.json"), `${JSON.stringify({ engine: "codex", budgetUsd: 25 })}\n`, "utf8");
+      const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/usage"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 77,
+        },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining(expectedNote));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps /usage note-free when the engine is Claude or no budget is configured", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+
+    try {
+      const runUsage = async (cfgEngine: "claude" | "codex") => {
+        const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+        const handled = await handleSimpleLocalTelegramCommand({
+          stateDir: root,
+          startedAt: Date.now() - 10,
+          locale: "en",
+          cfg: { engine: cfgEngine },
+          normalized: createNormalizedMessage("/usage"),
+          context: {
+            api: api as never,
+            instanceName: "default",
+            updateId: 77,
+          },
+          updateInstanceConfig: vi.fn(),
+        });
+        expect(handled).toBe(true);
+        return api.sendMessage.mock.calls[0]?.[1] as string;
+      };
+
+      // Claude engine with a budget: the cap is real, no note.
+      await writeFile(path.join(root, "config.json"), `${JSON.stringify({ engine: "claude", budgetUsd: 25 })}\n`, "utf8");
+      expect(await runUsage("claude")).not.toContain("budget cap");
+
+      // Codex engine without a budget: nothing to warn about.
+      await writeFile(path.join(root, "config.json"), `${JSON.stringify({ engine: "codex" })}\n`, "utf8");
+      expect(await runUsage("codex")).not.toContain("budget cap");
     } finally {
       await removeTempRoot(root);
     }

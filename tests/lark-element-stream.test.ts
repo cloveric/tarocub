@@ -193,6 +193,39 @@ describe("run card element-stream fast path", () => {
     expect(updates).toContain("以上内容可能不完整");
   });
 
+  it("returns error (not partial) when the only text preceded the last tool call (narration→tool→crash)", async () => {
+    // "partial" must mean part of the ANSWER arrived. Pre-tool narration ("我先
+    // 查一下…") followed by a tool call and then a crash produced NO answer —
+    // labeling that "部分完成" invited the operator to trust half a reply that
+    // never existed.
+    const { channel, cardUpdate } = managedChannel();
+    const controller = await createController(channel);
+    expect(controller).toBeDefined();
+
+    await controller!.apply({ type: "assistant_text", text: "我先检查一下依赖。" });
+    await flushTimers(20);
+    await controller!.apply({ type: "tool_use", toolName: "Bash", toolInput: { command: "ls" }, toolUseId: "t1" });
+    await flushTimers(450);
+    expect(await controller!.fail("引擎异常退出。")).toBe("error");
+
+    const updates = JSON.stringify(cardUpdate.mock.calls);
+    expect(updates).not.toContain("部分完成");
+  });
+
+  it("still returns partial when text resumes AFTER the last tool event and then the engine crashes", async () => {
+    const { channel } = managedChannel();
+    const controller = await createController(channel);
+    expect(controller).toBeDefined();
+
+    await controller!.apply({ type: "assistant_text", text: "我先检查一下依赖。" });
+    await flushTimers(20);
+    await controller!.apply({ type: "tool_use", toolName: "Bash", toolInput: { command: "ls" }, toolUseId: "t1" });
+    await controller!.apply({ type: "tool_result", toolUseId: "t1", output: "ok" });
+    await controller!.apply({ type: "assistant_text", text: "检查完毕，答案的前半部分是……" });
+    await flushTimers(450);
+    expect(await controller!.fail("引擎异常退出。")).toBe("partial");
+  });
+
   it("keeps the full run card after one transient full-patch failure", async () => {
     let attempt = 0;
     const cardUpdate = vi.fn(async () => {
@@ -269,6 +302,29 @@ describe("run card element-stream fast path", () => {
 
     await controller!.finish("done");
   }, 20_000);
+
+  it("keeps the rolling tail in full patches after a tool call follows an over-cap narration (no prefix rewind)", async () => {
+    const { channel, cardUpdate } = managedChannel();
+    const controller = await createController(channel);
+
+    await controller!.apply({ type: "assistant_text", text: "独特开场前缀。" + "长篇叙述。".repeat(1200) + "叙述末尾标记。" });
+    await flushTimers(20);
+    // A tool call arrives: the narration group is no longer live and the full
+    // patch re-renders its element — it must stay the rolling tail instead of
+    // snapping back to the ancient truncate() prefix.
+    await controller!.apply({ type: "tool_use", toolName: "Bash", toolInput: { command: "ls" }, toolUseId: "t1" });
+    await flushTimers(450);
+
+    const lastCall = (cardUpdate.mock.calls as unknown[][]).at(-1)![0] as {
+      data: { card: { data: string } };
+    };
+    const patched = lastCall.data.card.data;
+    expect(patched).toContain("实时预览仅显示最新输出");
+    expect(patched).toContain("叙述末尾标记");
+    expect(patched).not.toContain("独特开场前缀");
+
+    await controller!.finish("done");
+  });
 
   it("hands off to the full path around AskUserQuestion and resumes element streaming after", async () => {
     const { channel, elementContent, cardUpdate } = managedChannel();

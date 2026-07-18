@@ -49,6 +49,7 @@ import { renderUsageMessage, type Locale } from "../telegram/message-renderer.js
 import { handleLocalSessionTelegramCommand } from "../telegram/session-commands.js";
 import type { NormalizedTelegramMessage } from "../telegram/update-normalizer.js";
 import {
+  LarkGoalRunController,
   handleLarkBoardCommand,
   handleLarkDelegationCommand,
   handleLarkMiniBusCommand,
@@ -247,7 +248,15 @@ export async function handleLarkSimpleCommand(
 
   if (isUsageCommand(commandText)) {
     const usage = await new UsageStore(input.stateDir).load();
-    await sendLarkCommandMarkdown(input, normalized, "/usage", renderUsageMessage(usage, commandLocale));
+    let usageMessage = renderUsageMessage(usage, commandLocale);
+    // Codex/Antigravity never report dollar cost, so a configured budgetUsd can
+    // never trip. When one is set, say so honestly instead of silently implying
+    // the cap protects this instance (Telegram /usage carries the same note).
+    const usageCfg = await loadInstanceConfig(input.stateDir);
+    if (usageCfg.budgetUsd !== undefined && usageCfg.engine !== "claude") {
+      usageMessage = [usageMessage, renderLarkBudgetEngineNote(commandLocale)].join("\n");
+    }
+    await sendLarkCommandMarkdown(input, normalized, "/usage", usageMessage);
     return true;
   }
 
@@ -1629,6 +1638,9 @@ async function renderLarkStatusMessage(
       `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
       `Approval mode: ${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
       `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
+      // Honest caveat: only Claude reports dollar cost, so on other engines the
+      // configured cap is currently decorative — say so wherever it's shown.
+      ...(cfg.budgetUsd !== undefined && cfg.engine !== "claude" ? [renderLarkBudgetEngineNote(locale)] : []),
       `Locale: ${locale}`,
       `Verbosity: ${cfg.verbosity}`,
       `Timezone: ${cfg.timezone}`,
@@ -1657,6 +1669,7 @@ async function renderLarkStatusMessage(
     `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
     `审批模式：${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
     `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,
+    ...(cfg.budgetUsd !== undefined && cfg.engine !== "claude" ? [renderLarkBudgetEngineNote(locale)] : []),
     `语言：${locale}`,
     `详细度：${cfg.verbosity}`,
     `时区：${cfg.timezone}`,
@@ -1674,6 +1687,17 @@ async function renderLarkStatusMessage(
     `当前运行：${activeRun ? "是" : "否"}`,
     `待处理审批：${runtime.pendingApprovals.size}`,
   ].join("\n");
+}
+
+/**
+ * One-line caveat shown next to a configured budget on non-Claude engines:
+ * Codex/Antigravity never report dollar cost, so the budgetUsd cap can never
+ * trip there — pretending otherwise would be a false safety net.
+ */
+function renderLarkBudgetEngineNote(locale: Locale): string {
+  return locale === "en"
+    ? "Note: Codex/Antigravity engines do not report dollar cost; the budget cap currently only takes effect on Claude."
+    : "注意：Codex/Antigravity 引擎不上报美元成本，预算上限目前只对 Claude 生效。";
 }
 
 function renderLarkCliStatus(status: LarkCliStatus, locale: Locale): string {
@@ -2104,6 +2128,16 @@ async function handleLarkSteerCommand(stateDir: string, cfg: InstanceConfig, act
   if (secondsMatch) {
     const raw = Number.parseInt(secondsMatch[1]!, 10);
     const seconds = /m|分/.test(secondsMatch[2] ?? "") ? raw * 60 : raw;
+    // Zero in ANY spelling (0s / 0秒 / 0m / 0分 / 0分钟) means unlimited, same
+    // as the bare "0" alias above — `/steer 0s` used to error while `/steer 0`
+    // lifted the window, which read as arbitrary.
+    if (seconds === 0) {
+      await updateInstanceConfig(stateDir, (config) => {
+        delete config.larkSteerEnabled;
+        config.larkSteerWindowSeconds = 0;
+      });
+      return describe(true, 0) + claudeNote;
+    }
     if (seconds < 1 || seconds > 86_400) {
       return en ? "Window must be 1s–24h (or `unlimited`)." : "窗口需在 1 秒～24 小时之间（或用 `unlimited` 不限时）。";
     }
@@ -2342,7 +2376,15 @@ async function handleLarkGoalCommand(
     // activeRuns slot is NOT killed (nor falsely reported "cleared") by /goal clear.
     const activeGoalRun = input.runtime.activeRuns.get(conversationKey);
     if (activeGoalRun?.goalWatch) {
-      activeGoalRun.abortController.abort();
+      // End the PURSUIT specifically: abortGoal bypasses the stop routing that
+      // would otherwise divert a plain abort() into an ordinary turn currently
+      // running alongside the pursuit — /goal clear must kill the goal, never
+      // that unrelated turn (which keeps running).
+      if (activeGoalRun.abortController instanceof LarkGoalRunController) {
+        activeGoalRun.abortController.abortGoal();
+      } else {
+        activeGoalRun.abortController.abort();
+      }
       await sendLarkCommandMarkdown(input, normalized, "/goal", locale === "en"
         ? "Current goal cleared." : "已清除当前 goal。");
       return true;
@@ -2380,12 +2422,23 @@ async function handleLarkGoalCommand(
       const clearThreadGoal = input.bridge.clearThreadGoal?.bind(input.bridge);
       // Register the autonomous goal as the conversation's active run so /stop (and the
       // run card's stop button) can abort it — both flip activeRuns[key].abortController.
-      const abort = new AbortController();
+      // A LarkGoalRunController (bus.ts) rather than a plain AbortController: ordinary
+      // turns arriving DURING the pursuit attach to it (claimLarkRunSlot) instead of
+      // stealing the slot, and abort() routes to the attached turn first so the pursuit
+      // survives everything except /stop-with-nothing-else-running and /goal clear.
+      const abort = new LarkGoalRunController();
       // Active protection: the watcher runs detached (outside the chat queue), so abort
       // any run already active for this conversation before claiming the slot —
       // otherwise overwriting activeRuns would orphan it (untracked; /stop can't reach
-      // it). Guarantees exactly one tracked active run per conversation.
-      input.runtime.activeRuns.get(conversationKey)?.abortController.abort();
+      // it). A replaced PURSUIT is ended entirely (goal + any attached ordinary turn:
+      // both would be orphaned by the overwrite). Guarantees exactly one tracked
+      // active run per conversation.
+      const previousActive = input.runtime.activeRuns.get(conversationKey)?.abortController;
+      if (previousActive instanceof LarkGoalRunController) {
+        previousActive.abortAll();
+      } else {
+        previousActive?.abort();
+      }
       input.runtime.activeRuns.set(conversationKey, { abortController: abort, hasRunCard: true, goalWatch: true, startedAt: Date.now() });
       void (async () => {
         try {
@@ -2422,9 +2475,18 @@ async function handleLarkGoalCommand(
           }).catch(() => {});
           await runCard.fail(renderLarkUserFacingError(error, "engine", locale));
         } finally {
-          // Release our slot only if a newer run hasn't already replaced it.
+          // Release our slot only if a newer run hasn't already replaced it. If an
+          // ordinary turn is still attached (it ran alongside the pursuit and the
+          // pursuit ended first), PROMOTE it into the slot so /stop and the stop
+          // buttons can still reach it for the rest of its run — its own guarded
+          // release (claimLarkRunSlot) then cleans the promoted slot up.
           if (input.runtime.activeRuns.get(conversationKey)?.abortController === abort) {
-            input.runtime.activeRuns.delete(conversationKey);
+            const concurrent = abort.liveConcurrentTurn();
+            if (concurrent) {
+              input.runtime.activeRuns.set(conversationKey, concurrent);
+            } else {
+              input.runtime.activeRuns.delete(conversationKey);
+            }
           }
         }
       })();

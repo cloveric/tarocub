@@ -77,7 +77,7 @@ describe("classifyFailure specificity", () => {
   it("classifies the single-turn time-cap timeout as engine-timeout, distinct from engine-cli", () => {
     expect(classifyFailure(new Error("Codex app-server turn timed out after 60 minutes"))).toBe("engine-timeout");
     expect(classifyFailure(new Error("Antigravity process turn timed out after 60 minutes\n[state]"))).toBe("engine-timeout");
-    expect(classifyFailure(new Error("Claude turn became inactive after 30 minutes"))).toBe("engine-timeout");
+    expect(classifyFailure(new Error("Codex app-server turn became inactive after 30 minutes"))).toBe("engine-timeout");
     // a process/startup failure (no "turn timed out after N minutes") stays engine-cli
     expect(classifyFailure(new Error("Codex runtime process failed to start"))).toBe("engine-cli");
     // engine-timeout is NOT auto-retryable (rerunning the same long task times out again)
@@ -96,7 +96,7 @@ describe("classifyFailure specificity", () => {
   });
 
   it("renders Telegram engine timeouts with /timeout guidance instead of blind retry advice", () => {
-    const err = new Error("Claude turn became inactive after 30 minutes");
+    const err = new Error("Codex process turn became inactive after 30 minutes");
     const zh = renderCategorizedErrorMessage("engine-timeout", err.message, "zh");
     expect(zh).toContain("/timeout");
     expect(zh).not.toContain("请重试");

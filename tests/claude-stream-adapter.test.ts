@@ -180,6 +180,113 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("sanitizes an incompatible config effort through the validated reader on the Claude path", async () => {
+    const { children, calls, spawnFn } = createSpawnHarness();
+    const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
+    const configPath = path.join(root, "config.json");
+    // sanitizeConfigCompatibility logs the dropped effort; keep test output clean.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      // effort "ultra" is not a Claude effort: the raw reader used to forward it
+      // as `--effort ultra`; the validated reader must drop it.
+      await writeFile(
+        configPath,
+        JSON.stringify({ engine: "claude", approvalMode: "normal", effort: "ultra", model: "opus" }) + "\n",
+        "utf8",
+      );
+      const adapter = new ClaudeStreamAdapter("claude", {
+        spawnFn,
+        configPath,
+      });
+
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "First",
+        files: [],
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      expect(calls[0]?.args).not.toContain("--effort");
+      expect(calls[0]?.args).toContain("--model");
+      expect(calls[0]?.args).toContain("opus");
+
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');
+      await expect(turn).resolves.toEqual({
+        text: "ONE",
+        sessionId: "session-123",
+      });
+
+      // Control: a compatible effort still reaches the CLI unchanged.
+      const compatibleHarness = createSpawnHarness();
+      await writeFile(
+        configPath,
+        JSON.stringify({ engine: "claude", approvalMode: "normal", effort: "high", model: "opus" }) + "\n",
+        "utf8",
+      );
+      const compatibleAdapter = new ClaudeStreamAdapter("claude", {
+        spawnFn: compatibleHarness.spawnFn,
+        configPath,
+      });
+      const compatibleTurn = compatibleAdapter.sendUserMessage("telegram-12345", {
+        text: "First",
+        files: [],
+      });
+      await waitFor(() => compatibleHarness.children.length === 1 && compatibleHarness.children[0].stdin.lines.length === 1);
+      expect(compatibleHarness.calls[0]?.args).toContain("--effort");
+      expect(compatibleHarness.calls[0]?.args).toContain("high");
+      compatibleHarness.children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-456"}\n');
+      compatibleHarness.children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"TWO","session_id":"session-456"}\n');
+      await expect(compatibleTurn).resolves.toEqual({
+        text: "TWO",
+        sessionId: "session-456",
+      });
+    } finally {
+      consoleError.mockRestore();
+      await removeTempRoot(root);
+    }
+  });
+
+  it("sweeps stale alias keys from the worker map when a turn re-keys the session", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+    const workers = (adapter as unknown as { workers: Map<string, unknown> }).workers;
+
+    const first = adapter.sendUserMessage("telegram-12345", {
+      text: "First",
+      files: [],
+    });
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-1"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-1"}\n');
+    await expect(first).resolves.toEqual({
+      text: "ONE",
+      sessionId: "session-1",
+    });
+    expect([...workers.keys()]).toEqual(["session-1"]);
+
+    // Simulate a stale alias left behind by an earlier re-key (the reconfigure
+    // path re-keys a resumed worker under its engine-reported session id, so the
+    // caller's key and the map key can diverge and strand old entries).
+    workers.set("session-0", workers.get("session-1")!);
+
+    const second = adapter.sendUserMessage("session-1", {
+      text: "Second",
+      files: [],
+    });
+    await waitFor(() => children[0].stdin.lines.length === 2);
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"TWO","session_id":"session-2"}\n');
+    await expect(second).resolves.toEqual({
+      text: "TWO",
+      sessionId: "session-2",
+    });
+
+    // The same live process re-keys to the new session id; every other key that
+    // pointed at this worker (current AND stale aliases) must be gone.
+    expect(children).toHaveLength(1);
+    expect([...workers.keys()]).toEqual(["session-2"]);
+  });
+
   it("reaps an idle Claude worker after the configured TTL and resumes on the next turn", async () => {
     vi.useFakeTimers();
     const { children, calls, spawnFn } = createSpawnHarness();

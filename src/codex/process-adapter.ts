@@ -593,7 +593,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
     if (approvalMode === "normal" && input.onApprovalRequest) {
       const decision = await input.onApprovalRequest({
         engine: "codex",
-        toolName: "Codex full-auto turn",
+        toolName: "Codex full-auto turn (grants the WHOLE turn, not one command)",
         toolInput: { prompt },
         cwd: input.workspaceOverride ?? this.workspacePath,
         abortSignal: input.abortSignal,

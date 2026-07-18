@@ -135,15 +135,19 @@ function parseDotEnvEntry(rawLine: string): { key: string; value: string } | nul
   const rawValue = trimmed.slice(separatorIndex + 1).trim();
 
   if (rawValue.startsWith("\"")) {
-    try {
-      const parsed = JSON.parse(rawValue) as unknown;
-      return typeof parsed === "string" ? { key, value: parsed } : null;
-    } catch {
-      // One malformed optional line must not crash the whole instance. Skip it;
-      // a malformed bot-token line then becomes the normal actionable
-      // "TELEGRAM_BOT_TOKEN is required" error instead of a JSON parser crash.
+    const parsed = parseQuotedDotEnvValue(rawValue);
+    if (parsed === null) {
+      // One malformed optional line must not crash the whole instance. Skip it
+      // with a warning that names only the key; a malformed bot-token line then
+      // becomes the normal actionable "TELEGRAM_BOT_TOKEN is required" error
+      // instead of a JSON parser crash.
+      console.warn(`Skipping malformed quoted .env line for "${key}" (value withheld).`);
       return null;
     }
+    if (parsed.salvaged) {
+      console.warn(`Recovered quoted .env value for "${key}" from a malformed line (value withheld).`);
+    }
+    return { key, value: parsed.value };
   }
 
   if (rawValue.startsWith("'")) {
@@ -153,6 +157,38 @@ function parseDotEnvEntry(rawLine: string): { key: string; value: string } | nul
   }
 
   return { key, value: rawValue };
+}
+
+function parseQuotedDotEnvValue(rawValue: string): { value: string; salvaged?: boolean } | null {
+  const candidates = [rawValue];
+  // `KEY="value" # comment` — a quoted value with a trailing unquoted comment
+  // is a common .env idiom, not JSON; strip the comment and retry.
+  const withoutTrailingComment = rawValue.replace(/\s+#.*$/, "");
+  if (withoutTrailingComment !== rawValue) {
+    candidates.push(withoutTrailingComment);
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (typeof parsed === "string") {
+        return { value: parsed };
+      }
+    } catch {
+      // Fall through to the next candidate / the quote-pair fallback below.
+    }
+  }
+  // JSON.parse also rejects simple quoted values with inline junk (for example
+  // a Windows path with unescaped backslashes). When the line still looks like
+  // one plain quoted value, salvage the text between its first and last quote
+  // instead of silently dropping the variable.
+  const lastQuote = rawValue.lastIndexOf("\"");
+  if (lastQuote > 0) {
+    const inner = rawValue.slice(1, lastQuote);
+    if (!inner.includes("\"")) {
+      return { value: inner, salvaged: true };
+    }
+  }
+  return null;
 }
 
 function parseDotEnvValue(rawLine: string): string | null {

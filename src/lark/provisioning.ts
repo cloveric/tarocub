@@ -188,7 +188,7 @@ export function formatLarkProvisioningResult(
     // group that has missing scopes with its own bulk-import JSON, all under a
     // stable "Optional — " prefix so doctor renders them as info (never blocking).
     const optional: string[] = [
-      "advanced features below are opt-in (none are auto-granted by the QR registration). Import a group's scopes in the console + publish the app version ONLY to enable it:",
+      "advanced features below are opt-in (none are auto-granted by the QR registration). Import a group's scopes in the console to enable it (personal-edition apps grant instantly on 申请开通 — no publish step; enterprise apps must publish a version):",
     ];
     for (const group of LARK_OPTIONAL_SCOPE_GROUPS) {
       const missing = group.scopes.filter((scope) => result.missingOptionalScopes.includes(scope));
@@ -240,7 +240,7 @@ export function formatLarkScopeImportNextSteps(
       ? `1. Open app permissions page: ${formatLarkPermissionConsoleUrl(options.appId, options.domain)}`
       : "1. Open Feishu/Lark Developer Console -> your app -> Permissions -> bulk import/open.",
     `2. Paste this JSON: ${formatLarkScopeImportJson(scopes)}`,
-    "3. Publish the app version and wait for tenant/admin approval if Feishu asks for it.",
+    "3. Personal-edition apps: scopes grant instantly on 申请开通 (no publish step). Enterprise apps: publish the app version and wait for tenant/admin approval.",
     "4. Rerun `node dist/src/index.js lark provision`, then rerun `node dist/src/index.js lark doctor`.",
   ];
   if (scopes.includes("im:chat") || scopes.includes("im:chat:create")) {

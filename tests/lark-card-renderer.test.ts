@@ -7,6 +7,7 @@ import {
   LARK_OVERFLOW_CARD_MAX_CHARS,
   type LarkRunState,
   applyLarkEngineEvent,
+  exceedsCardAnswerBudget,
   initialLarkRunState,
   renderLarkApprovalCard,
   renderLarkContinuationCard,
@@ -15,6 +16,7 @@ import {
   renderLarkRunCard,
   renderLarkRunCardCompact,
   renderLarkRunCardMinimal,
+  rollingTailContent,
   splitLarkAnswerIntoCardChunks,
   liveRunCardStreamElement,
 } from "../src/lark/card-renderer.js";
@@ -221,6 +223,53 @@ describe("lark card renderer", () => {
     expect(element?.content).toBe(live!.content);
   });
 
+  it("renders every over-cap running text group as a rolling tail (a following tool call doesn't rewind it)", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "开场白独特前缀。" + "叙述内容。".repeat(1200) + "分组末尾标记。" });
+    // A tool call follows — the text group is no longer live, but it must keep
+    // rendering as the rolling tail instead of snapping back to the ancient
+    // truncate() prefix the operator already scrolled past.
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Bash", toolInput: { command: "ls" }, toolUseId: "t1" });
+
+    const card = renderLarkRunCard(state, "zh") as { body: { elements: Array<Record<string, unknown>> } };
+    const element = card.body.elements.find((el) => el.element_id === "md_0");
+    const content = element?.content as string;
+    expect(content).toContain("实时预览仅显示最新输出");
+    expect(content).toContain("分组末尾标记");
+    expect(content).not.toContain("开场白独特前缀");
+  });
+
+  it("softens the omission notice to '已省略' — no promise the omitted text is delivered later", () => {
+    // Only the FINAL answer arrives in full at finalize; a mid-turn narration
+    // group ends up truncated in the finished card's process panel, so the
+    // notice must not promise "完整发出".
+    const zh = rollingTailContent("长".repeat(6000), "zh");
+    expect(zh).toContain("已省略");
+    expect(zh).not.toContain("任务结束后完整发出");
+    const en = rollingTailContent("x".repeat(6000), "en");
+    expect(en).toContain("omitted");
+    expect(en).not.toContain("arrive in full");
+  });
+
+  it("keys the rolling switch on the dual char+byte answer budget and byte-caps the tail output", () => {
+    // Both axes inside their caps → not over budget (a full CJK answer at the
+    // char cap is ≈3 bytes/char, within the byte cap by design).
+    expect(exceedsCardAnswerBudget("好".repeat(LARK_CARD_ANSWER_MAX))).toBe(false);
+    // Chars over the cap → over budget; the byte axis (mirroring finalize's
+    // answerFitsCard rule) is the defensive net should the caps ever change,
+    // since UTF-16 text tops out at 3 bytes per length unit today.
+    expect(exceedsCardAnswerBudget("好".repeat(LARK_CARD_ANSWER_MAX + 1))).toBe(true);
+    // Byte-dense CJK past the cap: rolling engages and the tail output honors
+    // BOTH element budgets while still showing the newest text.
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "密".repeat(LARK_CARD_ANSWER_MAX + 200) + "结尾标记。" });
+    const live = liveRunCardStreamElement(state);
+    expect(live?.rolling).toBe(true);
+    expect(live!.content.length).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
+    expect(Buffer.byteLength(live!.content, "utf8")).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
+    expect(live!.content).toContain("结尾标记");
+  });
+
   it("renders a guaranteed-tiny terminal card pointing to the full reply", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, { type: "assistant_text", text: "x".repeat(50000) });
@@ -286,6 +335,26 @@ describe("lark card renderer", () => {
     expect((renderLarkRunCardCompact(state) as any).config.streaming_mode).toBe(false);
     // The compact card is dramatically smaller (no tool history).
     expect(compact.length).toBeLessThan(full.length / 2);
+  });
+
+  it("keeps the rolling-tail preview and the stop button when a running card degrades to compact", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: "早期内容。".repeat(1200) + "最新进展标记。" });
+
+    const card = renderLarkRunCardCompact(state, "zh");
+    const serialized = JSON.stringify(card);
+    // Degrade hits mid-run on exactly the long turns the rolling tail shipped
+    // for: the answer element stays the rolling tail (newest slice + omission
+    // notice), not a re-frozen truncate() prefix…
+    expect(serialized).toContain("实时预览仅显示最新输出");
+    expect(serialized).toContain("最新进展标记");
+    expect(maxMarkdownElementLength(card)).toBeLessThanOrEqual(LARK_CARD_ANSWER_MAX + 1);
+    // …and the operator keeps the same stop control the full card carries.
+    expect(serialized).toContain("停止");
+    expect(serialized).toContain('"cctb_lark":"stop"');
+    expect(serialized).toContain('"bridgeChatType":"group"');
+    // A running compact card carries the stop button even before any text.
+    expect(JSON.stringify(renderLarkRunCardCompact(initialLarkRunState("lark:oc_chat"), "zh"))).toContain("停止");
   });
 
   it("keeps intermediate narration in the finished process panel without duplicating the answer", () => {
@@ -640,6 +709,39 @@ describe("long-answer continuation cards", () => {
       expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(LARK_OVERFLOW_CARD_MAX_BYTES);
     }
     // Splits only at line boundaries → rejoining with newlines is exact.
+    expect(chunks.join("\n")).toBe(text);
+  });
+
+  it("balances ``` fences at chunk seams so a code block spanning the split renders correctly on both cards", () => {
+    // Enough prose to fill most of chunk 1, then a code block long enough to
+    // cross the seam into chunk 2.
+    const prose = Array.from({ length: 40 }, (_, i) => `第${i}行前置说明，` + "铺".repeat(90)).join("\n");
+    const code = Array.from({ length: 30 }, (_, i) => `const line${i} = "` + "v".repeat(80) + '";').join("\n");
+    const text = `${prose}\n\`\`\`ts\n${code}\n\`\`\`\n结尾说明。`;
+
+    const chunks = splitLarkAnswerIntoCardChunks(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      // Chunks stay within the card budgets AFTER the seam fences were added…
+      expect(chunk.length).toBeLessThanOrEqual(LARK_OVERFLOW_CARD_MAX_CHARS);
+      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(LARK_OVERFLOW_CARD_MAX_BYTES);
+      // …and every chunk carries balanced fences (none ends mid-block open or
+      // opens mid-block as prose).
+      expect((chunk.match(/```/g) ?? []).length % 2).toBe(0);
+    }
+    // The seam fell inside the code block: chunk 1 was closed at the seam and
+    // chunk 2 reopened the block.
+    expect(chunks[0]!.endsWith("```")).toBe(true);
+    expect(chunks[1]!.startsWith("```\n")).toBe(true);
+    // Total content is preserved minus the synthetic fence markers.
+    const withoutFences = (s: string): string => s.replace(/```[^\n]*/g, "").replace(/\n+/g, "\n");
+    expect(withoutFences(chunks.join("\n"))).toBe(withoutFences(text));
+  });
+
+  it("leaves fence-free chunk seams untouched (split stays lossless)", () => {
+    const text = Array.from({ length: 60 }, (_, i) => `第${i}行：` + "测".repeat(100)).join("\n");
+    const chunks = splitLarkAnswerIntoCardChunks(text);
+    expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.join("\n")).toBe(text);
   });
 

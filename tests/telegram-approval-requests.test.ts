@@ -297,7 +297,7 @@ describe("telegram approval requests", () => {
       locale: "en",
       request: {
         engine: "codex",
-        toolName: "Codex full-auto turn",
+        toolName: "Codex full-auto turn (grants the WHOLE turn, not one command)",
         toolInput: {
           prompt: "Delete temp.txt",
         },

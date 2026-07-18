@@ -18,7 +18,7 @@ import {
   appendCommandSuccessAuditEventBestEffort,
   type TelegramTurnContext,
 } from "./turn-bookkeeping.js";
-import type { InstanceEngine } from "./instance-config.js";
+import { loadInstanceConfig, type InstanceEngine } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
@@ -174,7 +174,19 @@ export async function handleSimpleLocalTelegramCommand(input: {
   if (isUsageCommand(normalized.text)) {
     const usageStore = new UsageStore(stateDir);
     const usage = await usageStore.load();
-    const usageMessage = renderUsageMessage(usage, locale);
+    let usageMessage = renderUsageMessage(usage, locale);
+    // Codex/Antigravity never report dollar cost, so a configured budget can
+    // never trip. When one is set, say so instead of silently implying the cap
+    // protects this instance.
+    const instanceConfig = await loadInstanceConfig(stateDir);
+    if (instanceConfig.budgetUsd !== undefined && (cfg.engine ?? instanceConfig.engine) !== "claude") {
+      usageMessage = [
+        usageMessage,
+        locale === "zh"
+          ? "注意：Codex/Antigravity 引擎不上报美元成本，预算上限目前只对 Claude 生效。"
+          : "Note: Codex/Antigravity engines do not report dollar costs; the budget cap currently only takes effect on the Claude engine.",
+      ].join("\n");
+    }
     await context.api.sendMessage(normalized.chatId, usageMessage);
     await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
       startedAt,
