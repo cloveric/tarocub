@@ -15,12 +15,16 @@ describe("larkAgentInstructions", () => {
 
   it("tells the agent to use the local ASR (not whisper) for its own transcription when one is configured", () => {
     const previous = process.env.ASR_HTTP_URL;
+    const previousTingwu = process.env.TINGWU_ASR_DIR;
     process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
+    process.env.TINGWU_ASR_DIR = "/tmp/tingwu";
     try {
       const asr = localAsrAgentInstruction();
       expect(asr).toBeDefined();
       expect(asr).toContain("http://127.0.0.1:8412/transcribe");
       expect(asr).toContain("whisper");
+      expect(asr).toContain(">=15 min");
+      expect(asr).toContain("强制本地转写 / 强制云端转写");
       // It is wired into the injected Lark prompt when ASR is available.
       expect(larkAgentInstructions()).toContain("do NOT default to whisper");
     } finally {
@@ -28,6 +32,11 @@ describe("larkAgentInstructions", () => {
         delete process.env.ASR_HTTP_URL;
       } else {
         process.env.ASR_HTTP_URL = previous;
+      }
+      if (previousTingwu === undefined) {
+        delete process.env.TINGWU_ASR_DIR;
+      } else {
+        process.env.TINGWU_ASR_DIR = previousTingwu;
       }
     }
   });

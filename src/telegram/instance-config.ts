@@ -17,7 +17,14 @@ import { isExtendedCodexEffort, knownCodexModelSupportsEffort } from "../codex/m
 export type { EffortLevel };
 export type InstanceEngine = "codex" | "claude" | "antigravity";
 
-export const DEFAULT_CLAUDE_MODEL = "opus[1m]";
+export const CLAUDE_MODEL_CHOICES = [
+  "claude-opus-5[1m]",
+  "fable",
+  "opus",
+  "sonnet",
+  "haiku",
+] as const;
+export const DEFAULT_CLAUDE_MODEL = CLAUDE_MODEL_CHOICES[0];
 export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
 export const DEFAULT_CODEX_EFFORT: EffortLevel = "xhigh";
 // Default steer eligibility window: a running turn accepts mid-turn steering for

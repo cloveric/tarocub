@@ -4243,7 +4243,7 @@ describe("lark service", () => {
         bridge,
         runtime: createLarkServiceRuntime(),
         stateDir,
-        message: fakeLarkMessage({ messageId: "om_model", content: "/model opus" }),
+        message: fakeLarkMessage({ messageId: "om_model", content: "/model claude-opus-5[1m]" }),
       });
       await handleLarkMessage({
         channel,
@@ -4254,10 +4254,10 @@ describe("lark service", () => {
       });
 
       const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
-      expect(config.model).toBe("opus");
+      expect(config.model).toBe("claude-opus-5[1m]");
       expect(config.effort).toBe("max");
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 opus");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 claude-opus-5[1m]");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Effort 已设为 max");
     } finally {
       await rm(stateDir, { recursive: true, force: true });

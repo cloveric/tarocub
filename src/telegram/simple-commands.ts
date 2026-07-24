@@ -18,7 +18,11 @@ import {
   appendCommandSuccessAuditEventBestEffort,
   type TelegramTurnContext,
 } from "./turn-bookkeeping.js";
-import { loadInstanceConfig, type InstanceEngine } from "./instance-config.js";
+import {
+  CLAUDE_MODEL_CHOICES,
+  loadInstanceConfig,
+  type InstanceEngine,
+} from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
@@ -110,22 +114,16 @@ export async function handleSimpleLocalTelegramCommand(input: {
         ? [
             `当前模型: ${current}`,
             "用 /model <名称> 选择模型：",
-            "/model fable",
-            "/model opus",
-            "/model sonnet",
-            "/model haiku",
+            ...CLAUDE_MODEL_CHOICES.map((model) => `/model ${model}`),
             "/model off",
-            "1M 上下文示例：/model opus[1m]",
+            "跟随最新 Opus 的别名：/model opus[1m]",
           ].join("\n")
         : [
             `Current model: ${current}`,
             "Choose a model with /model <name>:",
-            "/model fable",
-            "/model opus",
-            "/model sonnet",
-            "/model haiku",
+            ...CLAUDE_MODEL_CHOICES.map((model) => `/model ${model}`),
             "/model off",
-            "1M context example: /model opus[1m]",
+            "Latest Opus alias: /model opus[1m]",
           ].join("\n");
     }
 

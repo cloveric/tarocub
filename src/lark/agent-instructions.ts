@@ -37,9 +37,9 @@ export function localAsrAgentInstruction(): string | undefined {
   // actually configured, so the instruction never overpromises.
   const tingwuDir = (process.env.TINGWU_ASR_DIR ?? "").trim();
   const cloudNote = tingwuDir
-    ? " Long audio (>=15 min by default) is ALSO supported: the bridge auto-routes it to Aliyun Tingwu cloud transcription before you see the message, so never claim long recordings can't be transcribed. Users can force a path with 强制本地转写 / 强制云端转写 in the message."
+    ? " Long audio (>=15 min default) auto-routes to Aliyun Tingwu before delivery; never call it unsupported. 强制本地转写 / 强制云端转写 forces the route."
     : "";
-  return `Local speech-to-text is installed. For audio/video transcription you do yourself, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or say "no ASR available". Fast path: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Fall back to video frames/OCR only if this genuinely fails.${cloudNote}`;
+  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Use frames/OCR only if it fails.${cloudNote}`;
 }
 
 export function larkAgentInstructions(): string {

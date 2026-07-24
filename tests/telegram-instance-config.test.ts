@@ -372,7 +372,7 @@ describe("applyEngineSelection", () => {
     expect(result).toEqual({ clearedModel: false, enabledFullAuto: false });
     expect(config).toMatchObject({
       engine: "claude",
-      model: "opus[1m]",
+      model: "claude-opus-5[1m]",
       effort: "xhigh",
     });
   });
@@ -390,7 +390,7 @@ describe("applyEngineSelection", () => {
     expect(result).toEqual({ clearedModel: true, enabledFullAuto: false });
     expect(config).toMatchObject({
       engine: "claude",
-      model: "opus[1m]",
+      model: "claude-opus-5[1m]",
       effort: "xhigh",
     });
     expect(config.codexServiceTier).toBeUndefined();

@@ -19,7 +19,7 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | Command | What It Does | Channels |
 |---|---|---|
 | `/engine [claude\|codex\|antigravity]` | Inspect or switch the backend engine. | Telegram, Lark |
-| `/model [name\|off]` | Inspect or set the engine model. | Telegram, Lark |
+| `/model [name\|off]` | Inspect or set the engine model. Claude Opus 5 with 1M context: `/model claude-opus-5[1m]`. | Telegram, Lark |
 | `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Inspect or set reasoning effort where supported. Codex GPT-5.6 Sol/Terra support `ultra`; Luna supports up to `max`. | Telegram, Lark |
 | `/fast [on\|off\|status]` | Toggle Codex Fast Mode. | Telegram, Lark |
 | `/yolo [on\|off\|unsafe]` | Inspect or switch approval mode. | Telegram, Lark |

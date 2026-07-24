@@ -30,6 +30,7 @@ import { handleCronCommand, isCronCommand } from "../telegram/cron-commands.js";
 import { handleLocalEngineTelegramCommand } from "../telegram/engine-commands.js";
 import {
   applyEngineSelection,
+  CLAUDE_MODEL_CHOICES,
   loadInstanceConfig,
   resolveInstanceWorkspacePath,
   updateInstanceConfig,
@@ -1815,23 +1816,17 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
       return [
         `Current model: ${current}`,
         "Choose a model with /model <name>:",
-        "/model fable",
-        "/model opus",
-        "/model sonnet",
-        "/model haiku",
+        ...CLAUDE_MODEL_CHOICES.map((model) => `/model ${model}`),
         "/model off",
-        "1M context example: /model opus[1m]",
+        "Latest Opus alias: /model opus[1m]",
       ].join("\n");
     }
     return [
       `当前模型: ${current}`,
       "用 /model <名称> 选择模型：",
-      "/model fable",
-      "/model opus",
-      "/model sonnet",
-      "/model haiku",
+      ...CLAUDE_MODEL_CHOICES.map((model) => `/model ${model}`),
       "/model off",
-      "1M 上下文示例：/model opus[1m]",
+      "跟随最新 Opus 的别名：/model opus[1m]",
     ].join("\n");
   }
   if (cfg.engine === "codex") {

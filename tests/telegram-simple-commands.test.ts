@@ -657,12 +657,13 @@ describe("handleSimpleLocalTelegramCommand", () => {
         [
           "Current model: default",
           "Choose a model with /model <name>:",
+          "/model claude-opus-5[1m]",
           "/model fable",
           "/model opus",
           "/model sonnet",
           "/model haiku",
           "/model off",
-          "1M context example: /model opus[1m]",
+          "Latest Opus alias: /model opus[1m]",
         ].join("\n"),
       );
     } finally {
