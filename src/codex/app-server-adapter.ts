@@ -1374,7 +1374,20 @@ export class CodexAppServerAdapter implements CodexAdapter {
     if (!pending) {
       return undefined;
     }
-    if (!pending.turnId || !turnId) {
+    if (!turnId) {
+      // No id on the notification: thread ownership is all we have.
+      return pending;
+    }
+    if (!pending.turnId) {
+      // The turn's own id is not registered yet (the `turn/start` response has
+      // not landed). Claiming an id-bearing notification here is exactly how a
+      // concurrent /goal pursuit's output used to settle the user's turn, so
+      // only adopt it when no OTHER turn already owns that id, and pin it: a
+      // later `turn/start` response with a different id re-registers cleanly.
+      if (this.pendingTurnsByTurnId.has(turnId)) {
+        return undefined;
+      }
+      this.registerTurnId(pending, turnId);
       return pending;
     }
     return pending.turnId === turnId ? pending : undefined;
@@ -1609,14 +1622,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
       });
       if (typeof options?.timeoutMs === "number" && options.timeoutMs > 0) {
         timeout = setTimeout(() => {
-          rejectOnce(this.createRequestTimeoutError(
-            method,
-            options.timeoutMessage ?? `codex app-server ${method} timed out after ${options.timeoutMs}ms`,
-            requestChildGeneration,
-          ));
+          const timeoutMessage = options.timeoutMessage
+            ?? `codex app-server ${method} timed out after ${options.timeoutMs}ms`;
+          rejectOnce(this.createRequestTimeoutError(method, timeoutMessage, requestChildGeneration));
           if (options.destroyOnTimeout) {
             queueMicrotask(() => {
-              this.destroy(requestChildGeneration);
+              // Carry the timeout as the destroy reason: turns swept up by this
+              // respawn otherwise surface a bare "Adapter destroyed" instead of
+              // the request timeout that actually caused it.
+              this.destroy(requestChildGeneration, timeoutMessage);
             });
           }
         }, options.timeoutMs);
@@ -1730,7 +1744,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
       if (!isThreadReadTimeoutError(error)) {
         throw error;
       }
-      this.destroy(error.childGeneration);
+      // The destroy below rejects every pending turn with the generic "Adapter
+      // destroyed"; for the turn that actually hit the read timeout that hides
+      // the diagnosable cause. Pass the real reason so those rejections keep it.
+      this.destroy(error.childGeneration, error.message);
       await this.ensureInitialized(runtimeOptions);
       return await operation();
     }
@@ -2107,12 +2124,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
     return { text, usage: readTurnUsage(targetTurn) };
   }
 
-  destroy(expectedChildGeneration?: number): void {
+  destroy(expectedChildGeneration?: number, reason?: string): void {
     if (expectedChildGeneration !== undefined && expectedChildGeneration !== this.childGeneration) {
       return;
     }
     this.terminateChild();
-    this.failAllPending(this.withDiagnostics("Adapter destroyed"));
+    // `reason` preserves a diagnosable cause (e.g. the thread/read timeout that
+    // triggered the respawn); without it every pending turn was rejected with a
+    // bare "Adapter destroyed" and the real failure was unrecoverable from chat.
+    this.failAllPending(this.withDiagnostics(reason ?? "Adapter destroyed"));
     this.resetChildState();
   }
 

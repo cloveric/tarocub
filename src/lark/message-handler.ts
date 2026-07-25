@@ -1407,6 +1407,10 @@ async function runNormalizedLarkMessage(
             const transcript = await transcribeMedia(media.localPath, {
               messageText: normalized.text,
               stateDir: input.stateDir,
+              // /stop and the run-card stop button must actually kill a cloud
+              // transcription: without this the child ran to its wall clock while
+              // the chat's queue slot stayed held and the stop reported success.
+              abortSignal: runController.signal,
             });
             if (transcript.trim()) {
               requestText = requestText.trim() ? `${requestText.trim()}\n${transcript.trim()}` : transcript.trim();

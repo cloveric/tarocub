@@ -92,6 +92,20 @@ const DEFAULT_CLOUD_JOB_RETENTION_DAYS = 7;
  * is a backstop against a hung interpreter.
  */
 const CLOUD_PROCESS_KILL_GRACE_MS = 60_000;
+/**
+ * Raised when the caller's abort signal stops a cloud job. Distinct from a
+ * cloud FAILURE: a cancelled turn must not silently restart the work on the
+ * local engine — the operator asked for it to stop.
+ */
+export class CloudAsrCancelledError extends Error {
+  readonly cancelled = true;
+}
+
+export function isCloudAsrCancelledError(error: unknown): boolean {
+  return error instanceof CloudAsrCancelledError
+    || (typeof error === "object" && error !== null && (error as { cancelled?: unknown }).cancelled === true);
+}
+
 /** SIGTERM → SIGKILL escalation delay when a job is aborted or times out. */
 const CLOUD_PROCESS_HARD_KILL_DELAY_MS = 10_000;
 
@@ -241,7 +255,7 @@ export function runCloudAsrProcess(options: {
 }): Promise<number> {
   return new Promise((resolve, reject) => {
     if (options.abortSignal?.aborted) {
-      reject(new Error("cloud ASR transcription was cancelled before it started"));
+      reject(new CloudAsrCancelledError("cloud ASR transcription was cancelled before it started"));
       return;
     }
 
@@ -273,7 +287,7 @@ export function runCloudAsrProcess(options: {
       // Kill first, then settle: the caller (a queued turn) gets its slot back
       // immediately instead of waiting out the wall-clock bound.
       killChild();
-      finish(() => reject(new Error(`cloud ASR transcription was cancelled; logs in ${options.jobDir}`)));
+      finish(() => reject(new CloudAsrCancelledError(`cloud ASR transcription was cancelled; logs in ${options.jobDir}`)));
     };
 
     const finish = (settle: () => void): void => {

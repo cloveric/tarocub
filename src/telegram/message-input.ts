@@ -8,6 +8,7 @@ import {
   readCloudAsrConfig,
   transcribeViaTingwuCloud,
   type TranscribeMediaOptions,
+  isCloudAsrCancelledError,
 } from "../runtime/asr-cloud.js";
 import type { DownloadedAttachment } from "../runtime/file-workflow.js";
 import type { TelegramApi } from "./api.js";
@@ -414,8 +415,13 @@ export function createDefaultTranscribeVoice(options: {
           ...(callOptions?.abortSignal ? { abortSignal: callOptions.abortSignal } : {}),
         });
       } catch (error) {
-        // ANY cloud failure falls back to a local transcription attempt. The
-        // error messages from asr-cloud.ts carry no stderr content and no
+        // A CANCELLED job is not a failure: the operator pressed stop, so
+        // restarting the same work locally would defeat the stop entirely.
+        if (isCloudAsrCancelledError(error)) {
+          throw error;
+        }
+        // ANY other cloud failure falls back to a local transcription attempt.
+        // The error messages from asr-cloud.ts carry no stderr content and no
         // env values, so this warn cannot leak signed URLs or credentials.
         console.warn(`ASR cloud transcription failed; falling back to local ASR: ${summarizeError(error)}`);
       }

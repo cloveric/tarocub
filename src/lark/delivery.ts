@@ -1628,6 +1628,28 @@ function sanitizeEngineCallbackNode(
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeEngineCallbackNode(item, owner, conversationKey, bridgeChatType, replyInThread));
   }
+  if (typeof value === "string") {
+    // The click handler (card-actions `actionValue`) JSON.parses a STRING action
+    // value into the callback object, so passing strings through verbatim left a
+    // complete bypass: an engine could encode a privileged `config`/`resume`/
+    // `board` callback as a string and the object-only sanitizer never saw it.
+    // Parse, sanitize, re-encode — non-JSON strings (labels, urls) are untouched.
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{")) {
+      return value;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return value;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return value;
+    }
+    const sanitizedParsed = sanitizeEngineCallbackNode(parsed, owner, conversationKey, bridgeChatType, replyInThread);
+    return JSON.stringify(sanitizedParsed);
+  }
   if (!value || typeof value !== "object") {
     return value;
   }

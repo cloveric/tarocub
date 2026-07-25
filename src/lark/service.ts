@@ -561,10 +561,18 @@ export async function readRotatedLogFileTail(filePath: string, options: {
     if (parts.length < minFiles) {
       continue;
     }
-    if (bytes >= maxBytes) {
-      break;
+    // Coverage BEFORE budget: stopping on bytes first meant a busy instance could
+    // return a window shorter than `sinceMs`, so a long turn whose start record
+    // had rotated into .2+ looked idle and `restart --all` killed it mid-run.
+    // The byte budget only applies once the caller's window is actually covered
+    // (or when no window was requested).
+    if (options.sinceMs !== undefined) {
+      if (reachesBack(content, options.sinceMs)) {
+        break;
+      }
+      continue;
     }
-    if (options.sinceMs !== undefined && reachesBack(content, options.sinceMs)) {
+    if (bytes >= maxBytes) {
       break;
     }
   }
