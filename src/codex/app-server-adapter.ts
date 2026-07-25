@@ -1379,11 +1379,16 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return pending;
     }
     if (!pending.turnId) {
-      // The turn's own id is not registered yet (the `turn/start` response has
-      // not landed). Claiming an id-bearing notification here is exactly how a
-      // concurrent /goal pursuit's output used to settle the user's turn, so
-      // only adopt it when no OTHER turn already owns that id, and pin it: a
-      // later `turn/start` response with a different id re-registers cleanly.
+      // The turn's own id is not registered yet (its `turn/start` response has
+      // not landed). Adopting an id-bearing notification here is exactly how a
+      // concurrent /goal pursuit's output settled the user's turn — the goal's
+      // turn is NOT in pendingTurnsByTurnId (it isn't a pendingTurn at all), so
+      // an "is this id taken?" test can never see it. While a pursuit owns this
+      // thread the id-correlated `turn/start` response is the only authority,
+      // matching the same rule the `turn/started` handler already applies.
+      if (this.goalWatchers.has(threadId)) {
+        return undefined;
+      }
       if (this.pendingTurnsByTurnId.has(turnId)) {
         return undefined;
       }

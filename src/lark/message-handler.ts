@@ -1,3 +1,4 @@
+import { isCloudAsrCancelledError } from "../runtime/asr-cloud.js";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -1415,7 +1416,14 @@ async function runNormalizedLarkMessage(
             if (transcript.trim()) {
               requestText = requestText.trim() ? `${requestText.trim()}\n${transcript.trim()}` : transcript.trim();
             }
-          } catch {
+          } catch (error) {
+            // An operator stop is not a transcription failure: reporting it as
+            // one produced a misleading "转写失败" notice plus an error timeline
+            // entry right after the user pressed stop. The turn's own abort path
+            // already reports the interruption.
+            if (isCloudAsrCancelledError(error) || runController.signal.aborted) {
+              throw error;
+            }
             await input.channel.send(normalized.chatId, {
               text: renderLarkMediaTranscriptionFailure(locale),
             }, {

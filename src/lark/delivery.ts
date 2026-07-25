@@ -1624,18 +1624,24 @@ function sanitizeEngineCallbackNode(
   conversationKey: string | undefined,
   bridgeChatType: "private" | "group" | undefined,
   replyInThread: boolean | undefined,
+  inCallbackValuePosition = false,
 ): unknown {
   if (Array.isArray(value)) {
-    return value.map((item) => sanitizeEngineCallbackNode(item, owner, conversationKey, bridgeChatType, replyInThread));
+    return value.map((item) => sanitizeEngineCallbackNode(item, owner, conversationKey, bridgeChatType, replyInThread, inCallbackValuePosition));
   }
   if (typeof value === "string") {
-    // The click handler (card-actions `actionValue`) JSON.parses a STRING action
-    // value into the callback object, so passing strings through verbatim left a
-    // complete bypass: an engine could encode a privileged `config`/`resume`/
-    // `board` callback as a string and the object-only sanitizer never saw it.
-    // Parse, sanitize, re-encode — non-JSON strings (labels, urls) are untouched.
+    // Only a string sitting in a CALLBACK-VALUE position is re-parsed. The click
+    // handler (card-actions `actionValue`) JSON.parses such a string into the
+    // callback object, so passing it through verbatim was a complete bypass of
+    // the object-only sanitizer. Restricting it to that position keeps ordinary
+    // prose/markdown/code containing JSON (or the literal `cctb_lark`) untouched
+    // — an earlier version re-encoded any JSON-looking string anywhere in the
+    // card, which reflowed display text.
+    if (!inCallbackValuePosition) {
+      return value;
+    }
     const trimmed = value.trim();
-    if (!trimmed.startsWith("{")) {
+    if (!trimmed.startsWith("{") || !trimmed.includes("cctb_lark")) {
       return value;
     }
     let parsed: unknown;
@@ -1647,7 +1653,7 @@ function sanitizeEngineCallbackNode(
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return value;
     }
-    const sanitizedParsed = sanitizeEngineCallbackNode(parsed, owner, conversationKey, bridgeChatType, replyInThread);
+    const sanitizedParsed = sanitizeEngineCallbackNode(parsed, owner, conversationKey, bridgeChatType, replyInThread, false);
     return JSON.stringify(sanitizedParsed);
   }
   if (!value || typeof value !== "object") {
@@ -1663,7 +1669,10 @@ function sanitizeEngineCallbackNode(
   const nextOwner = Object.prototype.hasOwnProperty.call(node, "text") ? node : owner;
   const sanitized: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(node)) {
-    sanitized[key] = sanitizeEngineCallbackNode(item, nextOwner, conversationKey, bridgeChatType, replyInThread);
+    // `value` (button/option) and `behaviors[].value` are the only places a
+    // callback payload can sit; a string anywhere else is display content.
+    const childIsCallbackValue = key === "value" || key === "behaviors";
+    sanitized[key] = sanitizeEngineCallbackNode(item, nextOwner, conversationKey, bridgeChatType, replyInThread, childIsCallbackValue || (inCallbackValuePosition && Array.isArray(item)));
   }
   return sanitized;
 }

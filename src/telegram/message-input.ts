@@ -502,6 +502,12 @@ export async function prepareTelegramMessageInput(input: {
   api: Pick<TelegramApi, "getFile" | "downloadFile">;
   downloadAttachments?: typeof defaultDownloadAttachments;
   transcribeVoice?: typeof defaultTranscribeVoice;
+  /**
+   * The turn's abort signal. Threaded into cloud transcription so /stop can kill
+   * a running Tingwu job instead of leaving it to its wall clock — Lark already
+   * passes this; without it Telegram's stop could not interrupt a cloud job.
+   */
+  abortSignal?: AbortSignal;
 }): Promise<TelegramMessageInputPreparationResult> {
   const {
     locale,
@@ -510,6 +516,7 @@ export async function prepareTelegramMessageInput(input: {
     api,
     downloadAttachments = defaultDownloadAttachments,
     transcribeVoice = defaultTranscribeVoice,
+    abortSignal,
   } = input;
 
   const allDownloaded = await downloadAttachments(api, inboxDir, normalized.attachments);
@@ -525,6 +532,7 @@ export async function prepareTelegramMessageInput(input: {
   const transcribeOptions: TranscribeMediaOptions = {
     messageText: normalized.text,
     stateDir: path.dirname(path.resolve(inboxDir)),
+    ...(abortSignal ? { abortSignal } : {}),
   };
 
   let text = normalized.text;

@@ -536,7 +536,7 @@ npm run dev -- telegram budget clear --instance work    # 移除上限
 - 阈值：`ASR_CLOUD_THRESHOLD_SECONDS`（默认 900 秒）
 - 超时：`ASR_CLOUD_TASK_TIMEOUT_SECONDS`。不设置时，脚本自己的 `--timeout` 是 7200 秒，但**子进程最多跑 15 分钟**就会被杀掉——否则一个卡住的云端任务会把这个会话的队列占用两小时。显式设置这个变量会同时抬高（或压低）这两个上限
 - 任务目录保留：`ASR_CLOUD_JOB_RETENTION_DAYS`（默认 7 天），每次新任务顺手清理过期的 `<state>/asr-jobs/<id>/`
-- **变量写在哪里：不是 `lark.env`**。这四个变量都是**桥进程自己**读的，必须放在**启动服务的那个进程环境**里 —— 在跑 `node dist/src/index.js lark service start` / `telegram service start` 的 shell profile（或启动脚本）里 export。`~/.cctb/<instance>/lark.env` 对它们无效：那里的透传只负责引擎侧凭据（`IFIND_TOKEN` 这类 MCP token），并且会拒绝所有保留前缀 —— `CCTB_`、`TAROCUB_`、`LARK_`、`CODEX_`、`CLAUDE_`、`ANTIGRAVITY_`、`ASR_`、`TELEGRAM_`、`TINGWU_`（`TINGWU_ASR_DIR` 指向的是桥**要去执行 python 脚本**的目录，不能由 lark.env 决定）。被拒绝的键会在启动时打印 `[lark] lark.env: ignored bridge-reserved keys …`，云端转写突然不走了就先看这行
+- **变量写在哪里**：Lark 侧直接写进 `~/.cctb/<实例>/lark.env` 即可——这四个走**白名单配置通道**（`loadLarkRuntimeEnv`，和 `LARK_APP_ID` 同一条路），服务启动重写该文件时会保留；也可以导出到启动服务的进程环境，环境变量优先。注意区分同一个文件里的两条路：它们走**白名单**，不走 **extras 透传**——透传只把引擎凭据（`IFIND_TOKEN` 这类 MCP token）转给引擎子进程，并拒绝所有桥保留前缀（`CCTB_`、`TAROCUB_`、`LARK_`、`CODEX_`、`CLAUDE_`、`ANTIGRAVITY_`、`ASR_`、`TELEGRAM_`、`TINGWU_`），因为这些控制桥自身行为（`TINGWU_ASR_DIR` 指向桥**要去执行 python 脚本**的目录），所以引擎写入的 extras 永远改不了它。被拒的 extras 会在启动时打印 `[lark] lark.env: ignored bridge-reserved keys …`
 - **密钥必须放在任何引擎工作区之外**：本机约定放 `~/.tarocub-secrets/tingwu_asr`，这样在 `~/.cctb/<instance>/workspace` 里干活的 agent 读不到、也提交不了这些凭据
 - **消息内开关**：「强制本地转写」/「强制云端转写」必须和音频在**同一条消息或同一批**发送（当作附件说明）才生效——纯语音消息没有 caption，事后再发是新的一轮，改不了已经开跑的转写（冲突时本地优先）
 - 云端失败自动回退本地；任务产物（原始 JSON/日志/纯文本）保存在 `<state>/asr-jobs/<id>/` 便于追溯

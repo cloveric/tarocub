@@ -401,6 +401,9 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     inboxDir: context.inboxDir,
     normalized,
     api: context.api,
+    // Lets /stop kill a running cloud transcription instead of leaving the job
+    // to its wall clock while the chat's queue slot stays held.
+    ...(context.abortSignal ? { abortSignal: context.abortSignal } : {}),
   });
 
   if (inputPreparation.kind === "reply") {

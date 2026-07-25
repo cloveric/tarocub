@@ -95,4 +95,68 @@ describe("audit-3 review fixes", () => {
       await rm(jobDir, { recursive: true, force: true });
     });
   });
+
+  describe("goal cross-talk during the unknown-turnId window (P1, re-fix)", () => {
+    it("does not settle a user turn with a goal's events while its own turnId is unregistered", async () => {
+      const { CodexAppServerAdapter } = await import("../src/codex/app-server-adapter.js");
+      const { EventEmitter } = await import("node:events");
+
+      class FakeStream extends EventEmitter {
+        emitData(chunk: string) { this.emit("data", chunk); }
+      }
+      class FakeChild extends EventEmitter {
+        stdin = { lines: [] as string[], write(chunk: string) { this.lines.push(chunk.trim()); return true; } };
+        stdout = new FakeStream();
+        stderr = new FakeStream();
+        kill() { /* no-op */ }
+      }
+      const child = new FakeChild();
+      const adapter = new CodexAppServerAdapter(
+        "codex", process.cwd(), undefined, (() => child) as never,
+        undefined, undefined, undefined, 60 * 60_000, 30, 60,
+      );
+      // A /goal pursuit owns this thread. Its turn is NOT a pendingTurn, so an
+      // "is this turn id taken?" check can never see it — the earlier guard was
+      // therefore inert and the user's turn adopted the goal's events.
+      (adapter as unknown as { goalWatchers: Map<string, unknown> }).goalWatchers.set("T", {
+        resolve: () => undefined, reject: () => undefined,
+      });
+
+      const turn = adapter.sendUserMessage("telegram-1", { text: "user question", files: [] });
+      const waitForLines = async (n: number) => {
+        for (let i = 0; i < 200; i += 1) {
+          if (child.stdin.lines.length >= n) return;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      };
+      await waitForLines(1);
+      child.stdout.emitData('{"id":1,"result":{"platformOs":"darwin"}}\n');
+      await waitForLines(2);
+      child.stdout.emitData('{"id":2,"result":{"thread":{"id":"T"}}}\n');
+      await waitForLines(3);
+
+      // The goal's output arrives BEFORE the user's turn/start response — the
+      // exact window Codex reproduced against v0.1.186.
+      child.stdout.emitData('{"method":"item/completed","params":{"threadId":"T","turnId":"goal-turn","item":{"type":"agentMessage","text":"GOAL PROGRESS"}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turnId":"goal-turn","turn":{"id":"goal-turn","status":"completed","items":[],"usage":{"input_tokens":9999,"output_tokens":9999}}}}\n');
+
+      const pendingMarker = { text: "(still pending)" };
+      const settled = await Promise.race([
+        turn.then((value) => ({ resolved: value }), (error) => ({ rejected: String(error?.message ?? error) })),
+        new Promise((resolve) => setTimeout(() => resolve(pendingMarker), 400)),
+      ]);
+      // The user's turn must never be SETTLED WITH THE GOAL'S OUTPUT. Staying
+      // pending is ideal; a rejection is acceptable only if it is not the goal's
+      // result masquerading as this turn's answer.
+      const asRecord = settled as { resolved?: { text?: string; usage?: { inputTokens?: number } }; rejected?: string };
+      expect(asRecord.resolved?.text).not.toBe("GOAL PROGRESS");
+      expect(asRecord.resolved?.usage?.inputTokens).not.toBe(9999);
+      if (asRecord.rejected !== undefined) {
+        // Diagnostic breadcrumb if the rejection path ever changes shape.
+        expect(asRecord.rejected).toEqual(expect.any(String));
+      }
+      adapter.destroy();
+      await turn.catch(() => undefined);
+    }, 20_000);
+  });
 });
