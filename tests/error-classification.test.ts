@@ -84,6 +84,28 @@ describe("classifyFailure specificity", () => {
     expect(getBusErrorSemantics("engine-timeout")).toEqual({ code: "engine_timeout", retryable: false });
   });
 
+  it("covers the Claude inactivity-watchdog wording with the engine-timeout category", () => {
+    // Wording emitted by ClaudeStreamAdapter's inactivity watchdog; it must not
+    // fall through to engine-cli ("restart the instance"), and the renderer picks
+    // the minute count out of the detail.
+    const err = new Error(
+      "Claude turn became inactive after 30 minutes with no engine output; the wedged CLI was stopped. Send /timeout off before a genuinely long silent task.",
+    );
+    expect(classifyFailure(err)).toBe("engine-timeout");
+    expect(renderCategorizedErrorMessage("engine-timeout", err.message, "en")).toContain("30-minute");
+  });
+
+  it("classifies a busy Claude session (live background tasks) as engine-busy, not engine-cli", () => {
+    const err = new Error(
+      "Claude session has 2 background tasks still running, so the new engine settings cannot be applied yet. Retry once they finish, or send /reset to start a fresh session.",
+    );
+    expect(classifyFailure(err)).toBe("engine-busy");
+    // Transient: the same call works once the background work ends.
+    expect(getBusErrorSemantics("engine-busy")).toEqual({ code: "engine_busy", retryable: true });
+    // The old behavior told the operator to restart the instance for a healthy engine.
+    expect(renderCategorizedErrorMessage("engine-busy", err.message, "en")).not.toContain("Restart the instance");
+  });
+
   it("renders an accurate time-cap message pointing at /timeout, not the misleading 'restart' one", () => {
     const err = new Error("Codex app-server turn timed out after 60 minutes");
     const zh = renderLarkUserFacingError(err, "engine", "zh");

@@ -1445,6 +1445,12 @@ describe("CodexAppServerAdapter", () => {
       sessionId: "thread-123",
     });
     expect(engineEvents).toEqual([
+      // The thread is announced before the turn starts so the bridge binds it
+      // even if the turn is aborted (see engine-audit3-fixes).
+      {
+        type: "session",
+        sessionId: "thread-123",
+      },
       {
         type: "assistant_text",
         text: `[send-image:${imagePath}]`,

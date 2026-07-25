@@ -3,6 +3,22 @@ import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { CURRENT_SCHEMA_VERSION, withSchemaVersion } from "./schema-version.js";
+import { ensureStateDirPermissions, STATE_DIR_MODE, STATE_FILE_MODE } from "./state-permissions.js";
+
+// One repair sweep per directory per process: `ensureStateDirPermissions` walks
+// the directory, so running it on every write (usage.json is hot) would be
+// wasteful, while running it once catches directories created 0755 by an older
+// build before this process starts writing tokens/sessions into them.
+const permissionsEnsuredDirs = new Set<string>();
+
+async function ensureStateDirectory(directoryPath: string): Promise<void> {
+  await mkdir(directoryPath, { recursive: true, mode: STATE_DIR_MODE });
+  if (permissionsEnsuredDirs.has(directoryPath)) {
+    return;
+  }
+  permissionsEnsuredDirs.add(directoryPath);
+  await ensureStateDirPermissions(directoryPath);
+}
 
 export class JsonStore<T> {
   constructor(
@@ -37,7 +53,7 @@ export class JsonStore<T> {
 
   async write(value: T): Promise<void> {
     const directoryPath = path.dirname(this.filePath);
-    await mkdir(directoryPath, { recursive: true, mode: 0o700 });
+    await ensureStateDirectory(directoryPath);
 
     // Attach current schema version on write so future loads can detect
     // incompatibility without every caller remembering to add it.
@@ -46,7 +62,7 @@ export class JsonStore<T> {
       : value;
 
     const tmpPath = path.join(directoryPath, `${path.basename(this.filePath)}.${randomUUID()}.tmp`);
-    await writeFile(tmpPath, JSON.stringify(versioned, null, 2), { encoding: "utf8", mode: 0o600 });
+    await writeFile(tmpPath, JSON.stringify(versioned, null, 2), { encoding: "utf8", mode: STATE_FILE_MODE });
     const tmpHandle = await open(tmpPath, "r");
     try {
       await tmpHandle.sync();
@@ -69,7 +85,7 @@ export class JsonStore<T> {
   }
 
   async quarantineCurrentFile(reason = "unreadable"): Promise<string | null> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
+    await ensureStateDirectory(path.dirname(this.filePath));
 
     const quarantinePath = path.join(
       path.dirname(this.filePath),

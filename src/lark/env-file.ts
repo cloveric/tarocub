@@ -75,6 +75,10 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
     CCTB_LARK_STATE_DIR: env.CCTB_LARK_STATE_DIR ?? parsed.CCTB_LARK_STATE_DIR,
     CCTB_LARK_INSTANCE: larkInstance,
     LARK_REQUIRE_MENTION_IN_GROUP: env.LARK_REQUIRE_MENTION_IN_GROUP ?? parsed.LARK_REQUIRE_MENTION_IN_GROUP,
+    TINGWU_ASR_DIR: env.TINGWU_ASR_DIR ?? parsed.TINGWU_ASR_DIR,
+    ASR_CLOUD_THRESHOLD_SECONDS: env.ASR_CLOUD_THRESHOLD_SECONDS ?? parsed.ASR_CLOUD_THRESHOLD_SECONDS,
+    ASR_CLOUD_TASK_TIMEOUT_SECONDS: env.ASR_CLOUD_TASK_TIMEOUT_SECONDS ?? parsed.ASR_CLOUD_TASK_TIMEOUT_SECONDS,
+    ASR_CLOUD_JOB_RETENTION_DAYS: env.ASR_CLOUD_JOB_RETENTION_DAYS ?? parsed.ASR_CLOUD_JOB_RETENTION_DAYS,
     CCTB_LARK_DEBUG: env.CCTB_LARK_DEBUG ?? parsed.CCTB_LARK_DEBUG,
     TAROCUB_INSTANCE: env.TAROCUB_INSTANCE ?? larkInstance,
     CODEX_TELEGRAM_INSTANCE: env.CODEX_TELEGRAM_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
@@ -98,8 +102,15 @@ export async function applyLarkEnvPassthrough(
   target: NodeJS.ProcessEnv = process.env,
 ): Promise<string[]> {
   const applied: string[] = [];
-  const applyFrom = (content: string): void => {
-    for (const [key, value] of Object.entries(parseLarkEnvExtras(content))) {
+  const applyFrom = (content: string, sourceName: string): void => {
+    // Names only — a refused key is a real operator setting that will silently do
+    // nothing, so surface it. Values are secrets and must never be logged.
+    const dropped: string[] = [];
+    const extras = parseLarkEnvExtras(content, dropped);
+    if (dropped.length > 0) {
+      console.error(`[lark] ${sourceName}: ignored bridge-reserved keys (not passed to the engine): ${[...new Set(dropped)].join(", ")}`);
+    }
+    for (const [key, value] of Object.entries(extras)) {
       // Never clobber a value already present (process.env wins; instance wins over shared).
       if (target[key] !== undefined) {
         continue;
@@ -119,7 +130,7 @@ export async function applyLarkEnvPassthrough(
   if (instancePath) {
     const content = await readEnvFileOrUndefined(instancePath);
     if (content !== undefined) {
-      applyFrom(content);
+      applyFrom(content, LARK_ENV_FILE_NAME);
     }
   }
 
@@ -129,7 +140,7 @@ export async function applyLarkEnvPassthrough(
   if (sharedPath && sharedPath !== instancePath) {
     const content = await readEnvFileOrUndefined(sharedPath);
     if (content !== undefined) {
-      applyFrom(content);
+      applyFrom(content, SHARED_ENV_FILE_NAME);
     }
   }
 
@@ -164,8 +175,20 @@ export async function writeLarkEnvFile(
   // tokens like IFIND_TOKEN the operator added for the engine. Regenerating lark.env
   // on every service start must not silently drop them.
   let preservedExtras: Record<string, string> = {};
+  // Whitelisted bridge-config keys that the wizard does not own but the operator
+  // may set (cloud ASR). They are NOT extras (TINGWU_/ASR_ are reserved there),
+  // so without this they would be silently erased on every service start.
+  let preservedConfig: Record<string, string> = {};
   try {
-    preservedExtras = parseLarkEnvExtras(await readFile(envPath, "utf8"));
+    const existing = await readFile(envPath, "utf8");
+    preservedExtras = parseLarkEnvExtras(existing);
+    const parsedExisting = parseLarkEnvFile(existing);
+    for (const key of ["TINGWU_ASR_DIR", "ASR_CLOUD_THRESHOLD_SECONDS", "ASR_CLOUD_TASK_TIMEOUT_SECONDS", "ASR_CLOUD_JOB_RETENTION_DAYS"] as const) {
+      const value = parsedExisting[key];
+      if (value !== undefined) {
+        preservedConfig[key] = value;
+      }
+    }
   } catch (error) {
     if (!(typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT")) {
       throw error;
@@ -180,6 +203,7 @@ export async function writeLarkEnvFile(
     `CCTB_LARK_INSTANCE=${quoteEnvValue(instanceName)}`,
     `TAROCUB_INSTANCE=${quoteEnvValue(instanceName)}`,
     `LARK_REQUIRE_MENTION_IN_GROUP=${quoteEnvValue(values.requireMentionInGroup === false ? "false" : "true")}`,
+    ...Object.entries(preservedConfig).map(([key, value]) => `${key}=${quoteEnvValue(value)}`),
     ...Object.entries(preservedExtras).map(([key, value]) => `${key}=${quoteEnvValue(value)}`),
     "",
   ];
@@ -250,8 +274,12 @@ function parseLarkEnvFile(content: string): Partial<LarkRuntimeEnv> {
  * excluded (those are owned by loadLarkRuntimeEnv / written by writeLarkEnvFile).
  * Used both to pass extras through to the engine env and to preserve them across the
  * lark.env regeneration that happens on every service start.
+ *
+ * `dropped` (optional) collects the NAMES of refused keys so the caller can log
+ * them — a silently-ignored operator setting is a support trap. Names only: the
+ * values are secrets.
  */
-function parseLarkEnvExtras(content: string): Record<string, string> {
+function parseLarkEnvExtras(content: string, dropped?: string[]): Record<string, string> {
   const extras: Record<string, string> = {};
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -267,8 +295,13 @@ function parseLarkEnvExtras(content: string): Record<string, string> {
     // bridge namespace. lark.env extras may ONLY carry engine credentials (MCP API
     // tokens like IFIND_TOKEN) — they must never be able to set a variable the bridge
     // itself reads to control its own behaviour (send URL, active-turn state, doc/chat
-    // identity, executables, thread ids, telemetry, …).
-    if (isSupportedLarkEnvKey(key) || isReservedBridgeEnvKey(key) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    // identity, executables, thread ids, telemetry, …) or that changes how the
+    // bridge's own PROCESS loads code/certs/proxies.
+    if (isSupportedLarkEnvKey(key)) {
+      continue;
+    }
+    if (isReservedBridgeEnvKey(key) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      dropped?.push(key);
       continue;
     }
     extras[key] = parseEnvValue(line.slice(equalsIndex + 1).trim());
@@ -278,7 +311,7 @@ function parseLarkEnvExtras(content: string): Record<string, string> {
 
 function isSupportedLarkEnvKey(key: string): key is keyof Pick<
   LarkRuntimeEnv,
-  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE"
+  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "TINGWU_ASR_DIR" | "ASR_CLOUD_THRESHOLD_SECONDS" | "ASR_CLOUD_TASK_TIMEOUT_SECONDS" | "ASR_CLOUD_JOB_RETENTION_DAYS"
 > {
   return key === "LARK_APP_ID" ||
     key === "LARK_APP_SECRET" ||
@@ -288,7 +321,14 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "LARK_REQUIRE_MENTION_IN_GROUP" ||
     key === "CCTB_LARK_DEBUG" ||
     key === "TAROCUB_INSTANCE" ||
-    key === "CODEX_TELEGRAM_INSTANCE";
+    key === "CODEX_TELEGRAM_INSTANCE" ||
+    // Long-audio cloud ASR: whitelisted so lark.env stays the operator-facing
+    // config surface, while TINGWU_/ASR_ remain reserved on the EXTRAS path (an
+    // extra must never redirect the subprocess the bridge itself spawns).
+    key === "TINGWU_ASR_DIR" ||
+    key === "ASR_CLOUD_THRESHOLD_SECONDS" ||
+    key === "ASR_CLOUD_TASK_TIMEOUT_SECONDS" ||
+    key === "ASR_CLOUD_JOB_RETENTION_DAYS";
 }
 
 // Namespaces the bridge process reads to control its OWN behaviour (transport, active-turn
@@ -304,10 +344,52 @@ const RESERVED_BRIDGE_ENV_PREFIXES = [
   "ANTIGRAVITY_",
   "ASR_",
   "TELEGRAM_",
+  // Long-audio cloud ASR (Aliyun Tingwu): TINGWU_ASR_DIR points the bridge at a
+  // directory it EXECUTES a python script from, so it must come from a whitelisted
+  // service-env key or config — never from a lark.env/shared.env extra.
+  "TINGWU_",
 ] as const;
 
+/**
+ * Process-control variables that must never be injected into the BRIDGE's own
+ * process. The prefix denylist above only covers the bridge's own namespaces, so
+ * these standard, prefix-free names would otherwise sail straight through — and
+ * `applyLarkEnvPassthrough` writes into `process.env`, i.e. the bridge's own
+ * environment, not a separate child env. Any one of these changes what code the
+ * process loads (NODE_OPTIONS / LD_PRELOAD / DYLD_INSERT_LIBRARIES / PYTHONPATH),
+ * which binary a subcommand runs (GIT_SSH_COMMAND), where TLS trust comes from
+ * (NODE_EXTRA_CA_CERTS / SSL_CERT_FILE), which endpoint the engine talks to
+ * (ANTHROPIC_BASE_URL), or routes every outbound request through an attacker
+ * (…_PROXY). Matched case-insensitively: the proxy vars are conventionally
+ * lowercase and are read in both cases.
+ */
+const DENIED_PROCESS_CONTROL_ENV_KEYS: ReadonlySet<string> = new Set([
+  "NODE_OPTIONS",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_REPL_EXTERNAL_MODULE",
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "PYTHONPATH",
+  "GIT_SSH_COMMAND",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "ANTHROPIC_BASE_URL",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+]);
+
 function isReservedBridgeEnvKey(key: string): boolean {
-  return RESERVED_BRIDGE_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
+  const upper = key.toUpperCase();
+  if (DENIED_PROCESS_CONTROL_ENV_KEYS.has(upper)) {
+    return true;
+  }
+  // Compare on the uppercased key: every reserved prefix is uppercase, so this is
+  // strictly stricter and a lowercased spelling can't slip past the namespace gate.
+  return RESERVED_BRIDGE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
 }
 
 function parseEnvValue(value: string): string {

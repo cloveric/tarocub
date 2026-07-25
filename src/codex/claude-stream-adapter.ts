@@ -107,7 +107,15 @@ type PendingTurn = {
   approvalAbortController: AbortController;
   abortSignal?: AbortSignal;
   abortHandler?: () => void;
+  /** Inactivity watchdog (see armTurnInactivityWatchdog); re-armed on every byte
+   * the worker emits, so it only fires when the CLI has gone completely silent. */
   timeout?: ReturnType<typeof setTimeout>;
+  /** `/timeout off` (input.disableRuntimeTimeout) — no watchdog for this turn. */
+  inactivityTimeoutDisabled?: boolean;
+  /** Tool calls started by this turn that have not reported a result yet. A turn
+   * with outstanding tool work is still running, so the background-task settle
+   * timer must not treat its silence as "finished". */
+  outstandingToolUseIds: Set<string>;
   backgroundCompletionTimer?: ReturnType<typeof setTimeout>;
 };
 
@@ -160,7 +168,14 @@ const DEFAULT_IDLE_WORKER_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
-// No timeout — complex tasks (image generation, large projects) can run indefinitely
+// There is deliberately NO total-turn cap for Claude: long autonomous tasks
+// (large refactors, image generation, /goal-style runs) are expected to run for
+// hours and must not be cut off. The safety net is an INACTIVITY watchdog: a
+// wedged CLI that emits nothing at all for this long is not working, and without
+// it the turn never settles — holding the cross-process bridge session lock
+// (stale only after 12h) and blocking every channel and cron turn on that
+// session. `/timeout off` (disableRuntimeTimeout) disables it per turn.
+export const CLAUDE_STREAM_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
 
 let nextPendingTurnId = 0;
 
@@ -400,6 +415,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly configPath: string | undefined;
   private readonly workspacePath: string | undefined;
   private readonly idleWorkerTtlMs: number;
+  private readonly turnInactivityTimeoutMs: number | null;
   private readonly backgroundTaskMaxAgeMs: number;
   private readonly disallowedTools: string[];
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -416,6 +432,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       engineHomePath?: string;
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
+      turnInactivityTimeoutMs?: number | null;
       backgroundTaskMaxAgeMs?: number;
       disallowedTools?: string[];
     },
@@ -434,6 +451,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     this.configPath = options?.configPath;
     this.workspacePath = options?.workspacePath;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
+    this.turnInactivityTimeoutMs = options?.turnInactivityTimeoutMs === undefined
+      ? CLAUDE_STREAM_INACTIVITY_TIMEOUT_MS
+      : options.turnInactivityTimeoutMs;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
     this.disallowedTools = options?.disallowedTools ?? [];
 
@@ -559,8 +579,20 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       if (existing.pendingTurn) {
         throw new Error("Cannot reconfigure Claude session while a turn is in flight");
       }
+      // Sweep first: a background task whose completion notification never arrived
+      // lingers for backgroundTaskMaxAgeMs (6h by default) and would otherwise
+      // hard-block every /model, /effort, /approval or workspace change for that
+      // whole window — the idle sweeper only prunes workers it visits.
+      this.pruneExpiredBackgroundTasks(existing, Date.now());
       if (existing.backgroundTasks.size > 0) {
-        throw new Error("Cannot reconfigure Claude session while background tasks are active");
+        const count = existing.backgroundTasks.size;
+        // Phrased so classifyFailure() returns "engine-busy" instead of the
+        // "engine runtime failed, restart the instance" engine-cli message: this
+        // is a transient busy state, not a crash.
+        throw new Error(
+          `Claude session has ${count} background task${count === 1 ? "" : "s"} still running, so the new engine settings cannot be applied yet. ` +
+          `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
+        );
       }
 
       const resumedSessionId = existing.currentSessionId ?? sessionId;
@@ -808,6 +840,11 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         }
 
         if (item.type === "tool_use") {
+          if (typeof item.id === "string" && item.id) {
+            // Tracked so a long SILENT tool call is not mistaken for a finished
+            // turn by the background-task settle timer.
+            worker.pendingTurn.outstandingToolUseIds.add(item.id);
+          }
           this.emitEngineEvent(worker, {
             type: "tool_use",
             toolName: typeof item.name === "string" && item.name ? item.name : "Unknown tool",
@@ -843,6 +880,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       for (const item of parsed.message?.content ?? []) {
         if (item.type !== "tool_result") {
           continue;
+        }
+        if (typeof item.tool_use_id === "string" && item.tool_use_id) {
+          worker.pendingTurn.outstandingToolUseIds.delete(item.tool_use_id);
         }
         this.emitEngineEvent(worker, {
           type: "tool_result",
@@ -924,6 +964,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const resultText = renderBackgroundTaskTurnResult(metadata, text);
     pending.backgroundCompletionTimer = setTimeout(() => {
       if (worker.pendingTurn !== pending) {
+        return;
+      }
+      // The turn is only "finished" if it has no tool call still running. Any
+      // event clears this timer, so the dangerous case is a LONG SILENT tool call:
+      // settling there would resolve the turn with the background task's text and
+      // throw away the real answer (and its usage) that arrives seconds later.
+      // A turn that produced no assistant text of its own has nothing to lose, so
+      // the background task result is still its answer.
+      if (pending.outstandingToolUseIds.size > 0 && pending.assistantText.trim()) {
         return;
       }
       worker.pendingTurn = null;
@@ -1024,11 +1073,16 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         onApprovalRequest: input.onApprovalRequest,
         onEngineEvent: input.onEngineEvent,
         approvalAbortController: new AbortController(),
+        inactivityTimeoutDisabled: input.disableRuntimeTimeout === true,
+        outstandingToolUseIds: new Set<string>(),
         resolve,
         reject,
       };
       worker.pendingTurn = pendingTurn;
       worker.stderrTail = "";
+      // Start the inactivity watchdog now: a CLI that wedges before emitting its
+      // first event must still settle the turn instead of holding the session lock.
+      this.armTurnInactivityWatchdog(worker);
 
       if (input.abortSignal) {
         const onAbort = () => {
@@ -1116,6 +1170,45 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
   private markWorkerActivity(worker: ClaudeWorker): void {
     worker.lastActivityAt = Date.now();
+    // Any byte from the worker (stdout event, stderr line, our own write) proves
+    // the CLI is alive, so the inactivity watchdog restarts from zero.
+    this.armTurnInactivityWatchdog(worker);
+  }
+
+  /**
+   * (Re)arms the per-turn INACTIVITY watchdog. Fires only when the worker has been
+   * completely silent for turnInactivityTimeoutMs, in which case the CLI is wedged:
+   * kill it and reject the turn with a message the failure classifier maps to
+   * `engine-timeout` ("turn became inactive after N minutes"), so the user is told
+   * the turn stalled and how to lift the cap instead of "restart the instance".
+   */
+  private armTurnInactivityWatchdog(worker: ClaudeWorker): void {
+    const pending = worker.pendingTurn;
+    const timeoutMs = this.turnInactivityTimeoutMs;
+    if (!pending || pending.inactivityTimeoutDisabled || timeoutMs === null || timeoutMs <= 0) {
+      return;
+    }
+
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+      pending.timeout = undefined;
+    }
+
+    pending.timeout = setTimeout(() => {
+      pending.timeout = undefined;
+      if (worker.pendingTurn !== pending) {
+        return;
+      }
+
+      const minutes = Math.max(1, Math.round(timeoutMs / 60_000));
+      const error = new Error(
+        `Claude turn became inactive after ${minutes} minutes with no engine output; the wedged CLI was stopped. Send /timeout off before a genuinely long silent task.`,
+      );
+      killProcessTree(worker.child.pid);
+      this.failWorker(worker, error);
+      this.removeWorker(worker);
+    }, timeoutMs);
+    pending.timeout.unref?.();
   }
 
   private reapIdleWorkers(): void {

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { resolveLarkRuntimeConfig } from "../src/lark/config.js";
 import { applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir, writeLarkEnvFile } from "../src/lark/env-file.js";
@@ -222,6 +222,94 @@ describe("Lark env files", () => {
     }
   });
 
+  it("refuses process-control env vars (NODE_OPTIONS, LD_PRELOAD, proxies, …) and the TINGWU_ namespace", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    const instanceName = "ccfgg1";
+    const stateDir = path.join(tempDir, ".cctb", instanceName);
+    // applyLarkEnvPassthrough writes into the BRIDGE's own process env, so a
+    // prefix-free process-control var would change what code the bridge loads,
+    // where its TLS trust comes from, or where its traffic goes.
+    const blocked = [
+      "NODE_OPTIONS",
+      "NODE_EXTRA_CA_CERTS",
+      "NODE_REPL_EXTERNAL_MODULE",
+      "LD_PRELOAD",
+      "LD_LIBRARY_PATH",
+      "DYLD_INSERT_LIBRARIES",
+      "DYLD_LIBRARY_PATH",
+      "PYTHONPATH",
+      "GIT_SSH_COMMAND",
+      "SSL_CERT_FILE",
+      "ANTHROPIC_BASE_URL",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      // lowercase spellings are read by curl/undici just the same
+      "http_proxy",
+      "https_proxy",
+      "no_proxy",
+      // the cloud-ASR dir is EXECUTED from — it must come from a whitelisted
+      // service-env key or config, never from a lark.env extra
+      "TINGWU_ASR_DIR",
+      "TINGWU_APP_KEY",
+    ];
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "lark.env"), [
+        "IFIND_TOKEN=ok-ifind",
+        ...blocked.map((key) => `${key}=pwned-${key}`),
+        "",
+      ].join("\n"), "utf8");
+
+      const target: NodeJS.ProcessEnv = {};
+      const applied = await applyLarkEnvPassthrough({ USERPROFILE: tempDir, CCTB_LARK_INSTANCE: instanceName }, target);
+
+      expect(applied).toEqual(["IFIND_TOKEN"]);
+      for (const key of blocked) {
+        expect(target[key], `${key} must not reach the bridge process`).toBeUndefined();
+        expect(applied).not.toContain(key);
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("logs the NAMES (never the values) of refused lark.env keys so a dead setting is visible", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    const instanceName = "ccfgg1";
+    const stateDir = path.join(tempDir, ".cctb", instanceName);
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args.map((arg) => String(arg)).join(" "));
+    });
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "lark.env"), [
+        "IFIND_TOKEN=ok-ifind",
+        "NODE_OPTIONS=--require=/tmp/evil.js",
+        "CCTB_SEND_URL=http://attacker",
+        "",
+      ].join("\n"), "utf8");
+
+      await applyLarkEnvPassthrough({ USERPROFILE: tempDir, CCTB_LARK_INSTANCE: instanceName }, {});
+
+      const line = logged.find((entry) => entry.includes("NODE_OPTIONS"));
+      expect(line, "a refused key must be logged, not silently ignored").toBeTruthy();
+      expect(line).toContain("lark.env");
+      expect(line).toContain("CCTB_SEND_URL");
+      // Names only — the values are secrets.
+      expect(logged.join("\n")).not.toContain("/tmp/evil.js");
+      expect(logged.join("\n")).not.toContain("http://attacker");
+      expect(logged.join("\n")).not.toContain("ok-ifind");
+    } finally {
+      spy.mockRestore();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("inherits shared engine credentials from ~/.cctb/shared.env for a new instance with no lark.env", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
     try {
@@ -335,6 +423,40 @@ describe("Lark env files", () => {
       expect(target.CCTB_SEND_URL).toBeUndefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("cloud-ASR config keys (whitelisted, not extras)", () => {
+  it("reads TINGWU_ASR_DIR and ASR_CLOUD_* from lark.env and preserves them across regeneration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-env-"));
+    const stateDir = path.join(home, ".cctb", "asrinst");
+    await mkdir(stateDir, { recursive: true });
+    const envPath = path.join(stateDir, "lark.env");
+    await writeFile(envPath, [
+      "LARK_APP_ID=cli_x",
+      "LARK_APP_SECRET=sek",
+      "TINGWU_ASR_DIR=/opt/secrets/tingwu_asr",
+      "ASR_CLOUD_THRESHOLD_SECONDS=600",
+      "IFIND_TOKEN=tok",
+      "",
+    ].join("\n"), "utf8");
+
+    try {
+      // The bridge reads them through the WHITELIST (extras refuse TINGWU_/ASR_,
+      // so an engine-written extra can never redirect the spawned subprocess).
+      const loaded = await loadLarkRuntimeEnv({ HOME: home, CCTB_LARK_INSTANCE: "asrinst" });
+      expect(loaded.TINGWU_ASR_DIR).toBe("/opt/secrets/tingwu_asr");
+      expect(loaded.ASR_CLOUD_THRESHOLD_SECONDS).toBe("600");
+
+      // A service start regenerates lark.env — the operator's ASR config must survive.
+      await writeLarkEnvFile({ HOME: home, CCTB_LARK_INSTANCE: "asrinst" }, { appId: "cli_x", appSecret: "sek" });
+      const rewritten = await readFile(envPath, "utf8");
+      expect(rewritten).toContain('TINGWU_ASR_DIR="/opt/secrets/tingwu_asr"');
+      expect(rewritten).toContain('ASR_CLOUD_THRESHOLD_SECONDS="600"');
+      expect(rewritten).toContain('IFIND_TOKEN="tok"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
     }
   });
 });

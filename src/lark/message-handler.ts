@@ -11,7 +11,13 @@ import { LARK_STEER_DEFAULT_WINDOW_SECONDS, loadInstanceConfig, resolveInstanceW
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { LarkGoalRunController, claimLarkRunSlot, handleLarkCrewWorkflow } from "./bus.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
-import { handleLarkApprovalTextCommand, isLarkApprovalTextCommand, requestLarkApproval } from "./card-actions.js";
+import {
+  dropPendingLarkAttachmentBurst,
+  handleLarkApprovalTextCommand,
+  isLarkApprovalTextCommand,
+  renderLarkDroppedBurstNotice,
+  requestLarkApproval,
+} from "./card-actions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import {
   ELEMENT_CONTENT_MAX_BYTES,
@@ -322,19 +328,35 @@ async function runAcceptedLarkMessage(
     // queued tasks are NOT cancelled (clearPending would skip the whole queue).
     const active = input.runtime.activeRuns.get(normalized.conversationKey);
     active?.abortController.abort();
+    // A pending attachment burst has been ACCEPTED but is still parked in its
+    // quiet window, so it is in neither activeRuns nor the chat queue: /stop used
+    // to report "当前没有正在运行的任务。" and then the burst fired half a second
+    // later anyway. Drop it here (waiters resolved so nothing hangs) and say so.
+    const droppedBurst = dropPendingLarkAttachmentBurst(input.runtime, normalized.conversationKey);
+    if (droppedBurst) {
+      await markCancelledBatchMembersTerminal(input.stateDir, droppedBurst);
+    }
+    const burstNotice = droppedBurst ? renderLarkDroppedBurstNotice(droppedBurst.members.length, messageLocale) : "";
     // When the active run has a live run card, its in-place update to "已中断" is the
     // acknowledgment — skip the redundant "已停止。" text. Send text only when nothing
-    // was running, or the run had no card (fallback) to reflect the stop.
-    if (!active?.hasRunCard) {
-      await input.channel.send(normalized.chatId, { text: renderLarkStopResult(Boolean(active), messageLocale) }, {
+    // was running, or the run had no card (fallback) to reflect the stop. A dropped
+    // burst has no card at all, so it always needs a word.
+    if (!active?.hasRunCard || burstNotice) {
+      const stopText = active?.hasRunCard
+        ? burstNotice
+        : [renderLarkStopResult(Boolean(active) || Boolean(droppedBurst), messageLocale), burstNotice]
+          .filter((part) => part.length > 0)
+          .join("\n");
+      await input.channel.send(normalized.chatId, { text: stopText }, {
         replyTo: normalized.messageId,
         replyInThread: Boolean(normalized.threadId),
       });
     }
     await appendLarkTimelineEvent(input.stateDir, normalized, {
       type: "command.handled",
-      outcome: active ? "success" : "noop",
+      outcome: active || droppedBurst ? "success" : "noop",
       detail: "/stop",
+      ...(droppedBurst ? { metadata: { cancelledPendingBurst: droppedBurst.members.length } } : {}),
     });
     return true;
   }
@@ -575,6 +597,18 @@ async function runAcceptedLarkMessage(
   const effectiveNormalized = queueEscape
     ? { ...normalized, text: stripLarkQueuePrefix(normalized.text) }
     : normalized;
+
+  // FIFO: /q and quoted replies deliberately never JOIN an attachment burst
+  // (shouldBatchLarkMessage excludes both), so with a burst still parked in its
+  // quiet window they used to enqueue AHEAD of images the user sent earlier —
+  // inverting send order and answering the caption before the pictures exist.
+  // Flush the burst first; this message then queues behind it.
+  if (
+    (queueEscape || normalized.replyContext) &&
+    input.runtime.pendingBatches.has(normalized.conversationKey)
+  ) {
+    await flushPendingLarkBatchNow(input, normalized.conversationKey, messageLocale, handleConversationQueueWait);
+  }
 
   // A /q message must never batch (preempt-batch mode would merge it into another
   // turn and break its "runs as its own queued turn" guarantee) and must never
@@ -895,6 +929,24 @@ async function trySteerActiveLarkTurn(
   if (!activeRun) {
     return false;
   }
+  // A live /goal pursuit holds the conversation's activeRuns slot for its WHOLE
+  // life, and ordinary turns ATTACH to it rather than replacing it (see
+  // LarkGoalRunController in bus.ts). Two consequences for steering:
+  //  - The pursuit itself is never steerable. Injecting an unrelated chat message
+  //    into a running pursuit derails the autonomous objective, and the sender
+  //    only ever sees an OK reaction — never an answer. Per the established
+  //    stop design, only /stop and `/goal clear` touch a pursuit.
+  //  - When an ordinary turn IS attached (that is what the engine is actually
+  //    running), steer THAT turn — and age it by ITS startedAt. The slot holder's
+  //    startedAt is the GOAL's start time, so measuring the window against it
+  //    killed steering for the entire conversation for the pursuit's whole life.
+  const attachedTurn = activeRun.abortController instanceof LarkGoalRunController
+    ? activeRun.abortController.liveConcurrentTurn()
+    : null;
+  if (activeRun.goalWatch && !attachedTurn) {
+    return false;
+  }
+  const steerTarget = attachedTurn ?? activeRun;
   // Steering policy is instance config (/steer command): off → always queue;
   // window N seconds (default 30, operator decision 2026-07-12: a task deep in
   // progress must not be derailed mid-flight) → later messages queue as their
@@ -907,8 +959,8 @@ async function trySteerActiveLarkTurn(
   const steerWindowSeconds = steerCfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS;
   if (
     steerWindowSeconds > 0 &&
-    activeRun.startedAt !== undefined &&
-    Date.now() - activeRun.startedAt > steerWindowSeconds * 1000
+    steerTarget.startedAt !== undefined &&
+    Date.now() - steerTarget.startedAt > steerWindowSeconds * 1000
   ) {
     return false;
   }
@@ -1000,7 +1052,9 @@ function scheduleBatchedLarkTurn(
     existing.normalized = {
       ...existing.normalized,
       messageId: normalized.messageId,
-      text: mergeBatchedTexts([...existing.texts, normalized.text]),
+      // Merge on the raw MEMBERS (envelope + body + attachments each), not on the
+      // already-merged text — see mergeBatchedTexts.
+      text: mergeBatchedTexts([...existing.members, normalized]),
       attachments: [...existing.normalized.attachments, ...stampedAttachments],
     };
     existing.texts.push(normalized.text);
@@ -1070,6 +1124,47 @@ async function flushBatchedLarkTurn(
   }
 }
 
+/**
+ * Force-flush a conversation's pending attachment burst NOW, awaiting the turn it
+ * produces. Used by the paths that never JOIN a burst (/q and quoted replies):
+ * without this they enqueue immediately while the burst is still parked in its
+ * quiet window, so the later-sent message runs FIRST. Awaiting the flush keeps
+ * the user's send order (FIFO). flushBatchedLarkTurn settles its own waiters and
+ * never rethrows, so this can't turn a burst failure into a failure here.
+ */
+async function flushPendingLarkBatchNow(
+  input: Parameters<typeof flushBatchedLarkTurn>[0],
+  conversationKey: string,
+  locale: "zh" | "en",
+  onWait: (event: ChatQueueWaitEvent) => Promise<void>,
+): Promise<void> {
+  const batch = input.runtime.pendingBatches.get(conversationKey);
+  if (!batch) {
+    return;
+  }
+  clearTimeout(batch.timer);
+  await flushBatchedLarkTurn(input, conversationKey, locale, onWait);
+}
+
+/**
+ * Terminalize the timeline entries of a burst that was CANCELLED (by /stop)
+ * rather than merged: every member logged input.received and none of them will
+ * ever produce a turn, so without this they stay "in flight" forever for the
+ * active-turn recovery scan.
+ */
+async function markCancelledBatchMembersTerminal(
+  stateDir: string,
+  batch: PendingLarkBatch,
+): Promise<void> {
+  await Promise.allSettled(batch.members.map(async (member) => {
+    await appendLarkTimelineEvent(stateDir, member, {
+      type: "command.handled",
+      outcome: "noop",
+      detail: "batch-cancelled",
+    });
+  }));
+}
+
 async function markMergedBatchMembersTerminal(
   stateDir: string,
   batch: PendingLarkBatch,
@@ -1089,16 +1184,64 @@ async function markMergedBatchMembersTerminal(
   }));
 }
 
-function mergeBatchedTexts(texts: string[]): string {
-  // Image-only burst members contribute empty text — numbering those would
-  // render "#1" headers over nothing. Keep numbering only when 2+ real texts merge.
-  const nonEmpty = texts.map((text) => text.trim()).filter((text) => text.length > 0);
-  if (nonEmpty.length <= 1) {
-    return nonEmpty[0] ?? "";
+/**
+ * Merge a burst's members into ONE prompt.
+ *
+ * Every normalized Lark message is `<lark_context>…</lark_context>` + body +
+ * attachment summary — the envelope is ALWAYS present (message-normalizer
+ * prefixes it unconditionally). Merging the raw normalized texts therefore
+ * produced N conflicting envelopes with N different message_ids, plus `#1/#2/#3`
+ * headers over what was mostly pure metadata; `extractLarkMessageBody` slices at
+ * the FIRST `</lark_context>`, so every downstream body matcher (crew, archive,
+ * commands) then saw garbage. (The old comment here claimed image-only members
+ * "contribute empty text" — they never do; they carry a full envelope plus an
+ * `[image:…]` summary line.)
+ *
+ * So: merge the BODIES, keep exactly ONE envelope — the newest member's, which is
+ * the one whose message_id the merged turn actually replies to/downloads from —
+ * number only when 2+ members carry real text, and append the union of the
+ * attachment summaries once at the end.
+ */
+function mergeBatchedTexts(members: LarkNormalizedBridgeMessage[]): string {
+  const newest = members[members.length - 1];
+  if (!newest) {
+    return "";
   }
-  return nonEmpty
-    .map((text, index) => `#${index + 1}\n${text}`)
-    .join("\n\n");
+  const envelopeEnd = newest.text.indexOf("</lark_context>");
+  const envelope = envelopeEnd === -1
+    ? ""
+    : newest.text.slice(0, envelopeEnd + "</lark_context>".length);
+
+  const bodies = members
+    .map((member) => stripLarkAttachmentSummary(extractLarkMessageBody(member.text), member.attachments).trim())
+    .filter((body) => body.length > 0);
+  const mergedBody = bodies.length > 1
+    ? bodies.map((body, index) => `#${index + 1}\n${body}`).join("\n\n")
+    : bodies[0] ?? "";
+
+  const attachmentSummary = larkAttachmentSummary(members.flatMap((member) => member.attachments));
+  return [envelope, mergedBody, attachmentSummary].filter((part) => part.length > 0).join("\n\n");
+}
+
+/**
+ * Render attachment reference lines exactly as message-normalizer's buildLarkText
+ * does, so a merged burst carries ONE combined summary block instead of one per
+ * member (and so the per-member block can be recognized and stripped).
+ */
+function larkAttachmentSummary(attachments: LarkNormalizedBridgeMessage["attachments"]): string {
+  return attachments
+    .map((attachment) => `[${attachment.kind}:${attachment.fileKey}${attachment.fileName ? ` ${attachment.fileName}` : ""}]`)
+    .join("\n");
+}
+
+/** Remove a member's own trailing attachment-summary block from its body. */
+function stripLarkAttachmentSummary(body: string, attachments: LarkNormalizedBridgeMessage["attachments"]): string {
+  const summary = larkAttachmentSummary(attachments);
+  if (!summary) {
+    return body;
+  }
+  const trimmed = body.trimEnd();
+  return trimmed.endsWith(summary) ? trimmed.slice(0, trimmed.length - summary.length) : body;
 }
 
 function formatLarkDeniedAccessReply(
@@ -2170,6 +2313,14 @@ export async function createLarkRunCardController(input: {
   // last (a late "running" patch can't revert a finished card).
   const THROTTLE_MS = 400;
   let updateTimer: ReturnType<typeof setTimeout> | undefined;
+  // Set the moment a terminal path (finish/fail/interrupt/idleTimeout) begins.
+  // cancelScheduledUpdate only clears timers that exist RIGHT THEN; a
+  // flushElementStream tick already sitting in patchChain runs before the terminal
+  // finalize, finds the structure moved on, and calls scheduleFullUpdate() — arming
+  // a fresh 400ms timer nothing can reach any more, so a stale "running" full-card
+  // patch landed 400ms AFTER the card had been finalized. Once terminal, every
+  // scheduling entry point is a no-op; only finalize itself still patches.
+  let terminal = false;
   let patchChain: Promise<void> = Promise.resolve();
   const enqueuePatch = <T>(fn: () => Promise<T>): Promise<T> => {
     const next = patchChain.then(fn, fn);
@@ -2183,7 +2334,9 @@ export async function createLarkRunCardController(input: {
   const flushElementStream = (): void => {
     elementTimer = undefined;
     void enqueuePatch(async () => {
-      if (!handle || Date.now() < elementStreamRetryAt || degraded) {
+      // `terminal` can flip while this tick sits in the patch chain — a streamed
+      // element write after finalize would put live text back on a finished card.
+      if (terminal || !handle || Date.now() < elementStreamRetryAt || degraded) {
         return;
       }
       const live = liveRunCardStreamElement(state, input.locale);
@@ -2220,6 +2373,9 @@ export async function createLarkRunCardController(input: {
   // shows progress without waiting a full throttle interval; the rest coalesce.
   let firstLiveUpdateDone = false;
   const scheduleFullUpdate = (): void => {
+    if (terminal) {
+      return;
+    }
     if (!firstLiveUpdateDone) {
       firstLiveUpdateDone = true;
       void enqueuePatch(update);
@@ -2232,6 +2388,9 @@ export async function createLarkRunCardController(input: {
     updateTimer.unref?.();
   };
   const scheduleUpdate = (): void => {
+    if (terminal) {
+      return;
+    }
     if (
       elementStreamEnabled && Date.now() >= elementStreamRetryAt && !degraded &&
       remoteStructureSig !== null && firstLiveUpdateDone
@@ -2253,7 +2412,10 @@ export async function createLarkRunCardController(input: {
     }
     scheduleFullUpdate();
   };
+  // Enter the terminal phase: no further scheduling, and any timer armed so far
+  // is cleared. Idempotent, so a fail() after an interrupt() is still safe.
   const cancelScheduledUpdate = (): void => {
+    terminal = true;
     if (updateTimer) {
       clearTimeout(updateTimer);
       updateTimer = undefined;
@@ -2328,6 +2490,11 @@ export async function createLarkRunCardController(input: {
   };
   return {
     apply: async (event) => {
+      // A late engine event after the card was finalized must not mutate the
+      // rendered state, nor re-arm a patch that would revert the finished card.
+      if (terminal) {
+        return;
+      }
       state = applyLarkEngineEvent(state, event);
       // Coalesced, non-blocking: never await the live patch.
       scheduleUpdate();

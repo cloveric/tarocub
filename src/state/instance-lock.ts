@@ -5,6 +5,7 @@ import { unlinkSync, readFileSync } from "node:fs";
 
 import { InstanceLockRecordSchema } from "./instance-lock-schema.js";
 import { withFileMutex } from "./file-mutex.js";
+import { ensureStateDirPermissions, STATE_DIR_MODE, STATE_FILE_MODE } from "./state-permissions.js";
 
 const INSTANCE_LOCK_FILENAME = "instance.lock.json";
 
@@ -99,7 +100,7 @@ async function removeStaleLock(filePath: string): Promise<void> {
 }
 
 async function writeExclusiveLock(filePath: string, record: string): Promise<void> {
-  await writeFile(filePath, record, { encoding: "utf8", flag: "wx" });
+  await writeFile(filePath, record, { encoding: "utf8", flag: "wx", mode: STATE_FILE_MODE });
 }
 
 export function resolveInstanceLockPath(stateDir: string): string {
@@ -107,7 +108,10 @@ export function resolveInstanceLockPath(stateDir: string): string {
 }
 
 export async function acquireInstanceLock(stateDir: string, pid: number = process.pid): Promise<InstanceLockHandle> {
-  await mkdir(stateDir, { recursive: true });
+  await mkdir(stateDir, { recursive: true, mode: STATE_DIR_MODE });
+  // Service boot hook: repair any state dir/files an older build created 0755/0644
+  // before this process starts writing bot tokens and sessions into them.
+  await ensureStateDirPermissions(stateDir);
 
   const filePath = resolveInstanceLockPath(stateDir);
   const token = randomUUID();

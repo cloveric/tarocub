@@ -143,7 +143,11 @@ export async function handleDelegationTelegramCommand(input: {
         text: btwCmd.prompt,
         files: [],
         onEngineEvent: context.onEngineEvent,
-        sessionIdOverride: `btw-${randomUUID()}`,
+        // Must carry the `telegram-` marker: every adapter's
+        // isLogicalTelegramSessionId() treats anything else as an EXISTING
+        // session to resume, so a bare `btw-<uuid>` made Claude run
+        // `-r btw-…` → "not a UUID" and the side question failed outright.
+        sessionIdOverride: `telegram-btw-${randomUUID()}`,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
       const chunks = chunkTelegramMessage(result.text);

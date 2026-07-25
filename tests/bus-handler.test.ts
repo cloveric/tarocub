@@ -87,8 +87,12 @@ describe("createBusTalkHandler", () => {
       expect(handleAuthorizedMessage).toHaveBeenCalledTimes(2);
       const firstOverride = handleAuthorizedMessage.mock.calls[0]?.[0]?.sessionIdOverride;
       const secondOverride = handleAuthorizedMessage.mock.calls[1]?.[0]?.sessionIdOverride;
-      expect(firstOverride).toMatch(/^bus-/);
-      expect(secondOverride).toMatch(/^bus-/);
+      // The `telegram-` prefix is the shared "start a FRESH engine session" marker
+      // every adapter checks (isLogicalTelegramSessionId); a bare `bus-<uuid>` was
+      // treated as an existing session id and made Claude/process-Codex/Antigravity
+      // try to resume it. It is still ephemeral: sessionIdOverride is never persisted.
+      expect(firstOverride).toMatch(/^telegram-bus-/);
+      expect(secondOverride).toMatch(/^telegram-bus-/);
       expect(firstOverride).not.toBe(secondOverride);
     } finally {
       await removeTempRoot(root);

@@ -30,7 +30,29 @@ import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 
 type LarkSendPathKind = "file" | "image" | "audio" | "video";
-type LarkFileRejectReason = "outside-workspace" | "not-found" | "permission-denied" | "read-error" | "too-large" | "upload-failed";
+type LarkFileRejectReason = "outside-workspace" | "credentials-file" | "not-found" | "permission-denied" | "read-error" | "too-large" | "upload-failed";
+
+// Defense in depth for `[send-file:]` / send.file: dotenv files and private keys
+// are refused no matter where they sit — inside the workspace, inside the request
+// output dir, or under CCTB_LARK_ALLOW_ANY_FILE_PATH=1. The operator's Aliyun
+// keys lived inside a sandbox root for days; one injected tag must not be able to
+// turn that misplacement into an exfiltration.
+const CREDENTIALS_FILE_NAME_PATTERNS: RegExp[] = [
+  /^\.env(?:\.|$)/i,
+  /^id_rsa$/i,
+  /^id_ed25519$/i,
+  /\.pem$/i,
+  /\.key$/i,
+];
+
+function isCredentialsStyleFileName(fileName: string): boolean {
+  return CREDENTIALS_FILE_NAME_PATTERNS.some((pattern) => pattern.test(fileName));
+}
+
+/** True when either the requested path or its resolved target is credential-shaped. */
+function isCredentialsStylePath(...filePaths: Array<string | undefined>): boolean {
+  return filePaths.some((filePath) => Boolean(filePath) && isCredentialsStyleFileName(path.basename(filePath!)));
+}
 
 // Feishu rejects bot file uploads above ~30MB (HTTP 400 with no useful message).
 // Checked up front so an oversize file gets a precise "split it" notice instead
@@ -178,6 +200,18 @@ export async function deliverLarkResponse(input: {
       const filePath = match.path;
       try {
         const real = await realpath(filePath);
+        if (isCredentialsStylePath(filePath, real)) {
+          await appendLarkFileRejectedTimeline(input, {
+            path: filePath,
+            realPath: real,
+            reason: "credentials-file",
+            kind: match.preferPhoto ? "image" : "file",
+          });
+          await input.channel.send(input.chatId, {
+            text: renderLarkFileDeliveryError("credentials-file", locale, { fileName: path.basename(filePath) }),
+          }, replyOptions);
+          continue;
+        }
         if (
           !input.allowAnyAbsolutePath &&
           !larkAnyFilePathAllowed() &&
@@ -708,6 +742,18 @@ async function sendLarkPath(input: {
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
+  if (isCredentialsStylePath(input.filePath, real)) {
+    await appendLarkFileRejectedTimeline(input, {
+      path: input.filePath,
+      realPath: real,
+      reason: "credentials-file",
+      kind: input.kind,
+    });
+    await input.channel.send(input.chatId, {
+      text: renderLarkFileDeliveryError("credentials-file", input.locale, { fileName: path.basename(input.filePath) }),
+    }, larkReplyOptions(input.replyTo, input.replyInThread));
+    return false;
+  }
   if (!larkAnyFilePathAllowed() && !prefixes.some((prefix) => real.startsWith(prefix))) {
     await appendLarkFileRejectedTimeline(input, {
       path: input.filePath,
@@ -1131,6 +1177,8 @@ function renderLarkFileDeliveryError(
     switch (reason) {
       case "outside-workspace":
         return `This file is outside the allowed send directory — a path restriction, not a send failure. Copy it into ${dir} and resend (only files under that directory can be sent), or set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 on this instance to allow any path.`;
+      case "credentials-file":
+        return `Refusing to send a credentials-style file${name ? ` (${name})` : ""}. Dotenv files and private keys (.env*, *.pem, *.key, id_rsa, id_ed25519) are never sendable — not even from inside the workspace, and not with CCTB_LARK_ALLOW_ANY_FILE_PATH=1. Copy only the specific non-secret values you need into a normal file.`;
       case "not-found":
         return `File was not sent: the file does not exist${name ? ` (${name})` : ""}. The sender referenced a path that was never created.`;
       case "permission-denied":
@@ -1146,6 +1194,8 @@ function renderLarkFileDeliveryError(
   switch (reason) {
     case "outside-workspace":
       return `该文件不在允许发送的目录内——这是路径限制，不是发送失败。请把文件复制到 ${dir} 再发（只有该目录下的文件可直接发送），或在该实例设置 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 放开任意路径。`;
+    case "credentials-file":
+      return `拒绝发送凭据类文件${name ? `（${name}）` : ""}：.env* / *.pem / *.key / id_rsa / id_ed25519 这类文件永远不会被发送——即使它在工作区内，也不受 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 影响。如确需分享，请只把不涉密的内容单独写入普通文件。`;
     case "not-found":
       return `文件未发送：文件不存在${name ? `（${name}）` : ""}。发送方引用了一个从未生成的路径。`;
     case "permission-denied":
@@ -1539,7 +1589,61 @@ function decorateRawLarkCard(
   // Runs even without a conversationKey: the decoration also SANITIZES
   // engine-authored cctb_lark callbacks, and skipping it would ship them
   // verbatim (see the security note in decorateLarkCardNode).
-  return decorateLarkCardNode(card, conversationKey, bridgeChatType, replyInThread) as Record<string, unknown>;
+  const decorated = decorateLarkCardNode(card, conversationKey, bridgeChatType, replyInThread);
+  // SECURITY (confused deputy, part 2): decorateLarkCardNode only sanitizes
+  // `tag: "button"` nodes, but a callback payload can ride on ANY interactive
+  // Feishu element — Card 2.0 select_static / multi_select_static / checker /
+  // interactive_container / img `behaviors[].value`, Card 1.0 action-module
+  // overflow and select_static `options[].value`, and arbitrarily nested
+  // containers. Those all used to ship VERBATIM, so one operator tap on an
+  // engine-authored "interactive_container" could run a privileged bridge action
+  // (config / board / resume …) against any conversation. Walk the WHOLE decorated
+  // tree and rewrite every object carrying a cctb_lark key, wherever it sits.
+  // Idempotent over the button path above (re-sanitizing a sanitized choice
+  // callback yields the same object). Only engine-supplied raw cards reach here;
+  // bridge-authored cards are built by our own renderers and keep their
+  // privileged callbacks untouched.
+  return sanitizeEngineCallbackNode(
+    decorated,
+    null,
+    conversationKey,
+    bridgeChatType,
+    replyInThread,
+  ) as Record<string, unknown>;
+}
+
+/**
+ * Recursively rewrite every object that carries a `cctb_lark` key through
+ * `sanitizedEngineChoiceCallback`. `owner` is the immediate parent node, used
+ * only to recover a human label (a button/option's `text.content`) when the
+ * engine's payload has none.
+ */
+function sanitizeEngineCallbackNode(
+  value: unknown,
+  owner: Record<string, unknown> | null,
+  conversationKey: string | undefined,
+  bridgeChatType: "private" | "group" | undefined,
+  replyInThread: boolean | undefined,
+): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeEngineCallbackNode(item, owner, conversationKey, bridgeChatType, replyInThread));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const node = value as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(node, "cctb_lark")) {
+    return sanitizedEngineChoiceCallback(node, owner ?? node, conversationKey, bridgeChatType, replyInThread);
+  }
+  // Carry the nearest LABELLED ancestor down (a button/option carries `text`, the
+  // `behaviors[]` wrapper in between does not), so the recovered label is the one
+  // the operator actually sees on the control.
+  const nextOwner = Object.prototype.hasOwnProperty.call(node, "text") ? node : owner;
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(node)) {
+    sanitized[key] = sanitizeEngineCallbackNode(item, nextOwner, conversationKey, bridgeChatType, replyInThread);
+  }
+  return sanitized;
 }
 
 function decorateLarkCardNode(

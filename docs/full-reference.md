@@ -478,7 +478,11 @@ Inside an active Telegram turn, `cctb send` uses the turn-scoped side-channel an
 ```bash
 telegram send --image /absolute/path/to/image.png
 telegram send --file /absolute/path/to/report.pdf
-telegram send --chat 123456789 --file /absolute/path/to/report.pdf
+# NOTE: `telegram send` is turn-scoped only — it works from INSIDE an engine
+# turn (the bridge injects CCTB_SEND_URL/CCTB_SEND_TOKEN) and targets that
+# turn's own chat. `--chat` / `--instance <other>` are refused, and files must
+# live under the workspace sandbox.
+telegram send --file /absolute/path/inside/workspace/report.pdf
 telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.png
 ```
 
@@ -488,7 +492,7 @@ Current delivery rules:
 - `[tool:...]` examples are generated from the registered tool schema/examples; explicit fenced `tool-call` blocks execute through the same parser.
 - `cctb send` remains available for turn-scoped CLI workflows and is internally routed through the same send tool layer.
 - Use `telegram send` when you need the same explicit delivery command outside an active turn, or when the turn-scoped `cctb` helper is unavailable.
-- Explicit send commands accept any readable absolute file path.
+- In-turn side-channel sends accept any readable absolute path; the `cctb send` CLI wrapper does not (workspace sandbox applies).
 - Legacy `[send-file:/absolute/path]` / `[send-image:/absolute/path]` tags are accepted only for older sessions and copied historical output. Do not use them in new agent instructions, system prompts, or examples.
 - Small text/code files can still use the `file:name.ext` fenced-block form.
 - The helper is scoped to one Telegram turn. It will not work after the turn finishes.

@@ -18,6 +18,66 @@ const ARCHIVE_VERSION = 1;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB per file cap to avoid runaway backups
 const MAX_HEADER_SIZE = 16 * 1024 * 1024;
 
+/**
+ * Directories excluded from an instance backup by default.
+ *
+ * A live instance state dir is 3+ GB, almost all of it regenerable: the engine
+ * workspace's `node_modules` / `.venv*` / `.git`, plus bridge scratch
+ * (`.lark-out`, `.lark-files`, `asr-jobs`). `createArchive` reads every file
+ * into RAM before gzipping, so without these excludes `telegram backup` on a
+ * real instance is an OOM waiting to happen — and the resulting archive is
+ * mostly noise. What matters (config, access, sessions, cron, board, usage) is
+ * tiny and always included.
+ *
+ * Matched by directory NAME at any depth, so `workspace/node_modules` and
+ * `workspace/pkg/sub/node_modules` are both covered.
+ */
+export const ARCHIVE_EXCLUDED_DIRECTORY_NAMES: readonly string[] = [
+  "node_modules",
+  ".git",
+  ".lark-out",
+  ".lark-files",
+  "asr-jobs",
+];
+
+/** Directory-name prefixes excluded at any depth (`.venv`, `.venv3.12`, …). */
+export const ARCHIVE_EXCLUDED_DIRECTORY_PREFIXES: readonly string[] = [".venv"];
+
+/**
+ * Log files (and their rotations) excluded by default: `service.log`,
+ * `timeline.log.jsonl`, `audit.log.jsonl.3`, … Append-only operational history,
+ * up to 60 MB per instance, and never needed to restore a working bot.
+ */
+export const ARCHIVE_EXCLUDED_FILE_PATTERN = /\.log(?:\.|$)/;
+
+/** Human-readable summary of the default exclusions, for command output. */
+export const ARCHIVE_EXCLUSION_SUMMARY =
+  `${ARCHIVE_EXCLUDED_DIRECTORY_NAMES.join(", ")}, ${ARCHIVE_EXCLUDED_DIRECTORY_PREFIXES.map((prefix) => `${prefix}*`).join(", ")} (any depth) and *.log*`;
+
+export interface ArchiveExclusionReport {
+  /** Relative paths of directories that were skipped, in walk order. */
+  excludedDirectories: string[];
+  /** Files skipped because they exceed the per-file cap. */
+  skippedOversizeFiles: Array<{ path: string; size: number }>;
+  /** Number of log files skipped by ARCHIVE_EXCLUDED_FILE_PATTERN. */
+  excludedLogFileCount: number;
+}
+
+export interface CreateArchiveResult extends ArchiveExclusionReport {
+  fileCount: number;
+  uncompressedBytes: number;
+  archiveBytes: number;
+}
+
+function isExcludedDirectoryName(name: string): boolean {
+  return ARCHIVE_EXCLUDED_DIRECTORY_NAMES.includes(name) ||
+    ARCHIVE_EXCLUDED_DIRECTORY_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+function toRelativePosixPath(root: string, full: string): string {
+  return path.relative(root, full).replace(/\\/g, "/");
+}
+
 interface ArchiveHeader {
   version: number;
   createdAt: string;
@@ -95,7 +155,11 @@ function parseArchiveHeader(buffer: Buffer): { header: ArchiveHeader; bodyStart:
   };
 }
 
-async function walkDirectory(root: string, current: string = root): Promise<string[]> {
+async function walkDirectory(
+  root: string,
+  current: string = root,
+  report?: ArchiveExclusionReport,
+): Promise<string[]> {
   const results: string[] = [];
   let entries: string[];
   try {
@@ -110,20 +174,40 @@ async function walkDirectory(root: string, current: string = root): Promise<stri
       continue; // skip symlinks to prevent traversal outside state dir
     }
     if (stats.isDirectory()) {
-      const nested = await walkDirectory(root, full);
+      if (report && isExcludedDirectoryName(entry)) {
+        // Heavy + regenerable: never descend (a node_modules walk alone can be
+        // hundreds of thousands of lstat calls).
+        report.excludedDirectories.push(toRelativePosixPath(root, full));
+        continue;
+      }
+      const nested = await walkDirectory(root, full, report);
       for (const filePath of nested) {
         results.push(filePath);
       }
     } else if (stats.isFile()) {
+      if (report && ARCHIVE_EXCLUDED_FILE_PATTERN.test(entry)) {
+        report.excludedLogFileCount += 1;
+        continue;
+      }
       results.push(full);
     }
   }
   return results;
 }
 
-export async function createArchive(sourceDir: string, outputPath: string): Promise<{ fileCount: number; uncompressedBytes: number; archiveBytes: number }> {
+export async function createArchive(
+  sourceDir: string,
+  outputPath: string,
+  options: { applyDefaultExclusions?: boolean } = {},
+): Promise<CreateArchiveResult> {
+  const applyDefaultExclusions = options.applyDefaultExclusions !== false;
   const rootName = path.basename(sourceDir);
-  const files = await walkDirectory(sourceDir);
+  const report: ArchiveExclusionReport = {
+    excludedDirectories: [],
+    skippedOversizeFiles: [],
+    excludedLogFileCount: 0,
+  };
+  const files = await walkDirectory(sourceDir, sourceDir, applyDefaultExclusions ? report : undefined);
 
   const fileBuffers: Buffer[] = [];
   const manifestFiles: ArchiveHeader["files"] = [];
@@ -131,11 +215,20 @@ export async function createArchive(sourceDir: string, outputPath: string): Prom
 
   for (const filePath of files) {
     const stats = await lstat(filePath);
-    if (stats.isSymbolicLink() || stats.size > MAX_FILE_SIZE) {
-      continue; // skip files that are too large to safely backup
+    if (stats.isSymbolicLink()) {
+      continue;
+    }
+    if (stats.size > MAX_FILE_SIZE) {
+      // Report it: silently dropping a file from a backup the operator believes
+      // is complete is how a restore discovers the gap far too late.
+      report.skippedOversizeFiles.push({
+        path: toRelativePosixPath(sourceDir, filePath),
+        size: stats.size,
+      });
+      continue;
     }
     const content = await readFile(filePath);
-    const relPath = path.relative(sourceDir, filePath).replace(/\\/g, "/");
+    const relPath = toRelativePosixPath(sourceDir, filePath);
     manifestFiles.push({
       path: relPath,
       size: content.length,
@@ -170,6 +263,9 @@ export async function createArchive(sourceDir: string, outputPath: string): Prom
     fileCount: manifestFiles.length,
     uncompressedBytes: uncompressed,
     archiveBytes: compressed.length,
+    excludedDirectories: report.excludedDirectories,
+    skippedOversizeFiles: report.skippedOversizeFiles,
+    excludedLogFileCount: report.excludedLogFileCount,
   };
 }
 

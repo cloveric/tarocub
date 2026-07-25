@@ -105,7 +105,11 @@ Before committing or pushing, verify that **none** of the following appear in co
 
 Run this check before pushing:
 ```bash
-git diff --cached | grep -iE 'ghp_|sk-ant-|bot[0-9]{8,}:[A-Za-z0-9_-]{30,}|TELEGRAM_BOT_TOKEN=' 
+# NOTE: use /usr/bin/grep explicitly — an interactive shell may alias/shadow `grep`
+# (ugrep with --ignore-files silently returned ZERO on a history that really had 7 hits).
+# The token pattern must NOT require a literal "bot" prefix: a raw BotFather token
+# (<digits>:<35 chars>) is exactly what leaked once and that form never matched.
+git diff --cached | /usr/bin/grep -inE 'ghp_[A-Za-z0-9]{20,}|sk-ant-|LTAI[A-Za-z0-9]{10,}|ALIBABA_CLOUD_ACCESS_KEY|TINGWU_APP_KEY=[A-Za-z0-9]|OSSAccessKeyId|[0-9]{8,10}:[A-Za-z0-9_-]{35}|TELEGRAM_BOT_TOKEN=[A-Za-z0-9]' 
 ```
 If it matches anything, fix before committing.
 

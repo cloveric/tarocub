@@ -1,11 +1,42 @@
 import { classifyFailure } from "../runtime/error-classification.js";
+import { formatLarkFileSize, isLarkAttachmentTooLargeError } from "./files.js";
 import type { Locale } from "../telegram/message-renderer.js";
+
+const ATTACHMENT_KIND_LABELS_ZH: Record<string, string> = {
+  image: "图片",
+  audio: "音频",
+  video: "视频",
+  file: "文件",
+};
+
+/**
+ * An oversize inbound attachment gets its own message: the generic file-workflow
+ * text ("换一个文件") does not tell the user what actually happened, and the
+ * generic prepare text ("准备飞书消息时失败") is actively misleading.
+ */
+function renderLarkAttachmentTooLarge(error: unknown, locale: Locale): string | undefined {
+  if (!isLarkAttachmentTooLargeError(error)) {
+    return undefined;
+  }
+  const size = formatLarkFileSize(error.attachmentBytes);
+  const limit = formatLarkFileSize(error.limitBytes);
+  if (locale === "en") {
+    const kind = error.attachmentKind;
+    return `This ${kind} is ${size}, over the ${limit} a Feishu bot can download. Please compress or split it and send again.`;
+  }
+  const kind = ATTACHMENT_KIND_LABELS_ZH[error.attachmentKind] ?? "文件";
+  return `这个${kind} ${size}，超过飞书机器人可下载的上限（${limit}），请压缩或切分后再发。`;
+}
 
 export function renderLarkUserFacingError(
   error: unknown,
   phase: "prepare" | "engine" | "tool",
   locale: Locale = "zh",
 ): string {
+  const tooLarge = renderLarkAttachmentTooLarge(error, locale);
+  if (tooLarge) {
+    return tooLarge;
+  }
   const category = classifyFailure(error);
   if (locale === "en") {
     if (category === "auth") {

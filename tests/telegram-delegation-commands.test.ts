@@ -155,7 +155,9 @@ describe("handleDelegationTelegramCommand", () => {
       });
 
       const override = handleAuthorizedMessage.mock.calls[0]?.[0]?.sessionIdOverride;
-      expect(override).toMatch(/^btw-/);
+      // Must keep the `telegram-` marker every adapter checks for a FRESH
+      // session — a bare `btw-<uuid>` was resumed instead and failed the turn.
+      expect(override).toMatch(/^telegram-btw-/);
     } finally {
       await removeTempRoot(root);
     }

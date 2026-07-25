@@ -50,7 +50,8 @@ function redactLifecycleEvent(event: ServiceLifecycleEvent): ServiceLifecycleEve
 
 export function appendServiceLifecycleEventSync(stateDir: string, event: ServiceLifecycleEvent): void {
   try {
-    mkdirSync(stateDir, { recursive: true });
+    // 0700/0600: the lifecycle log records instance names, pids and error detail.
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     const record = {
       timestamp: new Date().toISOString(),
       pid: process.pid,
@@ -60,7 +61,7 @@ export function appendServiceLifecycleEventSync(stateDir: string, event: Service
     appendFileSync(
       path.join(stateDir, SERVICE_LIFECYCLE_LOG_FILE),
       `${JSON.stringify(record)}\n`,
-      "utf8",
+      { encoding: "utf8", mode: 0o600 },
     );
   } catch {
     // Lifecycle logging must never take the bot down.

@@ -1,30 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import { larkAgentInstructions, localAsrAgentInstruction } from "../src/lark/agent-instructions.js";
+import { cloudAsrAgentInstruction, larkAgentInstructions, localAsrAgentInstruction } from "../src/lark/agent-instructions.js";
 
 describe("larkAgentInstructions", () => {
   it("keeps the injected Lark system prompt compact enough for every-turn use", () => {
     const instructions = larkAgentInstructions();
 
-    // Bound covers the optional local-ASR line, which is appended on machines
-    // where an ASR backend is actually installed (e.g. the dev box running the
-    // suite); CI has neither the env nor the CLI files, so it stays absent there.
-    expect(instructions.length).toBeLessThan(2400);
+    // Bound covers the two optional ASR lines, appended only where the machine
+    // actually has a local ASR backend / a configured Tingwu dir (e.g. the dev
+    // box running the suite); CI has neither, so both stay absent there.
+    expect(instructions.length).toBeLessThan(2600);
     expect(instructions.split("\n").length).toBeLessThanOrEqual(10);
   });
 
   it("tells the agent to use the local ASR (not whisper) for its own transcription when one is configured", () => {
     const previous = process.env.ASR_HTTP_URL;
-    const previousTingwu = process.env.TINGWU_ASR_DIR;
     process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
-    process.env.TINGWU_ASR_DIR = "/tmp/tingwu";
     try {
       const asr = localAsrAgentInstruction();
       expect(asr).toBeDefined();
       expect(asr).toContain("http://127.0.0.1:8412/transcribe");
       expect(asr).toContain("whisper");
-      expect(asr).toContain(">=15 min");
-      expect(asr).toContain("强制本地转写 / 强制云端转写");
       // It is wired into the injected Lark prompt when ASR is available.
       expect(larkAgentInstructions()).toContain("do NOT default to whisper");
     } finally {
@@ -32,6 +28,42 @@ describe("larkAgentInstructions", () => {
         delete process.env.ASR_HTTP_URL;
       } else {
         process.env.ASR_HTTP_URL = previous;
+      }
+    }
+  });
+
+  it("advertises cloud long-audio routing on TINGWU_ASR_DIR alone, with reachable force-keyword wording", () => {
+    const previousHttp = process.env.ASR_HTTP_URL;
+    const previousCli = process.env.ASR_CLI_PYTHON;
+    const previousTingwu = process.env.TINGWU_ASR_DIR;
+    // No local ASR at all: the cloud note must NOT be gated on it.
+    delete process.env.ASR_HTTP_URL;
+    process.env.ASR_CLI_PYTHON = "/nonexistent/python";
+    process.env.TINGWU_ASR_DIR = "/tmp/tingwu";
+    try {
+      expect(localAsrAgentInstruction()).toBeUndefined();
+      const cloud = cloudAsrAgentInstruction();
+      expect(cloud).toBeDefined();
+      expect(cloud).toContain(">=15 min");
+      expect(cloud).toContain("强制本地转写/强制云端转写");
+      // The advertised trigger must match what the router can actually see: a
+      // bare voice note has no caption, so the keyword has to travel with it.
+      expect(cloud).toContain("same message or burst");
+      expect(larkAgentInstructions()).toContain("Aliyun Tingwu");
+
+      delete process.env.TINGWU_ASR_DIR;
+      expect(cloudAsrAgentInstruction()).toBeUndefined();
+      expect(larkAgentInstructions()).not.toContain("Aliyun Tingwu");
+    } finally {
+      if (previousHttp === undefined) {
+        delete process.env.ASR_HTTP_URL;
+      } else {
+        process.env.ASR_HTTP_URL = previousHttp;
+      }
+      if (previousCli === undefined) {
+        delete process.env.ASR_CLI_PYTHON;
+      } else {
+        process.env.ASR_CLI_PYTHON = previousCli;
       }
       if (previousTingwu === undefined) {
         delete process.env.TINGWU_ASR_DIR;

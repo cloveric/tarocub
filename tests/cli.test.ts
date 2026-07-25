@@ -3339,16 +3339,13 @@ describe("runCli", () => {
     }
   });
 
-  it("sends attachments through the configured instance when no active turn side-channel is present", async () => {
+  // `cctb send` without the turn-scoped side channel used to be a universal
+  // sender (any --instance token, any --chat, any absolute path). It now refuses;
+  // the surviving turn-scoped behaviour is covered by tests/configured-send-guard.test.ts.
+  it("refuses configured send when no active turn side-channel is present", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
-    const messages: string[] = [];
     const filePath = path.join(tempDir, "project", "chart.png");
-    const api = {
-      sendMessage: vi.fn(),
-      sendDocument: vi.fn(),
-      sendPhoto: vi.fn(),
-      sendVoice: vi.fn(),
-    };
+    const readConfiguredBotToken = vi.fn().mockResolvedValue("bot-token");
     const deliverTelegramResponse = vi.fn().mockResolvedValue(1);
 
     try {
@@ -3361,7 +3358,7 @@ describe("runCli", () => {
         updatedAt: new Date().toISOString(),
       });
 
-      const handled = await runCli([
+      await expect(runCli([
         "send",
         "--message",
         "Chart ready",
@@ -3369,100 +3366,15 @@ describe("runCli", () => {
         filePath,
       ], {
         env: { USERPROFILE: tempDir },
-        logger: {
-          log: (message) => messages.push(message),
-        },
         sendDeps: {
           cwd: path.join(tempDir, "project"),
-          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
-          createTelegramApi: vi.fn().mockReturnValue(api),
+          readConfiguredBotToken,
           deliverTelegramResponse,
         },
-      });
+      })).rejects.toThrow("cctb send requires the turn-scoped side channel");
 
-      expect(handled).toBe(true);
-      expect(deliverTelegramResponse).toHaveBeenCalledWith(
-        api,
-        84,
-        `Chart ready\n[send-file:${filePath}]`,
-        path.join(tempDir, ".cctb", "default", "inbox"),
-        path.join(tempDir, "project"),
-        undefined,
-        "en",
-        expect.objectContaining({
-          allowAnyAbsolutePath: true,
-        }),
-      );
-      expect(messages).toEqual(["Sent to Telegram chat 84 (1 file)."]);
-    } finally {
-      await removeTempRoot(tempDir);
-    }
-  });
-
-  it("surfaces configured send rejection details when a requested file cannot be delivered", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
-    const missingPath = path.join(tempDir, "project", "missing.pdf");
-    const api = {
-      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
-      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
-    };
-
-    try {
-      await mkdir(path.dirname(missingPath), { recursive: true });
-
-      await expect(runCli([
-        "send",
-        "--chat",
-        "84",
-        "--file",
-        missingPath,
-      ], {
-        env: { USERPROFILE: tempDir },
-        sendDeps: {
-          cwd: path.join(tempDir, "project"),
-          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
-          createTelegramApi: vi.fn().mockReturnValue(api),
-        },
-      })).rejects.toThrow(`1 file not delivered: ${missingPath} — not-found`);
-      expect(api.sendMessage).toHaveBeenCalledWith(84, expect.stringContaining(missingPath));
-      expect(api.sendDocument).not.toHaveBeenCalled();
-    } finally {
-      await removeTempRoot(tempDir);
-    }
-  });
-
-  it("fails configured send with a readable error for oversized files", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
-    const largePath = path.join(tempDir, "project", "large.bin");
-    const api = {
-      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
-      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
-      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
-    };
-
-    try {
-      await mkdir(path.dirname(largePath), { recursive: true });
-      await writeFile(largePath, "");
-      await truncate(largePath, 50_000_001);
-
-      await expect(runCli([
-        "send",
-        "--chat",
-        "84",
-        "--file",
-        largePath,
-      ], {
-        env: { USERPROFILE: tempDir },
-        sendDeps: {
-          cwd: path.join(tempDir, "project"),
-          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
-          createTelegramApi: vi.fn().mockReturnValue(api),
-        },
-      })).rejects.toThrow(`1 file not delivered: ${largePath} — too-large`);
-      expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      expect(api.sendMessage).toHaveBeenCalledWith(84, expect.stringContaining("too large"));
-      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(readConfiguredBotToken).not.toHaveBeenCalled();
+      expect(deliverTelegramResponse).not.toHaveBeenCalled();
     } finally {
       await removeTempRoot(tempDir);
     }
@@ -3480,8 +3392,6 @@ describe("runCli", () => {
         "send",
         "--instance",
         "bot2",
-        "--chat",
-        "84",
         "--message",
         "Chart ready",
         "--file",
@@ -3489,6 +3399,7 @@ describe("runCli", () => {
       ], {
         env: {
           USERPROFILE: tempDir,
+          CODEX_TELEGRAM_INSTANCE: "bot2",
           CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
           CCTB_SEND_TOKEN: "secret",
         },
@@ -3528,44 +3439,12 @@ describe("runCli", () => {
 
     try {
       await expect(runCli(["send"], {
-        env: { USERPROFILE: tempDir },
-      })).rejects.toThrow("Usage: send [--message <text>] [--image <path>] [--file <path>] [text]");
-    } finally {
-      await removeTempRoot(tempDir);
-    }
-  });
-
-  it("requires --chat for configured send when an instance has multiple sessions", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
-
-    try {
-      const store = new SessionStore(path.join(tempDir, ".cctb", "default", "session.json"));
-      const now = new Date().toISOString();
-      await store.upsert({
-        telegramChatId: 84,
-        codexSessionId: "telegram-84",
-        status: "idle",
-        updatedAt: now,
-      });
-      await store.upsert({
-        telegramChatId: 85,
-        codexSessionId: "telegram-85",
-        status: "idle",
-        updatedAt: now,
-      });
-
-      await expect(runCli(["send", "--message", "hello"], {
-        env: { USERPROFILE: tempDir },
-        sendDeps: {
-          readConfiguredBotToken: vi.fn().mockResolvedValue("bot-token"),
-          createTelegramApi: vi.fn().mockReturnValue({
-            sendMessage: vi.fn(),
-            sendDocument: vi.fn(),
-            sendPhoto: vi.fn(),
-      sendVoice: vi.fn(),
-          }),
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_SEND_URL: "http://127.0.0.1:12345/send/token",
+          CCTB_SEND_TOKEN: "secret",
         },
-      })).rejects.toThrow("Multiple Telegram sessions found; pass --chat <id>.");
+      })).rejects.toThrow("Usage: send [--message <text>] [--image <path>] [--file <path>] [text]");
     } finally {
       await removeTempRoot(tempDir);
     }

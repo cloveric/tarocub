@@ -133,7 +133,7 @@ node dist/src/index.js lark doctor
 | **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
-| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources are downloaded and transcribed automatically: short audio locally, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** via Aliyun Tingwu cloud transcription — a 30-min file transcribes in ~40s, with automatic local fallback on any cloud failure. Message keywords 强制本地转写 / 强制云端转写 override the routing; threshold via `ASR_CLOUD_THRESHOLD_SECONDS` (default 900). |
+| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources are downloaded and transcribed automatically: short audio locally, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** via Aliyun Tingwu cloud transcription — a 30-min file transcribes in ~40s, with automatic local fallback on any cloud failure. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
 | **Agent Bus** | Multiple bot instances can call each other as local workers for delegation, fan-out, chain, verifier, and coordinator-led crew workflows. |
@@ -198,7 +198,7 @@ node dist/src/index.js lark timeline 20
 node dist/src/index.js lark dashboard
 ```
 
-Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/yolo`, `/goal`, `/q`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/ws`, `/newgroup`, `/newtopic`, and `/continue`.
+Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/ws`, `/newgroup`, `/newtopic`, and `/continue` — plus the Lark-only `/yolo`, `/q`, `/config`, `/stream`, `/steer`, `/bg`, `/account`, and `/approve-session`.
 
 Lark group/session semantics:
 
@@ -273,8 +273,8 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | `/detach` | Detach the resumed session/thread/conversation |
 | `/goal <objective>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | Conversation goal (autonomous pursuit on Codex) |
 | `/btw <question>` | Side question without touching the session |
-| `/q <message>` | **Lark** — force a queued turn (skip mid-turn steering) |
-| `/steer [on\|off\|<seconds>\|unlimited\|default]` | **Lark** — mid-turn steering eligibility window (default 30s; past it messages queue; accepts `5m` minutes, `0`=unlimited) |
+| `/q <message>` (alias `/queue`) | **Lark** — force a queued turn (skip mid-turn steering) |
+| `/steer [on\|off\|<seconds>\|unlimited\|default\|status]` | **Lark** — mid-turn steering eligibility window (default 30s; past it messages queue; accepts `5m` minutes, `0`=unlimited) |
 | `/continue` | Continue the waiting archive analysis |
 | `/bg` · `/bg kill <pid>` · `/bg killall` | **Lark** — list/stop engine & background processes |
 
@@ -284,10 +284,10 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 |---|---|
 | `/config` | **Lark** — interactive settings card (recommended) |
 | `/engine [claude\|codex\|antigravity]` | Inspect/switch backend engine |
-| `/model [name\|off]` | Inspect/set engine model |
+| `/model [name\|off]` | Inspect/set engine model. Claude choices: `claude-opus-5[1m]` (Opus 5, 1M context — the default), `fable`, `opus`, `sonnet`, `haiku` |
 | `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Reasoning effort (model-dependent) |
-| `/fast [on\|off]` | Codex Fast Mode |
-| `/yolo [on\|off\|unsafe]` | Approval mode |
+| `/fast [on\|off\|status]` | Codex Fast Mode |
+| `/yolo [on\|off\|unsafe\|status]` | **Lark** — approval mode (Telegram sets it from the CLI: `telegram yolo …`) |
 | `/stream [on\|off]` | **Lark** — typewriter streaming for answer cards |
 | `/timeout [on\|off]` | Single-turn 60-min cap (`off` = lift for long tasks) |
 | `/usage` | Cumulative usage for this instance |
@@ -297,7 +297,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 
 | Command | What it does |
 |---|---|
-| `/group [status\|allow\|deny\|all\|at]` | Group authorization & reply mode (`all` = reply without @, `at` = @-only) |
+| `/group [status\|allow\|deny\|on\|off\|all\|at]` | Group authorization & reply mode (`on`/`off` = group mode for the whole instance, `all` = reply without @, `at` = @-only) |
 | `/invite group\|user @person` · `/remove …` | **Lark** — grant/revoke group or per-user access |
 | `/newgroup <name>` · `/newgroup topic <name>` · `/newtopic <name>` | **Lark** — create project groups / topic groups |
 
@@ -306,7 +306,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | Command | What it does |
 |---|---|
 | `/cron …` (`list`/`add`/`rm`/`toggle`/`mode`/`run`) | Reminders, recurring jobs, scheduled agent tasks |
-| `/board …` (`add`/`plan`/`list`/`show`/`run`/`heartbeat`/`recover`/`worktree`) | Durable Kanban tasks outside model memory |
+| `/board …` (alias `/kanban`) (`add`/`plan`/`list`/`show`/`run`/`heartbeat`/`recover`/`worktree`) | Durable Kanban tasks outside model memory |
 
 **Multi-agent**
 
@@ -321,10 +321,30 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | Command | What it does |
 |---|---|
 | `/context` · `/compact` | Claude context details / compaction |
-| `/code-review` · `/ultrareview` | Code review / deep multi-agent review |
-| `/approve [session]` · `/deny` | Text fallback when approval buttons are unavailable |
+| `/ultrareview` | Deep code review (Claude only) |
+| `/approve [session\|turn\|always]` · `/approve <request-id>` | Text fallback when approval buttons are unavailable |
+| `/deny` · `/deny <request-id>` | Deny a pending tool call (there is no `/deny session` form) |
+| `/approve-session <request-id>` | **Lark** — approve a request for the rest of the session |
+| `/help` (alias `/start` on **Lark**) | Bot help in the current chat |
 | `/ws list\|save\|use\|remove` | **Lark** — saved workspace directories |
-| 强制本地转写 · 强制云端转写 | Message keywords (not commands): send alongside an audio/video file to force the local or cloud ASR path |
+| 强制本地转写 · 强制云端转写 | Message keywords (not commands): send them **in the same message/burst as the audio** (e.g. as its caption) to force the local or cloud ASR path. A keyword sent afterwards is a new turn and cannot reroute a transcription already running |
+
+## Long-audio Cloud ASR
+
+Short audio is transcribed by the local ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to a local attempt.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TINGWU_ASR_DIR` | *(unset — cloud path fully disabled)* | Directory containing `tingwu_transcribe.py` and `.venv/`. |
+| `ASR_CLOUD_THRESHOLD_SECONDS` | `900` | Duration at or above which a file routes to the cloud. |
+| `ASR_CLOUD_TASK_TIMEOUT_SECONDS` | `7200` for the script's own `--timeout` | When set explicitly it also becomes the child process's wall-clock bound. Unset, the child is still killed after **15 minutes** so one stuck job cannot hold a chat's queue slot for hours. |
+| `ASR_CLOUD_JOB_RETENTION_DAYS` | `7` | `<stateDir>/asr-jobs/<id>/` dirs older than this are pruned on each new job. |
+
+**Where to set them — not `lark.env`.** All four are read by the bridge process itself, so they must be in the *service process environment*: export them in the shell profile (or the launcher) that runs `node dist/src/index.js lark service start` / `telegram service start`.
+
+`~/.cctb/<instance>/lark.env` does **not** work for them. Its passthrough carries engine credentials only (MCP API tokens like `IFIND_TOKEN`) and refuses every key in a reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*). A refused key is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`; if cloud ASR silently stops routing, that line is the first thing to check.
+
+**Secrets stay outside any engine workspace.** The Tingwu script loads its own Aliyun credentials from its `.env.local`; the bridge never reads, copies, or logs them. Keep that directory **outside** every engine workspace — the convention on this machine is `~/.tarocub-secrets/tingwu_asr` — so an agent working in `~/.cctb/<instance>/workspace` cannot read, commit, or exfiltrate the credentials.
 
 ## Safety Model
 

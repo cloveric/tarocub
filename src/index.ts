@@ -55,6 +55,18 @@ async function main(): Promise<void> {
 
     if (argv[0] === "lark" && argv[1] === "run" && !hasHelpFlag(argv.slice(2))) {
       const larkEnv = await loadLarkRuntimeEnv(process.env);
+      // Whitelisted bridge config the BRIDGE itself acts on (cloud-ASR routing +
+      // the subprocess it spawns). These deliberately do NOT ride the extras
+      // passthrough — TINGWU_/ASR_ are reserved there precisely so a lark.env
+      // extra can never redirect what the bridge executes. loadLarkRuntimeEnv
+      // read them from the whitelisted parse, so exporting them here is the one
+      // sanctioned channel; an existing process.env value still wins.
+      for (const key of ["TINGWU_ASR_DIR", "ASR_CLOUD_THRESHOLD_SECONDS", "ASR_CLOUD_TASK_TIMEOUT_SECONDS", "ASR_CLOUD_JOB_RETENTION_DAYS"] as const) {
+        const value = larkEnv[key];
+        if (value !== undefined && process.env[key] === undefined) {
+          process.env[key] = value;
+        }
+      }
       // Pass per-instance lark.env extras (e.g. MCP API tokens like IFIND_TOKEN) into
       // process.env so the spawned engine (claude/codex) inherits them. Names only.
       const passthroughKeys = await applyLarkEnvPassthrough(larkEnv);

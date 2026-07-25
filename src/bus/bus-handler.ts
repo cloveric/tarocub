@@ -21,13 +21,22 @@ export function createBusTalkHandler(input: {
   // labelling. They must NOT key a persisted session: a per-process counter would
   // reset to -1 on restart and resume an unrelated previous bus session (context
   // bleed) while accumulating stored sessions without bound. Each bus turn instead
-  // runs on a fresh ephemeral session via sessionIdOverride (never persisted/resumed).
+  // runs on a fresh ephemeral session via sessionIdOverride (never persisted/resumed),
+  // minted as a logical `telegram-bus-<uuid>` id (see runBusTurn).
   let busSessionCounter = 0;
 
   const runBusTurn = async (req: Parameters<BusTalkHandler>[0]): Promise<BusTalkResponse> => {
     const startedAt = Date.now();
     const busChatId = -(++busSessionCounter);
-    const ephemeralSessionId = `bus-${randomUUID()}`;
+    // The ephemeral id MUST carry the `telegram-` prefix: every adapter decides
+    // fresh-vs-resume with isLogicalTelegramSessionId() (`startsWith("telegram-")`),
+    // so a bare `bus-<uuid>` looked like an EXISTING engine session — Claude spawned
+    // `-r bus-<uuid>` (CLI: "not a UUID", zero turns), process-Codex ran `exec resume`,
+    // and Antigravity passed `--conversation`. `telegram-` is the shared logical-id
+    // marker for "start a new engine session" (cron mints `telegram-cron-…` for the
+    // same reason). It is still never persisted or resumed: sessionIdOverride bypasses
+    // getOrCreateSession/bindSession entirely.
+    const ephemeralSessionId = `telegram-bus-${randomUUID()}`;
     await appendTimelineEventBestEffort(input.stateDir, {
       type: "turn.started",
       instanceName: input.instanceName,

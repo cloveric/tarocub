@@ -33,13 +33,26 @@ export function localAsrAgentInstruction(): string | undefined {
     return undefined;
   }
   const httpUrl = (process.env.ASR_HTTP_URL ?? "").trim() || "http://127.0.0.1:8412/transcribe";
-  // Cloud long-audio path (Aliyun Tingwu): advertised only when the instance is
-  // actually configured, so the instruction never overpromises.
+  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Use frames/OCR only if it fails.`;
+}
+
+/**
+ * Cloud long-audio routing note (Aliyun Tingwu). Gated ONLY on TINGWU_ASR_DIR —
+ * the cloud path is what the bridge itself does to inbound audio and works with
+ * or without a local ASR backend, so hiding it behind local-ASR availability
+ * made the bot deny a capability it has.
+ *
+ * The wording must match reality: a bare voice message carries no caption, so
+ * the force keywords only reach the router when they travel WITH the audio
+ * (caption, or a text message in the same attachment burst). A keyword sent
+ * afterwards is a new turn and cannot reroute a transcription already running.
+ */
+export function cloudAsrAgentInstruction(): string | undefined {
   const tingwuDir = (process.env.TINGWU_ASR_DIR ?? "").trim();
-  const cloudNote = tingwuDir
-    ? " Long audio (>=15 min default) auto-routes to Aliyun Tingwu before delivery; never call it unsupported. 强制本地转写 / 强制云端转写 forces the route."
-    : "";
-  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Use frames/OCR only if it fails.${cloudNote}`;
+  if (!tingwuDir) {
+    return undefined;
+  }
+  return "Inbound audio/video is auto-transcribed before you see it (>=15 min → Aliyun Tingwu cloud, shorter → local); never call it unsupported. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), never afterwards.";
 }
 
 export function larkAgentInstructions(): string {
@@ -56,6 +69,10 @@ export function larkAgentInstructions(): string {
   const asr = localAsrAgentInstruction();
   if (asr) {
     lines.push(asr);
+  }
+  const cloudAsr = cloudAsrAgentInstruction();
+  if (cloudAsr) {
+    lines.push(cloudAsr);
   }
   return lines.join("\n");
 }

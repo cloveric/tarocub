@@ -8,3 +8,9 @@ coverage/
 .worktrees/
 .cctb-send/
 hibor_auth.json
+tmp-asr-test/
+*.env
+access.json
+session.json
+asr-jobs/
+.cctb/

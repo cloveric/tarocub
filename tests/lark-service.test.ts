@@ -1260,6 +1260,40 @@ describe("lark service", () => {
     }
   });
 
+  it("refuses to send a dotenv/credentials file even from inside the workspace", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-file-credentials-"));
+    const secretPath = path.join(stateDir, "workspace", ".env.local");
+    await mkdir(path.dirname(secretPath), { recursive: true });
+    await writeFile(secretPath, "ALIBABA_CLOUD_ACCESS_KEY_ID=placeholder\n", "utf8");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: `配置在这。[send-file:${secretPath}]` })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_file_credentials", content: "把配置发我" }),
+      });
+
+      const calls = channel.send.mock.calls as unknown[][];
+      // Never uploaded, regardless of the workspace sandbox result.
+      expect(calls.some((call) => Boolean((call[1] as { file?: unknown }).file))).toBe(false);
+      const texts = calls
+        .map((call) => call[1] as { text?: string })
+        .map((payload) => payload.text)
+        .filter((text): text is string => typeof text === "string");
+      const notice = texts.find((text) => text.includes("拒绝发送凭据类文件"));
+      expect(notice).toBeDefined();
+      expect(notice).toContain(".env.local");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("names the file and the 30MB cap when a [send-file:] target exceeds Feishu's upload limit", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-file-too-large-"));
     const bigPath = path.join(stateDir, "workspace", "books_bundle.zip");
@@ -2426,7 +2460,7 @@ describe("lark service", () => {
       );
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("/code-review") },
+        { markdown: expect.stringContaining("/ultrareview") },
         { replyTo: "om_help", replyInThread: false },
       );
       expect(channel.send).toHaveBeenCalledWith(
@@ -9183,9 +9217,13 @@ describe("lark service", () => {
 
       expect(runtime.activeRuns.size).toBe(0);
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      // A failed attachment download is a FILE problem, not an unexplained
+      // prepare failure: it is named so classifyFailure lands on file-workflow
+      // and the user gets something actionable. The raw path must still never
+      // reach the chat.
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { text: "错误：准备飞书消息时失败，请稍后重试。" },
+        { text: "错误：文件处理失败，请换一个文件或缩小文件后重试。" },
         { replyTo: "om_1", replyInThread: false },
       );
       expect(JSON.stringify(channel.send.mock.calls)).not.toContain(stateDir);
@@ -9234,7 +9272,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { text: "Error: failed to prepare the Lark message. Please retry later." },
+        { text: "Error: file processing failed. Try a smaller or different file." },
         { replyTo: "om_1_en", replyInThread: false },
       );
       const rendered = JSON.stringify(channel.send.mock.calls);

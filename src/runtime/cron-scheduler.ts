@@ -430,6 +430,11 @@ export class CronScheduler {
       const detail = error instanceof Error ? error.message : String(error);
       this.logger.warn(`cron: failed to mark one-shot job ${job.id} as missed: ${detail}`);
     }
+    // A reminder the user asked for silently vanishing is the worst outcome:
+    // they think it is still armed. Tell them through the same channel a job
+    // failure uses (which already honors job.mute / job.silent), AFTER the
+    // store/timeline bookkeeping so a delivery failure cannot lose the record.
+    await this.notifyJobFailure(job, message);
   }
 
   private executeWithTracking(

@@ -21,6 +21,14 @@ export interface LarkRuntimeEnv {
   LARK_DOMAIN?: string;
   CCTB_LARK_STATE_DIR?: string;
   LARK_REQUIRE_MENTION_IN_GROUP?: string;
+  // Long-audio cloud ASR (Aliyun Tingwu). Whitelisted bridge config — these are
+  // read from lark.env through loadLarkRuntimeEnv, NOT through the extras
+  // passthrough (extras must never set a variable the bridge itself acts on;
+  // TINGWU_/ASR_ are reserved prefixes there).
+  TINGWU_ASR_DIR?: string;
+  ASR_CLOUD_THRESHOLD_SECONDS?: string;
+  ASR_CLOUD_TASK_TIMEOUT_SECONDS?: string;
+  ASR_CLOUD_JOB_RETENTION_DAYS?: string;
   CCTB_LARK_DEBUG?: string;
   CCTB_LARK_REACTION_EMOJI?: string;
   LARK_REACTION_EMOJI?: string;

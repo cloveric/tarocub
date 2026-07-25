@@ -61,13 +61,13 @@ import {
 } from "./service.js";
 import { applyEngineSelection, loadInstanceConfig, updateInstanceConfig } from "../telegram/instance-config.js";
 import { parseSideChannelSendArgs, renderSideChannelDeliveryText, runSideChannelSendCommand } from "../telegram/side-channel-send.js";
-import { runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps } from "./send.js";
+import { assertTurnScopedSendTarget, runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps } from "./send.js";
 import { runCronCli } from "../cron-cli.js";
 import { CronStore } from "../state/cron-store.js";
 import { loadLarkRuntimeEnv, resolveLarkEnvFilePath, resolveLarkStateDir, writeLarkEnvFile } from "../lark/env-file.js";
 import { resolveDefaultLarkStateDir } from "../lark/config.js";
 import { LarkGroupModeStore } from "../lark/group-mode-store.js";
-import { createLarkServiceRuntime, readLarkTimelineLogWithRotations, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
+import { createLarkServiceRuntime, LARK_PENDING_TURN_LOOKBACK_MS, readLarkTimelineLogTail, readRotatedLogFile, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
@@ -2123,9 +2123,13 @@ async function readLarkPendingTurnActivity(
   oldestAcceptedAt?: string;
 }> {
   // A long-running turn may start just before the 10 MB timeline rotates and
-  // finish in the new current file. Read retained rotations oldest-first so the
-  // restart guard can pair that start with its terminal event across files.
-  const raw = await readLarkTimelineLogWithRotations(stateDir);
+  // finish in the new current file, so retained rotations must be read too —
+  // but only far enough back to cover a turn that could still be in flight.
+  // Parsing every retained rotation (62 MB / ~165k events on a busy instance)
+  // to answer "is anything running right now?" made the guard crawl.
+  const raw = await readLarkTimelineLogTail(stateDir, {
+    sinceMs: Date.now() - LARK_PENDING_TURN_LOOKBACK_MS,
+  });
   if (raw === null) {
     return { activeTurnCount: 0 };
   }
@@ -3452,23 +3456,16 @@ async function runAuditCommand(argv: string[], env: InstanceTokenEnv, logger: Cl
   }
   const auditPath = resolveAuditLogPath(resolveAuditStateDir(env, instanceName));
 
-  try {
-    const raw = await import("node:fs/promises").then((fs) => fs.readFile(auditPath, "utf8"));
-    const lines = filterAuditEvents(parseAuditEvents(raw), filter).map((event) => JSON.stringify(event));
-    logger.log(lines.length > 0 ? lines.join("\n") : "(empty)");
-  } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      logger.log("(empty)");
-      return true;
-    }
-
-    throw error;
+  // Include retained rotations: reading only `audit.log.jsonl` printed "(empty)"
+  // right after a 10 MB rotation while the events the operator asked for sat in
+  // `.1`–`.5`.
+  const raw = await readRotatedLogFile(auditPath);
+  if (raw === null) {
+    logger.log("(empty)");
+    return true;
   }
+  const lines = filterAuditEvents(parseAuditEvents(raw), filter).map((event) => JSON.stringify(event));
+  logger.log(lines.length > 0 ? lines.join("\n") : "(empty)");
 
   return true;
 }
@@ -3530,23 +3527,15 @@ async function runTimelineCommand(argv: string[], env: InstanceTokenEnv, logger:
 
   const timelinePath = resolveTimelineLogPath(resolveAuditStateDir(env, instanceName));
 
-  try {
-    const raw = await import("node:fs/promises").then((fs) => fs.readFile(timelinePath, "utf8"));
-    const lines = filterTimelineEvents(parseTimelineEvents(raw), filter).map((event) => JSON.stringify(event));
-    logger.log(lines.length > 0 ? lines.join("\n") : "(empty)");
-  } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      logger.log("(empty)");
-      return true;
-    }
-
-    throw error;
+  // Same rotation blindness as `audit`: `telegram timeline 200` looked empty
+  // immediately after a rotation. Read the retained rotations too.
+  const raw = await readRotatedLogFile(timelinePath);
+  if (raw === null) {
+    logger.log("(empty)");
+    return true;
   }
+  const lines = filterTimelineEvents(parseTimelineEvents(raw), filter).map((event) => JSON.stringify(event));
+  logger.log(lines.length > 0 ? lines.join("\n") : "(empty)");
 
   return true;
 }
@@ -4671,7 +4660,41 @@ async function runBackupCommand(
   logger.log(
     `Backed up instance "${instanceName}" to ${outPath} (${result.fileCount} files, ${Math.round(result.archiveBytes / 1024)} KB compressed from ${Math.round(result.uncompressedBytes / 1024)} KB)`,
   );
+  for (const line of await renderArchiveExclusionLines(result)) {
+    logger.log(line);
+  }
   return true;
+}
+
+/**
+ * Say out loud what the backup left out. The exclusions are what make backing up
+ * a 3 GB live instance possible at all, and an oversize file that is silently
+ * dropped is a restore-time surprise — so both are reported, never implied.
+ */
+async function renderArchiveExclusionLines(
+  result: Awaited<ReturnType<typeof import("../state/archive.js").createArchive>>,
+): Promise<string[]> {
+  const { ARCHIVE_EXCLUSION_SUMMARY } = await import("../state/archive.js");
+  const lines: string[] = [];
+  if (result.excludedDirectories.length > 0 || result.excludedLogFileCount > 0) {
+    lines.push(`Excluded by default: ${ARCHIVE_EXCLUSION_SUMMARY}`);
+  }
+  if (result.excludedDirectories.length > 0) {
+    const shown = result.excludedDirectories.slice(0, 10);
+    const extra = result.excludedDirectories.length - shown.length;
+    lines.push(
+      `  skipped ${result.excludedDirectories.length} directory tree(s): ${shown.join(", ")}${extra > 0 ? `, +${extra} more` : ""}`,
+    );
+  }
+  if (result.excludedLogFileCount > 0) {
+    lines.push(`  skipped ${result.excludedLogFileCount} log file(s)`);
+  }
+  for (const skipped of result.skippedOversizeFiles) {
+    lines.push(
+      `WARNING: skipped oversize file (over the 100 MB per-file cap): ${skipped.path} (${Math.round(skipped.size / (1024 * 1024))} MB) — it is NOT in this backup`,
+    );
+  }
+  return lines;
 }
 
 async function runRestoreCommand(
@@ -4770,6 +4793,9 @@ async function runLarkBackupCommand(
   logger.log(
     `Backed up Lark state to ${outPath} (${result.fileCount} files, ${Math.round(result.archiveBytes / 1024)} KB compressed from ${Math.round(result.uncompressedBytes / 1024)} KB)`,
   );
+  for (const line of await renderArchiveExclusionLines(result)) {
+    logger.log(line);
+  }
 }
 
 async function runLarkRestoreCommand(
@@ -4867,13 +4893,20 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   }
 
   if (normalized[0] === "send") {
+    const sendArgs = normalized.slice(1);
+    // `cctb send` is a turn-scoped side channel, never a universal sender: a
+    // prompt-injected engine must not be able to aim `--instance` at another
+    // bot's token on disk or `--chat` at an unrelated chat. Cross-target
+    // overrides are rejected here; without turn context (no CCTB_SEND_URL /
+    // CCTB_SEND_TOKEN) runConfiguredSendCommand refuses before reading any token.
+    assertTurnScopedSendTarget(env, sendArgs);
     if (env.CCTB_SEND_URL) {
-      await runSideChannelSendCommand(stripSendRoutingArgs(normalized.slice(1)), { env });
+      await runSideChannelSendCommand(stripSendRoutingArgs(sendArgs), { env });
       logger.log("Sent via active Telegram turn.");
       return true;
     }
 
-    const result = await runConfiguredSendCommand(normalized.slice(1), env, options.sendDeps);
+    const result = await runConfiguredSendCommand(sendArgs, env, options.sendDeps);
     logger.log(result.filesSent > 0
       ? `Sent to Telegram chat ${result.chatId} (${result.filesSent} file${result.filesSent === 1 ? "" : "s"}).`
       : `Sent to Telegram chat ${result.chatId}.`);

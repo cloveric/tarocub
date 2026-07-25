@@ -1223,11 +1223,13 @@ describe("ClaudeStreamAdapter", () => {
     children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
     await first;
 
+    // Precise, non-alarming wording (classified engine-busy, not engine-cli):
+    // a live background task blocks the reconfigure; restarting does not help.
     await expect(adapter.sendUserMessage("session-123", {
       text: "New instructions",
       files: [],
       instructions: "changed instructions",
-    })).rejects.toThrow("Cannot reconfigure Claude session while background tasks are active");
+    })).rejects.toThrow(/background task still running/);
     await waitFor(() => children.length === 1);
   });
 

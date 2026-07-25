@@ -23,6 +23,93 @@ export type DownloadedLarkAttachment = {
   localPath: string;
 };
 
+/**
+ * Largest inbound attachment this bridge will pull out of Feishu.
+ *
+ * Feishu's `im.v1.messageResource.get` refuses very large resources with a bare
+ * HTTP 400, and the whole body is buffered in memory here before it is written
+ * to disk — so a 100 MB+ send used to surface as the generic "准备飞书消息时失败"
+ * after a pointless download attempt. 100 MB is the documented bridge-side cap:
+ * anything above it is refused up front with an actionable message.
+ */
+export const LARK_INBOUND_ATTACHMENT_LIMIT_BYTES = 100 * 1024 * 1024;
+
+/**
+ * An inbound Feishu attachment the bridge refuses to download because it is
+ * over {@link LARK_INBOUND_ATTACHMENT_LIMIT_BYTES}. Carries the numbers so the
+ * Lark error renderer can say WHICH file and HOW big instead of a generic
+ * prepare failure. The `larkAttachmentTooLarge` brand lets `src/lark/errors.ts`
+ * recognize it without importing this module.
+ */
+export class LarkAttachmentTooLargeError extends Error {
+  readonly larkAttachmentTooLarge = true;
+
+  constructor(
+    readonly attachmentKind: LarkNormalizedAttachment["kind"],
+    readonly attachmentBytes: number,
+    readonly limitBytes: number,
+    readonly attachmentName?: string,
+  ) {
+    super(
+      `Lark attachment is too large to download: ${attachmentKind}${attachmentName ? ` ${attachmentName}` : ""} ` +
+      `is ${formatLarkFileSize(attachmentBytes)}, over the ${formatLarkFileSize(limitBytes)} inbound limit`,
+    );
+    this.name = "LarkAttachmentTooLargeError";
+  }
+}
+
+export function isLarkAttachmentTooLargeError(error: unknown): error is LarkAttachmentTooLargeError {
+  return error instanceof Error && (error as { larkAttachmentTooLarge?: unknown }).larkAttachmentTooLarge === true;
+}
+
+export function formatLarkFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${Math.round(bytes / (1024 * 1024))} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+/**
+ * The size Feishu advertised for this attachment, when it is known.
+ *
+ * Feishu's file/media message content carries `file_size`, but the normalizer
+ * currently keeps only file_key/file_name — so this reads the field
+ * structurally: the moment `fileSize` is plumbed onto the normalized
+ * attachment, the pre-check below starts refusing oversize sends BEFORE the
+ * download instead of after it.
+ */
+function advertisedAttachmentBytes(attachment: LarkNormalizedAttachment): number | undefined {
+  const value = (attachment as { fileSize?: unknown }).fileSize;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+  return undefined;
+}
+
+/**
+ * Refuse an oversize inbound attachment. Called twice: once with the size
+ * Feishu advertised (no download at all) and once with the materialized body
+ * length (the backstop when no size was advertised).
+ */
+export function assertLarkAttachmentDownloadable(
+  attachment: LarkNormalizedAttachment,
+  bytes: number | undefined,
+  limitBytes: number = LARK_INBOUND_ATTACHMENT_LIMIT_BYTES,
+): void {
+  if (typeof bytes === "number" && bytes > limitBytes) {
+    throw new LarkAttachmentTooLargeError(attachment.kind, bytes, limitBytes, attachment.fileName);
+  }
+}
+
 export async function prepareLarkFileWorkflow(input: {
   stateDir: string;
   normalized: LarkNormalizedBridgeMessage;
@@ -85,7 +172,13 @@ export async function downloadLarkAttachments(input: {
   const files: DownloadedLarkAttachment[] = [];
   const usedNames = new Set<string>();
   for (const [index, attachment] of input.attachments.entries()) {
+    // Pre-check on the advertised size: never spend a download (and a full
+    // in-memory buffer) on a file Feishu will refuse anyway.
+    assertLarkAttachmentDownloadable(attachment, advertisedAttachmentBytes(attachment));
     const body = await downloadLarkAttachmentBody(input.channel, attachment.sourceMessageId ?? input.messageId, attachment);
+    // Backstop for the (current) case where no size was advertised: the body is
+    // already in memory, so refuse before it is persisted and handed downstream.
+    assertLarkAttachmentDownloadable(attachment, body.length);
     const fileName = attachment.fileName ?? `${attachment.kind}-${index + 1}${defaultExtension(attachment.kind)}`;
     // A merged attachment burst downloads several messages' files into ONE
     // directory — same-named files (e.g. two cameras' IMG_001.jpg) would
@@ -109,6 +202,26 @@ export async function downloadLarkAttachments(input: {
 }
 
 async function downloadLarkAttachmentBody(
+  channel: LarkChannelLike,
+  messageId: string,
+  attachment: LarkNormalizedAttachment,
+): Promise<Buffer> {
+  try {
+    return await requestLarkAttachmentBody(channel, messageId, attachment);
+  } catch (error) {
+    // The SDK surfaces a refused resource as a bare HTTP 400, which used to
+    // fall through classifyFailure into the generic "准备飞书消息时失败".
+    // Name the failure so it classifies as file-workflow and the user is told
+    // to try a different/smaller file.
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Lark attachment download failed for ${attachment.kind}` +
+      `${attachment.fileName ? ` ${attachment.fileName}` : ""}: ${detail}`,
+    );
+  }
+}
+
+async function requestLarkAttachmentBody(
   channel: LarkChannelLike,
   messageId: string,
   attachment: LarkNormalizedAttachment,

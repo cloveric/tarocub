@@ -405,7 +405,14 @@ export function createDefaultTranscribeVoice(options: {
         ? path.join(jobStateDir, "asr-jobs")
         : path.join(os.tmpdir(), "cctb-asr-jobs");
       try {
-        return await transcribeViaTingwuCloud(audioPath, { config: cloudConfig, jobRootDir });
+        // The caller's abort signal (when it has one) is threaded straight into
+        // the child process: a cancelled turn must not leave a cloud job
+        // holding the chat's queue slot until the wall-clock bound expires.
+        return await transcribeViaTingwuCloud(audioPath, {
+          config: cloudConfig,
+          jobRootDir,
+          ...(callOptions?.abortSignal ? { abortSignal: callOptions.abortSignal } : {}),
+        });
       } catch (error) {
         // ANY cloud failure falls back to a local transcription attempt. The
         // error messages from asr-cloud.ts carry no stderr content and no

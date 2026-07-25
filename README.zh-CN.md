@@ -532,9 +532,13 @@ npm run dev -- telegram budget clear --instance work    # 移除上限
 
 **长音频自动走云端（通义听悟，可选）**：配置后，**≥ 15 分钟**的音频/视频自动路由到阿里云通义听悟离线转写（30 分钟音频约 40 秒出全文），短音频仍走本地。未配置时行为完全不变。
 
-- 激活：在实例的 `lark.env` 里指向已配好的听悟脚本目录 —— `TINGWU_ASR_DIR=/path/to/tingwu_asr`（脚本自带 OSS 上传/任务轮询/临时对象清理，密钥留在该目录的 `.env.local`，桥不读取也不记录）
-- 阈值/超时：`ASR_CLOUD_THRESHOLD_SECONDS`（默认 900）、`ASR_CLOUD_TASK_TIMEOUT_SECONDS`（默认 7200）
-- **消息内开关**：随音频附上「强制本地转写」或「强制云端转写」可覆盖自动判定（冲突时本地优先）
+- 激活：`TINGWU_ASR_DIR=/path/to/tingwu_asr`，指向已配好的听悟脚本目录（脚本自带 OSS 上传/任务轮询/临时对象清理，密钥留在该目录的 `.env.local`，桥不读取也不记录）
+- 阈值：`ASR_CLOUD_THRESHOLD_SECONDS`（默认 900 秒）
+- 超时：`ASR_CLOUD_TASK_TIMEOUT_SECONDS`。不设置时，脚本自己的 `--timeout` 是 7200 秒，但**子进程最多跑 15 分钟**就会被杀掉——否则一个卡住的云端任务会把这个会话的队列占用两小时。显式设置这个变量会同时抬高（或压低）这两个上限
+- 任务目录保留：`ASR_CLOUD_JOB_RETENTION_DAYS`（默认 7 天），每次新任务顺手清理过期的 `<state>/asr-jobs/<id>/`
+- **变量写在哪里：不是 `lark.env`**。这四个变量都是**桥进程自己**读的，必须放在**启动服务的那个进程环境**里 —— 在跑 `node dist/src/index.js lark service start` / `telegram service start` 的 shell profile（或启动脚本）里 export。`~/.cctb/<instance>/lark.env` 对它们无效：那里的透传只负责引擎侧凭据（`IFIND_TOKEN` 这类 MCP token），并且会拒绝所有保留前缀 —— `CCTB_`、`TAROCUB_`、`LARK_`、`CODEX_`、`CLAUDE_`、`ANTIGRAVITY_`、`ASR_`、`TELEGRAM_`、`TINGWU_`（`TINGWU_ASR_DIR` 指向的是桥**要去执行 python 脚本**的目录，不能由 lark.env 决定）。被拒绝的键会在启动时打印 `[lark] lark.env: ignored bridge-reserved keys …`，云端转写突然不走了就先看这行
+- **密钥必须放在任何引擎工作区之外**：本机约定放 `~/.tarocub-secrets/tingwu_asr`，这样在 `~/.cctb/<instance>/workspace` 里干活的 agent 读不到、也提交不了这些凭据
+- **消息内开关**：「强制本地转写」/「强制云端转写」必须和音频在**同一条消息或同一批**发送（当作附件说明）才生效——纯语音消息没有 caption，事后再发是新的一轮，改不了已经开跑的转写（冲突时本地优先）
 - 云端失败自动回退本地；任务产物（原始 JSON/日志/纯文本）保存在 `<state>/asr-jobs/<id>/` 便于追溯
 
 **工作原理：**
@@ -1226,8 +1230,8 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `/detach` | 解绑当前会话/thread/conversation |
 | `/goal <目标>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | 会话目标(Codex 上自主推进) |
 | `/btw <问题>` | 旁问,不动当前会话 |
-| `/q <消息>` | **Lark** — 强制排队(跳过中途注入) |
-| `/steer [on\|off\|<秒数>\|unlimited\|default]` | **Lark** — 任务中途引导的资格窗口(默认 30 秒,超窗自动排队;支持 `5m` 分钟写法,`0`=不限时) |
+| `/q <消息>`(别名 `/queue`) | **Lark** — 强制排队(跳过中途注入) |
+| `/steer [on\|off\|<秒数>\|unlimited\|default\|status]` | **Lark** — 任务中途引导的资格窗口(默认 30 秒,超窗自动排队;支持 `5m` 分钟写法,`0`=不限时) |
 | `/continue` | 继续等待中的压缩包分析 |
 | `/bg` · `/bg kill <pid>` · `/bg killall` | **Lark** — 查看/停止引擎与后台进程 |
 
@@ -1237,10 +1241,10 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 |---|---|
 | `/config` | **Lark** — 交互配置卡片(推荐) |
 | `/engine [claude\|codex\|antigravity]` | 查看/切换后端引擎 |
-| `/model [名称\|off]` | 查看/设置模型 |
+| `/model [名称\|off]` | 查看/设置模型。Claude 可选：`claude-opus-5[1m]`(Opus 5,1M 上下文,默认)、`fable`、`opus`、`sonnet`、`haiku` |
 | `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | 推理强度(视模型而定) |
-| `/fast [on\|off]` | Codex 快速模式 |
-| `/yolo [on\|off\|unsafe]` | 审批模式 |
+| `/fast [on\|off\|status]` | Codex 快速模式 |
+| `/yolo [on\|off\|unsafe\|status]` | **Lark** — 审批模式(Telegram 侧没有这个聊天命令，用 CLI `telegram yolo …`) |
 | `/stream [on\|off]` | **Lark** — 回答卡片打字机流式 |
 | `/timeout [on\|off]` | 单轮 60 分钟上限(`off` = 长任务放开) |
 | `/usage` | 本实例累计用量 |
@@ -1250,7 +1254,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 
 | 命令 | 作用 |
 |---|---|
-| `/group [status\|allow\|deny\|all\|at]` | 群授权与回复模式(`all`=不@也回,`at`=只@才回) |
+| `/group [status\|allow\|deny\|on\|off\|all\|at]` | 群授权与回复模式(`on`/`off`=整个实例的群模式开关，`all`=不@也回,`at`=只@才回) |
 | `/invite group\|user @某人` · `/remove …` | **Lark** — 授予/撤销群或用户授权 |
 | `/newgroup <名>` · `/newgroup topic <名>` · `/newtopic <名>` | **Lark** — 新建项目群 / 话题群 |
 
@@ -1259,7 +1263,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | 命令 | 作用 |
 |---|---|
 | `/cron …`(`list`/`add`/`rm`/`toggle`/`mode`/`run`) | 定时提醒、周期任务、计划 agent 任务 |
-| `/board …`(`add`/`plan`/`list`/`show`/`run`/`heartbeat`/`recover`/`worktree`) | 模型记忆之外的持久 Kanban 任务板 |
+| `/board …`(别名 `/kanban`)(`add`/`plan`/`list`/`show`/`run`/`heartbeat`/`recover`/`worktree`) | 模型记忆之外的持久 Kanban 任务板 |
 
 **多 Agent 协作**
 
@@ -1274,10 +1278,13 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | 命令 | 作用 |
 |---|---|
 | `/context` · `/compact` | Claude 上下文 / 压缩 |
-| `/code-review` · `/ultrareview` | 代码审查 / 深度多 agent 审查 |
-| `/approve [session]` · `/deny` | 审批按钮不可用时的文字兜底 |
+| `/ultrareview` | 深度代码审查（仅 Claude） |
+| `/approve [session\|turn\|always]` · `/approve <请求ID>` | 审批按钮不可用时的文字兜底 |
+| `/deny` · `/deny <请求ID>` | 拒绝待审批的工具调用（没有 `/deny session` 这种写法） |
+| `/approve-session <请求ID>` | **Lark** — 对指定请求在本会话内持续放行 |
+| `/help`(**Lark** 上别名 `/start`) | 当前聊天里的帮助 |
 | `/ws list\|save\|use\|remove` | **Lark** — 工作区目录管理 |
-| 强制本地转写 · 强制云端转写 | 消息关键词（非命令）：与音频/视频一起发送，强制走本地或云端转写 |
+| 强制本地转写 · 强制云端转写 | 消息关键词（非命令）：必须**和音频/视频同一条消息或同一批**发送（例如当作附件说明），才能强制走本地或云端转写；事后再发是新的一轮，改不了已经开跑的转写 |
 
 ## 服务运维
 

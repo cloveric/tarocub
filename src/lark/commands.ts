@@ -400,9 +400,13 @@ function larkCommandReplyOptions(normalized: LarkNormalizedBridgeMessage): { rep
 }
 
 export function isLarkLocalEngineCommand(text: string): boolean {
-  // `/ultrareview` is the deprecated alias of `/code-review`; both route to the
+  // `/ultrareview` is the Claude deep-review path. NOTE: `/code-review` is NOT
+  // implemented on either channel (no handler exists), so it must not be matched
+  // here — matching it swallowed the message into a handler that returns false,
+  // and it then reached the engine as plain prompt text anyway. Removed from the
+  // predicate and from /help; use `/ultrareview` for the deep review path.
   // Claude-local engine command path.
-  return /^\/(?:compact|context|code-review|ultrareview)(?:\s|$)/i.test(text.trim());
+  return /^\/(?:compact|context|ultrareview)(?:\s|$)/i.test(text.trim());
 }
 
 async function handleLarkLocalEngineCommand(
@@ -957,7 +961,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "**Advanced & collaboration**",
       "- `/board …` durable kanban · `/mini …` link group threads as peers · `/ask <instance> <prompt>` delegate to another bot",
       "- `/fan` · `/chain` · `/verify` Agent Bus parallel / sequential / verification flows",
-      "- `/context` · `/compact` · `/code-review` Claude context / compaction / code review",
+      "- `/context` · `/compact` · `/ultrareview` Claude context / compaction / deep review",
       "- `/approve [session]` · `/deny` handle approvals by text when card buttons are unavailable",
       "",
       "Full list: see the Slash Command Index in the README. Group messages need an `@` by default; `/group all` enables non-`@` replies (the app also needs `im:message` + `im:message.group_msg`). If non-`@` group messages still don't arrive, run `node dist/src/index.js lark doctor`.",
@@ -992,7 +996,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "**进阶与协作**",
     "- `/board …` 持久任务板 · `/mini …` 把群 thread 注册成 peer 互联 · `/ask <实例> <提示>` 委托给别的 bot",
     "- `/fan` · `/chain` · `/verify` Agent Bus 并行 / 串联 / 验证",
-    "- `/context` · `/compact` · `/code-review` Claude 上下文 / 压缩 / 代码审查",
+    "- `/context` · `/compact` · `/ultrareview` Claude 上下文 / 压缩 / 深度审查",
     "- `/approve [session]` · `/deny` 卡片按钮不可用时用文字处理审批",
     "",
     "完整命令表见 README 的 Slash Command Index。群里普通消息默认要@；`/group all` 开非@（应用还需有 `im:message` + `im:message.group_msg`）。若开了非@群消息仍收不到，运行 `node dist/src/index.js lark doctor`。",

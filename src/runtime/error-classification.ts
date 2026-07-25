@@ -8,6 +8,7 @@ export type FailureCategory =
   | "engine-cli"
   | "engine-backend"
   | "engine-timeout"
+  | "engine-busy"
   | "file-workflow"
   | "workflow-state"
   | "session-state"
@@ -96,7 +97,12 @@ export function classifyFailure(error: unknown): FailureCategory {
   if (
     text.includes("telegram attachment is too large to download via bot api") ||
     text.includes("telegram api request failed for getfile") ||
-    text.includes("telegram api request failed for downloadfile")
+    text.includes("telegram api request failed for downloadfile") ||
+    // Lark equivalent: an inbound Feishu attachment over the documented
+    // download limit. Without this branch it fell through to "unknown" and the
+    // user got the generic "failed to prepare the Lark message" instead of a
+    // message telling them to compress or split the file.
+    text.includes("lark attachment is too large to download")
   ) {
     return "file-workflow";
   }
@@ -125,6 +131,15 @@ export function classifyFailure(error: unknown): FailureCategory {
   // which "timed out"+"turn" would otherwise match.
   if (/\bturn (?:timed out|became inactive) after \d+\s*minute/.test(text)) {
     return "engine-timeout";
+  }
+
+  // The engine is healthy but busy: background tasks from an earlier turn are
+  // still running, so a settings change (model/effort/approval/workspace) cannot
+  // rebuild the session yet. Restarting the instance is exactly the wrong advice,
+  // which is what the engine-cli branch below would have produced ("claude" +
+  // "session" matches its signal) — so this is checked first.
+  if (text.includes("background task") && text.includes("still running")) {
+    return "engine-busy";
   }
 
   if (hasEngineCliSignal(text)) {
@@ -197,6 +212,9 @@ export function getBusErrorSemantics(failureCategory: FailureCategory): BusError
     case "engine-timeout":
       // Re-running the same long task as-is just times out again; not auto-retryable.
       return { code: "engine_timeout", retryable: false };
+    case "engine-busy":
+      // Transient: the same call succeeds once the in-flight background work ends.
+      return { code: "engine_busy", retryable: true };
     case "file-workflow":
       return { code: "file_workflow", retryable: false };
     case "workflow-state":

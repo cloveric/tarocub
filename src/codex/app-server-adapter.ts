@@ -476,6 +476,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private readonly pendingRequests = new Map<number, PendingRequest>();
   private readonly nonBlockingRequestIds = new Set<number>();
   private readonly pendingTurns = new Map<string, PendingTurn>();
+  // Secondary index of the SAME PendingTurn objects, keyed by the engine turn id
+  // once it is known. threadId alone is ambiguous: a self-running /goal pursuit and
+  // an ordinary turn share one thread, and turn/item notifications carry a turnId
+  // (required by the app-server schema for every item/* notification). Matching on
+  // it keeps a goal's deltas/usage out of the user's turn, and lets a turn that no
+  // longer owns its thread still settle with its own text and usage.
+  private readonly pendingTurnsByTurnId = new Map<string, PendingTurn>();
   // Watchers for a self-running thread goal (no user-initiated turn). Codex pursues a
   // goal autonomously and emits the SAME turn/item notifications; when there is no
   // pendingTurn for the thread, events fall back to this watcher so a goal can drive a
@@ -547,6 +554,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
     );
     const prompt = this.buildPrompt(input, instructions);
     const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
+    // Announce the thread BEFORE the turn can fail. Every other adapter emits a
+    // mid-turn `session` event that Bridge.handleAuthorizedTurn binds on; the
+    // app-server adapter only reported its thread id through a SUCCESSFUL
+    // response, so a /stop or a timeout on the first turn of an unbound chat
+    // (new chat, after /reset, or after a `thread not found` → startThread)
+    // discarded the new thread id and the next message silently started over.
+    // Mirrors process-adapter.ts:140.
+    await this.emitSessionEvent(threadId, input.onEngineEvent);
     const turn = await this.startTurn(
       threadId,
       prompt,
@@ -854,7 +869,19 @@ export class CodexAppServerAdapter implements CodexAdapter {
     if (!this.initializePromise) {
       this.currentApprovalMode = runtimeOptions.approvalMode;
       this.initializeKey = runtimeOptions.initializeKey;
-      this.initializePromise = this.startChildAndInitialize(runtimeOptions.initializeArgs);
+      // A rejected initialize must NOT be sticky. An `initialize` JSON-RPC *error*
+      // response (as opposed to a timeout) leaves the child alive, so neither the
+      // close nor the error handler fires and nothing resets the cached promise —
+      // every later message then re-awaited the same rejection forever. Tear the
+      // child down and clear the cached promise so the next call spawns a fresh
+      // one; a timeout already destroyed itself, in which case this is a no-op.
+      const attempt: Promise<void> = this.startChildAndInitialize(runtimeOptions.initializeArgs).catch((error) => {
+        if (this.initializePromise === attempt) {
+          this.destroy();
+        }
+        throw error;
+      });
+      this.initializePromise = attempt;
     }
 
     return this.initializePromise;
@@ -1012,10 +1039,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // Capture the turn id so an abort/inactivity interrupt can address it.
       const threadId = this.readString(parsed.params?.threadId);
       const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
-      if (pending && !pending.turnId) {
+      // With a /goal pursuit running on this thread, turn/started may belong to
+      // the goal's own turn — claiming that id would mislabel the user's turn.
+      // The id-correlated turn/start RESPONSE is authoritative there; this
+      // notification only fills in when nothing else can (no watcher).
+      if (pending && !pending.turnId && threadId && !this.goalWatchers.has(threadId)) {
         const turn = parsed.params?.turn;
         if (typeof turn === "object" && turn !== null && typeof (turn as { id?: unknown }).id === "string") {
-          pending.turnId = (turn as { id: string }).id;
+          this.registerTurnId(pending, (turn as { id: string }).id);
         }
       }
       return;
@@ -1025,7 +1056,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const threadId = this.readString(parsed.params?.threadId);
       const delta = this.readString(parsed.params?.delta);
       if (threadId && delta) {
-        const pending = this.pendingTurns.get(threadId);
+        const pending = this.matchPendingTurn(threadId, this.readString(parsed.params?.turnId));
         if (pending) {
           pending.chunks.push(delta);
           pending.onProgress?.(pending.chunks.join(""));
@@ -1035,7 +1066,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           text: delta,
           delta: true,
           sessionId: threadId,
-        });
+        }, pending ?? null);
       }
       return;
     }
@@ -1048,7 +1079,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           type: "thinking",
           text: delta,
           sessionId: threadId,
-        });
+        }, this.matchPendingTurn(threadId, this.readString(parsed.params?.turnId)) ?? null);
       }
       return;
     }
@@ -1064,7 +1095,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           toolName: "TodoWrite",
           toolInput: { todos },
           sessionId: threadId,
-        });
+        }, this.matchPendingTurn(threadId, this.readString(parsed.params?.turnId)) ?? null);
       }
       return;
     }
@@ -1090,7 +1121,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     if (parsed.method === "item/completed") {
       const threadId = this.readString(parsed.params?.threadId);
-      const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
+      const pending = threadId
+        ? this.matchPendingTurn(threadId, this.readString(parsed.params?.turnId))
+        : undefined;
       const item = parsed.params?.item;
       if (pending && threadId) {
         const generatedImagePath = extractGeneratedImagePath(item);
@@ -1121,7 +1154,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
             ...(toolEvent.toolInput === undefined ? {} : { toolInput: toolEvent.toolInput }),
             ...(toolEvent.toolUseId ? { toolUseId: toolEvent.toolUseId } : {}),
             sessionId: threadId,
-          });
+          }, pending ?? null);
           // A plan (TodoWrite) is meta-state shown as the plan panel, not a tool
           // block, so it needs no completion event. Skipping it also avoids an
           // id-less result wrongly finishing an unrelated running tool.
@@ -1133,7 +1166,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
               ...(toolEvent.output !== undefined ? { output: toolEvent.output } : {}),
               isError: toolEvent.isError,
               sessionId: threadId,
-            });
+            }, pending ?? null);
           }
         }
       }
@@ -1153,7 +1186,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
         return;
       }
 
-      const pending = this.pendingTurns.get(threadId);
+      // Match on the turn id: a self-running /goal pursuit completes its own turns
+      // on this same thread, and settling the user's turn with the goal's text and
+      // usage produced the wrong answer AND the wrong billing, then dropped the
+      // real user turn (it completed later with no pending entry). An unmatched
+      // completion has nothing to settle here — the goal watcher ends on the
+      // terminal thread/goal/updated instead.
+      const pending = this.matchPendingTurn(threadId, turnId);
       if (!pending) {
         return;
       }
@@ -1170,7 +1209,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // signal-driven, not timer-driven.
       pending.timeout && clearTimeout(pending.timeout);
       pending.timeout = undefined;
-      this.pendingTurns.delete(threadId);
+      if (this.pendingTurns.get(threadId) === pending) {
+        this.pendingTurns.delete(threadId);
+      }
       const turnErrorMessage = this.readTurnErrorMessage(parsed.params?.turn);
       this.completingTurns += 1;
       if (turnErrorMessage) {
@@ -1189,7 +1230,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     if (parsed.method === "error") {
       const threadId = this.readString(parsed.params?.threadId);
-      const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
+      // Same turn-id scoping as turn/completed: a /goal pursuit's error must not
+      // poison an unrelated user turn running on the same thread.
+      const pending = threadId
+        ? this.matchPendingTurn(threadId, this.readString(parsed.params?.turnId))
+        : undefined;
       const errorMessage = this.readErrorMessage(parsed.params?.error);
 
       if (pending && errorMessage) {
@@ -1269,12 +1314,96 @@ export class CodexAppServerAdapter implements CodexAdapter {
    * Routes a normalized engine event to the thread's active turn, or — when the thread
    * is running a goal autonomously (no pendingTurn) — to its goal watcher, so a
    * self-running goal can drive a live run card.
+   *
+   * `owner` disambiguates the two cases when the caller already matched the
+   * notification's turn id: a PendingTurn routes to that exact turn, and `null`
+   * means "this notification belongs to another turn on the thread" (typically the
+   * autonomous /goal pursuit) so it must go to the goal watcher, never to the
+   * unrelated user turn. `undefined` keeps the legacy thread-scoped resolution.
    */
-  private emitEngineEvent(threadId: string, event: EngineStreamEvent): void {
-    const sink = this.pendingTurns.get(threadId)?.onEngineEvent ?? this.goalWatchers.get(threadId)?.onEngineEvent;
+  private emitEngineEvent(threadId: string, event: EngineStreamEvent, owner?: PendingTurn | null): void {
+    const sink = owner === undefined
+      ? (this.pendingTurns.get(threadId)?.onEngineEvent ?? this.goalWatchers.get(threadId)?.onEngineEvent)
+      : owner === null
+        ? this.goalWatchers.get(threadId)?.onEngineEvent
+        : owner.onEngineEvent;
     if (sink) {
       void Promise.resolve(sink(event)).catch(() => {});
     }
+  }
+
+  /**
+   * Emits the `session` event the bridge binds on. Awaited (best effort) so the
+   * thread id is persisted before anything else can fail the turn.
+   */
+  private async emitSessionEvent(
+    threadId: string,
+    onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>,
+  ): Promise<void> {
+    if (!onEngineEvent) {
+      return;
+    }
+    try {
+      await onEngineEvent({ type: "session", sessionId: threadId });
+    } catch {
+      // Session binding is best effort; it must never fail the turn.
+    }
+  }
+
+  /**
+   * Resolves which pending turn a thread-scoped notification belongs to.
+   *
+   * - A known turn id wins: it still matches a turn that no longer owns the thread.
+   * - While the pending turn's own id is unknown (the window between turn/start
+   *   being written and its response/turn/started arriving) the thread's pending
+   *   turn owns every notification, preserving the previous behavior.
+   * - A known-but-different turn id returns undefined: the notification belongs to
+   *   another turn on the same thread (a /goal pursuit runs outside the chat queue
+   *   and emits the same turn/* and item/* notifications), so it must not append
+   *   deltas to — or settle — the user's turn.
+   */
+  private matchPendingTurn(threadId: string, turnId: string | null | undefined): PendingTurn | undefined {
+    if (turnId) {
+      const byTurnId = this.pendingTurnsByTurnId.get(turnId);
+      if (byTurnId) {
+        return byTurnId;
+      }
+    }
+
+    const pending = this.pendingTurns.get(threadId);
+    if (!pending) {
+      return undefined;
+    }
+    if (!pending.turnId || !turnId) {
+      return pending;
+    }
+    return pending.turnId === turnId ? pending : undefined;
+  }
+
+  private registerTurnId(pending: PendingTurn, turnId: string): void {
+    if (pending.turnId === turnId) {
+      return;
+    }
+    if (pending.turnId && this.pendingTurnsByTurnId.get(pending.turnId) === pending) {
+      this.pendingTurnsByTurnId.delete(pending.turnId);
+    }
+    pending.turnId = turnId;
+    this.pendingTurnsByTurnId.set(turnId, pending);
+  }
+
+  private forgetTurnId(pending: PendingTurn): void {
+    if (pending.turnId && this.pendingTurnsByTurnId.get(pending.turnId) === pending) {
+      this.pendingTurnsByTurnId.delete(pending.turnId);
+    }
+  }
+
+  /** True while the turn is still tracked (owns its thread, or is a displaced turn
+   * still reachable by its turn id), i.e. it has not settled yet. */
+  private isPendingTurnTracked(threadId: string, pending: PendingTurn): boolean {
+    return (
+      this.pendingTurns.get(threadId) === pending ||
+      (pending.turnId !== undefined && this.pendingTurnsByTurnId.get(pending.turnId) === pending)
+    );
   }
 
   private handleServerRequest(request: AppServerRequest): void {
@@ -1631,6 +1760,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         pendingTurn.inactivityTimeout = undefined;
         pendingTurn.abortCleanup?.();
         pendingTurn.abortCleanup = undefined;
+        this.forgetTurnId(pendingTurn);
         reject(error);
       };
       const resolveAndCleanup = (result: { text: string; usage?: AdapterUsage }) => {
@@ -1640,6 +1770,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         pendingTurn.inactivityTimeout = undefined;
         pendingTurn.abortCleanup?.();
         pendingTurn.abortCleanup = undefined;
+        this.forgetTurnId(pendingTurn);
         resolve(result);
       };
       const pendingTurn: PendingTurn = {
@@ -1662,7 +1793,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // without it the engine kept running the turn after /stop.
       const abortTurn = (error: Error) => {
         const pendingTurnState = this.pendingTurns.get(threadId);
-        if (pendingTurnState && pendingTurnState !== pendingTurn) {
+        // Another turn owning the thread does not mean this one is gone: it may
+        // still be tracked by its own turn id (overlapping turns on one thread).
+        if (pendingTurnState && pendingTurnState !== pendingTurn && !this.isPendingTurnTracked(threadId, pendingTurn)) {
           return;
         }
 
@@ -1722,11 +1855,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
         idleBlocking: false,
       }).then((result) => {
         // The turn/start response carries the turn id immediately (the turn
-        // itself runs async); capture it so abort/inactivity can interrupt.
-        if (this.pendingTurns.get(threadId) === pendingTurn && !pendingTurn.turnId) {
+        // itself runs async); capture it so abort/inactivity can interrupt and so
+        // this turn's notifications can be told apart from any other turn running
+        // on the same thread. This response is id-correlated, so it is the
+        // authoritative source for the turn id.
+        if (this.isPendingTurnTracked(threadId, pendingTurn) && !pendingTurn.turnId) {
           const turn = (result as { turn?: { id?: unknown } } | null | undefined)?.turn;
           if (turn && typeof turn.id === "string") {
-            pendingTurn.turnId = turn.id;
+            this.registerTurnId(pendingTurn, turn.id);
           }
         }
       }, (error) => {
@@ -1781,13 +1917,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
     pending.inactivityTimeout = setTimeout(() => {
       pending.inactivityTimeout = undefined;
       const pendingTurnState = this.pendingTurns.get(threadId);
-      if (pendingTurnState && pendingTurnState !== pending) {
-        return;
-      }
-
-      if (pendingTurnState === pending) {
+      if (this.isPendingTurnTracked(threadId, pending)) {
         pending.lastInactivityAt = Date.now();
-        this.pendingTurns.delete(threadId);
+        if (pendingTurnState === pending) {
+          this.pendingTurns.delete(threadId);
+        }
         this.loadedThreads.delete(threadId);
         this.interruptTurn(threadId, pending.turnId);
         pending.reject(
@@ -2007,10 +2141,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
     this.pendingRequests.clear();
     this.nonBlockingRequestIds.clear();
 
-    for (const pending of this.pendingTurns.values()) {
+    // Snapshot first: reject() runs the turn's cleanup, which mutates
+    // pendingTurnsByTurnId while we iterate.
+    for (const pending of new Set([...this.pendingTurns.values(), ...this.pendingTurnsByTurnId.values()])) {
       pending.reject(error);
     }
     this.pendingTurns.clear();
+    this.pendingTurnsByTurnId.clear();
     this.completingTurns = 0;
     for (const watcher of this.goalWatchers.values()) {
       watcher.resolve(watcher.latestGoal);
@@ -2026,7 +2163,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
         return false;
       }
     }
-    return this.pendingTurns.size === 0 && this.completingTurns === 0 && this.goalWatchers.size === 0;
+    return (
+      this.pendingTurns.size === 0 &&
+      // A turn displaced from the thread key is still running.
+      this.pendingTurnsByTurnId.size === 0 &&
+      this.completingTurns === 0 &&
+      this.goalWatchers.size === 0
+    );
   }
 
   private async waitForIdle(): Promise<void> {

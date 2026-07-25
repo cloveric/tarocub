@@ -43,7 +43,7 @@ import { sendManagedCard, settleThenUpdateManagedCard, updateManagedCard } from 
 import { claimLarkRunSlot } from "./bus.js";
 import { larkAccessChatIdFromConversationKey, larkAccessConversationKeyFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
-import type { LarkServiceRuntime, PendingLarkApproval } from "./runtime.js";
+import type { LarkServiceRuntime, PendingLarkApproval, PendingLarkBatch } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
 
 type LarkApprovalChoice = "once" | "session" | "deny";
@@ -544,6 +544,45 @@ function callbackBehavior(value: Record<string, unknown>): Record<string, unknow
   };
 }
 
+/**
+ * Cancel a conversation's PENDING attachment burst (the always-on quiet window
+ * that coalesces a multi-image send plus its caption into one turn).
+ *
+ * A burst parked in its window is invisible to every stop control: /stop and the
+ * card's stop button used to report "nothing running" and then the burst fired a
+ * moment later anyway. Dropping it here resolves its waiters (their promises are
+ * the ones `handleLarkMessage` returns — leaving them pending would hang the
+ * caller) and returns the dropped batch so the caller can report it and
+ * terminalize its members' timeline entries.
+ *
+ * Lives here rather than in message-handler.ts because BOTH stop entry points
+ * need it and message-handler.ts already imports this module (the reverse import
+ * would be a cycle).
+ */
+export function dropPendingLarkAttachmentBurst(
+  runtime: LarkServiceRuntime,
+  conversationKey: string,
+): PendingLarkBatch | undefined {
+  const batch = runtime.pendingBatches.get(conversationKey);
+  if (!batch) {
+    return undefined;
+  }
+  clearTimeout(batch.timer);
+  runtime.pendingBatches.delete(conversationKey);
+  // Resolve (never reject): a rejected waiter would surface as a service-level
+  // error reply for a burst the user themselves cancelled.
+  for (const resolve of batch.resolve) {
+    resolve(true);
+  }
+  return batch;
+}
+
+export function renderLarkDroppedBurstNotice(count: number, locale: Locale): string {
+  return locale === "en"
+    ? `Also cancelled ${count} message(s) still waiting to be merged into a turn.`
+    : `已同时取消 ${count} 条尚未合并成任务的待发送消息。`;
+}
+
 export function isLarkApprovalTextCommand(text: string): boolean {
   return parseLarkApprovalTextCommand(text) !== null;
 }
@@ -737,10 +776,20 @@ export async function handleLarkCardAction(input: {
     // advancing (do not clearPending, which would cancel every queued task too).
     const active = input.runtime.activeRuns.get(value.conversationKey);
     active?.abortController.abort();
+    // A burst still parked in its quiet window is not "running" yet, but it IS
+    // an accepted input that would fire right after this stop — drop it too.
+    const droppedBurst = dropPendingLarkAttachmentBurst(input.runtime, value.conversationKey);
+    const burstNotice = droppedBurst ? renderLarkDroppedBurstNotice(droppedBurst.members.length, locale) : "";
     // The run card updates in place to "已中断"; only post the "已停止。" text when
     // there's no live card to reflect the stop (fallback or nothing running).
-    if (!active?.hasRunCard) {
-      await input.channel.send(input.event.chatId, { text: renderLarkStopResult(Boolean(active), locale) }, {
+    // A dropped burst always needs a word — no card reflects it.
+    if (!active?.hasRunCard || burstNotice) {
+      const text = active?.hasRunCard
+        ? burstNotice
+        : [renderLarkStopResult(Boolean(active) || Boolean(droppedBurst), locale), burstNotice]
+          .filter((part) => part.length > 0)
+          .join("\n");
+      await input.channel.send(input.event.chatId, { text }, {
         replyTo: input.event.messageId,
         ...(replyInThread ? { replyInThread: true } : {}),
       });
