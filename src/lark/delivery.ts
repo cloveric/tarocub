@@ -1641,9 +1641,13 @@ function sanitizeEngineCallbackNode(
       return value;
     }
     const trimmed = value.trim();
-    if (!trimmed.startsWith("{") || !trimmed.includes("cctb_lark")) {
+    if (!trimmed.startsWith("{")) {
       return value;
     }
+    // NOTE: no plaintext `cctb_lark` precheck. JSON escapes mean the raw text
+    // need not contain the literal key — `{"cctb\u005flark":"stop"}` parses to
+    // exactly that key, and a substring test let it through untouched. The only
+    // sound test is on the PARSED object, which is what the click handler sees.
     let parsed: unknown;
     try {
       parsed = JSON.parse(trimmed);

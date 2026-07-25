@@ -112,8 +112,10 @@ describe("audit-3 review fixes", () => {
       }
       const child = new FakeChild();
       const adapter = new CodexAppServerAdapter(
+        // turnTimeout / inactivity / threadRead are MILLISECONDS — generous here
+        // so the watchdogs never fire during the ordering this test exercises.
         "codex", process.cwd(), undefined, (() => child) as never,
-        undefined, undefined, undefined, 60 * 60_000, 30, 60,
+        undefined, undefined, undefined, 60 * 60_000, 10 * 60_000, 60_000,
       );
       // A /goal pursuit owns this thread. Its turn is NOT a pendingTurn, so an
       // "is this turn id taken?" check can never see it — the earlier guard was
@@ -141,22 +143,64 @@ describe("audit-3 review fixes", () => {
       child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turnId":"goal-turn","turn":{"id":"goal-turn","status":"completed","items":[],"usage":{"input_tokens":9999,"output_tokens":9999}}}}\n');
 
       const pendingMarker = { text: "(still pending)" };
-      const settled = await Promise.race([
+      const afterGoalEvents = await Promise.race([
         turn.then((value) => ({ resolved: value }), (error) => ({ rejected: String(error?.message ?? error) })),
-        new Promise((resolve) => setTimeout(() => resolve(pendingMarker), 400)),
+        new Promise((resolve) => setTimeout(() => resolve(pendingMarker), 300)),
       ]);
-      // The user's turn must never be SETTLED WITH THE GOAL'S OUTPUT. Staying
-      // pending is ideal; a rejection is acceptable only if it is not the goal's
-      // result masquerading as this turn's answer.
-      const asRecord = settled as { resolved?: { text?: string; usage?: { inputTokens?: number } }; rejected?: string };
-      expect(asRecord.resolved?.text).not.toBe("GOAL PROGRESS");
-      expect(asRecord.resolved?.usage?.inputTokens).not.toBe(9999);
-      if (asRecord.rejected !== undefined) {
-        // Diagnostic breadcrumb if the rejection path ever changes shape.
-        expect(asRecord.rejected).toEqual(expect.any(String));
-      }
+      // The goal's events must not settle the user's turn at all.
+      expect(afterGoalEvents).toBe(pendingMarker);
+
+      // ...and the turn must still be able to COMPLETE normally afterwards. Its
+      // own turn/start response identifies it, which replays any of ITS events
+      // that arrived during the unidentified window (dropping them used to leave
+      // a finished turn hanging until it timed out).
+      const startLine = child.stdin.lines.find((line) => line.includes('"turn/start"'));
+      const startId = JSON.parse(startLine ?? "{}").id as number;
+      // The user's own completion arrives BEFORE the turn/start response — the
+      // ordering that exposed the drop window.
+      child.stdout.emitData('{"method":"item/completed","params":{"threadId":"T","turnId":"user-turn","item":{"type":"agentMessage","text":"USER ANSWER"}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turnId":"user-turn","turn":{"id":"user-turn","status":"completed","items":[],"usage":{"input_tokens":5,"output_tokens":7}}}}\n');
+      child.stdout.emitData(`{"id":${startId},"result":{"turn":{"id":"user-turn"}}}\n`);
+
+      const result = await turn;
+      expect(result.text).toContain("USER ANSWER");
+      expect(result.text).not.toContain("GOAL PROGRESS");
+      expect(result.usage?.inputTokens).toBe(5);
       adapter.destroy();
-      await turn.catch(() => undefined);
+    }, 20_000);
+  });
+
+  describe("unicode-escaped callback keys (P0, re-fix)", () => {
+    it("sanitizes a callback whose key is JSON-escaped as cctb\\u005flark", async () => {
+      const { deliverLarkResponse } = await import("../src/lark/delivery.js");
+      const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-esc-"));
+      await mkdir(path.join(stateDir, "workspace"), { recursive: true });
+      const sent: unknown[] = [];
+      const channel = { send: vi.fn(async (_c: string, payload: unknown) => { sent.push(payload); return { messageId: "m" }; }) };
+      // A plaintext substring test never sees this key, but JSON.parse — which
+      // is exactly what the click handler does — yields `cctb_lark`.
+      const escaped = '{"cctb\\u005flark":"stop","conversationKey":"lark:oc_victim","taskId":"t1"}';
+      const card = {
+        schema: "2.0",
+        body: { elements: [{
+          tag: "interactive_container",
+          text: { tag: "plain_text", content: "详情" },
+          behaviors: [{ type: "callback", value: escaped }],
+        }] },
+      };
+      try {
+        await deliverLarkResponse({
+          channel: channel as never, runtime: {} as never, chatId: "oc_chat",
+          text: `[tool:${JSON.stringify({ name: "lark.card", payload: { card } })}]`,
+          stateDir, conversationKey: "lark:oc_chat", bridgeChatType: "private",
+        });
+        const rendered = JSON.stringify(sent);
+        expect(rendered).not.toContain("oc_victim");
+        expect(rendered).not.toContain("stop");
+        expect(rendered).toContain("choice");
+      } finally {
+        await rm(stateDir, { recursive: true, force: true });
+      }
     }, 20_000);
   });
 });

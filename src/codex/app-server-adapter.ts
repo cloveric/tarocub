@@ -47,6 +47,12 @@ type AppServerChildProcess = {
 
 export type AppServerSpawnCodex = (command: string, args: string[], options: SpawnOptions) => AppServerChildProcess;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
+/**
+ * Cap on raw notification lines held for a turn whose id is not yet confirmed
+ * (only reachable while a /goal pursuit shares the thread).
+ */
+const UNIDENTIFIED_TURN_LINE_BUFFER_MAX = 200;
+
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_PROTOCOL_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_DIAGNOSTIC_CHARS = 4_000;
@@ -112,6 +118,14 @@ type PendingTurn = {
   usage?: AdapterUsage;
   errorMessage?: string;
   turnId?: string;
+  /**
+   * Raw notification lines that arrived carrying a turnId BEFORE this turn's own
+   * id was known, while a /goal pursuit shared the thread. They cannot be routed
+   * yet (they may be the goal's), and dropping them stranded a turn that had
+   * already completed. They are replayed once the id-correlated `turn/start`
+   * response identifies this turn, and discarded if they belong to another.
+   */
+  pendingUnidentifiedLines?: string[];
   /** Cumulative stderr chars seen when this turn started; failure diagnostics
    * only include stderr produced after this point, so an hours-old tail line
    * (e.g. a stale 401) cannot misclassify an unrelated later failure. */
@@ -969,6 +983,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
         this.appendOversizedStdoutDiagnostic(line);
         continue;
       }
+      if (this.bufferUnidentifiedTurnLine(line)) {
+        continue;
+      }
       this.handleMessage(line);
     }
 
@@ -1386,16 +1403,85 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // an "is this id taken?" test can never see it. While a pursuit owns this
       // thread the id-correlated `turn/start` response is the only authority,
       // matching the same rule the `turn/started` handler already applies.
-      if (this.goalWatchers.has(threadId)) {
+      if (this.pendingTurnsByTurnId.has(turnId)) {
         return undefined;
       }
-      if (this.pendingTurnsByTurnId.has(turnId)) {
+      if (this.goalWatchers.has(threadId)) {
+        // A pursuit shares this thread, so an id-bearing notification may be the
+        // GOAL's — adopting the id is how the goal's output used to settle the
+        // user's turn. But dropping it is equally wrong: the turn's OWN early
+        // notifications arrive here too, and discarding a `turn/completed` left a
+        // finished turn hanging until it timed out. Defer instead; the caller
+        // buffers the raw line and replays it once the id-correlated
+        // `turn/start` response says whose it is.
         return undefined;
       }
       this.registerTurnId(pending, turnId);
       return pending;
     }
     return pending.turnId === turnId ? pending : undefined;
+  }
+
+  /**
+   * While a /goal pursuit shares a thread, a notification carrying a turnId can
+   * belong either to the pursuit or to a user turn whose own id has not been
+   * confirmed yet. Neither routing it nor dropping it is safe, so hold the raw
+   * line on the pending turn and replay it once `turn/start` resolves the id.
+   * Bounded so a wedged pursuit cannot grow it without limit.
+   */
+  private bufferUnidentifiedTurnLine(line: string): boolean {
+    if (this.goalWatchers.size === 0) {
+      return false;
+    }
+    let parsed: { method?: unknown; params?: { threadId?: unknown; turnId?: unknown } } | undefined;
+    try {
+      parsed = JSON.parse(line) as typeof parsed;
+    } catch {
+      return false;
+    }
+    if (typeof parsed?.method !== "string") {
+      return false;
+    }
+    const threadId = this.readString(parsed.params?.threadId);
+    const turnId = this.readString(parsed.params?.turnId);
+    if (!threadId || !turnId || !this.goalWatchers.has(threadId)) {
+      return false;
+    }
+    const pending = this.pendingTurns.get(threadId);
+    if (!pending || pending.turnId) {
+      return false;
+    }
+    if (this.pendingTurnsByTurnId.has(turnId)) {
+      return false;
+    }
+    const buffered = pending.pendingUnidentifiedLines ?? [];
+    if (buffered.length >= UNIDENTIFIED_TURN_LINE_BUFFER_MAX) {
+      return false;
+    }
+    buffered.push(line);
+    pending.pendingUnidentifiedLines = buffered;
+    return true;
+  }
+
+  /** Replay buffered lines that belong to this turn; discard the rest. */
+  private flushUnidentifiedTurnLines(pending: PendingTurn): void {
+    const buffered = pending.pendingUnidentifiedLines;
+    if (!buffered || buffered.length === 0) {
+      return;
+    }
+    pending.pendingUnidentifiedLines = undefined;
+    for (const line of buffered) {
+      let turnId: string | null | undefined;
+      try {
+        const parsed = JSON.parse(line) as { params?: { turnId?: unknown } };
+        turnId = this.readString(parsed.params?.turnId);
+      } catch {
+        continue;
+      }
+      if (turnId === pending.turnId) {
+        this.handleMessage(line);
+      }
+    }
   }
 
   private registerTurnId(pending: PendingTurn, turnId: string): void {
@@ -1407,6 +1493,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
     pending.turnId = turnId;
     this.pendingTurnsByTurnId.set(turnId, pending);
+    this.flushUnidentifiedTurnLines(pending);
   }
 
   private forgetTurnId(pending: PendingTurn): void {
@@ -1457,7 +1544,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private async handleApprovalServerRequest(request: AppServerRequest, toolName: string): Promise<void> {
     const params = request.params ?? {};
     const threadId = this.readString(params.threadId);
-    const pending = threadId ? this.pendingTurns.get(threadId) : undefined;
+    const turnId = this.readString(params.turnId);
+    // Route by turn id when the request carries one: matching on threadId alone
+    // sent a /goal pursuit's command approval to the concurrent user turn's
+    // approval handler (which answered it as if the operator had approved the
+    // user's own command). matchPendingTurn falls back to thread ownership when
+    // no id is present, and defers while a pursuit shares an unidentified turn.
+    const pending = threadId ? this.matchPendingTurn(threadId, turnId) : undefined;
 
     if (!threadId || !pending) {
       this.respondToServerRequest(request.id, { decision: "cancel" });

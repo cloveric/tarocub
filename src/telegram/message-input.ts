@@ -551,7 +551,13 @@ export async function prepareTelegramMessageInput(input: {
         } else {
           lastEmptyAttachment = media.attachment;
         }
-      } catch {
+      } catch (error) {
+        // An operator stop is not a transcription failure: replying "语音转写失败"
+        // right after /stop is misleading. Propagate so the turn's own abort path
+        // reports the interruption (same rule as the Lark handler).
+        if (isCloudAsrCancelledError(error) || abortSignal?.aborted) {
+          throw error;
+        }
         return {
           kind: "reply",
           text: renderTranscriptionFailureMessage(locale, media.attachment),
