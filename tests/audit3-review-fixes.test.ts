@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,38 @@ import { describe, expect, it, vi } from "vitest";
 
 import { readRotatedLogFileTail } from "../src/lark/service.js";
 import { isCloudAsrCancelledError } from "../src/runtime/asr-cloud.js";
+
+class FakeCodexStream extends EventEmitter {
+  emitData(chunk: string): void {
+    this.emit("data", chunk);
+  }
+}
+
+class FakeCodexChild extends EventEmitter {
+  stdin = {
+    lines: [] as string[],
+    write(chunk: string): boolean {
+      this.lines.push(chunk.trim());
+      return true;
+    },
+  };
+  stdout = new FakeCodexStream();
+  stderr = new FakeCodexStream();
+
+  kill(): void {
+    // No process exists in protocol tests.
+  }
+}
+
+async function waitForCodexWrites(child: FakeCodexChild, count: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (child.stdin.lines.length >= count) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${count} Codex protocol writes`);
+}
 
 // Findings from Codex's review of the audit-3 release (v0.1.185). Each test
 // fails without its fix.
@@ -99,18 +132,7 @@ describe("audit-3 review fixes", () => {
   describe("goal cross-talk during the unknown-turnId window (P1, re-fix)", () => {
     it("does not settle a user turn with a goal's events while its own turnId is unregistered", async () => {
       const { CodexAppServerAdapter } = await import("../src/codex/app-server-adapter.js");
-      const { EventEmitter } = await import("node:events");
-
-      class FakeStream extends EventEmitter {
-        emitData(chunk: string) { this.emit("data", chunk); }
-      }
-      class FakeChild extends EventEmitter {
-        stdin = { lines: [] as string[], write(chunk: string) { this.lines.push(chunk.trim()); return true; } };
-        stdout = new FakeStream();
-        stderr = new FakeStream();
-        kill() { /* no-op */ }
-      }
-      const child = new FakeChild();
+      const child = new FakeCodexChild();
       const adapter = new CodexAppServerAdapter(
         // turnTimeout / inactivity / threadRead are MILLISECONDS — generous here
         // so the watchdogs never fire during the ordering this test exercises.
@@ -125,22 +147,16 @@ describe("audit-3 review fixes", () => {
       });
 
       const turn = adapter.sendUserMessage("telegram-1", { text: "user question", files: [] });
-      const waitForLines = async (n: number) => {
-        for (let i = 0; i < 200; i += 1) {
-          if (child.stdin.lines.length >= n) return;
-          await new Promise((resolve) => setTimeout(resolve, 5));
-        }
-      };
-      await waitForLines(1);
+      await waitForCodexWrites(child, 1);
       child.stdout.emitData('{"id":1,"result":{"platformOs":"darwin"}}\n');
-      await waitForLines(2);
+      await waitForCodexWrites(child, 2);
       child.stdout.emitData('{"id":2,"result":{"thread":{"id":"T"}}}\n');
-      await waitForLines(3);
+      await waitForCodexWrites(child, 3);
 
       // The goal's output arrives BEFORE the user's turn/start response — the
       // exact window Codex reproduced against v0.1.186.
       child.stdout.emitData('{"method":"item/completed","params":{"threadId":"T","turnId":"goal-turn","item":{"type":"agentMessage","text":"GOAL PROGRESS"}}}\n');
-      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turnId":"goal-turn","turn":{"id":"goal-turn","status":"completed","items":[],"usage":{"input_tokens":9999,"output_tokens":9999}}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turn":{"id":"goal-turn","status":"completed","items":[],"usage":{"input_tokens":9999,"output_tokens":9999}}}}\n');
 
       const pendingMarker = { text: "(still pending)" };
       const afterGoalEvents = await Promise.race([
@@ -159,7 +175,7 @@ describe("audit-3 review fixes", () => {
       // The user's own completion arrives BEFORE the turn/start response — the
       // ordering that exposed the drop window.
       child.stdout.emitData('{"method":"item/completed","params":{"threadId":"T","turnId":"user-turn","item":{"type":"agentMessage","text":"USER ANSWER"}}}\n');
-      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turnId":"user-turn","turn":{"id":"user-turn","status":"completed","items":[],"usage":{"input_tokens":5,"output_tokens":7}}}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turn":{"id":"user-turn","status":"completed","items":[],"usage":{"input_tokens":5,"output_tokens":7}}}}\n');
       child.stdout.emitData(`{"id":${startId},"result":{"turn":{"id":"user-turn"}}}\n`);
 
       const result = await turn;
@@ -167,6 +183,130 @@ describe("audit-3 review fixes", () => {
       expect(result.text).not.toContain("GOAL PROGRESS");
       expect(result.usage?.inputTokens).toBe(5);
       adapter.destroy();
+    }, 20_000);
+
+    it("cancels a buffered approval request that belongs to the concurrent goal turn", async () => {
+      const { CodexAppServerAdapter } = await import("../src/codex/app-server-adapter.js");
+      const child = new FakeCodexChild();
+      const adapter = new CodexAppServerAdapter(
+        "codex", process.cwd(), undefined, (() => child) as never,
+        undefined, undefined, undefined, 60 * 60_000, 10 * 60_000, 60_000,
+      );
+      (adapter as unknown as { goalWatchers: Map<string, unknown> }).goalWatchers.set("T", {
+        resolve: () => undefined, reject: () => undefined,
+      });
+
+      const turn = adapter.sendUserMessage("telegram-approval", { text: "user question", files: [] });
+      try {
+        await waitForCodexWrites(child, 1);
+        child.stdout.emitData('{"id":1,"result":{"platformOs":"darwin"}}\n');
+        await waitForCodexWrites(child, 2);
+        child.stdout.emitData('{"id":2,"result":{"thread":{"id":"T"}}}\n');
+        await waitForCodexWrites(child, 3);
+
+        child.stdout.emitData('{"id":99,"method":"item/commandExecution/requestApproval","params":{"threadId":"T","turnId":"goal-turn","command":"echo goal"}}\n');
+        expect(child.stdin.lines.some((line) => JSON.parse(line).id === 99)).toBe(false);
+
+        const startLine = child.stdin.lines.find((line) => line.includes('"turn/start"'));
+        const startId = JSON.parse(startLine ?? "{}").id as number;
+        child.stdout.emitData(`{"id":${startId},"result":{"turn":{"id":"user-turn"}}}\n`);
+        await waitForCodexWrites(child, 4);
+
+        const approvalResponse = child.stdin.lines
+          .map((line) => JSON.parse(line) as { id?: number; result?: unknown })
+          .find((entry) => entry.id === 99);
+        expect(approvalResponse?.result).toEqual({ decision: "cancel" });
+
+        child.stdout.emitData('{"method":"item/completed","params":{"threadId":"T","turnId":"user-turn","item":{"type":"agentMessage","text":"USER ANSWER"}}}\n');
+        child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"T","turn":{"id":"user-turn","status":"completed","items":[]}}}\n');
+        await expect(turn).resolves.toEqual(expect.objectContaining({ text: expect.stringContaining("USER ANSWER") }));
+      } finally {
+        adapter.destroy();
+        await turn.catch(() => undefined);
+      }
+    }, 20_000);
+
+    it("settles a still-buffered approval request when the holding turn is evicted", async () => {
+      const { CodexAppServerAdapter } = await import("../src/codex/app-server-adapter.js");
+      const child = new FakeCodexChild();
+      const adapter = new CodexAppServerAdapter(
+        "codex", process.cwd(), undefined, (() => child) as never,
+        undefined, undefined, undefined, 60 * 60_000, 10 * 60_000, 60_000,
+      );
+      (adapter as unknown as { goalWatchers: Map<string, unknown> }).goalWatchers.set("T", {
+        resolve: () => undefined, reject: () => undefined,
+      });
+
+      const turn = adapter.sendUserMessage("telegram-evicted", { text: "user question", files: [] });
+      try {
+        await waitForCodexWrites(child, 1);
+        child.stdout.emitData('{"id":1,"result":{"platformOs":"darwin"}}\n');
+        await waitForCodexWrites(child, 2);
+        child.stdout.emitData('{"id":2,"result":{"thread":{"id":"T"}}}\n');
+        await waitForCodexWrites(child, 3);
+
+        // The goal's approval is buffered: its owner cannot be known until the
+        // user turn's own turn/start response lands.
+        child.stdout.emitData('{"id":99,"method":"item/commandExecution/requestApproval","params":{"threadId":"T","turnId":"goal-turn","command":"echo goal"}}\n');
+
+        // The holding turn dies first (here: an unsupported request faults the
+        // thread). The buffer must not vanish with it — the app-server is still
+        // blocked on a response to id 99, which would wedge the pursuit.
+        child.stdout.emitData('{"id":100,"method":"thread/unsupportedRequest","params":{"threadId":"T"}}\n');
+        await expect(turn).rejects.toThrow(/Unsupported Codex app-server request/);
+
+        const approvalResponse = child.stdin.lines
+          .map((line) => JSON.parse(line) as { id?: number; result?: unknown })
+          .find((entry) => entry.id === 99);
+        expect(approvalResponse?.result).toEqual({ decision: "cancel" });
+      } finally {
+        adapter.destroy();
+        await turn.catch(() => undefined);
+      }
+    }, 20_000);
+
+    it("fails safely when unidentified turn events exceed the byte budget", async () => {
+      const { CodexAppServerAdapter } = await import("../src/codex/app-server-adapter.js");
+      const child = new FakeCodexChild();
+      const adapter = new CodexAppServerAdapter(
+        "codex", process.cwd(), undefined, (() => child) as never,
+        undefined, undefined, undefined, 60 * 60_000, 10 * 60_000, 60_000,
+      );
+      (adapter as unknown as { goalWatchers: Map<string, unknown> }).goalWatchers.set("T", {
+        resolve: () => undefined, reject: () => undefined,
+      });
+
+      const turn = adapter.sendUserMessage("telegram-buffer", { text: "user question", files: [] });
+      try {
+        await waitForCodexWrites(child, 1);
+        child.stdout.emitData('{"id":1,"result":{"platformOs":"darwin"}}\n');
+        await waitForCodexWrites(child, 2);
+        child.stdout.emitData('{"id":2,"result":{"thread":{"id":"T"}}}\n');
+        await waitForCodexWrites(child, 3);
+
+        const largeDelta = "x".repeat(700 * 1024);
+        for (let index = 0; index < 3; index += 1) {
+          child.stdout.emitData(`${JSON.stringify({
+            method: "item/agentMessage/delta",
+            params: { threadId: "T", turnId: `unknown-${index}`, delta: largeDelta },
+          })}\n`);
+        }
+
+        const outcome = await Promise.race([
+          turn.then(
+            () => ({ kind: "resolved" as const, message: "" }),
+            (error) => ({ kind: "rejected" as const, message: String(error?.message ?? error) }),
+          ),
+          new Promise<{ kind: "timeout"; message: string }>((resolve) => {
+            setTimeout(() => resolve({ kind: "timeout", message: "" }), 500);
+          }),
+        ]);
+        expect(outcome.kind).toBe("rejected");
+        expect(outcome.message).toContain("unidentified turn event buffer exceeded");
+      } finally {
+        adapter.destroy();
+        await turn.catch(() => undefined);
+      }
     }, 20_000);
   });
 

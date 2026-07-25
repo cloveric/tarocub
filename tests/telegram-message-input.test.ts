@@ -10,6 +10,7 @@ import {
   prepareTelegramMessageInput,
   TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES,
 } from "../src/telegram/message-input.js";
+import { CloudAsrCancelledError } from "../src/runtime/asr-cloud.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
 function createNormalizedMessage(
@@ -285,6 +286,61 @@ describe("prepareTelegramMessageInput", () => {
       expect(result.kind).toBe("ready");
       expect(normalized.replyContext?.text).toBe("[Quoted audio transcript]\nquoted audio transcript");
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("propagates cancellation while transcribing a direct audio attachment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const cancelled = new CloudAsrCancelledError("cancelled");
+    const normalized = createNormalizedMessage("", [
+      { fileId: "audio-1", fileName: "request.m4a", kind: "audio" },
+    ]);
+
+    try {
+      await expect(prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "audio/request.m4a" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice: vi.fn().mockRejectedValue(cancelled),
+      })).rejects.toBe(cancelled);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("propagates cancellation while transcribing quoted audio", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const cancelled = new CloudAsrCancelledError("cancelled");
+    const normalized: NormalizedTelegramMessage = {
+      ...createNormalizedMessage("draft from this", []),
+      replyContext: {
+        messageId: 99,
+        text: "",
+        audioAttachment: {
+          fileId: "quoted-audio-1",
+          fileName: "request.m4a",
+          kind: "audio",
+        },
+      },
+    };
+
+    try {
+      await expect(prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "audio/request.m4a" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice: vi.fn().mockRejectedValue(cancelled),
+      })).rejects.toBe(cancelled);
     } finally {
       await removeTempRoot(root);
     }

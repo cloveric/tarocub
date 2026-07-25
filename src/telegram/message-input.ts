@@ -589,7 +589,10 @@ export async function prepareTelegramMessageInput(input: {
         if (transcript) {
           appendQuotedAudioTranscript(normalized.replyContext, transcript);
         }
-      } catch {
+      } catch (error) {
+        if (isCloudAsrCancelledError(error) || abortSignal?.aborted) {
+          throw error;
+        }
         return {
           kind: "reply",
           text: renderTranscriptionFailureMessage(locale, quotedAudio.attachment, true),

@@ -48,10 +48,11 @@ type AppServerChildProcess = {
 export type AppServerSpawnCodex = (command: string, args: string[], options: SpawnOptions) => AppServerChildProcess;
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 /**
- * Cap on raw notification lines held for a turn whose id is not yet confirmed
+ * Cap on raw turn-scoped JSON-RPC lines held while a turn id is not yet confirmed
  * (only reachable while a /goal pursuit shares the thread).
  */
 const UNIDENTIFIED_TURN_LINE_BUFFER_MAX = 200;
+const UNIDENTIFIED_TURN_LINE_BUFFER_MAX_BYTES = 2 * 1024 * 1024;
 
 const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 const MAX_PROTOCOL_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -119,13 +120,15 @@ type PendingTurn = {
   errorMessage?: string;
   turnId?: string;
   /**
-   * Raw notification lines that arrived carrying a turnId BEFORE this turn's own
-   * id was known, while a /goal pursuit shared the thread. They cannot be routed
-   * yet (they may be the goal's), and dropping them stranded a turn that had
-   * already completed. They are replayed once the id-correlated `turn/start`
-   * response identifies this turn, and discarded if they belong to another.
+   * Raw turn-scoped JSON-RPC lines that arrived carrying a turnId BEFORE this
+   * turn's own id was known, while a /goal pursuit shared the thread. They cannot
+   * be routed yet (they may be the goal's), and dropping them stranded a turn
+   * that had already completed. They are replayed once the id-correlated
+   * `turn/start` response identifies this turn; mismatched requests are settled
+   * explicitly and mismatched notifications are discarded.
    */
   pendingUnidentifiedLines?: string[];
+  pendingUnidentifiedBytes?: number;
   /** Cumulative stderr chars seen when this turn started; failure diagnostics
    * only include stderr produced after this point, so an hours-old tail line
    * (e.g. a stale 401) cannot misclassify an unrelated later failure. */
@@ -1192,13 +1195,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     if (parsed.method === "turn/completed") {
       const threadId = this.readString(parsed.params?.threadId);
-      const turnId =
-        typeof parsed.params?.turn === "object" &&
-        parsed.params?.turn !== null &&
-        "id" in parsed.params.turn &&
-        typeof (parsed.params.turn as { id?: unknown }).id === "string"
-          ? (parsed.params.turn as { id: string }).id
-          : undefined;
+      const turnId = this.readTurnIdFromParams(parsed.params);
       if (!threadId) {
         return;
       }
@@ -1237,7 +1234,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         return;
       }
 
-      void this.completeTurn(threadId, turnId, pending).catch((error) => {
+      void this.completeTurn(threadId, turnId ?? undefined, pending).catch((error) => {
         pending.reject(this.withDiagnostics(error instanceof Error ? error.message : String(error), pending.stderrOffset));
       }).finally(() => {
         this.finishCompletingTurn();
@@ -1263,6 +1260,19 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
   private readString(value: unknown): string | null {
     return typeof value === "string" ? value : null;
+  }
+
+  private readTurnIdFromParams(params: Record<string, unknown> | undefined): string | null {
+    const directTurnId = this.readString(params?.turnId);
+    if (directTurnId) {
+      return directTurnId;
+    }
+
+    const turn = params?.turn;
+    if (typeof turn !== "object" || turn === null || Array.isArray(turn)) {
+      return null;
+    }
+    return this.readString((turn as Record<string, unknown>).id);
   }
 
   private readErrorMessage(value: unknown): string | null {
@@ -1423,7 +1433,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   /**
-   * While a /goal pursuit shares a thread, a notification carrying a turnId can
+   * While a /goal pursuit shares a thread, a turn-scoped event or request can
    * belong either to the pursuit or to a user turn whose own id has not been
    * confirmed yet. Neither routing it nor dropping it is safe, so hold the raw
    * line on the pending turn and replay it once `turn/start` resolves the id.
@@ -1433,7 +1443,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     if (this.goalWatchers.size === 0) {
       return false;
     }
-    let parsed: { method?: unknown; params?: { threadId?: unknown; turnId?: unknown } } | undefined;
+    let parsed: JsonRpcResponse | undefined;
     try {
       parsed = JSON.parse(line) as typeof parsed;
     } catch {
@@ -1443,7 +1453,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return false;
     }
     const threadId = this.readString(parsed.params?.threadId);
-    const turnId = this.readString(parsed.params?.turnId);
+    const turnId = this.readTurnIdFromParams(parsed.params);
     if (!threadId || !turnId || !this.goalWatchers.has(threadId)) {
       return false;
     }
@@ -1455,33 +1465,101 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return false;
     }
     const buffered = pending.pendingUnidentifiedLines ?? [];
-    if (buffered.length >= UNIDENTIFIED_TURN_LINE_BUFFER_MAX) {
-      return false;
+    const bufferedBytes = pending.pendingUnidentifiedBytes ?? 0;
+    const lineBytes = Buffer.byteLength(line, "utf8");
+    if (
+      buffered.length >= UNIDENTIFIED_TURN_LINE_BUFFER_MAX ||
+      bufferedBytes + lineBytes > UNIDENTIFIED_TURN_LINE_BUFFER_MAX_BYTES
+    ) {
+      const message = [
+        "Codex app-server unidentified turn event buffer exceeded its safety limit",
+        `(max ${UNIDENTIFIED_TURN_LINE_BUFFER_MAX} lines / ${UNIDENTIFIED_TURN_LINE_BUFFER_MAX_BYTES} bytes)`,
+      ].join(" ");
+      pending.pendingUnidentifiedLines = [...buffered, line];
+      pending.pendingUnidentifiedBytes = bufferedBytes + lineBytes;
+      this.drainUnidentifiedTurnLines(pending, message);
+      this.failPendingTurn(threadId, message);
+      return true;
     }
     buffered.push(line);
     pending.pendingUnidentifiedLines = buffered;
+    pending.pendingUnidentifiedBytes = bufferedBytes + lineBytes;
     return true;
   }
 
-  /** Replay buffered lines that belong to this turn; discard the rest. */
+  /** Replay this turn's buffered lines and explicitly settle mismatched RPC requests. */
   private flushUnidentifiedTurnLines(pending: PendingTurn): void {
     const buffered = pending.pendingUnidentifiedLines;
     if (!buffered || buffered.length === 0) {
+      pending.pendingUnidentifiedBytes = undefined;
       return;
     }
     pending.pendingUnidentifiedLines = undefined;
+    pending.pendingUnidentifiedBytes = undefined;
     for (const line of buffered) {
-      let turnId: string | null | undefined;
+      let parsed: JsonRpcResponse;
       try {
-        const parsed = JSON.parse(line) as { params?: { turnId?: unknown } };
-        turnId = this.readString(parsed.params?.turnId);
+        parsed = JSON.parse(line) as JsonRpcResponse;
       } catch {
         continue;
       }
-      if (turnId === pending.turnId) {
+      if (this.readTurnIdFromParams(parsed.params) === pending.turnId) {
         this.handleMessage(line);
+      } else {
+        this.settleUnmatchedBufferedServerRequest(parsed, "No matching pending Codex turn");
       }
     }
+  }
+
+  /**
+   * A turn can be evicted (/stop, timeout, failed turn/start, unsupported request)
+   * while it still holds buffered lines whose owner was never resolved. Dropping
+   * buffered NOTIFICATIONS is harmless, but a buffered server REQUEST leaves the
+   * app-server waiting on a response that will now never arrive — wedging the
+   * /goal pursuit that issued it. Settle them exactly as the unmatched path does.
+   */
+  private drainUnidentifiedTurnLines(pending: PendingTurn, message: string): void {
+    const buffered = pending.pendingUnidentifiedLines;
+    pending.pendingUnidentifiedLines = undefined;
+    pending.pendingUnidentifiedBytes = undefined;
+    if (!buffered) {
+      return;
+    }
+    for (const line of buffered) {
+      this.settleUnmatchedBufferedServerRequest(line, message);
+    }
+  }
+
+  private settleUnmatchedBufferedServerRequest(line: string, message: string): void;
+  private settleUnmatchedBufferedServerRequest(parsed: JsonRpcResponse, message: string): void;
+  private settleUnmatchedBufferedServerRequest(lineOrParsed: string | JsonRpcResponse, message: string): void {
+    let parsed: JsonRpcResponse;
+    if (typeof lineOrParsed === "string") {
+      try {
+        parsed = JSON.parse(lineOrParsed) as JsonRpcResponse;
+      } catch {
+        return;
+      }
+    } else {
+      parsed = lineOrParsed;
+    }
+
+    if (
+      (typeof parsed.id !== "number" && typeof parsed.id !== "string") ||
+      typeof parsed.method !== "string"
+    ) {
+      return;
+    }
+    if (
+      parsed.method === "item/commandExecution/requestApproval" ||
+      parsed.method === "execCommandApproval" ||
+      parsed.method === "item/fileChange/requestApproval" ||
+      parsed.method === "applyPatchApproval"
+    ) {
+      this.respondToServerRequest(parsed.id, { decision: "cancel" });
+      return;
+    }
+    this.rejectServerRequest(parsed.id, message);
   }
 
   private registerTurnId(pending: PendingTurn, turnId: string): void {
@@ -1647,6 +1725,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     // child is caught by the next thread/resume|read timeout (destroyOnTimeout).
     this.pendingTurns.delete(threadId);
     this.loadedThreads.delete(threadId);
+    this.drainUnidentifiedTurnLines(pending, message);
     pending.reject(this.withDiagnostics(this.withAppServerState(message, threadId, pending), pending.stderrOffset));
     this.notifyIdleWaitersIfIdle();
   }
@@ -1919,6 +1998,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         }
         this.loadedThreads.delete(threadId);
         this.interruptTurn(threadId, pendingTurn.turnId);
+        this.drainUnidentifiedTurnLines(pendingTurn, error.message);
         pendingTurn.reject(error);
         this.notifyIdleWaitersIfIdle();
       };
@@ -1988,7 +2068,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
         }
         this.pendingTurns.delete(threadId);
         this.notifyIdleWaitersIfIdle();
-        pendingTurn.reject(error instanceof Error ? error : new Error(String(error)));
+        const turnStartError = error instanceof Error ? error : new Error(String(error));
+        this.drainUnidentifiedTurnLines(pendingTurn, turnStartError.message);
+        pendingTurn.reject(turnStartError);
       });
     });
 
@@ -2039,6 +2121,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         }
         this.loadedThreads.delete(threadId);
         this.interruptTurn(threadId, pending.turnId);
+        this.drainUnidentifiedTurnLines(pending, "Codex app-server turn became inactive");
         pending.reject(
           this.withDiagnostics(
             this.withAppServerState(
