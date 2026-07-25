@@ -459,4 +459,30 @@ describe("cloud-ASR config keys (whitelisted, not extras)", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  it("reads ASR_MAX_AUDIO_SECONDS from lark.env and preserves it across regeneration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-max-"));
+    const stateDir = path.join(home, ".cctb", "maxinst");
+    await mkdir(stateDir, { recursive: true });
+    const envPath = path.join(stateDir, "lark.env");
+    await writeFile(envPath, [
+      "LARK_APP_ID=cli_x",
+      "LARK_APP_SECRET=sek",
+      // Must track the ASR service's own cap: the injected agent instruction
+      // quotes this number, and an agent told the wrong bound submits a request
+      // long enough to wedge the shared model for every instance.
+      "ASR_MAX_AUDIO_SECONDS=180",
+      "",
+    ].join("\n"), "utf8");
+
+    try {
+      const loaded = await loadLarkRuntimeEnv({ HOME: home, CCTB_LARK_INSTANCE: "maxinst" });
+      expect(loaded.ASR_MAX_AUDIO_SECONDS).toBe("180");
+
+      await writeLarkEnvFile({ HOME: home, CCTB_LARK_INSTANCE: "maxinst" }, { appId: "cli_x", appSecret: "sek" });
+      expect(await readFile(envPath, "utf8")).toContain('ASR_MAX_AUDIO_SECONDS="180"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 });

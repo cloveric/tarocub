@@ -29,6 +29,14 @@ export interface LarkRuntimeEnv {
   ASR_CLOUD_THRESHOLD_SECONDS?: string;
   ASR_CLOUD_TASK_TIMEOUT_SECONDS?: string;
   ASR_CLOUD_JOB_RETENTION_DAYS?: string;
+  /**
+   * Longest single request the local ASR accepts, in seconds. The bridge never
+   * hits this (it chunks at ASR_CHUNK_SECONDS), but the injected agent
+   * instruction quotes it so an engine transcribing a file ITSELF knows the
+   * boundary. Keep it equal to the ASR service's own ASR_MAX_AUDIO_SECONDS:
+   * a long request there wedges the shared model and blocks every instance.
+   */
+  ASR_MAX_AUDIO_SECONDS?: string;
   CCTB_LARK_DEBUG?: string;
   CCTB_LARK_REACTION_EMOJI?: string;
   LARK_REACTION_EMOJI?: string;

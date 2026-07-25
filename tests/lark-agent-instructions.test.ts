@@ -9,7 +9,7 @@ describe("larkAgentInstructions", () => {
     // Bound covers the two optional ASR lines, appended only where the machine
     // actually has a local ASR backend / a configured Tingwu dir (e.g. the dev
     // box running the suite); CI has neither, so both stay absent there.
-    expect(instructions.length).toBeLessThan(2600);
+    expect(instructions.length).toBeLessThan(2800);
     expect(instructions.split("\n").length).toBeLessThanOrEqual(10);
   });
 
@@ -28,6 +28,43 @@ describe("larkAgentInstructions", () => {
         delete process.env.ASR_HTTP_URL;
       } else {
         process.env.ASR_HTTP_URL = previous;
+      }
+    }
+  });
+
+  it("gives the local ASR a length boundary AND the way out of it", () => {
+    const previousUrl = process.env.ASR_HTTP_URL;
+    const previousMax = process.env.ASR_MAX_AUDIO_SECONDS;
+    process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
+    delete process.env.ASR_MAX_AUDIO_SECONDS;
+    try {
+      // An over-long request wedged the shared model in an uninterruptible MPS
+      // wait and its global inference lock was never released, so EVERY
+      // instance's transcription then timed out. Stating only "it failed" is not
+      // enough: without the split remedy the agent reports failure and stops.
+      const asr = localAsrAgentInstruction() ?? "";
+      expect(asr).toContain("Max 300s per request");
+      expect(asr).toContain("the model is shared");
+      expect(asr).toContain("never be retried as-is");
+      expect(asr).toContain("-segment_time 300");
+
+      // The quoted bound must follow the service's configured cap, not a
+      // hard-coded number that silently drifts away from it.
+      process.env.ASR_MAX_AUDIO_SECONDS = "120";
+      const tightened = localAsrAgentInstruction() ?? "";
+      expect(tightened).toContain("Max 120s per request");
+      expect(tightened).toContain("-segment_time 120");
+      expect(tightened).not.toContain("300s");
+    } finally {
+      if (previousUrl === undefined) {
+        delete process.env.ASR_HTTP_URL;
+      } else {
+        process.env.ASR_HTTP_URL = previousUrl;
+      }
+      if (previousMax === undefined) {
+        delete process.env.ASR_MAX_AUDIO_SECONDS;
+      } else {
+        process.env.ASR_MAX_AUDIO_SECONDS = previousMax;
       }
     }
   });

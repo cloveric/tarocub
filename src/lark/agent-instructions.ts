@@ -28,12 +28,27 @@ function isLocalAsrAvailable(): boolean {
  * that can't honor it. The endpoint is read from env (not hard-coded), so this is
  * safe to ship — it only appears where an ASR is actually configured/installed.
  */
+/** Default must match the ASR service's own ASR_MAX_AUDIO_SECONDS. */
+const DEFAULT_ASR_MAX_AUDIO_SECONDS = 300;
+
+function localAsrMaxAudioSeconds(): number {
+  const raw = Number.parseInt((process.env.ASR_MAX_AUDIO_SECONDS ?? "").trim(), 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_ASR_MAX_AUDIO_SECONDS;
+}
+
 export function localAsrAgentInstruction(): string | undefined {
   if (!isLocalAsrAvailable()) {
     return undefined;
   }
   const httpUrl = (process.env.ASR_HTTP_URL ?? "").trim() || "http://127.0.0.1:8412/transcribe";
-  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Use frames/OCR only if it fails.`;
+  const maxSeconds = localAsrMaxAudioSeconds();
+  // The length bound is not cosmetic. The ASR serializes inference behind one
+  // global lock, and an over-long request wedged the model in an uninterruptible
+  // MPS wait — the lock was never released, so EVERY instance's transcription
+  // then timed out. The service now rejects over-long input outright; this tells
+  // the agent where the edge is and what to do at it, so a rejection becomes a
+  // split-and-retry instead of a reported failure.
+  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request — the model is shared, longer input is rejected and must never be retried as-is; split it first (ffmpeg -i in.wav -f segment -segment_time ${maxSeconds} -c copy part_%03d.wav) and transcribe each part in order. Use frames/OCR only if it fails.`;
 }
 
 /**

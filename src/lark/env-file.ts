@@ -79,6 +79,7 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
     ASR_CLOUD_THRESHOLD_SECONDS: env.ASR_CLOUD_THRESHOLD_SECONDS ?? parsed.ASR_CLOUD_THRESHOLD_SECONDS,
     ASR_CLOUD_TASK_TIMEOUT_SECONDS: env.ASR_CLOUD_TASK_TIMEOUT_SECONDS ?? parsed.ASR_CLOUD_TASK_TIMEOUT_SECONDS,
     ASR_CLOUD_JOB_RETENTION_DAYS: env.ASR_CLOUD_JOB_RETENTION_DAYS ?? parsed.ASR_CLOUD_JOB_RETENTION_DAYS,
+    ASR_MAX_AUDIO_SECONDS: env.ASR_MAX_AUDIO_SECONDS ?? parsed.ASR_MAX_AUDIO_SECONDS,
     CCTB_LARK_DEBUG: env.CCTB_LARK_DEBUG ?? parsed.CCTB_LARK_DEBUG,
     TAROCUB_INSTANCE: env.TAROCUB_INSTANCE ?? larkInstance,
     CODEX_TELEGRAM_INSTANCE: env.CODEX_TELEGRAM_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
@@ -183,7 +184,7 @@ export async function writeLarkEnvFile(
     const existing = await readFile(envPath, "utf8");
     preservedExtras = parseLarkEnvExtras(existing);
     const parsedExisting = parseLarkEnvFile(existing);
-    for (const key of ["TINGWU_ASR_DIR", "ASR_CLOUD_THRESHOLD_SECONDS", "ASR_CLOUD_TASK_TIMEOUT_SECONDS", "ASR_CLOUD_JOB_RETENTION_DAYS"] as const) {
+    for (const key of ["TINGWU_ASR_DIR", "ASR_CLOUD_THRESHOLD_SECONDS", "ASR_CLOUD_TASK_TIMEOUT_SECONDS", "ASR_CLOUD_JOB_RETENTION_DAYS", "ASR_MAX_AUDIO_SECONDS"] as const) {
       const value = parsedExisting[key];
       if (value !== undefined) {
         preservedConfig[key] = value;
@@ -311,7 +312,7 @@ function parseLarkEnvExtras(content: string, dropped?: string[]): Record<string,
 
 function isSupportedLarkEnvKey(key: string): key is keyof Pick<
   LarkRuntimeEnv,
-  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "TINGWU_ASR_DIR" | "ASR_CLOUD_THRESHOLD_SECONDS" | "ASR_CLOUD_TASK_TIMEOUT_SECONDS" | "ASR_CLOUD_JOB_RETENTION_DAYS"
+  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "TINGWU_ASR_DIR" | "ASR_CLOUD_THRESHOLD_SECONDS" | "ASR_CLOUD_TASK_TIMEOUT_SECONDS" | "ASR_CLOUD_JOB_RETENTION_DAYS" | "ASR_MAX_AUDIO_SECONDS"
 > {
   return key === "LARK_APP_ID" ||
     key === "LARK_APP_SECRET" ||
@@ -328,7 +329,10 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "TINGWU_ASR_DIR" ||
     key === "ASR_CLOUD_THRESHOLD_SECONDS" ||
     key === "ASR_CLOUD_TASK_TIMEOUT_SECONDS" ||
-    key === "ASR_CLOUD_JOB_RETENTION_DAYS";
+    key === "ASR_CLOUD_JOB_RETENTION_DAYS" ||
+    // Quoted verbatim in the injected agent instruction so an engine that
+    // transcribes a file itself knows where the local ASR cuts off.
+    key === "ASR_MAX_AUDIO_SECONDS";
 }
 
 // Namespaces the bridge process reads to control its OWN behaviour (transport, active-turn
