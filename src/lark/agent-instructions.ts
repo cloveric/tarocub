@@ -36,19 +36,26 @@ function localAsrMaxAudioSeconds(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_ASR_MAX_AUDIO_SECONDS;
 }
 
+function localAsrSegmentSeconds(maxSeconds: number): number {
+  // Container timestamps can push a nominally exact segment slightly over the
+  // service cap, so retain headroom instead of segmenting at the rejection edge.
+  return Math.max(1, Math.floor(maxSeconds * 0.9));
+}
+
 export function localAsrAgentInstruction(): string | undefined {
   if (!isLocalAsrAvailable()) {
     return undefined;
   }
   const httpUrl = (process.env.ASR_HTTP_URL ?? "").trim() || "http://127.0.0.1:8412/transcribe";
   const maxSeconds = localAsrMaxAudioSeconds();
+  const segmentSeconds = localAsrSegmentSeconds(maxSeconds);
   // The length bound is not cosmetic. The ASR serializes inference behind one
   // global lock, and an over-long request wedged the model in an uninterruptible
   // MPS wait — the lock was never released, so EVERY instance's transcription
   // then timed out. The service now rejects over-long input outright; this tells
   // the agent where the edge is and what to do at it, so a rejection becomes a
   // split-and-retry instead of a reported failure.
-  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request — the model is shared, longer input is rejected and must never be retried as-is; split it first (ffmpeg -i in.wav -f segment -segment_time ${maxSeconds} -c copy part_%03d.wav) and transcribe each part in order. Use frames/OCR only if it fails.`;
+  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request — the model is shared, longer input is rejected and must never be retried as-is; split it first with headroom (ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} -reset_timestamps 1 part_%03d.wav) and transcribe each part in order. Use frames/OCR only if it fails.`;
 }
 
 /**

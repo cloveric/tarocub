@@ -18,6 +18,7 @@ import type {
 } from "./adapter.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
+import { renderBackgroundTaskHeader } from "../runtime/background-task-header.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -241,11 +242,7 @@ function renderBackgroundTaskTurnResult(metadata: ClaudeTaskNotificationMetadata
   if (summary) {
     return summary;
   }
-  const status = metadata.status?.trim().toLowerCase();
-  if (status === "failed" || status === "error") {
-    return "Background task failed.";
-  }
-  return "Background task completed.";
+  return `${renderBackgroundTaskHeader("en", metadata.status)}.`;
 }
 
 /**

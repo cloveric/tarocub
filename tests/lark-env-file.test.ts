@@ -5,7 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { resolveLarkRuntimeConfig } from "../src/lark/config.js";
-import { applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir, writeLarkEnvFile } from "../src/lark/env-file.js";
+import { applyLarkBridgeRuntimeEnv, applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir, writeLarkEnvFile } from "../src/lark/env-file.js";
 
 describe("Lark env files", () => {
   it("uses CCTB_LARK_INSTANCE as the Lark-specific state directory selector", async () => {
@@ -428,6 +428,24 @@ describe("Lark env files", () => {
 });
 
 describe("cloud-ASR config keys (whitelisted, not extras)", () => {
+  it("exports all bridge-owned ASR config into the runtime without clobbering existing values", () => {
+    const target: NodeJS.ProcessEnv = {
+      ASR_CLOUD_THRESHOLD_SECONDS: "900",
+    };
+
+    expect(applyLarkBridgeRuntimeEnv({
+      TINGWU_ASR_DIR: "/opt/tingwu",
+      ASR_CLOUD_THRESHOLD_SECONDS: "600",
+      ASR_MAX_AUDIO_SECONDS: "180",
+    }, target)).toEqual([
+      "TINGWU_ASR_DIR",
+      "ASR_MAX_AUDIO_SECONDS",
+    ]);
+    expect(target.TINGWU_ASR_DIR).toBe("/opt/tingwu");
+    expect(target.ASR_CLOUD_THRESHOLD_SECONDS).toBe("900");
+    expect(target.ASR_MAX_AUDIO_SECONDS).toBe("180");
+  });
+
   it("reads TINGWU_ASR_DIR and ASR_CLOUD_* from lark.env and preserves them across regeneration", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-env-"));
     const stateDir = path.join(home, ".cctb", "asrinst");

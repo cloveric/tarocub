@@ -46,14 +46,17 @@ describe("larkAgentInstructions", () => {
       expect(asr).toContain("Max 300s per request");
       expect(asr).toContain("the model is shared");
       expect(asr).toContain("never be retried as-is");
-      expect(asr).toContain("-segment_time 300");
+      expect(asr).toContain("-segment_time 270");
+      expect(asr).not.toContain("-segment_time 300");
+      expect(asr).toContain("-vn -ac 1 -ar 16000 -c:a pcm_s16le");
 
       // The quoted bound must follow the service's configured cap, not a
       // hard-coded number that silently drifts away from it.
       process.env.ASR_MAX_AUDIO_SECONDS = "120";
       const tightened = localAsrAgentInstruction() ?? "";
       expect(tightened).toContain("Max 120s per request");
-      expect(tightened).toContain("-segment_time 120");
+      expect(tightened).toContain("-segment_time 108");
+      expect(tightened).not.toContain("-segment_time 120");
       expect(tightened).not.toContain("300s");
     } finally {
       if (previousUrl === undefined) {

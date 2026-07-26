@@ -940,6 +940,58 @@ describe("ClaudeStreamAdapter", () => {
     }));
   });
 
+  it("does not describe a stopped Claude background task with an empty result as completed", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: unknown[] = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Run in background",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+    await expect(promise).resolves.toEqual({
+      text: "Started in the background.",
+      sessionId: "session-123",
+    });
+
+    children[0].stdout.emitData(JSON.stringify({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-stopped",
+      status: "stopped",
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "",
+      task_id: "task-stopped",
+      session_id: "session-123",
+      origin: { kind: "task-notification" },
+    }) + "\n");
+
+    await waitFor(() => events.some((event) =>
+      typeof event === "object" &&
+      event !== null &&
+      "type" in event &&
+      event.type === "task_notification"
+    ));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "task_notification",
+      text: "Background task stopped.",
+      taskId: "task-stopped",
+      status: "stopped",
+    }));
+  });
+
   it("does not resolve an active user turn with a Claude background task notification result", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: unknown[] = [];

@@ -27,7 +27,7 @@ import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-e
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
 import { upgradeInstanceAgentInstructions } from "./commands/access.js";
 import { runSearchMcpServer } from "./search/search-mcp-server.js";
-import { applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir } from "./lark/env-file.js";
+import { applyLarkBridgeRuntimeEnv, applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir } from "./lark/env-file.js";
 import { runLarkService } from "./lark/service.js";
 
 function renderLifecycleError(error: unknown): string {
@@ -61,12 +61,7 @@ async function main(): Promise<void> {
       // extra can never redirect what the bridge executes. loadLarkRuntimeEnv
       // read them from the whitelisted parse, so exporting them here is the one
       // sanctioned channel; an existing process.env value still wins.
-      for (const key of ["TINGWU_ASR_DIR", "ASR_CLOUD_THRESHOLD_SECONDS", "ASR_CLOUD_TASK_TIMEOUT_SECONDS", "ASR_CLOUD_JOB_RETENTION_DAYS"] as const) {
-        const value = larkEnv[key];
-        if (value !== undefined && process.env[key] === undefined) {
-          process.env[key] = value;
-        }
-      }
+      applyLarkBridgeRuntimeEnv(larkEnv);
       // Pass per-instance lark.env extras (e.g. MCP API tokens like IFIND_TOKEN) into
       // process.env so the spawned engine (claude/codex) inherits them. Names only.
       const passthroughKeys = await applyLarkEnvPassthrough(larkEnv);

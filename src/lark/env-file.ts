@@ -6,6 +6,35 @@ import { resolveDefaultLarkStateDir, resolveLarkInstanceName, type LarkRuntimeEn
 
 export const LARK_ENV_FILE_NAME = "lark.env";
 
+export const LARK_BRIDGE_RUNTIME_ENV_KEYS = [
+  "TINGWU_ASR_DIR",
+  "ASR_CLOUD_THRESHOLD_SECONDS",
+  "ASR_CLOUD_TASK_TIMEOUT_SECONDS",
+  "ASR_CLOUD_JOB_RETENTION_DAYS",
+  "ASR_MAX_AUDIO_SECONDS",
+] as const;
+
+type LarkBridgeRuntimeEnvKey = (typeof LARK_BRIDGE_RUNTIME_ENV_KEYS)[number];
+
+/**
+ * Export bridge-owned settings loaded from lark.env into the live process.
+ * Existing process values retain precedence over per-instance configuration.
+ */
+export function applyLarkBridgeRuntimeEnv(
+  source: Pick<LarkRuntimeEnv, LarkBridgeRuntimeEnvKey>,
+  target: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const applied: string[] = [];
+  for (const key of LARK_BRIDGE_RUNTIME_ENV_KEYS) {
+    const value = source[key];
+    if (value !== undefined && target[key] === undefined) {
+      target[key] = value;
+      applied.push(key);
+    }
+  }
+  return applied;
+}
+
 export function resolveLarkStateDir(env: Pick<LarkRuntimeEnv, "HOME" | "USERPROFILE" | "CCTB_LARK_INSTANCE" | "TAROCUB_INSTANCE" | "CCTB_LARK_STATE_DIR" | "CODEX_TELEGRAM_STATE_DIR">): string {
   if (env.CCTB_LARK_STATE_DIR) {
     return env.CCTB_LARK_STATE_DIR;
@@ -184,7 +213,7 @@ export async function writeLarkEnvFile(
     const existing = await readFile(envPath, "utf8");
     preservedExtras = parseLarkEnvExtras(existing);
     const parsedExisting = parseLarkEnvFile(existing);
-    for (const key of ["TINGWU_ASR_DIR", "ASR_CLOUD_THRESHOLD_SECONDS", "ASR_CLOUD_TASK_TIMEOUT_SECONDS", "ASR_CLOUD_JOB_RETENTION_DAYS", "ASR_MAX_AUDIO_SECONDS"] as const) {
+    for (const key of LARK_BRIDGE_RUNTIME_ENV_KEYS) {
       const value = parsedExisting[key];
       if (value !== undefined) {
         preservedConfig[key] = value;
