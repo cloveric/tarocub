@@ -10,6 +10,7 @@ import {
   resolveCctbSendDir,
 } from "../runtime/telegram-out.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { renderBackgroundTaskHeader } from "../runtime/background-task-header.js";
 import {
   boundArchiveSummaryForTelegram,
   prepareArchiveContinueWorkflow as defaultPrepareArchiveContinueWorkflow,
@@ -568,7 +569,7 @@ export async function executeWorkflowAwareTelegramTurn(input: {
       const notificationText = isWholeResponseFileBlockText(event.text)
         ? event.text
         : [
-            locale === "zh" ? "后台任务完成" : "Background task completed",
+            renderBackgroundTaskHeader(locale, event.status),
             event.text.trim(),
           ].filter(Boolean).join("\n");
       const delivery = deliverTelegramResponse(

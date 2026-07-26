@@ -544,7 +544,7 @@ function createLarkBusEngineEventHandler(
     }
 
     const notificationText = [
-      renderLarkBackgroundTaskHeader(options.locale),
+      renderLarkBackgroundTaskHeader(options.locale, event.status),
       event.text.trim(),
     ].filter(Boolean).join("\n");
 

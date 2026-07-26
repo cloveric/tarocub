@@ -1624,7 +1624,7 @@ async function runNormalizedLarkMessage(
           return;
         }
 
-        const headerText = renderLarkBackgroundTaskHeader(locale);
+        const headerText = renderLarkBackgroundTaskHeader(locale, event.status);
         const notificationText = [headerText, event.text.trim()].filter(Boolean).join("\n");
         const notificationFallbackText = [headerText, cleanCardText(event.text)].filter(Boolean).join("\n");
         // Render the out-of-band background-task notification as a card to match

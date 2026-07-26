@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+import { renderBackgroundTaskHeader } from "../runtime/background-task-header.js";
 import type { Locale } from "../telegram/message-renderer.js";
 
 export async function readRawLarkConfig(stateDir: string): Promise<Record<string, unknown>> {
@@ -17,8 +18,9 @@ export async function resolveLarkLocale(stateDir: string): Promise<Locale> {
   return rawConfig.locale === "en" ? "en" : "zh";
 }
 
-export function renderLarkBackgroundTaskHeader(locale: Locale): string {
-  return locale === "en" ? "Background task completed" : "后台任务完成";
+/** Shared with the Telegram channel so the two cannot disagree on a status. */
+export function renderLarkBackgroundTaskHeader(locale: Locale, status?: string): string {
+  return renderBackgroundTaskHeader(locale, status);
 }
 
 export function renderLarkStopResult(stopped: boolean, locale: Locale): string {

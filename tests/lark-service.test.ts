@@ -1086,6 +1086,49 @@ describe("lark service", () => {
     }
   });
 
+  it("headers a stopped background task as stopped, not completed", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-stopped-"));
+    const channel = fakeChannel();
+    // The shape actually observed in the field: a background shell orphaned by a
+    // service restart resurfaces on the next turn with status "stopped", and its
+    // body says a completion record was NOT found. Announcing that as 后台任务完成
+    // contradicts the body — and since the card replies to whatever the user last
+    // asked, it reads as a wrong answer to that question.
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({
+          type: "task_notification",
+          status: "stopped",
+          text: "No completion record was found for this background shell command from the previous session.",
+        });
+        return { text: "好的。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_task_stopped", content: "国内ETF份额日频历史哪里可以查到" }),
+      });
+
+      const notificationCardCall = (channel.send.mock.calls as unknown[][]).find((call) => {
+        const payload = call[1] as { card?: unknown };
+        return payload?.card && JSON.stringify(payload.card).includes("后台任务");
+      });
+      expect(notificationCardCall).toBeDefined();
+      const notificationCard = JSON.stringify((notificationCardCall![1] as { card: unknown }).card);
+      expect(notificationCard).toContain("**后台任务已停止**");
+      expect(notificationCard).not.toContain("后台任务完成");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("spills an oversize background notification into continuation cards, not a plain-text dump", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-long-"));
     const channel = fakeChannel();

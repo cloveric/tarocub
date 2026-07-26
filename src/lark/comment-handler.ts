@@ -151,7 +151,7 @@ export async function handleLarkComment(input: {
         }
 
         const notificationText = [
-          renderLarkBackgroundTaskHeader(locale),
+          renderLarkBackgroundTaskHeader(locale, event.status),
           event.text.trim(),
         ].filter(Boolean).join("\n");
         try {
