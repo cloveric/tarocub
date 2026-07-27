@@ -12628,6 +12628,57 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
+  it("re-renders the form (keeping the picks already made) when a submit misses an answer", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [
+            { question: "这套图用哪个画风？", header: "画风", multiSelect: false,
+              options: [{ label: "编辑插画水彩" }, { label: "高精度手绘" }, { label: "设计感水彩" }] },
+            { question: "12 页这个体量可以吗？", header: "页数", multiSelect: false,
+              options: [{ label: "就 12 页" }, { label: "精简到 9 页左右" }, { label: "再加厚" }] },
+          ],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    // The field report: 页数 answered, 画风 missed.
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: {
+          value: { cctb_lark: "ask_user_question", action: "form_submit", requestId },
+          form_value: { q0: "", q1: "1" },
+        },
+      },
+    });
+
+    // The approval must stay open — nothing was resolved.
+    expect(runtime.pendingApprovals.size).toBe(1);
+
+    // A text-only re-prompt strands the form: the client holds a post-submit
+    // lock until the server pushes a card, so the user's next 提交 never
+    // leaves the device. A card must go back out.
+    const cardCall = (channel.send.mock.calls as unknown[][])
+      .map((call) => call[1] as { card?: unknown })
+      .filter((payload) => payload?.card)
+      .pop();
+    expect(cardCall).toBeDefined();
+    const card = JSON.stringify(cardCall!.card);
+    expect(card).toContain("请先选择");
+    expect(card).toContain("画风");
+    // …and it must carry the answer already given, so 页数 does not have to be redone.
+    expect(card).toContain("\"initial_option\":\"1\"");
+    void pending;
+  });
+
   it("parses a multi-select form value delivered as a JSON string", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();

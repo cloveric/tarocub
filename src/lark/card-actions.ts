@@ -250,11 +250,44 @@ function askFormOtherFieldName(index: number): string {
   return `q${index}_other`;
 }
 
+/** Selected option values for one field of a rejected submit, as a string list. */
+function askFormSelectedValues(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((entry): entry is string => typeof entry === "string");
+  }
+  if (typeof raw !== "string") {
+    return [];
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.filter((entry): entry is string => typeof entry === "string");
+      }
+    } catch {
+      // Fall through: treat it as a single opaque value.
+    }
+  }
+  return [trimmed];
+}
+
 function renderLarkAskUserQuestionCard(input: {
   requestId: string;
   toolInput: unknown;
   replyInThread?: boolean;
   locale?: Locale;
+  /**
+   * Raw form_value of a submit that was rejected for a missing answer. Replayed
+   * as the components' initial values so re-rendering the form does not throw
+   * away the picks the user already made.
+   */
+  selections?: Record<string, unknown>;
+  /** Why the previous submit was rejected; shown at the top of the form. */
+  notice?: string;
 }): Record<string, unknown> {
   const locale = input.locale ?? "zh";
   const questions = normalizeAskUserQuestions(input.toolInput);
@@ -263,6 +296,9 @@ function renderLarkAskUserQuestionCard(input: {
   // server (no card re-render, no collapse, no lag). Changing a choice before
   // submit is the built-in "undo". Everything resolves on a single Submit.
   const formElements: unknown[] = [];
+  if (input.notice) {
+    formElements.push({ tag: "markdown", content: `<font color="red">${input.notice}</font>` });
+  }
   questions.forEach((question, index) => {
     if (index > 0) {
       formElements.push({ tag: "hr" });
@@ -291,6 +327,11 @@ function renderLarkAskUserQuestionCard(input: {
       // handler translates the index back to the label.
       value: String(optionIndex),
     }));
+    // Carry a rejected submit's picks back into the re-rendered form. Without
+    // this the user has to redo every choice they already made just because one
+    // question was missed.
+    const selected = askFormSelectedValues(input.selections?.[askFormFieldName(index)])
+      .filter((value) => selectOptions.some((option) => option.value === value));
     formElements.push({
       tag: question.multiSelect ? "multi_select_static" : "select_static",
       name: askFormFieldName(index),
@@ -303,9 +344,15 @@ function renderLarkAskUserQuestionCard(input: {
           : (locale === "en" ? "Select one" : "请选择"),
       },
       options: selectOptions,
+      ...(selected.length > 0
+        ? (question.multiSelect
+          ? { initial_options: selected }
+          : { initial_option: selected[0] })
+        : {}),
     });
     // Free-text "Other" — mirrors the AskUserQuestion CLI, where the last choice
     // lets you type your own answer. Filled only when none of the options fit.
+    const otherValue = stringValue(input.selections?.[askFormOtherFieldName(index)]) ?? "";
     formElements.push({
       tag: "input",
       name: askFormOtherFieldName(index),
@@ -313,6 +360,7 @@ function renderLarkAskUserQuestionCard(input: {
         tag: "plain_text",
         content: locale === "en" ? "Other — type your own (optional)" : "其他 —— 不合适就自己填（选填）",
       },
+      ...(otherValue ? { default_value: otherValue } : {}),
     });
   });
 
@@ -1041,6 +1089,35 @@ export async function handleLarkCardAction(input: {
     const questions = normalizeAskUserQuestions(pending.askUserQuestionInput);
     const formValue = larkCardActionFormValue(input.event);
 
+    // Record that the submit ARRIVED, before any of the branches below can
+    // swallow it. Only the stop button was writing a timeline entry, so a
+    // "I pressed submit and nothing happened" report could not be told apart
+    // from "the click never reached the bridge" — the logs were silent either
+    // way. Field names only: the values are the operator's own answers.
+    const logCardSubmit = async (outcome: string, detail: string): Promise<void> => {
+      if (!input.stateDir) {
+        return;
+      }
+      await appendLarkCardActionEngineEvent({
+        stateDir: input.stateDir,
+        chatId: input.event.chatId,
+        replyTo: input.event.messageId,
+        conversationKey: approvalConversationKey,
+        bridgeChatType: approvalBridgeChatType,
+        userId: stableLarkNumericId(`user:${larkOperatorRawId(input.event.operator)}`),
+      }, {
+        type: "engine.event",
+        action: "choice",
+        outcome,
+        detail,
+        metadata: {
+          requestId: value.requestId,
+          questions: questions.length,
+          answeredFields: Object.keys(formValue).filter((key) => askFormSelectedValues(formValue[key]).length > 0),
+        },
+      });
+    };
+
     // The whole form arrives in one submit. Each select carries the option's
     // INDEX as its value (labels aren't unique per question); map each selected
     // index back to its label (single = label, multi = joined labels). A value
@@ -1096,20 +1173,51 @@ export async function handleLarkCardAction(input: {
     });
 
     // Backstop for clients that don't enforce the form's `required`: a
-    // single-select question must have an answer. Re-prompt without resolving,
-    // leaving the form (and the user's other picks) intact.
+    // single-select question must have an answer.
+    //
+    // Re-prompting with a plain text message is NOT enough. The client holds a
+    // post-submit lock on the card (the same lock settleThenUpdateManagedCard
+    // exists to work around on the success path), and it is only released when
+    // the server pushes an update. Leaving the card untouched here stranded the
+    // form: the user picked the missing answer, pressed 提交 again, and that
+    // second submit never left the client — "I selected it and it still won't
+    // go through". So re-render the form IN PLACE, carrying the picks already
+    // made so nothing has to be redone.
     const missingRequired = questions.filter(
       (question) => !question.multiSelect && !(answers[question.question] ?? "").trim(),
     );
     if (missingRequired.length > 0) {
       const names = missingRequired.map((question) => question.header).join(locale === "en" ? ", " : "、");
-      await input.channel.send(
-        input.event.chatId,
-        { text: locale === "en" ? `Please choose an answer for: ${names}` : `请先选择：${names}` },
-        replyOpts,
-      );
+      const notice = locale === "en" ? `Please choose an answer for: ${names}` : `请先选择：${names}`;
+      const retryCard = renderLarkAskUserQuestionCard({
+        requestId: value.requestId,
+        toolInput: pending.askUserQuestionInput,
+        ...(pending.replyInThread ?? replyInThread ? { replyInThread: true } : {}),
+        locale,
+        selections: formValue,
+        notice,
+      });
+      const postRetryFallback = async (): Promise<void> => {
+        // No managed card, or the in-place update failed: a fresh interactive
+        // card is the only way back to a form the user can actually submit.
+        await sendLarkCardWithFallback({
+          channel: input.channel,
+          chatId: input.event.chatId,
+          card: retryCard,
+          fallbackText: notice,
+          options: (pending.replyInThread ?? replyInThread) ? { replyInThread: true } : undefined,
+          locale,
+        });
+      };
+      if (pending.managedCard) {
+        settleThenUpdateManagedCard(input.channel, pending.managedCard, retryCard, postRetryFallback);
+      } else {
+        await postRetryFallback();
+      }
+      await logCardSubmit("rejected", "choice_missing_answer");
       return true;
     }
+    await logCardSubmit("received", "choice_submit");
 
     // Re-check AFTER the access-check awaits: the 29-minute timer or a turn
     // abort may have settled this approval inside that window (both delete the
