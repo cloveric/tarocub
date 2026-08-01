@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, truncate, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -9877,7 +9877,7 @@ describe("lark service", () => {
     }
   });
 
-  it("cleans up transient Lark attachment downloads after the turn finishes", async () => {
+  it("keeps inbound attachment downloads after the turn so later turns can refer back to them", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-attachment-cleanup-"));
     const downloadedPath = path.join(stateDir, "workspace", ".lark-files", "om_cleanup", "input", "report.txt");
     let engineSawDownloadedFile = false;
@@ -9905,9 +9905,43 @@ describe("lark service", () => {
       });
 
       expect(engineSawDownloadedFile).toBe(true);
-      await expect(readFile(downloadedPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      // Deleting at turn end broke the operator's real usage — send a file, then
+      // a turn later say "用刚才那个文件…" and the recorded path was gone. The
+      // download now survives the turn (swept by retention days instead).
+      expect(await readFile(downloadedPath, "utf8")).toBe("report body");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes inbound attachment downloads past the retention window, keeping fresh ones", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-retention-"));
+    const { pruneLarkInboundFileDirs, cleanupLarkMessageArtifacts } = await import("../src/lark/files.js");
+    const oldDir = path.join(root, "om_old", "input");
+    const freshDir = path.join(root, "om_fresh", "input");
+    await mkdir(oldDir, { recursive: true });
+    await mkdir(freshDir, { recursive: true });
+    await writeFile(path.join(oldDir, "stale.txt"), "stale");
+    await writeFile(path.join(freshDir, "fresh.txt"), "fresh");
+    const fourDaysAgo = new Date(Date.now() - 4 * 24 * 60 * 60_000);
+    await utimes(path.join(root, "om_old"), fourDaysAgo, fourDaysAgo);
+
+    try {
+      const pruned = await pruneLarkInboundFileDirs(root, 3);
+      expect(pruned).toBe(1);
+      await expect(readFile(path.join(oldDir, "stale.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(path.join(freshDir, "fresh.txt"), "utf8")).toBe("fresh");
+
+      // retention 0 restores the old delete-immediately behaviour for this message.
+      const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-retention0-"));
+      const immediateDir = path.join(stateDir, "workspace", ".lark-files", "om_now", "input");
+      await mkdir(immediateDir, { recursive: true });
+      await writeFile(path.join(immediateDir, "gone.txt"), "gone");
+      await cleanupLarkMessageArtifacts(stateDir, "om_now", 0);
+      await expect(readFile(path.join(immediateDir, "gone.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await rm(stateDir, { recursive: true, force: true });
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 

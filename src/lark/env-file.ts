@@ -12,6 +12,7 @@ export const LARK_BRIDGE_RUNTIME_ENV_KEYS = [
   "ASR_CLOUD_TASK_TIMEOUT_SECONDS",
   "ASR_CLOUD_JOB_RETENTION_DAYS",
   "ASR_MAX_AUDIO_SECONDS",
+  "LARK_INBOUND_FILE_RETENTION_DAYS",
 ] as const;
 
 type LarkBridgeRuntimeEnvKey = (typeof LARK_BRIDGE_RUNTIME_ENV_KEYS)[number];
@@ -109,6 +110,7 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
     ASR_CLOUD_TASK_TIMEOUT_SECONDS: env.ASR_CLOUD_TASK_TIMEOUT_SECONDS ?? parsed.ASR_CLOUD_TASK_TIMEOUT_SECONDS,
     ASR_CLOUD_JOB_RETENTION_DAYS: env.ASR_CLOUD_JOB_RETENTION_DAYS ?? parsed.ASR_CLOUD_JOB_RETENTION_DAYS,
     ASR_MAX_AUDIO_SECONDS: env.ASR_MAX_AUDIO_SECONDS ?? parsed.ASR_MAX_AUDIO_SECONDS,
+    LARK_INBOUND_FILE_RETENTION_DAYS: env.LARK_INBOUND_FILE_RETENTION_DAYS ?? parsed.LARK_INBOUND_FILE_RETENTION_DAYS,
     CCTB_LARK_DEBUG: env.CCTB_LARK_DEBUG ?? parsed.CCTB_LARK_DEBUG,
     TAROCUB_INSTANCE: env.TAROCUB_INSTANCE ?? larkInstance,
     CODEX_TELEGRAM_INSTANCE: env.CODEX_TELEGRAM_INSTANCE ?? parsed.CODEX_TELEGRAM_INSTANCE,
@@ -341,7 +343,7 @@ function parseLarkEnvExtras(content: string, dropped?: string[]): Record<string,
 
 function isSupportedLarkEnvKey(key: string): key is keyof Pick<
   LarkRuntimeEnv,
-  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "TINGWU_ASR_DIR" | "ASR_CLOUD_THRESHOLD_SECONDS" | "ASR_CLOUD_TASK_TIMEOUT_SECONDS" | "ASR_CLOUD_JOB_RETENTION_DAYS" | "ASR_MAX_AUDIO_SECONDS"
+  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "TINGWU_ASR_DIR" | "ASR_CLOUD_THRESHOLD_SECONDS" | "ASR_CLOUD_TASK_TIMEOUT_SECONDS" | "ASR_CLOUD_JOB_RETENTION_DAYS" | "ASR_MAX_AUDIO_SECONDS" | "LARK_INBOUND_FILE_RETENTION_DAYS"
 > {
   return key === "LARK_APP_ID" ||
     key === "LARK_APP_SECRET" ||
@@ -361,7 +363,9 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "ASR_CLOUD_JOB_RETENTION_DAYS" ||
     // Quoted verbatim in the injected agent instruction so an engine that
     // transcribes a file itself knows where the local ASR cuts off.
-    key === "ASR_MAX_AUDIO_SECONDS";
+    key === "ASR_MAX_AUDIO_SECONDS" ||
+    // Inbound-attachment retention window (days); 0 = delete at turn end.
+    key === "LARK_INBOUND_FILE_RETENTION_DAYS";
 }
 
 // Namespaces the bridge process reads to control its OWN behaviour (transport, active-turn

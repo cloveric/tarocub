@@ -478,6 +478,29 @@ describe("cloud-ASR config keys (whitelisted, not extras)", () => {
     }
   });
 
+  it("reads LARK_INBOUND_FILE_RETENTION_DAYS from lark.env and preserves it across regeneration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-retention-env-"));
+    const stateDir = path.join(home, ".cctb", "retinst");
+    await mkdir(stateDir, { recursive: true });
+    const envPath = path.join(stateDir, "lark.env");
+    await writeFile(envPath, [
+      "LARK_APP_ID=cli_x",
+      "LARK_APP_SECRET=sek",
+      "LARK_INBOUND_FILE_RETENTION_DAYS=7",
+      "",
+    ].join("\n"), "utf8");
+
+    try {
+      const loaded = await loadLarkRuntimeEnv({ HOME: home, CCTB_LARK_INSTANCE: "retinst" });
+      expect(loaded.LARK_INBOUND_FILE_RETENTION_DAYS).toBe("7");
+
+      await writeLarkEnvFile({ HOME: home, CCTB_LARK_INSTANCE: "retinst" }, { appId: "cli_x", appSecret: "sek" });
+      expect(await readFile(envPath, "utf8")).toContain('LARK_INBOUND_FILE_RETENTION_DAYS="7"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("reads ASR_MAX_AUDIO_SECONDS from lark.env and preserves it across regeneration", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-max-"));
     const stateDir = path.join(home, ".cctb", "maxinst");

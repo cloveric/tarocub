@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -254,13 +254,69 @@ async function readableToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> 
   return Buffer.concat(chunks);
 }
 
-export async function cleanupLarkMessageArtifacts(stateDir: string, messageId: string): Promise<void> {
-  await rm(path.join(stateDir, "workspace", ".lark-files", safeSegment(messageId)), {
-    recursive: true,
-    force: true,
-    maxRetries: 5,
-    retryDelay: 20,
-  });
+/**
+ * Inbound attachments used to be deleted the moment their turn finished, which
+ * broke the operator's actual usage: send a file, let the bot handle it, then
+ * refer back to it a turn later ("用刚才那个文件…") — the recorded path was
+ * already gone. Downloads now live for a retention window instead, so
+ * cross-turn references keep working, and expired ones are swept here.
+ * `retentionDays` 0 restores the old delete-immediately behaviour.
+ */
+export const DEFAULT_LARK_INBOUND_RETENTION_DAYS = 3;
+
+export function larkInboundRetentionDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number.parseFloat((env.LARK_INBOUND_FILE_RETENTION_DAYS ?? "").trim());
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_LARK_INBOUND_RETENTION_DAYS;
+}
+
+export async function cleanupLarkMessageArtifacts(
+  stateDir: string,
+  messageId: string,
+  retentionDays: number = larkInboundRetentionDays(),
+): Promise<void> {
+  const root = path.join(stateDir, "workspace", ".lark-files");
+  if (retentionDays <= 0) {
+    await rm(path.join(root, safeSegment(messageId)), {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 20,
+    });
+    return;
+  }
+  await pruneLarkInboundFileDirs(root, retentionDays);
+}
+
+/**
+ * Best-effort sweep of expired `.lark-files/<messageId>/` dirs, run at each
+ * turn end (same self-maintaining pattern as pruneCloudAsrJobDirs). Never
+ * throws: an undeletable dir must not fail the turn that triggered the sweep.
+ */
+export async function pruneLarkInboundFileDirs(rootDir: string, retentionDays: number): Promise<number> {
+  const cutoff = Date.now() - retentionDays * 24 * 60 * 60_000;
+  let pruned = 0;
+  try {
+    const entries = await readdir(rootDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const fullPath = path.join(rootDir, entry.name);
+      try {
+        const stats = await stat(fullPath);
+        if (stats.mtimeMs >= cutoff) {
+          continue;
+        }
+        await rm(fullPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 });
+        pruned += 1;
+      } catch {
+        // One undeletable dir must never block the rest.
+      }
+    }
+  } catch {
+    // No downloads yet, or an unreadable root — nothing to sweep.
+  }
+  return pruned;
 }
 
 export function boundLarkArchiveSummary(text: string): string {

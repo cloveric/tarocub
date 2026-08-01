@@ -37,6 +37,8 @@ export interface LarkRuntimeEnv {
    * a long request there wedges the shared model and blocks every instance.
    */
   ASR_MAX_AUDIO_SECONDS?: string;
+  /** Days inbound attachment downloads stay on disk (default 3; 0 = delete at turn end). */
+  LARK_INBOUND_FILE_RETENTION_DAYS?: string;
   CCTB_LARK_DEBUG?: string;
   CCTB_LARK_REACTION_EMOJI?: string;
   LARK_REACTION_EMOJI?: string;
