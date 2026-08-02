@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
 import { createClaudeInstructionsFile, type ClaudeInstructionsFile } from "./claude-instructions-file.js";
+import { ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS } from "./engine-timeouts.js";
 // Use the shared kill helper (SIGTERM then grace + SIGKILL escalation) rather
 // than a local SIGTERM-only copy, so a Claude CLI (and its MCP/sandbox children)
 // that ignores SIGTERM is still force-killed — matching the other adapters.
@@ -176,7 +177,7 @@ const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
 // it the turn never settles — holding the cross-process bridge session lock
 // (stale only after 12h) and blocking every channel and cron turn on that
 // session. `/timeout off` (disableRuntimeTimeout) disables it per turn.
-export const CLAUDE_STREAM_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
+export const CLAUDE_STREAM_INACTIVITY_TIMEOUT_MS = ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS;
 
 let nextPendingTurnId = 0;
 

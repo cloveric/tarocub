@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "0.23.0",
     "@larksuiteoapi/node-sdk": "^1.70.0",
     "@types/adm-zip": "^0.5.8",
     "adm-zip": "^0.5.17",
