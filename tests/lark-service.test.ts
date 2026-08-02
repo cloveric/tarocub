@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, truncate, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -8768,6 +8768,79 @@ describe("lark service", () => {
       }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers Codex generated_images tags and collapses repeated sandbox refusals into one notice", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-genimg-"));
+    const codexHome = await mkdtemp(path.join(os.tmpdir(), "cctb-codex-home-"));
+    const genDir = path.join(codexHome, "generated_images", "session-1");
+    await mkdir(genDir, { recursive: true });
+    const imageA = path.join(genDir, "call_a.png");
+    await writeFile(imageA, "png-bytes-a");
+    // A symlink planted inside generated_images must NOT smuggle an outside file.
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "cctb-genimg-outside-"));
+    const smuggled = path.join(outsideDir, "secret.png");
+    await writeFile(smuggled, "secret");
+    const smuggleLink = path.join(genDir, "link.png");
+    await symlink(smuggled, smuggleLink);
+    const outsideB = path.join(outsideDir, "b.png");
+    const outsideC = path.join(outsideDir, "c.png");
+    await writeFile(outsideB, "b");
+    await writeFile(outsideC, "c");
+
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        // One legit generated image + a symlink escape + two other outside paths.
+        text: [
+          `[send-image:${imageA}]`,
+          `[send-image:${smuggleLink}]`,
+          `[send-image:${outsideB}]`,
+          `[send-image:${outsideC}]`,
+        ].join("\n"),
+      })),
+    };
+    const prevCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_genimg", content: "发图" }),
+      });
+
+      const calls = channel.send.mock.calls as unknown as unknown[][];
+      // The engine-generated image goes out (image or file-fallback payload).
+      const mediaCalls = calls.filter((c) => {
+        const payload = c[1] as { image?: unknown; file?: unknown; card?: unknown } | undefined;
+        return Boolean(payload?.image || payload?.file || payload?.card);
+      });
+      expect(mediaCalls.length).toBeGreaterThan(0);
+      // The symlink escape and the two outside paths are refused — but the
+      // identical lecture is posted ONCE, not three times.
+      const refusalTexts = calls
+        .map((c) => (c[1] as { text?: string } | undefined)?.text)
+        .filter((text): text is string => Boolean(text && text.includes("不在允许发送的目录内")));
+      expect(refusalTexts.length).toBe(1);
+      // The timeline still records every rejected path individually.
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      const rejected = timeline.filter((event) => event.type === "file.rejected");
+      expect(rejected.map((event) => (event.metadata as { path?: string }).path).sort()).toEqual(
+        [smuggleLink, outsideB, outsideC].sort(),
+      );
+    } finally {
+      if (prevCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = prevCodexHome;
+      }
+      await rm(stateDir, { recursive: true, force: true });
+      await rm(codexHome, { recursive: true, force: true });
       await rm(outsideDir, { recursive: true, force: true });
     }
   });

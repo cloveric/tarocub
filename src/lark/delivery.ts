@@ -189,9 +189,22 @@ export async function deliverLarkResponse(input: {
     const overrideRoot = input.workspaceOverride
       ? await realpath(input.workspaceOverride).catch(() => input.workspaceOverride)
       : undefined;
+    const generatedImagesRoot = await codexGeneratedImagesRoot();
     const workspacePrefix = workspaceRoot + path.sep;
     const outputPrefix = outputRoot ? `${outputRoot}${path.sep}` : undefined;
     const overridePrefix = overrideRoot ? `${overrideRoot}${path.sep}` : undefined;
+    const generatedImagesPrefix = generatedImagesRoot ? `${generatedImagesRoot}${path.sep}` : undefined;
+    // One identical failure notice per delivery, not one per file: a reply
+    // carrying five refused tags posted the same lecture five times. The
+    // timeline still records every rejected path individually.
+    const sentDeliveryErrors = new Set<string>();
+    const sendDeliveryErrorOnce = async (text: string): Promise<void> => {
+      if (sentDeliveryErrors.has(text)) {
+        return;
+      }
+      sentDeliveryErrors.add(text);
+      await input.channel.send(input.chatId, { text }, replyOptions);
+    };
 
     // Images are collected and delivered together as one card (a titled series stays
     // grouped — see deliverLarkPendingImages); files are sent inline as we go.
@@ -207,9 +220,7 @@ export async function deliverLarkResponse(input: {
             reason: "credentials-file",
             kind: match.preferPhoto ? "image" : "file",
           });
-          await input.channel.send(input.chatId, {
-            text: renderLarkFileDeliveryError("credentials-file", locale, { fileName: path.basename(filePath) }),
-          }, replyOptions);
+          await sendDeliveryErrorOnce(renderLarkFileDeliveryError("credentials-file", locale, { fileName: path.basename(filePath) }));
           continue;
         }
         if (
@@ -217,7 +228,8 @@ export async function deliverLarkResponse(input: {
           !larkAnyFilePathAllowed() &&
           !real.startsWith(workspacePrefix) &&
           !(outputPrefix && real.startsWith(outputPrefix)) &&
-          !(overridePrefix && real.startsWith(overridePrefix))
+          !(overridePrefix && real.startsWith(overridePrefix)) &&
+          !(generatedImagesPrefix && real.startsWith(generatedImagesPrefix))
         ) {
           await appendLarkFileRejectedTimeline(input, {
             path: filePath,
@@ -225,7 +237,7 @@ export async function deliverLarkResponse(input: {
             reason: "outside-workspace",
             kind: match.preferPhoto ? "image" : "file",
           });
-          await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", locale, { workspaceRoot }) }, replyOptions);
+          await sendDeliveryErrorOnce(renderLarkFileDeliveryError("outside-workspace", locale, { workspaceRoot }));
           continue;
         }
         const fileSize = (await stat(real)).size;
@@ -721,10 +733,12 @@ async function sendLarkPath(input: {
   const overrideRoot = input.workspaceOverride
     ? await realpath(input.workspaceOverride).catch(() => input.workspaceOverride)
     : undefined;
+  const generatedImagesRoot = await codexGeneratedImagesRoot();
   const prefixes = [
     workspaceRoot + path.sep,
     ...(outputRoot ? [outputRoot + path.sep] : []),
     ...(overrideRoot ? [overrideRoot + path.sep] : []),
+    ...(generatedImagesRoot ? [generatedImagesRoot + path.sep] : []),
   ];
   let real: string;
   try {
@@ -1159,6 +1173,30 @@ function larkAnyFilePathAllowed(): boolean {
   // send a file from ANY absolute path on the machine. Off by default — only files
   // under the workspace / output / override roots are sendable.
   return /^(?:1|true|yes|on)$/i.test((process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH ?? "").trim());
+}
+
+/**
+ * Codex writes its GPT-Image outputs under `$CODEX_HOME/generated_images/` and
+ * references them with `[send-image:]` tags — a documented flow on the Telegram
+ * channel that the Lark sandbox refused wholesale: a Codex bot's own generated
+ * images bounced with the "copy into your workspace" lecture, once per image
+ * (the operator got the same refusal five times for one reply). The dir holds
+ * only engine-generated media, so it is a sanctioned read root alongside the
+ * request-output dir. Containment still applies: the check below runs on the
+ * file's REALPATH, so a symlink planted inside cannot smuggle an outside file,
+ * and isCredentialsStylePath screens the resolved target first regardless.
+ */
+async function codexGeneratedImagesRoot(): Promise<string | undefined> {
+  const home = (process.env.CODEX_HOME ?? "").trim()
+    || (process.env.HOME ? path.join(process.env.HOME, ".codex") : "");
+  if (!home) {
+    return undefined;
+  }
+  try {
+    return await realpath(path.join(home, "generated_images"));
+  } catch {
+    return undefined;
+  }
 }
 
 function renderLarkFileDeliveryError(
