@@ -56,14 +56,14 @@ async function main(): Promise<void> {
     if (argv[0] === "lark" && argv[1] === "run" && !hasHelpFlag(argv.slice(2))) {
       const larkEnv = await loadLarkRuntimeEnv(process.env);
       // Whitelisted bridge config the BRIDGE itself acts on (cloud-ASR routing +
-      // the subprocess it spawns). These deliberately do NOT ride the extras
+      // engine executable selection). These deliberately do NOT ride the extras
       // passthrough — TINGWU_/ASR_ are reserved there precisely so a lark.env
       // extra can never redirect what the bridge executes. loadLarkRuntimeEnv
       // read them from the whitelisted parse, so exporting them here is the one
       // sanctioned channel; an existing process.env value still wins.
       applyLarkBridgeRuntimeEnv(larkEnv);
       // Pass per-instance lark.env extras (e.g. MCP API tokens like IFIND_TOKEN) into
-      // process.env so the spawned engine (claude/codex) inherits them. Names only.
+      // process.env so the spawned engine (claude/codex/kimi) inherits them. Names only.
       const passthroughKeys = await applyLarkEnvPassthrough(larkEnv);
       if (passthroughKeys.length > 0) {
         console.error(`[lark] lark.env passthrough → engine env: ${passthroughKeys.join(", ")}`);
@@ -116,6 +116,8 @@ async function main(): Promise<void> {
         CODEX_TELEGRAM_STATE_DIR: process.env.CODEX_TELEGRAM_STATE_DIR,
         CODEX_EXECUTABLE: process.env.CODEX_EXECUTABLE,
         CLAUDE_EXECUTABLE: process.env.CLAUDE_EXECUTABLE,
+        KIMI_EXECUTABLE: process.env.KIMI_EXECUTABLE,
+        KIMI_CODE_HOME: process.env.KIMI_CODE_HOME,
         ANTIGRAVITY_EXECUTABLE: process.env.ANTIGRAVITY_EXECUTABLE,
         TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
       },

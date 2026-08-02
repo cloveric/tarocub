@@ -56,6 +56,7 @@ describe("handleLocalEngineTelegramCommand", () => {
           "Choose an engine with /engine <name>:",
           "/engine claude",
           "/engine codex",
+          "/engine kimi",
           "/engine antigravity",
           "Restart this instance after switching to apply the change.",
         ].join("\n"),
@@ -256,7 +257,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /engine [claude|codex|antigravity]");
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /engine [claude|codex|kimi|antigravity]");
     } finally {
       await removeTempRoot(root);
     }

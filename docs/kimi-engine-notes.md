@@ -364,6 +364,29 @@ The first Kimi adapter should follow these rules:
 8. Show Kimi usage as unavailable until a structured usage field is actually
    observed.
 
+## ACP Instruction Injection
+
+Kimi Code 0.31.1 was probed with a valid custom-agent file, both with and
+without `KIMI_CODE_EXPERIMENTAL_FLAG=1`. Starting `kimi --agent-file <path>
+acp` did not apply that agent to sessions created through ACP `session/new`.
+The ACP request has no agent or system-instruction field, so treating
+`--agent-file` as working here would silently drop TaroCub and instance
+instructions.
+
+The bridge therefore reloads `agent.md` for every turn, combines it with the
+channel instructions, and prepends a clearly delimited `[Bridge Instructions]`
+block to the ACP prompt. This preserves hot reload and resumed-session behavior,
+but it is prompt-scoped rather than a trusted system channel and adds token and
+history overhead. Revisit this implementation if a future Kimi ACP version
+advertises an agent or system-prompt capability.
+
+Kimi session config values also survive process restarts. To make `/model off`
+and `/effort off` real rather than cosmetic, the bridge writes the current
+`default_model` from `KIMI_CODE_HOME/config.toml` and its `high` effort default
+back through ACP when those instance overrides are absent. If `default_model`
+cannot be read, the bridge does not invent a model ID; operators can still set
+an explicit provider-advertised ID with `/model <id>`.
+
 ## Known Gaps And Unverified Areas
 
 The following are not established by this milestone:
@@ -375,8 +398,6 @@ The following are not established by this milestone:
 - whether Kimi exposes compaction as an RPC rather than its `/compact`
   command;
 - whether changing model/thinking/mode during an active prompt is safe;
-- whether `--agent-file` affects ACP sessions or must be translated into an
-  alternate instruction path;
 - audio input (the agent explicitly advertises `audio: false`).
 
 These must be implemented only after separate verification or documented as

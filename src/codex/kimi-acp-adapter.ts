@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -11,6 +12,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
+  type SessionConfigOption,
   type Stream,
   type ToolCallContent,
 } from "@agentclientprotocol/sdk";
@@ -30,6 +32,8 @@ import {
   ENGINE_DEFAULT_TURN_TIMEOUT_MS,
 } from "./engine-timeouts.js";
 import { killProcessTree } from "./process-tree.js";
+import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
+import { DEFAULT_KIMI_EFFORT, readValidatedConfigFile } from "../telegram/instance-config.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -95,6 +99,7 @@ type KimiWorker = {
   requestedSessionId: string;
   currentSessionId: string | null;
   workspacePath: string;
+  settingsKey: string;
   stderrTail: string;
   pendingTurn: PendingKimiTurn | null;
   tools: Map<string, KimiToolState>;
@@ -107,6 +112,12 @@ type KimiWorker = {
 
 type KimiSessionResult = NewSessionResponse | LoadSessionResponse;
 
+type KimiRuntimeOptions = {
+  model?: string;
+  effort?: string;
+  mode?: "default" | "yolo" | "auto";
+};
+
 export const KIMI_ACP_TURN_TIMEOUT_MS = ENGINE_DEFAULT_TURN_TIMEOUT_MS;
 export const KIMI_ACP_INACTIVITY_TIMEOUT_MS = ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS;
 export const KIMI_ACP_INITIALIZE_TIMEOUT_MS = 30_000;
@@ -117,6 +128,71 @@ const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60_000;
 const MAX_ACP_LINE_BYTES = 64 * 1024 * 1024;
 const MAX_STDERR_TAIL_CHARS = 20_000;
 const MAX_ERROR_LINE_PREVIEW_CHARS = 240;
+const MAX_INSTRUCTIONS_CHARS = 100_000;
+
+function combineInstructions(agentInstructions: string | null, bridgeInstructions: string | null): string | null {
+  const parts = [agentInstructions, bridgeInstructions]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function kimiModeForApprovalMode(mode: ApprovalMode): KimiRuntimeOptions["mode"] {
+  if (mode === "full-auto") {
+    return "yolo";
+  }
+  if (mode === "bypass") {
+    return "auto";
+  }
+  return "default";
+}
+
+function configOptionValues(option: SessionConfigOption): string[] {
+  if (option.type !== "select") {
+    return [];
+  }
+  const values: string[] = [];
+  for (const item of option.options) {
+    if ("value" in item) {
+      values.push(item.value);
+      continue;
+    }
+    for (const grouped of item.options) {
+      values.push(grouped.value);
+    }
+  }
+  return values;
+}
+
+function findConfigOption(
+  options: SessionConfigOption[],
+  category: "model" | "thought_level" | "mode",
+  fallbackId: string,
+): SessionConfigOption | undefined {
+  return options.find((option) => option.category === category)
+    ?? options.find((option) => option.id === fallbackId);
+}
+
+function parseKimiDefaultModel(configToml: string): string | undefined {
+  for (const line of configToml.split(/\r?\n/)) {
+    const doubleQuoted = line.match(/^\s*default_model\s*=\s*("(?:\\.|[^"\\])*")\s*(?:#.*)?$/);
+    if (doubleQuoted) {
+      try {
+        const parsed = JSON.parse(doubleQuoted[1]) as unknown;
+        if (typeof parsed === "string" && parsed.trim()) {
+          return parsed.trim();
+        }
+      } catch {
+        return undefined;
+      }
+    }
+    const singleQuoted = line.match(/^\s*default_model\s*=\s*'([^']*)'\s*(?:#.*)?$/);
+    if (singleQuoted?.[1]?.trim()) {
+      return singleQuoted[1].trim();
+    }
+  }
+  return undefined;
+}
 
 function isLogicalSessionId(sessionId: string): boolean {
   return sessionId.startsWith("telegram-");
@@ -381,6 +457,9 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnKimi: SpawnKimi;
   private readonly workspacePath: string;
+  private readonly instructionsPath: string | undefined;
+  private readonly configPath: string | undefined;
+  private readonly engineHomePath: string | undefined;
   private readonly turnTimeoutMs: number | null;
   private readonly inactivityTimeoutMs: number | null;
   private readonly initializeTimeoutMs: number;
@@ -397,6 +476,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       childEnv?: NodeJS.ProcessEnv;
       spawnFn?: SpawnKimi;
       workspacePath?: string;
+      instructionsPath?: string;
+      configPath?: string;
       engineHomePath?: string;
       turnTimeoutMs?: number | null;
       inactivityTimeoutMs?: number | null;
@@ -417,6 +498,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     })();
     this.spawnKimi = options?.spawnFn ?? (spawn as unknown as SpawnKimi);
     this.workspacePath = path.resolve(options?.workspacePath ?? process.cwd());
+    this.instructionsPath = options?.instructionsPath;
+    this.configPath = options?.configPath;
+    const homeDir = this.childEnv.HOME ?? this.childEnv.USERPROFILE;
+    this.engineHomePath = options?.engineHomePath
+      ?? this.childEnv.KIMI_CODE_HOME
+      ?? (homeDir ? path.join(homeDir, ".kimi-code") : undefined);
     this.turnTimeoutMs = options?.turnTimeoutMs === undefined ? KIMI_ACP_TURN_TIMEOUT_MS : options.turnTimeoutMs;
     this.inactivityTimeoutMs = options?.inactivityTimeoutMs === undefined
       ? KIMI_ACP_INACTIVITY_TIMEOUT_MS
@@ -441,12 +528,15 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (isLogicalSessionId(sessionId)) {
       throw new Error("A logical Kimi chat session cannot be resumed as an external session");
     }
-    await this.getOrCreateWorker(sessionId, this.workspacePath);
+    await this.getOrCreateWorker(sessionId, this.workspacePath, {});
   }
 
   async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
     const workspacePath = path.resolve(input.workspaceOverride ?? this.workspacePath);
-    const worker = await this.getOrCreateWorker(sessionId, workspacePath);
+    const agentInstructions = await this.loadInstructions();
+    const instructions = combineInstructions(agentInstructions, input.instructions ?? null);
+    const runtimeOptions = await this.loadRuntimeOptions();
+    const worker = await this.getOrCreateWorker(sessionId, workspacePath, runtimeOptions);
     if (worker.pendingTurn) {
       throw new Error("Kimi session already has an in-flight turn");
     }
@@ -457,7 +547,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     await this.emitEngineEvent(input.onEngineEvent, { type: "session", sessionId: actualSessionId });
 
-    const result = await this.runTurn(worker, actualSessionId, this.buildPrompt(input), input);
+    const result = await this.runTurn(worker, actualSessionId, this.buildPrompt(input, instructions), input);
     this.rekeyWorker(worker, actualSessionId);
     return {
       text: result.text,
@@ -466,23 +556,85 @@ export class KimiAcpAdapter implements CodexAdapter {
     };
   }
 
-  private buildPrompt(input: CodexUserMessageInput): string {
-    const parts = [input.text];
+  private buildPrompt(input: CodexUserMessageInput, instructions: string | null): string {
+    const text = instructions
+      ? [
+          "[Bridge Instructions]",
+          instructions,
+          "[/Bridge Instructions]",
+          "",
+          "[User Message]",
+          input.text,
+        ].join("\n")
+      : input.text;
+    const parts = [text];
     for (const file of input.files) {
       parts.push(`Attachment: ${file}`);
     }
     return parts.join("\n");
   }
 
-  private async getOrCreateWorker(sessionId: string, workspacePath: string): Promise<KimiWorker> {
+  private async loadInstructions(): Promise<string | null> {
+    if (!this.instructionsPath) {
+      return null;
+    }
+    try {
+      const trimmed = (await readFile(this.instructionsPath, "utf8")).trim();
+      if (!trimmed) {
+        return null;
+      }
+      return trimmed.length <= MAX_INSTRUCTIONS_CHARS
+        ? trimmed
+        : `${trimmed.slice(0, MAX_INSTRUCTIONS_CHARS)}\n\n[Instructions truncated at ${MAX_INSTRUCTIONS_CHARS} characters]`;
+    } catch {
+      return null;
+    }
+  }
+
+  private async loadRuntimeOptions(): Promise<KimiRuntimeOptions> {
+    if (!this.configPath) {
+      return {};
+    }
+    const parsed = await readValidatedConfigFile(this.configPath);
+    const approvalMode = normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
+    return {
+      model: typeof parsed.model === "string" && parsed.model.trim()
+        ? parsed.model.trim()
+        : await this.loadDefaultModel(),
+      effort: typeof parsed.effort === "string" ? parsed.effort : DEFAULT_KIMI_EFFORT,
+      mode: kimiModeForApprovalMode(approvalMode),
+    };
+  }
+
+  private async loadDefaultModel(): Promise<string | undefined> {
+    if (!this.engineHomePath) {
+      return undefined;
+    }
+    try {
+      return parseKimiDefaultModel(await readFile(path.join(this.engineHomePath, "config.toml"), "utf8"));
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async getOrCreateWorker(
+    sessionId: string,
+    workspacePath: string,
+    runtimeOptions: KimiRuntimeOptions,
+  ): Promise<KimiWorker> {
+    const settingsKey = JSON.stringify(runtimeOptions);
     const existing = this.workers.get(sessionId);
     if (existing) {
-      if (existing.workspacePath !== workspacePath) {
-        throw new Error(
-          `Cannot change the workspace of an existing Kimi session from ${existing.workspacePath} to ${workspacePath}; use /reset first.`,
-        );
+      if (existing.workspacePath === workspacePath && existing.settingsKey === settingsKey) {
+        return existing;
       }
-      return existing;
+      if (existing.pendingTurn) {
+        throw new Error("Cannot reconfigure Kimi session while a turn is in flight");
+      }
+      const resumedSessionId = existing.currentSessionId ?? sessionId;
+      this.killProcessTreeFn(existing.child.pid);
+      this.removeWorker(existing);
+      sessionId = resumedSessionId;
     }
 
     const pending = this.pendingWorkers.get(sessionId);
@@ -490,7 +642,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       return await pending;
     }
 
-    const creation = this.createWorker(sessionId, workspacePath);
+    const creation = this.createWorker(sessionId, workspacePath, runtimeOptions, settingsKey);
     this.pendingWorkers.set(sessionId, creation);
     try {
       return await creation;
@@ -501,7 +653,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
-  private async createWorker(sessionId: string, workspacePath: string): Promise<KimiWorker> {
+  private async createWorker(
+    sessionId: string,
+    workspacePath: string,
+    runtimeOptions: KimiRuntimeOptions,
+    settingsKey: string,
+  ): Promise<KimiWorker> {
     const invocation = buildCommandInvocation(this.kimiExecutable, ["acp"]);
     const child = this.spawnKimi(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -537,6 +694,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       requestedSessionId: sessionId,
       currentSessionId: null,
       workspacePath,
+      settingsKey,
       stderrTail: "",
       pendingTurn: null,
       tools: new Map(),
@@ -622,12 +780,70 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (!worker.currentSessionId) {
         throw new Error("Kimi ACP session/new returned no session id");
       }
+      await this.applySessionConfigOptions(worker, sessionResult.configOptions ?? [], runtimeOptions);
       this.rekeyWorker(worker, worker.currentSessionId);
       return worker;
     } catch (error) {
       this.killProcessTreeFn(child.pid);
       this.removeWorker(worker);
       throw this.withDiagnostics(worker, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private async applySessionConfigOptions(
+    worker: KimiWorker,
+    initialOptions: SessionConfigOption[],
+    requested: KimiRuntimeOptions,
+  ): Promise<void> {
+    const sessionId = worker.currentSessionId;
+    if (!sessionId) {
+      throw new Error("Kimi ACP did not provide a session id before configuration");
+    }
+
+    let options = initialOptions;
+    const selections: Array<{
+      label: string;
+      category: "model" | "thought_level" | "mode";
+      fallbackId: string;
+      value: string | undefined;
+    }> = [
+      { label: "model", category: "model", fallbackId: "model", value: requested.model },
+      { label: "effort", category: "thought_level", fallbackId: "thinking", value: requested.effort },
+      { label: "approval mode", category: "mode", fallbackId: "mode", value: requested.mode },
+    ];
+
+    for (const selection of selections) {
+      if (selection.value === undefined) {
+        continue;
+      }
+      const option = findConfigOption(options, selection.category, selection.fallbackId);
+      if (!option || option.type !== "select") {
+        throw new Error(
+          `Kimi ACP did not advertise a configurable ${selection.label}; update Kimi Code CLI or reset that override.`,
+        );
+      }
+      const available = configOptionValues(option);
+      if (!available.includes(selection.value)) {
+        throw new Error(
+          `Kimi does not advertise ${selection.label} ${selection.value}. Available values: ${available.join(", ") || "none"}.`,
+        );
+      }
+      if (option.currentValue === selection.value) {
+        continue;
+      }
+      const response = await withTimeout(
+        Promise.race([
+          worker.connection.setSessionConfigOption({
+            sessionId,
+            configId: option.id,
+            value: selection.value,
+          }),
+          worker.failurePromise,
+        ]),
+        this.initializeTimeoutMs,
+        `Kimi ACP ${selection.label} configuration timed out after ${this.initializeTimeoutMs}ms`,
+      );
+      options = response.configOptions;
     }
   }
 

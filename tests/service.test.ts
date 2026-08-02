@@ -35,6 +35,7 @@ import { ClaudeStreamAdapter } from "../src/codex/claude-stream-adapter.js";
 import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
 import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
 import { ProcessAntigravityAdapter } from "../src/codex/antigravity-adapter.js";
+import { KimiAcpAdapter } from "../src/codex/kimi-acp-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import * as auditLog from "../src/state/audit-log.js";
@@ -209,6 +210,10 @@ describe("createServiceDependenciesForInstance", () => {
     expect(resolveEngineRuntime("codex", "normal")).toBe("app-server");
   });
 
+  it("reports Kimi's runtime as ACP", () => {
+    expect(resolveEngineRuntime("kimi", "normal")).toBe("acp");
+  });
+
   it("honors the Codex runtime override", () => {
     expect(resolveEngineRuntime("codex", "normal", "process")).toBe("process");
   });
@@ -218,7 +223,7 @@ describe("createServiceDependenciesForInstance", () => {
     const configPath = path.join(root, "config.json");
 
     try {
-      for (const engine of ["codex", "claude", "antigravity"] as const) {
+      for (const engine of ["codex", "claude", "kimi", "antigravity"] as const) {
         await writeFile(configPath, JSON.stringify({ engine }) + "\n", "utf8");
 
         await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
@@ -655,6 +660,31 @@ describe("createServiceDependenciesForInstance", () => {
       expect((result.bridge as any).adapter).toBeInstanceOf(ProcessAntigravityAdapter);
       expect((result.bridge as any).adapter.antigravityExecutable).toBe("agy-test");
       expect((result.bridge as any).adapter.childEnv.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("uses the Kimi ACP adapter and forwards its explicit executable and home", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, ".env"), 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n", "utf8");
+
+      const result = await createServiceDependenciesForInstance({
+        USERPROFILE: root,
+        KIMI_EXECUTABLE: "/opt/kimi",
+        KIMI_CODE_HOME: path.join(root, "kimi-home"),
+      }, "alpha");
+
+      const adapter = (result.bridge as any).adapter;
+      expect(adapter).toBeInstanceOf(KimiAcpAdapter);
+      expect(adapter.kimiExecutable).toBe("/opt/kimi");
+      expect(adapter.childEnv.KIMI_CODE_HOME).toBe(path.join(root, "kimi-home"));
+      expect(adapter.childEnv.TELEGRAM_BOT_TOKEN).toBeUndefined();
+      adapter.destroy();
     } finally {
       await removeTempRoot(root);
     }
@@ -6612,6 +6642,7 @@ describe("polling helpers", () => {
           "Choose an engine with /engine <name>:",
           "/engine claude",
           "/engine codex",
+          "/engine kimi",
           "/engine antigravity",
           "Restart this instance after switching to apply the change.",
         ].join("\n"),

@@ -20,7 +20,7 @@ import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig } from "./locale.js";
 import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 
-const LARK_CONFIG_ENGINES: InstanceEngine[] = ["codex", "claude", "antigravity"];
+const LARK_CONFIG_ENGINES: InstanceEngine[] = ["codex", "claude", "kimi", "antigravity"];
 
 export type LarkConfigActionName = "engine" | "fast" | "yolo" | "locale" | "group" | "refresh" | "submit";
 
@@ -97,6 +97,7 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
     section(labels.engineSection, [
       button(optionLabel(labels.codex, cfg.engine === "codex", labels), "engine", "codex", input, cfg.engine === "codex" ? "primary" : "default"),
       button(optionLabel(labels.claude, cfg.engine === "claude", labels), "engine", "claude", input, cfg.engine === "claude" ? "primary" : "default"),
+      button(optionLabel(labels.kimi, cfg.engine === "kimi", labels), "engine", "kimi", input, cfg.engine === "kimi" ? "primary" : "default"),
       button(optionLabel(labels.antigravity, cfg.engine === "antigravity", labels), "engine", "antigravity", input, cfg.engine === "antigravity" ? "primary" : "default"),
     ]),
     section(labels.speedSection, [
@@ -464,6 +465,7 @@ function configFormSection(
     selectStatic("engine", cfg.engine, [
       ["codex", "Codex"],
       ["claude", "Claude"],
+      ["kimi", "Kimi"],
       ["antigravity", "Antigravity"],
     ]),
     selectStatic("fast", cfg.codexServiceTier === "fast" ? "on" : "off", [
@@ -636,6 +638,7 @@ function larkConfigLabels(locale: Locale): {
   engineSection: string;
   codex: string;
   claude: string;
+  kimi: string;
   antigravity: string;
   speedSection: string;
   fastOn: string;
@@ -682,6 +685,7 @@ function larkConfigLabels(locale: Locale): {
       engineSection: "Engine",
       codex: "Codex",
       claude: "Claude",
+      kimi: "Kimi",
       antigravity: "Antigravity",
       speedSection: "Speed",
       fastOn: "Fast On",
@@ -728,6 +732,7 @@ function larkConfigLabels(locale: Locale): {
     engineSection: "引擎",
     codex: "Codex",
     claude: "Claude",
+    kimi: "Kimi",
     antigravity: "Antigravity",
     speedSection: "速度",
     fastOn: "Fast 开",

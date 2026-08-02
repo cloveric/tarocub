@@ -8,9 +8,9 @@ import { applyEngineSelection } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { InstanceEngine } from "./instance-config.js";
 
-const ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "antigravity"];
-const ENGINE_USAGE_EN = "Usage: /engine [claude|codex|antigravity]";
-const ENGINE_USAGE_ZH = "用法: /engine [claude|codex|antigravity]";
+const ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "kimi", "antigravity"];
+const ENGINE_USAGE_EN = "Usage: /engine [claude|codex|kimi|antigravity]";
+const ENGINE_USAGE_ZH = "用法: /engine [claude|codex|kimi|antigravity]";
 
 function isCompactCommand(text: string): boolean {
   return /^\/compact(?:@\w+)?(?:\s|$)/i.test(text.trim());

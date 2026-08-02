@@ -1,7 +1,7 @@
 import type { FailureCategory } from "../runtime/error-classification.js";
 
 export type Locale = "en" | "zh";
-export type EngineName = "codex" | "claude" | "antigravity";
+export type EngineName = "codex" | "claude" | "antigravity" | "kimi";
 
 function utf16Length(text: string): number {
   return text.length;
@@ -177,7 +177,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     return [
       "Telegram 命令：",
       "/status - 显示引擎、会话和文件任务状态",
-      "/engine [claude|codex|antigravity] - 切换引擎（切换后需重启实例）",
+      "/engine [claude|codex|kimi|antigravity] - 切换引擎（切换后需重启实例）",
       "/effort [low|medium|high|xhigh|max|ultra|off] - 设置推理强度（Codex 5.6：Sol/Terra 支持 ultra，Luna 最高 max）",
       "/fast [on|off|status] - 开关 Codex Fast Mode（更快但消耗更多 credits）",
       "/goal <目标> - 设置默认无上限 goal；用 --budget 50k 加 token 预算，另支持 status/clear",
@@ -207,7 +207,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
   return [
     "Telegram commands:",
     "/status - show engine, session, and file task state",
-    "/engine [claude|codex|antigravity] - switch engine (restart required after changing)",
+    "/engine [claude|codex|kimi|antigravity] - switch engine (restart required after changing)",
     "/effort [low|medium|high|xhigh|max|ultra|off] - set reasoning effort (Codex 5.6: Sol/Terra support ultra; Luna tops out at max)",
     "/fast [on|off|status] - toggle Codex Fast Mode (faster, higher credit use)",
     "/goal <goal> - set a goal; default is unbounded unless --budget is provided, plus status/clear",

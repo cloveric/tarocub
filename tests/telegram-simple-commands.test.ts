@@ -154,6 +154,27 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("rejects Kimi effort values outside the live ACP range", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const updateInstanceConfig = vi.fn();
+    try {
+      await expect(handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi", effort: "high" },
+        normalized: createNormalizedMessage("/effort xhigh"),
+        context: { api: api as never, instanceName: "default", updateId: 79 },
+        updateInstanceConfig,
+      })).resolves.toBe(true);
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Kimi effort supports only low, high, max, or off.");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("configures and reports the Telegram turn timeout", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
@@ -706,6 +727,27 @@ describe("handleSimpleLocalTelegramCommand", () => {
           "Sol/Terra support max and ultra; Luna supports max but not ultra.",
         ].join("\n"),
       );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("explains Kimi's provider-defined model IDs on bare /model", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    try {
+      await expect(handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi", model: "moonshot-v1" },
+        normalized: createNormalizedMessage("/model"),
+        context: { api: api as never, instanceName: "default", updateId: 80 },
+        updateInstanceConfig: vi.fn(),
+      })).resolves.toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining(
+        "Kimi validates the exact model ID through ACP when the next turn starts.",
+      ));
     } finally {
       await removeTempRoot(root);
     }

@@ -190,6 +190,8 @@ describe("Lark env files", () => {
       await writeFile(path.join(stateDir, "lark.env"), [
         // engine credentials — allowed through
         "IFIND_TOKEN=ok-ifind",
+        "KIMI_API_KEY=ok-kimi",
+        "KIMI_CODE_HOME=/tmp/kimi-home",
         "TAVILY_API_KEY=ok-tavily",
         // bridge-control vars — must be refused so lark.env can't repoint/hijack the bridge
         "CCTB_SEND_URL=http://attacker",
@@ -207,8 +209,10 @@ describe("Lark env files", () => {
       const applied = await applyLarkEnvPassthrough({ USERPROFILE: tempDir, CCTB_LARK_INSTANCE: instanceName }, target);
 
       // Only non-reserved engine credentials pass through.
-      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "TAVILY_API_KEY"]);
+      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "KIMI_API_KEY", "KIMI_CODE_HOME", "TAVILY_API_KEY"]);
       expect(target.IFIND_TOKEN).toBe("ok-ifind");
+      expect(target.KIMI_API_KEY).toBe("ok-kimi");
+      expect(target.KIMI_CODE_HOME).toBe("/tmp/kimi-home");
       expect(target.TAVILY_API_KEY).toBe("ok-tavily");
       for (const blocked of [
         "CCTB_SEND_URL", "CCTB_LARK_ACTIVE_INSTANCE", "CODEX_THREAD_ID", "LARK_DOC_CREATE_AS",
@@ -427,7 +431,38 @@ describe("Lark env files", () => {
   });
 });
 
-describe("cloud-ASR config keys (whitelisted, not extras)", () => {
+describe("bridge runtime config keys (whitelisted, not extras)", () => {
+  it("reads and preserves the whitelisted Kimi executable without exposing it as a credential extra", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-env-"));
+    const stateDir = path.join(home, ".cctb", "kimiinst");
+    await mkdir(stateDir, { recursive: true });
+    const envPath = path.join(stateDir, "lark.env");
+    await writeFile(envPath, [
+      "LARK_APP_ID=cli_x",
+      "LARK_APP_SECRET=sek",
+      "KIMI_EXECUTABLE=/opt/kimi",
+      "KIMI_API_KEY=credential",
+      "",
+    ].join("\n"), "utf8");
+
+    try {
+      const selector = { HOME: home, CCTB_LARK_INSTANCE: "kimiinst" };
+      const loaded = await loadLarkRuntimeEnv(selector);
+      expect(loaded.KIMI_EXECUTABLE).toBe("/opt/kimi");
+      const target: NodeJS.ProcessEnv = {};
+      await expect(applyLarkEnvPassthrough(selector, target)).resolves.toEqual(["KIMI_API_KEY"]);
+      expect(target.KIMI_EXECUTABLE).toBeUndefined();
+      expect(target.KIMI_API_KEY).toBe("credential");
+
+      await writeLarkEnvFile(selector, { appId: "cli_x", appSecret: "sek" });
+      const rewritten = await readFile(envPath, "utf8");
+      expect(rewritten).toContain('KIMI_EXECUTABLE="/opt/kimi"');
+      expect(rewritten).toContain('KIMI_API_KEY="credential"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("exports all bridge-owned ASR config into the runtime without clobbering existing values", () => {
     const target: NodeJS.ProcessEnv = {
       ASR_CLOUD_THRESHOLD_SECONDS: "900",

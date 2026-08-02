@@ -4199,13 +4199,13 @@ async function runEngineCommand(
   }
 
   const engine = args[0];
-  if (engine !== "codex" && engine !== "claude" && engine !== "antigravity") {
-    throw new Error("Usage: telegram engine <codex|claude|antigravity> [--instance <name>]");
+  if (engine !== "codex" && engine !== "claude" && engine !== "kimi" && engine !== "antigravity") {
+    throw new Error("Usage: telegram engine <codex|claude|kimi|antigravity> [--instance <name>]");
   }
 
   const config = await readInstanceConfig(configPath);
   const previousEngine =
-    config.engine === "claude" || config.engine === "codex" || config.engine === "antigravity"
+    config.engine === "claude" || config.engine === "codex" || config.engine === "kimi" || config.engine === "antigravity"
       ? config.engine
       : "codex";
   let resetSessionBindings = false;
@@ -4339,7 +4339,7 @@ Commands:
   instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run]
                                               Manage per-instance agent.md
   yolo [on|off|unsafe] [--instance <name>]    Toggle YOLO auto-approval mode
-  engine [codex|claude|antigravity] [--instance <name>]
+  engine [codex|claude|kimi|antigravity] [--instance <name>]
                                               Switch AI engine per instance
   usage [--instance <name>]                   Show token usage and cost
   verbosity [0|1|2] [--instance <name>]       Set progress output level

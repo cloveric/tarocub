@@ -20,6 +20,7 @@ import {
 } from "./turn-bookkeeping.js";
 import {
   CLAUDE_MODEL_CHOICES,
+  KIMI_EFFORT_LEVELS,
   loadInstanceConfig,
   type InstanceEngine,
 } from "./instance-config.js";
@@ -124,6 +125,21 @@ export async function handleSimpleLocalTelegramCommand(input: {
             ...CLAUDE_MODEL_CHOICES.map((model) => `/model ${model}`),
             "/model off",
             "Latest Opus alias: /model opus[1m]",
+          ].join("\n");
+    }
+    if (cfg.engine === "kimi") {
+      return locale === "zh"
+        ? [
+            `当前模型: ${current}`,
+            "用 /model <id> 设置当前 Kimi provider 配置实际提供的模型。",
+            "/model off",
+            "下一轮开始时会通过 ACP 校验该模型 ID。",
+          ].join("\n")
+        : [
+            `Current model: ${current}`,
+            "Use /model <id> with a model advertised by your Kimi provider configuration.",
+            "/model off",
+            "Kimi validates the exact model ID through ACP when the next turn starts.",
           ].join("\n");
     }
 
@@ -268,6 +284,16 @@ export async function handleSimpleLocalTelegramCommand(input: {
       effortMessage = locale === "zh"
         ? "Claude 不支持 ultra；最高可用 max。"
         : "Claude does not support ultra; use max for its highest effort.";
+      await context.api.sendMessage(normalized.chatId, effortMessage);
+    } else if (
+      cfg.engine === "kimi" &&
+      !KIMI_EFFORT_LEVELS.includes(effortCmd.level as (typeof KIMI_EFFORT_LEVELS)[number]) &&
+      effortCmd.level !== "off" && effortCmd.level !== "default"
+    ) {
+      auditValue = "unsupported-kimi-effort";
+      effortMessage = locale === "zh"
+        ? "Kimi effort 仅支持 low、high、max 或 off。"
+        : "Kimi effort supports only low, high, max, or off.";
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel) && cfg.engine === "codex") {
       const effort = effortCmd.level as EffortLevel;

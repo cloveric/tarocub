@@ -31,6 +31,7 @@ import { handleLocalEngineTelegramCommand } from "../telegram/engine-commands.js
 import {
   applyEngineSelection,
   CLAUDE_MODEL_CHOICES,
+  KIMI_EFFORT_LEVELS,
   loadInstanceConfig,
   resolveInstanceWorkspacePath,
   updateInstanceConfig,
@@ -73,7 +74,7 @@ import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
 const VALID_LARK_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
-const LARK_ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "antigravity"];
+const LARK_ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "kimi", "antigravity"];
 
 type RequestLarkApproval = (input: {
   channel: LarkChannelLike;
@@ -947,7 +948,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "",
       "**Settings**",
       "- `/config` interactive panel (recommended) · `/usage` usage · `/account` bound Feishu app",
-      "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex Fast Mode · `/yolo` approval mode",
+      "- `/model` · `/effort` · `/engine [claude|codex|kimi|antigravity]` · `/fast` Codex Fast Mode · `/yolo` approval mode",
       "- `/stream [on|off]` typewriter streaming on run cards (off = full-card refresh)",
       "- `/timeout [on|off]` single-turn 60-min time cap (off = lift it for long tasks)",
       "- `/steer [on|off|<seconds>|unlimited]` mid-turn steering window (default 30s; later messages queue)",
@@ -982,7 +983,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "",
     "**设置**",
     "- `/config` 交互配置面板（推荐）· `/usage` 用量 · `/account` 当前绑定的飞书应用",
-    "- `/model` · `/effort` · `/engine [claude|codex|antigravity]` · `/fast` Codex 快速模式 · `/yolo` 审批模式",
+    "- `/model` · `/effort` · `/engine [claude|codex|kimi|antigravity]` · `/fast` Codex 快速模式 · `/yolo` 审批模式",
     "- `/stream [on|off]` 回答卡片打字机流式开关（off = 整卡刷新）",
     "- `/timeout [on|off]` 单轮 60 分钟时间上限（off = 长任务放开上限）",
     "- `/steer [on|off|<秒数>|unlimited]` 任务中途引导的资格窗口（默认 30 秒，超窗排队）",
@@ -1851,6 +1852,21 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
       CODEX_EFFORT_COMPATIBILITY_ZH,
     ].join("\n");
   }
+  if (cfg.engine === "kimi") {
+    return locale === "en"
+      ? [
+          `Current model: ${current}`,
+          "Use /model <id> with a model advertised by your Kimi provider configuration.",
+          "/model off",
+          "Kimi validates the exact model ID through ACP when the next turn starts.",
+        ].join("\n")
+      : [
+          `当前模型: ${current}`,
+          "用 /model <id> 设置当前 Kimi provider 配置实际提供的模型。",
+          "/model off",
+          "下一轮开始时会通过 ACP 校验该模型 ID。",
+        ].join("\n");
+  }
   if (locale === "en") {
     return [
       `Current model: ${current}`,
@@ -1936,6 +1952,11 @@ async function handleLarkEffortCommand(
     return locale === "en"
       ? "Claude does not support ultra; use max for its highest effort."
       : "Claude 不支持 ultra；最高可用 max。";
+  }
+  if (cfg.engine === "kimi" && !KIMI_EFFORT_LEVELS.includes(level as (typeof KIMI_EFFORT_LEVELS)[number])) {
+    return locale === "en"
+      ? "Kimi effort supports only low, high, max, or off."
+      : "Kimi effort 仅支持 low、high、max 或 off。";
   }
   if (!VALID_LARK_EFFORT_LEVELS.includes(level as EffortLevel)) {
     return locale === "en"
@@ -2178,7 +2199,7 @@ async function handleLarkEngineCommand(
     ].join("\n");
   }
   if (invalid || !LARK_ENGINE_CHOICES.includes(engine as InstanceEngine)) {
-    return locale === "en" ? "Usage: /engine [claude|codex|antigravity]" : "用法: /engine [claude|codex|antigravity]";
+    return locale === "en" ? "Usage: /engine [claude|codex|kimi|antigravity]" : "用法: /engine [claude|codex|kimi|antigravity]";
   }
 
   const selectedEngine = engine as InstanceEngine;

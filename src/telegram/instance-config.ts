@@ -15,7 +15,7 @@ import { withFileMutex } from "../state/file-mutex.js";
 import { isExtendedCodexEffort, knownCodexModelSupportsEffort } from "../codex/model-capabilities.js";
 
 export type { EffortLevel };
-export type InstanceEngine = "codex" | "claude" | "antigravity";
+export type InstanceEngine = "codex" | "claude" | "antigravity" | "kimi";
 
 export const CLAUDE_MODEL_CHOICES = [
   "claude-opus-5[1m]",
@@ -27,6 +27,8 @@ export const CLAUDE_MODEL_CHOICES = [
 export const DEFAULT_CLAUDE_MODEL = CLAUDE_MODEL_CHOICES[0];
 export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
 export const DEFAULT_CODEX_EFFORT: EffortLevel = "xhigh";
+export const KIMI_EFFORT_LEVELS = ["low", "high", "max"] as const satisfies readonly EffortLevel[];
+export const DEFAULT_KIMI_EFFORT: EffortLevel = "high";
 // Default steer eligibility window: a running turn accepts mid-turn steering for
 // its first 30s; later messages queue as their own turn. /steer <seconds> tunes it,
 // 0 = unlimited, /steer off disables steering entirely.
@@ -73,14 +75,21 @@ function sanitizeConfigCompatibility(config: ConfigFile, configPath: string): Co
     isExtendedCodexEffort(effort) &&
     knownCodexModelSupportsEffort(config.model, effort) !== true;
   const invalidClaudeEffort = engine === "claude" && effort === "ultra";
-  if (!invalidCodexEffort && !invalidClaudeEffort) {
+  const invalidKimiEffort = engine === "kimi" && effort !== undefined &&
+    !KIMI_EFFORT_LEVELS.includes(effort as (typeof KIMI_EFFORT_LEVELS)[number]);
+  if (!invalidCodexEffort && !invalidClaudeEffort && !invalidKimiEffort) {
     return config;
   }
 
   const sanitized = { ...config };
   delete sanitized.effort;
+  const reason = invalidKimiEffort
+    ? "Kimi ACP supports only low, high, and max"
+    : invalidClaudeEffort
+      ? "Claude supports up to max"
+      : "the selected Codex model does not advertise that effort";
   console.error(
-    `Ignored incompatible effort ${effort} in ${configPath}; select a compatible explicit model before restoring that effort.`,
+    `Ignored incompatible effort ${effort} in ${configPath}; ${reason}.`,
   );
   return sanitized;
 }
@@ -99,6 +108,7 @@ export interface GroupModeConfig {
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
 const VALID_CLAUDE_EFFORT_LEVELS: EffortLevel[] = VALID_EFFORT_LEVELS.filter((level) => level !== "ultra");
+const VALID_KIMI_EFFORT_LEVELS: EffortLevel[] = [...KIMI_EFFORT_LEVELS];
 
 function applyClaudeEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
   const modelOverride = typeof config.model === "string" && config.model.trim().length > 0
@@ -129,6 +139,15 @@ function applyCodexEngineDefaults(config: Record<string, unknown>, previousEngin
   // following the engine's own current default is the safer behavior there.
   if (previousEngine !== "codex" || effortOverride === undefined) {
     config.effort = DEFAULT_CODEX_EFFORT;
+  }
+}
+
+function applyKimiEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
+  const effortOverride = VALID_KIMI_EFFORT_LEVELS.includes(config.effort as EffortLevel)
+    ? config.effort as EffortLevel
+    : undefined;
+  if (previousEngine !== "kimi" || effortOverride === undefined) {
+    config.effort = DEFAULT_KIMI_EFFORT;
   }
 }
 
@@ -226,7 +245,7 @@ export function applyEngineSelection(
   engine: InstanceEngine,
 ): { clearedModel: boolean; enabledFullAuto: boolean } {
   const previousEngine =
-    config.engine === "claude" || config.engine === "codex" || config.engine === "antigravity"
+    config.engine === "claude" || config.engine === "codex" || config.engine === "antigravity" || config.engine === "kimi"
       ? config.engine
       : undefined;
   const hadModelOverride = typeof config.model === "string" && config.model.trim().length > 0;
@@ -245,6 +264,9 @@ export function applyEngineSelection(
   }
   if (engine === "codex") {
     applyCodexEngineDefaults(config, previousEngine);
+  }
+  if (engine === "kimi") {
+    applyKimiEngineDefaults(config, previousEngine);
   }
   if (normalizeApprovalMode(config.approvalMode) === undefined) {
     config.approvalMode = DEFAULT_APPROVAL_MODE;
@@ -326,7 +348,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
 
   const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
   return {
-    engine: config.engine === "claude" || config.engine === "antigravity" ? config.engine : "codex",
+    engine: config.engine === "claude" || config.engine === "antigravity" || config.engine === "kimi" ? config.engine : "codex",
     locale: config.locale === "zh" ? "zh" : "en",
     verbosity: config.verbosity === 0 ? 0 : config.verbosity === 2 ? 2 : 1,
     budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,

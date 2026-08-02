@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +9,7 @@ import type {
   EngineApprovalRequest,
   EngineStreamEvent,
 } from "../src/codex/adapter.js";
+import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import {
   KimiAcpAdapter,
   type KimiChildProcess,
@@ -68,6 +72,43 @@ class FakeAcpServer {
   readonly prompts: JsonRpcMessage[] = [];
   loadReplayText = "old replay that must be ignored";
   autoCompleteCancel = true;
+  configOptions: SessionConfigOption[] = [
+    {
+      id: "model",
+      name: "Model",
+      category: "model",
+      type: "select",
+      currentValue: "kimi-default",
+      options: [
+        { value: "kimi-default", name: "Default" },
+        { value: "kimi-k2.5", name: "K2.5" },
+      ],
+    },
+    {
+      id: "thinking",
+      name: "Thinking",
+      category: "thought_level",
+      type: "select",
+      currentValue: "high",
+      options: [
+        { value: "low", name: "Low" },
+        { value: "high", name: "High" },
+        { value: "max", name: "Max" },
+      ],
+    },
+    {
+      id: "mode",
+      name: "Mode",
+      category: "mode",
+      type: "select",
+      currentValue: "default",
+      options: [
+        { value: "default", name: "Default" },
+        { value: "yolo", name: "YOLO" },
+        { value: "auto", name: "Auto" },
+      ],
+    },
+  ];
 
   private inputBuffer = "";
   private nextServerRequestId = 10_000;
@@ -156,7 +197,7 @@ class FakeAcpServer {
       return;
     }
     if (message.method === "session/new") {
-      this.respond(message, { sessionId: this.sessionId });
+      this.respond(message, { sessionId: this.sessionId, configOptions: this.configOptions });
       return;
     }
     if (message.method === "session/load") {
@@ -164,7 +205,16 @@ class FakeAcpServer {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: this.loadReplayText },
       }, String(message.params?.sessionId));
-      this.respond(message, {});
+      this.respond(message, { configOptions: this.configOptions });
+      return;
+    }
+    if (message.method === "session/set_config_option") {
+      const configId = String(message.params?.configId);
+      const value = String(message.params?.value);
+      this.configOptions = this.configOptions.map((option) => (
+        option.id === configId && option.type === "select" ? { ...option, currentValue: value } : option
+      ));
+      this.respond(message, { configOptions: this.configOptions });
       return;
     }
     if (message.method === "session/prompt") {
@@ -235,13 +285,14 @@ class FakeKimiChild extends EventEmitter {
   }
 }
 
-function createHarness() {
+function createHarness(configureServer?: (server: FakeAcpServer) => void) {
   const children: FakeKimiChild[] = [];
   const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
   const killedPids: Array<number | undefined> = [];
   const spawnFn: SpawnKimi = (command, args, options) => {
     const index = children.length + 1;
     const child = new FakeKimiChild(700 + index, `kimi-session-${index}`);
+    configureServer?.(child.server);
     children.push(child);
     spawnCalls.push({ command, args, cwd: options.cwd });
     return child as unknown as KimiChildProcess;
@@ -253,6 +304,18 @@ function createHarness() {
     spawnFn,
     killProcessTreeFn: (pid: number | undefined) => killedPids.push(pid),
   };
+}
+
+function promptText(server: FakeAcpServer, index = 0): string {
+  const prompt = server.prompts[index]?.params?.prompt;
+  if (!Array.isArray(prompt)) {
+    throw new Error("Expected an ACP prompt array");
+  }
+  const first = prompt[0];
+  if (!first || typeof first !== "object" || !("text" in first) || typeof first.text !== "string") {
+    throw new Error("Expected the first ACP prompt block to contain text");
+  }
+  return first.text;
 }
 
 function adapterOptions(harness: ReturnType<typeof createHarness>) {
@@ -272,6 +335,276 @@ afterEach(() => {
 });
 
 describe("KimiAcpAdapter", () => {
+  it("applies advertised model, effort, and approval settings and reloads the same session after reconfiguration", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-config-test-"));
+    const configPath = path.join(root, "config.json");
+    const instructionsPath = path.join(root, "agent.md");
+    await writeFile(instructionsPath, "Always follow the instance instruction.", "utf8");
+    await writeFile(configPath, JSON.stringify({
+      engine: "kimi",
+      model: "kimi-k2.5",
+      effort: "max",
+      approvalMode: "full-auto",
+    }), "utf8");
+
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("/opt/kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      instructionsPath,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-55", {
+        text: "first",
+        files: [],
+        instructions: "Use the Lark delivery contract.",
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(harness.children[0].server.requests("session/set_config_option").map((request) => request.params)).toEqual([
+        { sessionId: "kimi-session-1", configId: "model", value: "kimi-k2.5" },
+        { sessionId: "kimi-session-1", configId: "thinking", value: "max" },
+        { sessionId: "kimi-session-1", configId: "mode", value: "yolo" },
+      ]);
+      expect(harness.spawnCalls[0]?.args).toEqual(["acp"]);
+      expect(promptText(harness.children[0].server)).toBe([
+        "[Bridge Instructions]",
+        "Always follow the instance instruction.",
+        "",
+        "Use the Lark delivery contract.",
+        "[/Bridge Instructions]",
+        "",
+        "[User Message]",
+        "first",
+      ].join("\n"));
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "one" },
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toEqual({ text: "one", sessionId: "kimi-session-1" });
+
+      await writeFile(configPath, JSON.stringify({
+        engine: "kimi",
+        effort: "low",
+        approvalMode: "bypass",
+      }), "utf8");
+      const second = adapter.sendUserMessage("kimi-session-1", {
+        text: "second",
+        files: [],
+        instructions: "Use the Lark delivery contract.",
+      });
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      expect(harness.killedPids).toContain(701);
+      expect(harness.children[1].server.requests("session/load")[0]?.params?.sessionId).toBe("kimi-session-1");
+      expect(harness.children[1].server.requests("session/set_config_option").map((request) => request.params)).toEqual([
+        { sessionId: "kimi-session-1", configId: "thinking", value: "low" },
+        { sessionId: "kimi-session-1", configId: "mode", value: "auto" },
+      ]);
+      harness.children[1].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "two" },
+      }, "kimi-session-1");
+      harness.children[1].server.respondPrompt();
+      await expect(second).resolves.toEqual({ text: "two" });
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reloads instance instructions on every turn without restarting the ACP worker", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-instructions-test-"));
+    const instructionsPath = path.join(root, "agent.md");
+    await writeFile(instructionsPath, "Use instruction version one.", "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), instructionsPath });
+    try {
+      const first = adapter.sendUserMessage("telegram-59", { text: "first", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(promptText(harness.children[0].server)).toContain("Use instruction version one.");
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "one" },
+      });
+      harness.children[0].server.respondPrompt();
+      await first;
+
+      await writeFile(instructionsPath, "Use instruction version two.", "utf8");
+      const second = adapter.sendUserMessage("kimi-session-1", { text: "second", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      expect(promptText(harness.children[0].server, 1)).toContain("Use instruction version two.");
+      expect(promptText(harness.children[0].server, 1)).not.toContain("Use instruction version one.");
+      expect(harness.children).toHaveLength(1);
+      expect(harness.killedPids).toEqual([]);
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "two" },
+      });
+      harness.children[0].server.respondPrompt();
+      await second;
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes provider model and bridge effort defaults back to a resumed session after overrides are removed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-default-reset-test-"));
+    const configPath = path.join(root, "instance-config.json");
+    await writeFile(path.join(root, "config.toml"), 'default_model = "kimi-default"\n', "utf8");
+    await writeFile(configPath, JSON.stringify({
+      engine: "kimi",
+      model: "kimi-k2.5",
+      effort: "max",
+      approvalMode: "normal",
+    }), "utf8");
+
+    let workerCount = 0;
+    const harness = createHarness((server) => {
+      workerCount += 1;
+      if (workerCount !== 2) {
+        return;
+      }
+      server.configOptions = server.configOptions.map((option) => {
+        if (option.id === "model" && option.type === "select") {
+          return { ...option, currentValue: "kimi-k2.5" };
+        }
+        if (option.id === "thinking" && option.type === "select") {
+          return { ...option, currentValue: "max" };
+        }
+        return option;
+      });
+    });
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-60", { text: "first", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(harness.children[0].server.requests("session/set_config_option").map((request) => request.params)).toEqual([
+        { sessionId: "kimi-session-1", configId: "model", value: "kimi-k2.5" },
+        { sessionId: "kimi-session-1", configId: "thinking", value: "max" },
+      ]);
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "one" },
+      });
+      harness.children[0].server.respondPrompt();
+      await first;
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", approvalMode: "normal" }), "utf8");
+      const second = adapter.sendUserMessage("kimi-session-1", { text: "second", files: [] });
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      expect(harness.children[1].server.requests("session/load")[0]?.params?.sessionId).toBe("kimi-session-1");
+      expect(harness.children[1].server.requests("session/set_config_option").map((request) => request.params)).toEqual([
+        { sessionId: "kimi-session-1", configId: "model", value: "kimi-default" },
+        { sessionId: "kimi-session-1", configId: "thinking", value: "high" },
+      ]);
+      harness.children[1].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "two" },
+      }, "kimi-session-1");
+      harness.children[1].server.respondPrompt();
+      await second;
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a Kimi model that the live ACP session does not advertise", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-model-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({
+      engine: "kimi",
+      model: "not-installed",
+      effort: "high",
+      approvalMode: "normal",
+    }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), configPath, engineHomePath: root });
+    try {
+      await expect(adapter.sendUserMessage("telegram-56", { text: "hello", files: [] }))
+        .rejects.toThrow("Available values: kimi-default, kimi-k2.5");
+      expect(harness.children[0].server.prompts).toHaveLength(0);
+      expect(harness.killedPids).toContain(701);
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts model values advertised inside grouped ACP config options", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-grouped-model-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({
+      engine: "kimi",
+      model: "moonshot-v1",
+      effort: "high",
+      approvalMode: "normal",
+    }), "utf8");
+    const harness = createHarness((server) => {
+      server.configOptions = server.configOptions.map((option) => option.category === "model"
+        ? {
+            ...option,
+            options: [{
+              group: "moonshot",
+              name: "Moonshot",
+              options: [{ value: "moonshot-v1", name: "Moonshot V1" }],
+            }],
+          }
+        : option);
+    });
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), configPath, engineHomePath: root });
+    try {
+      const turn = adapter.sendUserMessage("telegram-57", { text: "hello", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(harness.children[0].server.requests("session/set_config_option")[0]?.params).toEqual({
+        sessionId: "kimi-session-1",
+        configId: "model",
+        value: "moonshot-v1",
+      });
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "ok" },
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "ok" });
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a settings change while the same Kimi session has an in-flight turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-inflight-config-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), configPath, engineHomePath: root });
+    try {
+      const first = adapter.sendUserMessage("telegram-58", { text: "first", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      await expect(adapter.sendUserMessage("kimi-session-1", { text: "second", files: [] }))
+        .rejects.toThrow("Cannot reconfigure Kimi session while a turn is in flight");
+      expect(harness.children).toHaveLength(1);
+
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "one" },
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "one" });
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("creates placeholders and maps a real ACP turn stream, UTF-8 chunks, tools, usage, and session ids", async () => {
     const harness = createHarness();
     const adapter = new KimiAcpAdapter("/opt/kimi", adapterOptions(harness));
@@ -613,7 +946,7 @@ describe("KimiAcpAdapter", () => {
     });
     const first = adapter.sendUserMessage("telegram-9", { text: "start", files: [] });
     const rejected = expect(first).rejects.toThrow("cannot spawn kimi");
-    expect(harness.children).toHaveLength(1);
+    await waitFor(() => harness.children.length === 1);
     harness.children[0].fail(new Error("cannot spawn kimi"));
     await rejected;
     expect(harness.killedPids).toContain(701);

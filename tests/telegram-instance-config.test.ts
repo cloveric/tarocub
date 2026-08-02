@@ -18,6 +18,26 @@ afterEach(() => {
 });
 
 describe("loadInstanceConfig", () => {
+  it("loads Kimi and drops effort levels that its ACP protocol does not advertise", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({ engine: "kimi", model: "kimi-k2.5", effort: "xhigh" }) + "\n",
+        "utf8",
+      );
+      await expect(loadInstanceConfig(root)).resolves.toMatchObject({
+        engine: "kimi",
+        model: "kimi-k2.5",
+        effort: undefined,
+      });
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Ignored incompatible effort xhigh"));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("loads Codex GPT-5.6 ultra effort without dropping it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
 
@@ -364,6 +384,26 @@ describe("updateInstanceConfig", () => {
 });
 
 describe("applyEngineSelection", () => {
+  it("pins Kimi to its verified high effort default and clears another engine's model", () => {
+    const config: Record<string, unknown> = {
+      engine: "claude",
+      model: "opus[1m]",
+      effort: "xhigh",
+    };
+
+    const result = applyEngineSelection(config, "kimi");
+
+    expect(result).toEqual({ clearedModel: true, enabledFullAuto: false });
+    expect(config).toMatchObject({ engine: "kimi", effort: "high" });
+    expect(config.model).toBeUndefined();
+  });
+
+  it("preserves a valid Kimi effort when Kimi is reselected", () => {
+    const config: Record<string, unknown> = { engine: "kimi", effort: "max", model: "kimi-k2.5" };
+    applyEngineSelection(config, "kimi");
+    expect(config).toMatchObject({ engine: "kimi", effort: "max", model: "kimi-k2.5" });
+  });
+
   it("applies the Claude default model and effort when selecting Claude for a fresh config", () => {
     const config: Record<string, unknown> = {};
 

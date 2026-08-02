@@ -19,6 +19,8 @@ export interface EnvSource {
   CCTB_LARK_ACTIVE_STATE_DIR?: string;
   CODEX_EXECUTABLE?: string;
   CLAUDE_EXECUTABLE?: string;
+  KIMI_EXECUTABLE?: string;
+  KIMI_CODE_HOME?: string;
   ANTIGRAVITY_EXECUTABLE?: string;
   TAROCUB_MAX_CONCURRENT_TURNS?: string;
   CODEX_TELEGRAM_MAX_CONCURRENT_TURNS?: string;
@@ -99,6 +101,22 @@ function resolveDefaultAntigravityExecutable(env: EnvSource): string {
   return "agy";
 }
 
+function resolveDefaultKimiExecutable(env: EnvSource): string {
+  if (env.KIMI_EXECUTABLE) {
+    return normalizeExecutablePath(env.KIMI_EXECUTABLE);
+  }
+
+  const homeDir = resolveHomeDir(env);
+  if (homeDir) {
+    const homeBinary = path.join(homeDir, ".kimi-code", "bin", isWindows ? "kimi.exe" : "kimi");
+    if (existsSync(homeBinary)) {
+      return homeBinary;
+    }
+  }
+
+  return "kimi";
+}
+
 export function joinStatePath(base: string, segment: string): string {
   return path.join(base, segment);
 }
@@ -153,6 +171,7 @@ function resolveBaseConfig(env: EnvSource, telegramBotToken: string): AppConfig 
     sessionStatePath: joinStatePath(stateDir, "session.json"),
     runtimeLogPath: joinStatePath(stateDir, "runtime.log"),
     codexExecutable: resolveDefaultCodexExecutable(env),
+    kimiExecutable: resolveDefaultKimiExecutable(env),
     antigravityExecutable: resolveDefaultAntigravityExecutable(env),
   };
 }

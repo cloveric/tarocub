@@ -8,6 +8,7 @@ import { resolveBridgeConfig, resolveConfig, resolveInstanceStateDir, type EnvSo
 import { Bridge } from "./runtime/bridge.js";
 import { ProcessCodexAdapter } from "./codex/process-adapter.js";
 import { ClaudeStreamAdapter } from "./codex/claude-stream-adapter.js";
+import { KimiAcpAdapter } from "./codex/kimi-acp-adapter.js";
 import { ProcessAntigravityAdapter } from "./codex/antigravity-adapter.js";
 import { CodexAppServerAdapter } from "./codex/app-server-adapter.js";
 import type { CodexAdapter } from "./codex/adapter.js";
@@ -281,6 +282,8 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_TELEGRAM_STATE_DIR?: string;
     CODEX_EXECUTABLE?: string;
     CLAUDE_EXECUTABLE?: string;
+    KIMI_EXECUTABLE?: string;
+    KIMI_CODE_HOME?: string;
     ANTIGRAVITY_EXECUTABLE?: string;
     TAROCUB_MAX_CONCURRENT_TURNS?: string;
     CODEX_TELEGRAM_MAX_CONCURRENT_TURNS?: string;
@@ -298,6 +301,8 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
     CLAUDE_EXECUTABLE: env.CLAUDE_EXECUTABLE,
+    KIMI_EXECUTABLE: env.KIMI_EXECUTABLE,
+    KIMI_CODE_HOME: env.KIMI_CODE_HOME,
     ANTIGRAVITY_EXECUTABLE: env.ANTIGRAVITY_EXECUTABLE,
     TAROCUB_MAX_CONCURRENT_TURNS: env.TAROCUB_MAX_CONCURRENT_TURNS,
     CODEX_TELEGRAM_MAX_CONCURRENT_TURNS: env.CODEX_TELEGRAM_MAX_CONCURRENT_TURNS,
@@ -507,7 +512,7 @@ async function seedIsolatedClaudeConfig(
   ]);
 }
 
-export type EngineType = "codex" | "claude" | "antigravity";
+export type EngineType = "codex" | "claude" | "antigravity" | "kimi";
 type CodexRuntime = "app-server" | "process";
 
 export async function readInstanceRuntimeConfig(configPath: string): Promise<{
@@ -516,7 +521,9 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
   codexRuntime: CodexRuntime | undefined;
 }> {
   const parsed = await readValidatedConfigFile(configPath);
-  const engine = parsed.engine === "claude" || parsed.engine === "antigravity" ? parsed.engine : "codex";
+  const engine = parsed.engine === "claude" || parsed.engine === "antigravity" || parsed.engine === "kimi"
+    ? parsed.engine
+    : "codex";
   const approvalMode = resolveApprovalMode(parsed.approvalMode);
   return {
     engine,
@@ -540,12 +547,15 @@ export function resolveEngineRuntime(
   engine: EngineType,
   _approvalMode: ApprovalMode,
   codexRuntime?: CodexRuntime,
-): "app-server" | "process" | "stream" {
+): "app-server" | "process" | "stream" | "acp" {
   if (engine === "claude") {
     return "stream";
   }
   if (engine === "antigravity") {
     return "process";
+  }
+  if (engine === "kimi") {
+    return "acp";
   }
 
   return codexRuntime ?? "app-server";
@@ -702,6 +712,7 @@ function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
     ["USERPROFILE", "USERPROFILE"],
     ["CODEX_HOME", "CODEX_HOME"],
     ["CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"],
+    ["KIMI_CODE_HOME", "KIMI_CODE_HOME"],
     ["TAROCUB_INSTANCE", "TAROCUB_INSTANCE"],
     ["CODEX_TELEGRAM_INSTANCE", "CODEX_TELEGRAM_INSTANCE"],
     ["ANTIGRAVITY_EXECUTABLE", "ANTIGRAVITY_EXECUTABLE"],
@@ -784,6 +795,16 @@ async function createAdapter(
       configPath,
       workspacePath,
     );
+  }
+
+  if (engine === "kimi") {
+    await mkdir(workspacePath, { recursive: true });
+    return new KimiAcpAdapter(config.kimiExecutable, {
+      childEnv,
+      instructionsPath,
+      configPath,
+      workspacePath,
+    });
   }
 
   // Same rationale and trade-offs as the Claude branch above: bots inherit
