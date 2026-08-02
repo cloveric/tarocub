@@ -420,6 +420,30 @@ extra exception.
 - Audio is not an ACP input capability (`audio: false`); channel audio remains
   supported only through the bridge's transcription-to-text path.
 
+## M5 Verification
+
+The repository gate was run from a clean main worktree with:
+
+```text
+TMPDIR=/tmp/t bash scripts/pre-complete-hook.sh
+```
+
+Result: 126 test files passed, 2,220 tests passed, one test was skipped, and the
+TypeScript build passed.
+
+Sensitivity checks ran in a disposable detached worktree while retaining the
+new tests:
+
+- removing the M2 adapter implementation made the adapter suite fail to load;
+- restoring the pre-M3 bridge/config implementation produced 24 test failures
+  across all seven selected Kimi integration suites;
+- restoring the pre-M4 channel implementation made the Kimi question,
+  approval-label, compact, goal, resume/detach, usage/status, and steering tests
+  fail.
+
+The disposable worktree was removed afterwards and the main worktree remained
+clean.
+
 ## References
 
 - Kimi Code documentation: <https://moonshotai.github.io/kimi-code/>
