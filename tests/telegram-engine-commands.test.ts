@@ -343,7 +343,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "/compact is only supported with the Claude engine. The current engine does not run local context compaction; use /reset to clear this conversation.",
+        "/compact is only supported with the Claude and Kimi engines. The current engine does not run local context compaction; use /reset to clear this conversation.",
       );
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({
@@ -354,6 +354,37 @@ describe("handleLocalEngineTelegramCommand", () => {
           rejected: "wrong-engine",
         }),
       }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("forwards /compact to a Kimi ACP session", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "Compaction completed" }),
+    };
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("/compact"),
+        context: { api: api as never, instanceName: "default", updateId: 79 },
+        bridge,
+        sessionStore: { removeByChatId: vi.fn(), clearAll: vi.fn() },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        text: "/compact",
+        files: [],
+      }));
+      expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Context compacted.\n\nCompaction completed");
     } finally {
       await removeTempRoot(root);
     }

@@ -240,22 +240,8 @@ approval IDs.
 
 ### Structured question
 
-Kimi's `AskUserQuestion` is fully structured in ACP. A real red/blue probe
-first streamed the question text, then emitted a tool lifecycle with parsed
-input:
-
-```json
-{
-  "questions": [{
-    "question": "Which do you choose: red or blue?",
-    "header": "Choice",
-    "multi_select": false,
-    "options": [{"label":"red"},{"label":"blue"}]
-  }]
-}
-```
-
-It then sent `session/request_permission` with:
+A real red/blue `AskUserQuestion` probe streamed the question text and then
+sent `session/request_permission` with:
 
 ```json
 {
@@ -272,10 +258,16 @@ It then sent `session/request_permission` with:
 }
 ```
 
-Selecting `q0_opt_0` returned `red` to the tool, and the same prompt continued
-to its final answer. This can map to the existing Lark question card without
-text scraping. Multiple simultaneous questions and free-form answers were not
-verified yet and must not be claimed as supported until tested.
+The live permission request did **not** contain structured `rawInput` or a
+`questions` array. The adapter therefore recognizes the exact tool title,
+uses the tool-call content as the single question, and maps the advertised
+non-reject options into the existing Lark form. Selecting `q0_opt_0` returned
+`red` to the tool and the same prompt continued to its final answer.
+
+Only advertised option IDs can be returned through ACP. The Lark form must not
+offer an invented free-text `Other` answer for Kimi. Multiple simultaneous
+questions and free-form answers remain unsupported until the protocol exposes
+a way to represent them.
 
 ### Cancellation
 
@@ -387,21 +379,46 @@ back through ACP when those instance overrides are absent. If `default_model`
 cannot be read, the bridge does not invent a model ID; operators can still set
 an explicit provider-advertised ID with `/model <id>`.
 
-## Known Gaps And Unverified Areas
+## M4 Channel Alignment
 
-The following are not established by this milestone:
+The following behaviors are implemented through the shared bridge layer and
+covered by integration tests for a Kimi-configured instance:
 
-- mid-turn steering of an already running Kimi prompt;
-- multi-question and free-form `AskUserQuestion` replies;
-- structured per-turn token/cost accounting;
-- an ACP equivalent of Codex thread-goal APIs;
-- whether Kimi exposes compaction as an RPC rather than its `/compact`
-  command;
-- whether changing model/thinking/mode during an active prompt is safe;
-- audio input (the agent explicitly advertises `audio: false`).
+- Lark run-card streaming, thought/tool sections, stop-button cancellation,
+  ordinary approvals, locale, timeout, and budget messaging;
+- `[send-file:]`, `[send-image:]`, fenced `file:` blocks, and `.lark-out`
+  automatic delivery;
+- cron execution and Kimi engine labels;
+- `/compact`, which was verified against a real ACP session and preserved a
+  probe token across the compaction turn;
+- `/resume session <session-id>`, which validates through real ACP
+  `session/load` before changing the bridge binding; Kimi ACP exposes no
+  bridge-usable local session scan, so bare `/resume` explains the limitation;
+- single-choice `AskUserQuestion` forms using only ACP-advertised option IDs.
 
-These must be implemented only after separate verification or documented as
-gaps in the final capability matrix.
+No Kimi-private generated-image directory analogous to Codex
+`generated_images` was observed. Kimi output is therefore subject to the
+normal workspace and `.lark-out` sandbox rules; the bridge does not invent an
+extra exception.
+
+## Verified Gaps
+
+- Kimi ACP has no mid-turn prompt injection. `/steer` reports the gap and new
+  messages queue as separate turns.
+- The live ACP `/goal` probe returned `Unknown ACP command: /goal`. The bridge
+  rejects `/goal` explicitly rather than disguising a normal prompt as a goal.
+- ACP 0.31.1 emits no structured per-turn token or cost telemetry. `/usage` and
+  `/status` say that Kimi turns are excluded; configured dollar budgets cannot
+  meter them.
+- ACP questions support selecting an advertised option ID, but not arbitrary
+  free-text answers or verified multi-question forms.
+- The existing `verbosity` setting is a compatibility/configuration value; it
+  does not currently suppress Kimi thought events. Lark renders structured
+  thought events in the run card, while Telegram has no live-edit stream card.
+- Changing model, thinking, or mode during an already active prompt remains
+  unverified. The bridge applies hot configuration to the next turn.
+- Audio is not an ACP input capability (`audio: false`); channel audio remains
+  supported only through the bridge's transcription-to-text path.
 
 ## References
 

@@ -321,7 +321,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
       return {
         engine: cfg.engine,
         sessionBound: sessionResult.warning ? null : sessionResult.record !== null,
-        threadId: sessionResult.warning || (cfg.engine !== "codex" && cfg.engine !== "antigravity")
+        threadId: sessionResult.warning || (cfg.engine !== "codex" && cfg.engine !== "antigravity" && cfg.engine !== "kimi")
           ? null
           : sessionResult.record?.codexSessionId ?? null,
         blockingTasks,

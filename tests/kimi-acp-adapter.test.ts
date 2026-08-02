@@ -774,6 +774,14 @@ describe("KimiAcpAdapter", () => {
       onApprovalRequest: async (request) => {
         expect(request.engine).toBe("kimi");
         expect(request.toolName).toBe("AskUserQuestion");
+        expect(request.toolInput).toEqual({
+          questions: [{
+            question: "Which do you choose: red or blue?",
+            header: "Choice",
+            multi_select: false,
+            options: [{ label: "red" }, { label: "blue" }],
+          }],
+        });
         return {
           behavior: "allow",
           updatedInput: { answers: { Choice: "blue" } },
@@ -788,18 +796,17 @@ describe("KimiAcpAdapter", () => {
       title: "AskUserQuestion",
       kind: "other",
       status: "pending",
-      rawInput: {
-        questions: [{
-          question: "Red or blue?",
-          header: "Choice",
-          multi_select: false,
-          options: [{ label: "red" }, { label: "blue" }],
-        }],
-      },
     });
     const requestId = server.requestPermission({
       sessionId: server.sessionId,
-      toolCall: { toolCallId: "question-1", title: "AskUserQuestion" },
+      toolCall: {
+        toolCallId: "question-1",
+        title: "AskUserQuestion",
+        content: [{
+          type: "content",
+          content: { type: "text", text: "Which do you choose: red or blue?" },
+        }],
+      },
       options: [
         { kind: "allow_once", name: "red", optionId: "q0_opt_0" },
         { kind: "allow_once", name: "blue", optionId: "q0_opt_1" },

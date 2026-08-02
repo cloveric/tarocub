@@ -1,4 +1,4 @@
-import type { EngineApprovalDecision } from "../codex/adapter.js";
+import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/adapter.js";
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig as defaultLoadBusConfig } from "../bus/bus-config.js";
 import type { TranscribeMediaOptions } from "../runtime/asr-cloud.js";
@@ -85,6 +85,7 @@ export interface PendingLarkApproval {
   replyTo?: string;
   replyInThread?: boolean;
   askUserQuestionInput?: unknown;
+  approvalEngine?: EngineApprovalRequest["engine"];
   /** Tool name/input of a regular (non-AskUserQuestion) approval, kept so the decision handler can re-render the card in place as resolved. */
   approvalToolName?: string;
   approvalToolInput?: unknown;

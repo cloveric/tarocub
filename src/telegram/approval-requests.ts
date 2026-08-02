@@ -30,11 +30,17 @@ interface PendingApproval {
 const pendingApprovals = new Map<string, PendingApproval>();
 
 function renderEngineRequestName(engine: EngineApprovalRequest["engine"]): string {
-  return engine === "codex" ? "Codex" : "Claude Code";
+  if (engine === "codex") return "Codex";
+  if (engine === "kimi") return "Kimi Code";
+  if (engine === "antigravity") return "Antigravity";
+  return "Claude Code";
 }
 
 function renderEngineResumeName(engine: EngineApprovalRequest["engine"]): string {
-  return engine === "codex" ? "Codex" : "Claude";
+  if (engine === "codex") return "Codex";
+  if (engine === "kimi") return "Kimi";
+  if (engine === "antigravity") return "Antigravity";
+  return "Claude";
 }
 
 function truncate(value: string, maxChars: number): string {

@@ -62,7 +62,21 @@ type AskUserQuestionCardQuestion = {
 };
 
 function isAskUserQuestionRequest(request: EngineApprovalRequest): boolean {
-  return request.engine === "claude" && request.toolName === "AskUserQuestion";
+  return (request.engine === "claude" || request.engine === "kimi")
+    && request.toolName === "AskUserQuestion";
+}
+
+function renderApprovalEngineLabel(engine: EngineApprovalRequest["engine"] | undefined): string {
+  if (engine === "kimi") {
+    return "Kimi";
+  }
+  if (engine === "codex") {
+    return "Codex";
+  }
+  if (engine === "antigravity") {
+    return "Antigravity";
+  }
+  return "Claude";
 }
 
 export type LarkApprovalTextCommandResult =
@@ -129,6 +143,7 @@ export async function requestLarkApproval(input: {
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       ...(input.replyInThread ? { replyInThread: true } : {}),
       ...(isAskUserQuestionRequest(input.request) ? { askUserQuestionInput: input.request.toolInput } : {}),
+      approvalEngine: input.request.engine,
       approvalToolName: input.request.toolName,
       approvalToolInput: input.request.toolInput,
       resolve,
@@ -158,6 +173,7 @@ export async function requestLarkApproval(input: {
       const askCard = renderLarkAskUserQuestionCard({
         requestId,
         toolInput: input.request.toolInput,
+        engine: input.request.engine,
         replyInThread: input.replyInThread,
         locale: input.locale,
       });
@@ -179,7 +195,12 @@ export async function requestLarkApproval(input: {
           channel: input.channel,
           chatId: input.chatId,
           card: askCard,
-          fallbackText: renderLarkAskUserQuestionFallbackText(input.request.toolInput, input.locale ?? "zh"),
+          fallbackText: renderLarkAskUserQuestionFallbackText(
+            input.request.toolInput,
+            input.locale ?? "zh",
+            0,
+            input.request.engine,
+          ),
           options: larkReplyOptions(input.replyTo, input.replyInThread),
           locale: input.locale ?? "zh",
         });
@@ -278,6 +299,7 @@ function askFormSelectedValues(raw: unknown): string[] {
 function renderLarkAskUserQuestionCard(input: {
   requestId: string;
   toolInput: unknown;
+  engine?: EngineApprovalRequest["engine"];
   replyInThread?: boolean;
   locale?: Locale;
   /**
@@ -350,18 +372,20 @@ function renderLarkAskUserQuestionCard(input: {
           : { initial_option: selected[0] })
         : {}),
     });
-    // Free-text "Other" — mirrors the AskUserQuestion CLI, where the last choice
-    // lets you type your own answer. Filled only when none of the options fit.
-    const otherValue = stringValue(input.selections?.[askFormOtherFieldName(index)]) ?? "";
-    formElements.push({
-      tag: "input",
-      name: askFormOtherFieldName(index),
-      placeholder: {
-        tag: "plain_text",
-        content: locale === "en" ? "Other — type your own (optional)" : "其他 —— 不合适就自己填（选填）",
-      },
-      ...(otherValue ? { default_value: otherValue } : {}),
-    });
+    // Kimi ACP permissions can only return one of the advertised optionIds.
+    // Claude supports a free-text "Other" answer, so preserve that UX there.
+    if (input.engine !== "kimi") {
+      const otherValue = stringValue(input.selections?.[askFormOtherFieldName(index)]) ?? "";
+      formElements.push({
+        tag: "input",
+        name: askFormOtherFieldName(index),
+        placeholder: {
+          tag: "plain_text",
+          content: locale === "en" ? "Other — type your own (optional)" : "其他 —— 不合适就自己填（选填）",
+        },
+        ...(otherValue ? { default_value: otherValue } : {}),
+      });
+    }
   });
 
   formElements.push({
@@ -394,7 +418,9 @@ function renderLarkAskUserQuestionCard(input: {
     config: {
       update_multi: true,
       summary: {
-        content: locale === "en" ? "Claude is asking a question" : "Claude 请求选择",
+        content: locale === "en"
+          ? `${renderApprovalEngineLabel(input.engine)} is asking a question`
+          : `${renderApprovalEngineLabel(input.engine)} 请求选择`,
       },
     },
     header: {
@@ -509,11 +535,17 @@ function renderLarkPendingClosedCard(icon: string, title: string, body: string):
   };
 }
 
-function renderLarkAskUserQuestionFallbackText(toolInput: unknown, locale: Locale, questionIndex = 0): string {
+function renderLarkAskUserQuestionFallbackText(
+  toolInput: unknown,
+  locale: Locale,
+  questionIndex = 0,
+  engine?: EngineApprovalRequest["engine"],
+): string {
   const questions = normalizeAskUserQuestions(toolInput);
   const question = questions[questionIndex] ?? questions[0];
   if (!question) {
-    return locale === "en" ? "Claude is asking a question." : "Claude 需要你选择。";
+    const engineName = renderApprovalEngineLabel(engine);
+    return locale === "en" ? `${engineName} is asking a question.` : `${engineName} 需要你选择。`;
   }
   const options = question.options
     .map((option, index) => {
@@ -1192,6 +1224,7 @@ export async function handleLarkCardAction(input: {
       const retryCard = renderLarkAskUserQuestionCard({
         requestId: value.requestId,
         toolInput: pending.askUserQuestionInput,
+        engine: pending.approvalEngine,
         ...(pending.replyInThread ?? replyInThread ? { replyInThread: true } : {}),
         locale,
         selections: formValue,

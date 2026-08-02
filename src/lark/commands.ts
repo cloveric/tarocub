@@ -255,8 +255,13 @@ export async function handleLarkSimpleCommand(
     // never trip. When one is set, say so honestly instead of silently implying
     // the cap protects this instance (Telegram /usage carries the same note).
     const usageCfg = await loadInstanceConfig(input.stateDir);
-    if (usageCfg.budgetUsd !== undefined && usageCfg.engine !== "claude") {
-      usageMessage = [usageMessage, renderLarkBudgetEngineNote(commandLocale)].join("\n");
+    if (usageCfg.engine === "kimi") {
+      usageMessage = [
+        usageMessage,
+        renderLarkEngineUsageNote(usageCfg.engine, commandLocale, usageCfg.budgetUsd !== undefined),
+      ].join("\n");
+    } else if (usageCfg.budgetUsd !== undefined && usageCfg.engine !== "claude") {
+      usageMessage = [usageMessage, renderLarkEngineUsageNote(usageCfg.engine, commandLocale, true)].join("\n");
     }
     await sendLarkCommandMarkdown(input, normalized, "/usage", usageMessage);
     return true;
@@ -941,7 +946,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "",
       "**Session**",
       "- `/status` current conversation · `/stop` stop the current task (cancel a queued task from its queue card) · `/reset` reset the session",
-      "- `/resume [n]` pick a local session (`/resume thread …` / `/resume conversation …` bind explicitly) · `/detach` unbind the current thread/conversation",
+      "- `/resume [n]` pick a Claude/Antigravity session · Codex `/resume thread <id>` · Kimi `/resume session <id>` · `/detach` unbind",
       "- `/goal […]` set a conversation goal · `/btw <q>` ask aside without touching the session · `/continue` resume a waiting archive analysis",
       "- `/q <message>` force a queued turn — while a Codex turn is running, plain text steers INTO it; `/q` runs it afterwards instead",
       "- `/bg` list this instance's engine/background processes · `/bg kill <pid>` · `/bg killall` sweep orphans",
@@ -962,7 +967,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "**Advanced & collaboration**",
       "- `/board …` durable kanban · `/mini …` link group threads as peers · `/ask <instance> <prompt>` delegate to another bot",
       "- `/fan` · `/chain` · `/verify` Agent Bus parallel / sequential / verification flows",
-      "- `/context` · `/compact` · `/ultrareview` Claude context / compaction / deep review",
+      "- `/context` Claude context · `/compact` Claude/Kimi compaction · `/ultrareview` Claude deep review",
       "- `/approve [session]` · `/deny` handle approvals by text when card buttons are unavailable",
       "",
       "Full list: see the Slash Command Index in the README. Group messages need an `@` by default; `/group all` enables non-`@` replies (the app also needs `im:message` + `im:message.group_msg`). If non-`@` group messages still don't arrive, run `node dist/src/index.js lark doctor`.",
@@ -976,7 +981,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "",
     "**会话**",
     "- `/status` 当前会话 · `/stop` 停当前任务（排队任务在各自排队卡片上取消）· `/reset` 重置会话",
-    "- `/resume [编号]` 选本地会话（`/resume thread …` / `/resume conversation …` 显式绑定）· `/detach` 解绑当前 thread/会话",
+    "- `/resume [编号]` 选 Claude/Antigravity 会话 · Codex `/resume thread <id>` · Kimi `/resume session <id>` · `/detach` 解绑",
     "- `/goal […]` 设会话目标 · `/btw <问题>` 旁问不影响会话 · `/continue` 继续等待中的压缩包分析",
     "- `/q <消息>` 强制排队 — Codex 任务运行中纯文本会注入当前任务，`/q` 则排在后面单独执行",
     "- `/bg` 列出本实例引擎/后台进程 · `/bg kill <pid>` 停指定进程树 · `/bg killall` 清理孤儿后台进程",
@@ -997,7 +1002,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "**进阶与协作**",
     "- `/board …` 持久任务板 · `/mini …` 把群 thread 注册成 peer 互联 · `/ask <实例> <提示>` 委托给别的 bot",
     "- `/fan` · `/chain` · `/verify` Agent Bus 并行 / 串联 / 验证",
-    "- `/context` · `/compact` · `/ultrareview` Claude 上下文 / 压缩 / 深度审查",
+    "- `/context` Claude 上下文 · `/compact` Claude/Kimi 压缩 · `/ultrareview` Claude 深度审查",
     "- `/approve [session]` · `/deny` 卡片按钮不可用时用文字处理审批",
     "",
     "完整命令表见 README 的 Slash Command Index。群里普通消息默认要@；`/group all` 开非@（应用还需有 `im:message` + `im:message.group_msg`）。若开了非@群消息仍收不到，运行 `node dist/src/index.js lark doctor`。",
@@ -1646,7 +1651,11 @@ async function renderLarkStatusMessage(
       `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
       // Honest caveat: only Claude reports dollar cost, so on other engines the
       // configured cap is currently decorative — say so wherever it's shown.
-      ...(cfg.budgetUsd !== undefined && cfg.engine !== "claude" ? [renderLarkBudgetEngineNote(locale)] : []),
+      ...(cfg.engine === "kimi"
+        ? [renderLarkEngineUsageNote(cfg.engine, locale, cfg.budgetUsd !== undefined)]
+        : cfg.budgetUsd !== undefined && cfg.engine !== "claude"
+          ? [renderLarkEngineUsageNote(cfg.engine, locale, true)]
+          : []),
       `Locale: ${locale}`,
       `Verbosity: ${cfg.verbosity}`,
       `Timezone: ${cfg.timezone}`,
@@ -1660,6 +1669,7 @@ async function renderLarkStatusMessage(
         : `Session bound: ${currentSession ? "yes" : "no"}`,
       ...(cfg.engine === "codex" && currentSession ? [`Current thread: ${currentSession.codexSessionId}`] : []),
       ...(cfg.engine === "antigravity" && currentSession ? [`Current conversation: ${currentSession.codexSessionId}`] : []),
+      ...(cfg.engine === "kimi" && currentSession ? [`Current Kimi session: ${currentSession.codexSessionId}`] : []),
       ...workflowLines,
       `Active run: ${activeRun ? "yes" : "no"}`,
       `Pending approvals: ${runtime.pendingApprovals.size}`,
@@ -1675,7 +1685,11 @@ async function renderLarkStatusMessage(
     `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
     `审批模式：${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
     `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,
-    ...(cfg.budgetUsd !== undefined && cfg.engine !== "claude" ? [renderLarkBudgetEngineNote(locale)] : []),
+    ...(cfg.engine === "kimi"
+      ? [renderLarkEngineUsageNote(cfg.engine, locale, cfg.budgetUsd !== undefined)]
+      : cfg.budgetUsd !== undefined && cfg.engine !== "claude"
+        ? [renderLarkEngineUsageNote(cfg.engine, locale, true)]
+        : []),
     `语言：${locale}`,
     `详细度：${cfg.verbosity}`,
     `时区：${cfg.timezone}`,
@@ -1689,6 +1703,7 @@ async function renderLarkStatusMessage(
       : `会话绑定：${currentSession ? "是" : "否"}`,
     ...(cfg.engine === "codex" && currentSession ? [`当前 thread：${currentSession.codexSessionId}`] : []),
     ...(cfg.engine === "antigravity" && currentSession ? [`当前 conversation：${currentSession.codexSessionId}`] : []),
+    ...(cfg.engine === "kimi" && currentSession ? [`当前 Kimi session：${currentSession.codexSessionId}`] : []),
     ...workflowLines,
     `当前运行：${activeRun ? "是" : "否"}`,
     `待处理审批：${runtime.pendingApprovals.size}`,
@@ -1700,7 +1715,12 @@ async function renderLarkStatusMessage(
  * Codex/Antigravity never report dollar cost, so the budgetUsd cap can never
  * trip there — pretending otherwise would be a false safety net.
  */
-function renderLarkBudgetEngineNote(locale: Locale): string {
+function renderLarkEngineUsageNote(engine: InstanceConfig["engine"], locale: Locale, budgetConfigured: boolean): string {
+  if (engine === "kimi") {
+    return locale === "en"
+      ? `Note: Kimi ACP does not currently report structured per-turn tokens or cost; Kimi turns are excluded from these totals${budgetConfigured ? " and the configured budget cap cannot track them" : ""}.`
+      : `注意：Kimi ACP 当前不上报结构化的单轮 token 或费用；这些累计数据不包含 Kimi turn${budgetConfigured ? "，已配置的预算上限也无法追踪它们" : ""}。`;
+  }
   return locale === "en"
     ? "Note: Codex/Antigravity engines do not report dollar cost; the budget cap currently only takes effect on Claude."
     : "注意：Codex/Antigravity 引擎不上报美元成本，预算上限目前只对 Claude 生效。";
@@ -2098,11 +2118,15 @@ async function handleLarkSteerCommand(stateDir: string, cfg: InstanceConfig, act
   // Steering is implemented only by the Codex app-server adapter; on Claude the
   // setting persists but mid-turn messages always queue regardless. Say so
   // honestly instead of implying the toggle changes anything here.
-  const claudeNote = cfg.engine === "claude"
+  const engineNote = cfg.engine === "claude"
     ? (en
       ? " (Note: this instance runs Claude, which doesn't support mid-turn steering — messages during a turn always queue; this setting only takes effect if the instance switches to Codex.)"
       : "（注意：当前是 Claude 引擎，不支持任务中途注入——进行中收到的消息本就一律排队；此设置仅在切换到 Codex 引擎后生效。）")
-    : "";
+    : cfg.engine === "kimi"
+      ? (en
+        ? " (Note: Kimi ACP does not support mid-turn prompt injection — messages received during a turn queue as separate turns; this setting only takes effect after switching to Codex.)"
+        : "（注意：Kimi ACP 不支持任务中途注入——进行中收到的消息会排队成为独立 turn；此设置仅在切换到 Codex 后生效。）")
+      : "";
   const describe = (enabled: boolean, windowSeconds: number): string => {
     if (!enabled) {
       return en
@@ -2122,27 +2146,27 @@ async function handleLarkSteerCommand(stateDir: string, cfg: InstanceConfig, act
     await updateInstanceConfig(stateDir, (config) => {
       config.larkSteerEnabled = false;
     });
-    return describe(false, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+    return describe(false, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + engineNote;
   }
   if (action === "on" || action === "enable") {
     await updateInstanceConfig(stateDir, (config) => {
       delete config.larkSteerEnabled;
     });
-    return describe(true, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+    return describe(true, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + engineNote;
   }
   if (action === "unlimited" || action === "always" || action === "不限" || action === "0") {
     await updateInstanceConfig(stateDir, (config) => {
       delete config.larkSteerEnabled;
       config.larkSteerWindowSeconds = 0;
     });
-    return describe(true, 0) + claudeNote;
+    return describe(true, 0) + engineNote;
   }
   if (action === "default" || action === "reset") {
     await updateInstanceConfig(stateDir, (config) => {
       delete config.larkSteerEnabled;
       delete config.larkSteerWindowSeconds;
     });
-    return describe(true, LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+    return describe(true, LARK_STEER_DEFAULT_WINDOW_SECONDS) + engineNote;
   }
   const secondsMatch = action.match(/^(\d+)\s*(s|秒)?$/) ?? action.match(/^(\d+)\s*(m|分|分钟)$/);
   if (secondsMatch) {
@@ -2156,7 +2180,7 @@ async function handleLarkSteerCommand(stateDir: string, cfg: InstanceConfig, act
         delete config.larkSteerEnabled;
         config.larkSteerWindowSeconds = 0;
       });
-      return describe(true, 0) + claudeNote;
+      return describe(true, 0) + engineNote;
     }
     if (seconds < 1 || seconds > 86_400) {
       return en ? "Window must be 1s–24h (or `unlimited`)." : "窗口需在 1 秒～24 小时之间（或用 `unlimited` 不限时）。";
@@ -2165,10 +2189,10 @@ async function handleLarkSteerCommand(stateDir: string, cfg: InstanceConfig, act
       delete config.larkSteerEnabled;
       config.larkSteerWindowSeconds = seconds;
     });
-    return describe(true, seconds) + claudeNote;
+    return describe(true, seconds) + engineNote;
   }
   if (action === "status") {
-    return describe(cfg.larkSteerEnabled !== false, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + claudeNote;
+    return describe(cfg.larkSteerEnabled !== false, cfg.larkSteerWindowSeconds ?? LARK_STEER_DEFAULT_WINDOW_SECONDS) + engineNote;
   }
   return en
     ? "Usage: /steer [on|off|<seconds>|unlimited|default|status]"
@@ -2355,6 +2379,13 @@ async function handleLarkGoalCommand(
       normalized.goalObjective = action.objective;
     }
     return null;
+  }
+
+  if (cfg.engine === "kimi") {
+    await sendLarkCommandMarkdown(input, normalized, "/goal", locale === "en"
+      ? "Kimi ACP does not currently provide /goal (the live CLI returns Unknown ACP command), so the bridge will not disguise an ordinary prompt as a goal. Send the task normally or switch to Codex/Claude."
+      : "Kimi ACP 当前未提供 /goal 命令（真机返回 Unknown ACP command），bridge 不会把普通聊天伪装成 goal。请直接发送任务，或切换到 Codex/Claude。");
+    return true;
   }
 
   const goalInput = {

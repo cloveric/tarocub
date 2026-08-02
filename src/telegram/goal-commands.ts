@@ -184,6 +184,16 @@ export async function handleGoalTelegramCommand(input: {
     return false;
   }
 
+  if (input.cfg.engine === "kimi") {
+    await input.context.api.sendMessage(
+      normalized.chatId,
+      locale === "zh"
+        ? "Kimi ACP 当前未提供 /goal 命令（真机返回 Unknown ACP command），bridge 不会把普通聊天伪装成 goal。请直接发送任务，或切换到 Codex/Claude。"
+        : "Kimi ACP does not currently provide /goal (the live CLI returns Unknown ACP command), so the bridge will not disguise an ordinary prompt as a goal. Send the task normally or switch to Codex/Claude.",
+    );
+    return true;
+  }
+
   if (input.cfg.engine !== "codex") {
     await input.context.api.sendMessage(
       normalized.chatId,

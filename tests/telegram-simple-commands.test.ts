@@ -120,6 +120,32 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("always discloses that Kimi turns are excluded from /usage totals", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+
+    try {
+      await writeFile(path.join(root, "config.json"), `${JSON.stringify({ engine: "kimi" })}\n`, "utf8");
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("/usage"),
+        context: { api: api as never, instanceName: "default", updateId: 78 },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("Kimi turns are excluded from these totals"),
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("handles /effort updates through the config mutator", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {
@@ -981,6 +1007,45 @@ describe("handleSimpleLocalTelegramCommand", () => {
           "Engine: antigravity",
           "Session bound: yes",
           "Current conversation: fdfc8ab1-7936-4599-98b0-d8ba2593c250",
+          "Blocking file tasks: 0",
+          "Waiting file tasks: 0",
+        ].join("\n"),
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("includes the current Kimi session id in /status when available", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const resolveStatus = vi.fn().mockResolvedValue({
+      engine: "kimi",
+      sessionBound: true,
+      threadId: "kimi-session-123",
+      blockingTasks: 0,
+      waitingTasks: 0,
+    });
+
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("/status"),
+        context: { api: api as never, instanceName: "default", updateId: 83 },
+        updateInstanceConfig: vi.fn(),
+        resolveStatus,
+      });
+
+      expect(handled).toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        [
+          "Engine: kimi",
+          "Session bound: yes",
+          "Current Kimi session: kimi-session-123",
           "Blocking file tasks: 0",
           "Waiting file tasks: 0",
         ].join("\n"),

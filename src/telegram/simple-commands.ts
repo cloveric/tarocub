@@ -193,7 +193,15 @@ export async function handleSimpleLocalTelegramCommand(input: {
     // never trip. When one is set, say so instead of silently implying the cap
     // protects this instance.
     const instanceConfig = await loadInstanceConfig(stateDir);
-    if (instanceConfig.budgetUsd !== undefined && (cfg.engine ?? instanceConfig.engine) !== "claude") {
+    const engine = cfg.engine ?? instanceConfig.engine;
+    if (engine === "kimi") {
+      usageMessage = [
+        usageMessage,
+        locale === "zh"
+          ? `注意：Kimi ACP 当前不上报结构化的单轮 token 或费用；这些累计数据不包含 Kimi turn${instanceConfig.budgetUsd !== undefined ? "，已配置的预算上限也无法追踪它们" : ""}。`
+          : `Note: Kimi ACP does not currently report structured per-turn tokens or cost; Kimi turns are excluded from these totals${instanceConfig.budgetUsd !== undefined ? " and the configured budget cap cannot track them" : ""}.`,
+      ].join("\n");
+    } else if (instanceConfig.budgetUsd !== undefined && engine !== "claude") {
       usageMessage = [
         usageMessage,
         locale === "zh"

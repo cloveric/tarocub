@@ -91,6 +91,36 @@ describe("telegram approval requests", () => {
     expect(api.editMessage).toHaveBeenCalledWith(123, 11, "Approved once. Claude is resuming...", { inlineKeyboard: null });
   });
 
+  it("labels Kimi approvals and resume messages accurately", async () => {
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "kimi",
+        toolName: "Bash",
+        toolInput: { command: "pwd" },
+      },
+    });
+    expect(api.sendMessage.mock.calls[0]?.[1]).toContain("Kimi Code is requesting permission");
+
+    await handleTelegramApprovalCommand({
+      normalized: {
+        chatId: 123,
+        userId: 456,
+        chatType: "private",
+        text: "/approve",
+        attachments: [],
+      },
+      api,
+    });
+
+    await expect(pending).resolves.toEqual({ behavior: "allow", scope: "once" });
+    expect(api.editMessage).toHaveBeenCalledWith(123, 11, "Approved once. Kimi is resuming...", { inlineKeyboard: null });
+  });
+
   it("resolves the oldest pending request from /approve session", async () => {
     const api = createApi();
     const pending = requestTelegramApproval({

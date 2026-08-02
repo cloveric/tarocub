@@ -265,6 +265,34 @@ function maybeParseJson(value: string | undefined): unknown {
   }
 }
 
+function hasAskUserQuestions(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Array.isArray((value as { questions?: unknown }).questions)
+    && (value as { questions: unknown[] }).questions.length > 0;
+}
+
+function normalizeKimiQuestionInput(request: RequestPermissionRequest, toolInput: unknown): unknown {
+  if (hasAskUserQuestions(toolInput)) {
+    return toolInput;
+  }
+  const question = toolContentText(request.toolCall.content)?.trim() || "Choose an option.";
+  const options = request.options
+    .filter((option) => option.kind === "allow_once" || option.kind === "allow_always")
+    .map((option) => option.name.trim())
+    .filter((name) => name.length > 0 && name.toLocaleLowerCase() !== "skip")
+    .map((label) => ({ label }));
+  return {
+    questions: [{
+      question,
+      header: "Choice",
+      multi_select: false,
+      options,
+    }],
+  };
+}
+
 function requestToolName(request: RequestPermissionRequest, state?: KimiToolState): string {
   return state?.toolName || request.toolCall.title || "Unknown tool";
 }
@@ -1050,7 +1078,10 @@ export class KimiAcpAdapter implements CodexAdapter {
       this.maybeEmitToolUse(worker, state);
     }
     const toolName = requestToolName(request, state);
-    const toolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
+    const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
+    const toolInput = toolName === "AskUserQuestion"
+      ? normalizeKimiQuestionInput(request, rawToolInput)
+      : rawToolInput;
     await this.emitEngineEvent(pending.onEngineEvent, {
       type: "permission_request",
       toolName,

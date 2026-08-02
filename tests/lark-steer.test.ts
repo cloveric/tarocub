@@ -250,6 +250,33 @@ describe("lark mid-turn steering", () => {
     }
   });
 
+  it("reports Kimi steering as an ACP gap instead of implying injection works", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-kimi-"));
+    await updateInstanceConfig(stateDir, (config) => {
+      config.engine = "kimi";
+    });
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_steer_kimi", content: "/steer status" }),
+      });
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Kimi ACP 不支持任务中途注入");
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await cleanupTempRoot(stateDir);
+    }
+  });
+
   it("falls back to the normal queue when the engine rejects the steer", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-steer-fallback-"));
     const runtime = createLarkServiceRuntime();

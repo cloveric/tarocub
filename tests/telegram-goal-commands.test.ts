@@ -244,6 +244,25 @@ describe("handleGoalTelegramCommand", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("rejects Kimi /goal without forwarding a fake ordinary turn", async () => {
+    const sendMessage = vi.fn();
+    const normalized = createNormalizedMessage("/goal ship the release");
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "kimi" },
+      normalized,
+      context: {
+        api: { sendMessage },
+        bridge: {},
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(normalized.text).toBe("/goal ship the release");
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Unknown ACP command"));
+  });
+
   it("lets explicitly unbounded Antigravity goals pass through to the native agy slash command", async () => {
     const sendMessage = vi.fn();
     const normalized = createNormalizedMessage("/goal --unbounded run a long investigation");

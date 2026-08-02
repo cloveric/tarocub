@@ -4305,6 +4305,35 @@ describe("lark service", () => {
     }
   });
 
+  it("discloses missing Kimi usage telemetry in Lark even without a budget", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-usage-kimi-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi", locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_usage_kimi", content: "/usage" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("Kimi turns are excluded from these totals") },
+        { replyTo: "om_usage_kimi", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("sets Lark model and effort commands in the shared instance config", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");
@@ -5028,6 +5057,40 @@ describe("lark service", () => {
     }
   });
 
+  it("binds an explicit Kimi session from Lark resume without running the engine", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-kimi-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      validateCodexThread: vi.fn(async () => undefined),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_resume_kimi", content: "/resume session kimi-abc" }),
+      });
+
+      const record = await sessionStore.findByConversationKey("lark:oc_chat");
+      expect(record?.codexSessionId).toBe("kimi-abc");
+      expect(bridge.validateCodexThread).toHaveBeenCalledWith("kimi-abc");
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("已绑定 Kimi session：kimi-abc") },
+        { replyTo: "om_resume_kimi", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("answers Lark resume guidance in English when Lark locale is explicitly English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-en-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex", locale: "en" }) + "\n");
@@ -5726,11 +5789,12 @@ describe("lark service", () => {
     }
   });
 
-  it("renders an agent-mode Lark cron result into a run card and still delivers files", async () => {
+  it("renders a Kimi agent-mode Lark cron result into a run card and still delivers files", async () => {
     // Production wiring (createRunCard provided): the AI task's result reads like a
     // chat reply (run card), the [send-file:] tag is stripped from the card text,
     // and the file is still delivered via deliverResponse alongside the card.
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-agent-card-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
     const channel = fakeChannel(); // has updateCard → the run-card path engages
     const runtime = createLarkServiceRuntime();
     const bridge = {
@@ -6581,6 +6645,35 @@ describe("lark service", () => {
     }
   });
 
+  it("rejects Kimi goals without forwarding a fake ordinary turn", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-goal-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi", locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_kimi_goal", content: "/goal ship the release" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("Unknown ACP command") },
+        { replyTo: "om_kimi_goal", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("frames a Claude /goal turn's run card with a 🎯 goal banner (full path)", async () => {
     // The fall-through path (command sets normalized.goalObjective → message-handler
     // → run card) must actually reach the card, not just type-check — same lesson as
@@ -6737,8 +6830,37 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("/compact 仅支持 Claude 引擎") },
+        { markdown: expect.stringContaining("/compact 仅支持 Claude 与 Kimi 引擎") },
         { replyTo: "om_compact_wrong_engine", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards Kimi compact commands from Lark to the ACP session", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-compact-kimi-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "Compaction completed" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_compact_kimi", content: "/compact" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "/compact" }));
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: "上下文已压缩。\n\nCompaction completed" },
+        { replyTo: "om_compact_kimi", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -8463,6 +8585,54 @@ describe("lark service", () => {
           via: "post-turn",
         }),
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("streams Kimi thinking/tools into the Lark run card and auto-delivers .lark-out files", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-stream-delivery-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        requestOutputDir?: string;
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        const outputDir = input.requestOutputDir!;
+        const reportPath = path.join(outputDir, "kimi-report.txt");
+        await writeFile(reportPath, "kimi report");
+        await input.onEngineEvent?.({ type: "thinking", text: "Kimi reasoning" });
+        await input.onEngineEvent?.({ type: "tool_use", toolName: "Read", toolInput: { path: "README.md" }, toolUseId: "kimi-read" });
+        await input.onEngineEvent?.({ type: "tool_result", toolName: "Read", toolUseId: "kimi-read", output: "read ok" });
+        await input.onEngineEvent?.({ type: "assistant_text", text: "Kimi answer", delta: true });
+        await input.onEngineEvent?.({ type: "result", text: `Kimi answer\n[send-file:${reportPath}]` });
+        return { text: `Kimi answer\n[send-file:${reportPath}]` };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_kimi_stream", content: "make a report" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        requestOutputDir: expect.stringContaining(path.join("workspace", ".lark-out", "om_kimi_stream")),
+      }));
+      const cards = JSON.stringify(channel.updateCard.mock.calls);
+      expect(cards).toContain("Kimi reasoning");
+      expect(cards).toContain("Read");
+      expect(cards).toContain("Kimi answer");
+      expect(cards).not.toContain("send-file:");
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { file: { source: Buffer.from("kimi report"), fileName: "kimi-report.txt" } },
+        { replyTo: "om_kimi_stream" },
+      );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -12621,6 +12791,51 @@ describe("lark service", () => {
         action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0: "Fast", q1: ["A"] } } },
     });
     await pending.catch(() => undefined);
+  });
+
+  it("renders Kimi AskUserQuestion as a native option-only form", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_kimi",
+      locale: "en",
+      request: {
+        engine: "kimi",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{
+            question: "Which do you choose?",
+            header: "Choice",
+            multi_select: false,
+            options: [{ label: "red" }, { label: "blue" }],
+          }],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalled());
+    const payload = JSON.stringify((channel.send.mock.calls[0] as unknown[])?.[1]);
+    expect(payload).toContain("Kimi is asking a question");
+    expect(payload).toContain('"name":"q0"');
+    expect(payload).not.toContain("q0_other");
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: {
+          value: { cctb_lark: "ask_user_question", action: "form_submit", requestId },
+          form_value: { q0: "1" },
+        },
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      behavior: "allow",
+      updatedInput: { answers: { "Which do you choose?": "blue" } },
+    });
   });
 
   it("flips an unanswered AskUserQuestion card to a timed-out state and says the task continued", async () => {

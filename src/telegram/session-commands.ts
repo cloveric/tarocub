@@ -80,6 +80,7 @@ type ResumeCommand =
   | { kind: "scan" }
   | { kind: "pick"; pick: number }
   | { kind: "thread"; threadId: string }
+  | { kind: "session"; sessionId: string }
   | { kind: "conversation"; conversationId: string }
   | { kind: "invalid" };
 
@@ -97,6 +98,11 @@ function parseResumeCommand(text: string): ResumeCommand | null {
   const conversationMatch = arg.match(/^(?:conversation|conv)\s+(\S+)$/i);
   if (conversationMatch?.[1]?.trim()) {
     return { kind: "conversation", conversationId: conversationMatch[1].trim() };
+  }
+
+  const sessionMatch = arg.match(/^session\s+(\S+)$/i);
+  if (sessionMatch?.[1]?.trim()) {
+    return { kind: "session", sessionId: sessionMatch[1].trim() };
   }
 
   const num = Number(arg);
@@ -265,6 +271,73 @@ export async function handleLocalSessionTelegramCommand(input: {
 
   const resumeCmd = parseResumeCommand(normalized.text);
   if (resumeCmd) {
+    if (cfg.engine === "kimi") {
+      if (resumeCmd.kind !== "session") {
+        const msg = locale === "zh"
+          ? "Kimi 请使用 /resume session <session-id>。当前 Kimi ACP 未提供 bridge 可用的本地 session 列表扫描。"
+          : "For Kimi, use /resume session <session-id>. Kimi ACP does not currently expose a local session scan that the bridge can use.";
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: { engine: "kimi", rejected: "kimi-requires-session-id" },
+        });
+        return true;
+      }
+
+      try {
+        if (!validateCodexThread) {
+          throw new Error("external session validation unsupported");
+        }
+        await validateCodexThread(resumeCmd.sessionId);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const unsupported = /validation unsupported/i.test(detail);
+        const msg = unsupported
+          ? (locale === "zh"
+            ? "当前 Kimi runtime 无法验证外部 session id。"
+            : "This Kimi runtime cannot validate external session IDs.")
+          : (locale === "zh"
+            ? `无法加载 Kimi session：${resumeCmd.sessionId}`
+            : `Could not load Kimi session: ${resumeCmd.sessionId}`);
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: { engine: "kimi", rejected: unsupported ? "validation-unavailable" : "session-not-found" },
+        });
+        return true;
+      }
+
+      const existing = await findSessionForConversation(sessionStore, normalized);
+      await sessionStore.upsert({
+        telegramChatId: normalized.chatId,
+        ...sessionScopeRecordFields(normalized),
+        codexSessionId: resumeCmd.sessionId,
+        status: "idle",
+        updatedAt: new Date().toISOString(),
+        suspendedPrevious: buildSuspendedPreviousSnapshot({
+          existingRecord: existing.record,
+          currentResume: cfg.resume,
+        }),
+      });
+      await updateInstanceConfig((c) => { delete c.resume; });
+
+      const msg = locale === "zh"
+        ? `已绑定 Kimi session：${resumeCmd.sessionId}\n\n发送消息继续对话，完成后发 /detach 断开。`
+        : `Attached Kimi session: ${resumeCmd.sessionId}\n\nSend a message to continue. Use /detach when done.`;
+      await context.api.sendMessage(normalized.chatId, msg);
+      await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+        startedAt,
+        command: "resume",
+        responseText: msg,
+        metadata: { engine: "kimi", sessionId: resumeCmd.sessionId },
+      });
+      return true;
+    }
+
     if (cfg.engine === "antigravity") {
       if (resumeCmd.kind === "scan") {
         const sessions = await scanRecentAntigravitySessions(24);
@@ -448,7 +521,7 @@ export async function handleLocalSessionTelegramCommand(input: {
       return true;
     }
 
-    if (resumeCmd.kind === "invalid" || resumeCmd.kind === "thread" || resumeCmd.kind === "conversation") {
+    if (resumeCmd.kind === "invalid" || resumeCmd.kind === "thread" || resumeCmd.kind === "session" || resumeCmd.kind === "conversation") {
       const msg = locale === "zh"
         ? "用法: /resume [编号]\n先发 /resume 扫描，再发 /resume <编号> 选择。"
         : "Usage: /resume [number]\nSend /resume to scan, then /resume <number> to pick.";
@@ -585,9 +658,13 @@ export async function handleLocalSessionTelegramCommand(input: {
           ? (locale === "zh"
             ? "已断开当前 Antigravity conversation，并恢复到 /resume 之前的对话。"
             : "Detached from the current Antigravity conversation and restored the previous conversation.")
-        : (locale === "zh"
-          ? "已断开恢复的 session，并恢复到 /resume 之前的对话。"
-          : "Detached from resumed session and restored the previous conversation.");
+          : cfg.engine === "kimi"
+            ? (locale === "zh"
+              ? "已断开当前 Kimi session，并恢复到 /resume 之前的对话。"
+              : "Detached from the current Kimi session and restored the previous conversation.")
+            : (locale === "zh"
+              ? "已断开恢复的 session，并恢复到 /resume 之前的对话。"
+              : "Detached from resumed session and restored the previous conversation.");
       await context.api.sendMessage(normalized.chatId, detachMessage);
     } else if (cfg.resume) {
       if (cfg.resume.symlinkPath) {
@@ -606,7 +683,7 @@ export async function handleLocalSessionTelegramCommand(input: {
         ? "已断开恢复的 session，回到 bot 默认工作区。"
         : "Detached from resumed session. Back to default workspace.";
       await context.api.sendMessage(normalized.chatId, detachMessage);
-    } else if (cfg.engine === "codex" || cfg.engine === "antigravity") {
+    } else if (cfg.engine === "codex" || cfg.engine === "antigravity" || cfg.engine === "kimi") {
       const removed = await removeSessionForConversation(sessionStore, normalized);
       if (cfg.engine === "codex") {
         detachMessage = removed
@@ -616,7 +693,7 @@ export async function handleLocalSessionTelegramCommand(input: {
           : (locale === "zh"
             ? "当前没有绑定的 Codex thread。"
             : "No active Codex thread.");
-      } else {
+      } else if (cfg.engine === "antigravity") {
         detachMessage = removed
           ? (locale === "zh"
             ? "已断开当前 Antigravity conversation。下一条消息会新建 conversation。"
@@ -624,6 +701,14 @@ export async function handleLocalSessionTelegramCommand(input: {
           : (locale === "zh"
             ? "当前没有绑定的 Antigravity conversation。"
             : "No active Antigravity conversation.");
+      } else {
+        detachMessage = removed
+          ? (locale === "zh"
+            ? "已断开当前 Kimi session。下一条消息会新建 session。"
+            : "Detached from the current Kimi session. Next message will start a fresh session.")
+          : (locale === "zh"
+            ? "当前没有绑定的 Kimi session。"
+            : "No active Kimi session.");
       }
       await context.api.sendMessage(normalized.chatId, detachMessage);
     } else {

@@ -109,6 +109,46 @@ describe("handleLocalSessionTelegramCommand", () => {
     }
   });
 
+  it("requires an explicit Kimi session id instead of scanning Claude sessions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const scanRecentSessions = vi.fn();
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("/resume"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 79,
+        },
+        sessionStore: {
+          inspect: vi.fn(),
+          findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+          removeByChatId: vi.fn(),
+          upsert: vi.fn(),
+        },
+        updateInstanceConfig: vi.fn(),
+        scanRecentSessions,
+      });
+
+      expect(handled).toBe(true);
+      expect(scanRecentSessions).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "For Kimi, use /resume session <session-id>. Kimi ACP does not currently expose a local session scan that the bridge can use.",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("expires cached /resume scans after 10 minutes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-19T10:00:00.000Z"));
@@ -227,6 +267,99 @@ describe("handleLocalSessionTelegramCommand", () => {
         123,
         "Attached Codex thread: thread-abc\n\nSend a message to continue. Use /detach when done.",
       );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("attaches a validated Kimi session with /resume session <session-id>", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({
+        record: { codexSessionId: "kimi-old" },
+        warning: undefined,
+      }),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+    const updateInstanceConfig = vi.fn();
+    const validateCodexThread = vi.fn().mockResolvedValue(undefined);
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("/resume session kimi-new"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 801,
+        },
+        sessionStore,
+        updateInstanceConfig,
+        validateCodexThread,
+      });
+
+      expect(handled).toBe(true);
+      expect(validateCodexThread).toHaveBeenCalledWith("kimi-new");
+      expect(sessionStore.upsert).toHaveBeenCalledWith({
+        telegramChatId: 123,
+        codexSessionId: "kimi-new",
+        status: "idle",
+        updatedAt: expect.any(String),
+        suspendedPrevious: {
+          sessionId: "kimi-old",
+          resume: null,
+        },
+      });
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Attached Kimi session: kimi-new\n\nSend a message to continue. Use /detach when done.",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("fails closed when a Kimi session cannot be loaded", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("/resume session kimi-missing"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 802,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        validateCodexThread: vi.fn().mockRejectedValue(new Error("Kimi ACP could not load session")),
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.upsert).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Could not load Kimi session: kimi-missing");
     } finally {
       await removeTempRoot(root);
     }
@@ -889,6 +1022,45 @@ describe("handleLocalSessionTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         "Detached from the current Codex thread. Next message will start a fresh thread.",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("detaches the current Kimi session when one is bound", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+      removeByChatId: vi.fn().mockResolvedValue(true),
+      upsert: vi.fn(),
+    };
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("/detach"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 811,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.removeByChatId).toHaveBeenCalledWith(123);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Detached from the current Kimi session. Next message will start a fresh session.",
       );
     } finally {
       await removeTempRoot(root);
