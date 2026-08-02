@@ -10,14 +10,14 @@
   <a href="https://github.com/cloveric/tarocub/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cloveric/tarocub?style=flat-square&color=818cf8" alt="License"></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js >= 20">
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
-  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20Code%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Antigravity">
+  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Kimi Code | Antigravity">
   <img src="https://img.shields.io/badge/channels-Telegram%20%7C%20Feishu%2FLark-2563eb?style=flat-square" alt="Telegram | Feishu/Lark">
 </p>
 
 <h1 align="center">TaroCub</h1>
 
 <p align="center">
-  <strong>Run Codex, Claude Code, and Antigravity locally. Control them from Telegram and Feishu/Lark.</strong><br>
+  <strong>Run Codex, Claude Code, Kimi Code, and Antigravity locally. Control them from Telegram and Feishu/Lark.</strong><br>
   TaroCub runs real CLI agents on your own machine, then gives them durable chat surfaces, files, sessions, tasks, cron, audit logs, and multi-agent workflows.<br>
   Resume local sessions anytime from your phone, whether you are at your desk, commuting, or walking the dog.
 </p>
@@ -33,7 +33,7 @@
 
 ## What This Is
 
-`TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface across Telegram and Feishu/Lark.
+`TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, Kimi Code, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface across Telegram and Feishu/Lark.
 
 This project was formerly named `cc-telegram-bridge`. The canonical repository is now `cloveric/tarocub`; GitHub redirects the old URL, and existing state directories plus the `cctb` shorthand remain supported for compatibility.
 
@@ -43,7 +43,7 @@ It is built for people who already use CLI agents heavily and want:
 - Feishu/Lark-native operation with cards, Docs comments, Sheets, and group workflows;
 - durable state for sessions, cron jobs, file delivery, usage, timelines, audit logs, and multi-agent routing.
 
-The intended setup flow is agent-assisted: clone the repo, open it in Codex, Claude Code, or Antigravity, and ask the agent to configure the bridge for you. The CLI exists so your local agent can do the boring setup work instead of making you hand-edit every file.
+The intended setup flow is agent-assisted: clone the repo, open it in Codex, Claude Code, Kimi Code, or Antigravity, and ask the agent to configure the bridge for you. The CLI exists so your local agent can do the boring setup work instead of making you hand-edit every file.
 
 The old long README is preserved as [Full Reference](./docs/full-reference.md). This landing page is intentionally short.
 
@@ -51,7 +51,7 @@ The old long README is preserved as [Full Reference](./docs/full-reference.md). 
 
 ### Recommended: ask your local agent to configure it
 
-Open this repository in Codex, Claude Code, or Antigravity and say:
+Open this repository in Codex, Claude Code, Kimi Code, or Antigravity and say:
 
 ```text
 Read the README and configure TaroCub for me.
@@ -83,7 +83,7 @@ npm run dev -- telegram yolo unsafe
 npm run dev -- telegram service start
 ```
 
-`telegram yolo unsafe` is the recommended default for a personal, trusted bot instance. It maps to `approvalMode: "bypass"`: Codex runs with `--dangerously-bypass-approvals-and-sandbox`, Claude Code/Antigravity run with their unsafe skip-permissions flags, and the bridge will not ask for per-turn approval. Treat it as equivalent to bypassing the normal approval prompts and local sandbox. Use `telegram yolo off` only when you explicitly want approval prompts again.
+`telegram yolo unsafe` is the recommended default for a personal, trusted bot instance. It maps to `approvalMode: "bypass"`: Codex uses its bypass sandbox mode, Claude Code/Antigravity use their unsafe skip-permissions modes, and Kimi selects ACP `auto` mode. Treat it as equivalent to bypassing normal approval prompts and local sandbox controls. Use `telegram yolo off` only when you explicitly want approval prompts again; Kimi `full-auto` maps to ACP `yolo`, which auto-approves tools but can still ask a question.
 
 Send any message to the bot. It will reply with a pairing code:
 
@@ -128,8 +128,8 @@ node dist/src/index.js lark doctor
 
 | Highlight | Why it matters |
 |---|---|
-| **Real CLI engines, not a fake chat backend** | Codex, Claude Code, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
-| **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, and Antigravity conversations can be attached from chat and detached later. |
+| **Real CLI engines, not a fake chat backend** | Codex, Claude Code, Kimi Code, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
+| **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, Kimi ACP sessions, and Antigravity conversations can be attached from chat and detached later. |
 | **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
@@ -146,7 +146,7 @@ node dist/src/index.js lark doctor
 
 | Feature | Telegram | Feishu/Lark | Local CLI |
 |---|---:|---:|---:|
-| Codex / Claude Code / Antigravity engines | Yes | Yes | Yes |
+| Codex / Claude Code / Kimi Code / Antigravity engines | Yes | Yes | Yes |
 | Session resume / detach | Yes | Yes | Yes |
 | Voice, audio, and video ASR | Yes | Yes | Inspect/debug |
 | File and image delivery | Yes | Yes | `telegram send` / `lark send` |
@@ -159,6 +159,22 @@ node dist/src/index.js lark doctor
 | Mini Bus topic/thread workflows | Telegram topics | Lark threads | Inspect state |
 | Docs comments and Sheets workflows | Not applicable | Yes, with `lark-cli` | Provision/auth/doctor |
 | Timeline, audit, dashboard, usage | Yes | Yes | Primary ops surface |
+
+### Kimi Code engine
+
+Select Kimi per instance with `telegram engine kimi --instance <name>` or
+`/engine kimi`. The service resolves `KIMI_EXECUTABLE` first and otherwise
+falls back to `~/.kimi-code/bin/kimi`; Kimi Code must already be authenticated
+locally. TaroCub uses the persistent `kimi acp` protocol, not prompt-mode text
+scraping.
+
+Kimi supports streamed text/thought/tool events, `/stop`, tool approvals,
+single-choice Lark question forms, `/compact`, model/effort/mode session
+options, and explicit `/resume session <session-id>`. Bare `/resume` cannot
+scan Kimi sessions because ACP exposes no bridge-usable list. Kimi ACP 0.31.1
+does not expose structured per-turn token/cost usage, mid-turn steering, or a
+`/goal` command; TaroCub reports those gaps instead of simulating support. See
+[Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence.
 
 ## Lark Setup
 
@@ -269,7 +285,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | `/status` | Current engine, session binding, runtime state |
 | `/stop` | Stop the running task (queued tasks cancel from their queue card) |
 | `/reset` | Reset the chat/session binding |
-| `/resume [n]` · `/resume thread <id>` · `/resume conversation <id>` | Resume local Claude sessions / bind a Codex thread / an Antigravity conversation |
+| `/resume [n]` · `/resume thread <id>` · `/resume session <id>` · `/resume conversation <id>` | Resume Claude sessions / bind a Codex thread / a Kimi ACP session / an Antigravity conversation |
 | `/detach` | Detach the resumed session/thread/conversation |
 | `/goal <objective>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | Conversation goal (autonomous pursuit on Codex) |
 | `/btw <question>` | Side question without touching the session |
@@ -283,8 +299,8 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | Command | What it does |
 |---|---|
 | `/config` | **Lark** — interactive settings card (recommended) |
-| `/engine [claude\|codex\|antigravity]` | Inspect/switch backend engine |
-| `/model [name\|off]` | Inspect/set engine model. Claude choices: `claude-opus-5[1m]` (Opus 5, 1M context — the default), `fable`, `opus`, `sonnet`, `haiku` |
+| `/engine [claude\|codex\|kimi\|antigravity]` | Inspect/switch backend engine |
+| `/model [name\|off]` | Inspect/set engine model. Claude has named choices; Kimi accepts provider-advertised model IDs and validates them through ACP on the next turn |
 | `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Reasoning effort (model-dependent) |
 | `/fast [on\|off\|status]` | Codex Fast Mode |
 | `/yolo [on\|off\|unsafe\|status]` | **Lark** — approval mode (Telegram sets it from the CLI: `telegram yolo …`) |
@@ -316,11 +332,12 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | `/fan` · `/chain` · `/verify` | Agent Bus parallel / sequential / verify |
 | `/mini …` (`here`/`ask`/`fan`/`chain`/`verify`/`crew`) | Topic/thread-level peer agents |
 
-**Claude utilities & approvals**
+**Context utilities & approvals**
 
 | Command | What it does |
 |---|---|
-| `/context` · `/compact` | Claude context details / compaction |
+| `/context` | Claude context details |
+| `/compact` | Compact Claude or Kimi session context |
 | `/ultrareview` | Deep code review (Claude only) |
 | `/approve [session\|turn\|always]` · `/approve <request-id>` | Text fallback when approval buttons are unavailable |
 | `/deny` · `/deny <request-id>` | Deny a pending tool call (there is no `/deny session` form) |
@@ -342,7 +359,7 @@ Short audio is transcribed by the local ASR. Audio/video at or above the thresho
 
 **Where to set them.** On Lark, put them in `~/.cctb/<instance>/lark.env` — they are read through the *whitelisted config channel* (`loadLarkRuntimeEnv`, the same one that carries `LARK_APP_ID`), and a service start preserves them when it regenerates the file. They can also be exported in the service process environment, which wins over the file.
 
-Note the distinction inside `lark.env`: these four ride the **whitelist**, not the *extras passthrough*. The passthrough (which forwards engine credentials such as `IFIND_TOKEN` into the engine child) refuses every reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — precisely because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*), so an engine-written extra can never redirect it. A refused extra is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`.
+Note the distinction inside `lark.env`: these four ride the **whitelist**, not the *extras passthrough*. The passthrough (which forwards engine credentials such as `IFIND_TOKEN` into the engine child) refuses every reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `KIMI_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — precisely because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*), so an engine-written extra can never redirect it. A refused extra is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`.
 
 **Secrets stay outside any engine workspace.** The Tingwu script loads its own Aliyun credentials from its `.env.local`; the bridge never reads, copies, or logs them. Keep that directory **outside** every engine workspace — the convention on this machine is `~/.tarocub-secrets/tingwu_asr` — so an agent working in `~/.cctb/<instance>/workspace` cannot read, commit, or exfiltrate the credentials.
 

@@ -444,6 +444,18 @@ new tests:
 The disposable worktree was removed afterwards and the main worktree remained
 clean.
 
+## M6 End-To-End Verification
+
+The built Kimi adapter was exercised through the real shared runtime chain,
+not a stub: `KimiAcpAdapter` -> `Bridge` -> `SessionManager` -> `SessionStore` ->
+the installed `kimi acp` binary. The probe required the exact response marker
+`KIMI_M6_FULL_CHAIN_OK`.
+
+The real run produced the exact marker, emitted `session`, `thinking`,
+`assistant_text`, and `result` events, persisted a non-empty Kimi session ID,
+and rebound that logical session through the shared session store. The
+temporary probe workspace and state were removed after verification.
+
 ## References
 
 - Kimi Code documentation: <https://moonshotai.github.io/kimi-code/>

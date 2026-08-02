@@ -27,6 +27,7 @@ For deeper system context, then read:
 - `docs/change-rules.md`
 - `docs/release-checklist.md`
 - `docs/lark-permissions.md` — granting a Feishu scope to a Lark bot. 个人版 apps: `申请开通` is INSTANT, there is NO version-publish step — don't hunt a `发布` button.
+- `docs/kimi-engine-notes.md` — verified Kimi CLI/ACP behavior, implementation consequences, and known gaps.
 
 ## Main Entrypoints
 
@@ -180,6 +181,9 @@ See `docs/state-model.md` before changing on-disk semantics.
   Claude CLI adapter.
 - `src/codex/claude-stream-adapter.ts`
   Claude streaming adapter.
+- `src/codex/kimi-acp-adapter.ts`
+  Persistent Kimi ACP worker, session configuration/loading, streaming event mapping,
+  approvals/questions, cancellation, and compact support.
 
 If a bug smells like auth, stale session, engine CLI output shape, or provider-specific formatting, inspect these modules before patching Telegram code.
 
@@ -188,7 +192,7 @@ If a bug smells like auth, stale session, engine CLI output shape, or provider-s
 - Prefer changing the narrowest module that owns the behavior.
 - Do not add new command logic back into `delivery.ts`.
 - Do not duplicate usage, budget, or audit logic across Telegram command modules and bus handlers.
-- When changing file delivery, keep both Claude and Codex output formats working.
+- When changing file delivery, keep all engine response formats and shared channel delivery paths working.
 - When changing state semantics, update `docs/state-model.md` if the authoritative behavior changes.
 - When changing trust boundaries or file access behavior, update `docs/security-boundaries.md` if the effective boundary changes.
 
@@ -220,6 +224,7 @@ Run focused tests for the area you touched before wider validation.
   `tests/lark-element-stream.test.ts`
 - Shared runtime/state:
   `tests/bridge.test.ts`
+  `tests/kimi-acp-adapter.test.ts`
   `tests/cron-scheduler.test.ts`
   `tests/instance-lock.test.ts`
   `tests/runtime-state.test.ts`

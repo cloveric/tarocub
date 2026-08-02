@@ -15,7 +15,7 @@ Static Telegram transport rules belong in instance-level `~/.cctb/<instance>/age
 
 This repository is not in maintenance mode. The active objective is:
 
-`make TaroCub a reliable local control surface for Codex, Claude Code, and Antigravity across Telegram and Feishu/Lark, keeping parity where possible and using each platform's native strengths where it is better`
+`make TaroCub a reliable local control surface for Codex, Claude Code, Kimi Code, and Antigravity across Telegram and Feishu/Lark, keeping parity where possible and using each platform's native strengths where it is better`
 
 Do not treat "feature implemented" as "work complete" unless the current milestone has been verified end-to-end.
 
@@ -72,25 +72,42 @@ When choosing the next task without asking:
 3. Improve operator controls and observability
 4. Improve GitHub presentation and documentation
 
-## File Delivery: Claude vs Codex Engine Differences
+## File Delivery: Engine Differences
 
-The two engines surface files differently. The delivery layer (`src/telegram/delivery.ts` → `response-delivery.ts`) handles these formats:
+The engines surface files differently. The delivery layer (`src/telegram/delivery.ts` → `response-delivery.ts`) handles these formats:
 
 | Engine | Format | Example | Notes |
 |--------|--------|---------|-------|
-| Both | `[send-file:/path]` / `[send-image:/path]` tag | `[send-file:/Users/me/img.png]` | The only response-text delivery tag. `[send-image:]` prefers `sendPhoto`. |
-| Both | Inline text file block | `` ```file:report.txt\ncontent\n``` `` | **Only honored when it is the entire response** — a fenced `file:` block surrounded by other text is treated as an explanatory example, not an attachment. |
+| All engines | `[send-file:/path]` / `[send-image:/path]` tag | `[send-file:/Users/me/img.png]` | The only response-text delivery tag. `[send-image:]` prefers `sendPhoto`. |
+| All engines | Inline text file block | `` ```file:report.txt\ncontent\n``` `` | **Only honored when it is the entire response** — a fenced `file:` block surrounded by other text is treated as an explanatory example, not an attachment. |
 | Codex | telegram-out auto-delivery | files written under `workspace/.telegram-out/<req>/` | Codex's primary file path: the message-turn loop auto-delivers files the engine produced in the current request output dir. |
 
 **Codex does NOT use Markdown image/link extraction.** That extraction was removed: `deliverTelegramResponse` leaves Markdown absolute links (`![alt](/path)`, `[name](/path)`) as ordinary chat text (codified by the `"leaves markdown absolute links as ordinary chat text"` test in `tests/telegram-response-delivery.test.ts`). Codex delivers files via telegram-out auto-delivery, generated-image `[send-image:]` tags, and the `cctb send` side channel — not Markdown syntax.
 
 **When modifying file delivery logic:**
 
-1. Test both the response-text tag path (`[send-file:]` / `[send-image:]`, both engines) and the Codex telegram-out auto-delivery path.
+1. Test both the response-text tag path (`[send-file:]` / `[send-image:]`, all engines) and the Codex telegram-out auto-delivery path.
 2. File path patterns must match both Unix (`/Users/...`) and Windows (`C:\Users\...`) absolute paths.
 3. The `sendFileOrPhoto` helper auto-detects image extensions and uses `sendPhoto` (Telegram compresses) with a `sendDocument` fallback.
 4. Multiple images are sent **one-by-one** (each via `sendFileOrPhoto`). `sendMediaGroup` exists on the API but currently has **zero call sites** — there is no album batching today; do not assume it.
 5. Never break the `deliverTelegramResponse` function without re-running its test cases (`tests/telegram-response-delivery.test.ts`, see commit `7dad7a4`).
+
+## Engine Runtime Differences
+
+| Capability | Codex | Claude Code | Kimi Code | Antigravity |
+|---|---|---|---|---|
+| Runtime | persistent app-server by default | streaming CLI worker | persistent ACP worker | one-shot print mode |
+| Explicit resume | `/resume thread <id>` | local scan and `/resume <n>` | `/resume session <id>` after real `session/load`; no list scan | log scan or `/resume conversation <id>` |
+| Goal | bridge-native, including status/clear | native goal prompt | unsupported by ACP 0.31.1; reject explicitly | native goal prompt |
+| Mid-turn steer | app-server `turn/steer` | unsupported | unsupported by ACP | unsupported |
+| Compact | bridge reset fallback | native compact | real ACP `/compact` command | unsupported |
+| Usage | structured token usage when emitted | token and cost usage | no structured per-turn usage in ACP 0.31.1 | no structured per-turn usage |
+| Instructions | trusted runtime channel | appended system prompt | prompt-scoped bridge block because ACP ignores `--agent-file` | prompt-scoped bridge instructions |
+
+Kimi `AskUserQuestion` currently exposes only ACP-advertised option IDs. Keep it
+single-choice and do not add a free-text `Other` path unless the protocol starts
+providing a structured input field. See `docs/kimi-engine-notes.md` before
+changing Kimi behavior.
 
 ## Security: No Private Data in Commits
 
