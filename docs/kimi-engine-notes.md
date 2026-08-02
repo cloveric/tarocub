@@ -456,6 +456,10 @@ The real run produced the exact marker, emitted `session`, `thinking`,
 and rebound that logical session through the shared session store. The
 temporary probe workspace and state were removed after verification.
 
+The release-level Kimi/Codex/Claude comparison is maintained in
+[Kimi Capability Matrix](./kimi-capability-matrix.md). Every Kimi row is marked
+as aligned or as an explicit protocol/implementation gap.
+
 ## References
 
 - Kimi Code documentation: <https://moonshotai.github.io/kimi-code/>

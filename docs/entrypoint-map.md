@@ -28,6 +28,7 @@ For deeper system context, then read:
 - `docs/release-checklist.md`
 - `docs/lark-permissions.md` — granting a Feishu scope to a Lark bot. 个人版 apps: `申请开通` is INSTANT, there is NO version-publish step — don't hunt a `发布` button.
 - `docs/kimi-engine-notes.md` — verified Kimi CLI/ACP behavior, implementation consequences, and known gaps.
+- `docs/kimi-capability-matrix.md` — Kimi vs Codex vs Claude release contract, including explicit protocol gaps.
 
 ## Main Entrypoints
 

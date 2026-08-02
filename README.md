@@ -174,7 +174,9 @@ options, and explicit `/resume session <session-id>`. Bare `/resume` cannot
 scan Kimi sessions because ACP exposes no bridge-usable list. Kimi ACP 0.31.1
 does not expose structured per-turn token/cost usage, mid-turn steering, or a
 `/goal` command; TaroCub reports those gaps instead of simulating support. See
-[Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence.
+[Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence and the
+[Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for the three-engine
+release contract.
 
 ## Lark Setup
 

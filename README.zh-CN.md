@@ -226,7 +226,7 @@ npm run dev -- telegram engine --instance review-bot
 | 工作目录 | 实例 `workspace/` | 实例 `workspace/` | 实例 `workspace/` | 实例 `workspace/` |
 | 空闲 worker | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每轮退出 |
 
-Kimi 的实测事件、取消、提问、恢复和 gap 证据见 [`docs/kimi-engine-notes.md`](./docs/kimi-engine-notes.md)。
+Kimi 的实测事件、取消、提问、恢复和 gap 证据见 [`docs/kimi-engine-notes.md`](./docs/kimi-engine-notes.md)，三引擎逐项对照见 [`docs/kimi-capability-matrix.md`](./docs/kimi-capability-matrix.md)。
 
 ## 实时网页搜索 MCP：Brave + Tavily
 
