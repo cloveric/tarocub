@@ -24,11 +24,29 @@ export function resolveConversationResume(
   return record?.codexSessionId === legacyResume?.sessionId ? legacyResume : undefined;
 }
 
+function scopeLegacyResumeToRecord(
+  record: ConversationResumeRecord,
+  legacyResume: ResumeState,
+): ResumeState {
+  if (record.codexSessionId === legacyResume.sessionId) {
+    return legacyResume;
+  }
+
+  // Before resume state became conversation-scoped, its workspace applied to
+  // every existing conversation in the instance. Preserve that actual cwd for
+  // those records, but never copy the old shared symlink ownership.
+  const { symlinkPath: _legacySymlinkPath, ...sharedWorkspace } = legacyResume;
+  return {
+    ...sharedWorkspace,
+    sessionId: record.codexSessionId,
+  };
+}
+
 /**
- * Move the pre-conversation-scoping `config.json.resume` value onto the session
- * record that owns its session id. Callers may delete the legacy field only
- * after this returns true; otherwise another conversation could erase the old
- * binding before its owner has had a chance to migrate.
+ * Move the pre-conversation-scoping `config.json.resume` value onto every
+ * session record that previously inherited its instance-wide workspace. Once
+ * this succeeds callers may delete the legacy field; future conversations no
+ * longer inherit that workspace.
  */
 export async function migrateLegacyConversationResume<T extends ConversationResumeRecord>(
   store: {
@@ -40,10 +58,14 @@ export async function migrateLegacyConversationResume<T extends ConversationResu
   if (!legacyResume) return false;
   const inspected = await store.inspect();
   if (!inspected?.state || !Array.isArray(inspected.state.chats) || inspected.warning) return false;
-  const owner = inspected.state.chats.find((record) => record.codexSessionId === legacyResume.sessionId);
-  if (!owner) return false;
-  if (!hasConversationResume(owner)) {
-    await store.upsert({ ...owner, resume: legacyResume });
+  if (inspected.state.chats.length === 0) return false;
+  for (const record of inspected.state.chats) {
+    if (!hasConversationResume(record)) {
+      await store.upsert({
+        ...record,
+        resume: scopeLegacyResumeToRecord(record, legacyResume),
+      });
+    }
   }
   return true;
 }
