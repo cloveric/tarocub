@@ -149,7 +149,21 @@ export interface LarkBridgeLike {
     turnPoolWaitNotifyAfterMs?: number;
     onTurnPoolWait?: (event: TurnPoolWaitEvent) => void | Promise<void>;
   }): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number; cachedTokens?: number; costUsd?: number } }>;
-  validateCodexThread?(threadId: string): Promise<void>;
+  validateCodexThread?(
+    threadId: string,
+    input?: { workspaceOverride?: string },
+  ): Promise<{
+    sessionId: string;
+    cwd: string;
+    title?: string;
+    updatedAt?: string;
+  } | void>;
+  listExternalSessions?(input?: { cwd?: string; limit?: number }): Promise<Array<{
+    sessionId: string;
+    cwd: string;
+    title?: string;
+    updatedAt?: string;
+  }>>;
   steerActiveTurn?(input: {
     chatId: number;
     messageThreadId?: number;

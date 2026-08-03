@@ -133,7 +133,7 @@ node dist/src/index.js lark doctor
 | **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
-| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources are downloaded and transcribed automatically: short audio locally, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** via Aliyun Tingwu cloud transcription — a 30-min file transcribes in ~40s, with automatic local fallback on any cloud failure. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
+| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources are downloaded and transcribed automatically before any Claude/Codex/Kimi/Antigravity adapter runs: short audio uses the local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription — with chunked local fallback on cloud failure. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
 | **Agent Bus** | Multiple bot instances can call each other as local workers for delegation, fan-out, chain, verifier, and coordinator-led crew workflows. |
@@ -169,13 +169,17 @@ locally. TaroCub uses the persistent `kimi acp` protocol, not prompt-mode text
 scraping.
 
 Kimi supports streamed text/thought/tool events, `/stop`, tool approvals,
-single-choice Lark question forms, `/compact`, model/effort/mode session
-options, and explicit `/resume session <session-id>`. Bare `/resume` cannot
-scan Kimi sessions because ACP exposes no bridge-usable list. Kimi ACP 0.31.1
-does not expose structured per-turn token/cost usage, mid-turn steering, or a
-`/goal` command; TaroCub reports those gaps instead of simulating support. See
+single-choice Lark and Telegram questions, `/compact`, model/effort/mode
+options, and `/resume` session scanning/selection. TaroCub loads instance and
+channel guidance through a workspace `.kimi-code/agents/agent.md` main-agent
+override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
+exposes local Codex skills to bridge-owned Kimi workspaces and injects the
+built-in Search MCP alongside Kimi's native MCP/plugins. Kimi ACP 0.31.1 does
+not expose structured per-turn token/cost usage, mid-turn steering, a direct
+client-supplied system-prompt field, or a `/goal` command; TaroCub reports those
+gaps instead of simulating support. See
 [Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence and the
-[Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for the three-engine
+[Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for the four-engine
 release contract.
 
 ## Lark Setup
@@ -224,15 +228,17 @@ Whether a Lark group isolates each topic into its own session follows the group'
 
 | Chat type | Feishu signal | Topic context (session) |
 |---|---|---|
-| 1:1 chat | `chat_mode = p2p` | One continuous session. |
+| 1:1 main timeline | `chat_mode = p2p`, no `thread_id` | One continuous main session. |
+| 1:1 thread/topic | `chat_mode = p2p` + `thread_id` | Each thread is its **own isolated** session. |
 | Topic group | `chat_mode = topic` | Each topic is its **own isolated** session. |
 | Conversation group switched to the topic message form | `chat_mode = group` + `group_message_type = thread` | Each topic is its **own isolated** session. |
 | Conversation group, default form | `chat_mode = group` + `group_message_type = chat` | Topic replies **share the one** group session. |
 
 - "Isolated" means a topic's context does not bleed into other topics or the group's main timeline. "Shared" means a topic reply continues the group's single session.
-- A topic conversation key is `lark:<chat_id>:<thread_id>`; the shared group / 1:1 key is `lark:<chat_id>`. Isolation needs both the topic form **and** a `thread_id` on the message.
+- A thread conversation key is `lark:<chat_id>:<thread_id>`; a main 1:1 timeline or shared conversation-group key is `lark:<chat_id>`. A private thread isolates whenever Lark supplies `thread_id`; a group thread isolates only when the group uses topic message form.
 - `chat_mode` alone cannot tell a toggled topic group (`chat_mode = group` + `group_message_type = thread`) from a plain conversation group, so `group_message_type` is the decisive signal.
 - `/invite group` and `/group allow` authorize the current group, not only the current thread. `/remove group` and `/group deny` remove the current group authorization.
+- `/newgroup <name>`, `/newgroup topic <name>`, and `/newtopic <name>` use the instance bot by default and invite the requester; explicit user-OAuth mode creates as the OAuth user instead. Both paths ensure the instance bot joins and automatically authorize the new group. They do **not** enable listen-all: the safer @bot trigger remains until `/group all` is sent inside that group.
 - **Group reply mode is per-group.** By default the bot replies in a group only when it is **@-mentioned**. `/group all` opts a single group into replying to ordinary (non-`@`) messages too — handy for a private, you-only project group — and needs the app's `im:message` + `im:message.group_msg` scopes. `/group at` returns that one group to mention-required, and `/group status` shows its current mode. These switches are per-group and never affect other groups.
 - **Access is still enforced per user** in groups: even under `/group all`, only an authorized user (paired, or on the allowlist) can drive the bot — a newly added member cannot. So when a private group gains other people, `/group at` is the clean lock: the bot then silently ignores every non-`@` message instead of replying.
 - `known-chats.json` is diagnostic metadata for `/status`, `/config`, and dashboard labels. It never decides routing or access by itself.
@@ -350,7 +356,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 
 ## Long-audio Cloud ASR
 
-Short audio is transcribed by the local ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to a local attempt.
+Short audio is transcribed by the local Qwen ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to chunked local transcription. This routing runs at the channel layer, before engine selection, so Claude, Codex, Kimi, and Antigravity receive the same transcript behavior. `/stop` aborts the bridge-side local HTTP wait or terminates CLI/chunking/cloud work, and never starts a fallback after cancellation. The local HTTP server may still finish an already-running model kernel before it notices that its client disconnected.
 
 | Variable | Default | Meaning |
 |---|---|---|

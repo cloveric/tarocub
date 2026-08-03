@@ -76,20 +76,28 @@ describe("larkAgentInstructions", () => {
     const previousHttp = process.env.ASR_HTTP_URL;
     const previousCli = process.env.ASR_CLI_PYTHON;
     const previousTingwu = process.env.TINGWU_ASR_DIR;
+    const previousThreshold = process.env.ASR_CLOUD_THRESHOLD_SECONDS;
     // No local ASR at all: the cloud note must NOT be gated on it.
     delete process.env.ASR_HTTP_URL;
     process.env.ASR_CLI_PYTHON = "/nonexistent/python";
     process.env.TINGWU_ASR_DIR = "/tmp/tingwu";
+    delete process.env.ASR_CLOUD_THRESHOLD_SECONDS;
     try {
       expect(localAsrAgentInstruction()).toBeUndefined();
       const cloud = cloudAsrAgentInstruction();
       expect(cloud).toBeDefined();
       expect(cloud).toContain(">=15 min");
+      expect(cloud).toContain("local Qwen ASR");
       expect(cloud).toContain("强制本地转写/强制云端转写");
       // The advertised trigger must match what the router can actually see: a
       // bare voice note has no caption, so the keyword has to travel with it.
       expect(cloud).toContain("same message or burst");
       expect(larkAgentInstructions()).toContain("Aliyun Tingwu");
+
+      process.env.ASR_CLOUD_THRESHOLD_SECONDS = "120";
+      const customThreshold = cloudAsrAgentInstruction() ?? "";
+      expect(customThreshold).toContain(">=2 min");
+      expect(customThreshold).not.toContain(">=15 min");
 
       delete process.env.TINGWU_ASR_DIR;
       expect(cloudAsrAgentInstruction()).toBeUndefined();
@@ -109,6 +117,11 @@ describe("larkAgentInstructions", () => {
         delete process.env.TINGWU_ASR_DIR;
       } else {
         process.env.TINGWU_ASR_DIR = previousTingwu;
+      }
+      if (previousThreshold === undefined) {
+        delete process.env.ASR_CLOUD_THRESHOLD_SECONDS;
+      } else {
+        process.env.ASR_CLOUD_THRESHOLD_SECONDS = previousThreshold;
       }
     }
   });

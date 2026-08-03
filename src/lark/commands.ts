@@ -66,7 +66,7 @@ import { LarkGroupModeStore } from "./group-mode-store.js";
 import { checkGroupMsgScope, renderGroupMsgScopeWarning } from "./group-scope-check.js";
 import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig, renderLarkCronRuntimeMissing, renderLarkUserAccessDenied, resolveLarkLocale } from "./locale.js";
-import { stableLarkNumericId, type LarkNormalizedBridgeMessage } from "./message-normalizer.js";
+import { buildLarkConversationKey, stableLarkNumericId, type LarkNormalizedBridgeMessage } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import type { LarkServiceRuntime } from "./runtime.js";
@@ -484,6 +484,18 @@ async function handleLarkSessionCommand(
     validateCodexThread: input.bridge.validateCodexThread?.bind(input.bridge),
     scanRecentSessions: input.runtime.sessionRuntime?.scanRecentSessions,
     scanRecentAntigravitySessions: input.runtime.sessionRuntime?.scanRecentAntigravitySessions,
+    scanRecentKimiSessions: input.bridge.listExternalSessions
+      ? async () => (await input.bridge.listExternalSessions!({ limit: 20 })).map((session) => {
+          const modifiedAt = new Date(session.updatedAt ?? 0);
+          return {
+            sessionId: session.sessionId,
+            dirName: session.sessionId,
+            workspacePath: session.cwd,
+            modifiedAt: Number.isNaN(modifiedAt.getTime()) ? new Date(0) : modifiedAt,
+            displayName: session.title || session.sessionId,
+          };
+        })
+      : undefined,
     sendResumeScanResult: async ({ kind, visibleSessions }) => {
       await sendLarkCardWithFallback({
         channel: input.channel,
@@ -505,7 +517,7 @@ async function handleLarkSessionCommand(
 }
 
 function renderLarkResumeFallback(
-  kind: "claude" | "antigravity",
+  kind: "claude" | "antigravity" | "kimi",
   sessions: ScannedSession[],
   locale: Locale,
 ): string {
@@ -770,6 +782,7 @@ async function handleLarkNewGroupCommand(
       name: command.name,
       mode: command.mode,
       operatorOpenId: normalized.senderId,
+      ...(input.runtime.appInfo?.appId ? { botAppId: input.runtime.appInfo.appId } : {}),
       channel: input.channel,
     });
   } catch (error) {
@@ -777,10 +790,20 @@ async function handleLarkNewGroupCommand(
     return;
   }
 
+  let authorizationWarning: string | undefined;
+  try {
+    const newGroupId = stableLarkNumericId(buildLarkConversationKey(created.chatId));
+    await updateLarkGroupMode(input.stateDir, (groupMode) => {
+      allowLarkGroup(groupMode, newGroupId);
+    });
+  } catch (error) {
+    authorizationWarning = redactLarkErrorDetail(error);
+  }
+
   let welcomeWarning: string | undefined;
   try {
     await input.channel.send(created.chatId, {
-      markdown: renderLarkNewGroupWelcome(command.name, command.mode, locale),
+      markdown: renderLarkNewGroupWelcome(command.name, command.mode, locale, authorizationWarning === undefined),
     });
   } catch (error) {
     welcomeWarning = redactLarkErrorDetail(error);
@@ -796,6 +819,7 @@ async function handleLarkNewGroupCommand(
       name: created.name ?? command.name,
       chatId: created.chatId,
       shareLink: created.shareLink,
+      authorizationWarning,
       welcomeWarning,
     }),
   );
@@ -810,7 +834,7 @@ function renderLarkNewGroupUsage(locale: Locale): string {
         "- `/newgroup <name>`: create a normal group chat",
         "- `/newgroup topic <name>` or `/newtopic <name>`: create a topic-style group",
         "",
-        "The bridge will invite the requesting user when using bot identity.",
+        "Default bot identity invites the requester; explicit user-OAuth mode creates as the OAuth user. Both paths ensure the instance bot joins and automatically authorize the group. User access remains enforced, and @bot remains the default trigger.",
       ].join("\n")
     : [
         "**创建飞书会话**",
@@ -819,26 +843,37 @@ function renderLarkNewGroupUsage(locale: Locale): string {
         "- `/newgroup <名称>`：创建普通飞书群",
         "- `/newgroup topic <名称>` 或 `/newtopic <名称>`：创建飞书话题群",
         "",
-        "默认用 bot 身份创建，并把发起人拉进新群。",
+        "默认用实例 bot 创建并拉入发起人；显式用户 OAuth 模式则由 OAuth 用户创建。两条路径都会确保实例 bot 入群并自动授权；用户权限仍会校验，默认仍需 @bot。",
       ].join("\n");
 }
 
-function renderLarkNewGroupWelcome(name: string, mode: "group" | "topic", locale: Locale): string {
+function renderLarkNewGroupWelcome(
+  name: string,
+  mode: "group" | "topic",
+  locale: Locale,
+  authorized: boolean,
+): string {
   if (locale === "en") {
     return [
       `**${name}** is connected to TaroCub.`,
       "",
       mode === "topic"
-        ? "Use each topic as an isolated session, or send `/status` to inspect this conversation."
-        : "Use replies/threads as isolated sessions, or send `/status` to inspect this conversation.",
+        ? "Each topic is an isolated session. Send `/status` inside a topic to inspect that session."
+        : "This conversation-form group shares one session, including ordinary replies/threads. Send `/status` to inspect it.",
+      authorized
+        ? "The group is authorized; individual user access still applies. Messages require @bot by default. Use `/group all` to accept ordinary messages."
+        : "Automatic group authorization failed. An authorized user must send `/group allow` here before normal use.",
     ].join("\n");
   }
   return [
     `**${name}** 这个${mode === "topic" ? "话题群" : "群"}已经接入 TaroCub。`,
     "",
     mode === "topic"
-      ? "每个话题都可以作为独立 session 使用；发送 `/status` 可查看当前会话。"
-      : "可以用 thread/reply 形成独立 session；发送 `/status` 可查看当前会话。",
+      ? "每个话题都是独立 session；在话题内发送 `/status` 可查看该会话。"
+      : "普通对话群全群共享一个 session，普通 reply/thread 也会延续该会话；发送 `/status` 可查看。",
+    authorized
+      ? "新群已授权，但仍只允许已授权用户使用。默认需要 @bot；发送 `/group all` 可改为监听普通消息。"
+      : "新群自动授权失败；请由已授权用户在本群发送 `/group allow` 后再使用。",
   ].join("\n");
 }
 
@@ -848,6 +883,7 @@ function renderLarkNewGroupCreated(input: {
   name: string;
   chatId: string;
   shareLink?: string;
+  authorizationWarning?: string;
   welcomeWarning?: string;
 }): string {
   const kind = input.mode === "topic"
@@ -864,6 +900,12 @@ function renderLarkNewGroupCreated(input: {
       ];
   if (input.shareLink) {
     lines.push(input.locale === "en" ? `Link: ${input.shareLink}` : `链接：${input.shareLink}`);
+  }
+  if (input.authorizationWarning) {
+    lines.push("");
+    lines.push(input.locale === "en"
+      ? `Created, but automatic group authorization failed: ${input.authorizationWarning}. Send /group allow inside the new group.`
+      : `已创建，但自动授权新群失败：${input.authorizationWarning}。请在新群内发送 /group allow。`);
   }
   if (input.welcomeWarning) {
     lines.push("");
@@ -942,11 +984,11 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     return [
       "**TaroCub for Feishu/Lark**",
       "",
-      "Just message me to start — DMs work directly; in a group, @-mention me. You can also send files, images, or audio/video (audio/video is transcribed locally first). Most settings live in the interactive `/config` panel.",
+      "Just message me to start — DMs work directly; in a group, @-mention me. You can also send files, images, or audio/video (short media uses local Qwen ASR; long media uses Aliyun Tingwu when configured). Most settings live in the interactive `/config` panel.",
       "",
       "**Session**",
       "- `/status` current conversation · `/stop` stop the current task (cancel a queued task from its queue card) · `/reset` reset the session",
-      "- `/resume [n]` pick a Claude/Antigravity session · Codex `/resume thread <id>` · Kimi `/resume session <id>` · `/detach` unbind",
+      "- `/resume [n]` pick a Claude/Kimi/Antigravity session · Codex `/resume thread <id>` · Kimi also supports `/resume session <id>` · `/detach` unbind",
       "- `/goal […]` set a conversation goal · `/btw <q>` ask aside without touching the session · `/continue` resume a waiting archive analysis",
       "- `/q <message>` force a queued turn — while a Codex turn is running, plain text steers INTO it; `/q` runs it afterwards instead",
       "- `/bg` list this instance's engine/background processes · `/bg kill <pid>` · `/bg killall` sweep orphans",
@@ -960,7 +1002,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "",
       "**Workspace & groups**",
       "- `/ws list|save|use|remove` workspace directories",
-      "- `/newgroup <name>` / `/newtopic <name>` create a group / topic group (you become its owner)",
+      "- `/newgroup <name>` / `/newgroup topic <name>` / `/newtopic <name>` create and authorize a group / topic group (you become its owner)",
       "- `/group [status|allow|deny|all|at]` group access & reply mode (`all` = reply without `@`, `at` = `@`-only)",
       "- `/invite group|user @person` · `/remove …` group/user access · `/cron …` reminders & scheduled tasks",
       "",
@@ -977,11 +1019,11 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
   return [
     "**TaroCub · 飞书/Lark**",
     "",
-    "直接发消息就能用 —— 私聊直接发，群里 @我 触发。也能发文件、图片、音视频（音视频会先本地转写）。大部分设置走 `/config` 交互面板。",
+    "直接发消息就能用 —— 私聊直接发，群里 @我 触发。也能发文件、图片、音视频（短音频走本地 Qwen ASR，长音频在已配置时走通义听悟）。大部分设置走 `/config` 交互面板。",
     "",
     "**会话**",
     "- `/status` 当前会话 · `/stop` 停当前任务（排队任务在各自排队卡片上取消）· `/reset` 重置会话",
-    "- `/resume [编号]` 选 Claude/Antigravity 会话 · Codex `/resume thread <id>` · Kimi `/resume session <id>` · `/detach` 解绑",
+    "- `/resume [编号]` 选 Claude/Kimi/Antigravity 会话 · Codex `/resume thread <id>` · Kimi 也支持 `/resume session <id>` · `/detach` 解绑",
     "- `/goal […]` 设会话目标 · `/btw <问题>` 旁问不影响会话 · `/continue` 继续等待中的压缩包分析",
     "- `/q <消息>` 强制排队 — Codex 任务运行中纯文本会注入当前任务，`/q` 则排在后面单独执行",
     "- `/bg` 列出本实例引擎/后台进程 · `/bg kill <pid>` 停指定进程树 · `/bg killall` 清理孤儿后台进程",
@@ -995,7 +1037,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "",
     "**工作区与群**",
     "- `/ws list|save|use|remove` 工作区目录",
-    "- `/newgroup <名>` / `/newtopic <名>` 新建群 / 话题群（你是群主）",
+    "- `/newgroup <名>` / `/newgroup topic <名>` / `/newtopic <名>` 新建并授权普通群 / 话题群（你是群主）",
     "- `/group [status|allow|deny|all|at]` 群授权与回复模式（`all`=不@也回，`at`=只@才回）",
     "- `/invite group|user @某人` · `/remove …` 群/用户授权 · `/cron …` 定时提醒与任务",
     "",

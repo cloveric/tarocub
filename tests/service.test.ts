@@ -670,6 +670,14 @@ describe("createServiceDependenciesForInstance", () => {
     const stateDir = path.join(root, ".cctb", "alpha");
     try {
       await mkdir(stateDir, { recursive: true });
+      await mkdir(path.join(root, ".codex", "skills", "astock"), { recursive: true });
+      await writeFile(path.join(root, ".codex", "skills", "astock", "SKILL.md"), "shared skill\n", "utf8");
+      await mkdir(path.join(stateDir, "workspace", ".kimi-code", "skills", "project-skill"), { recursive: true });
+      await writeFile(
+        path.join(stateDir, "workspace", ".kimi-code", "skills", "project-skill", "SKILL.md"),
+        "project skill\n",
+        "utf8",
+      );
       await writeFile(path.join(stateDir, ".env"), 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
       await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n", "utf8");
 
@@ -684,6 +692,12 @@ describe("createServiceDependenciesForInstance", () => {
       expect(adapter.kimiExecutable).toBe("/opt/kimi");
       expect(adapter.childEnv.KIMI_CODE_HOME).toBe(path.join(root, "kimi-home"));
       expect(adapter.childEnv.TELEGRAM_BOT_TOKEN).toBeUndefined();
+      expect(await realpath(path.join(stateDir, "workspace", ".kimi-code", "skills", "astock")))
+        .toBe(await realpath(path.join(root, ".codex", "skills", "astock")));
+      expect(await readFile(
+        path.join(stateDir, "workspace", ".kimi-code", "skills", "project-skill", "SKILL.md"),
+        "utf8",
+      )).toBe("project skill\n");
       adapter.destroy();
     } finally {
       await removeTempRoot(root);

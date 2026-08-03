@@ -10,6 +10,15 @@ import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 type ApprovalApi = Pick<TelegramApi, "sendMessage" | "answerCallbackQuery"> & Partial<Pick<TelegramApi, "editMessage">>;
 type ApprovalChoice = "once" | "session" | "deny";
+type ApprovalSelection =
+  | { kind: "approval"; choice: ApprovalChoice }
+  | { kind: "answer"; index: number };
+
+interface ApprovalQuestion {
+  answerKey: string;
+  question: string;
+  options: string[];
+}
 
 interface PendingApproval {
   id: string;
@@ -18,6 +27,7 @@ interface PendingApproval {
   userId: number;
   locale: Locale;
   engine: EngineApprovalRequest["engine"];
+  question?: ApprovalQuestion;
   resolve: (decision: EngineApprovalDecision) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -47,6 +57,11 @@ function truncate(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars - 20)}\n... [truncated]`;
 }
 
+function buttonLabel(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= 60 ? normalized : `${normalized.slice(0, 57)}...`;
+}
+
 function renderToolInputPreview(request: EngineApprovalRequest): string {
   const input = request.toolInput;
   if (
@@ -71,7 +86,59 @@ function renderToolInputPreview(request: EngineApprovalRequest): string {
   });
 }
 
-function renderApprovalPrompt(request: EngineApprovalRequest, locale: Locale): string {
+function extractApprovalQuestion(request: EngineApprovalRequest): ApprovalQuestion | undefined {
+  if (request.toolName !== "AskUserQuestion") {
+    return undefined;
+  }
+  const input = request.toolInput;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return undefined;
+  }
+  const questions = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return undefined;
+  }
+  const first = questions[0];
+  if (!first || typeof first !== "object" || Array.isArray(first)) {
+    return undefined;
+  }
+  const record = first as { question?: unknown; header?: unknown; options?: unknown };
+  const question = typeof record.question === "string" ? record.question.trim() : "";
+  const options = Array.isArray(record.options)
+    ? record.options.flatMap((option) => {
+        if (!option || typeof option !== "object" || Array.isArray(option)) {
+          return [];
+        }
+        const label = (option as { label?: unknown }).label;
+        return typeof label === "string" && label.trim() ? [label.trim()] : [];
+      })
+    : [];
+  if (!question || options.length === 0) {
+    return undefined;
+  }
+  const header = typeof record.header === "string" ? record.header.trim() : "";
+  return {
+    // Claude's AskUserQuestion contract keys `answers` by the full question
+    // text. Kimi only consumes the selected value, so the same shape works for
+    // both engines without making a display-only header part of the protocol.
+    answerKey: question,
+    question,
+    options,
+  };
+}
+
+function renderApprovalPrompt(
+  request: EngineApprovalRequest,
+  locale: Locale,
+  question?: ApprovalQuestion,
+): string {
+  if (question) {
+    const engineName = renderEngineRequestName(request.engine);
+    const options = question.options.map((option, index) => `${index + 1}. ${option}`);
+    return locale === "zh"
+      ? [`${engineName} 需要你的选择。`, "", question.question, "", ...options].join("\n")
+      : [`${engineName} needs your input.`, "", question.question, "", ...options].join("\n");
+  }
   const preview = truncate(renderToolInputPreview(request), 2600);
   const engineName = renderEngineRequestName(request.engine);
   const codexFullAutoNotice = request.engine === "codex"
@@ -123,6 +190,13 @@ function renderResolvedMessage(choice: ApprovalChoice, locale: Locale, engine: E
     : `Approved once. ${engineName} is resuming...`;
 }
 
+function renderAnsweredMessage(answer: string, locale: Locale, engine: EngineApprovalRequest["engine"]): string {
+  const engineName = renderEngineResumeName(engine);
+  return locale === "zh"
+    ? `已选择“${answer}”，${engineName} 正在继续...`
+    : `Selected “${answer}”. ${engineName} is resuming...`;
+}
+
 function renderExpiredMessage(locale: Locale): string {
   return locale === "zh" ? "审批已过期（已拒绝）。" : "Approval expired (denied).";
 }
@@ -139,11 +213,23 @@ function cleanupPending(pending: PendingApproval): void {
   }
 }
 
-function resolvePending(pending: PendingApproval, choice: ApprovalChoice): EngineApprovalDecision {
+function resolvePending(pending: PendingApproval, selection: ApprovalSelection): EngineApprovalDecision {
   cleanupPending(pending);
-  const decision: EngineApprovalDecision = choice === "deny"
-    ? { behavior: "deny" }
-    : { behavior: "allow", scope: choice };
+  let decision: EngineApprovalDecision;
+  if (selection.kind === "answer") {
+    const answer = pending.question?.options[selection.index];
+    decision = answer && pending.question
+      ? {
+          behavior: "allow",
+          scope: "once",
+          updatedInput: { answers: { [pending.question.answerKey]: answer } },
+        }
+      : { behavior: "deny" };
+  } else {
+    decision = selection.choice === "deny"
+      ? { behavior: "deny" }
+      : { behavior: "allow", scope: selection.choice };
+  }
   pending.resolve(decision);
   return decision;
 }
@@ -163,14 +249,20 @@ function findOldestPendingForConversationAndUser(
   );
 }
 
-function parseApprovalCommand(text: string): { kind: "id"; id: string; choice: ApprovalChoice } | { kind: "chat"; choice: ApprovalChoice } | null {
+function parseApprovalCommand(text: string):
+  | { kind: "id"; id: string; selection: ApprovalSelection }
+  | { kind: "chat"; selection: ApprovalSelection }
+  | null {
   const trimmed = text.trim();
-  const internal = trimmed.match(/^\/approval(?:@\w+)?\s+([A-Za-z0-9_-]+)\s+(once|session|deny)$/i);
+  const internal = trimmed.match(/^\/approval(?:@\w+)?\s+([A-Za-z0-9_-]+)\s+(once|session|deny|answer-(\d+))$/i);
   if (internal) {
+    const value = internal[2]!.toLowerCase();
     return {
       kind: "id",
       id: internal[1]!,
-      choice: internal[2]!.toLowerCase() as ApprovalChoice,
+      selection: value.startsWith("answer-")
+        ? { kind: "answer", index: Number.parseInt(internal[3]!, 10) }
+        : { kind: "approval", choice: value as ApprovalChoice },
     };
   }
 
@@ -179,7 +271,10 @@ function parseApprovalCommand(text: string): { kind: "id"; id: string; choice: A
     const args = approve[1]?.toLowerCase() ?? "";
     return {
       kind: "chat",
-      choice: /\b(?:session|turn|always)\b/i.test(args) ? "session" : "once",
+      selection: {
+        kind: "approval",
+        choice: /\b(?:session|turn|always)\b/i.test(args) ? "session" : "once",
+      },
     };
   }
 
@@ -188,14 +283,14 @@ function parseApprovalCommand(text: string): { kind: "id"; id: string; choice: A
     return {
       kind: "id",
       id: denyById[1]!,
-      choice: "deny",
+      selection: { kind: "approval", choice: "deny" },
     };
   }
 
   if (/^\/deny(?:@\w+)?(?:\s|$)/i.test(trimmed)) {
     return {
       kind: "chat",
-      choice: "deny",
+      selection: { kind: "approval", choice: "deny" },
     };
   }
 
@@ -220,6 +315,7 @@ export async function requestTelegramApproval(input: {
   }
 
   const id = randomUUID();
+  const question = extractApprovalQuestion(input.request);
   return await new Promise<EngineApprovalDecision>((resolve, reject) => {
     const timer = setTimeout(() => {
       const pending = pendingApprovals.get(id);
@@ -238,6 +334,7 @@ export async function requestTelegramApproval(input: {
       userId: input.userId,
       locale: input.locale,
       engine: input.request.engine,
+      question,
       resolve,
       reject,
       timer,
@@ -255,16 +352,23 @@ export async function requestTelegramApproval(input: {
 
     pendingApprovals.set(id, pending);
 
-    pending.promptSent = input.api.sendMessage(input.chatId, renderApprovalPrompt(input.request, input.locale), {
-      inlineKeyboard: [
-        [
-          { text: input.locale === "zh" ? "允许一次" : "Allow Once", callbackData: `approval:${id}:once` },
-          { text: input.locale === "zh" ? "本轮允许" : "Allow This Turn", callbackData: `approval:${id}:session` },
-        ],
-        [
-          { text: input.locale === "zh" ? "拒绝" : "Deny", callbackData: `approval:${id}:deny` },
-        ],
-      ],
+    const inlineKeyboard = question
+      ? [
+          ...question.options.map((option, index) => [{
+            text: buttonLabel(option),
+            callbackData: `approval:${id}:answer:${index}`,
+          }]),
+          [{ text: input.locale === "zh" ? "跳过" : "Skip", callbackData: `approval:${id}:deny` }],
+        ]
+      : [
+          [
+            { text: input.locale === "zh" ? "允许一次" : "Allow Once", callbackData: `approval:${id}:once` },
+            { text: input.locale === "zh" ? "本轮允许" : "Allow This Turn", callbackData: `approval:${id}:session` },
+          ],
+          [{ text: input.locale === "zh" ? "拒绝" : "Deny", callbackData: `approval:${id}:deny` }],
+        ];
+    pending.promptSent = input.api.sendMessage(input.chatId, renderApprovalPrompt(input.request, input.locale, question), {
+      inlineKeyboard,
     }).then((message) => {
       pending.promptMessageId = message.message_id;
     }).catch((error) => {
@@ -274,8 +378,19 @@ export async function requestTelegramApproval(input: {
   });
 }
 
-async function deliverApprovalResolution(api: ApprovalApi, pending: PendingApproval, choice: ApprovalChoice): Promise<void> {
-  const message = renderResolvedMessage(choice, pending.locale, pending.engine);
+async function deliverApprovalResolution(
+  api: ApprovalApi,
+  pending: PendingApproval,
+  selection: ApprovalSelection,
+): Promise<void> {
+  const answer = selection.kind === "answer" ? pending.question?.options[selection.index] : undefined;
+  const message = answer
+    ? renderAnsweredMessage(answer, pending.locale, pending.engine)
+    : renderResolvedMessage(
+        selection.kind === "approval" ? selection.choice : "deny",
+        pending.locale,
+        pending.engine,
+      );
   await pending.promptSent?.catch(() => undefined);
 
   if (api.editMessage && pending.promptMessageId !== undefined) {
@@ -360,8 +475,16 @@ export async function handleTelegramApprovalCommand(input: {
     return true;
   }
 
-  resolvePending(pending, parsed.choice);
-  await deliverApprovalResolution(input.api, pending, parsed.choice);
+  if (pending.question && parsed.selection.kind === "approval" && parsed.selection.choice !== "deny") {
+    await input.api.sendMessage(
+      input.normalized.chatId,
+      pending.locale === "zh" ? "请点击问题中的选项按钮。" : "Choose one of the question buttons.",
+    );
+    return true;
+  }
+
+  resolvePending(pending, parsed.selection);
+  await deliverApprovalResolution(input.api, pending, parsed.selection);
   return true;
 }
 

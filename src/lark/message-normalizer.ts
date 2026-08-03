@@ -141,11 +141,18 @@ export function larkSessionThreadIdForMessage(
   threadId?: string,
   chatMode?: LarkChatMode,
 ): string | undefined {
-  // Isolate by thread only when the chat is in topic-message form. The caller
-  // (resolveLarkMessageChatMode) resolves chatMode to "topic" for both a native
-  // topic group (chat_mode='topic') and a conversation group switched to the
-  // topic message form (group_message_type='thread'); a conversation-form group
-  // stays "group" so its topic replies share the one group session.
+  // A real thread in a private chat is an explicit user-created side
+  // conversation, so isolate it even though the containing chat remains p2p.
+  // Access control still uses the parent chat key through accessConversationKey.
+  if (chatType === "p2p") {
+    return threadId;
+  }
+
+  // For groups, isolate by thread only when the chat is in topic-message form.
+  // The caller resolves chatMode to "topic" for both a native topic group
+  // (chat_mode='topic') and a conversation group switched to the topic message
+  // form (group_message_type='thread'); a conversation-form group stays "group"
+  // so its replies share the one group session.
   const effectiveMode = chatMode ?? (chatType === "p2p" ? "p2p" : "topic");
   return effectiveMode === "topic" ? threadId : undefined;
 }

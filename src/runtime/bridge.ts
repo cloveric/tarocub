@@ -4,6 +4,7 @@ import type {
   EngineApprovalDecision,
   EngineApprovalRequest,
   EngineStreamEvent,
+  ExternalSessionInfo,
 } from "../codex/adapter.js";
 import { findConflictingLockedChatId } from "../state/access-store.js";
 import {
@@ -179,12 +180,24 @@ export class Bridge {
     this.adapter.destroy?.();
   }
 
-  async validateCodexThread(threadId: string): Promise<void> {
+  async validateCodexThread(
+    threadId: string,
+    input?: { workspaceOverride?: string },
+  ): Promise<ExternalSessionInfo | void> {
     if (!this.adapter.validateExternalSession) {
       throw new Error("codex thread validation unsupported");
     }
 
-    await this.adapter.validateExternalSession(threadId);
+    return input === undefined
+      ? await this.adapter.validateExternalSession(threadId)
+      : await this.adapter.validateExternalSession(threadId, input);
+  }
+
+  async listExternalSessions(input?: { cwd?: string; limit?: number }): Promise<ExternalSessionInfo[]> {
+    if (!this.adapter.listExternalSessions) {
+      throw new Error("external session listing unsupported");
+    }
+    return await this.adapter.listExternalSessions(input);
   }
 
   async checkAccess(input: BridgeAccessInput): Promise<BridgeAccessDecision> {

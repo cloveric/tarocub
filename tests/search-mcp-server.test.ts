@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -6,6 +9,7 @@ import {
   addExtractSourceMetadata,
   addSearchFallbackNotice,
   addSearchSourceLog,
+  applyCodexSearchCredentialFallback,
   getProviderStatusFromEnv,
   runSearchProviderHealthCheck,
   resolveSearchMcpServerInvocation,
@@ -34,6 +38,40 @@ async function readOneJsonLine(stdout: NodeJS.ReadableStream): Promise<Record<st
 }
 
 describe("search MCP server", () => {
+  it("reuses configured Codex Search MCP credentials when direct env values are absent", async () => {
+    const codexHome = await mkdtemp(path.join(os.tmpdir(), "search-mcp-codex-home-"));
+    const env: NodeJS.ProcessEnv = { CODEX_HOME: codexHome };
+    try {
+      await writeFile(path.join(codexHome, "config.toml"), [
+        "[mcp_servers.web-search]",
+        "command = \"node\"",
+        "",
+        "[mcp_servers.web-search.env]",
+        "BRAVE_API_KEY = \"brave-from-codex\"",
+        "TAVILY_API_KEY = 'tavily-from-codex'",
+        "",
+      ].join("\n"), "utf8");
+
+      await expect(applyCodexSearchCredentialFallback(env)).resolves.toEqual([
+        "BRAVE_API_KEY",
+        "TAVILY_API_KEY",
+      ]);
+      expect(env.BRAVE_API_KEY).toBe("brave-from-codex");
+      expect(env.TAVILY_API_KEY).toBe("tavily-from-codex");
+
+      const explicitEnv: NodeJS.ProcessEnv = {
+        CODEX_HOME: codexHome,
+        BRAVE_API_KEY: "",
+        TAVILY_API_KEY: "explicit-tavily",
+      };
+      await expect(applyCodexSearchCredentialFallback(explicitEnv)).resolves.toEqual([]);
+      expect(explicitEnv.BRAVE_API_KEY).toBe("");
+      expect(explicitEnv.TAVILY_API_KEY).toBe("explicit-tavily");
+    } finally {
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it("lists web search tools without API keys", async () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {

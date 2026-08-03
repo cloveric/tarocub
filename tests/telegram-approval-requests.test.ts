@@ -121,6 +121,130 @@ describe("telegram approval requests", () => {
     expect(api.editMessage).toHaveBeenCalledWith(123, 11, "Approved once. Kimi is resuming...", { inlineKeyboard: null });
   });
 
+  it("renders Kimi AskUserQuestion options and returns the selected answer", async () => {
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "kimi",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{
+            question: "Which environment?",
+            header: "Environment",
+            multi_select: false,
+            options: [{ label: "staging" }, { label: "production" }],
+          }],
+        },
+      },
+    });
+
+    expect(api.sendMessage.mock.calls[0]?.[1]).toContain("Which environment?");
+    const keyboard = api.sendMessage.mock.calls[0]?.[2]?.inlineKeyboard;
+    expect(keyboard?.map((row: Array<{ text: string }>) => row[0]?.text)).toEqual([
+      "staging",
+      "production",
+      "Skip",
+    ]);
+    const callbackData = keyboard?.[1]?.[0]?.callbackData as string;
+    expect(callbackData).toMatch(/^approval:[^:]+:answer:1$/);
+
+    const normalized = normalizeUpdate({
+      callback_query: {
+        id: "callback-answer",
+        data: callbackData,
+        from: { id: 456 },
+        message: { chat: { id: 123, type: "private" } },
+      },
+    });
+    expect(normalized?.text).toMatch(/^\/approval [^ ]+ answer-1$/);
+    await handleTelegramApprovalCommand({ normalized: normalized!, api });
+
+    await expect(pending).resolves.toEqual({
+      behavior: "allow",
+      scope: "once",
+      updatedInput: { answers: { "Which environment?": "production" } },
+    });
+    expect(api.editMessage).toHaveBeenCalledWith(
+      123,
+      11,
+      "Selected “production”. Kimi is resuming...",
+      { inlineKeyboard: null },
+    );
+  });
+
+  it("keys Claude AskUserQuestion answers by question text rather than the display header", async () => {
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{
+            question: "Continue deployment?",
+            header: "Deployment",
+            multiSelect: false,
+            options: [{ label: "Yes" }, { label: "No" }],
+          }],
+        },
+      },
+    });
+    const callbackData = api.sendMessage.mock.calls[0]?.[2]?.inlineKeyboard?.[0]?.[0]?.callbackData as string;
+    const normalized = normalizeUpdate({
+      callback_query: {
+        id: "callback-claude-answer",
+        data: callbackData,
+        from: { id: 456 },
+        message: { chat: { id: 123, type: "private" } },
+      },
+    });
+
+    await handleTelegramApprovalCommand({ normalized: normalized!, api });
+
+    await expect(pending).resolves.toEqual({
+      behavior: "allow",
+      scope: "once",
+      updatedInput: { answers: { "Continue deployment?": "Yes" } },
+    });
+  });
+
+  it("does not treat /approve as an answer to AskUserQuestion", async () => {
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "kimi",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{ question: "Pick one", header: "Choice", options: [{ label: "A" }] }],
+        },
+      },
+    });
+
+    await handleTelegramApprovalCommand({
+      normalized: {
+        chatId: 123,
+        userId: 456,
+        chatType: "private",
+        text: "/approve",
+        attachments: [],
+      },
+      api,
+    });
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Choose one of the question buttons.");
+    await expect(withTimeout(pending, 20)).rejects.toThrow("timed out waiting for approval");
+  });
+
   it("resolves the oldest pending request from /approve session", async () => {
     const api = createApi();
     const pending = requestTelegramApproval({

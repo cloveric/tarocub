@@ -1,5 +1,6 @@
-import { lstat, unlink } from "node:fs/promises";
+import { lstat, realpath, stat, unlink } from "node:fs/promises";
 
+import type { ExternalSessionInfo } from "../codex/adapter.js";
 import { SessionStateError } from "../runtime/session-manager.js";
 import {
   formatAntigravityConversationList,
@@ -68,7 +69,7 @@ const RESUME_SCAN_TTL_MS = 10 * 60 * 1000;
 const ANTIGRAVITY_CONVERSATION_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-type PendingResumeScanKind = "claude" | "antigravity";
+type PendingResumeScanKind = "claude" | "antigravity" | "kimi";
 
 const pendingResumeScans = new Map<string, {
   kind: PendingResumeScanKind;
@@ -204,13 +205,17 @@ export async function handleLocalSessionTelegramCommand(input: {
   context: TelegramTurnContext;
   sessionStore: SessionCommandStore;
   updateInstanceConfig: (updater: (config: Record<string, unknown>) => void) => Promise<void>;
-  validateCodexThread?: (threadId: string) => Promise<void>;
+  validateCodexThread?: (
+    threadId: string,
+    input?: { workspaceOverride?: string },
+  ) => Promise<ExternalSessionInfo | void>;
   scanRecentSessions?: (hours: number) => Promise<ScannedSession[]>;
   scanRecentAntigravitySessions?: (hours: number) => Promise<ScannedSession[]>;
+  scanRecentKimiSessions?: () => Promise<ScannedSession[]>;
   formatSessionListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
   formatAntigravityConversationListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
   sendResumeScanResult?: (input: {
-    kind: "claude" | "antigravity";
+    kind: "claude" | "antigravity" | "kimi";
     sessions: ScannedSession[];
     visibleSessions: ScannedSession[];
     locale: Locale;
@@ -228,6 +233,7 @@ export async function handleLocalSessionTelegramCommand(input: {
     validateCodexThread,
     scanRecentSessions = scanRecentClaudeSessions,
     scanRecentAntigravitySessions = scanRecentAntigravityConversations,
+    scanRecentKimiSessions,
     formatSessionListMessage = formatSessionList,
     formatAntigravityConversationListMessage = formatAntigravityConversationList,
     sendResumeScanResult,
@@ -272,41 +278,114 @@ export async function handleLocalSessionTelegramCommand(input: {
   const resumeCmd = parseResumeCommand(normalized.text);
   if (resumeCmd) {
     if (cfg.engine === "kimi") {
-      if (resumeCmd.kind !== "session") {
-        const msg = locale === "zh"
-          ? "Kimi 请使用 /resume session <session-id>。当前 Kimi ACP 未提供 bridge 可用的本地 session 列表扫描。"
-          : "For Kimi, use /resume session <session-id>. Kimi ACP does not currently expose a local session scan that the bridge can use.";
-        await context.api.sendMessage(normalized.chatId, msg);
+      if (resumeCmd.kind === "scan") {
+        if (!scanRecentKimiSessions) {
+          const msg = locale === "zh"
+            ? "当前 Kimi runtime 未提供 session 列表。"
+            : "This Kimi runtime does not provide session listing.";
+          await context.api.sendMessage(normalized.chatId, msg);
+          await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+            startedAt,
+            command: "resume",
+            responseText: msg,
+            metadata: { engine: "kimi", rejected: "listing-unavailable" },
+          });
+          return true;
+        }
+        const sessions = (await scanRecentKimiSessions()).slice(0, MAX_FORMATTED_ANTIGRAVITY_CONVERSATIONS);
+        if (sessions.length > 0) {
+          pendingResumeScans.set(conversationKey, { kind: "kimi", scannedAt: Date.now(), sessions });
+        } else {
+          pendingResumeScans.delete(conversationKey);
+        }
+        const msg = sessions.length > 0
+          ? [
+              locale === "zh" ? "Kimi sessions：" : "Kimi sessions:",
+              ...sessions.map((session, index) => `${index + 1}. [${session.displayName}] ${session.sessionId}`),
+              locale === "zh" ? "\n回复 /resume <编号> 继续。" : "\nReply /resume <number> to continue.",
+            ].join("\n")
+          : (locale === "zh" ? "没有找到 Kimi session。" : "No Kimi sessions found.");
+        if (sendResumeScanResult) {
+          await sendResumeScanResult({ kind: "kimi", sessions, visibleSessions: sessions, locale });
+        } else {
+          await context.api.sendMessage(normalized.chatId, msg);
+        }
         await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
           startedAt,
           command: "resume",
           responseText: msg,
-          metadata: { engine: "kimi", rejected: "kimi-requires-session-id" },
+          metadata: { engine: "kimi", scanned: sessions.length },
         });
         return true;
       }
 
-      try {
-        if (!validateCodexThread) {
-          throw new Error("external session validation unsupported");
+      let sessionId: string | null = null;
+      let selectedSession: ScannedSession | undefined;
+      if (resumeCmd.kind === "pick") {
+        const cached = getPendingResumeScan(conversationKey, "kimi");
+        if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
+          const msg = locale === "zh"
+            ? "无效选择，请先发 /resume 扫描 Kimi session。"
+            : "Invalid selection. Send /resume first to scan Kimi sessions.";
+          await context.api.sendMessage(normalized.chatId, msg);
+          await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+            startedAt,
+            command: "resume",
+            responseText: msg,
+            metadata: { engine: "kimi", rejected: "invalid-pick" },
+          });
+          return true;
         }
-        await validateCodexThread(resumeCmd.sessionId);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        const unsupported = /validation unsupported/i.test(detail);
-        const msg = unsupported
-          ? (locale === "zh"
-            ? "当前 Kimi runtime 无法验证外部 session id。"
-            : "This Kimi runtime cannot validate external session IDs.")
-          : (locale === "zh"
-            ? `无法加载 Kimi session：${resumeCmd.sessionId}`
-            : `Could not load Kimi session: ${resumeCmd.sessionId}`);
+        selectedSession = cached[resumeCmd.pick - 1]!;
+        sessionId = selectedSession.sessionId;
+        pendingResumeScans.delete(conversationKey);
+      } else if (resumeCmd.kind === "session") {
+        sessionId = resumeCmd.sessionId;
+      } else {
+        const msg = locale === "zh"
+          ? "用法: /resume、/resume <编号> 或 /resume session <session-id>"
+          : "Usage: /resume, /resume <number>, or /resume session <session-id>";
         await context.api.sendMessage(normalized.chatId, msg);
         await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
           startedAt,
           command: "resume",
           responseText: msg,
-          metadata: { engine: "kimi", rejected: unsupported ? "validation-unavailable" : "session-not-found" },
+          metadata: { engine: "kimi", rejected: "invalid-kimi-arg" },
+        });
+        return true;
+      }
+
+      let validatedSession: ExternalSessionInfo | void;
+      let workspacePath: string;
+      try {
+        if (!validateCodexThread) {
+          throw new Error("external session validation unsupported");
+        }
+        validatedSession = await validateCodexThread(sessionId);
+        const candidate = validatedSession?.cwd ?? selectedSession?.workspacePath;
+        if (!candidate) {
+          throw new Error("Kimi session workspace is unavailable");
+        }
+        workspacePath = await realpath(candidate);
+        const workspaceInfo = await stat(workspacePath);
+        if (!workspaceInfo.isDirectory()) {
+          throw new Error("Kimi session workspace is not a directory");
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const unsupported = /validation unsupported|listing unsupported/i.test(detail);
+        const msg = unsupported
+          ? (locale === "zh" ? "当前 Kimi runtime 无法验证 session id。" : "This Kimi runtime cannot validate session IDs.")
+          : (locale === "zh" ? `无法加载 Kimi session：${sessionId}` : `Could not load Kimi session: ${sessionId}`);
+        await context.api.sendMessage(normalized.chatId, msg);
+        await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+          startedAt,
+          command: "resume",
+          responseText: msg,
+          metadata: {
+            engine: "kimi",
+            rejected: unsupported ? "session-validation-unavailable" : "session-load-failed",
+          },
         });
         return true;
       }
@@ -315,7 +394,7 @@ export async function handleLocalSessionTelegramCommand(input: {
       await sessionStore.upsert({
         telegramChatId: normalized.chatId,
         ...sessionScopeRecordFields(normalized),
-        codexSessionId: resumeCmd.sessionId,
+        codexSessionId: sessionId,
         status: "idle",
         updatedAt: new Date().toISOString(),
         suspendedPrevious: buildSuspendedPreviousSnapshot({
@@ -323,17 +402,23 @@ export async function handleLocalSessionTelegramCommand(input: {
           currentResume: cfg.resume,
         }),
       });
-      await updateInstanceConfig((c) => { delete c.resume; });
+      await updateInstanceConfig((c) => {
+        c.resume = {
+          sessionId,
+          dirName: selectedSession?.dirName ?? sessionId,
+          workspacePath,
+        };
+      });
 
       const msg = locale === "zh"
-        ? `已绑定 Kimi session：${resumeCmd.sessionId}\n\n发送消息继续对话，完成后发 /detach 断开。`
-        : `Attached Kimi session: ${resumeCmd.sessionId}\n\nSend a message to continue. Use /detach when done.`;
+        ? `已绑定 Kimi session：${sessionId}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`
+        : `Attached Kimi session: ${sessionId}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`;
       await context.api.sendMessage(normalized.chatId, msg);
       await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
         startedAt,
         command: "resume",
         responseText: msg,
-        metadata: { engine: "kimi", sessionId: resumeCmd.sessionId },
+        metadata: { engine: "kimi", sessionId },
       });
       return true;
     }

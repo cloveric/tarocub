@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -109,41 +109,78 @@ describe("handleLocalSessionTelegramCommand", () => {
     }
   });
 
-  it("requires an explicit Kimi session id instead of scanning Claude sessions", async () => {
+  it("scans and attaches a listed Kimi session by number", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const canonicalRoot = await realpath(root);
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
-    const scanRecentSessions = vi.fn();
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+    const scanRecentKimiSessions = vi.fn().mockResolvedValue([{
+      sessionId: "kimi-session-1",
+      dirName: "kimi-session-1",
+      workspacePath: root,
+      modifiedAt: new Date("2026-08-03T00:00:00.000Z"),
+      displayName: "Project A",
+    }]);
+    const validateCodexThread = vi.fn().mockResolvedValue({
+      sessionId: "kimi-session-1",
+      cwd: root,
+      title: "Project A",
+    });
+    const configState: Record<string, unknown> = {};
+    const updateInstanceConfig = vi.fn(async (updater: (config: Record<string, unknown>) => void) => {
+      updater(configState);
+    });
 
     try {
-      const handled = await handleLocalSessionTelegramCommand({
+      const common = {
         stateDir: root,
         startedAt: Date.now() - 10,
         locale: "en",
         cfg: { engine: "kimi" },
-        normalized: createNormalizedMessage("/resume"),
         context: {
           api: api as never,
           instanceName: "default",
           updateId: 79,
         },
-        sessionStore: {
-          inspect: vi.fn(),
-          findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
-          removeByChatId: vi.fn(),
-          upsert: vi.fn(),
-        },
-        updateInstanceConfig: vi.fn(),
-        scanRecentSessions,
+        sessionStore,
+        updateInstanceConfig,
+        scanRecentKimiSessions,
+        validateCodexThread,
+      } as const;
+      const handled = await handleLocalSessionTelegramCommand({
+        ...common,
+        normalized: createNormalizedMessage("/resume"),
+      });
+      const picked = await handleLocalSessionTelegramCommand({
+        ...common,
+        normalized: createNormalizedMessage("/resume 1"),
       });
 
       expect(handled).toBe(true);
-      expect(scanRecentSessions).not.toHaveBeenCalled();
-      expect(api.sendMessage).toHaveBeenCalledWith(
-        123,
-        "For Kimi, use /resume session <session-id>. Kimi ACP does not currently expose a local session scan that the bridge can use.",
-      );
+      expect(picked).toBe(true);
+      expect(scanRecentKimiSessions).toHaveBeenCalledOnce();
+      expect(validateCodexThread).toHaveBeenCalledOnce();
+      expect(validateCodexThread).toHaveBeenCalledWith("kimi-session-1");
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Kimi sessions:"));
+      expect(sessionStore.upsert).toHaveBeenCalledWith(expect.objectContaining({
+        telegramChatId: 123,
+        codexSessionId: "kimi-session-1",
+        status: "idle",
+      }));
+      expect(configState.resume).toEqual({
+        sessionId: "kimi-session-1",
+        dirName: "kimi-session-1",
+        workspacePath: canonicalRoot,
+      });
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Attached Kimi session: kimi-session-1"));
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining(`Workspace: ${canonicalRoot}`));
     } finally {
       await removeTempRoot(root);
     }
@@ -274,6 +311,7 @@ describe("handleLocalSessionTelegramCommand", () => {
 
   it("attaches a validated Kimi session with /resume session <session-id>", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const canonicalRoot = await realpath(root);
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
@@ -286,8 +324,11 @@ describe("handleLocalSessionTelegramCommand", () => {
       removeByChatId: vi.fn(),
       upsert: vi.fn().mockResolvedValue(undefined),
     };
-    const updateInstanceConfig = vi.fn();
-    const validateCodexThread = vi.fn().mockResolvedValue(undefined);
+    const configState: Record<string, unknown> = {};
+    const updateInstanceConfig = vi.fn(async (updater: (config: Record<string, unknown>) => void) => {
+      updater(configState);
+    });
+    const validateCodexThread = vi.fn().mockResolvedValue({ sessionId: "kimi-new", cwd: root });
 
     try {
       const handled = await handleLocalSessionTelegramCommand({
@@ -319,9 +360,14 @@ describe("handleLocalSessionTelegramCommand", () => {
         },
       });
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(configState.resume).toEqual({
+        sessionId: "kimi-new",
+        dirName: "kimi-new",
+        workspacePath: canonicalRoot,
+      });
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Attached Kimi session: kimi-new\n\nSend a message to continue. Use /detach when done.",
+        `Attached Kimi session: kimi-new\nWorkspace: ${canonicalRoot}\n\nSend a message to continue. Use /detach when done.`,
       );
     } finally {
       await removeTempRoot(root);

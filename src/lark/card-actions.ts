@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import type {
@@ -1028,10 +1028,33 @@ export async function handleLarkCardAction(input: {
       return true;
     }
     const cfg = await loadInstanceConfig(input.stateDir);
-    const kind = cfg.engine === "antigravity" ? "antigravity" : "claude";
+    if (cfg.engine === "codex") {
+      await input.channel.send(
+        input.event.chatId,
+        {
+          text: locale === "en"
+            ? "Codex does not provide a session scan here. Use /resume thread <thread-id>."
+            : "Codex 当前不支持在这里扫描 session，请使用 /resume thread <thread-id>。",
+        },
+        larkReplyOptions(input.event.messageId, replyInThread),
+      );
+      return true;
+    }
+    const kind = cfg.engine === "antigravity" ? "antigravity" : cfg.engine === "kimi" ? "kimi" : "claude";
     const sessions = kind === "antigravity"
       ? await scanRecentAntigravityConversations(24)
-      : cfg.engine === "claude"
+      : kind === "kimi" && input.bridge?.listExternalSessions
+        ? (await input.bridge.listExternalSessions({ limit: 20 })).map((session) => {
+            const modifiedAt = new Date(session.updatedAt ?? 0);
+            return {
+              sessionId: session.sessionId,
+              dirName: session.sessionId,
+              workspacePath: session.cwd,
+              modifiedAt: Number.isNaN(modifiedAt.getTime()) ? new Date(0) : modifiedAt,
+              displayName: session.title || session.sessionId,
+            };
+          })
+        : cfg.engine === "claude"
         ? await scanRecentClaudeSessions(1)
         : [];
     const card = renderLarkResumeScanCard({
@@ -1057,7 +1080,7 @@ export async function handleLarkCardAction(input: {
     value.cctb_lark === "resume" &&
     typeof value.conversationKey === "string" &&
     typeof value.sessionId === "string" &&
-    (value.engine === "claude" || value.engine === "antigravity")
+    (value.engine === "claude" || value.engine === "antigravity" || value.engine === "kimi")
   ) {
     if (!input.stateDir) {
       return false;
@@ -1072,7 +1095,47 @@ export async function handleLarkCardAction(input: {
     })) {
       return true;
     }
-    const result = await applyLarkResumeCardAction(input.stateDir, value, locale);
+    const currentConfig = await loadInstanceConfig(input.stateDir);
+    if (currentConfig.engine !== value.engine) {
+      await input.channel.send(
+        input.event.chatId,
+        { text: renderLarkResumeEngineChanged(locale) },
+        larkReplyOptions(input.event.messageId, replyInThread),
+      );
+      return true;
+    }
+    let resumeValue = value;
+    if (value.engine === "kimi") {
+      const validateKimiSession = input.bridge?.validateCodexThread?.bind(input.bridge);
+      if (!validateKimiSession) {
+        await input.channel.send(
+          input.event.chatId,
+          { text: locale === "en" ? "This Kimi runtime cannot validate session IDs." : "当前 Kimi runtime 无法验证 session id。" },
+          larkReplyOptions(input.event.messageId, replyInThread),
+        );
+        return true;
+      }
+      try {
+        const validated = await validateKimiSession(value.sessionId);
+        if (!validated?.cwd) {
+          throw new Error("Kimi session workspace is unavailable");
+        }
+        resumeValue = {
+          ...value,
+          workspacePath: validated.cwd,
+          dirName: validated.sessionId,
+          displayName: validated.title || validated.sessionId,
+        };
+      } catch {
+        await input.channel.send(
+          input.event.chatId,
+          { text: locale === "en" ? `Could not load Kimi session: ${value.sessionId}` : `无法加载 Kimi session：${value.sessionId}` },
+          larkReplyOptions(input.event.messageId, replyInThread),
+        );
+        return true;
+      }
+    }
+    const result = await applyLarkResumeCardAction(input.stateDir, resumeValue, locale);
     await input.channel.send(input.event.chatId, { text: result }, larkReplyOptions(input.event.messageId, replyInThread));
     return true;
   }
@@ -2261,6 +2324,12 @@ function renderUnsupportedLarkCardAction(locale: Locale): string {
     : "这张卡片的操作已不再有效，或当前机器人版本不支持。请发送新消息继续。";
 }
 
+function renderLarkResumeEngineChanged(locale: Locale): string {
+  return locale === "en"
+    ? "The bot engine changed after this resume card was created. Send /resume again to load a current list."
+    : "这张恢复卡片生成后，bot 引擎已经切换。请重新发送 /resume 获取当前列表。";
+}
+
 function renderTextApprovalResolution(choice: LarkApprovalChoice, locale: Locale = "zh"): string {
   if (locale === "en") {
     if (choice === "deny") {
@@ -2280,10 +2349,36 @@ async function applyLarkResumeCardAction(
   locale: Locale,
 ): Promise<string> {
   const conversationKey = String(value.conversationKey);
-  const engine = value.engine === "antigravity" ? "antigravity" : "claude";
+  const engine = value.engine === "antigravity" ? "antigravity" : value.engine === "kimi" ? "kimi" : "claude";
   const sessionId = String(value.sessionId);
   const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
   const cfg = await loadInstanceConfig(stateDir);
+  if (cfg.engine !== engine) {
+    return renderLarkResumeEngineChanged(locale);
+  }
+  let workspacePath: string | null = null;
+  if (engine === "claude" || engine === "kimi") {
+    const candidate = typeof value.workspacePath === "string" && value.workspacePath.trim()
+      ? value.workspacePath
+      : null;
+    if (!candidate) {
+      return locale === "en"
+        ? "Cannot resume this session because its workspace path is unknown."
+        : "无法恢复这个 session：工作区路径未知。";
+    }
+    try {
+      workspacePath = await realpath(candidate);
+      const info = await stat(workspacePath);
+      if (!info.isDirectory()) {
+        throw new Error("not a directory");
+      }
+    } catch {
+      return locale === "en"
+        ? "Cannot resume this session because its workspace path is not an existing directory."
+        : "无法恢复这个 session：工作区路径不是一个有效的目录。";
+    }
+  }
+
   const existing = await sessionStore.findByConversationKeySafe(conversationKey);
   const currentResume = cfg.resume;
   await sessionStore.upsert({
@@ -2298,29 +2393,7 @@ async function applyLarkResumeCardAction(
     }),
   });
 
-  if (engine === "claude") {
-    const workspacePath = typeof value.workspacePath === "string" && value.workspacePath.trim()
-      ? value.workspacePath
-      : null;
-    if (!workspacePath) {
-      return locale === "en"
-        ? "Cannot resume this session because its workspace path is unknown."
-        : "无法恢复这个 session：工作区路径未知。";
-    }
-    // Validate the workspace path before writing it into config.resume — that
-    // path becomes the file-delivery root override (a deliberate trust-boundary
-    // widening), so don't accept an arbitrary/crafted card value: it must be an
-    // existing directory.
-    try {
-      const info = await stat(workspacePath);
-      if (!info.isDirectory()) {
-        throw new Error("not a directory");
-      }
-    } catch {
-      return locale === "en"
-        ? "Cannot resume this session because its workspace path is not an existing directory."
-        : "无法恢复这个 session：工作区路径不是一个有效的目录。";
-    }
+  if ((engine === "claude" || engine === "kimi") && workspacePath) {
     await updateInstanceConfig(stateDir, (config) => {
       config.resume = {
         sessionId,
@@ -2329,6 +2402,11 @@ async function applyLarkResumeCardAction(
       };
     });
     const displayName = typeof value.displayName === "string" ? value.displayName : sessionId;
+    if (engine === "kimi") {
+      return locale === "en"
+        ? `Attached Kimi session: ${sessionId}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`
+        : `已绑定 Kimi session：${sessionId}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`;
+    }
     return locale === "en"
       ? `Resumed session: ${displayName}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`
       : `已恢复 session：${displayName}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`;

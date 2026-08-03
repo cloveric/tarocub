@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, truncate, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -226,6 +226,58 @@ describe("lark service", () => {
         threadId: "omt_group_reply",
       }));
       expectLarkFinalAnswer(channel, "done");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("isolates a private Lark thread while authorizing against the parent p2p chat", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-private-thread-session-"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "private thread answer" })),
+    };
+    const accessChatId = stableLarkNumericId("lark:oc_chat");
+    const conversationChatId = stableLarkNumericId("lark:oc_chat:omt_private_topic");
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_private_thread",
+          chatType: "p2p",
+          threadId: "omt_private_topic",
+          content: "private side conversation",
+        }),
+      });
+
+      expect(bridge.checkAccess).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: accessChatId,
+        conversationChatId,
+        chatType: "private",
+        conversationKey: "lark:oc_chat:omt_private_topic",
+      }));
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: accessChatId,
+        chatType: "private",
+        conversationKey: "lark:oc_chat:omt_private_topic",
+      }));
+      const known = JSON.parse(await readFile(path.join(stateDir, "known-chats.json"), "utf8")) as {
+        chats: Array<{ conversationKey: string; threadId?: string }>;
+      };
+      expect(known.chats).toContainEqual(expect.objectContaining({
+        conversationKey: "lark:oc_chat:omt_private_topic",
+        threadId: "omt_private_topic",
+      }));
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        expect.anything(),
+        expect.objectContaining({ replyInThread: true }),
+      );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2935,11 +2987,14 @@ describe("lark service", () => {
       handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
     };
 
+    const runtime = createLarkServiceRuntime({ createChat });
+    runtime.appInfo = { appId: "cli_new_group" };
+
     try {
       await handleLarkMessage({
         channel,
         bridge,
-        runtime: createLarkServiceRuntime({ createChat }),
+        runtime,
         stateDir,
         message: fakeLarkMessage({
           messageId: "om_new_chat",
@@ -2951,6 +3006,7 @@ describe("lark service", () => {
         name: "产品需求讨论",
         mode: "group",
         operatorOpenId: "ou_user",
+        botAppId: "cli_new_group",
         channel: expect.anything(),
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
@@ -2965,6 +3021,11 @@ describe("lark service", () => {
       );
       expect(JSON.stringify(channel.send.mock.calls)).toContain("oc_new_chat");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("https://example.feishu.cn/chat/oc_new_chat");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("全群共享一个 session");
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("普通 reply/thread 形成独立 session");
+      const cfg = await loadInstanceConfig(stateDir);
+      expect(cfg.groupMode.enabled).toBe(true);
+      expect(cfg.groupMode.allowedChatIds).toContain(stableLarkNumericId("lark:oc_new_chat"));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -2982,11 +3043,14 @@ describe("lark service", () => {
       handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
     };
 
+    const runtime = createLarkServiceRuntime({ createChat });
+    runtime.appInfo = { appId: "cli_new_topic" };
+
     try {
       await handleLarkMessage({
         channel,
         bridge,
-        runtime: createLarkServiceRuntime({ createChat }),
+        runtime,
         stateDir,
         message: fakeLarkMessage({
           messageId: "om_new_topic",
@@ -2998,6 +3062,7 @@ describe("lark service", () => {
         name: "研发话题群",
         mode: "topic",
         operatorOpenId: "ou_user",
+        botAppId: "cli_new_topic",
         channel: expect.anything(),
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
@@ -3006,6 +3071,9 @@ describe("lark service", () => {
         { markdown: expect.stringContaining("已创建飞书话题群：研发话题群") },
         { replyTo: "om_new_topic", replyInThread: false },
       );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("每个话题都是独立 session");
+      expect((await loadInstanceConfig(stateDir)).groupMode.allowedChatIds)
+        .toContain(stableLarkNumericId("lark:oc_topic_chat"));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -3024,10 +3092,13 @@ describe("lark service", () => {
     };
 
     try {
+      const runtime = createLarkServiceRuntime({ createChat });
+      runtime.appInfo = { appId: "cli_newtopic" };
+
       await handleLarkMessage({
         channel,
         bridge,
-        runtime: createLarkServiceRuntime({ createChat }),
+        runtime,
         stateDir,
         message: fakeLarkMessage({
           messageId: "om_newtopic",
@@ -3039,6 +3110,7 @@ describe("lark service", () => {
         name: "快捷话题群",
         mode: "topic",
         operatorOpenId: "ou_user",
+        botAppId: "cli_newtopic",
         channel: expect.anything(),
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
@@ -3405,6 +3477,107 @@ describe("lark service", () => {
         { markdown: expect.stringContaining("只响应 @bot") },
         { replyTo: "om_group_at", replyInThread: false },
       );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies Lark /group all and /group at across every topic in the same topic group", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-mode-topics-"));
+    const channel = fakeChannel({ getChatTopicForm: vi.fn(async () => true) });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      checkUserAuthorization: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "topic answer" })),
+    };
+    const runtime = createLarkServiceRuntime();
+    const baseChatId = stableLarkNumericId("lark:oc_topic_group");
+    const topicAChatId = stableLarkNumericId("lark:oc_topic_group:omt_a");
+    const topicBChatId = stableLarkNumericId("lark:oc_topic_group:omt_b");
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_all_topic_a",
+          chatId: "oc_topic_group",
+          chatType: "group",
+          threadId: "omt_a",
+          mentionedBot: true,
+          content: "/group all",
+        }),
+      });
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_plain_topic_b",
+          chatId: "oc_topic_group",
+          chatType: "group",
+          threadId: "omt_b",
+          mentionedBot: false,
+          content: "topic B ordinary message",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: baseChatId,
+        conversationKey: "lark:oc_topic_group:omt_b",
+        text: expect.stringContaining("topic B ordinary message"),
+      }));
+      let cfg = await loadInstanceConfig(stateDir);
+      expect(cfg.groupMode.allowedChatIds).toContain(baseChatId);
+      expect(cfg.groupMode.allowedChatIds).not.toContain(topicAChatId);
+      expect(cfg.groupMode.listenAllChatIds).toContain(baseChatId);
+      expect(cfg.groupMode.listenAllChatIds).not.toContain(topicAChatId);
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_at_topic_b",
+          chatId: "oc_topic_group",
+          chatType: "group",
+          threadId: "omt_b",
+          mentionedBot: true,
+          content: "/group at",
+        }),
+      });
+      bridge.handleAuthorizedMessage.mockClear();
+
+      const handled = await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_plain_topic_a_after_at",
+          chatId: "oc_topic_group",
+          chatType: "group",
+          threadId: "omt_a",
+          mentionedBot: false,
+          content: "topic A should be ignored again",
+        }),
+      });
+
+      expect(handled).toBe(false);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      cfg = await loadInstanceConfig(stateDir);
+      expect(cfg.groupMode.listenAllChatIds).not.toContain(baseChatId);
+      expect(cfg.groupMode.listenAllChatIds).not.toContain(topicBChatId);
+      expect(await new LarkGroupModeStore(stateDir).isListenAll("oc_topic_group")).toBe(false);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -5059,12 +5232,16 @@ describe("lark service", () => {
 
   it("binds an explicit Kimi session from Lark resume without running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-kimi-"));
+    const canonicalStateDir = await realpath(stateDir);
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
     const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
     const channel = fakeChannel();
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
-      validateCodexThread: vi.fn(async () => undefined),
+      validateCodexThread: vi.fn(async () => ({
+        sessionId: "kimi-abc",
+        cwd: stateDir,
+      })),
       handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
     };
 
@@ -5080,11 +5257,76 @@ describe("lark service", () => {
       const record = await sessionStore.findByConversationKey("lark:oc_chat");
       expect(record?.codexSessionId).toBe("kimi-abc");
       expect(bridge.validateCodexThread).toHaveBeenCalledWith("kimi-abc");
+      expect((await loadInstanceConfig(stateDir)).resume).toEqual({
+        sessionId: "kimi-abc",
+        dirName: "kimi-abc",
+        workspacePath: canonicalStateDir,
+      });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: expect.stringContaining("已绑定 Kimi session：kimi-abc") },
         { replyTo: "om_resume_kimi", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("scans and binds a Kimi session from Lark by number", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-kimi-scan-"));
+    const canonicalStateDir = await realpath(stateDir);
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      listExternalSessions: vi.fn(async () => [{
+        sessionId: "kimi-session-1",
+        cwd: stateDir,
+        title: "Demo session",
+        updatedAt: "2026-08-03T00:00:00.000Z",
+      }]),
+      validateCodexThread: vi.fn(async () => ({
+        sessionId: "kimi-session-1",
+        cwd: stateDir,
+        title: "Demo session",
+      })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_resume_kimi_scan", content: "/resume" }),
+      });
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_resume_kimi_pick", content: "/resume 1" }),
+      });
+
+      const record = await sessionStore.findByConversationKey("lark:oc_chat");
+      expect(record?.codexSessionId).toBe("kimi-session-1");
+      expect(bridge.listExternalSessions).toHaveBeenCalledWith({ limit: 20 });
+      expect(bridge.validateCodexThread).toHaveBeenCalledWith("kimi-session-1");
+      expect((await loadInstanceConfig(stateDir)).resume).toEqual({
+        sessionId: "kimi-session-1",
+        dirName: "kimi-session-1",
+        workspacePath: canonicalStateDir,
+      });
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("恢复 Kimi session");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("Demo session");
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("已绑定 Kimi session：kimi-session-1") },
+        { replyTo: "om_resume_kimi_pick", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -11321,90 +11563,33 @@ describe("lark service", () => {
     }
   });
 
-  it("falls back to lark-cli im +chat-create (topic) when no channel is available, inviting the bot via --bots", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-chat-"));
-    const binDir = path.join(tempDir, "bin");
-    const logPath = path.join(tempDir, "args.json");
-    const fakeCliPath = path.join(binDir, "lark-cli");
-    const originalPath = process.env.PATH;
-    const originalApp = process.env.LARK_APP_ID;
-    await mkdir(binDir, { recursive: true });
-    await writeFile(fakeCliPath, [
-      "#!/usr/bin/env node",
-      "const { writeFileSync } = require('node:fs');",
-      `writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
-      "if (process.env.LARK_CHANNEL !== '1') { throw new Error('missing lark-channel env'); }",
-      "console.log(JSON.stringify({ ok: true, data: { chat: { chat_id: 'oc_new', name: '新项目', share_link: 'https://example.feishu.cn/chat/oc_new' } } }));",
-    ].join("\n"), { mode: 0o755 });
-    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
-    process.env.LARK_APP_ID = "cli_testapp";
+  it("fails closed instead of using the separate lark-cli bot app when the instance SDK is unavailable", async () => {
+    const originalAs = process.env.CCTB_LARK_CHAT_CREATE_AS;
+    delete process.env.CCTB_LARK_CHAT_CREATE_AS;
 
     try {
-      const created = await createLarkChatWithCli({
-        name: "新项目",
+      await expect(createLarkChatWithCli({
+        name: "普通群",
+        mode: "group",
+        operatorOpenId: "ou_user",
+        botAppId: "cli_instance_bot",
+      })).rejects.toThrow("current instance SDK channel");
+      await expect(createLarkChatWithCli({
+        name: "话题群",
         mode: "topic",
         operatorOpenId: "ou_user",
-      });
-      const args = JSON.parse(await readFile(logPath, "utf8")) as string[];
-
-      expect(created).toEqual({
-        chatId: "oc_new",
-        name: "新项目",
-        shareLink: "https://example.feishu.cn/chat/oc_new",
-      });
-      expect(args).toContain("im");
-      expect(args).toContain("+chat-create");
-      expect(args.slice(args.indexOf("--name"), args.indexOf("--name") + 2)).toEqual(["--name", "新项目"]);
-      expect(args.slice(args.indexOf("--chat-mode"), args.indexOf("--chat-mode") + 2)).toEqual(["--chat-mode", "topic"]);
-      expect(args.slice(args.indexOf("--as"), args.indexOf("--as") + 2)).toEqual(["--as", "bot"]);
-      expect(args.slice(args.indexOf("--users"), args.indexOf("--users") + 2)).toEqual(["--users", "ou_user"]);
-      // The human operator becomes the group OWNER (so they can change the
-      // message form 话题/对话); the bot stays a manager.
-      expect(args.slice(args.indexOf("--owner"), args.indexOf("--owner") + 2)).toEqual(["--owner", "ou_user"]);
-      expect(args).toContain("--set-bot-manager");
-      // A topic chat doesn't retain the creating bot, so it is invited at creation
-      // via --bots (bot_id_list) with the bot's App ID — part of the create request,
-      // so no extra im:chat.members scope is needed.
-      expect(args.slice(args.indexOf("--bots"), args.indexOf("--bots") + 2)).toEqual(["--bots", "cli_testapp"]);
+        botAppId: "cli_instance_bot",
+      })).rejects.toThrow("current instance SDK channel");
     } finally {
-      process.env.PATH = originalPath;
-      if (originalApp === undefined) { delete process.env.LARK_APP_ID; } else { process.env.LARK_APP_ID = originalApp; }
-      await rm(tempDir, { recursive: true, force: true });
+      if (originalAs === undefined) {
+        delete process.env.CCTB_LARK_CHAT_CREATE_AS;
+      } else {
+        process.env.CCTB_LARK_CHAT_CREATE_AS = originalAs;
+      }
     }
   });
 
-  it("does not pass --bots for a normal (non-topic) group creation", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-chat-grp-"));
-    const binDir = path.join(tempDir, "bin");
-    const logPath = path.join(tempDir, "args.json");
-    const fakeCliPath = path.join(binDir, "lark-cli");
-    const originalPath = process.env.PATH;
-    const originalApp = process.env.LARK_APP_ID;
-    await mkdir(binDir, { recursive: true });
-    await writeFile(fakeCliPath, [
-      "#!/usr/bin/env node",
-      "const { writeFileSync } = require('node:fs');",
-      `writeFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
-      "console.log(JSON.stringify({ ok: true, data: { chat: { chat_id: 'oc_grp' } } }));",
-    ].join("\n"), { mode: 0o755 });
-    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
-    process.env.LARK_APP_ID = "cli_testapp";
-
-    try {
-      await createLarkChatWithCli({ name: "普通群", mode: "group", operatorOpenId: "ou_user" });
-      const args = JSON.parse(await readFile(logPath, "utf8")) as string[];
-      expect(args.slice(args.indexOf("--chat-mode"), args.indexOf("--chat-mode") + 2)).toEqual(["--chat-mode", "group"]);
-      expect(args).toContain("--set-bot-manager");
-      // Normal groups already keep the creating bot — no --bots needed.
-      expect(args).not.toContain("--bots");
-    } finally {
-      process.env.PATH = originalPath;
-      if (originalApp === undefined) { delete process.env.LARK_APP_ID; } else { process.env.LARK_APP_ID = originalApp; }
-      await rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("invites the requesting user when Lark /newgroup uses user identity", async () => {
+  it("creates as the OAuth user and invites the instance bot without cross-app open_ids", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cli-chat-user-"));
     const binDir = path.join(tempDir, "bin");
     const logPath = path.join(tempDir, "args.json");
@@ -11426,15 +11611,18 @@ describe("lark service", () => {
         name: "用户身份群",
         mode: "group",
         operatorOpenId: "ou_requester",
+        botAppId: "cli_instance_bot",
       });
       const args = JSON.parse(await readFile(logPath, "utf8")) as string[];
 
       expect(created.chatId).toBe("oc_user_new");
       expect(args.slice(args.indexOf("--as"), args.indexOf("--as") + 2)).toEqual(["--as", "user"]);
-      expect(args.slice(args.indexOf("--users"), args.indexOf("--users") + 2)).toEqual(["--users", "ou_requester"]);
+      expect(args).not.toContain("--users");
       expect(args).not.toContain("--set-bot-manager");
-      // On the user-identity path the owner defaults to the authorizing user;
-      // we must NOT pass --owner with the bot-namespace open_id.
+      expect(args.slice(args.indexOf("--bots"), args.indexOf("--bots") + 2))
+        .toEqual(["--bots", "cli_instance_bot"]);
+      // The OAuth user is already creator/owner. The bot-app open_id cannot be
+      // passed through lark-cli's separate app namespace.
       expect(args).not.toContain("--owner");
     } finally {
       process.env.PATH = originalPath;
@@ -11464,18 +11652,44 @@ describe("lark service", () => {
   });
 
   it("creates a Lark topic group via the instance SDK with bot_id_list (the --bots equivalent)", async () => {
-    const originalApp = process.env.LARK_APP_ID;
-    process.env.LARK_APP_ID = "cli_testapp";
     const chatCreate = vi.fn(async (_req: { params: { user_id_type?: string; set_bot_manager?: boolean }; data: Record<string, unknown> }) =>
       ({ code: 0, msg: "success", data: { chat_id: "oc_sdk_topic" } }));
     const channel = { rawClient: { im: { v1: { chat: { create: chatCreate } } } } } as unknown as Parameters<typeof createLarkChatWithCli>[0]["channel"];
 
+    await createLarkChatWithCli({
+      name: "SDK 话题群",
+      mode: "topic",
+      operatorOpenId: "ou_user",
+      botAppId: "cli_testapp",
+      channel,
+    });
+    const arg = chatCreate.mock.calls[0]![0];
+    expect(arg.data).toMatchObject({ chat_mode: "topic", owner_id: "ou_user", bot_id_list: ["cli_testapp"] });
+  });
+
+  it("fails before creating a chat when an explicit bot invite is required but its app id is unavailable", async () => {
+    const originalApp = process.env.LARK_APP_ID;
+    const originalAs = process.env.CCTB_LARK_CHAT_CREATE_AS;
+    delete process.env.LARK_APP_ID;
+    delete process.env.CCTB_LARK_CHAT_CREATE_AS;
+    const chatCreate = vi.fn();
+    const channel = { rawClient: { im: { v1: { chat: { create: chatCreate } } } } } as unknown as Parameters<typeof createLarkChatWithCli>[0]["channel"];
+
     try {
-      await createLarkChatWithCli({ name: "SDK 话题群", mode: "topic", operatorOpenId: "ou_user", channel });
-      const arg = chatCreate.mock.calls[0]![0];
-      expect(arg.data).toMatchObject({ chat_mode: "topic", owner_id: "ou_user", bot_id_list: ["cli_testapp"] });
+      await expect(createLarkChatWithCli({
+        name: "不可用话题群",
+        mode: "topic",
+        operatorOpenId: "ou_user",
+        channel,
+      })).rejects.toThrow("requires the instance bot app id");
+      expect(chatCreate).not.toHaveBeenCalled();
     } finally {
       if (originalApp === undefined) { delete process.env.LARK_APP_ID; } else { process.env.LARK_APP_ID = originalApp; }
+      if (originalAs === undefined) {
+        delete process.env.CCTB_LARK_CHAT_CREATE_AS;
+      } else {
+        process.env.CCTB_LARK_CHAT_CREATE_AS = originalAs;
+      }
     }
   });
 
@@ -12512,6 +12726,7 @@ describe("lark service", () => {
 
   it("resumes a Claude session from a Lark resume card button", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-card-action-"));
+    const canonicalStateDir = await realpath(stateDir);
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");
     const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
     const runtime = createLarkServiceRuntime();
@@ -12552,13 +12767,168 @@ describe("lark service", () => {
       expect(record?.codexSessionId).toBe("claude-session-card");
       expect(config.resume).toMatchObject({
         sessionId: "claude-session-card",
-        workspacePath: stateDir,
+        workspacePath: canonicalStateDir,
       });
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { text: expect.stringContaining("已恢复 session：demo") },
         { replyTo: "card_resume" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("validates a Kimi resume card through ACP and ignores a forged workspace path", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-resume-card-action-"));
+    const canonicalStateDir = await realpath(stateDir);
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      validateCodexThread: vi.fn(async () => ({
+        sessionId: "kimi-session-card",
+        cwd: stateDir,
+        title: "Kimi card session",
+      })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_resume_kimi",
+          operator: { openId: "ou_user", name: "User" },
+          action: {
+            value: {
+              cctb_lark: "resume",
+              engine: "kimi",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              sessionId: "kimi-session-card",
+              workspacePath: "/tmp/forged-kimi-workspace",
+            },
+          },
+        },
+      });
+
+      const record = await sessionStore.findByConversationKey("lark:oc_chat");
+      const config = await loadInstanceConfig(stateDir);
+      expect(handled).toBe(true);
+      expect(bridge.validateCodexThread).toHaveBeenCalledWith("kimi-session-card");
+      expect(record?.codexSessionId).toBe("kimi-session-card");
+      expect(config.resume).toEqual({
+        sessionId: "kimi-session-card",
+        dirName: "kimi-session-card",
+        workspacePath: canonicalStateDir,
+      });
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: expect.stringContaining(`工作区：${canonicalStateDir}`) },
+        { replyTo: "card_resume_kimi" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a stale Kimi resume card after the instance engine changes", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stale-kimi-resume-card-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      validateCodexThread: vi.fn(async () => ({
+        sessionId: "kimi-stale",
+        cwd: stateDir,
+      })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_resume_kimi_stale",
+          operator: { openId: "ou_user", name: "User" },
+          action: {
+            value: {
+              cctb_lark: "resume",
+              engine: "kimi",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              sessionId: "kimi-stale",
+              workspacePath: stateDir,
+            },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.validateCodexThread).not.toHaveBeenCalled();
+      expect(await sessionStore.findByConversationKey("lark:oc_chat")).toBeNull();
+      expect((await loadInstanceConfig(stateDir)).resume).toBeUndefined();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: expect.stringContaining("bot 引擎已经切换") },
+        { replyTo: "card_resume_kimi_stale" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not make the status resume card scan Claude sessions for a Codex instance", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-codex-resume-scan-card-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex" }) + "\n");
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      listExternalSessions: vi.fn(async () => []),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_resume_scan_codex",
+          operator: { openId: "ou_user", name: "User" },
+          action: {
+            value: {
+              cctb_lark: "resume_scan",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+            },
+          },
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.listExternalSessions).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: expect.stringContaining("/resume thread <thread-id>") },
+        { replyTo: "card_resume_scan_codex" },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });

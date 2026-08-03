@@ -57,7 +57,7 @@ export function renderLarkStatusCard(input: {
 }
 
 export function renderLarkResumeScanCard(input: {
-  kind: "claude" | "antigravity";
+  kind: "claude" | "antigravity" | "kimi";
   sessions: ScannedSession[];
   locale: Locale;
   conversationKey: string;
@@ -146,7 +146,7 @@ function statusLabels(locale: Locale): { title: string; config: string; resume: 
     : { title: "飞书会话状态", config: "打开配置", resume: "恢复会话" };
 }
 
-function resumeLabels(locale: Locale, kind: "claude" | "antigravity"): {
+function resumeLabels(locale: Locale, kind: "claude" | "antigravity" | "kimi"): {
   title: string;
   hint: string;
   empty: string;
@@ -155,17 +155,33 @@ function resumeLabels(locale: Locale, kind: "claude" | "antigravity"): {
 } {
   if (locale === "en") {
     return {
-      title: kind === "antigravity" ? "Recent Antigravity conversations" : "Resume local sessions",
+      title: kind === "antigravity"
+        ? "Recent Antigravity conversations"
+        : kind === "kimi"
+          ? "Resume Kimi sessions"
+          : "Resume local sessions",
       hint: "Pick one session below. The current conversation will bind to that history.",
-      empty: kind === "antigravity" ? "No Antigravity conversations found in the last 24 hours." : "No local sessions found in the last hour.",
+      empty: kind === "antigravity"
+        ? "No Antigravity conversations found in the last 24 hours."
+        : kind === "kimi"
+          ? "No Kimi sessions found."
+          : "No local sessions found in the last hour.",
       resumeButton: kind === "antigravity" ? "Attach this conversation" : "Resume this session",
       workspaceUnknown: "unknown",
     };
   }
   return {
-    title: kind === "antigravity" ? "最近的 Antigravity conversation" : "恢复历史会话",
+    title: kind === "antigravity"
+      ? "最近的 Antigravity conversation"
+      : kind === "kimi"
+        ? "恢复 Kimi session"
+        : "恢复历史会话",
     hint: "选择一个历史会话，当前飞书会话会绑定到这段上下文。",
-    empty: kind === "antigravity" ? "最近 24 小时内没有找到 Antigravity conversation。" : "最近 1 小时内没有找到本地 session。",
+    empty: kind === "antigravity"
+      ? "最近 24 小时内没有找到 Antigravity conversation。"
+      : kind === "kimi"
+        ? "没有找到 Kimi session。"
+        : "最近 1 小时内没有找到本地 session。",
     resumeButton: kind === "antigravity" ? "绑定此 conversation" : "恢复此会话",
     workspaceUnknown: "未知",
   };

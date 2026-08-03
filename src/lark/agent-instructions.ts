@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import { readCloudAsrConfig } from "../runtime/asr-cloud.js";
+
 /**
  * Whether this machine has a local speech-to-text backend the agent can call
  * itself. True when `ASR_HTTP_URL` is explicitly set, or the default Qwen3 ASR
@@ -70,11 +72,14 @@ export function localAsrAgentInstruction(): string | undefined {
  * afterwards is a new turn and cannot reroute a transcription already running.
  */
 export function cloudAsrAgentInstruction(): string | undefined {
-  const tingwuDir = (process.env.TINGWU_ASR_DIR ?? "").trim();
-  if (!tingwuDir) {
+  const config = readCloudAsrConfig(process.env);
+  if (!config) {
     return undefined;
   }
-  return "Inbound audio/video is auto-transcribed before you see it (>=15 min → Aliyun Tingwu cloud, shorter → local); never call it unsupported. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), never afterwards.";
+  const threshold = config.thresholdSeconds % 60 === 0
+    ? `${config.thresholdSeconds / 60} min`
+    : `${config.thresholdSeconds}s`;
+  return `Inbound audio/video is auto-transcribed before you see it (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never call it unsupported. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), never afterwards.`;
 }
 
 export function larkAgentInstructions(): string {

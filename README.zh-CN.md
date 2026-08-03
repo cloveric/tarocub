@@ -99,7 +99,9 @@ export LARK_APP_SECRET="..."
 
 - p2p/group 消息进入同一条 `Bridge.handleAuthorizedMessage` 路径，并复用 Telegram 侧同一套 pairing/allowlist 访问控制；
 - 基础聊天命令：`/help`、`/status`、`/usage`、`/model`、`/effort`、`/fast`、`/engine`、`/yolo`、`/goal`、`/btw`、`/ask`、`/reset`、`/detach`、Claude/Antigravity `/resume` 扫描选择、显式 `/resume thread ...` / `/resume session ...` / `/resume conversation ...`、`/cron`、`/board`、`/mini`、`/fan`、`/chain`、`/verify`、`/stop`、Lark `/q`（运行中强制排队）；
-- 用 `conversationKey` 隔离话题/thread；
+- 私聊主时间线使用 `lark:<chat_id>` 连续会话；私聊中的真实 thread/topic 使用 `lark:<chat_id>:<thread_id>` 独立会话，但访问授权仍绑定父私聊；
+- 群聊是否按 thread 隔离取决于飞书“群消息形式”：话题群或 thread 形式群按 topic 独立，普通对话形式群的 reply/thread 继续共享全群会话；
+- `/newgroup <名>`、`/newgroup topic <名>`、`/newtopic <名>` 默认由实例 bot 创建并拉入发起人；显式用户 OAuth 模式则由 OAuth 用户创建。两条路径都会确保实例 bot 入群并自动授权新群；默认仍需 @bot，只有显式 `/group all` 才监听普通消息；
 - streaming interactive card 和 Card 2.0 callback 停止按钮；
 - 引擎权限请求审批卡片，点击审批前会按操作者重新走 bridge 访问控制；
 - 收到图片/文件资源后只在当前 turn 临时下载，完成 staging/转写后清理临时输入；
@@ -175,7 +177,7 @@ telegram service restart --all
 
 ## 为什么是这套架构
 
-- **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex、Claude Code 和 Antigravity CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
+- **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex、Claude Code、Kimi Code 和 Antigravity CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
 - **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。Antigravity 成功运行后会自动绑定 conversation，也可以用 `/resume conversation <id>` 手动接上。
 - **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。不同 topic 还可以组成 Mini Bus，用同一个群里的轻量 peer 跑 fan-out、chain、verify 或 crew workflow；`/board` 负责把 Kanban 任务状态持久化到模型记忆之外。
 - **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex、Claude、Kimi 或 Antigravity，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
@@ -214,23 +216,24 @@ npm run dev -- telegram engine --instance review-bot
 | 特性 | Codex | Claude | Kimi | Antigravity |
 |---|---|---|---|---|
 | 协议 | app-server / `codex exec` | stream-json | `kimi acp` | `agy --print` |
-| 会话恢复 | `/resume thread <id>` | `/resume` 扫描并选择 | `/resume session <id>`，先用 `session/load` 验证；无列表扫描 | 自动绑定日志 conversation；`/resume` 扫描；`/resume conversation <id>` |
-| 项目指令 | `agent.md` prompt 注入 | `agent.md` system prompt + workspace `CLAUDE.md` | 每 turn 注入 `[Bridge Instructions]`；ACP 0.31.1 不接受 `--agent-file` | `agent.md` prompt 注入 |
+| 会话恢复 | `/resume thread <id>` | `/resume` 扫描并选择 | `/resume` 通过 ACP `session/list` 扫描并选择，也支持 `/resume session <id>` | 自动绑定日志 conversation；`/resume` 扫描；`/resume conversation <id>` |
+| 项目指令 | `agent.md` prompt 注入 | `agent.md` system prompt + workspace `CLAUDE.md` | workspace `.kimi-code/agents/agent.md` 主代理 override；保留 `${base_prompt}` 与 `${plugin_sections}`，实例/Lark 指令进入原生 system context | `agent.md` prompt 注入 |
 | 流式与工具 | 原生事件 | 原生事件 | ACP 文本、思考、工具、审批事件 | stdout chunk |
-| 审批 | app-server 沙箱 / process 整轮预审批 | 单工具审批 | ACP 单工具审批；Lark 单选提问卡 | 整轮预审批 |
+| 审批 | app-server 沙箱 / process 整轮预审批 | 单工具审批 | ACP 单工具审批；Lark/Telegram 单选提问 | 整轮预审批 |
+| 本地 skill / MCP | 原生 skill/MCP | 原生 skill/MCP/plugin | 原生 Kimi skill/MCP/plugin + workspace 暴露 `~/.codex/skills` + 自动注入 Search MCP | 原生能力 |
 | `/goal` | bridge 原生 goal | 原生命令透传 | **gap**：真机返回 `Unknown ACP command` | 原生命令透传 |
 | `/steer` | app-server 中途注入 | **gap**，后续消息排队 | **gap**，ACP 无中途 prompt 注入 | **gap**，后续消息排队 |
 | `/model` / effort | bridge 配置 | bridge 配置 | ACP 广告的 session option；模型 ID 在下一 turn 验证 | 由本机交互 CLI 管 |
 | `/compact` | 不需要（exec 无状态） | 支持 | 支持，已真机会话验证 | 暂不支持 |
 | 用量 | token（费用视 runtime） | token + USD | **gap**：ACP 0.31.1 无结构化 token/费用 | 无结构化费用 |
-| 工作目录 | 实例 `workspace/` | 实例 `workspace/` | 实例 `workspace/` | 实例 `workspace/` |
+| 工作目录 | 实例 `workspace/` | 实例或恢复 session 的原工作区 | 实例或恢复 session 的原 `cwd`（绑定前用真实 `session/load` 校验） | 实例 `workspace/` |
 | 空闲 worker | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每轮退出 |
 
-Kimi 的实测事件、取消、提问、恢复和 gap 证据见 [`docs/kimi-engine-notes.md`](./docs/kimi-engine-notes.md)，三引擎逐项对照见 [`docs/kimi-capability-matrix.md`](./docs/kimi-capability-matrix.md)。
+Kimi 的实测事件、取消、提问、恢复和 gap 证据见 [`docs/kimi-engine-notes.md`](./docs/kimi-engine-notes.md)，四引擎逐项对照见 [`docs/kimi-capability-matrix.md`](./docs/kimi-capability-matrix.md)。
 
 ## 实时网页搜索 MCP：Brave + Tavily
 
-bridge 内置一个可选的本地 MCP server；当各引擎自己的原生 MCP/plugin 层配置好后，Codex、Claude Code 和 Antigravity 可以共用同一套可追溯的网页研究工具：
+bridge 内置一个可选的本地 MCP server。Codex、Claude Code 和 Antigravity 可按各自原生方式注册；Kimi 实例会由 TaroCub 在 ACP 新建/恢复 session 时自动注入，同时保留 Kimi 自己的 MCP/plugin：
 
 - `web_search`：通过 Brave 和/或 Tavily 做实时搜索。
 - `web_extract`：用 Tavily Extract 清理并抽取指定 URL 正文。
@@ -264,9 +267,9 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-Antigravity 侧如需原生 MCP/plugin，请使用 Antigravity 自己的配置方式。默认 bridge 配置不应该导入 Claude 或 Codex 的原生插件。bridge 可以跨引擎复用同一批 skill 文档和工具使用规则，但每个实例的 `agent.md`、以及三套原生插件系统仍然各自独立。
+Kimi 无需为 TaroCub Search MCP 手工注册；Antigravity 侧如需原生 MCP/plugin，请使用 Antigravity 自己的配置方式。默认 bridge 配置不应该跨引擎导入原生插件。bridge 可以跨引擎复用 skill 文档和工具使用规则，但每个实例的 `agent.md` 与各引擎原生插件系统仍然各自独立。
 
-配置后重启相关 bot 实例，让新的 Codex/Claude/Kimi/Antigravity turn 继承各自原生 MCP/plugin 配置。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
+配置后重启相关 bot 实例，让新进程继承环境与原生 MCP/plugin 配置；Kimi 会自动获得 TaroCub Search MCP。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
 
 ### Claude 引擎：CLAUDE.md 支持
 
@@ -454,7 +457,7 @@ Agent 可以通过和文件投递同一套 tool layer 创建 Telegram 投递的�
 - 这个默认值上线前创建的旧任务会保留已存储的模式；可用 `/cron mode <job-id> new_per_run` 原地升级旧周期任务，不必删除重建。
 - 每个 chat 有任务数量上限，防止任务递归创建导致无限增长。
 
-人类运维仍然可以用 CLI 检查和调试；但 generated `agent.md` 会要求 agent 使用 `[tool:{...}]` layer，这样 Claude/Codex/Antigravity 的 process 和 stream runtime 行为一致。
+人类运维仍然可以用 CLI 检查和调试；但 generated instructions 会要求 agent 使用 `[tool:{...}]` layer，这样 Claude/Codex/Kimi/Antigravity 的 process、stream 和 ACP runtime 行为一致。
 
 ---
 
@@ -535,9 +538,9 @@ npm run dev -- telegram budget clear --instance work    # 移除上限
 
 ## 语音输入（ASR）
 
-在 Telegram 中发送语音消息 — 桥接器会在本地转写后将文本发送给 AI 引擎。短音频无需任何云端服务。
+在 Telegram 发送语音/音视频，或在飞书/Lark 发送音频/视频资源，桥接器都会在进入 Claude、Codex、Kimi、Antigravity 适配器**之前**完成转写。短音频走本机 Qwen ASR，无需云端服务。
 
-**长音频自动走云端（通义听悟，可选）**：配置后，**≥ 15 分钟**的音频/视频自动路由到阿里云通义听悟离线转写（30 分钟音频约 40 秒出全文），短音频仍走本地。未配置时行为完全不变。
+**长音频自动走云端（通义听悟，可选）**：配置后，**≥ 15 分钟**的音频/视频自动路由到阿里云通义听悟离线转写（30 分钟音频约 40 秒出全文），短音频仍走本机 Qwen。未配置时全部走本地；云端失败时按安全分片回退本地。
 
 - 激活：`TINGWU_ASR_DIR=/path/to/tingwu_asr`，指向已配好的听悟脚本目录（脚本自带 OSS 上传/任务轮询/临时对象清理，密钥留在该目录的 `.env.local`，桥不读取也不记录）
 - 阈值：`ASR_CLOUD_THRESHOLD_SECONDS`（默认 900 秒）
@@ -547,13 +550,14 @@ npm run dev -- telegram budget clear --instance work    # 移除上限
 - **密钥必须放在任何引擎工作区之外**：本机约定放 `~/.tarocub-secrets/tingwu_asr`，这样在 `~/.cctb/<instance>/workspace` 里干活的 agent 读不到、也提交不了这些凭据
 - **消息内开关**：「强制本地转写」/「强制云端转写」必须和音频在**同一条消息或同一批**发送（当作附件说明）才生效——纯语音消息没有 caption，事后再发是新的一轮，改不了已经开跑的转写（冲突时本地优先）
 - 云端失败自动回退本地；任务产物（原始 JSON/日志/纯文本）保存在 `<state>/asr-jobs/<id>/` 便于追溯
+- `/stop` 会中断时长探测、ffmpeg 切片、Qwen CLI/听悟子进程，并停止等待本地 Qwen HTTP；用户主动取消不会被误报成“转写失败”，也不会取消后又切换路径重跑。已进入模型内核的本地 HTTP 请求可能仍会在后台收尾，但不会继续占用 bot 的会话队列
 
 **工作原理：**
 
-1. 用户在 Telegram 中发送语音消息
-2. 桥接器下载 `.ogg` 文件
-3. 通过本地 ASR 服务转写（优先 HTTP，CLI 备用）
-4. 转写文本作为用户消息发送给引擎
+1. 用户在 Telegram 发送语音/音视频，或在飞书/Lark 发送音频/视频资源
+2. 桥接器下载媒体并探测时长
+3. 低于阈值时走本机 Qwen ASR（HTTP 优先、CLI 备用）；达到阈值时走通义听悟，云端失败再安全分片回退本地
+4. 桥接器把转写文本追加到用户消息后，才交给当前 Claude、Codex、Kimi 或 Antigravity 引擎
 
 **以 Qwen3-ASR 为例搭建：**
 
@@ -648,21 +652,21 @@ Codex 没有和 Claude 一样的本地 session 扫描入口。如果你已经知
 
 ### Kimi ACP session 绑定
 
-Kimi ACP 目前没有可供 bridge 使用的本地 session 列表扫描。如果已经知道 session id，可以显式绑定：
+Kimi ACP 提供 `session/list`。直接发 `/resume` 可以列出最近 session，再用 `/resume <编号>` 选择；如果已经知道 session id，也可以显式绑定：
 
 ```text
 /resume session session_abc123
 ```
 
-bridge 会先启动真实 Kimi ACP worker，并调用 `session/load` 验证该 session 和当前工作区。只有验证成功才会改写聊天绑定；不存在或不可加载的 ID 会 fail closed。
+bridge 会用短生命周期 ACP 连接先执行真实 `session/list` 和 `session/load`，以 Kimi 返回的原始 `cwd` 为准。只有 session 可加载且原工作区仍是有效目录时才会改写聊天绑定，并把该 `cwd` 持久化给后续 turn；不存在、工作区不匹配或不可加载的 ID 会 fail closed。
 
 绑定后：
 
-- 后续消息继续该 Kimi ACP session
+- 后续消息在原项目工作区继续该 Kimi ACP session
 - `/status` 显示当前 session id
 - `/detach` 解绑该 session；如果存在绑定前的旧对话，就恢复它
 
-Kimi 下直接发送 `/resume` 会说明为什么不能列出候选项，不会伪造扫描结果。
+Kimi 的实例/Lark 指令写入 bot 自有工作区的 `.kimi-code/agents/agent.md` 主代理 override，并保留 Kimi 内置 `${base_prompt}` 和 `${plugin_sections}`。本机 `~/.agents/skills`、Kimi plugin skills 与原生 MCP 继续由 Kimi 发现；TaroCub 还把 `~/.codex/skills` 暴露到 bot 自有工作区，并在 `session/new`/`session/load` 注入 Search MCP。对于外部恢复工作区，bridge 不修改对方项目文件，只对普通文本 turn 使用 prompt fallback；这是 ACP 没有直接 system-prompt 请求字段时的安全边界。
 
 ### Antigravity conversation 绑定
 
@@ -1018,7 +1022,7 @@ coordinator 实例上的配置示例：
 
 ## 快速开始
 
-> **简单来说** — 你只需要在手机上做两件事：从 BotFather 拿 token 和发送配对码。其余全部在电脑上通过 Codex、Claude Code 或 Antigravity CLI 完成。
+> **简单来说** — 你只需要在手机上做两件事：从 BotFather 拿 token 和发送配对码。其余全部在电脑上通过 Codex、Claude Code、Kimi Code 或 Antigravity CLI 完成。
 
 ### 环境要求
 
@@ -1036,7 +1040,7 @@ coordinator 实例上的配置示例：
 
 ### 第二步：安装和配置（电脑操作）
 
-打开终端的 Codex、Claude Code 或 Antigravity，告诉它：
+打开终端的 Codex、Claude Code、Kimi Code 或 Antigravity，告诉它：
 
 > *"克隆 https://github.com/cloveric/tarocub 并用这个 token 配置 Telegram bot：`<粘贴你的 token>`"*
 
@@ -1139,7 +1143,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
   <tr>
     <td width="50%">
       <h3>多引擎</h3>
-      <p>每个实例可切换 Codex、Claude Code 或 Antigravity。混合搭配 — 一个 bot 跑 Codex，另一个跑 Claude，另一个跑 Antigravity，统一 CLI 管理。</p>
+      <p>每个实例可切换 Codex、Claude Code、Kimi Code 或 Antigravity。不同 bot 可混合使用四种引擎，并由同一套 CLI 管理。</p>
     </td>
     <td width="50%">
       <h3>独立人格</h3>
@@ -1281,7 +1285,7 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 |---|---|
 | `/group [status\|allow\|deny\|on\|off\|all\|at]` | 群授权与回复模式(`on`/`off`=整个实例的群模式开关，`all`=不@也回,`at`=只@才回) |
 | `/invite group\|user @某人` · `/remove …` | **Lark** — 授予/撤销群或用户授权 |
-| `/newgroup <名>` · `/newgroup topic <名>` · `/newtopic <名>` | **Lark** — 新建项目群 / 话题群 |
+| `/newgroup <名>` · `/newgroup topic <名>` · `/newtopic <名>` | **Lark** — 新建并自动授权项目群 / 话题群；默认仍需 @bot |
 
 **定时与持久任务**
 
@@ -1363,7 +1367,7 @@ Telegram 用户也可以使用：
 - `/fan <提示>` — 查询当前 bot 和并行 specialist bot
 - `/chain <提示>` — 跑配置好的顺序 bot 链
 - `/verify <提示>` — 本地执行后交给 verifier bot 自动复核
-- `/resume` — Claude：扫描并恢复本地 session；Codex：使用 `/resume thread <thread-id>`；Kimi：使用 `/resume session <session-id>`；Antigravity：使用 `/resume conversation <conversation-id>`
+- `/resume` — Claude/Kimi：扫描并按编号恢复 session（Kimi 也支持 `/resume session <session-id>`）；Codex：使用 `/resume thread <thread-id>`；Antigravity：使用 `/resume conversation <conversation-id>`
 - `/detach` — 断开恢复的 Claude/Kimi session、当前 Codex thread 或当前 Antigravity conversation；如果存在旧对话，则恢复到 /resume 之前
 - `/stop` — 立即停止当前运行中的任务
 - `/continue` — 恢复最近一个等待中的压缩包摘要

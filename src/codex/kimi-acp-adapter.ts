@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -7,6 +8,7 @@ import {
   PROTOCOL_VERSION,
   type InitializeResponse,
   type LoadSessionResponse,
+  type McpServer,
   type NewSessionResponse,
   type PromptResponse,
   type RequestPermissionRequest,
@@ -26,14 +28,17 @@ import type {
   EngineApprovalDecision,
   EngineApprovalRequest,
   EngineStreamEvent,
+  ExternalSessionInfo,
 } from "./adapter.js";
 import {
   ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS,
   ENGINE_DEFAULT_TURN_TIMEOUT_MS,
 } from "./engine-timeouts.js";
 import { killProcessTree } from "./process-tree.js";
+import { syncKimiWorkspaceInstructions } from "./kimi-workspace.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { DEFAULT_KIMI_EFFORT, readValidatedConfigFile } from "../telegram/instance-config.js";
+import { resolveSearchMcpServerInvocation } from "../search/search-mcp-server.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -81,6 +86,7 @@ type PendingKimiTurn = {
   stopError?: Error;
   failurePromise: Promise<never>;
   rejectFailure: (error: Error) => void;
+  eventChain: Promise<void>;
 };
 
 type KimiToolState = {
@@ -129,12 +135,33 @@ const MAX_ACP_LINE_BYTES = 64 * 1024 * 1024;
 const MAX_STDERR_TAIL_CHARS = 20_000;
 const MAX_ERROR_LINE_PREVIEW_CHARS = 240;
 const MAX_INSTRUCTIONS_CHARS = 100_000;
+const MAX_LISTED_SESSIONS = 200;
+
+type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | null) => Promise<string>;
 
 function combineInstructions(agentInstructions: string | null, bridgeInstructions: string | null): string | null {
   const parts = [agentInstructions, bridgeInstructions]
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value));
   return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function instructionFingerprint(instructions: string | null): string {
+  return createHash("sha256").update(instructions ?? "").digest("hex");
+}
+
+function resolveDefaultKimiMcpServers(): McpServer[] {
+  const invocation = resolveSearchMcpServerInvocation();
+  return [{
+    name: "cctb_search",
+    command: invocation.command,
+    args: invocation.args,
+    env: [],
+  }];
+}
+
+function isSlashCommand(text: string): boolean {
+  return /^\/[A-Za-z0-9_-]+(?:(?::|\.)[A-Za-z0-9_.-]+)?(?:\s|$)/.test(text.trimStart());
 }
 
 function kimiModeForApprovalMode(mode: ApprovalMode): KimiRuntimeOptions["mode"] {
@@ -265,28 +292,54 @@ function maybeParseJson(value: string | undefined): unknown {
   }
 }
 
-function hasAskUserQuestions(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  return Array.isArray((value as { questions?: unknown }).questions)
-    && (value as { questions: unknown[] }).questions.length > 0;
-}
-
 function normalizeKimiQuestionInput(request: RequestPermissionRequest, toolInput: unknown): unknown {
-  if (hasAskUserQuestions(toolInput)) {
-    return toolInput;
+  const firstQuestion = (() => {
+    if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)) {
+      return undefined;
+    }
+    const questions = (toolInput as { questions?: unknown }).questions;
+    const first = Array.isArray(questions) ? questions[0] : undefined;
+    return first && typeof first === "object" && !Array.isArray(first)
+      ? first as { question?: unknown; header?: unknown; options?: unknown }
+      : undefined;
+  })();
+  const question = typeof firstQuestion?.question === "string" && firstQuestion.question.trim()
+    ? firstQuestion.question.trim()
+    : toolContentText(request.toolCall.content)?.trim() || "Choose an option.";
+  const header = typeof firstQuestion?.header === "string" && firstQuestion.header.trim()
+    ? firstQuestion.header.trim()
+    : "Choice";
+  const descriptions = new Map<string, string>();
+  if (Array.isArray(firstQuestion?.options)) {
+    for (const option of firstQuestion.options) {
+      if (!option || typeof option !== "object" || Array.isArray(option)) {
+        continue;
+      }
+      const label = (option as { label?: unknown }).label;
+      const description = (option as { description?: unknown }).description;
+      if (typeof label === "string" && typeof description === "string" && description.trim()) {
+        descriptions.set(label.trim().toLocaleLowerCase(), description.trim());
+      }
+    }
   }
-  const question = toolContentText(request.toolCall.content)?.trim() || "Choose an option.";
-  const options = request.options
-    .filter((option) => option.kind === "allow_once" || option.kind === "allow_always")
-    .map((option) => option.name.trim())
-    .filter((name) => name.length > 0 && name.toLocaleLowerCase() !== "skip")
-    .map((label) => ({ label }));
+  const seen = new Set<string>();
+  const options = request.options.flatMap((option) => {
+    if (option.kind !== "allow_once" && option.kind !== "allow_always") {
+      return [];
+    }
+    const label = option.name.trim();
+    const key = label.toLocaleLowerCase();
+    if (!label || key === "skip" || seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    const description = descriptions.get(key);
+    return [{ label, ...(description ? { description } : {}) }];
+  });
   return {
     questions: [{
       question,
-      header: "Choice",
+      header,
       multi_select: false,
       options,
     }],
@@ -494,6 +547,8 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly cancelGraceMs: number;
   private readonly idleWorkerTtlMs: number;
   private readonly killProcessTreeFn: (pid: number | undefined) => void;
+  private readonly mcpServers: McpServer[];
+  private readonly syncWorkspaceInstructionsFn: SyncWorkspaceInstructions;
   private readonly workers = new Map<string, KimiWorker>();
   private readonly pendingWorkers = new Map<string, Promise<KimiWorker>>();
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -514,6 +569,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
       killProcessTreeFn?: (pid: number | undefined) => void;
+      mcpServers?: McpServer[];
+      syncWorkspaceInstructionsFn?: SyncWorkspaceInstructions;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -540,6 +597,8 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.cancelGraceMs = options?.cancelGraceMs ?? KIMI_ACP_CANCEL_GRACE_MS;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
     this.killProcessTreeFn = options?.killProcessTreeFn ?? killProcessTree;
+    this.mcpServers = options?.mcpServers ?? resolveDefaultKimiMcpServers();
+    this.syncWorkspaceInstructionsFn = options?.syncWorkspaceInstructionsFn ?? syncKimiWorkspaceInstructions;
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -552,11 +611,83 @@ export class KimiAcpAdapter implements CodexAdapter {
     return { sessionId: `telegram-${chatId}` };
   }
 
-  async validateExternalSession(sessionId: string): Promise<void> {
+  async validateExternalSession(
+    sessionId: string,
+    input?: { workspaceOverride?: string },
+  ): Promise<ExternalSessionInfo> {
     if (isLogicalSessionId(sessionId)) {
       throw new Error("A logical Kimi chat session cannot be resumed as an external session");
     }
-    await this.getOrCreateWorker(sessionId, this.workspacePath, {});
+    return await this.withControlConnection(async (connection, initialized) => {
+      if (!initialized.agentCapabilities?.sessionCapabilities?.list) {
+        throw new Error("This Kimi ACP version does not support session/list");
+      }
+      if (!initialized.agentCapabilities.loadSession) {
+        throw new Error("This Kimi ACP version does not support session/load");
+      }
+      let cursor: string | null = null;
+      let found: ExternalSessionInfo | undefined;
+      do {
+        const response = await connection.listSessions({ cwd: null, cursor });
+        const matched = response.sessions.find((session) => session.sessionId === sessionId);
+        if (matched) {
+          found = {
+            sessionId: matched.sessionId,
+            cwd: matched.cwd,
+            ...(matched.title ? { title: matched.title } : {}),
+            ...(matched.updatedAt ? { updatedAt: matched.updatedAt } : {}),
+          };
+          break;
+        }
+        cursor = response.nextCursor ?? null;
+      } while (cursor);
+      if (!found) {
+        throw new Error(`Kimi session not found: ${sessionId}`);
+      }
+      const workspacePath = path.resolve(input?.workspaceOverride ?? found.cwd);
+      if (input?.workspaceOverride && path.resolve(found.cwd) !== workspacePath) {
+        throw new Error(`Kimi session workspace mismatch: expected ${found.cwd}`);
+      }
+      await connection.loadSession({
+        sessionId,
+        cwd: workspacePath,
+        mcpServers: [...this.mcpServers],
+      });
+      return found;
+    });
+  }
+
+  async listExternalSessions(input?: { cwd?: string; limit?: number }): Promise<ExternalSessionInfo[]> {
+    const requestedLimit = input?.limit;
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(Math.trunc(requestedLimit!), MAX_LISTED_SESSIONS))
+      : MAX_LISTED_SESSIONS;
+    return await this.withControlConnection(async (connection, initialized) => {
+      if (!initialized.agentCapabilities?.sessionCapabilities?.list) {
+        throw new Error("This Kimi ACP version does not support session/list");
+      }
+      const sessions: ExternalSessionInfo[] = [];
+      let cursor: string | null = null;
+      do {
+        const response = await connection.listSessions({
+          cwd: input?.cwd ? path.resolve(input.cwd) : null,
+          cursor,
+        });
+        for (const session of response.sessions) {
+          sessions.push({
+            sessionId: session.sessionId,
+            cwd: session.cwd,
+            ...(session.title ? { title: session.title } : {}),
+            ...(session.updatedAt ? { updatedAt: session.updatedAt } : {}),
+          });
+          if (sessions.length >= limit) {
+            return sessions;
+          }
+        }
+        cursor = response.nextCursor ?? null;
+      } while (cursor);
+      return sessions;
+    });
   }
 
   async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
@@ -564,7 +695,13 @@ export class KimiAcpAdapter implements CodexAdapter {
     const agentInstructions = await this.loadInstructions();
     const instructions = combineInstructions(agentInstructions, input.instructions ?? null);
     const runtimeOptions = await this.loadRuntimeOptions();
-    const worker = await this.getOrCreateWorker(sessionId, workspacePath, runtimeOptions);
+    const preparedInstructions = await this.prepareInstructions(workspacePath, instructions);
+    const worker = await this.getOrCreateWorker(
+      sessionId,
+      workspacePath,
+      runtimeOptions,
+      preparedInstructions.settingsKey,
+    );
     if (worker.pendingTurn) {
       throw new Error("Kimi session already has an in-flight turn");
     }
@@ -575,7 +712,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     await this.emitEngineEvent(input.onEngineEvent, { type: "session", sessionId: actualSessionId });
 
-    const result = await this.runTurn(worker, actualSessionId, this.buildPrompt(input, instructions), input);
+    const result = await this.runTurn(
+      worker,
+      actualSessionId,
+      this.buildPrompt(input, preparedInstructions.promptInstructions),
+      input,
+    );
     this.rekeyWorker(worker, actualSessionId);
     return {
       text: result.text,
@@ -585,7 +727,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   private buildPrompt(input: CodexUserMessageInput, instructions: string | null): string {
-    const text = instructions
+    const text = instructions && !isSlashCommand(input.text)
       ? [
           "[Bridge Instructions]",
           instructions,
@@ -600,6 +742,23 @@ export class KimiAcpAdapter implements CodexAdapter {
       parts.push(`Attachment: ${file}`);
     }
     return parts.join("\n");
+  }
+
+  private async prepareInstructions(
+    workspacePath: string,
+    instructions: string | null,
+  ): Promise<{ promptInstructions: string | null; settingsKey: string }> {
+    if (workspacePath === this.workspacePath) {
+      const synchronizedInstructions = await this.syncWorkspaceInstructionsFn(workspacePath, instructions);
+      return {
+        promptInstructions: null,
+        settingsKey: `workspace-instructions:${instructionFingerprint(synchronizedInstructions)}`,
+      };
+    }
+    return {
+      promptInstructions: instructions,
+      settingsKey: `prompt-instructions:${instructionFingerprint(instructions)}`,
+    };
   }
 
   private async loadInstructions(): Promise<string | null> {
@@ -649,8 +808,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     sessionId: string,
     workspacePath: string,
     runtimeOptions: KimiRuntimeOptions,
+    instructionSettingsKey = "",
   ): Promise<KimiWorker> {
-    const settingsKey = JSON.stringify(runtimeOptions);
+    const settingsKey = JSON.stringify({ runtimeOptions, instructionSettingsKey });
     const existing = this.workers.get(sessionId);
     if (existing) {
       if (existing.workspacePath === workspacePath && existing.settingsKey === settingsKey) {
@@ -779,7 +939,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (isLogicalSessionId(sessionId)) {
         sessionResult = await withTimeout(
           Promise.race([
-            connection.newSession({ cwd: workspacePath, mcpServers: [] }),
+            connection.newSession({ cwd: workspacePath, mcpServers: [...this.mcpServers] }),
             worker.failurePromise,
           ]),
           this.initializeTimeoutMs,
@@ -794,7 +954,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         try {
           sessionResult = await withTimeout(
             Promise.race([
-              connection.loadSession({ sessionId, cwd: workspacePath, mcpServers: [] }),
+              connection.loadSession({ sessionId, cwd: workspacePath, mcpServers: [...this.mcpServers] }),
               worker.failurePromise,
             ]),
             this.initializeTimeoutMs,
@@ -815,6 +975,73 @@ export class KimiAcpAdapter implements CodexAdapter {
       this.killProcessTreeFn(child.pid);
       this.removeWorker(worker);
       throw this.withDiagnostics(worker, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private async withControlConnection<T>(
+    operation: (connection: ClientSideConnection, initialized: InitializeResponse) => Promise<T>,
+  ): Promise<T> {
+    const invocation = buildCommandInvocation(this.kimiExecutable, ["acp"]);
+    const child = this.spawnKimi(invocation.command, invocation.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: invocation.shell,
+      env: this.childEnv,
+      cwd: this.workspacePath,
+      windowsHide: true,
+    });
+    if (!child.stdin || !child.stdout || !child.stderr) {
+      this.killProcessTreeFn(child.pid);
+      throw new Error("Kimi ACP subprocess did not expose stdio pipes");
+    }
+
+    let stderrTail = "";
+    let rejectFailure!: (error: Error) => void;
+    const failurePromise = new Promise<never>((_resolve, reject) => {
+      rejectFailure = reject;
+    });
+    void failurePromise.catch(() => undefined);
+    child.stderr.on("data", (chunk) => {
+      stderrTail = `${stderrTail}${chunk.toString()}`.slice(-MAX_STDERR_TAIL_CHARS);
+    });
+    child.once("error", (error) => rejectFailure(error));
+    child.once("close", (code, signal) => {
+      const suffix = signal ? ` (signal ${signal})` : "";
+      rejectFailure(new Error(`Kimi ACP exited with code ${code}${suffix}`));
+    });
+
+    const stream = createBoundedAcpStream(child.stdout, child.stdin, () => undefined);
+    const connection = new ClientSideConnection(() => ({
+      requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+      sessionUpdate: async () => undefined,
+    }), stream);
+    try {
+      const initialized = await withTimeout(
+        Promise.race([
+          connection.initialize({
+            protocolVersion: PROTOCOL_VERSION,
+            clientInfo: { name: "tarocub", version: "0.1.0" },
+            clientCapabilities: {},
+          }),
+          failurePromise,
+        ]),
+        this.initializeTimeoutMs,
+        `Kimi ACP initialize timed out after ${this.initializeTimeoutMs}ms`,
+      );
+      this.validateInitializeResponse(initialized);
+      return await withTimeout(
+        Promise.race([operation(connection, initialized), failurePromise]),
+        this.initializeTimeoutMs,
+        `Kimi ACP control request timed out after ${this.initializeTimeoutMs}ms`,
+      );
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      const stderr = stderrTail.trim();
+      if (!stderr || normalized.message.includes(stderr)) {
+        throw normalized;
+      }
+      throw new Error(`${normalized.message}\n\nKimi stderr:\n${stderr}`);
+    } finally {
+      this.killProcessTreeFn(child.pid);
     }
   }
 
@@ -905,6 +1132,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       timeoutsDisabled: input.disableRuntimeTimeout === true,
       failurePromise,
       rejectFailure,
+      eventChain: Promise.resolve(),
     };
     worker.pendingTurn = pending;
     worker.tools.clear();
@@ -936,6 +1164,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (result.stopReason !== "end_turn") {
         throw new Error(`Kimi ACP stopped the turn with reason ${result.stopReason}`);
       }
+      await pending.eventChain;
       const text = pending.assistantText.trim() || "Kimi completed the request.";
       await this.emitEngineEvent(pending.onEngineEvent, { type: "result", text, sessionId });
       return { text, usage: usageFromPromptResult(result) };
@@ -962,7 +1191,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
       pending.assistantText += update.content.text;
       pending.onProgress?.(pending.assistantText);
-      void this.emitEngineEvent(pending.onEngineEvent, {
+      this.queueEngineEvent(pending, {
         type: "assistant_text",
         text: update.content.text,
         delta: true,
@@ -973,7 +1202,7 @@ export class KimiAcpAdapter implements CodexAdapter {
 
     if (update.sessionUpdate === "agent_thought_chunk") {
       if (update.content.type === "text" && update.content.text) {
-        void this.emitEngineEvent(pending.onEngineEvent, {
+        this.queueEngineEvent(pending, {
           type: "thinking",
           text: update.content.text,
           sessionId,
@@ -1039,7 +1268,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       return;
     }
     state.emittedUse = true;
-    void this.emitEngineEvent(worker.pendingTurn?.onEngineEvent, {
+    const pending = worker.pendingTurn;
+    if (!pending) {
+      return;
+    }
+    this.queueEngineEvent(pending, {
       type: "tool_use",
       toolName: state.toolName,
       toolInput: state.rawInput,
@@ -1054,7 +1287,11 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     this.maybeEmitToolUse(worker, state);
     state.emittedResult = true;
-    void this.emitEngineEvent(worker.pendingTurn?.onEngineEvent, {
+    const pending = worker.pendingTurn;
+    if (!pending) {
+      return;
+    }
+    this.queueEngineEvent(pending, {
       type: "tool_result",
       toolUseId: state.toolCallId,
       toolName: state.toolName,
@@ -1077,17 +1314,19 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (state) {
       this.maybeEmitToolUse(worker, state);
     }
+    await pending.eventChain;
     const toolName = requestToolName(request, state);
     const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
     const toolInput = toolName === "AskUserQuestion"
       ? normalizeKimiQuestionInput(request, rawToolInput)
       : rawToolInput;
-    await this.emitEngineEvent(pending.onEngineEvent, {
+    this.queueEngineEvent(pending, {
       type: "permission_request",
       toolName,
       toolInput,
       sessionId: worker.currentSessionId ?? request.sessionId,
     });
+    await pending.eventChain;
 
     const approvalRequest: EngineApprovalRequest = {
       engine: "kimi",
@@ -1238,6 +1477,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     } catch {
       // Engine event rendering is best-effort and must not break the turn.
     }
+  }
+
+  private queueEngineEvent(pending: PendingKimiTurn, event: EngineStreamEvent): void {
+    pending.eventChain = pending.eventChain.then(async () => {
+      await this.emitEngineEvent(pending.onEngineEvent, event);
+    });
   }
 
   private rekeyWorker(worker: KimiWorker, sessionId: string): void {

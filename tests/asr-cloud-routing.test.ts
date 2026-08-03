@@ -116,6 +116,9 @@ function buildTranscriber(options: {
     chunkAfterSeconds: 100_000,
     env: options.env,
     stateDir: options.stateDir,
+    // This suite isolates cloud routing rather than the production local-ASR
+    // capacity guard, which has its own regression tests.
+    maxAudioSeconds: 100_000,
   } as never);
   return { transcribe, fetchImpl };
 }

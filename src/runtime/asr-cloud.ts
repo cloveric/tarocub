@@ -42,15 +42,11 @@ export interface TranscribeMediaOptions {
   /** Instance state dir; cloud ASR job dirs live under `<stateDir>/asr-jobs/`. */
   stateDir?: string;
   /**
-   * Cancels an in-flight cloud transcription (the child process is killed and
-   * the promise rejects promptly). Without it a cloud job holds its queue slot
-   * until the wall-clock bound expires and `/stop` cannot actually stop it.
-   *
-   * TODO(lark): `src/lark/message-handler.ts` (the `transcribeMedia(...)` call
-   * in the media-download block of `handleLarkEngineTurn`, ~line 1263) still
-   * calls without a signal; it owns `runController.signal` and should pass it
-   * so `/stop` aborts a running cloud transcription. Telegram's
-   * `prepareTelegramMessageInput` has no per-turn signal in scope today.
+   * Cancels the entire transcription pipeline. Channel callers pass the active
+   * turn signal through duration probing, local Qwen HTTP/CLI and chunking, or
+   * the Tingwu child process, so `/stop` promptly releases the chat queue. The
+   * bridge can abort an HTTP request, though the ASR server may finish an
+   * already-running model kernel before it observes the disconnected client.
    */
   abortSignal?: AbortSignal;
 }

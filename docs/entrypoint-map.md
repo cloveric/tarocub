@@ -185,6 +185,8 @@ See `docs/state-model.md` before changing on-disk semantics.
 - `src/codex/kimi-acp-adapter.ts`
   Persistent Kimi ACP worker, session configuration/loading, streaming event mapping,
   approvals/questions, cancellation, and compact support.
+- `src/codex/kimi-workspace.ts`
+  Atomic managed-block synchronization for Kimi workspace instructions.
 
 If a bug smells like auth, stale session, engine CLI output shape, or provider-specific formatting, inspect these modules before patching Telegram code.
 
@@ -226,6 +228,7 @@ Run focused tests for the area you touched before wider validation.
 - Shared runtime/state:
   `tests/bridge.test.ts`
   `tests/kimi-acp-adapter.test.ts`
+  `tests/kimi-workspace.test.ts`
   `tests/cron-scheduler.test.ts`
   `tests/instance-lock.test.ts`
   `tests/runtime-state.test.ts`

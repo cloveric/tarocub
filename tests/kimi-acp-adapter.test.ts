@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -72,6 +72,13 @@ class FakeAcpServer {
   readonly prompts: JsonRpcMessage[] = [];
   loadReplayText = "old replay that must be ignored";
   autoCompleteCancel = true;
+  respondToSessionList = true;
+  listedSessions: Array<{
+    sessionId: string;
+    cwd: string;
+    title?: string;
+    updatedAt?: string;
+  }> = [];
   configOptions: SessionConfigOption[] = [
     {
       id: "model",
@@ -191,8 +198,19 @@ class FakeAcpServer {
       this.respond(message, {
         protocolVersion: 1,
         agentInfo: { name: "Fake Kimi", version: "test" },
-        agentCapabilities: { loadSession: true },
+        agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
         authMethods: [],
+      });
+      return;
+    }
+    if (message.method === "session/list") {
+      if (!this.respondToSessionList) {
+        return;
+      }
+      const cwd = typeof message.params?.cwd === "string" ? message.params.cwd : null;
+      this.respond(message, {
+        sessions: cwd ? this.listedSessions.filter((session) => session.cwd === cwd) : this.listedSessions,
+        nextCursor: null,
       });
       return;
     }
@@ -327,6 +345,7 @@ function adapterOptions(harness: ReturnType<typeof createHarness>) {
     idleSweepIntervalMs: 0,
     turnTimeoutMs: null,
     inactivityTimeoutMs: null,
+    syncWorkspaceInstructionsFn: vi.fn(async (_workspacePath: string, instructions: string | null) => instructions ?? ""),
   };
 }
 
@@ -348,11 +367,13 @@ describe("KimiAcpAdapter", () => {
     }), "utf8");
 
     const harness = createHarness();
+    const syncWorkspaceInstructionsFn = vi.fn(async (_workspacePath: string, instructions: string | null) => instructions ?? "");
     const adapter = new KimiAcpAdapter("/opt/kimi", {
       ...adapterOptions(harness),
       configPath,
       engineHomePath: root,
       instructionsPath,
+      syncWorkspaceInstructionsFn,
     });
     try {
       const first = adapter.sendUserMessage("telegram-55", {
@@ -367,16 +388,14 @@ describe("KimiAcpAdapter", () => {
         { sessionId: "kimi-session-1", configId: "mode", value: "yolo" },
       ]);
       expect(harness.spawnCalls[0]?.args).toEqual(["acp"]);
-      expect(promptText(harness.children[0].server)).toBe([
-        "[Bridge Instructions]",
-        "Always follow the instance instruction.",
-        "",
-        "Use the Lark delivery contract.",
-        "[/Bridge Instructions]",
-        "",
-        "[User Message]",
-        "first",
-      ].join("\n"));
+      expect(promptText(harness.children[0].server)).toBe("first");
+      expect(syncWorkspaceInstructionsFn).toHaveBeenCalledWith(
+        "/tmp/kimi-workspace",
+        "Always follow the instance instruction.\n\nUse the Lark delivery contract.",
+      );
+      expect(harness.children[0].server.requests("session/new")[0]?.params?.mcpServers).toEqual([
+        expect.objectContaining({ name: "cctb_search" }),
+      ]);
       harness.children[0].server.sendUpdate({
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "one" },
@@ -413,16 +432,21 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
-  it("reloads instance instructions on every turn without restarting the ACP worker", async () => {
+  it("syncs instance instructions into Kimi's native workspace context and reloads when they change", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-instructions-test-"));
     const instructionsPath = path.join(root, "agent.md");
     await writeFile(instructionsPath, "Use instruction version one.", "utf8");
     const harness = createHarness();
-    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), instructionsPath });
+    const syncWorkspaceInstructionsFn = vi.fn(async (_workspacePath: string, instructions: string | null) => instructions ?? "");
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      instructionsPath,
+      syncWorkspaceInstructionsFn,
+    });
     try {
       const first = adapter.sendUserMessage("telegram-59", { text: "first", files: [] });
       await waitFor(() => harness.children[0]?.server.prompts.length === 1);
-      expect(promptText(harness.children[0].server)).toContain("Use instruction version one.");
+      expect(promptText(harness.children[0].server)).toBe("first");
       harness.children[0].server.sendUpdate({
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "one" },
@@ -432,17 +456,87 @@ describe("KimiAcpAdapter", () => {
 
       await writeFile(instructionsPath, "Use instruction version two.", "utf8");
       const second = adapter.sendUserMessage("kimi-session-1", { text: "second", files: [] });
-      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
-      expect(promptText(harness.children[0].server, 1)).toContain("Use instruction version two.");
-      expect(promptText(harness.children[0].server, 1)).not.toContain("Use instruction version one.");
-      expect(harness.children).toHaveLength(1);
-      expect(harness.killedPids).toEqual([]);
-      harness.children[0].server.sendUpdate({
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      expect(promptText(harness.children[1].server)).toBe("second");
+      expect(harness.children).toHaveLength(2);
+      expect(harness.killedPids).toContain(701);
+      expect(syncWorkspaceInstructionsFn).toHaveBeenNthCalledWith(
+        2,
+        "/tmp/kimi-workspace",
+        "Use instruction version two.",
+      );
+      harness.children[1].server.sendUpdate({
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "two" },
+      }, "kimi-session-1");
+      harness.children[1].server.respondPrompt();
+      await second;
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reloads when project-owned Kimi AGENTS guidance changes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-project-instructions-test-"));
+    const instructionsPath = path.join(root, "agent.md");
+    await writeFile(instructionsPath, "Stable bridge guidance.", "utf8");
+    await mkdir(path.join(root, ".kimi-code"), { recursive: true });
+    const agentsPath = path.join(root, ".kimi-code", "AGENTS.md");
+    await writeFile(agentsPath, "Project-owned guidance v1.\n", "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      workspacePath: root,
+      instructionsPath,
+      syncWorkspaceInstructionsFn: undefined,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-62", { text: "first", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "one" },
       });
       harness.children[0].server.respondPrompt();
+      await first;
+
+      await writeFile(agentsPath, "Project-owned guidance v2.\n", "utf8");
+      const second = adapter.sendUserMessage("kimi-session-1", { text: "second", files: [] });
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      expect(harness.killedPids).toContain(701);
+      harness.children[1].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "two" },
+      }, "kimi-session-1");
+      harness.children[1].server.respondPrompt();
       await second;
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps native slash commands raw when an override workspace requires prompt-level instructions", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-command-test-"));
+    const instructionsPath = path.join(root, "agent.md");
+    await writeFile(instructionsPath, "Follow bridge guidance.", "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), instructionsPath });
+    try {
+      const turn = adapter.sendUserMessage("telegram-61", {
+        text: "/compact",
+        files: [],
+        workspaceOverride: path.join(root, "external-workspace"),
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(promptText(harness.children[0].server)).toBe("/compact");
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "compacted" },
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "compacted" });
     } finally {
       adapter.destroy();
       await rm(root, { recursive: true, force: true });
@@ -694,6 +788,31 @@ describe("KimiAcpAdapter", () => {
     adapter.destroy();
   });
 
+  it("delivers queued engine events before the final result", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const eventOrder: string[] = [];
+    const turn = adapter.sendUserMessage("telegram-43", {
+      text: "hello",
+      files: [],
+      onEngineEvent: async (event) => {
+        if (event.type === "assistant_text") {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        eventOrder.push(event.type);
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    harness.children[0].server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "done" },
+    });
+    harness.children[0].server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "done" });
+    expect(eventOrder).toEqual(["session", "assistant_text", "result"]);
+    adapter.destroy();
+  });
+
   it("loads an external session and excludes replayed history from the new answer", async () => {
     const harness = createHarness();
     const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
@@ -710,6 +829,69 @@ describe("KimiAcpAdapter", () => {
     server.respondPrompt();
 
     await expect(turn).resolves.toEqual({ text: "fresh answer" });
+    adapter.destroy();
+  });
+
+  it("lists and validates Kimi sessions through a short-lived ACP control connection", async () => {
+    const harness = createHarness((server) => {
+      server.listedSessions = [
+        {
+          sessionId: "session-a",
+          cwd: "/tmp/project-a",
+          title: "Project A",
+          updatedAt: "2026-08-03T00:00:00.000Z",
+        },
+        { sessionId: "session-b", cwd: "/tmp/project-b" },
+      ];
+    });
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    await expect(adapter.listExternalSessions({ cwd: "/tmp/project-a", limit: 20 })).resolves.toEqual([{
+      sessionId: "session-a",
+      cwd: "/tmp/project-a",
+      title: "Project A",
+      updatedAt: "2026-08-03T00:00:00.000Z",
+    }]);
+    expect(harness.children[0].server.requests("session/list")[0]?.params).toEqual({
+      cwd: "/tmp/project-a",
+      cursor: null,
+    });
+    expect(harness.children[0].server.requests("session/new")).toHaveLength(0);
+    expect(harness.killedPids).toContain(701);
+
+    await expect(adapter.validateExternalSession("session-b")).resolves.toEqual({
+      sessionId: "session-b",
+      cwd: "/tmp/project-b",
+    });
+    expect(harness.children[1].server.requests("session/load")[0]?.params).toEqual({
+      sessionId: "session-b",
+      cwd: "/tmp/project-b",
+      mcpServers: [expect.objectContaining({ name: "cctb_search" })],
+    });
+    await expect(adapter.validateExternalSession("session-b", {
+      workspaceOverride: "/tmp/project-a",
+    })).rejects.toThrow("Kimi session workspace mismatch");
+    await expect(adapter.validateExternalSession("missing-session")).rejects.toThrow("Kimi session not found");
+    expect(harness.children).toHaveLength(4);
+    expect(harness.children.every((child) => child.server.requests("session/new").length === 0)).toBe(true);
+    adapter.destroy();
+  });
+
+  it("times out and kills a stalled Kimi session/list control process", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness((server) => {
+      server.respondToSessionList = false;
+    });
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      initializeTimeoutMs: 25,
+    });
+    const listing = adapter.listExternalSessions();
+    const timedOut = expect(listing).rejects.toThrow("Kimi ACP control request timed out after 25ms");
+    await waitFor(() => harness.children[0]?.server.requests("session/list").length === 1);
+    await vi.advanceTimersByTimeAsync(25);
+
+    await timedOut;
+    expect(harness.killedPids).toContain(701);
     adapter.destroy();
   });
 
@@ -777,14 +959,17 @@ describe("KimiAcpAdapter", () => {
         expect(request.toolInput).toEqual({
           questions: [{
             question: "Which do you choose: red or blue?",
-            header: "Choice",
+            header: "Colour",
             multi_select: false,
-            options: [{ label: "red" }, { label: "blue" }],
+            options: [
+              { label: "red", description: "Warm" },
+              { label: "blue", description: "Cool" },
+            ],
           }],
         });
         return {
           behavior: "allow",
-          updatedInput: { answers: { Choice: "blue" } },
+          updatedInput: { answers: { Colour: "blue" } },
         };
       },
     });
@@ -796,6 +981,24 @@ describe("KimiAcpAdapter", () => {
       title: "AskUserQuestion",
       kind: "other",
       status: "pending",
+      rawInput: {
+        questions: [
+          {
+            question: "Which do you choose: red or blue?",
+            header: "Colour",
+            multi_select: true,
+            options: [
+              { label: "red", description: "Warm" },
+              { label: "blue", description: "Cool" },
+            ],
+          },
+          {
+            question: "This second question cannot be represented by one ACP optionId.",
+            header: "Unsupported",
+            options: [{ label: "extra" }],
+          },
+        ],
+      },
     });
     const requestId = server.requestPermission({
       sessionId: server.sessionId,

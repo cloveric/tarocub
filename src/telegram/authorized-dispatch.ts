@@ -40,7 +40,21 @@ export interface AuthorizedTelegramDispatchContext {
   api: Pick<TelegramApi, "sendMessage" | "sendDocument" | "sendPhoto" | "sendVoice" | "getFile" | "downloadFile">;
   bridge: {
     supportsTurnScopedEnv?: boolean;
-    validateCodexThread?(threadId: string): Promise<void>;
+    validateCodexThread?(
+      threadId: string,
+      input?: { workspaceOverride?: string },
+    ): Promise<{
+      sessionId: string;
+      cwd: string;
+      title?: string;
+      updatedAt?: string;
+    } | void>;
+    listExternalSessions?(input?: { cwd?: string; limit?: number }): Promise<Array<{
+      sessionId: string;
+      cwd: string;
+      title?: string;
+      updatedAt?: string;
+    }>>;
     getThreadGoal?(input: {
       chatId: number;
       userId: number;
@@ -255,6 +269,18 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     sessionStore,
     updateInstanceConfig,
     validateCodexThread: context.bridge.validateCodexThread?.bind(context.bridge),
+    scanRecentKimiSessions: context.bridge.listExternalSessions
+      ? async () => (await context.bridge.listExternalSessions!({ limit: 20 })).map((session) => {
+          const modifiedAt = new Date(session.updatedAt ?? 0);
+          return {
+            sessionId: session.sessionId,
+            dirName: session.sessionId,
+            workspacePath: session.cwd,
+            modifiedAt: Number.isNaN(modifiedAt.getTime()) ? new Date(0) : modifiedAt,
+            displayName: session.title || session.sessionId,
+          };
+        })
+      : undefined,
   })) {
     return;
   }

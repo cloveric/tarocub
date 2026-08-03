@@ -120,7 +120,7 @@ describe("normalizeLarkMessage", () => {
     expect(normalized?.text).toContain("thread_id: omt_group_thread");
   });
 
-  it("keeps p2p message threads in the parent private session", () => {
+  it("isolates p2p message threads while keeping access on the parent private chat", () => {
     const normalized = normalizeLarkMessage({
       messageId: "om_123",
       chatId: "oc_chat",
@@ -138,7 +138,9 @@ describe("normalizeLarkMessage", () => {
       createTime: 123,
     });
 
-    expect(normalized?.conversationKey).toBe("lark:oc_chat");
+    expect(normalized?.conversationKey).toBe("lark:oc_chat:omt_private_thread");
+    expect(normalized?.accessConversationKey).toBe("lark:oc_chat");
+    expect(normalized?.bridgeChatId).not.toBe(normalized?.bridgeAccessChatId);
     expect(normalized?.bridgeChatType).toBe("private");
     expect(normalized?.threadId).toBe("omt_private_thread");
     expect(normalized?.text).toContain("thread_id: omt_private_thread");

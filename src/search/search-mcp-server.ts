@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -105,6 +106,107 @@ type EnrichedExtractPayload = Omit<TavilyExtractPayload, "results"> & {
   results?: EnrichedExtractEntry[];
   sourceLog: SourceLogEntry[];
 };
+
+const SEARCH_CREDENTIAL_KEYS = ["BRAVE_API_KEY", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY"] as const;
+type SearchCredentialKey = (typeof SEARCH_CREDENTIAL_KEYS)[number];
+
+function stripTomlInlineComment(value: string): string {
+  let quote: "\"" | "'" | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if ((char === "\"" || char === "'") && value[index - 1] !== "\\") {
+      quote = quote === char ? null : quote ?? char;
+      continue;
+    }
+    if (char === "#" && quote === null) {
+      return value.slice(0, index).trim();
+    }
+  }
+  return value.trim();
+}
+
+function parseTomlString(value: string): string | undefined {
+  const trimmed = stripTomlInlineComment(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("\"")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      return typeof parsed === "string" && parsed.trim() ? parsed.trim() : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    const parsed = trimmed.slice(1, -1).trim();
+    return parsed || undefined;
+  }
+  return trimmed;
+}
+
+function searchCredentialsFromCodexConfig(raw: string): Partial<Record<SearchCredentialKey, string>> {
+  const credentials: Partial<Record<SearchCredentialKey, string>> = {};
+  let inMcpEnvSection = false;
+  for (const line of raw.split(/\r?\n/)) {
+    const section = line.match(/^\s*\[\s*([^\]]+)\s*\]\s*(?:#.*)?$/)?.[1]?.trim();
+    if (section !== undefined) {
+      inMcpEnvSection = /^mcp_servers\..+\.env$/i.test(section);
+      continue;
+    }
+    if (!inMcpEnvSection) {
+      continue;
+    }
+    const entry = line.match(/^\s*["']?([A-Za-z_][A-Za-z0-9_]*)["']?\s*=\s*(.+)$/);
+    const key = entry?.[1];
+    if (!key || !SEARCH_CREDENTIAL_KEYS.some((candidate) => candidate === key)) {
+      continue;
+    }
+    const value = parseTomlString(entry![2]!);
+    if (value && credentials[key as SearchCredentialKey] === undefined) {
+      credentials[key as SearchCredentialKey] = value;
+    }
+  }
+  return credentials;
+}
+
+export async function applyCodexSearchCredentialFallback(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
+  const needsBrave = env.BRAVE_API_KEY === undefined && env.BRAVE_SEARCH_API_KEY === undefined;
+  const needsTavily = env.TAVILY_API_KEY === undefined;
+  if (!needsBrave && !needsTavily) {
+    return [];
+  }
+  const codexHome = env.CODEX_HOME?.trim()
+    || (env.HOME || env.USERPROFILE ? path.join((env.HOME ?? env.USERPROFILE)!, ".codex") : undefined);
+  if (!codexHome) {
+    return [];
+  }
+  let configured: Partial<Record<SearchCredentialKey, string>>;
+  try {
+    configured = searchCredentialsFromCodexConfig(
+      await readFile(path.join(codexHome, "config.toml"), "utf8"),
+    );
+  } catch {
+    return [];
+  }
+  const applied: string[] = [];
+  if (needsBrave) {
+    const key: "BRAVE_API_KEY" | "BRAVE_SEARCH_API_KEY" | undefined = configured.BRAVE_API_KEY
+      ? "BRAVE_API_KEY"
+      : configured.BRAVE_SEARCH_API_KEY
+        ? "BRAVE_SEARCH_API_KEY"
+        : undefined;
+    if (key) {
+      env[key] = configured[key];
+      applied.push(key);
+    }
+  }
+  if (needsTavily && configured.TAVILY_API_KEY) {
+    env.TAVILY_API_KEY = configured.TAVILY_API_KEY;
+    applied.push("TAVILY_API_KEY");
+  }
+  return applied;
+}
 
 function sendResponse(id: string | number | undefined, result: Record<string, unknown>): void {
   if (id === undefined) {
@@ -615,6 +717,7 @@ export function resolveSearchMcpServerInvocation(): SearchMcpServerInvocation {
 }
 
 export async function runSearchMcpServer(): Promise<void> {
+  await applyCodexSearchCredentialFallback();
   let buffer = "";
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {

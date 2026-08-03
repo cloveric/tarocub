@@ -110,6 +110,7 @@ async function ensureInboxDirExists(inboxDir: string): Promise<void> {
 //   ASR_CLI_PYTHON + ASR_CLI_SCRIPT — CLI fallback (cold start)
 //   ASR_HTTP_TIMEOUT_MS — per-file/chunk ASR HTTP timeout
 //   ASR_CHUNK_AFTER_SECONDS + ASR_CHUNK_SECONDS — split long audio before ASR
+//   ASR_MAX_AUDIO_SECONDS — hard per-request limit of the local ASR service
 // An empty ASR_HTTP_URL disables the HTTP path; missing CLI paths disable
 // the CLI path. If both are unavailable, voice messages fail cleanly
 // with an "ASR not configured" error instead of spawning against
@@ -122,7 +123,7 @@ const ASR_CLI_SCRIPT = process.env.ASR_CLI_SCRIPT
 const ASR_HTTP_TIMEOUT_MS = parsePositiveNumber(process.env.ASR_HTTP_TIMEOUT_MS, 180_000);
 const ASR_CHUNK_AFTER_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_AFTER_SECONDS, 120);
 const ASR_CHUNK_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_SECONDS, 60);
-const MAX_ASR_CHUNK_SECONDS = 600;
+const ASR_MAX_AUDIO_SECONDS = parsePositiveNumber(process.env.ASR_MAX_AUDIO_SECONDS, 300);
 const VIDEO_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
 const asrWatchdog = createAsrWatchdogFromEnv();
 
@@ -130,7 +131,7 @@ type ExecFileCallback = (error: Error | null, stdout: string | Buffer, stderr: s
 type ExecFileImpl = (
   file: string,
   args: readonly string[],
-  options: { timeout?: number },
+  options: { timeout?: number; signal?: AbortSignal },
   callback: ExecFileCallback,
 ) => void;
 
@@ -156,7 +157,7 @@ function execFileText(
   execFileImpl: ExecFileImpl,
   file: string,
   args: readonly string[],
-  options: { timeout?: number } = {},
+  options: { timeout?: number; signal?: AbortSignal } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFileImpl(file, args, options, (error, stdout, stderr) => {
@@ -177,6 +178,7 @@ async function probeAudioDurationSeconds(
   audioPath: string,
   execFileImpl: ExecFileImpl,
   ffprobePath: string,
+  abortSignal?: AbortSignal,
 ): Promise<number | null> {
   try {
     const { stdout } = await execFileText(execFileImpl, ffprobePath, [
@@ -187,10 +189,16 @@ async function probeAudioDurationSeconds(
       "-of",
       "default=noprint_wrappers=1:nokey=1",
       audioPath,
-    ], { timeout: 10_000 });
+    ], {
+      timeout: 10_000,
+      ...(abortSignal ? { signal: abortSignal } : {}),
+    });
     const duration = Number.parseFloat(stdout.trim());
     return Number.isFinite(duration) && duration > 0 ? duration : null;
   } catch (error) {
+    if (abortSignal?.aborted) {
+      throw error;
+    }
     try {
       await access(audioPath);
     } catch {
@@ -205,6 +213,7 @@ async function splitAudioIntoChunks(inputPath: string, options: {
   chunkSeconds: number;
   execFileImpl: ExecFileImpl;
   ffmpegPath: string;
+  abortSignal?: AbortSignal;
 }): Promise<{ chunks: string[]; cleanup: () => Promise<void> }> {
   const chunkDir = await mkdtemp(path.join(os.tmpdir(), "cctb-asr-chunks-"));
   const pattern = path.join(chunkDir, "chunk-%03d.wav");
@@ -228,7 +237,10 @@ async function splitAudioIntoChunks(inputPath: string, options: {
       "-reset_timestamps",
       "1",
       pattern,
-    ], { timeout: 300_000 });
+    ], {
+      timeout: 300_000,
+      ...(options.abortSignal ? { signal: options.abortSignal } : {}),
+    });
 
     const chunks = (await readdir(chunkDir))
       .filter((entry) => /^chunk-\d+\.wav$/.test(entry))
@@ -261,6 +273,7 @@ export function createDefaultTranscribeVoice(options: {
   httpTimeoutMs?: number;
   chunkAfterSeconds?: number;
   chunkSeconds?: number;
+  maxAudioSeconds?: number;
   /**
    * Env source for the long-audio cloud ASR config (TINGWU_ASR_DIR,
    * ASR_CLOUD_THRESHOLD_SECONDS, ASR_CLOUD_TASK_TIMEOUT_SECONDS). Read at
@@ -280,8 +293,15 @@ export function createDefaultTranscribeVoice(options: {
   const ffprobePath = options.ffprobePath ?? "ffprobe";
   const ffmpegPath = options.ffmpegPath ?? "ffmpeg";
   const httpTimeoutMs = options.httpTimeoutMs ?? ASR_HTTP_TIMEOUT_MS;
-  const chunkAfterSeconds = options.chunkAfterSeconds ?? ASR_CHUNK_AFTER_SECONDS;
-  const chunkSeconds = Math.min(options.chunkSeconds ?? ASR_CHUNK_SECONDS, MAX_ASR_CHUNK_SECONDS);
+  const configuredMaxAudioSeconds = options.maxAudioSeconds ?? ASR_MAX_AUDIO_SECONDS;
+  const maxAudioSeconds = Number.isFinite(configuredMaxAudioSeconds) && configuredMaxAudioSeconds > 0
+    ? configuredMaxAudioSeconds
+    : ASR_MAX_AUDIO_SECONDS;
+  // Leave timestamp/container headroom below the ASR service's hard cap. A
+  // nominally exact 300s segment can probe slightly above 300s and be rejected.
+  const safeChunkSeconds = Math.max(1, Math.floor(maxAudioSeconds * 0.9));
+  const chunkAfterSeconds = Math.min(options.chunkAfterSeconds ?? ASR_CHUNK_AFTER_SECONDS, maxAudioSeconds);
+  const chunkSeconds = Math.min(options.chunkSeconds ?? ASR_CHUNK_SECONDS, safeChunkSeconds);
   const cloudEnv = options.env ?? process.env;
   const factoryStateDir = options.stateDir;
 
@@ -301,15 +321,18 @@ export function createDefaultTranscribeVoice(options: {
     }
   }
 
-  async function transcribeSingleFile(audioPath: string): Promise<string> {
+  async function transcribeSingleFile(audioPath: string, abortSignal?: AbortSignal): Promise<string> {
+    abortSignal?.throwIfAborted();
     if (httpUrl) {
       try {
+        const timeoutSignal = AbortSignal.timeout(httpTimeoutMs);
         const response = await fetchImpl(httpUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: audioPath }),
-          signal: AbortSignal.timeout(httpTimeoutMs),
+          signal: abortSignal ? AbortSignal.any([abortSignal, timeoutSignal]) : timeoutSignal,
         });
+        abortSignal?.throwIfAborted();
         if (response.ok) {
           const text = await response.text();
           if (text.trim()) {
@@ -321,6 +344,11 @@ export function createDefaultTranscribeVoice(options: {
           await recordHttpFailure(new Error(`ASR HTTP server returned ${response.status}`));
         }
       } catch (error) {
+        // An operator cancellation must not be recorded as an ASR outage or
+        // fall through to the cold CLI path after /stop.
+        if (abortSignal?.aborted) {
+          throw error;
+        }
         await recordHttpFailure(error);
         // HTTP server unreachable — fall back to CLI if configured
       }
@@ -332,8 +360,12 @@ export function createDefaultTranscribeVoice(options: {
       );
     }
 
+    abortSignal?.throwIfAborted();
     return new Promise<string>((resolve, reject) => {
-      execFileImpl(cliPython, [cliScript, audioPath], { timeout: 300_000 }, (error, stdout, stderr) => {
+      execFileImpl(cliPython, [cliScript, audioPath], {
+        timeout: 300_000,
+        ...(abortSignal ? { signal: abortSignal } : {}),
+      }, (error, stdout, stderr) => {
         if (error) {
           const stderrText = Buffer.isBuffer(stderr) ? stderr.toString("utf8") : stderr;
           reject(new Error(stderrText.trim() || error.message));
@@ -344,25 +376,35 @@ export function createDefaultTranscribeVoice(options: {
     });
   }
 
-  async function transcribeLocally(audioPath: string, duration: number | null): Promise<string> {
+  async function transcribeLocally(
+    audioPath: string,
+    duration: number | null,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    abortSignal?.throwIfAborted();
     const shouldExtractOrChunk = isLikelyVideoFile(audioPath) || (duration !== null && duration > chunkAfterSeconds);
     if (shouldExtractOrChunk) {
       const { chunks, cleanup } = await splitAudioIntoChunks(audioPath, {
         chunkSeconds,
         execFileImpl,
         ffmpegPath,
+        ...(abortSignal ? { abortSignal } : {}),
       });
       try {
         const transcripts: string[] = [];
         let successfulChunks = 0;
         for (const [index, chunk] of chunks.entries()) {
+          abortSignal?.throwIfAborted();
           try {
-            const transcript = await transcribeSingleFile(chunk);
+            const transcript = await transcribeSingleFile(chunk, abortSignal);
             if (transcript.trim()) {
               successfulChunks += 1;
               transcripts.push(transcript.trim());
             }
           } catch (error) {
+            if (abortSignal?.aborted) {
+              throw error;
+            }
             // Per-chunk failures are infrastructure errors, NOT user speech.
             // Do not blend a "[chunk N/M transcription failed: ...]" marker into
             // the transcript — the model would treat it as the user's words.
@@ -385,11 +427,13 @@ export function createDefaultTranscribeVoice(options: {
       }
     }
 
-    return transcribeSingleFile(audioPath);
+    return transcribeSingleFile(audioPath, abortSignal);
   }
 
   return async function defaultTranscribeVoice(audioPath: string, callOptions?: TranscribeMediaOptions): Promise<string> {
-    const duration = await probeAudioDurationSeconds(audioPath, execFileImpl, ffprobePath);
+    const abortSignal = callOptions?.abortSignal;
+    abortSignal?.throwIfAborted();
+    const duration = await probeAudioDurationSeconds(audioPath, execFileImpl, ffprobePath, abortSignal);
 
     // Long-audio cloud routing (Aliyun Tingwu). Env is read per call so the
     // feature can be enabled/disabled without rebuilding the transcriber.
@@ -417,7 +461,7 @@ export function createDefaultTranscribeVoice(options: {
       } catch (error) {
         // A CANCELLED job is not a failure: the operator pressed stop, so
         // restarting the same work locally would defeat the stop entirely.
-        if (isCloudAsrCancelledError(error)) {
+        if (isCloudAsrCancelledError(error) || abortSignal?.aborted) {
           throw error;
         }
         // ANY other cloud failure falls back to a local transcription attempt.
@@ -427,7 +471,7 @@ export function createDefaultTranscribeVoice(options: {
       }
     }
 
-    return transcribeLocally(audioPath, duration);
+    return transcribeLocally(audioPath, duration, abortSignal);
   };
 }
 
@@ -503,9 +547,9 @@ export async function prepareTelegramMessageInput(input: {
   downloadAttachments?: typeof defaultDownloadAttachments;
   transcribeVoice?: typeof defaultTranscribeVoice;
   /**
-   * The turn's abort signal. Threaded into cloud transcription so /stop can kill
-   * a running Tingwu job instead of leaving it to its wall clock — Lark already
-   * passes this; without it Telegram's stop could not interrupt a cloud job.
+   * The turn's abort signal. Threaded through duration probing, local Qwen ASR,
+   * media chunking, and Tingwu so /stop releases the chat queue and does not
+   * start a fallback after cancellation.
    */
   abortSignal?: AbortSignal;
 }): Promise<TelegramMessageInputPreparationResult> {

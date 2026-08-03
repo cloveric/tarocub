@@ -15,13 +15,13 @@ Code CLI 0.31.1 and must be re-probed before removing a gap.
 | Stop/cancel | Runtime interrupt/abort | Worker abort | **Aligned:** ACP `session/cancel`, then process termination after the grace period |
 | Normal approvals | App-server tool approval; process mode pre-approves the turn | Per-tool permission callback | **Aligned:** ACP permission callbacks use the shared approval policy and Lark/Telegram UI |
 | Full-auto/bypass | Native sandbox/full-auto and bypass modes | Native permission modes | **Aligned:** full-auto -> ACP `yolo`; bypass -> ACP `auto` |
-| Structured questions | Native request-user-input path | Native `AskUserQuestion` | **Gap:** ACP exposes one advertised option ID at a time, but no verified free-text or multi-question input |
+| Structured questions | Native request-user-input path | Native `AskUserQuestion` | **Partially aligned:** ACP-advertised single-choice options render in both Lark and Telegram; free-text and verified multi-question input remain unavailable |
 | Model selection | Bridge model configuration | Bridge aliases/model configuration | **Aligned:** provider-advertised ACP model options; invalid IDs fail on the next real session |
 | Effort/thinking | Model-dependent bridge values | Model-dependent bridge values | **Aligned:** ACP thinking options support `low`, `high`, and `max`; unsupported values fail closed |
-| Project/instance instructions | Trusted runtime instruction channel | Appended system prompt | **Gap:** ACP 0.31.1 ignores `--agent-file` for new ACP sessions, so instructions are prompt-scoped per turn |
+| Project/instance instructions | Trusted runtime instruction channel | Appended system prompt | **Aligned for bridge-owned workspaces:** TaroCub atomically manages a block in the default `.kimi-code/agents/agent.md` main-agent override, retaining `${base_prompt}` and `${plugin_sections}`; ACP has no direct client-supplied system-prompt field, so external resumed workspaces remain untouched and use prompt fallback for ordinary text turns |
 | New conversation | New thread/session through runtime | New Claude session | **Aligned:** ACP `session/new`, with the returned session ID persisted by the shared session store |
-| Explicit resume | `/resume thread <id>` with runtime validation | `/resume <n>` after local scan | **Aligned:** `/resume session <id>` validates through real ACP `session/load` before binding |
-| Resume candidate scan | Runtime-known thread validation, no bridge list | Local Claude session scan | **Gap:** ACP exposes no bridge-usable session-list method; bare `/resume` explains the limitation |
+| Explicit resume | `/resume thread <id>` with runtime validation | `/resume <n>` after local scan | **Aligned:** `/resume session <id>` validates with real ACP `session/list` plus `session/load`, preserves the authoritative original `cwd`, and only then changes the chat binding |
+| Resume candidate scan | Runtime-known thread validation, no bridge list | Local Claude session scan | **Aligned:** bare `/resume` uses ACP `session/list` and supports numbered selection in Telegram and Lark |
 | Detach/reset | Shared session store | Shared session store | **Aligned:** shared detach/reset behavior restores the prior logical binding when available |
 | Context compaction | Stateless reset fallback | Native `/compact` | **Aligned:** real ACP `/compact`, verified to retain a probe token in the same session |
 | Goal mode | Bridge-native goal API | Native `/goal` prompt | **Gap:** live ACP returned `Unknown ACP command: /goal`; TaroCub rejects it explicitly |
@@ -38,7 +38,8 @@ Code CLI 0.31.1 and must be re-probed before removing a gap.
 | Locale and operator errors | Shared locale/error classification | Shared locale/error classification | **Aligned:** Kimi engine labels, auth/spawn errors, and capability gaps are localized |
 | Turn timeout | Shared timeout and cancellation | Shared timeout and cancellation | **Aligned:** shared timeout abort reaches ACP cancellation and worker cleanup |
 | Audio/video input | Channel ASR -> text | Channel ASR -> text | **Aligned at bridge layer:** ACP advertises `audio: false`, so channels transcribe media to text first |
-| MCP servers | Native Codex MCP configuration | Native Claude MCP/plugins | **Aligned:** Kimi inherits native user/project `mcp.json`; credentials remain outside TaroCub config |
+| Local skills | Codex/user/project skills | Claude/user/project skills | **Aligned:** Kimi keeps its native `~/.agents/skills`, project `.kimi-code/skills`/`.agents/skills`, and plugin skills; TaroCub exposes `~/.codex/skills` through the bridge-owned workspace `.kimi-code/skills` path without replacing existing project skills |
+| MCP servers | Native Codex MCP configuration | Native Claude MCP/plugins | **Aligned:** native Kimi user/project MCP/plugins remain active, and TaroCub injects its Brave/Tavily Search MCP through ACP for every new or loaded session |
 | Thought verbosity control | Runtime-dependent | Runtime-dependent | **Gap:** compatibility `verbosity` does not suppress Kimi thought events in ACP 0.31.1 |
 | Hot config during a turn | Runtime-dependent | Runtime-dependent | **Gap:** Kimi model/thinking/mode changes apply to the next turn and are rejected while that session is in flight |
 

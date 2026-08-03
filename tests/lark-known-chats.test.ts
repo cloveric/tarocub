@@ -28,6 +28,41 @@ function groupMessage(chatId: string): LarkNormalizedBridgeMessage {
 }
 
 describe("LarkKnownChatStore", () => {
+  it("keeps a private-chat thread as a distinct routable conversation", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-known-private-thread-"));
+    const normalized: LarkNormalizedBridgeMessage = {
+      messageId: "om_private_thread",
+      chatId: "oc_private",
+      chatMode: "p2p",
+      threadId: "omt_private_topic",
+      senderId: "ou_sender",
+      senderName: "Clover",
+      bridgeChatId: 8,
+      bridgeAccessChatId: 7,
+      bridgeUserId: 9,
+      bridgeChatType: "private",
+      conversationKey: "lark:oc_private:omt_private_topic",
+      accessConversationKey: "lark:oc_private",
+      text: "hello",
+      mentions: [],
+      attachments: [],
+    };
+
+    try {
+      const store = new LarkKnownChatStore(stateDir);
+      await store.record(normalized, new Date("2026-08-03T00:00:00.000Z"));
+
+      await expect(store.get(normalized.conversationKey)).resolves.toEqual(expect.objectContaining({
+        chatType: "private",
+        chatMode: "p2p",
+        threadId: "omt_private_topic",
+        label: "Clover / omt_private_topic",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("sanitizes stale parent-group known chat labels that were recorded from reply threads", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-known-chats-"));
     await writeFile(path.join(stateDir, "known-chats.json"), JSON.stringify({

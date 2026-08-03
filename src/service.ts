@@ -364,6 +364,45 @@ async function symlinkIfMissing(sourcePath: string, targetPath: string): Promise
   }
 }
 
+async function linkKimiSharedSkills(
+  env: Pick<EnvSource, "HOME" | "USERPROFILE" | "CODEX_HOME">,
+  workspacePath: string,
+): Promise<void> {
+  const sharedCodexHome = resolveSharedCodexHome(env);
+  if (!sharedCodexHome) {
+    return;
+  }
+  const kimiConfigDir = path.join(workspacePath, ".kimi-code");
+  const sourceSkillsDir = path.join(sharedCodexHome, "skills");
+  const targetSkillsPath = path.join(kimiConfigDir, "skills");
+  await mkdir(kimiConfigDir, { recursive: true });
+  let targetInfo: Awaited<ReturnType<typeof lstat>> | null = null;
+  try {
+    targetInfo = await lstat(targetSkillsPath);
+  } catch {
+    // Missing target gets the simplest zero-copy whole-directory link.
+  }
+  if (!targetInfo) {
+    await symlinkIfMissing(sourceSkillsDir, targetSkillsPath);
+    return;
+  }
+  if (!targetInfo.isDirectory() || targetInfo.isSymbolicLink()) {
+    return;
+  }
+
+  // Preserve project-owned Kimi skills while exposing missing shared Codex
+  // skills one entry at a time. Existing names always win.
+  let entries: string[];
+  try {
+    entries = await readdir(sourceSkillsDir);
+  } catch {
+    return;
+  }
+  await Promise.all(entries.map(async (entry) => {
+    await symlinkIfMissing(path.join(sourceSkillsDir, entry), path.join(targetSkillsPath, entry));
+  }));
+}
+
 async function syncOrRemove(sourcePath: string, destinationPath: string): Promise<void> {
   try {
     await copyFile(sourcePath, destinationPath);
@@ -799,6 +838,7 @@ async function createAdapter(
 
   if (engine === "kimi") {
     await mkdir(workspacePath, { recursive: true });
+    await linkKimiSharedSkills(env, workspacePath);
     return new KimiAcpAdapter(config.kimiExecutable, {
       childEnv,
       instructionsPath,

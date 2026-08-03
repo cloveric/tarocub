@@ -2,6 +2,13 @@ export interface CodexSessionHandle {
   sessionId: string;
 }
 
+export interface ExternalSessionInfo {
+  sessionId: string;
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+}
+
 export interface AdapterUsage {
   inputTokens: number;
   outputTokens: number;
@@ -138,7 +145,11 @@ export interface CodexAdapter {
   // steer; false means no active/addressable turn — the caller must fall back
   // to delivering the input as a normal queued message so it is never lost.
   steerActiveTurn?(sessionId: string, input: { text: string }): Promise<boolean>;
-  validateExternalSession?(sessionId: string): Promise<void>;
+  validateExternalSession?(
+    sessionId: string,
+    input?: { workspaceOverride?: string },
+  ): Promise<ExternalSessionInfo | void>;
+  listExternalSessions?(input?: { cwd?: string; limit?: number }): Promise<ExternalSessionInfo[]>;
   getThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<CodexThreadGoalResponse>;
   setThreadGoal?(sessionId: string, input: {
     objective: string;

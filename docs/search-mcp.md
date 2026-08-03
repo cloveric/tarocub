@@ -103,11 +103,21 @@ Check:
 claude mcp list
 ```
 
+## Kimi Code Runtime
+
+Kimi instances need no manual registration for TaroCub search. The bridge
+passes this stdio Search MCP in ACP `session/new` and `session/load`, while Kimi
+continues to load its own user/project MCP files and plugins normally. Provider
+keys are never copied into Kimi config. Explicit `BRAVE_API_KEY` /
+`TAVILY_API_KEY` process values take precedence; when they are absent, the MCP
+server can reuse those same keys from an existing local Codex
+`[mcp_servers.<name>.env]` configuration without logging them.
+
 ## Telegram Bot Runtime
 
-After registering MCP servers, restart the affected bot instances so new Codex/Claude/Antigravity turns inherit the tool configuration.
+After registering native MCP servers, restart the affected bot instances so new Codex/Claude/Antigravity turns inherit the tool configuration. Kimi receives TaroCub Search MCP automatically when its next ACP worker starts; no Kimi-side registration is required.
 
-Codex-backed instances use the Codex MCP registration. Claude-backed instances use the Claude Code MCP registration. Antigravity-backed instances use whatever native tool/MCP configuration the Antigravity CLI exposes to `agy --print`.
+Codex-backed instances use the Codex MCP registration. Claude-backed instances use the Claude Code MCP registration. Kimi-backed instances receive TaroCub Search MCP through ACP and retain native Kimi MCP/plugins. Antigravity-backed instances use whatever native tool/MCP configuration the Antigravity CLI exposes to `agy --print`.
 
 Keep the native plugin systems separate. Do not import Claude or Codex native plugins into Antigravity as part of the default bridge setup. Shared bridge skills should live as reusable skill files/docs or engine-neutral MCP/tool guidance. Instance `agent.md` files may reference or absorb those skills, but the `agent.md` files themselves remain per-instance, not shared state.
 

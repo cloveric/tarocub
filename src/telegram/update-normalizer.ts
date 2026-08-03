@@ -71,6 +71,11 @@ export function coalesceTelegramMediaGroupUpdates(updates: unknown[]): unknown[]
 }
 
 function normalizeCallbackCommand(data: string): string | null {
+  const answer = data.match(/^approval:([A-Za-z0-9_-]+):answer:(\d+)$/i);
+  if (answer) {
+    return `/approval ${answer[1]} answer-${answer[2]}`;
+  }
+
   const approval = data.match(/^approval:([A-Za-z0-9_-]+):(once|session|deny)$/i);
   if (approval) {
     return `/approval ${approval[1]} ${approval[2]!.toLowerCase()}`;

@@ -302,6 +302,16 @@ the exact token. This is durable conversation continuation. The bridge should
 ignore replayed history when constructing the new answer while still accepting
 the restored configuration response.
 
+### Session list
+
+The same initialize response advertised `sessionCapabilities.list`. A direct
+`session/list` probe returned durable session IDs with cwd, title, and update
+time. TaroCub uses a short-lived initialized ACP control connection for listing.
+Explicit-ID validation performs both `session/list` and a real `session/load`
+with the authoritative returned cwd, then terminates the control process. Bare
+`/resume` can therefore scan and select Kimi sessions, while binding fails
+closed before persistence if the session cannot actually load.
+
 ### Usage
 
 No `usage_update` notification and no `PromptResponse.usage` value were
@@ -338,6 +348,21 @@ did not print or copy token values. TaroCub must inherit the operator's Kimi
 home by default, pass through explicitly configured `KIMI_*` values, and never
 persist provider tokens into TaroCub config or logs.
 
+In addition to native Kimi MCP/plugin configuration, TaroCub passes its local
+Brave/Tavily Search MCP as an ACP stdio server in both `session/new` and
+`session/load`. A live probe confirmed that Kimi invoked
+`mcp__cctb_search__provider_status`. Native Kimi MCP servers are not copied or
+rewritten. Explicit provider environment variables win; if absent, the Search
+MCP can read the existing provider keys from a local Codex MCP env section in
+`CODEX_HOME/config.toml`. Values stay in local process memory and are neither
+logged nor copied into Kimi config.
+
+Kimi natively discovers `~/.agents/skills` and managed plugin skills, but ACP
+did not honor a probe-only `--skills-dir`. For bridge-owned workspaces TaroCub
+therefore exposes `~/.codex/skills` at `.kimi-code/skills` while preserving an
+existing project skills path. A live system-context probe confirmed locally
+installed skills such as `astock` and `dr` became visible.
+
 ## Consequences For Implementation
 
 The first Kimi adapter should follow these rules:
@@ -365,12 +390,22 @@ The ACP request has no agent or system-instruction field, so treating
 `--agent-file` as working here would silently drop TaroCub and instance
 instructions.
 
-The bridge therefore reloads `agent.md` for every turn, combines it with the
-channel instructions, and prepends a clearly delimited `[Bridge Instructions]`
-block to the ACP prompt. This preserves hot reload and resumed-session behavior,
-but it is prompt-scoped rather than a trusted system channel and adds token and
-history overhead. Revisit this implementation if a future Kimi ACP version
-advertises an agent or system-prompt capability.
+The supported project main-agent path behaved differently. Live ACP probes,
+both inside and outside a Git repository, confirmed that workspace
+`.kimi-code/agents/agent.md` with `name: agent` and `override: true` controls the
+main-agent system context. The bridge atomically maintains a delimited TaroCub
+block there, includes `${base_prompt}` so Kimi's built-in runtime/workspace/Skill
+instructions remain active, and includes `${plugin_sections}` so enabled plugin
+guidance remains active. It rejects malformed project-owned main-agent files or
+reserved-marker collisions rather than claiming instructions are installed
+when they are not. Instruction or project AGENTS changes re-create/load the
+worker, and native slash commands such as `/compact` remain raw commands.
+
+ACP still exposes no direct client-supplied system-prompt field. For an external
+`workspaceOverride`, TaroCub does not edit that project and falls back to a
+prompt-scoped instruction block for ordinary text turns. This is an explicit
+safety boundary, not equivalent privileged-channel parity for arbitrary
+external projects.
 
 Kimi session config values also survive process restarts. To make `/model off`
 and `/effort off` real rather than cosmetic, the bridge writes the current
@@ -391,10 +426,13 @@ covered by integration tests for a Kimi-configured instance:
 - cron execution and Kimi engine labels;
 - `/compact`, which was verified against a real ACP session and preserved a
   probe token across the compaction turn;
-- `/resume session <session-id>`, which validates through real ACP
-  `session/load` before changing the bridge binding; Kimi ACP exposes no
-  bridge-usable local session scan, so bare `/resume` explains the limitation;
-- single-choice `AskUserQuestion` forms using only ACP-advertised option IDs.
+- bare `/resume`, numbered selection, and `/resume session <session-id>`, using
+  real ACP `session/list` metadata plus pre-binding `session/load`, with the
+  original session cwd persisted for the resumed turn;
+- single-choice `AskUserQuestion` forms/buttons in Lark and Telegram using only
+  ACP-advertised option IDs;
+- native workspace instructions, local skills, and the injected TaroCub Search
+  MCP alongside Kimi's own MCP/plugins.
 
 No Kimi-private generated-image directory analogous to Codex
 `generated_images` was observed. Kimi output is therefore subject to the
@@ -419,6 +457,10 @@ extra exception.
   unverified. The bridge applies hot configuration to the next turn.
 - Audio is not an ACP input capability (`audio: false`); channel audio remains
   supported only through the bridge's transcription-to-text path.
+- ACP has no direct client-supplied system-prompt request field. Bridge-owned
+  workspaces use Kimi's native main-agent override as system context; arbitrary
+  external resumed workspaces are intentionally not modified and use ordinary
+  prompt fallback.
 
 ## M5 Verification
 

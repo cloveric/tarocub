@@ -683,7 +683,7 @@ describe("createDefaultTranscribeVoice", () => {
     }
   });
 
-  it("caps configured ASR chunk size to ten minutes", async () => {
+  it("caps configured ASR chunks below the local service's 300-second limit", async () => {
     let segmentTimeArg = "";
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
@@ -725,7 +725,111 @@ describe("createDefaultTranscribeVoice", () => {
 
     await expect(transcribeVoice("/tmp/meeting.m4a")).resolves.toBe("chunk transcript");
 
-    expect(segmentTimeArg).toBe("600");
+    expect(segmentTimeArg).toBe("270");
+  });
+
+  it("cancels local Qwen HTTP transcription without watchdog noise or CLI fallback", async () => {
+    const watchdog = {
+      recordSuccess: vi.fn(),
+      recordFailure: vi.fn().mockResolvedValue(undefined),
+    };
+    let markRequestStarted: (() => void) | undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const rejectCancelled = () => {
+          reject(signal?.reason instanceof Error ? signal.reason : new Error("local ASR cancelled"));
+        };
+        markRequestStarted?.();
+        if (signal?.aborted) {
+          rejectCancelled();
+          return;
+        }
+        signal?.addEventListener("abort", rejectCancelled, { once: true });
+      })
+    );
+    const execFileImpl = vi.fn((
+      file: string,
+      _args: readonly string[],
+      options: { signal?: AbortSignal },
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        expect(options.signal).toBeDefined();
+        callback(null, "30\n", "");
+        return;
+      }
+      callback(new Error(`unexpected CLI fallback: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "/tmp/qwen-python",
+      cliScript: "/tmp/qwen-transcribe.py",
+      fetchImpl: fetchImpl as never,
+      watchdog,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+    } as never);
+    const controller = new AbortController();
+    const pending = transcribeVoice("/tmp/voice.ogg", { abortSignal: controller.signal });
+
+    await requestStarted;
+    controller.abort(new Error("stopped by user"));
+
+    await expect(pending).rejects.toThrow("stopped by user");
+    expect(watchdog.recordFailure).not.toHaveBeenCalled();
+    expect(execFileImpl).not.toHaveBeenCalledWith(
+      "/tmp/qwen-python",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("passes the turn cancellation signal into local Qwen CLI fallback", async () => {
+    let markCliStarted: (() => void) | undefined;
+    const cliStarted = new Promise<void>((resolve) => {
+      markCliStarted = resolve;
+    });
+    let observedCliSignal: AbortSignal | undefined;
+    const execFileImpl = vi.fn((
+      file: string,
+      _args: readonly string[],
+      options: { signal?: AbortSignal },
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "30\n", "");
+        return;
+      }
+      if (file === "/tmp/qwen-python") {
+        observedCliSignal = options.signal;
+        markCliStarted?.();
+        options.signal?.addEventListener("abort", () => {
+          callback(new Error("qwen CLI aborted"), "", "");
+        }, { once: true });
+        return;
+      }
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "",
+      cliPython: "/tmp/qwen-python",
+      cliScript: "/tmp/qwen-transcribe.py",
+      execFileImpl,
+      ffprobePath: "ffprobe",
+    } as never);
+    const controller = new AbortController();
+    const pending = transcribeVoice("/tmp/voice.ogg", { abortSignal: controller.signal });
+
+    await cliStarted;
+    controller.abort(new Error("stopped by user"));
+
+    await expect(pending).rejects.toThrow("qwen CLI aborted");
+    expect(observedCliSignal).toBe(controller.signal);
   });
 
   it("uses a configurable ASR HTTP timeout", async () => {

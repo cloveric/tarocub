@@ -10,6 +10,8 @@ export interface LarkChatCreateInput {
   name: string;
   mode: "group" | "topic";
   operatorOpenId?: string;
+  /** The current bridge instance's app id. Needed when the bot must be invited. */
+  botAppId?: string;
   // The instance's own Lark channel. The bot path creates the chat through this
   // channel's SDK client (the instance's app) instead of lark-cli, because lark-cli
   // authenticates as its own separate app — so a sender open_id captured by THIS
@@ -31,13 +33,26 @@ export async function createLarkChatWithCli(input: LarkChatCreateInput): Promise
   }
 
   const actor = resolveDefaultLarkChatCreateActor();
+  const botAppId = (input.botAppId ?? process.env.LARK_APP_ID ?? "").trim();
 
   // Bot path: create through the instance's own SDK so the acting app matches the
-  // sender open_id's namespace (avoids "open_id cross app"). Falls back to lark-cli
-  // only when no channel/rawClient is available. The user-identity path stays on
-  // lark-cli (it creates under the authorizing user's OAuth).
-  if (actor === "bot" && larkChannelHasChatCreate(input.channel)) {
+  // sender open_id's namespace (avoids "open_id cross app"). Never fall back to
+  // lark-cli's bot identity: it belongs to a separate app, so the requester open_id
+  // is invalid there and a successfully created chat may omit this instance's bot.
+  if (actor === "bot") {
+    if (!larkChannelHasChatCreate(input.channel)) {
+      throw new Error("Lark bot chat creation requires the current instance SDK channel; cross-app lark-cli fallback is disabled");
+    }
+    if (input.mode === "topic" && !botAppId.startsWith("cli_")) {
+      throw new Error("Lark chat creation requires the instance bot app id so the bot can join the new chat");
+    }
     return await createLarkChatViaSdk(input.channel!, name, input);
+  }
+
+  // User-identity creation is an explicit OAuth path. The authorizing user owns
+  // the group, and the current instance bot must be invited in the same request.
+  if (!botAppId.startsWith("cli_")) {
+    throw new Error("Lark chat creation requires the instance bot app id so the bot can join the new chat");
   }
 
   const args = [
@@ -53,30 +68,10 @@ export async function createLarkChatWithCli(input: LarkChatCreateInput): Promise
     "json",
   ];
 
-  if (input.operatorOpenId?.startsWith("ou_")) {
-    args.push("--users", input.operatorOpenId);
-  }
-  if (actor === "bot") {
-    // The bot creates the chat (so it is a member of the group), but hand
-    // OWNERSHIP to the human operator — otherwise they are only a plain member
-    // and cannot change group settings such as the message form (话题/对话).
-    // The bot stays a manager via --set-bot-manager. operatorOpenId is the
-    // sender open_id in the bot app's namespace, so it matches an --as bot
-    // creation. (On the --as user path the owner already defaults to the
-    // authorizing user, and operatorOpenId would be the wrong namespace.)
-    if (input.operatorOpenId?.startsWith("ou_")) {
-      args.push("--owner", input.operatorOpenId);
-    }
-    args.push("--set-bot-manager");
-    // A topic chat does NOT retain the creating bot the way a normal group does
-    // (set_bot_manager alone leaves the bot outside the topic group). Invite the bot
-    // explicitly at creation via bot_id_list (--bots): it rides in the create request
-    // body, so it needs only the chat-create permission — no im:chat.members scope.
-    const botAppId = (process.env.LARK_APP_ID ?? "").trim();
-    if (input.mode === "topic" && botAppId.startsWith("cli_")) {
-      args.push("--bots", botAppId);
-    }
-  }
+  // operatorOpenId was captured by the instance bot app and cannot be reused by
+  // lark-cli's separate OAuth app. The OAuth user is already the creator/owner.
+  // User-identity creation never makes the instance bot a member implicitly.
+  args.push("--bots", botAppId);
 
   let stdout: string;
   try {
@@ -189,6 +184,7 @@ async function createLarkChatViaSdk(
     throw new Error("lark channel rawClient does not expose im.v1.chat.create");
   }
   const owner = input.operatorOpenId?.startsWith("ou_") ? input.operatorOpenId : undefined;
+  const botAppId = (input.botAppId ?? process.env.LARK_APP_ID ?? "").trim();
   const data: Record<string, unknown> = {
     name,
     chat_mode: input.mode === "topic" ? "topic" : "group",
@@ -202,10 +198,7 @@ async function createLarkChatViaSdk(
   if (input.mode === "topic") {
     // A topic chat does not retain the creating bot via set_bot_manager alone — invite
     // it explicitly via bot_id_list (the SDK equivalent of lark-cli --bots).
-    const botAppId = (process.env.LARK_APP_ID ?? "").trim();
-    if (botAppId.startsWith("cli_")) {
-      data.bot_id_list = [botAppId];
-    }
+    data.bot_id_list = [botAppId];
   }
   const res = await create({
     params: { user_id_type: "open_id", set_bot_manager: true },
