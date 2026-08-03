@@ -1427,6 +1427,20 @@ export class KimiAcpAdapter implements CodexAdapter {
       clearTimeout(pending.inactivityTimeout);
     }
     pending.inactivityTimeout = setTimeout(() => {
+      // An outstanding tool call IS activity, even with a silent session
+      // stream. Kimi 0.31.1 does not forward AgentSwarm subagents' progress to
+      // the parent session: a turn that fanned out into a swarm produced zero
+      // session/update for 30+ minutes while demonstrably working, and the
+      // watchdog killed it ONE SECOND before the swarm's tool_result landed —
+      // executing exactly the long multi-agent tasks Kimi is best at. While any
+      // tool call is still unresolved, re-arm quietly; a genuinely wedged tool
+      // is still bounded by the total turn timeout.
+      for (const state of worker.tools.values()) {
+        if (!state.emittedResult) {
+          this.armInactivityTimeout(worker, pending);
+          return;
+        }
+      }
       const minutes = Math.max(1, Math.round(this.inactivityTimeoutMs! / 60_000));
       this.requestStop(
         worker,

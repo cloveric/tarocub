@@ -1324,6 +1324,54 @@ describe("KimiAcpAdapter", () => {
     adapter.destroy();
   });
 
+  it("does not fire the inactivity watchdog while a tool call (e.g. AgentSwarm) is outstanding", async () => {
+    // The field incident: a turn fanned out into Kimi's AgentSwarm, whose
+    // subagent progress is NOT forwarded to the parent session in 0.31.1. The
+    // parent stream was silent for exactly 30 minutes and the watchdog killed
+    // the turn one second before the swarm's tool_result landed.
+    vi.useFakeTimers();
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      turnTimeoutMs: null,
+      inactivityTimeoutMs: 60_000,
+    });
+    const turn = adapter.sendUserMessage("telegram-swarm", { text: "audit the repo", files: [] });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "swarm-1",
+      title: "AgentSwarm",
+      kind: "other",
+      status: "in_progress",
+    });
+
+    // Way past the inactivity window with ZERO session updates: the outstanding
+    // swarm call must keep the turn alive.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(harness.children[0].server.cancels).toHaveLength(0);
+
+    // The swarm returns; the turn completes normally.
+    server.sendUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "swarm-1",
+      status: "completed",
+    });
+    server.sendUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "swarm done" } });
+    server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "swarm done" });
+
+    // With NO outstanding tool, silence must still kill a stalled turn.
+    const second = adapter.sendUserMessage("kimi-session-1", { text: "again", files: [] });
+    const secondRejected = expect(second).rejects.toThrow(/inactive/);
+    await waitFor(() => server.prompts.length === 2);
+    await vi.advanceTimersByTimeAsync(61_000);
+    await secondRejected;
+    adapter.destroy();
+    vi.useRealTimers();
+  });
+
   it("enforces total and inactivity watchdogs while honoring per-turn timeout disablement", async () => {
     vi.useFakeTimers();
 
