@@ -109,7 +109,6 @@ type KimiWorker = {
   stderrTail: string;
   pendingTurn: PendingKimiTurn | null;
   tools: Map<string, KimiToolState>;
-  replayingHistory: boolean;
   lastActivityAt: number;
   removed: boolean;
   failurePromise: Promise<never>;
@@ -886,7 +885,6 @@ export class KimiAcpAdapter implements CodexAdapter {
       stderrTail: "",
       pendingTurn: null,
       tools: new Map(),
-      replayingHistory: false,
       lastActivityAt: Date.now(),
       removed: false,
       failurePromise,
@@ -950,19 +948,14 @@ export class KimiAcpAdapter implements CodexAdapter {
         if (initialized.agentCapabilities?.loadSession !== true) {
           throw new Error("This Kimi ACP version does not support session/load");
         }
-        worker.replayingHistory = true;
-        try {
-          sessionResult = await withTimeout(
-            Promise.race([
-              connection.loadSession({ sessionId, cwd: workspacePath, mcpServers: [...this.mcpServers] }),
-              worker.failurePromise,
-            ]),
-            this.initializeTimeoutMs,
-            `Kimi ACP session/load timed out after ${this.initializeTimeoutMs}ms`,
-          );
-        } finally {
-          worker.replayingHistory = false;
-        }
+        sessionResult = await withTimeout(
+          Promise.race([
+            connection.loadSession({ sessionId, cwd: workspacePath, mcpServers: [...this.mcpServers] }),
+            worker.failurePromise,
+          ]),
+          this.initializeTimeoutMs,
+          `Kimi ACP session/load timed out after ${this.initializeTimeoutMs}ms`,
+        );
         worker.currentSessionId = sessionId;
       }
       if (!worker.currentSessionId) {
@@ -1134,6 +1127,17 @@ export class KimiAcpAdapter implements CodexAdapter {
       rejectFailure,
       eventChain: Promise.resolve(),
     };
+    // Synchronous re-check immediately before the assignment. The friendly
+    // guard in sendUserMessage runs BEFORE an awaited engine event (Lark card
+    // creation — a real network round-trip), and the bridge turn lock does not
+    // fully close that window: during a chat's first turn the lock still keys
+    // on the logical id while the kimi session id is already bound, so a
+    // message arriving under the kimi-id key runs concurrently. Without this
+    // check the second turn overwrites pendingTurn and the two turns' chunks
+    // interleave on one ACP session.
+    if (worker.pendingTurn) {
+      throw new Error("Kimi session already has an in-flight turn");
+    }
     worker.pendingTurn = pending;
     worker.tools.clear();
     worker.stderrTail = "";
@@ -1164,7 +1168,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (result.stopReason !== "end_turn") {
         throw new Error(`Kimi ACP stopped the turn with reason ${result.stopReason}`);
       }
-      await pending.eventChain;
+      // Raced against the failure promise: eventChain delivery is best-effort,
+      // and with runtime timeouts disabled a hung onEngineEvent (e.g. a Lark
+      // API call that never settles) would otherwise pin pendingTurn forever —
+      // every later message then bounces off "already has an in-flight turn".
+      await Promise.race([pending.eventChain, pending.failurePromise]);
       const text = pending.assistantText.trim() || "Kimi completed the request.";
       await this.emitEngineEvent(pending.onEngineEvent, { type: "result", text, sessionId });
       return { text, usage: usageFromPromptResult(result) };
@@ -1178,7 +1186,12 @@ export class KimiAcpAdapter implements CodexAdapter {
 
   private handleSessionUpdate(worker: KimiWorker, notification: SessionNotification): void {
     this.markActivity(worker);
-    if (worker.replayingHistory || !worker.pendingTurn) {
+    // Replayed history (session/load) arrives while no turn is pending — the
+    // null check drops it. session/load only ever runs during worker creation
+    // or pre-binding validation, both of which hold no pending turn; a separate
+    // replayingHistory flag existed but was unreachable defense the tests could
+    // not exercise, so it was removed rather than kept untestable.
+    if (!worker.pendingTurn) {
       return;
     }
     const pending = worker.pendingTurn;
@@ -1314,7 +1327,10 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (state) {
       this.maybeEmitToolUse(worker, state);
     }
-    await pending.eventChain;
+    // Both awaits below race the failure promise: an unanswered ACP
+    // session/request_permission wedges the CLI, so eviction (stop/timeout/
+    // destroy) must be able to unblock this handler and let it answer.
+    await Promise.race([pending.eventChain, pending.failurePromise.catch(() => undefined)]);
     const toolName = requestToolName(request, state);
     const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
     const toolInput = toolName === "AskUserQuestion"
@@ -1326,7 +1342,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       toolInput,
       sessionId: worker.currentSessionId ?? request.sessionId,
     });
-    await pending.eventChain;
+    await Promise.race([pending.eventChain, pending.failurePromise.catch(() => undefined)]);
 
     const approvalRequest: EngineApprovalRequest = {
       engine: "kimi",

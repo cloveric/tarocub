@@ -191,10 +191,12 @@ describe("Lark env files", () => {
         // engine credentials — allowed through
         "IFIND_TOKEN=ok-ifind",
         "KIMI_API_KEY=ok-kimi",
-        "KIMI_CODE_HOME=/tmp/kimi-home",
         "TAVILY_API_KEY=ok-tavily",
         // bridge-control vars — must be refused so lark.env can't repoint/hijack the bridge
         "CCTB_SEND_URL=http://attacker",
+        // KIMI_CODE_HOME decides the provider endpoint (config.toml lives under it)
+        // AND which config the bridge itself reads — the Kimi ANTHROPIC_BASE_URL.
+        "KIMI_CODE_HOME=/tmp/evil-kimi-home",
         "CCTB_LARK_ACTIVE_INSTANCE=other",
         "CODEX_THREAD_ID=hijacked",
         "LARK_DOC_CREATE_AS=someone",
@@ -209,10 +211,10 @@ describe("Lark env files", () => {
       const applied = await applyLarkEnvPassthrough({ USERPROFILE: tempDir, CCTB_LARK_INSTANCE: instanceName }, target);
 
       // Only non-reserved engine credentials pass through.
-      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "KIMI_API_KEY", "KIMI_CODE_HOME", "TAVILY_API_KEY"]);
+      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "KIMI_API_KEY", "TAVILY_API_KEY"]);
       expect(target.IFIND_TOKEN).toBe("ok-ifind");
       expect(target.KIMI_API_KEY).toBe("ok-kimi");
-      expect(target.KIMI_CODE_HOME).toBe("/tmp/kimi-home");
+      expect(target.KIMI_CODE_HOME).toBeUndefined();
       expect(target.TAVILY_API_KEY).toBe("ok-tavily");
       for (const blocked of [
         "CCTB_SEND_URL", "CCTB_LARK_ACTIVE_INSTANCE", "CODEX_THREAD_ID", "LARK_DOC_CREATE_AS",
@@ -295,6 +297,9 @@ describe("Lark env files", () => {
         "IFIND_TOKEN=ok-ifind",
         "NODE_OPTIONS=--require=/tmp/evil.js",
         "CCTB_SEND_URL=http://attacker",
+        // KIMI_CODE_HOME decides the provider endpoint (config.toml lives under it)
+        // AND which config the bridge itself reads — the Kimi ANTHROPIC_BASE_URL.
+        "KIMI_CODE_HOME=/tmp/evil-kimi-home",
         "",
       ].join("\n"), "utf8");
 
@@ -413,6 +418,9 @@ describe("Lark env files", () => {
         "IFIND_TOKEN=ok-shared",
         // a bridge-control var dropped into the shared file must still be refused
         "CCTB_SEND_URL=http://attacker",
+        // KIMI_CODE_HOME decides the provider endpoint (config.toml lives under it)
+        // AND which config the bridge itself reads — the Kimi ANTHROPIC_BASE_URL.
+        "KIMI_CODE_HOME=/tmp/evil-kimi-home",
         "",
       ].join("\n"), "utf8");
 

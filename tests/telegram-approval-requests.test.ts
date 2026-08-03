@@ -166,7 +166,15 @@ describe("telegram approval requests", () => {
     await expect(pending).resolves.toEqual({
       behavior: "allow",
       scope: "once",
-      updatedInput: { answers: { "Which environment?": "production" } },
+      updatedInput: {
+        questions: [{
+          question: "Which environment?",
+          header: "Environment",
+          multi_select: false,
+          options: [{ label: "staging" }, { label: "production" }],
+        }],
+        answers: { "Which environment?": "production" },
+      },
     });
     expect(api.editMessage).toHaveBeenCalledWith(
       123,
@@ -211,8 +219,59 @@ describe("telegram approval requests", () => {
     await expect(pending).resolves.toEqual({
       behavior: "allow",
       scope: "once",
-      updatedInput: { answers: { "Continue deployment?": "Yes" } },
+      // updatedInput REPLACES the tool input (claude-stream-adapter forwards it
+      // verbatim), so it must carry the original questions alongside the
+      // answers — a bare {answers} stripped `questions` from what the CLI ran.
+      updatedInput: {
+        questions: [{
+          question: "Continue deployment?",
+          header: "Deployment",
+          multiSelect: false,
+          options: [{ label: "Yes" }, { label: "No" }],
+        }],
+        answers: { "Continue deployment?": "Yes" },
+      },
     });
+  });
+
+  it("falls back to the generic pre-approval for a multi-question AskUserQuestion instead of truncating", async () => {
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [
+            { question: "Which style?", header: "Style", multiSelect: false, options: [{ label: "A" }, { label: "B" }] },
+            { question: "How many pages?", header: "Pages", multiSelect: false, options: [{ label: "9" }, { label: "12" }] },
+          ],
+        },
+      },
+    });
+    // The one-question inline prompt cannot carry both questions; rendering
+    // only Q1 answered with a single option silently dropped Q2. The generic
+    // Allow/Deny prompt passes the ORIGINAL input through untouched instead.
+    const keyboard = api.sendMessage.mock.calls[0]?.[2]?.inlineKeyboard as Array<Array<{ text: string; callbackData: string }>>;
+    const labels = keyboard.flat().map((button) => button.text);
+    expect(labels).toContain("Allow Once");
+    expect(labels).not.toContain("A");
+    expect(labels).not.toContain("9");
+    const allow = keyboard.flat().find((button) => button.text === "Allow Once")!;
+    const normalized = normalizeUpdate({
+      callback_query: {
+        id: "callback-multi-q",
+        data: allow.callbackData,
+        from: { id: 456 },
+        message: { chat: { id: 123, type: "private" } },
+      },
+    });
+    await handleTelegramApprovalCommand({ normalized: normalized!, api });
+    // Allow-once with NO updatedInput: the engine keeps its own full input.
+    await expect(pending).resolves.toEqual({ behavior: "allow", scope: "once" });
   });
 
   it("does not treat /approve as an answer to AskUserQuestion", async () => {

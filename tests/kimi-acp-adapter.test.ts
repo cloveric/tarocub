@@ -1029,6 +1029,148 @@ describe("KimiAcpAdapter", () => {
     adapter.destroy();
   });
 
+  it("builds the AskUserQuestion form from tool_call content when the request has no structured rawInput", async () => {
+    // The docs-recorded LIVE shape: the real 0.31.1 permission request carried
+    // no rawInput/questions — only content text on the tool_call. The fallback
+    // (question from content, header "Choice") is the path production hits.
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const turn = adapter.sendUserMessage("telegram-noraw", {
+      text: "ask",
+      files: [],
+      onApprovalRequest: async (request) => {
+        expect(request.toolName).toBe("AskUserQuestion");
+        const input = request.toolInput as { questions: Array<{ question: string; header: string; options: Array<{ label: string }> }> };
+        expect(input.questions[0]?.question).toContain("Proceed with the risky migration?");
+        expect(input.questions[0]?.header).toBe("Choice");
+        // Only allow-kind options become form choices; reject kinds map to deny.
+        expect(input.questions[0]?.options.map((option) => option.label)).toEqual(["Yes", "No"]);
+        return { behavior: "allow", updatedInput: { answers: { [input.questions[0]!.question]: "Yes" } } };
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "ask-noraw",
+      title: "AskUserQuestion",
+      kind: "other",
+      status: "pending",
+      content: [{ type: "content", content: { type: "text", text: "Proceed with the risky migration?" } }],
+    });
+    const requestId = server.requestPermission({
+      sessionId: server.sessionId,
+      toolCall: {
+        toolCallId: "ask-noraw",
+        title: "AskUserQuestion",
+        // The question text lives on the PERMISSION REQUEST's toolCall content
+        // (the live 0.31.1 shape) — not on the earlier tool_call update.
+        content: [{ type: "content", content: { type: "text", text: "Proceed with the risky migration?" } }],
+      },
+      options: [
+        { kind: "allow_once", name: "Yes", optionId: "opt-yes" },
+        { kind: "allow_once", name: "No", optionId: "opt-no" },
+        { kind: "reject_once", name: "Skip", optionId: "opt-skip" },
+      ],
+    });
+    await waitFor(() => server.clientResponses.has(requestId));
+    expect(server.clientResponses.get(requestId)?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "opt-yes" },
+    });
+    server.sendUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "migrating" } });
+    server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "migrating" });
+    adapter.destroy();
+  });
+
+  it("still answers an outstanding permission request on the wire when the turn is stopped mid-approval", async () => {
+    // The unanswered-server-request family: an ACP session/request_permission
+    // that never gets a JSON-RPC response wedges the CLI forever. A /stop while
+    // the operator approval is outstanding must still settle the wire request.
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const controller = new AbortController();
+    const approvalStarted = { seen: false };
+    const turn = adapter.sendUserMessage("telegram-stopmid", {
+      text: "run",
+      files: [],
+      abortSignal: controller.signal,
+      onApprovalRequest: (request) => new Promise((resolve) => {
+        approvalStarted.seen = true;
+        // Mirror the channels' abort contract: resolve deny when aborted.
+        request.abortSignal?.addEventListener("abort", () => resolve({ behavior: "deny" }), { once: true });
+      }),
+    });
+    const turnRejected = expect(turn).rejects.toThrow("Task was stopped by user");
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "bash-stop",
+      title: "Bash",
+      kind: "execute",
+      status: "pending",
+      rawInput: { command: "sleep 999" },
+    });
+    const requestId = server.requestPermission({
+      sessionId: server.sessionId,
+      toolCall: { toolCallId: "bash-stop", title: "Bash" },
+      options: [
+        { kind: "allow_once", name: "Approve", optionId: "ok" },
+        { kind: "reject_once", name: "Reject", optionId: "no" },
+      ],
+    });
+    await waitFor(() => approvalStarted.seen);
+    controller.abort();
+    await turnRejected;
+    // The wire request MUST have a response (reject/cancel outcome), and the
+    // worker must remain usable for the next turn.
+    await waitFor(() => server.clientResponses.has(requestId));
+    const outcome = (server.clientResponses.get(requestId)?.result as { outcome?: { outcome?: string } })?.outcome?.outcome;
+    expect(["selected", "cancelled"]).toContain(outcome);
+
+    const second = adapter.sendUserMessage("kimi-session-1", { text: "again", files: [] });
+    await waitFor(() => server.prompts.length === 2);
+    server.sendUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "recovered" } });
+    server.respondPrompt();
+    await expect(second).resolves.toMatchObject({ text: "recovered" });
+    adapter.destroy();
+  });
+
+  it("unblocks a turn stuck on a hung engine-event handler when stopped, even with timeouts disabled", async () => {
+    // eventChain delivery is best-effort. With runtime timeouts disabled, a
+    // hung onEngineEvent used to pin pendingTurn forever (every later message
+    // bounced off "already has an in-flight turn"); the awaits now race the
+    // failure promise so eviction can unblock them.
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), cancelGraceMs: 25 });
+    const controller = new AbortController();
+    const turn = adapter.sendUserMessage("telegram-hung", {
+      text: "run",
+      files: [],
+      abortSignal: controller.signal,
+      disableRuntimeTimeout: true,
+      // The initial "session" event must pass (it is awaited before the prompt
+      // is sent); only in-turn queued events hang, wedging the event chain.
+      onEngineEvent: (event) => event.type === "session"
+        ? undefined
+        : new Promise<void>(() => {
+          // never settles — a wedged downstream consumer (e.g. a dead Lark call)
+        }),
+    });
+    const turnSettled = expect(turn).rejects.toThrow("Task was stopped by user");
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "partial" } });
+    server.respondPrompt();
+    // The prompt has completed but the turn is now waiting on the hung event
+    // chain. Stopping must settle it rather than leaving the session wedged.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    await turnSettled;
+    adapter.destroy();
+  });
+
   it("soft-cancels through ACP and reuses the same worker for the next turn", async () => {
     const harness = createHarness();
     const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));

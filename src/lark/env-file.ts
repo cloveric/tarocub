@@ -357,7 +357,10 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "TAROCUB_INSTANCE" ||
     key === "CODEX_TELEGRAM_INSTANCE" ||
     // Explicitly whitelisted executable setting. Other KIMI_* names remain
-    // available as engine credentials/config (for example KIMI_CODE_HOME).
+    // available as engine credentials (e.g. KIMI_API_KEY) — except
+    // KIMI_CODE_HOME, which is denied outright (see
+    // DENIED_PROCESS_CONTROL_ENV_KEYS): it decides which provider endpoint the
+    // engine talks to and which config.toml the BRIDGE itself reads.
     key === "KIMI_EXECUTABLE" ||
     // Long-audio cloud ASR: whitelisted so lark.env stays the operator-facing
     // config surface, while TINGWU_/ASR_ remain reserved on the EXTRAS path (an
@@ -418,6 +421,13 @@ const DENIED_PROCESS_CONTROL_ENV_KEYS: ReadonlySet<string> = new Set([
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "ANTHROPIC_BASE_URL",
+  // Kimi's engine home holds config.toml (provider base URL + auth) and the
+  // bridge itself reads it (kimi-acp-adapter loads default_model from there).
+  // An extra retargeting it is the Kimi equivalent of the denied
+  // ANTHROPIC_BASE_URL: one line in shared.env would repoint every Kimi
+  // instance's provider endpoint at the next restart. Other KIMI_* names still
+  // flow as engine credentials (e.g. KIMI_API_KEY).
+  "KIMI_CODE_HOME",
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "ALL_PROXY",

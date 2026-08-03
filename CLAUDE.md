@@ -97,12 +97,12 @@ The engines surface files differently. The delivery layer (`src/telegram/deliver
 | Capability | Codex | Claude Code | Kimi Code | Antigravity |
 |---|---|---|---|---|
 | Runtime | persistent app-server by default | streaming CLI worker | persistent ACP worker | one-shot print mode |
-| Explicit resume | `/resume thread <id>` | local scan and `/resume <n>` | `/resume session <id>` after real `session/load`; no list scan | log scan or `/resume conversation <id>` |
+| Explicit resume | `/resume thread <id>` | local scan and `/resume <n>` | ACP `session/list` scan and `/resume session <id>` via real `session/load` | log scan or `/resume conversation <id>` |
 | Goal | bridge-native, including status/clear | native goal prompt | unsupported by ACP 0.31.1; reject explicitly | native goal prompt |
 | Mid-turn steer | app-server `turn/steer` | unsupported | unsupported by ACP | unsupported |
 | Compact | bridge reset fallback | native compact | real ACP `/compact` command | unsupported |
 | Usage | structured token usage when emitted | token and cost usage | no structured per-turn usage in ACP 0.31.1 | no structured per-turn usage |
-| Instructions | trusted runtime channel | appended system prompt | prompt-scoped bridge block because ACP ignores `--agent-file` | prompt-scoped bridge instructions |
+| Instructions | trusted runtime channel | appended system prompt | workspace `.kimi-code/agents/agent.md` main-agent override; prompt-scoped block only for external workspace overrides | prompt-scoped bridge instructions |
 
 Kimi `AskUserQuestion` currently exposes only ACP-advertised option IDs. Keep it
 single-choice and do not add a free-text `Other` path unless the protocol starts

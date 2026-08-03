@@ -18,6 +18,8 @@ interface ApprovalQuestion {
   answerKey: string;
   question: string;
   options: string[];
+  /** The full original tool input, spread back into updatedInput on resolve. */
+  root: Record<string, unknown>;
 }
 
 interface PendingApproval {
@@ -98,6 +100,15 @@ function extractApprovalQuestion(request: EngineApprovalRequest): ApprovalQuesti
   if (!Array.isArray(questions) || questions.length === 0) {
     return undefined;
   }
+  if (questions.length > 1) {
+    // The inline-button prompt can render exactly one question. Truncating a
+    // multi-question ask to its first question silently dropped the rest, so a
+    // multi-question input falls back to the generic Allow/Deny pre-approval,
+    // which passes the ORIGINAL input through untouched and lets the engine
+    // collect answers itself. (The Lark form card handles all questions; a
+    // Telegram multi-question form is future work, not a truncation.)
+    return undefined;
+  }
   const first = questions[0];
   if (!first || typeof first !== "object" || Array.isArray(first)) {
     return undefined;
@@ -124,6 +135,7 @@ function extractApprovalQuestion(request: EngineApprovalRequest): ApprovalQuesti
     answerKey: question,
     question,
     options,
+    root: { ...(input as Record<string, unknown>) },
   };
 }
 
@@ -222,7 +234,11 @@ function resolvePending(pending: PendingApproval, selection: ApprovalSelection):
       ? {
           behavior: "allow",
           scope: "once",
-          updatedInput: { answers: { [pending.question.answerKey]: answer } },
+          // updatedInput REPLACES the tool input (claude-stream-adapter
+          // forwards it verbatim to canUseTool), so it must carry the original
+          // fields — resolving with a bare {answers} stripped `questions` from
+          // the input the CLI then executed. Same shape the Lark card resolves.
+          updatedInput: { ...pending.question.root, answers: { [pending.question.answerKey]: answer } },
         }
       : { behavior: "deny" };
   } else {
