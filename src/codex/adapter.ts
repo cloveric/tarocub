@@ -110,6 +110,16 @@ export type EngineStreamEvent =
       sessionId?: string;
     }
   | {
+      /** A Claude background task (run_in_background shell / subagent) was
+       * spawned. Logged to the timeline so the restart busy-guard — which runs
+       * in a SEPARATE process and can only see the timeline — knows the engine
+       * still owns live background work after the foreground turn settles. */
+      type: "background_task_started";
+      taskId: string;
+      sessionId?: string;
+      description?: string;
+    }
+  | {
       type: "task_notification";
       text: string;
       sessionId?: string;

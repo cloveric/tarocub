@@ -2139,6 +2139,12 @@ async function readLarkPendingTurnActivity(
   const pendingByConversationKey = new Map<string, TimelineEvent[]>();
   const pendingCronRunsByJobId = new Map<string, TimelineEvent[]>();
   const pendingCommentTurnsByKey = new Map<string, TimelineEvent[]>();
+  // Claude background tasks (run_in_background shells / subagents) outlive
+  // their foreground turn: the turn pairs off as completed while the engine
+  // worker still owns live background work. Restarting then kills it mid-run
+  // (the operator saw exactly this: a release's own self-check cut off). Pair
+  // background_task_started against the task_notification that settles it.
+  const pendingBackgroundTasksById = new Map<string, TimelineEvent>();
   for (const event of parseTimelineEvents(raw)) {
     if (event.channel !== "lark") {
       continue;
@@ -2149,6 +2155,17 @@ async function readLarkPendingTurnActivity(
       const pending = pendingByConversationKey.get(conversationKey) ?? [];
       pending.push(event);
       pendingByConversationKey.set(conversationKey, pending);
+      continue;
+    }
+
+    if (event.type === "engine.event") {
+      const detail = (event as { detail?: unknown }).detail;
+      const taskId = typeof event.metadata?.taskId === "string" ? event.metadata.taskId : undefined;
+      if (detail === "background_task_started" && taskId) {
+        pendingBackgroundTasksById.set(taskId, event);
+      } else if (detail === "task_notification" && taskId) {
+        pendingBackgroundTasksById.delete(taskId);
+      }
       continue;
     }
 
@@ -2225,6 +2242,7 @@ async function readLarkPendingTurnActivity(
     ...[...pendingByConversationKey.values()].flat(),
     ...[...pendingCronRunsByJobId.values()].flat(),
     ...[...pendingCommentTurnsByKey.values()].flat(),
+    ...pendingBackgroundTasksById.values(),
   ]
     .filter((event) => {
       const timestampMs = event.timestamp ? new Date(event.timestamp).getTime() : Number.NaN;

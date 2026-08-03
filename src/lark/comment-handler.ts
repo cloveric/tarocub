@@ -143,6 +143,7 @@ export async function handleLarkComment(input: {
             toolName: "toolName" in event ? event.toolName : undefined,
             textChars: "text" in event ? event.text.length : undefined,
             status: "status" in event ? event.status : undefined,
+            taskId: "taskId" in event ? event.taskId : undefined,
           },
         });
 

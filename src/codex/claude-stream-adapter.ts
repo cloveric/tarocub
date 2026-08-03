@@ -795,6 +795,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
           lastSeenAt: eventSeenAt,
         });
+        // Surface the start on the timeline: the deferred-restart busy guard
+        // pairs this against the task_notification terminal event, so a
+        // restart no longer fires while background work is still running.
+        this.emitEngineEvent(worker, {
+          type: "background_task_started",
+          taskId: metadata.taskId,
+          sessionId: worker.currentSessionId ?? undefined,
+          ...(metadata.summary ? { description: metadata.summary } : {}),
+        }, worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent);
       }
       return;
     }

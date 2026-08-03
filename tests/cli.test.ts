@@ -794,6 +794,67 @@ describe("runCli", () => {
     }
   });
 
+  it("treats a live Claude background task as activity for the restart guard", async () => {
+    // A background shell outlives its foreground turn: the turn pairs off as
+    // completed while the engine still owns live background work. The guard
+    // used to read that as idle, and the (deferred) restart cut the task off
+    // mid-run — the operator watched a release's own self-check get killed.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const runEnv = {
+      USERPROFILE: tempDir,
+      LARK_APP_ID: "cli_a",
+      LARK_APP_SECRET: "secret",
+      CCTB_LARK_INSTANCE: "alpha",
+      CCTB_LARK_STATE_DIR: stateDir,
+    };
+    const event = (extra: Record<string, unknown>) => `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      channel: "lark",
+      chatId: 123,
+      conversationKey: "lark:oc_chat",
+      userId: 456,
+      ...extra,
+    })}\n`;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      // Foreground turn completed; its background task has NOT reported back.
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), [
+        event({ type: "input.received", metadata: { larkMessageId: "om_1" } }),
+        event({ type: "engine.event", detail: "background_task_started", metadata: { larkMessageId: "om_1", taskId: "task-9" } }),
+        event({ type: "turn.completed", outcome: "success", metadata: { larkMessageId: "om_1" } }),
+      ].join(""));
+
+      await expect(runCli(["lark", "service", "restart"], {
+        env: runEnv,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+      expect(stop).not.toHaveBeenCalled();
+
+      // The task's terminal notification settles it: restart proceeds.
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), [
+        event({ type: "input.received", metadata: { larkMessageId: "om_1" } }),
+        event({ type: "engine.event", detail: "background_task_started", metadata: { larkMessageId: "om_1", taskId: "task-9" } }),
+        event({ type: "turn.completed", outcome: "success", metadata: { larkMessageId: "om_1" } }),
+        event({ type: "engine.event", detail: "task_notification", metadata: { larkMessageId: "om_1", taskId: "task-9", status: "completed" } }),
+      ].join(""));
+      const handled = await runCli(["lark", "service", "restart"], {
+        env: runEnv,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      });
+      expect(handled).toBe(true);
+      expect(stop).toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("refuses to restart a Lark service with accepted turns unless forced", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
