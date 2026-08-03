@@ -192,6 +192,8 @@ export interface CliOptions {
   larkProvisionApp?: (input: { appId: string; appSecret: string; domain?: string; logger?: CliLogger }) => Promise<LarkProvisioningResult>;
   larkInspectApp?: (input: { appId: string; appSecret: string; domain?: string }) => Promise<LarkProvisioningResult>;
   larkDetectCli?: () => Promise<LarkCliStatus>;
+  /** Test seam: replaces the interactive Lark wizard. */
+  larkWizard?: typeof runLarkWizard;
   larkRunCommand?: LarkRunCommand;
   stdinText?: string;
 }
@@ -2889,6 +2891,8 @@ async function runLarkCommand(
     detectCli?: CliOptions["larkDetectCli"];
     runCommand?: CliOptions["larkRunCommand"];
     stdinText?: CliOptions["stdinText"];
+    /** Test seam: capture the env the wizard actually receives. */
+    wizard?: typeof runLarkWizard;
   } = {},
 ): Promise<boolean> {
   const scoped = extractOptionalInstanceOption(argv.slice(1));
@@ -3130,7 +3134,17 @@ async function runLarkCommand(
     if (args.length !== 0) {
       throw new Error("Usage: lark wizard");
     }
-    await runLarkWizard(env, logger);
+    // larkEnv, NOT the raw env: every other branch already routes through
+    // resolveLarkCommandTargetEnv, which drops an inherited
+    // CCTB_LARK_STATE_DIR that points at a DIFFERENT instance than the
+    // explicitly-requested one. The wizard was the one branch still on the raw
+    // env, so `CCTB_LARK_INSTANCE=other lark wizard` run inside a bot turn
+    // (whose engine env carries the CURRENT instance's state dir, which
+    // outranks the instance name) wrote the new app's credentials over the
+    // RUNNING instance's lark.env — recovering the clobbered secret took an
+    // operator console visit. For credential-WRITING flows this routing is
+    // load-bearing, not cosmetic.
+    await (deps.wizard ?? runLarkWizard)(larkEnv, logger);
     return true;
   }
 
@@ -4930,6 +4944,7 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
       detectCli: options.larkDetectCli,
       runCommand: options.larkRunCommand,
       stdinText: options.stdinText,
+      wizard: options.larkWizard,
     });
   }
 

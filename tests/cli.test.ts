@@ -229,6 +229,42 @@ describe("runCli", () => {
     }
   });
 
+  it("routes the Lark wizard through the resolved instance env, not the raw inherited one", async () => {
+    // The incident shape: `CCTB_LARK_INSTANCE=ccfkk1 lark wizard` run inside a
+    // bot turn, whose engine env carries the CURRENT instance's state dir
+    // (which outranks the instance name in resolveLarkStateDir). Every other
+    // branch already routed through resolveLarkCommandTargetEnv; the wizard was
+    // the one branch still on the raw env, so it wrote the NEW app's
+    // credentials over the RUNNING instance's lark.env — recovering the
+    // clobbered secret took an operator console visit.
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const inheritedStateDir = path.join(tempDir, ".cctb", "ccfcc2");
+    let wizardEnv: Record<string, unknown> | undefined;
+
+    try {
+      const handled = await runCli(["lark", "wizard"], {
+        env: {
+          USERPROFILE: tempDir,
+          CCTB_LARK_INSTANCE: "ccfkk1",
+          CCTB_LARK_STATE_DIR: inheritedStateDir,
+        },
+        logger: { log: () => undefined },
+        larkWizard: (async (env: Record<string, unknown>) => {
+          wizardEnv = env;
+        }) as never,
+      } as Parameters<typeof runCli>[1] & { larkWizard: unknown });
+
+      expect(handled).toBe(true);
+      expect(wizardEnv).toBeDefined();
+      // The mismatched inherited dir must be gone: the wizard would have
+      // written credentials into it. The explicit instance survives.
+      expect(wizardEnv!.CCTB_LARK_STATE_DIR).toBeUndefined();
+      expect(wizardEnv!.CCTB_LARK_INSTANCE).toBe("ccfkk1");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("loads Lark credentials from the generated lark.env file", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
