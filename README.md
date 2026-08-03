@@ -152,7 +152,7 @@ node dist/src/index.js lark doctor
 | File and image delivery | Yes | Yes | `telegram send` / `lark send` |
 | Stop and approvals | Inline buttons | Interactive cards | Service controls |
 | Mid-turn steering + `/q` queue escape | Planned | Yes (Codex engine) | Native in Codex CLI |
-| Plan Mode-style choices | Limited buttons | Rich choice cards | Tool/debug path |
+| Plan Mode-style choices | Sequential buttons, including multi-select | Rich choice cards | Tool/debug path |
 | Cron reminders and agent jobs | Yes | Yes | Manage/list/run |
 | Board durable tasks | Yes | Yes | Inspect/export |
 | Agent Bus fan/chain/verify | Yes | Yes | Configure peers |
@@ -181,6 +181,12 @@ gaps instead of simulating support. See
 [Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence and the
 [Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for the four-engine
 release contract.
+
+Telegram renders structured `AskUserQuestion` requests in one editable inline
+flow: multiple questions advance sequentially, while multi-select questions use
+toggle buttons plus an explicit Submit action. Kimi's current ACP permission
+protocol still advertises only one single-choice question at a time; the richer
+flow applies when an engine such as Claude supplies it.
 
 ## Lark Setup
 
@@ -367,7 +373,7 @@ Short audio is transcribed by the local Qwen ASR. Audio/video at or above the th
 
 **Where to set them.** On Lark, put them in `~/.cctb/<instance>/lark.env` — they are read through the *whitelisted config channel* (`loadLarkRuntimeEnv`, the same one that carries `LARK_APP_ID`), and a service start preserves them when it regenerates the file. They can also be exported in the service process environment, which wins over the file.
 
-Note the distinction inside `lark.env`: these four ride the **whitelist**, not the *extras passthrough*. The passthrough (which forwards engine credentials such as `IFIND_TOKEN` into the engine child) refuses every reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `KIMI_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — precisely because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*), so an engine-written extra can never redirect it. A refused extra is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`.
+Note the distinction inside `lark.env`: these four ride the **whitelist**, not the *extras passthrough*. The passthrough (which forwards engine credentials such as `IFIND_TOKEN` into the engine child) refuses every reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `KIMI_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — precisely because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*), so an engine-written extra can never redirect it. The only `KIMI_` extras admitted are the explicit credential allowlist: `KIMI_API_KEY`, `KIMI_MODEL_API_KEY`, `KIMI_REGISTRY_API_KEY`, `KIMI_WEB_FETCH_API_KEY`, and `KIMI_WEB_SEARCH_API_KEY`; endpoint, OAuth-host, custom-header, home, marketplace, and future unknown controls remain blocked. A refused extra is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`.
 
 **Secrets stay outside any engine workspace.** The Tingwu script loads its own Aliyun credentials from its `.env.local`; the bridge never reads, copies, or logs them. Keep that directory **outside** every engine workspace — the convention on this machine is `~/.tarocub-secrets/tingwu_asr` — so an agent working in `~/.cctb/<instance>/workspace` cannot read, commit, or exfiltrate the credentials.
 

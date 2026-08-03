@@ -39,6 +39,22 @@ async function waitFor(condition: () => boolean): Promise<void> {
   throw new Error("Condition was not met in time");
 }
 
+async function settleWithin<T>(promise: Promise<T>, ms = 500): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("Kimi turn did not settle in time")), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 class FakeReadable extends EventEmitter {
   emitData(chunk: string | Uint8Array): void {
     this.emit("data", chunk);
@@ -1141,7 +1157,8 @@ describe("KimiAcpAdapter", () => {
     // eventChain delivery is best-effort. With runtime timeouts disabled, a
     // hung onEngineEvent used to pin pendingTurn forever (every later message
     // bounced off "already has an in-flight turn"); the awaits now race the
-    // failure promise so eviction can unblock them.
+    // interruption promise so a soft ACP cancel can unblock them without
+    // destroying the reusable worker.
     const harness = createHarness();
     const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), cancelGraceMs: 25 });
     const controller = new AbortController();
@@ -1168,6 +1185,114 @@ describe("KimiAcpAdapter", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     controller.abort();
     await turnSettled;
+    adapter.destroy();
+  });
+
+  it("stops while the initial session event handler is hung before the ACP prompt starts", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), cancelGraceMs: 25 });
+    const controller = new AbortController();
+    let sessionEventStarted = false;
+    const turn = adapter.sendUserMessage("telegram-hung-session", {
+      text: "run",
+      files: [],
+      abortSignal: controller.signal,
+      disableRuntimeTimeout: true,
+      onEngineEvent: (event) => {
+        if (event.type !== "session") {
+          return undefined;
+        }
+        sessionEventStarted = true;
+        return new Promise<void>(() => {
+          // Simulate a wedged downstream session-card delivery.
+        });
+      },
+    });
+    await waitFor(() => sessionEventStarted);
+    expect(harness.children[0]?.server.prompts).toHaveLength(0);
+
+    controller.abort();
+    await expect(settleWithin(turn)).rejects.toThrow("Task was stopped by user");
+    expect(harness.killedPids).toHaveLength(0);
+    adapter.destroy();
+  });
+
+  it("stops while the final result event handler is hung after the ACP prompt completes", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), cancelGraceMs: 25 });
+    const controller = new AbortController();
+    let resultEventStarted = false;
+    const turn = adapter.sendUserMessage("telegram-hung-result", {
+      text: "run",
+      files: [],
+      abortSignal: controller.signal,
+      disableRuntimeTimeout: true,
+      onEngineEvent: (event) => {
+        if (event.type !== "result") {
+          return undefined;
+        }
+        resultEventStarted = true;
+        return new Promise<void>(() => {
+          // Simulate a final-card update that never returns.
+        });
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "done" } });
+    server.respondPrompt();
+    await waitFor(() => resultEventStarted);
+
+    controller.abort();
+    await expect(settleWithin(turn)).rejects.toThrow("Task was stopped by user");
+    expect(harness.killedPids).toHaveLength(0);
+    adapter.destroy();
+  });
+
+  it("answers ACP permission denial when both event delivery and the approval callback are hung", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", { ...adapterOptions(harness), cancelGraceMs: 25 });
+    const controller = new AbortController();
+    const turn = adapter.sendUserMessage("telegram-hung-permission", {
+      text: "run",
+      files: [],
+      abortSignal: controller.signal,
+      disableRuntimeTimeout: true,
+      onEngineEvent: (event) => event.type === "tool_use"
+        ? new Promise<void>(() => {
+            // Prevent the permission event chain from advancing.
+          })
+        : undefined,
+      onApprovalRequest: () => new Promise(() => {
+        // Deliberately ignore the abort signal; the adapter must still deny.
+      }),
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "bash-hung",
+      title: "Bash",
+      kind: "execute",
+      status: "pending",
+      rawInput: { command: "sleep 999" },
+    });
+    const requestId = server.requestPermission({
+      sessionId: server.sessionId,
+      toolCall: { toolCallId: "bash-hung", title: "Bash" },
+      options: [
+        { kind: "allow_once", name: "Approve", optionId: "ok" },
+        { kind: "reject_once", name: "Reject", optionId: "no" },
+      ],
+    });
+
+    controller.abort();
+    await expect(settleWithin(turn)).rejects.toThrow("Task was stopped by user");
+    await waitFor(() => server.clientResponses.has(requestId));
+    expect(server.clientResponses.get(requestId)?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "no" },
+    });
+    expect(harness.killedPids).toHaveLength(0);
     adapter.destroy();
   });
 

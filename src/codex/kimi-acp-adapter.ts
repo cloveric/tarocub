@@ -86,6 +86,8 @@ type PendingKimiTurn = {
   stopError?: Error;
   failurePromise: Promise<never>;
   rejectFailure: (error: Error) => void;
+  interruptionPromise: Promise<never>;
+  rejectInterruption: (error: Error) => void;
   eventChain: Promise<void>;
 };
 
@@ -709,8 +711,6 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (!actualSessionId) {
       throw new Error("Kimi ACP did not provide a session id");
     }
-    await this.emitEngineEvent(input.onEngineEvent, { type: "session", sessionId: actualSessionId });
-
     const result = await this.runTurn(
       worker,
       actualSessionId,
@@ -1116,6 +1116,11 @@ export class KimiAcpAdapter implements CodexAdapter {
     // A transport failure can race with the prompt's own rejection. Attach a
     // handler immediately so the losing branch never becomes unhandled.
     void failurePromise.catch(() => undefined);
+    let rejectInterruption!: (error: Error) => void;
+    const interruptionPromise = new Promise<never>((_resolve, reject) => {
+      rejectInterruption = reject;
+    });
+    void interruptionPromise.catch(() => undefined);
     const pending: PendingKimiTurn = {
       assistantText: "",
       onProgress: input.onProgress,
@@ -1125,6 +1130,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       timeoutsDisabled: input.disableRuntimeTimeout === true,
       failurePromise,
       rejectFailure,
+      interruptionPromise,
+      rejectInterruption,
       eventChain: Promise.resolve(),
     };
     // Synchronous re-check immediately before the assignment. The friendly
@@ -1155,6 +1162,14 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     try {
+      // Register the pending turn before delivering the session event. Lark may
+      // perform network I/O in this callback; racing both failure channels
+      // keeps /stop and runtime watchdogs effective even if that I/O wedges.
+      await Promise.race([
+        this.emitEngineEvent(pending.onEngineEvent, { type: "session", sessionId }),
+        pending.failurePromise,
+        pending.interruptionPromise,
+      ]);
       const result = await Promise.race([
         worker.connection.prompt({
           sessionId,
@@ -1172,9 +1187,17 @@ export class KimiAcpAdapter implements CodexAdapter {
       // and with runtime timeouts disabled a hung onEngineEvent (e.g. a Lark
       // API call that never settles) would otherwise pin pendingTurn forever —
       // every later message then bounces off "already has an in-flight turn".
-      await Promise.race([pending.eventChain, pending.failurePromise]);
+      await Promise.race([
+        pending.eventChain,
+        pending.failurePromise,
+        pending.interruptionPromise,
+      ]);
       const text = pending.assistantText.trim() || "Kimi completed the request.";
-      await this.emitEngineEvent(pending.onEngineEvent, { type: "result", text, sessionId });
+      await Promise.race([
+        this.emitEngineEvent(pending.onEngineEvent, { type: "result", text, sessionId }),
+        pending.failurePromise,
+        pending.interruptionPromise,
+      ]);
       return { text, usage: usageFromPromptResult(result) };
     } catch (error) {
       const effectiveError = pending.stopError ?? (error instanceof Error ? error : new Error(String(error)));
@@ -1330,7 +1353,11 @@ export class KimiAcpAdapter implements CodexAdapter {
     // Both awaits below race the failure promise: an unanswered ACP
     // session/request_permission wedges the CLI, so eviction (stop/timeout/
     // destroy) must be able to unblock this handler and let it answer.
-    await Promise.race([pending.eventChain, pending.failurePromise.catch(() => undefined)]);
+    await Promise.race([
+      pending.eventChain,
+      pending.failurePromise.catch(() => undefined),
+      pending.interruptionPromise.catch(() => undefined),
+    ]);
     const toolName = requestToolName(request, state);
     const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
     const toolInput = toolName === "AskUserQuestion"
@@ -1342,7 +1369,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       toolInput,
       sessionId: worker.currentSessionId ?? request.sessionId,
     });
-    await Promise.race([pending.eventChain, pending.failurePromise.catch(() => undefined)]);
+    await Promise.race([
+      pending.eventChain,
+      pending.failurePromise.catch(() => undefined),
+      pending.interruptionPromise.catch(() => undefined),
+    ]);
 
     const approvalRequest: EngineApprovalRequest = {
       engine: "kimi",
@@ -1355,11 +1386,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     };
     let decision: EngineApprovalDecision = { behavior: "deny" };
     if (pending.onApprovalRequest) {
-      try {
-        decision = await pending.onApprovalRequest(approvalRequest);
-      } catch {
-        decision = { behavior: "deny" };
-      }
+      const denyOnFailure = (): EngineApprovalDecision => ({ behavior: "deny" });
+      decision = await Promise.race([
+        pending.onApprovalRequest(approvalRequest).catch(denyOnFailure),
+        pending.failurePromise.catch(denyOnFailure),
+        pending.interruptionPromise.catch(denyOnFailure),
+      ]);
     }
     return renderPermissionResponse(request, toolName, decision);
   }
@@ -1409,6 +1441,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       return;
     }
     pending.stopError = error;
+    pending.rejectInterruption(error);
     pending.approvalAbortController.abort(error);
     const sessionId = worker.currentSessionId;
     if (!sessionId) {

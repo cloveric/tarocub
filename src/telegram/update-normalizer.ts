@@ -71,6 +71,22 @@ export function coalesceTelegramMediaGroupUpdates(updates: unknown[]): unknown[]
 }
 
 function normalizeCallbackCommand(data: string): string | null {
+  const indexedAnswer = data.match(/^approval:([A-Za-z0-9_-]+):answer:(\d+):(\d+)$/i);
+  if (indexedAnswer) {
+    return `/approval ${indexedAnswer[1]} answer-${indexedAnswer[2]}-${indexedAnswer[3]}`;
+  }
+
+  const toggle = data.match(/^approval:([A-Za-z0-9_-]+):toggle:(\d+):(\d+)$/i);
+  if (toggle) {
+    return `/approval ${toggle[1]} toggle-${toggle[2]}-${toggle[3]}`;
+  }
+
+  const submit = data.match(/^approval:([A-Za-z0-9_-]+):submit:(\d+)$/i);
+  if (submit) {
+    return `/approval ${submit[1]} submit-${submit[2]}`;
+  }
+
+  // Keep callbacks emitted before this upgrade usable until they expire.
   const answer = data.match(/^approval:([A-Za-z0-9_-]+):answer:(\d+)$/i);
   if (answer) {
     return `/approval ${answer[1]} answer-${answer[2]}`;

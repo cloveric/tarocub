@@ -191,12 +191,23 @@ describe("Lark env files", () => {
         // engine credentials — allowed through
         "IFIND_TOKEN=ok-ifind",
         "KIMI_API_KEY=ok-kimi",
+        "KIMI_MODEL_API_KEY=ok-kimi-model",
+        "KIMI_REGISTRY_API_KEY=ok-kimi-registry",
+        "KIMI_WEB_FETCH_API_KEY=ok-kimi-fetch",
+        "KIMI_WEB_SEARCH_API_KEY=ok-kimi-search",
         "TAVILY_API_KEY=ok-tavily",
         // bridge-control vars — must be refused so lark.env can't repoint/hijack the bridge
         "CCTB_SEND_URL=http://attacker",
         // KIMI_CODE_HOME decides the provider endpoint (config.toml lives under it)
         // AND which config the bridge itself reads — the Kimi ANTHROPIC_BASE_URL.
         "KIMI_CODE_HOME=/tmp/evil-kimi-home",
+        "KIMI_CODE_BASE_URL=http://attacker/code",
+        "KIMI_CODE_OAUTH_HOST=http://attacker/oauth",
+        "KIMI_BASE_URL=http://attacker/base",
+        "KIMI_MODEL_BASE_URL=http://attacker/model",
+        "KIMI_CODE_CUSTOM_HEADERS=X-Evil:true",
+        "KIMI_CODE_PLUGIN_MARKETPLACE_URL=http://attacker/plugins",
+        "KIMI_FUTURE_CONTROL=unexpected",
         "CCTB_LARK_ACTIVE_INSTANCE=other",
         "CODEX_THREAD_ID=hijacked",
         "LARK_DOC_CREATE_AS=someone",
@@ -211,13 +222,28 @@ describe("Lark env files", () => {
       const applied = await applyLarkEnvPassthrough({ USERPROFILE: tempDir, CCTB_LARK_INSTANCE: instanceName }, target);
 
       // Only non-reserved engine credentials pass through.
-      expect([...applied].sort()).toEqual(["IFIND_TOKEN", "KIMI_API_KEY", "TAVILY_API_KEY"]);
+      expect([...applied].sort()).toEqual([
+        "IFIND_TOKEN",
+        "KIMI_API_KEY",
+        "KIMI_MODEL_API_KEY",
+        "KIMI_REGISTRY_API_KEY",
+        "KIMI_WEB_FETCH_API_KEY",
+        "KIMI_WEB_SEARCH_API_KEY",
+        "TAVILY_API_KEY",
+      ]);
       expect(target.IFIND_TOKEN).toBe("ok-ifind");
       expect(target.KIMI_API_KEY).toBe("ok-kimi");
+      expect(target.KIMI_MODEL_API_KEY).toBe("ok-kimi-model");
+      expect(target.KIMI_REGISTRY_API_KEY).toBe("ok-kimi-registry");
+      expect(target.KIMI_WEB_FETCH_API_KEY).toBe("ok-kimi-fetch");
+      expect(target.KIMI_WEB_SEARCH_API_KEY).toBe("ok-kimi-search");
       expect(target.KIMI_CODE_HOME).toBeUndefined();
       expect(target.TAVILY_API_KEY).toBe("ok-tavily");
       for (const blocked of [
-        "CCTB_SEND_URL", "CCTB_LARK_ACTIVE_INSTANCE", "CODEX_THREAD_ID", "LARK_DOC_CREATE_AS",
+        "CCTB_SEND_URL", "KIMI_CODE_HOME", "KIMI_CODE_BASE_URL", "KIMI_CODE_OAUTH_HOST",
+        "KIMI_BASE_URL", "KIMI_MODEL_BASE_URL", "KIMI_CODE_CUSTOM_HEADERS",
+        "KIMI_CODE_PLUGIN_MARKETPLACE_URL", "KIMI_FUTURE_CONTROL",
+        "CCTB_LARK_ACTIVE_INSTANCE", "CODEX_THREAD_ID", "LARK_DOC_CREATE_AS",
         "TAROCUB_MAX_CONCURRENT_TURNS", "ANTIGRAVITY_EXECUTABLE", "ASR_HTTP_URL", "TELEGRAM_BOT_USERNAME",
       ]) {
         expect(target[blocked], `${blocked} must not pass through`).toBeUndefined();
@@ -416,11 +442,15 @@ describe("Lark env files", () => {
       await mkdir(path.join(tempDir, ".cctb"), { recursive: true });
       await writeFile(path.join(tempDir, ".cctb", "shared.env"), [
         "IFIND_TOKEN=ok-shared",
+        "KIMI_API_KEY=ok-kimi-shared",
         // a bridge-control var dropped into the shared file must still be refused
         "CCTB_SEND_URL=http://attacker",
         // KIMI_CODE_HOME decides the provider endpoint (config.toml lives under it)
         // AND which config the bridge itself reads — the Kimi ANTHROPIC_BASE_URL.
         "KIMI_CODE_HOME=/tmp/evil-kimi-home",
+        "KIMI_CODE_BASE_URL=http://attacker/code",
+        "KIMI_CODE_OAUTH_HOST=http://attacker/oauth",
+        "KIMI_FUTURE_CONTROL=unexpected",
         "",
       ].join("\n"), "utf8");
 
@@ -430,9 +460,14 @@ describe("Lark env files", () => {
         CCTB_LARK_INSTANCE: "missing-instance",
       }, target);
 
-      expect(applied).toEqual(["IFIND_TOKEN"]);
+      expect(applied).toEqual(["IFIND_TOKEN", "KIMI_API_KEY"]);
       expect(target.IFIND_TOKEN).toBe("ok-shared");
+      expect(target.KIMI_API_KEY).toBe("ok-kimi-shared");
       expect(target.CCTB_SEND_URL).toBeUndefined();
+      expect(target.KIMI_CODE_HOME).toBeUndefined();
+      expect(target.KIMI_CODE_BASE_URL).toBeUndefined();
+      expect(target.KIMI_CODE_OAUTH_HOST).toBeUndefined();
+      expect(target.KIMI_FUTURE_CONTROL).toBeUndefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

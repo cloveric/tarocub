@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 
 import { coalesceTelegramMediaGroupUpdates, normalizeUpdate } from "../src/telegram/update-normalizer.js";
 
+describe("normalizeUpdate approval callbacks", () => {
+  it.each([
+    ["approval:req-1:answer:2:3", "/approval req-1 answer-2-3"],
+    ["approval:req-1:toggle:2:3", "/approval req-1 toggle-2-3"],
+    ["approval:req-1:submit:2", "/approval req-1 submit-2"],
+    // Buttons sent before the sequential-question upgrade remain valid.
+    ["approval:req-1:answer:3", "/approval req-1 answer-3"],
+  ])("maps %s to %s", (data, expected) => {
+    const normalized = normalizeUpdate({
+      callback_query: {
+        id: "callback-approval",
+        data,
+        from: { id: 456 },
+        message: { chat: { id: 123, type: "private" } },
+      },
+    });
+
+    expect(normalized).toMatchObject({ text: expected, callbackQueryId: "callback-approval" });
+  });
+});
+
 describe("normalizeUpdate media groups", () => {
   it("coalesces an album into one message with every attachment and the caption", () => {
     const updates = coalesceTelegramMediaGroupUpdates([

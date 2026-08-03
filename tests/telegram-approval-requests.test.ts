@@ -150,7 +150,7 @@ describe("telegram approval requests", () => {
       "Skip",
     ]);
     const callbackData = keyboard?.[1]?.[0]?.callbackData as string;
-    expect(callbackData).toMatch(/^approval:[^:]+:answer:1$/);
+    expect(callbackData).toMatch(/^approval:[^:]+:answer:0:1$/);
 
     const normalized = normalizeUpdate({
       callback_query: {
@@ -160,7 +160,7 @@ describe("telegram approval requests", () => {
         message: { chat: { id: 123, type: "private" } },
       },
     });
-    expect(normalized?.text).toMatch(/^\/approval [^ ]+ answer-1$/);
+    expect(normalized?.text).toMatch(/^\/approval [^ ]+ answer-0-1$/);
     await handleTelegramApprovalCommand({ normalized: normalized!, api });
 
     await expect(pending).resolves.toEqual({
@@ -234,7 +234,7 @@ describe("telegram approval requests", () => {
     });
   });
 
-  it("falls back to the generic pre-approval for a multi-question AskUserQuestion instead of truncating", async () => {
+  it("collects every AskUserQuestion answer sequentially instead of dropping later questions", async () => {
     const api = createApi();
     const pending = requestTelegramApproval({
       api,
@@ -252,26 +252,122 @@ describe("telegram approval requests", () => {
         },
       },
     });
-    // The one-question inline prompt cannot carry both questions; rendering
-    // only Q1 answered with a single option silently dropped Q2. The generic
-    // Allow/Deny prompt passes the ORIGINAL input through untouched instead.
     const keyboard = api.sendMessage.mock.calls[0]?.[2]?.inlineKeyboard as Array<Array<{ text: string; callbackData: string }>>;
     const labels = keyboard.flat().map((button) => button.text);
-    expect(labels).toContain("Allow Once");
-    expect(labels).not.toContain("A");
+    expect(api.sendMessage.mock.calls[0]?.[1]).toContain("Question 1/2");
+    expect(labels).toContain("A");
+    expect(labels).toContain("B");
     expect(labels).not.toContain("9");
-    const allow = keyboard.flat().find((button) => button.text === "Allow Once")!;
-    const normalized = normalizeUpdate({
+    const first = keyboard.flat().find((button) => button.text === "A")!;
+    const firstNormalized = normalizeUpdate({
       callback_query: {
         id: "callback-multi-q",
-        data: allow.callbackData,
+        data: first.callbackData,
         from: { id: 456 },
         message: { chat: { id: 123, type: "private" } },
       },
     });
-    await handleTelegramApprovalCommand({ normalized: normalized!, api });
-    // Allow-once with NO updatedInput: the engine keeps its own full input.
-    await expect(pending).resolves.toEqual({ behavior: "allow", scope: "once" });
+    await handleTelegramApprovalCommand({ normalized: firstNormalized!, api });
+
+    const secondEdit = api.editMessage.mock.calls.at(-1)!;
+    expect(secondEdit[2]).toContain("Question 2/2");
+    expect(secondEdit[2]).toContain("How many pages?");
+    const secondKeyboard = secondEdit[3]?.inlineKeyboard as Array<Array<{ text: string; callbackData: string }>>;
+    const twelve = secondKeyboard.flat().find((button) => button.text === "12")!;
+    const secondNormalized = normalizeUpdate({
+      callback_query: {
+        id: "callback-multi-q-2",
+        data: twelve.callbackData,
+        from: { id: 456 },
+        message: { chat: { id: 123, type: "private" } },
+      },
+    });
+    await handleTelegramApprovalCommand({ normalized: secondNormalized!, api });
+
+    await expect(pending).resolves.toEqual({
+      behavior: "allow",
+      scope: "once",
+      updatedInput: {
+        questions: [
+          { question: "Which style?", header: "Style", multiSelect: false, options: [{ label: "A" }, { label: "B" }] },
+          { question: "How many pages?", header: "Pages", multiSelect: false, options: [{ label: "9" }, { label: "12" }] },
+        ],
+        answers: { "Which style?": "A", "How many pages?": "12" },
+      },
+    });
+    expect(api.editMessage).toHaveBeenLastCalledWith(
+      123,
+      11,
+      "Answers submitted. Claude is resuming...",
+      { inlineKeyboard: null },
+    );
+  });
+
+  it("toggles multiple AskUserQuestion choices and submits them together", async () => {
+    const api = createApi();
+    const pending = requestTelegramApproval({
+      api,
+      chatId: 123,
+      userId: 456,
+      locale: "en",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{
+            question: "Which outputs?",
+            header: "Outputs",
+            multiSelect: true,
+            options: [{ label: "PDF" }, { label: "DOCX" }, { label: "XLSX" }],
+          }],
+        },
+      },
+    });
+
+    const click = async (callbackData: string, callbackQueryId: string) => {
+      const normalized = normalizeUpdate({
+        callback_query: {
+          id: callbackQueryId,
+          data: callbackData,
+          from: { id: 456 },
+          message: { chat: { id: 123, type: "private" } },
+        },
+      });
+      await handleTelegramApprovalCommand({ normalized: normalized!, api });
+    };
+
+    const initialKeyboard = api.sendMessage.mock.calls[0]?.[2]?.inlineKeyboard as Array<Array<{ text: string; callbackData: string }>>;
+    expect(initialKeyboard.flat().map((button) => button.text)).toEqual(["PDF", "DOCX", "XLSX", "Submit (0)", "Skip"]);
+    await click(initialKeyboard[0]![0]!.callbackData, "toggle-pdf");
+    let updatedKeyboard = api.editMessage.mock.calls.at(-1)![3]?.inlineKeyboard as Array<Array<{ text: string; callbackData: string }>>;
+    expect(updatedKeyboard.flat().map((button) => button.text)).toContain("✓ PDF");
+    expect(updatedKeyboard.flat().map((button) => button.text)).toContain("Submit (1)");
+
+    await click(updatedKeyboard[2]![0]!.callbackData, "toggle-xlsx");
+    updatedKeyboard = api.editMessage.mock.calls.at(-1)![3]?.inlineKeyboard as Array<Array<{ text: string; callbackData: string }>>;
+    expect(updatedKeyboard.flat().map((button) => button.text)).toContain("✓ XLSX");
+    const submit = updatedKeyboard.flat().find((button) => button.text === "Submit (2)")!;
+    await click(submit.callbackData, "submit-outputs");
+
+    await expect(pending).resolves.toEqual({
+      behavior: "allow",
+      scope: "once",
+      updatedInput: {
+        questions: [{
+          question: "Which outputs?",
+          header: "Outputs",
+          multiSelect: true,
+          options: [{ label: "PDF" }, { label: "DOCX" }, { label: "XLSX" }],
+        }],
+        answers: { "Which outputs?": "PDF, XLSX" },
+      },
+    });
+    expect(api.editMessage).toHaveBeenLastCalledWith(
+      123,
+      11,
+      "Answers submitted. Claude is resuming...",
+      { inlineKeyboard: null },
+    );
   });
 
   it("does not treat /approve as an answer to AskUserQuestion", async () => {
@@ -414,6 +510,8 @@ describe("telegram approval requests", () => {
         toolInput: { command: "topic-20" },
       },
     });
+    expect(api.sendMessage.mock.calls[0]?.[2]).toMatchObject({ messageThreadId: 10 });
+    expect(api.sendMessage.mock.calls[1]?.[2]).toMatchObject({ messageThreadId: 20 });
 
     await expect(handleTelegramApprovalCommand({
       normalized: {

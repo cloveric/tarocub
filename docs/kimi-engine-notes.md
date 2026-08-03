@@ -344,9 +344,12 @@ environment, cwd, headers, enablement, and timeout settings. OAuth tokens are
 managed separately by Kimi's MCP login flow.
 
 The probe inspected only configuration structure and credential key names. It
-did not print or copy token values. TaroCub must inherit the operator's Kimi
-home by default, pass through explicitly configured `KIMI_*` values, and never
-persist provider tokens into TaroCub config or logs.
+did not print or copy token values. TaroCub inherits the operator's native Kimi
+home by default and passes through only its explicit Kimi credential allowlist
+(`KIMI_API_KEY`, model/registry API keys, and web fetch/search API keys).
+Endpoint, OAuth-host, custom-header, home, marketplace, and unknown future
+`KIMI_*` controls are rejected from `lark.env`/`shared.env`; provider tokens are
+never persisted into TaroCub config or logs.
 
 In addition to native Kimi MCP/plugin configuration, TaroCub passes its local
 Brave/Tavily Search MCP as an ACP stdio server in both `session/new` and

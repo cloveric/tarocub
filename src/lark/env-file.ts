@@ -334,7 +334,10 @@ function parseLarkEnvExtras(content: string, dropped?: string[]): Record<string,
     if (isSupportedLarkEnvKey(key)) {
       continue;
     }
-    if (isReservedBridgeEnvKey(key) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    if (
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+      || (isReservedBridgeEnvKey(key) && !isAllowedKimiCredentialEnvKey(key))
+    ) {
       dropped?.push(key);
       continue;
     }
@@ -356,11 +359,9 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "CCTB_LARK_DEBUG" ||
     key === "TAROCUB_INSTANCE" ||
     key === "CODEX_TELEGRAM_INSTANCE" ||
-    // Explicitly whitelisted executable setting. Other KIMI_* names remain
-    // available as engine credentials (e.g. KIMI_API_KEY) — except
-    // KIMI_CODE_HOME, which is denied outright (see
-    // DENIED_PROCESS_CONTROL_ENV_KEYS): it decides which provider endpoint the
-    // engine talks to and which config.toml the BRIDGE itself reads.
+    // Explicitly whitelisted executable setting. The extras path admits only
+    // named Kimi API-key variables; all endpoint/home/header/plugin controls
+    // stay reserved so they cannot reconfigure the bridge process.
     key === "KIMI_EXECUTABLE" ||
     // Long-audio cloud ASR: whitelisted so lark.env stays the operator-facing
     // config surface, while TINGWU_/ASR_ remain reserved on the EXTRAS path (an
@@ -386,6 +387,12 @@ const RESERVED_BRIDGE_ENV_PREFIXES = [
   "LARK_",
   "CODEX_",
   "CLAUDE_",
+  // Kimi exposes endpoint, OAuth-host, custom-header, plugin-marketplace,
+  // updater, host-check, and model-provider controls under this namespace.
+  // Keep the namespace closed by default and allow only the credential keys
+  // listed below; otherwise every new Kimi control variable becomes an
+  // implicit shared.env privilege escalation until the bridge learns its name.
+  "KIMI_",
   "ANTIGRAVITY_",
   "ASR_",
   "TELEGRAM_",
@@ -394,6 +401,18 @@ const RESERVED_BRIDGE_ENV_PREFIXES = [
   // service-env key or config — never from a lark.env/shared.env extra.
   "TINGWU_",
 ] as const;
+
+const ALLOWED_KIMI_CREDENTIAL_ENV_KEYS: ReadonlySet<string> = new Set([
+  "KIMI_API_KEY",
+  "KIMI_MODEL_API_KEY",
+  "KIMI_REGISTRY_API_KEY",
+  "KIMI_WEB_FETCH_API_KEY",
+  "KIMI_WEB_SEARCH_API_KEY",
+]);
+
+function isAllowedKimiCredentialEnvKey(key: string): boolean {
+  return ALLOWED_KIMI_CREDENTIAL_ENV_KEYS.has(key.toUpperCase());
+}
 
 /**
  * Process-control variables that must never be injected into the BRIDGE's own
@@ -425,8 +444,9 @@ const DENIED_PROCESS_CONTROL_ENV_KEYS: ReadonlySet<string> = new Set([
   // bridge itself reads it (kimi-acp-adapter loads default_model from there).
   // An extra retargeting it is the Kimi equivalent of the denied
   // ANTHROPIC_BASE_URL: one line in shared.env would repoint every Kimi
-  // instance's provider endpoint at the next restart. Other KIMI_* names still
-  // flow as engine credentials (e.g. KIMI_API_KEY).
+  // instance's provider endpoint at the next restart. The KIMI_ namespace is
+  // otherwise closed by default; only the explicit API-key allowlist above is
+  // eligible for passthrough.
   "KIMI_CODE_HOME",
   "HTTP_PROXY",
   "HTTPS_PROXY",
