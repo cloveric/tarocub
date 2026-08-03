@@ -1141,3 +1141,29 @@ describe("TelegramApi", () => {
     fetchMock.mockRestore();
   });
 });
+
+describe("codex-fix review regressions (v0.1.205)", () => {
+  it("prefers line boundaries when chunking plain prose", async () => {
+    const { chunkTelegramMessage } = await import("../src/telegram/message-renderer.js");
+    const lines = Array.from({ length: 60 }, (_, i) => `Line ${i}: ${"x".repeat(90)}`).join("\n");
+    const chunks = chunkTelegramMessage(lines, 1000);
+    expect(chunks.join("")).toBe(lines);
+    // v0.1.203's rewrite split mid-line; every boundary must now land between lines.
+    for (const chunk of chunks.slice(0, -1)) {
+      expect(chunk.endsWith("\n"), `chunk ended mid-line: …${JSON.stringify(chunk.slice(-20))}`).toBe(true);
+    }
+  });
+
+  it("keeps code lines whole across fence-safe chunk boundaries", async () => {
+    const { chunkTelegramMessage } = await import("../src/telegram/message-renderer.js");
+    const body = Array.from({ length: 40 }, (_, i) => `const v${i} = compute(${i});`).join("\n");
+    const text = "```ts\n" + body + "\n```";
+    const chunks = chunkTelegramMessage(text, 400);
+    // Reconstructed content (minus the re-open/close scaffolding) must contain
+    // every line INTACT — no line split across two chunks.
+    for (let i = 0; i < 40; i += 1) {
+      const line = `const v${i} = compute(${i});`;
+      expect(chunks.some((chunk) => chunk.includes(line)), `line ${i} was split`).toBe(true);
+    }
+  });
+});

@@ -99,6 +99,14 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
         closeAndReopenFence();
         continue;
       }
+      // Same line-boundary preference inside a fence: if this code line cannot
+      // finish in the current chunk but fits a fresh one, close/reopen now
+      // instead of splitting the line across two cards.
+      const freshAvailable = limit - utf16Length(`${fenceOpener}\n`) - utf16Length(fenceDelimiter) - 1;
+      if (utf16Length(remaining) > available && utf16Length(remaining) <= freshAvailable) {
+        closeAndReopenFence();
+        continue;
+      }
       if (utf16Length(remaining) <= available) {
         current += remaining;
         return;
@@ -120,6 +128,15 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
       if (utf16Length(remaining) <= available) {
         current += remaining;
         return;
+      }
+      // Prefer breaking at the line boundary we are already on: push the
+      // partially-filled chunk and let this line start the next one. Splitting
+      // mid-line/mid-word is reserved for a single line that alone exceeds the
+      // limit (v0.1.203's fence-safe rewrite dropped this preference and long
+      // prose started splitting inside words on both channels).
+      if (current) {
+        pushCurrent();
+        continue;
       }
       const prefix = takeSafePrefixByUnits(remaining, available);
       if (utf16Length(prefix) > available) {

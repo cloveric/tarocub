@@ -1502,7 +1502,16 @@ export function truncateBytes(s: string, maxBytes: number): string {
       hi = mid - 1;
     }
   }
-  return `${s.slice(0, lo)}…`;
+  // Never cut inside a surrogate pair: a byte budget can land mid-emoji, and a
+  // lone high surrogate makes the string ill-formed (Feishu may reject the
+  // whole card element). Backing off one unit always fits (a pair is 4 UTF-8
+  // bytes; its high half alone would have encoded to 3).
+  let cut = lo;
+  const last = s.charCodeAt(cut - 1);
+  if (cut > 0 && last >= 0xd800 && last <= 0xdbff) {
+    cut -= 1;
+  }
+  return `${s.slice(0, cut)}…`;
 }
 
 // --- Long-answer overflow: continuation cards ------------------------------------

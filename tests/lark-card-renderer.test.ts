@@ -817,3 +817,13 @@ describe("renderLarkNotificationCard", () => {
     expect(renderLarkNotificationCard("后台任务完成", "```file:report.txt\nhello world\n```")).toBeNull();
   });
 });
+
+describe("truncateBytes surrogate safety (v0.1.205)", () => {
+  it("never ends output inside a surrogate pair", async () => {
+    const { truncateBytes } = await import("../src/lark/card-renderer.js");
+    for (let maxBytes = 8; maxBytes <= 40; maxBytes += 1) {
+      const out = truncateBytes("a😀😀😀😀😀😀😀😀", maxBytes);
+      expect((out as string & { isWellFormed(): boolean }).isWellFormed(), `maxBytes=${maxBytes} produced lone surrogate`).toBe(true);
+    }
+  });
+});

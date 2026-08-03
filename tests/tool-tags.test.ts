@@ -453,3 +453,21 @@ describe("telegram tool tags", () => {
     });
   });
 });
+
+describe("empty fenced block off-by-one (v0.1.205)", () => {
+  it("does not mask everything after an empty code block", async () => {
+    const { extractDeliveryTagMatches } = await import("../src/telegram/delivery-tags.js");
+    // The closer line immediately follows the opener: the closer regex used to
+    // start AFTER the opener's newline, so (^|\n) could never match and the
+    // "unclosed" block swallowed the rest of the message — a legit tag below
+    // an empty block silently did not deliver.
+    const text = "```\n```\n[send-file:/tmp/report.txt]";
+    const matches = extractDeliveryTagMatches(text);
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.path).toBe("/tmp/report.txt");
+    // And a tag INSIDE a fence stays masked.
+    expect(extractDeliveryTagMatches("```\n[send-file:/tmp/a.txt]\n```")).toHaveLength(0);
+    // Tilde variant of the same shape.
+    expect(extractDeliveryTagMatches("~~~\n~~~\n[send-file:/tmp/b.txt]")).toHaveLength(1);
+  });
+});

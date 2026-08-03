@@ -1,4 +1,7 @@
-import type { ResumeState } from "../telegram/instance-config.js";
+import path from "node:path";
+
+import { SessionStore } from "../state/session-store.js";
+import { updateInstanceConfig, type InstanceConfig, type ResumeState } from "../telegram/instance-config.js";
 
 export interface ConversationResumeRecord {
   codexSessionId: string;
@@ -68,4 +71,42 @@ export async function migrateLegacyConversationResume<T extends ConversationResu
     }
   }
   return true;
+}
+
+/**
+ * Scope `cfg.resume` to ONE conversation, in place. v0.1.203 moved /resume
+ * workspace bindings from instance config onto per-conversation session
+ * records, and the message-turn entry points were updated — but the Lark
+ * card-driven entry points (AskUserQuestion choice, archive-continue) kept
+ * reading the raw instance config, so a resumed conversation's card follow-up
+ * ran in the DEFAULT workspace with the default delivery sandbox. Every entry
+ * point that turns a conversation's input into an engine turn must call this
+ * before deriving a workspace from cfg.
+ */
+export async function applyConversationResumeScope(
+  stateDir: string,
+  conversationKey: string,
+  cfg: InstanceConfig,
+): Promise<void> {
+  const store = new SessionStore(path.join(stateDir, "session.json"));
+  if (cfg.resume && await migrateLegacyConversationResume(store, cfg.resume)) {
+    const migratedSessionId = cfg.resume.sessionId;
+    await updateInstanceConfig(stateDir, (config) => {
+      const legacy = config.resume as ResumeState | undefined;
+      if (legacy?.sessionId === migratedSessionId) delete config.resume;
+    });
+    cfg.resume = undefined;
+  }
+  const session = await store.findByConversationKeySafe(conversationKey);
+  const scoped = session.warning
+    ? undefined
+    : resolveConversationResume(session.record, cfg.resume);
+  if (scoped && session.record && !hasConversationResume(session.record)) {
+    await store.upsert({ ...session.record, resume: scoped });
+    await updateInstanceConfig(stateDir, (config) => {
+      const legacy = config.resume as ResumeState | undefined;
+      if (legacy?.sessionId === scoped.sessionId) delete config.resume;
+    });
+  }
+  cfg.resume = scoped;
 }

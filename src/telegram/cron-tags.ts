@@ -109,7 +109,8 @@ function markdownCodeRanges(text: string): Array<{ start: number; end: number }>
     const minLength = marker.length;
     const contentStart = opener.lastIndex;
     const closer = new RegExp(`(^|\\n)[ \\t]*${fenceChar}{${minLength},}[ \\t]*(?=\\r?\\n|$)`, "g");
-    closer.lastIndex = contentStart;
+    // One char back: lets (^|\n) match an empty block's immediate closer.
+    closer.lastIndex = Math.max(0, contentStart - 1);
     const closeMatch = closer.exec(maskedTags);
     if (!closeMatch) {
       ranges.push({ start, end: maskedTags.length });

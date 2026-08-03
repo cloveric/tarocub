@@ -18,7 +18,10 @@ function maskMarkdownCode(text: string): string {
     const start = match.index + prefix.length;
     const marker = match[3]!;
     const closer = new RegExp(`(^|\\n)[ \\t]*${marker[0]}{${marker.length},}[ \\t]*(?=\\r?\\n|$)`, "g");
-    closer.lastIndex = opener.lastIndex;
+    // Start ONE char back so the (^|\n) prefix can re-consume the opener
+    // line's newline: an EMPTY fenced block ("```\n```") otherwise never
+    // matches its closer and everything after it is masked forever.
+    closer.lastIndex = Math.max(0, opener.lastIndex - 1);
     const closeMatch = closer.exec(text);
     const end = closeMatch ? closeMatch.index + closeMatch[0].length : text.length;
     ranges.push({ start, end });

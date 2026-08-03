@@ -16,6 +16,7 @@ import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
 import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
 import { loadInstanceConfig, resolveInstanceWorkspacePath, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
+import { applyConversationResumeScope } from "../runtime/conversation-resume.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkBoardCommand } from "./bus.js";
@@ -1783,6 +1784,9 @@ async function runLarkCardChoice(input: {
   const bridgeChatId = stableLarkNumericId(input.conversationKey);
   const locale = await resolveLarkLocale(input.stateDir);
   const cfg = await loadInstanceConfig(input.stateDir);
+  // Card-driven turns must see the CONVERSATION's resumed workspace, not the
+  // raw instance config — see applyConversationResumeScope.
+  await applyConversationResumeScope(input.stateDir, input.conversationKey, cfg);
   const workspaceOverride = resolveInstanceWorkspacePath(cfg);
   // Enforce the spend budget before running the engine (parity with the
   // message-turn and bus entry points).
@@ -1965,6 +1969,9 @@ async function runLarkArchiveContinueCardAction(input: {
   const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
   const locale = await resolveLarkLocale(input.stateDir);
   const cfg = await loadInstanceConfig(input.stateDir);
+  // Card-driven turns must see the CONVERSATION's resumed workspace, not the
+  // raw instance config — see applyConversationResumeScope.
+  await applyConversationResumeScope(input.stateDir, input.conversationKey, cfg);
   const workspaceOverride = resolveInstanceWorkspacePath(cfg);
   // Enforce the spend budget before running the engine (parity with the
   // message-turn and bus entry points).

@@ -57,7 +57,8 @@ function findFencedCodeRanges(text: string): FencedCodeRange[] {
     const info = (match[4] ?? "").trim();
     const contentStart = opener.lastIndex;
     const closer = new RegExp(`(^|\\n)[ \\t]*${fenceChar}{${minLength},}[ \\t]*(?=\\r?\\n|$)`, "g");
-    closer.lastIndex = contentStart;
+    // One char back: lets (^|\n) match an empty block's immediate closer.
+    closer.lastIndex = Math.max(0, contentStart - 1);
     const closeMatch = closer.exec(text);
     if (!closeMatch) {
       ranges.push({
