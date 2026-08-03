@@ -1387,8 +1387,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     let decision: EngineApprovalDecision = { behavior: "deny" };
     if (pending.onApprovalRequest) {
       const denyOnFailure = (): EngineApprovalDecision => ({ behavior: "deny" });
+      const onApprovalRequest = pending.onApprovalRequest;
       decision = await Promise.race([
-        pending.onApprovalRequest(approvalRequest).catch(denyOnFailure),
+        // Promise.resolve().then(...) also catches a SYNCHRONOUS throw from the
+        // handler — a bare call would escape the .catch and turn into a raw
+        // JSON-RPC error response instead of a graceful deny selection.
+        Promise.resolve().then(() => onApprovalRequest(approvalRequest)).catch(denyOnFailure),
         pending.failurePromise.catch(denyOnFailure),
         pending.interruptionPromise.catch(denyOnFailure),
       ]);
