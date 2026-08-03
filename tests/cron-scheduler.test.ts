@@ -141,6 +141,27 @@ describe("CronScheduler", () => {
     });
   });
 
+  it("does not convert a successful execution into a job failure when run bookkeeping fails", async () => {
+    const onJobFailure = vi.fn().mockResolvedValue(undefined);
+    await withDeps(async ({ store, scheduler, executor, logger }) => {
+      const job = await store.add({
+        chatId: 1,
+        userId: 1,
+        cronExpr: "0 9 * * *",
+        prompt: "a",
+        maxFailures: 1,
+      });
+      vi.spyOn(store, "recordRun").mockRejectedValueOnce(new Error("disk full"));
+
+      await scheduler.runJobNow(job.id);
+
+      expect(executor).toHaveBeenCalledTimes(1);
+      expect(onJobFailure).not.toHaveBeenCalled();
+      expect(await store.get(job.id)).toMatchObject({ enabled: true, failureCount: 0 });
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("failed to record run"));
+    }, { onJobFailure });
+  });
+
   it("runs overdue one-shot jobs immediately and disables them after the attempt", async () => {
     await withDeps(async ({ store, scheduler, executor }) => {
       const targetAt = new Date(Date.now() - 1000).toISOString();

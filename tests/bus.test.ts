@@ -65,6 +65,7 @@ import {
 } from "../src/bus/bus-registry.js";
 import {
   createBusServer,
+  MAX_CONCURRENT_BUS_TALKS,
   startBusServer,
   stopBusServer,
   type BusTalkRequest,
@@ -458,6 +459,52 @@ describe("bus registry", () => {
 });
 
 describe("bus server", () => {
+  it("rejects excess concurrent talks with a retryable server_busy response", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-server-"));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let entered = 0;
+    const handler = vi.fn(async (): Promise<BusTalkResponse> => {
+      entered += 1;
+      await held;
+      return { success: true, text: "ok", fromInstance: "test" };
+    });
+
+    try {
+      await writeFile(
+        path.join(tempDir, "config.json"),
+        JSON.stringify({ bus: { peers: "*", secret: "test-secret" } }),
+        "utf8",
+      );
+      const server = createBusServer("test", tempDir, handler);
+      const port = await startBusServer(server, 0);
+      const send = () => fetch(`http://127.0.0.1:${port}/api/talk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer test-secret" },
+        body: JSON.stringify({ fromInstance: "work", prompt: "hello", depth: 0 }),
+      });
+
+      try {
+        const active = Array.from({ length: MAX_CONCURRENT_BUS_TALKS }, () => send());
+        await vi.waitFor(() => expect(entered).toBe(MAX_CONCURRENT_BUS_TALKS));
+        const overflow = await send();
+        expect(overflow.status).toBe(503);
+        await expect(overflow.json()).resolves.toMatchObject({
+          success: false,
+          errorCode: "server_busy",
+          retryable: true,
+        });
+        release();
+        await expect(Promise.all(active)).resolves.toHaveLength(MAX_CONCURRENT_BUS_TALKS);
+      } finally {
+        release();
+        await stopBusServer(server);
+      }
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("handles /api/talk with peer validation", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "bus-server-"));
     const stateDir = tempDir;

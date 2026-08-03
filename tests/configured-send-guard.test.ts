@@ -281,13 +281,13 @@ describe("cctb send turn-scoped guard", () => {
 
   it("rejects an absolute path outside the workspace sandbox", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-send-guard-sandbox-"));
-    const outsidePath = path.join(tempDir, "outside", "id_rsa");
+    const outsidePath = path.join(tempDir, "outside", "report.txt");
     const api = fakeApi();
 
     try {
       await mkdir(path.join(tempDir, "project"), { recursive: true });
       await mkdir(path.dirname(outsidePath), { recursive: true });
-      await writeFile(outsidePath, "PRIVATE KEY", "utf8");
+      await writeFile(outsidePath, "outside workspace", "utf8");
       await seedSingleChatSession(tempDir);
 
       await expect(runConfiguredSendCommand(

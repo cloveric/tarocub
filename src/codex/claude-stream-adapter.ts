@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 
 import { createClaudeInstructionsFile, type ClaudeInstructionsFile } from "./claude-instructions-file.js";
 import { ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS } from "./engine-timeouts.js";
@@ -30,11 +31,12 @@ type SpawnOptions = {
 };
 
 type ProcessStreamLike = {
-  on(event: "data", listener: (chunk: { toString(): string } | string) => void): void;
+  on(event: "data", listener: (chunk: Buffer | { toString(): string } | string) => void): void;
 };
 
 type Writable = {
   write(chunk: string, callback?: (error?: Error | null) => void): boolean;
+  on?(event: "error", listener: (error: Error) => void): void;
 };
 
 type ClaudeChildProcess = {
@@ -136,6 +138,8 @@ type ClaudeBackgroundTask = ClaudeTaskNotificationMetadata & {
 
 type ClaudeWorker = {
   child: ClaudeChildProcess;
+  stdoutDecoder: StringDecoder;
+  stderrDecoder: StringDecoder;
   lineBuffer: string;
   stderrTail: string;
   currentSessionId: string | null;
@@ -151,6 +155,7 @@ type ClaudeWorker = {
   approvalMode: ApprovalMode;
   engineOptionsKey: string;
   sessionApprovedKeys: Set<string>;
+  pendingApprovalByKey: Map<string, Promise<EngineApprovalDecision>>;
 };
 
 const MAX_INSTRUCTIONS_CHARS = 16_000;
@@ -178,6 +183,16 @@ const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
 // (stale only after 12h) and blocking every channel and cron turn on that
 // session. `/timeout off` (disableRuntimeTimeout) disables it per turn.
 export const CLAUDE_STREAM_INACTIVITY_TIMEOUT_MS = ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS;
+
+function decodeProcessChunk(
+  decoder: StringDecoder,
+  chunk: Buffer | { toString(): string } | string,
+): string {
+  if (typeof chunk === "string") {
+    return chunk;
+  }
+  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk.toString();
+}
 
 let nextPendingTurnId = 0;
 
@@ -652,6 +667,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     const worker: ClaudeWorker = {
       child,
+      stdoutDecoder: new StringDecoder("utf8"),
+      stderrDecoder: new StringDecoder("utf8"),
       lineBuffer: "",
       stderrTail: "",
       currentSessionId: isLogicalTelegramSessionId(sessionId) ? null : sessionId,
@@ -667,17 +684,24 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       approvalMode,
       engineOptionsKey: optionsKey,
       sessionApprovedKeys: new Set(),
+      pendingApprovalByKey: new Map(),
     };
 
     child.stdout?.on("data", (chunk) => {
       this.markWorkerActivity(worker);
-      this.handleStdout(worker, chunk.toString());
+      this.handleStdout(worker, decodeProcessChunk(worker.stdoutDecoder, chunk));
     });
 
     child.stderr?.on("data", (chunk) => {
       this.markWorkerActivity(worker);
       // Claude stream-json emits structured events on stdout; stderr is only used on hard failure.
-      worker.stderrTail = `${worker.stderrTail}${chunk.toString()}`.slice(-MAX_STDERR_TAIL_CHARS);
+      worker.stderrTail = `${worker.stderrTail}${decodeProcessChunk(worker.stderrDecoder, chunk)}`.slice(-MAX_STDERR_TAIL_CHARS);
+    });
+
+    child.stdin?.on?.("error", (error) => {
+      this.failWorker(worker, error);
+      killProcessTree(worker.child.pid);
+      this.removeWorker(worker);
     });
 
     child.once("error", (error) => {
@@ -685,6 +709,14 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     });
 
     child.once("close", (code) => {
+      const trailingStdout = worker.stdoutDecoder.end();
+      // Force the residual JSONL record through even when the CLI exits
+      // without writing a final newline.
+      this.handleStdout(worker, `${trailingStdout}\n`);
+      const trailingStderr = worker.stderrDecoder.end();
+      if (trailingStderr) {
+        worker.stderrTail = `${worker.stderrTail}${trailingStderr}`.slice(-MAX_STDERR_TAIL_CHARS);
+      }
       this.failWorker(worker, new Error(renderClaudeStreamExitError(code, worker.stderrTail)));
       this.removeWorker(worker);
     });
@@ -737,7 +769,20 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     if (parsed.session_id) {
+      const owner = this.workers.get(parsed.session_id);
+      if (owner && owner !== worker) {
+        const error = new Error(`Claude session ${parsed.session_id} is already owned by another live worker`);
+        this.failWorker(worker, error);
+        killProcessTree(worker.child.pid);
+        this.removeWorker(worker);
+        return;
+      }
       worker.currentSessionId = parsed.session_id;
+      // Keep the logical alias until sendUserMessage returns, but publish the
+      // real session id immediately. A second surface can now find this worker
+      // during the first turn instead of spawning another CLI against the same
+      // Claude session file.
+      this.workers.set(parsed.session_id, worker);
     }
     const eventSeenAt = Date.now();
 
@@ -1036,7 +1081,20 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         decision = { behavior: "allow", scope: "session" };
       } else {
         try {
-          decision = await pending.onApprovalRequest(request);
+          const inFlight = worker.pendingApprovalByKey.get(key);
+          if (inFlight) {
+            decision = await inFlight;
+          } else {
+            const decisionPromise = pending.onApprovalRequest(request);
+            worker.pendingApprovalByKey.set(key, decisionPromise);
+            try {
+              decision = await decisionPromise;
+            } finally {
+              if (worker.pendingApprovalByKey.get(key) === decisionPromise) {
+                worker.pendingApprovalByKey.delete(key);
+              }
+            }
+          }
           if (decision.behavior === "allow" && decision.scope === "session") {
             worker.sessionApprovedKeys.add(key);
           }

@@ -19,6 +19,7 @@ import {
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import { isResetCommand } from "./command-detection.js";
 import { getNormalizedTelegramConversationKey, getTelegramConversationKey } from "./conversation-key.js";
+import { resolveConversationResume } from "../runtime/conversation-resume.js";
 
 export interface SessionCommandConfig {
   engine: InstanceEngine;
@@ -30,6 +31,7 @@ export interface SessionCommandStore {
   findByChatIdSafe(chatId: number): Promise<{
     record: {
       codexSessionId: string;
+      resume?: ResumeState | null;
       suspendedPrevious?: {
         sessionId: string | null;
         resume: ResumeState | null;
@@ -41,6 +43,7 @@ export interface SessionCommandStore {
   findByConversationKeySafe?(conversationKey: string): Promise<{
     record: {
       codexSessionId: string;
+      resume?: ResumeState | null;
       suspendedPrevious?: {
         sessionId: string | null;
         resume: ResumeState | null;
@@ -58,6 +61,7 @@ export interface SessionCommandStore {
     codexSessionId: string;
     status: "idle";
     updatedAt: string;
+    resume?: ResumeState | null;
     suspendedPrevious?: {
       sessionId: string | null;
       resume: ResumeState | null;
@@ -140,6 +144,7 @@ function isAntigravityConversationId(value: string): boolean {
 function buildSuspendedPreviousSnapshot(input: {
   existingRecord: {
     codexSessionId: string;
+    resume?: ResumeState | null;
     suspendedPrevious?: {
       sessionId: string | null;
       resume: ResumeState | null;
@@ -251,19 +256,22 @@ export async function handleLocalSessionTelegramCommand(input: {
       );
     }
 
-    await removeSessionForConversation(sessionStore, normalized);
-
-    if (cfg.resume) {
-      if (cfg.resume.symlinkPath) {
+    const current = await findSessionForConversation(sessionStore, normalized);
+    const currentResume = current.warning
+      ? undefined
+      : resolveConversationResume(current.record, cfg.resume);
+    if (currentResume) {
+      if (currentResume.symlinkPath) {
         try {
-          const st = await lstat(cfg.resume.symlinkPath);
-          if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
+          const st = await lstat(currentResume.symlinkPath);
+          if (st.isSymbolicLink()) await unlink(currentResume.symlinkPath);
         } catch {
           // ok
         }
       }
-      await updateInstanceConfig((c) => { delete c.resume; });
     }
+    await removeSessionForConversation(sessionStore, normalized);
+    await updateInstanceConfig((c) => { delete c.resume; });
 
     const resetMessage = renderSessionResetMessage(false, locale);
     await context.api.sendMessage(normalized.chatId, resetMessage);
@@ -391,24 +399,24 @@ export async function handleLocalSessionTelegramCommand(input: {
       }
 
       const existing = await findSessionForConversation(sessionStore, normalized);
+      const nextResume: ResumeState = {
+        sessionId,
+        dirName: selectedSession?.dirName ?? sessionId,
+        workspacePath,
+      };
       await sessionStore.upsert({
         telegramChatId: normalized.chatId,
         ...sessionScopeRecordFields(normalized),
         codexSessionId: sessionId,
         status: "idle",
         updatedAt: new Date().toISOString(),
+        resume: nextResume,
         suspendedPrevious: buildSuspendedPreviousSnapshot({
           existingRecord: existing.record,
-          currentResume: cfg.resume,
+          currentResume: resolveConversationResume(existing.record, cfg.resume),
         }),
       });
-      await updateInstanceConfig((c) => {
-        c.resume = {
-          sessionId,
-          dirName: selectedSession?.dirName ?? sessionId,
-          workspacePath,
-        };
-      });
+      await updateInstanceConfig((c) => { delete c.resume; });
 
       const msg = locale === "zh"
         ? `已绑定 Kimi session：${sessionId}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`
@@ -514,9 +522,10 @@ export async function handleLocalSessionTelegramCommand(input: {
         codexSessionId: conversationId,
         status: "idle",
         updatedAt: new Date().toISOString(),
+        resume: null,
         suspendedPrevious: buildSuspendedPreviousSnapshot({
           existingRecord: existing.record,
-          currentResume: cfg.resume,
+          currentResume: resolveConversationResume(existing.record, cfg.resume),
         }),
       });
       await updateInstanceConfig((c) => { delete c.resume; });
@@ -586,9 +595,10 @@ export async function handleLocalSessionTelegramCommand(input: {
         codexSessionId: resumeCmd.threadId,
         status: "idle",
         updatedAt: new Date().toISOString(),
+        resume: null,
         suspendedPrevious: buildSuspendedPreviousSnapshot({
           existingRecord: existing.record,
-          currentResume: cfg.resume,
+          currentResume: resolveConversationResume(existing.record, cfg.resume),
         }),
       });
       await updateInstanceConfig((c) => { delete c.resume; });
@@ -674,24 +684,24 @@ export async function handleLocalSessionTelegramCommand(input: {
           await context.api.sendMessage(normalized.chatId, resumeAuditText);
         } else {
           const existing = await findSessionForConversation(sessionStore, normalized);
+          const nextResume: ResumeState = {
+            sessionId: picked.sessionId,
+            dirName: picked.dirName,
+            workspacePath: picked.workspacePath,
+          };
           await sessionStore.upsert({
             telegramChatId: normalized.chatId,
             ...sessionScopeRecordFields(normalized),
             codexSessionId: picked.sessionId,
             status: "idle",
             updatedAt: new Date().toISOString(),
+            resume: nextResume,
             suspendedPrevious: buildSuspendedPreviousSnapshot({
               existingRecord: existing.record,
-              currentResume: cfg.resume,
+              currentResume: resolveConversationResume(existing.record, cfg.resume),
             }),
           });
-          await updateInstanceConfig((c) => {
-            c.resume = {
-              sessionId: picked.sessionId,
-              dirName: picked.dirName,
-              workspacePath: picked.workspacePath,
-            };
-          });
+          await updateInstanceConfig((c) => { delete c.resume; });
 
           resumeAuditText = locale === "zh"
             ? `已恢复 session：${picked.displayName}\n工作区：${picked.workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`
@@ -712,6 +722,9 @@ export async function handleLocalSessionTelegramCommand(input: {
 
   if (isDetachCommand(normalized.text)) {
     const current = await findSessionForConversation(sessionStore, normalized);
+    const currentResume = current.warning
+      ? undefined
+      : resolveConversationResume(current.record, cfg.resume);
     let detachMessage: string;
     if (current.record?.suspendedPrevious) {
       const previous = current.record.suspendedPrevious;
@@ -722,18 +735,13 @@ export async function handleLocalSessionTelegramCommand(input: {
           codexSessionId: previous.sessionId,
           status: "idle",
           updatedAt: new Date().toISOString(),
+          resume: previous.resume,
         });
       } else {
         await removeSessionForConversation(sessionStore, normalized);
       }
 
-      await updateInstanceConfig((c) => {
-        if (previous.resume) {
-          c.resume = previous.resume;
-        } else {
-          delete c.resume;
-        }
-      });
+      await updateInstanceConfig((c) => { delete c.resume; });
 
       detachMessage = cfg.engine === "codex"
         ? (locale === "zh"
@@ -751,11 +759,11 @@ export async function handleLocalSessionTelegramCommand(input: {
               ? "已断开恢复的 session，并恢复到 /resume 之前的对话。"
               : "Detached from resumed session and restored the previous conversation.");
       await context.api.sendMessage(normalized.chatId, detachMessage);
-    } else if (cfg.resume) {
-      if (cfg.resume.symlinkPath) {
+    } else if (currentResume) {
+      if (currentResume.symlinkPath) {
         try {
-          const st = await lstat(cfg.resume.symlinkPath);
-          if (st.isSymbolicLink()) await unlink(cfg.resume.symlinkPath);
+          const st = await lstat(currentResume.symlinkPath);
+          if (st.isSymbolicLink()) await unlink(currentResume.symlinkPath);
         } catch {
           // ok
         }

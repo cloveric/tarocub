@@ -51,6 +51,7 @@ export interface SessionRecord {
   codexSessionId: string;
   status: "idle" | "running" | "queued" | "blocked";
   updatedAt: string;
+  resume?: SuspendedConversationState["resume"];
   suspendedPrevious?: SuspendedConversationState;
 }
 

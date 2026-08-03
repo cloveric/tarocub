@@ -5,10 +5,61 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { FILE_WORKFLOW_STATE_UNREADABLE_WARNING, FileWorkflowStore } from "../src/state/file-workflow-store.js";
+import {
+  FILE_WORKFLOW_STATE_UNREADABLE_WARNING,
+  FILE_WORKFLOW_TERMINAL_RETENTION_MS,
+  FileWorkflowStore,
+} from "../src/state/file-workflow-store.js";
 import { JsonStore } from "../src/state/json-store.js";
 
 describe("FileWorkflowStore", () => {
+  it("prunes stale terminal records without deleting active or recent workflows", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new FileWorkflowStore(stateDir);
+    const now = Date.now();
+    const staleAt = new Date(now - FILE_WORKFLOW_TERMINAL_RETENTION_MS - 1).toISOString();
+    const recentAt = new Date(now - 60_000).toISOString();
+    const makeRecord = (
+      uploadId: string,
+      status: "processing" | "awaiting_continue" | "completed" | "failed",
+      updatedAt: string,
+    ) => ({
+      uploadId,
+      chatId: 100,
+      userId: 100,
+      kind: status === "awaiting_continue" ? "archive" as const : "document" as const,
+      status,
+      sourceFiles: [`${uploadId}.dat`],
+      derivedFiles: [],
+      summary: uploadId,
+      createdAt: updatedAt,
+      updatedAt,
+    });
+
+    try {
+      await writeFile(path.join(stateDir, "file-workflow.json"), JSON.stringify({ records: [
+        makeRecord("stale-completed", "completed", staleAt),
+        makeRecord("stale-active", "processing", staleAt),
+        makeRecord("stale-waiting", "awaiting_continue", staleAt),
+        makeRecord("recent-failed", "failed", recentAt),
+      ] }), "utf8");
+
+      await store.append(makeRecord("trigger", "processing", recentAt));
+      await store.update("trigger", (record) => {
+        record.status = "completed";
+      });
+
+      expect((await store.list()).map((record) => record.uploadId).sort()).toEqual([
+        "recent-failed",
+        "stale-active",
+        "stale-waiting",
+        "trigger",
+      ]);
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
   it("lists records newest-first and clears a single upload", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new FileWorkflowStore(stateDir);

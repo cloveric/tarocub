@@ -513,6 +513,9 @@ export class TelegramApi {
       message_id: messageId,
       text,
     };
+    if (options?.parseMode) {
+      body.parse_mode = options.parseMode;
+    }
 
     const inlineKeyboard = options?.inlineKeyboard;
     if (inlineKeyboard === null) {

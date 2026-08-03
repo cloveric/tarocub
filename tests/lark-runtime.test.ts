@@ -254,6 +254,7 @@ describe("runLarkService", () => {
         logger: silentLogger(),
       });
 
+      // A pre-queue denial never enters execution, so there is no second check.
       expect(currentBridge.checkAccess).toHaveBeenCalledOnce();
       expect(currentBridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(ownerBridge.checkAccess).not.toHaveBeenCalled();
@@ -360,7 +361,9 @@ describe("runLarkService", () => {
 
       expect(ownerBridge.checkAccess).not.toHaveBeenCalled();
       expect(ownerBridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(currentBridge.checkAccess).toHaveBeenCalledOnce();
+      // Pre-queue admission prevents an unknown sender from occupying the
+      // conversation queue; execution rechecks in case access was revoked.
+      expect(currentBridge.checkAccess).toHaveBeenCalledTimes(2);
       expect(currentBridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         chatId: stableLarkNumericId("lark:oc_owner"),
         userId: stableLarkNumericId("user:ou_owner"),

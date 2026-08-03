@@ -65,6 +65,36 @@ describe("chunkTelegramMessage", () => {
     expect(chunks[0]).toContain("```js");
     expect(chunks[0]).toMatch(/```$/);
     expect(chunks[1]).toMatch(/^```js/);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+  });
+
+  it("preserves tilde and long-backtick fences while chunking", () => {
+    const tilde = ["before", "~~~ts", "const 文本 = '很长的一段内容';", "~~~", "after"].join("\n");
+    const longTicks = ["````md", "```nested```", "more content", "````"].join("\n");
+
+    const tildeChunks = chunkTelegramMessage(tilde, 24);
+    const tickChunks = chunkTelegramMessage(longTicks, 20);
+
+    expect(tildeChunks.length).toBeGreaterThan(1);
+    expect(tildeChunks.every((chunk) => chunk.length <= 24)).toBe(true);
+    expect(tildeChunks[0]).toMatch(/~~~$/);
+    expect(tildeChunks[1]).toMatch(/^~~~ts/);
+    expect(tickChunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(tickChunks.some((chunk) => chunk.startsWith("````md"))).toBe(true);
+  });
+
+  it("reserves room for synthetic fence closers at line boundaries", () => {
+    const chunks = chunkTelegramMessage(["```js", "xxxxx", "y", "```"].join("\n"), 15);
+
+    expect(chunks.every((chunk) => chunk.length <= 15)).toBe(true);
+    expect(chunks[0]).toMatch(/```$/);
+    expect(chunks[1]).toMatch(/^```js/);
+  });
+
+  it("rejects fenced limits that cannot consume content instead of looping", () => {
+    expect(() => chunkTelegramMessage(["```js", "x", "```"].join("\n"), 10)).toThrow(
+      "limit is too small to safely encode a fenced code block",
+    );
   });
 });
 

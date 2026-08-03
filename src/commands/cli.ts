@@ -2075,7 +2075,7 @@ function isLarkCommentTimelineEvent(event: TimelineEvent): boolean {
 
 function getLarkTimelineCommentPairingKey(event: TimelineEvent): string {
   const commentId = event.metadata?.commentId;
-  return `${event.conversationKey ?? ""} ${typeof commentId === "string" ? commentId : ""}`;
+  return `${event.conversationKey ?? ""}\0${typeof commentId === "string" ? commentId : ""}`;
 }
 
 function removePendingLarkTimelineEvent(

@@ -125,5 +125,8 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
   if (value === undefined) {
     return fallback;
   }
-  return /^(?:1|true|yes|on)$/i.test(value.trim());
+  const normalized = value.trim();
+  if (/^(?:1|true|yes|on)$/i.test(normalized)) return true;
+  if (/^(?:0|false|no|off)$/i.test(normalized)) return false;
+  return fallback;
 }

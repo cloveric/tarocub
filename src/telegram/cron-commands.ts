@@ -205,8 +205,41 @@ async function handleList(context: CronCommandContext): Promise<void> {
   const header = context.locale === "zh"
     ? `📅 已安排 ${jobs.length} 个任务：`
     : `📅 ${jobs.length} scheduled task${jobs.length === 1 ? "" : "s"}:`;
-  const body = jobs.map((job, idx) => renderJob(job, idx + 1, context.locale)).join("\n\n");
-  await context.api.sendMessage(context.chatId, `${header}\n\n${body}`);
+  const entries = jobs.map((job, idx) => renderJob(job, idx + 1, context.locale));
+  const chunks = splitCronListMessages(header, entries);
+  for (const chunk of chunks) {
+    await context.api.sendMessage(context.chatId, chunk);
+  }
+}
+
+const CRON_LIST_MESSAGE_MAX_CHARS = 3800;
+
+function splitCronListMessages(header: string, entries: string[]): string[] {
+  const chunks: string[] = [];
+  let current = header;
+  for (const entry of entries) {
+    const sections = splitTextByCodePoints(entry, CRON_LIST_MESSAGE_MAX_CHARS);
+    for (const section of sections) {
+      const candidate = `${current}\n\n${section}`;
+      if (candidate.length <= CRON_LIST_MESSAGE_MAX_CHARS) {
+        current = candidate;
+      } else {
+        chunks.push(current);
+        current = section;
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+function splitTextByCodePoints(text: string, maxChars: number): string[] {
+  const codePoints = Array.from(text);
+  const chunks: string[] = [];
+  for (let offset = 0; offset < codePoints.length; offset += maxChars) {
+    chunks.push(codePoints.slice(offset, offset + maxChars).join(""));
+  }
+  return chunks.length > 0 ? chunks : [""];
 }
 
 async function handleAdd(rest: string, context: CronCommandContext): Promise<void> {

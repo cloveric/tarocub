@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDefaultTranscribeVoice,
   prepareTelegramMessageInput,
+  pruneTelegramInbox,
   TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES,
 } from "../src/telegram/message-input.js";
 import { CloudAsrCancelledError } from "../src/runtime/asr-cloud.js";
@@ -395,6 +396,29 @@ describe("prepareTelegramMessageInput", () => {
         kind: "reply",
         text: "视频转写失败，请发送文字消息或音频文件。",
       });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+});
+
+describe("pruneTelegramInbox", () => {
+  it("removes expired inbound files while preserving recent attachments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-inbox-prune-"));
+    const inboxDir = path.join(root, "inbox");
+    const now = Date.parse("2026-08-03T09:00:00.000Z");
+
+    try {
+      await mkdir(inboxDir, { recursive: true });
+      const stalePath = path.join(inboxDir, "stale.bin");
+      const recentPath = path.join(inboxDir, "recent.bin");
+      await writeFile(stalePath, "stale", "utf8");
+      await writeFile(recentPath, "recent", "utf8");
+      await utimes(stalePath, new Date(now - 4 * 24 * 60 * 60_000), new Date(now - 4 * 24 * 60 * 60_000));
+      await utimes(recentPath, new Date(now - 24 * 60 * 60_000), new Date(now - 24 * 60 * 60_000));
+
+      await expect(pruneTelegramInbox(inboxDir, 3, now)).resolves.toBe(1);
+      await expect(readdir(inboxDir)).resolves.toEqual(["recent.bin"]);
     } finally {
       await removeTempRoot(root);
     }

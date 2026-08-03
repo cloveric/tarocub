@@ -185,6 +185,7 @@ export async function startClaudePermissionHookServer(
   onApprovalRequest: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>,
 ): Promise<ClaudePermissionHookServer> {
   const sessionApprovedKeys = new Set<string>();
+  const pendingApprovalByKey = new Map<string, Promise<EngineApprovalDecision>>();
   const approvalAbortController = new AbortController();
   const token = randomUUID();
   const hookPath = `${CLAUDE_PERMISSION_HOOK_PATH}/${token}`;
@@ -211,7 +212,19 @@ export async function startClaudePermissionHookServer(
         return;
       }
 
-      const decision = await onApprovalRequest(toEngineApprovalRequest(input, approvalAbortController.signal));
+      let decision: EngineApprovalDecision;
+      const pending = pendingApprovalByKey.get(key);
+      if (pending) {
+        decision = await pending;
+      } else {
+        const decisionPromise = onApprovalRequest(toEngineApprovalRequest(input, approvalAbortController.signal));
+        pendingApprovalByKey.set(key, decisionPromise);
+        try {
+          decision = await decisionPromise;
+        } finally {
+          if (pendingApprovalByKey.get(key) === decisionPromise) pendingApprovalByKey.delete(key);
+        }
+      }
       if (decision.behavior === "allow" && decision.scope === "session") {
         sessionApprovedKeys.add(key);
       }

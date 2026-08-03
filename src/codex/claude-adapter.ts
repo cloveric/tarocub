@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 
 import type {
   CodexAdapter,
@@ -28,12 +29,13 @@ type SpawnOptions = {
 };
 
 type ProcessStreamLike = {
-  on(event: "data", listener: (chunk: { toString(): string } | string) => void): void;
+  on(event: "data", listener: (chunk: Buffer | { toString(): string } | string) => void): void;
 };
 
 type Writable = {
   write(chunk: string, callback?: (error?: Error | null) => void): boolean;
   end(callback?: () => void): void;
+  on?(event: "error", listener: (error: Error) => void): void;
 };
 
 type ClaudeChildProcess = {
@@ -47,6 +49,16 @@ type ClaudeChildProcess = {
 };
 
 type SpawnClaude = (command: string, args: string[], options: SpawnOptions) => ClaudeChildProcess;
+
+function decodeProcessChunk(
+  decoder: StringDecoder,
+  chunk: Buffer | { toString(): string } | string,
+): string {
+  if (typeof chunk === "string") {
+    return chunk;
+  }
+  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk.toString();
+}
 
 interface ClaudeJsonResult {
   type?: string;
@@ -516,7 +528,10 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     return await new Promise<{ stdout: string; stderr: string; exitCode: number | null }>((resolve, reject) => {
       let stdout = "";
       let stderr = "";
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
       let settled = false;
+      let abortCleanup: (() => void) | undefined;
 
       const resolveOnce = (value: { stdout: string; stderr: string; exitCode: number | null }) => {
         if (settled) {
@@ -524,6 +539,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         }
 
         settled = true;
+        abortCleanup?.();
         resolve(value);
       };
 
@@ -533,6 +549,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         }
 
         settled = true;
+        abortCleanup?.();
         reject(error);
       };
 
@@ -543,20 +560,28 @@ export class ProcessClaudeAdapter implements CodexAdapter {
         };
         if (abortSignal.aborted) { onAbort(); return; }
         abortSignal.addEventListener("abort", onAbort, { once: true });
+        abortCleanup = () => abortSignal.removeEventListener("abort", onAbort);
       }
 
       child.stdout?.on("data", (chunk) => {
-        stdout += chunk.toString();
+        stdout += decodeProcessChunk(stdoutDecoder, chunk);
       });
 
       child.stderr?.on("data", (chunk) => {
-        stderr += chunk.toString();
+        stderr += decodeProcessChunk(stderrDecoder, chunk);
+      });
+
+      child.stdin?.on?.("error", (error) => {
+        killProcessTree(child.pid);
+        rejectOnce(error);
       });
 
       child.once("error", (error) => {
         rejectOnce(error);
       });
       child.once("close", (code) => {
+        stdout += stdoutDecoder.end();
+        stderr += stderrDecoder.end();
         // Claude CLI returns exit code 1 for some API errors (e.g. 401 auth)
         // but still writes a valid {"is_error":true,"result":"..."} JSON to
         // stdout. Resolve with stdout in that case so parseResult() can

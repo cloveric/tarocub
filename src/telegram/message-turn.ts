@@ -10,6 +10,7 @@ import {
   resolveCctbSendDir,
 } from "../runtime/telegram-out.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { isCredentialStylePath } from "../runtime/credential-files.js";
 import { renderBackgroundTaskHeader } from "../runtime/background-task-header.js";
 import {
   boundArchiveSummaryForTelegram,
@@ -1050,72 +1051,158 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   }
 
   if (state.telegramOutDirPath) {
-    const describedFiles = await describeTelegramOutFiles(state.telegramOutDirPath);
-    const alreadyDeliveredRealPaths = new Set(
-      await Promise.all(getAlreadyDeliveredFilePaths().map((filePath) => resolveExistingPath(filePath))),
-    );
-    const limitedFiles = applyTelegramOutLimits(describedFiles, TELEGRAM_OUT_AUTO_DELIVERY_LIMITS);
+    try {
+      const describedFiles = await describeTelegramOutFiles(state.telegramOutDirPath);
+      const alreadyDeliveredRealPaths = new Set(
+        await Promise.all(getAlreadyDeliveredFilePaths().map((filePath) => resolveExistingPath(filePath))),
+      );
+      const limitedFiles = applyTelegramOutLimits(describedFiles, TELEGRAM_OUT_AUTO_DELIVERY_LIMITS);
+      const failedFiles: string[] = [];
+      let firstTailError: unknown;
 
-    for (const file of limitedFiles.accepted) {
-      const fileRealPath = await resolveExistingPath(file.path);
-      if (alreadyDeliveredRealPaths.has(fileRealPath)) {
-        continue;
+      for (const file of limitedFiles.accepted) {
+        const fileRealPath = await resolveExistingPath(file.path);
+        if (alreadyDeliveredRealPaths.has(fileRealPath)) {
+          continue;
+        }
+        if (isCredentialStylePath(file.path, fileRealPath)) {
+          failedFiles.push(file.name);
+          firstTailError ??= new Error(`credential-shaped generated file was rejected: ${file.name}`);
+          deliveryLedger.recordRejected({
+            path: file.path,
+            reason: "credentials-file",
+            source: "telegram-out",
+          });
+          await appendTimelineEventBestEffort(stateDir, {
+            type: "file.rejected",
+            instanceName: context.instanceName,
+            channel: "telegram",
+            chatId: normalized.chatId,
+            ...logScope,
+            userId: normalized.userId,
+            updateId: context.updateId,
+            outcome: "rejected",
+            detail: "credential-shaped files are not sendable",
+            metadata: { path: file.path, fileName: file.name, reason: "credentials-file", via: "telegram-out" },
+          });
+          continue;
+        }
+        try {
+          const contents = await readFile(file.path);
+          await sendTelegramOutFile(normalized.chatId, file.name, contents);
+          deliveryLedger.recordAccepted({
+            path: file.path,
+            realPath: fileRealPath,
+            fileName: file.name,
+            bytes: contents.length,
+            source: "telegram-out",
+          });
+          await appendTimelineEventBestEffort(stateDir, {
+            type: "file.accepted",
+            instanceName: context.instanceName,
+            channel: "telegram",
+            chatId: normalized.chatId,
+            ...logScope,
+            userId: normalized.userId,
+            updateId: context.updateId,
+            outcome: "accepted",
+            metadata: {
+              fileName: file.name,
+              bytes: contents.length,
+              via: "telegram-out",
+            },
+          });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          failedFiles.push(file.name);
+          firstTailError ??= error;
+          deliveryLedger.recordRejected({
+            path: file.path,
+            reason: "send-error",
+            detail,
+            source: "telegram-out",
+          });
+          await appendTimelineEventBestEffort(stateDir, {
+            type: "file.rejected",
+            instanceName: context.instanceName,
+            channel: "telegram",
+            chatId: normalized.chatId,
+            ...logScope,
+            userId: normalized.userId,
+            updateId: context.updateId,
+            outcome: "rejected",
+            detail,
+            metadata: { path: file.path, fileName: file.name, reason: "send-error", via: "telegram-out" },
+          });
+        }
       }
-      const contents = await readFile(file.path);
-      await sendTelegramOutFile(normalized.chatId, file.name, contents);
-      deliveryLedger.recordAccepted({
-        path: file.path,
-        realPath: fileRealPath,
-        fileName: file.name,
-        bytes: contents.length,
-        source: "telegram-out",
-      });
+
+      if (failedFiles.length > 0 && !state.workflowRecordId) {
+        await context.api.sendMessage(
+          normalized.chatId,
+          locale === "zh"
+            ? `回复已完成，但有 ${failedFiles.length} 个生成文件未能发送：${failedFiles.slice(0, 5).join(", ")}`
+            : `The reply completed, but ${failedFiles.length} generated file(s) could not be sent: ${failedFiles.slice(0, 5).join(", ")}`,
+        ).catch(() => undefined);
+      }
+
+      if (failedFiles.length > 0 && state.workflowRecordId) {
+        throw firstTailError ?? new Error("generated-file delivery failed");
+      }
+
+      if (limitedFiles.skipped.length > 0) {
+        for (const file of limitedFiles.skipped) {
+          await appendTimelineEventBestEffort(stateDir, {
+            type: "file.rejected",
+            instanceName: context.instanceName,
+            channel: "telegram",
+            chatId: normalized.chatId,
+            ...logScope,
+            userId: normalized.userId,
+            updateId: context.updateId,
+            outcome: "rejected",
+            detail: "telegram-out auto-delivery limit exceeded",
+            metadata: {
+              path: file.path,
+              fileName: file.name,
+              bytes: file.size,
+              reason: file.size > TELEGRAM_OUT_AUTO_DELIVERY_LIMITS.maxFileBytes ? "too-large" : "batch-limit",
+              via: "telegram-out",
+            },
+          });
+        }
+        const names = limitedFiles.skipped.slice(0, 5).map((file) => file.name).join(", ");
+        const suffix = limitedFiles.skipped.length > 5 ? ` +${limitedFiles.skipped.length - 5}` : "";
+        await context.api.sendMessage(
+          normalized.chatId,
+          locale === "zh"
+            ? `有 ${limitedFiles.skipped.length} 个自动生成文件未发送，因为超过 Telegram 自动投递限制：${names}${suffix}`
+            : `${limitedFiles.skipped.length} generated file(s) were not sent because they exceed Telegram auto-delivery limits: ${names}${suffix}`,
+        ).catch(() => undefined);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       await appendTimelineEventBestEffort(stateDir, {
-        type: "file.accepted",
+        type: "file.rejected",
         instanceName: context.instanceName,
         channel: "telegram",
         chatId: normalized.chatId,
         ...logScope,
         userId: normalized.userId,
         updateId: context.updateId,
-        outcome: "accepted",
-        metadata: {
-          fileName: file.name,
-          bytes: contents.length,
-          via: "telegram-out",
-        },
+        outcome: "rejected",
+        detail,
+        metadata: { reason: "telegram-out-tail-failed", via: "telegram-out" },
       });
-    }
-
-    if (limitedFiles.skipped.length > 0) {
-      for (const file of limitedFiles.skipped) {
-        await appendTimelineEventBestEffort(stateDir, {
-          type: "file.rejected",
-          instanceName: context.instanceName,
-          channel: "telegram",
-          chatId: normalized.chatId,
-          ...logScope,
-          userId: normalized.userId,
-          updateId: context.updateId,
-          outcome: "rejected",
-          detail: "telegram-out auto-delivery limit exceeded",
-          metadata: {
-            path: file.path,
-            fileName: file.name,
-            bytes: file.size,
-            reason: file.size > TELEGRAM_OUT_AUTO_DELIVERY_LIMITS.maxFileBytes ? "too-large" : "batch-limit",
-            via: "telegram-out",
-          },
-        });
-      }
-      const names = limitedFiles.skipped.slice(0, 5).map((file) => file.name).join(", ");
-      const suffix = limitedFiles.skipped.length > 5 ? ` +${limitedFiles.skipped.length - 5}` : "";
       await context.api.sendMessage(
         normalized.chatId,
         locale === "zh"
-          ? `有 ${limitedFiles.skipped.length} 个自动生成文件未发送，因为超过 Telegram 自动投递限制：${names}${suffix}`
-          : `${limitedFiles.skipped.length} generated file(s) were not sent because they exceed Telegram auto-delivery limits: ${names}${suffix}`,
-      );
+          ? "回复已完成，但自动生成文件的收尾投递失败。"
+          : "The reply completed, but generated-file delivery failed during finalization.",
+      ).catch(() => undefined);
+      if (state.workflowRecordId) {
+        throw error;
+      }
     }
   }
 

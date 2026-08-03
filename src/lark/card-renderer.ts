@@ -1007,7 +1007,7 @@ function summarizeToolInput(name: string, input: unknown): string {
       return "";
     }
     const oneLine = value.replace(/\s+/g, " ").trim();
-    return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
+    return truncate(oneLine, max);
   };
   switch (name) {
     case "Bash":
@@ -1092,7 +1092,7 @@ export function cleanCardText(content: string): string {
  * blockquote prefix and preserve it, downgrading only the heading inside.
  */
 function downgradeMarkdownHeadings(text: string): string {
-  return text.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)[ \t]*#*$/gm, (_match, quote: string, title: string) => {
+  return text.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/gm, (_match, quote: string, title: string) => {
     const trimmed = title.trim();
     // Don't wrap in ** when the title already contains a ** span (fully bold,
     // or an inner bold like `…的**逐笔成交明细**`) — an outer ** would create
@@ -1466,7 +1466,10 @@ function shortenPath(p: string): string {
 }
 
 function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}…` : s;
+  if (s.length <= max) return s;
+  let end = max;
+  if (end > 0 && /[\uD800-\uDBFF]/.test(s[end - 1] ?? "") && /[\uDC00-\uDFFF]/.test(s[end] ?? "")) end -= 1;
+  return `${s.slice(0, end)}…`;
 }
 
 // Feishu rejects any card whose SINGLE element exceeds the per-element size cap

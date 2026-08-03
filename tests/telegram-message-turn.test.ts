@@ -2636,6 +2636,65 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("keeps a completed turn successful when telegram-out finalization fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn(),
+      sendPhoto: vi.fn(),
+      sendVoice: vi.fn(),
+      getFile: vi.fn(),
+      downloadFile: vi.fn(),
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async ({ requestOutputDir }: { requestOutputDir?: string }) => {
+        if (!requestOutputDir) throw new Error("missing request output dir");
+        await writeFile(path.join(requestOutputDir, "report.txt"), "report", "utf8");
+        return { text: "The report is complete." };
+      }),
+    };
+
+    try {
+      await expect(executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("generate a report file"),
+        context: {
+          api: api as never,
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 118,
+        },
+        workflowStore: { update: vi.fn() } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse: vi.fn().mockResolvedValue(0),
+        sendTelegramOutFile: vi.fn().mockRejectedValue(new Error("Telegram upload unavailable")),
+      })).resolves.toBeUndefined();
+
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("reply completed"),
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.rejected",
+        outcome: "rejected",
+        metadata: expect.objectContaining({ reason: "send-error", via: "telegram-out" }),
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("notifies and logs when telegram-out files are skipped by auto-delivery limits", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };

@@ -156,6 +156,33 @@ describe("Claude permission prompt MCP tool", () => {
     }
   });
 
+  it("coalesces overlapping identical approvals even when the decision is only for this request", async () => {
+    let resolveDecision!: (decision: { behavior: "allow"; scope: "once" }) => void;
+    const decision = new Promise<{ behavior: "allow"; scope: "once" }>((resolve) => {
+      resolveDecision = resolve;
+    });
+    const onApprovalRequest = vi.fn(() => decision);
+    const server = await startClaudePermissionHookServer(onApprovalRequest);
+    const body = JSON.stringify({
+      tool_name: "Write",
+      input: { file_path: "/tmp/example.txt", content: "hello" },
+    });
+
+    try {
+      const first = fetch(server.url, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      const second = fetch(server.url, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      await vi.waitFor(() => expect(onApprovalRequest).toHaveBeenCalledTimes(1));
+      resolveDecision({ behavior: "allow", scope: "once" });
+
+      const [firstResponse, secondResponse] = await Promise.all([first, second]);
+      await expect(firstResponse.json()).resolves.toMatchObject({ behavior: "allow" });
+      await expect(secondResponse.json()).resolves.toMatchObject({ behavior: "allow" });
+      expect(onApprovalRequest).toHaveBeenCalledTimes(1);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("denies malformed hook request bodies before prompting Telegram", async () => {
     const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "allow", scope: "once" });
     const server = await startClaudePermissionHookServer(onApprovalRequest);

@@ -54,6 +54,8 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 }
 
 export const MAX_BODY_BYTES = 256 * 1024;
+export const MAX_CONCURRENT_BUS_TALKS = 8;
+export const BUS_SERVER_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 export function createBusServer(
   instanceName: string,
@@ -61,11 +63,24 @@ export function createBusServer(
   handler: BusTalkHandler,
   startupSecret?: string,
 ): http.Server {
+  let activeTalks = 0;
   const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && req.url === "/api/talk") {
       const chunks: Buffer[] = [];
       let totalBytes = 0;
       let aborted = false;
+      // IncomingMessage emits `error` when the peer resets mid-upload. Without
+      // a listener Node treats it as an uncaught EventEmitter error and can take
+      // down the whole bridge process.
+      req.on("error", () => {
+        aborted = true;
+        if (!res.writableEnded) {
+          res.destroy();
+        }
+      });
+      req.on("aborted", () => {
+        aborted = true;
+      });
       req.on("data", (chunk: Buffer) => {
         if (aborted) {
           return;
@@ -95,81 +110,98 @@ export function createBusServer(
       });
       req.on("end", async () => {
         if (aborted) return;
-        const body = Buffer.concat(chunks).toString("utf8");
-        const talkReq = parseBusTalkRequest(body);
-
-        if (!talkReq) {
-          sendJson(res, 400, createBusErrorResponse({
-            fromInstance: instanceName,
-            error: "Invalid request body",
-            errorCode: "invalid_request",
-            retryable: false,
-          }));
-          return;
-        }
-
-        const busConfig = await loadBusConfig(stateDir);
-        if (!busConfig) {
-          sendJson(res, 403, createBusErrorResponse({
-            fromInstance: instanceName,
-            error: "Bus is not enabled on this instance",
-            errorCode: "bus_disabled",
-            retryable: false,
-          }));
-          return;
-        }
-
-        const authHeader = req.headers.authorization;
-        const expectedSecret = startupSecret ?? busConfig.secret;
-        if (expectedSecret && !bearerSecretMatches(authHeader, expectedSecret)) {
-          sendJson(res, 401, createBusErrorResponse({
-            fromInstance: instanceName,
-            error: "Invalid or missing bus secret",
-            errorCode: "auth_failed",
-            retryable: false,
-          }));
-          return;
-        }
-
-        if (!isPeerAllowed(busConfig, talkReq.fromInstance)) {
-          sendJson(res, 403, createBusErrorResponse({
-            fromInstance: instanceName,
-            error: `Instance "${talkReq.fromInstance}" is not in the peer list`,
-            errorCode: "peer_not_allowed",
-            retryable: false,
-          }));
-          return;
-        }
-
-        if (talkReq.depth >= busConfig.maxDepth) {
-          sendJson(res, 429, createBusErrorResponse({
-            fromInstance: instanceName,
-            error: `Max delegation depth (${busConfig.maxDepth}) exceeded`,
-            errorCode: "max_depth_exceeded",
-            retryable: false,
-          }));
-          return;
-        }
-
         try {
-          const result = parseBusTalkResponse(await handler(talkReq));
-          if (!result) {
-            sendJson(res, 500, createBusErrorResponse({
+          const body = Buffer.concat(chunks).toString("utf8");
+          const talkReq = parseBusTalkRequest(body);
+
+          if (!talkReq) {
+            sendJson(res, 400, createBusErrorResponse({
               fromInstance: instanceName,
-              error: "Handler returned invalid bus response",
-              errorCode: "invalid_handler_response",
+              error: "Invalid request body",
+              errorCode: "invalid_request",
+              retryable: false,
+            }));
+            return;
+          }
+
+          const busConfig = await loadBusConfig(stateDir);
+          if (!busConfig) {
+            sendJson(res, 403, createBusErrorResponse({
+              fromInstance: instanceName,
+              error: "Bus is not enabled on this instance",
+              errorCode: "bus_disabled",
+              retryable: false,
+            }));
+            return;
+          }
+
+          const authHeader = req.headers.authorization;
+          const expectedSecret = startupSecret ?? busConfig.secret;
+          if (expectedSecret && !bearerSecretMatches(authHeader, expectedSecret)) {
+            sendJson(res, 401, createBusErrorResponse({
+              fromInstance: instanceName,
+              error: "Invalid or missing bus secret",
+              errorCode: "auth_failed",
+              retryable: false,
+            }));
+            return;
+          }
+
+          if (!isPeerAllowed(busConfig, talkReq.fromInstance)) {
+            sendJson(res, 403, createBusErrorResponse({
+              fromInstance: instanceName,
+              error: `Instance "${talkReq.fromInstance}" is not in the peer list`,
+              errorCode: "peer_not_allowed",
+              retryable: false,
+            }));
+            return;
+          }
+
+          if (talkReq.depth >= busConfig.maxDepth) {
+            sendJson(res, 429, createBusErrorResponse({
+              fromInstance: instanceName,
+              error: `Max delegation depth (${busConfig.maxDepth}) exceeded`,
+              errorCode: "max_depth_exceeded",
+              retryable: false,
+            }));
+            return;
+          }
+
+          if (activeTalks >= MAX_CONCURRENT_BUS_TALKS) {
+            sendJson(res, 503, createBusErrorResponse({
+              fromInstance: instanceName,
+              error: "Bus server is at its concurrent request limit",
+              errorCode: "server_busy",
               retryable: true,
             }));
             return;
           }
-          sendJson(res, 200, createBusTalkResponseEnvelope(result));
+
+          activeTalks += 1;
+          try {
+            const result = parseBusTalkResponse(await handler(talkReq));
+            if (!result) {
+              sendJson(res, 500, createBusErrorResponse({
+                fromInstance: instanceName,
+                error: "Handler returned invalid bus response",
+                errorCode: "invalid_handler_response",
+                retryable: true,
+              }));
+              return;
+            }
+            sendJson(res, 200, createBusTalkResponseEnvelope(result));
+          } finally {
+            activeTalks = Math.max(0, activeTalks - 1);
+          }
         } catch (error) {
-          sendJson(res, 500, createBusErrorResponse({
-            fromInstance: instanceName,
-            error: error instanceof Error ? error.message : String(error),
-            errorCode: "internal_error",
-            retryable: true,
-          }));
+          if (!res.writableEnded && !res.destroyed) {
+            sendJson(res, 500, createBusErrorResponse({
+              fromInstance: instanceName,
+              error: error instanceof Error ? error.message : String(error),
+              errorCode: "internal_error",
+              retryable: true,
+            }));
+          }
         }
       });
       return;
@@ -203,8 +235,32 @@ export function startBusServer(
   });
 }
 
-export function stopBusServer(server: http.Server): Promise<void> {
+export function stopBusServer(
+  server: http.Server,
+  timeoutMs = BUS_SERVER_SHUTDOWN_TIMEOUT_MS,
+): Promise<void> {
   return new Promise<void>((resolve) => {
-    server.close(() => resolve());
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve();
+    };
+    if (!server.listening) {
+      finish();
+      return;
+    }
+    server.close(finish);
+    timer = setTimeout(() => {
+      server.closeAllConnections?.();
+      finish();
+    }, Math.max(0, timeoutMs));
+    timer.unref?.();
   });
 }

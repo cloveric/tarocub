@@ -8,6 +8,7 @@ import type {
   EngineStreamEvent,
 } from "../codex/adapter.js";
 import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
+import { resolveConversationResume } from "../runtime/conversation-resume.js";
 import { prepareArchiveContinueWorkflow } from "../runtime/file-workflow.js";
 import { scanRecentAntigravityConversations, scanRecentClaudeSessions } from "../runtime/session-scanner.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
@@ -31,6 +32,7 @@ import { renderLarkUserFacingError } from "./errors.js";
 import { safeSegment } from "./files.js";
 import { assertStableLarkIdMappings } from "./id-map.js";
 import { larkOperatorRawId } from "./identity.js";
+import { appendLarkTimelineEvent } from "./timeline.js";
 import {
   renderLarkApprovalExpired,
   renderLarkBackgroundTaskHeader,
@@ -86,7 +88,7 @@ export type LarkApprovalTextCommandResult =
     outcome: "success" | "noop";
     choice: LarkApprovalChoice;
     requestId?: string;
-    reason?: "no-pending" | "different-conversation" | "ask-user-question";
+    reason?: "no-pending" | "different-conversation" | "different-user" | "ask-user-question";
   };
 
 export async function requestLarkApproval(input: {
@@ -95,6 +97,7 @@ export async function requestLarkApproval(input: {
   chatId: string;
   conversationKey?: string;
   bridgeChatType?: "private" | "group";
+  requesterUserId?: number;
   replyTo?: string;
   replyInThread?: boolean;
   locale?: Locale;
@@ -140,6 +143,7 @@ export async function requestLarkApproval(input: {
       chatId: input.chatId,
       ...(input.conversationKey ? { conversationKey: input.conversationKey } : {}),
       ...(input.bridgeChatType ? { bridgeChatType: input.bridgeChatType } : {}),
+      ...(input.requesterUserId !== undefined ? { requesterUserId: input.requesterUserId } : {}),
       ...(input.replyTo ? { replyTo: input.replyTo } : {}),
       ...(input.replyInThread ? { replyInThread: true } : {}),
       ...(isAskUserQuestionRequest(input.request) ? { askUserQuestionInput: input.request.toolInput } : {}),
@@ -674,6 +678,7 @@ export async function handleLarkApprovalTextCommand(input: {
   messageId: string;
   conversationKey: string;
   bridgeChatType: "private" | "group";
+  userId?: number;
   replyInThread?: boolean;
   text: string;
   locale?: Locale;
@@ -699,6 +704,16 @@ export async function handleLarkApprovalTextCommand(input: {
       choice: parsed.choice,
       requestId: pending.requestId,
       reason: "different-conversation",
+    };
+  }
+  if (pending.requesterUserId !== undefined && pending.requesterUserId !== input.userId) {
+    await input.channel.send(input.chatId, { text: renderApprovalDifferentUser(locale) }, larkReplyOptions(input.messageId, input.replyInThread));
+    return {
+      handled: true,
+      outcome: "noop",
+      choice: parsed.choice,
+      requestId: pending.requestId,
+      reason: "different-user",
     };
   }
   if (pending.askUserQuestionInput !== undefined && parsed.choice !== "deny") {
@@ -859,6 +874,15 @@ export async function handleLarkCardAction(input: {
     // A burst still parked in its quiet window is not "running" yet, but it IS
     // an accepted input that would fire right after this stop — drop it too.
     const droppedBurst = dropPendingLarkAttachmentBurst(input.runtime, value.conversationKey);
+    if (droppedBurst && input.stateDir) {
+      await Promise.allSettled(droppedBurst.members.map(async (member) => {
+        await appendLarkTimelineEvent(input.stateDir!, member, {
+          type: "command.handled",
+          outcome: "noop",
+          detail: "batch-cancelled",
+        });
+      }));
+    }
     const burstNotice = droppedBurst ? renderLarkDroppedBurstNotice(droppedBurst.members.length, locale) : "";
     // The run card updates in place to "已中断"; only post the "已停止。" text when
     // there's no live card to reflect the stop (fallback or nothing running).
@@ -1719,7 +1743,7 @@ async function ensureLarkCardActionAccess(input: {
 
 function pendingLarkApprovalMatchesEvent(
   pending: PendingLarkApproval,
-  event: { chatId: string; messageId: string },
+  event: { chatId: string; messageId: string; operator?: { openId?: string; userId?: string } },
   conversationKey: string,
 ): boolean {
   const expectedChatId = conversationKey.startsWith("lark:")
@@ -1729,6 +1753,12 @@ function pendingLarkApprovalMatchesEvent(
     return false;
   }
   if (pending.managedCard?.messageId && pending.managedCard.messageId !== event.messageId) {
+    return false;
+  }
+  if (
+    pending.requesterUserId !== undefined
+    && pending.requesterUserId !== stableLarkNumericId(`user:${larkOperatorRawId(event.operator)}`)
+  ) {
     return false;
   }
   return true;
@@ -1849,6 +1879,7 @@ async function runLarkCardChoice(input: {
         chatId: input.chatId,
         conversationKey: input.conversationKey,
         bridgeChatType: input.bridgeChatType,
+        requesterUserId: input.userId,
         replyTo: input.replyTo,
         replyInThread: input.replyInThread,
         locale,
@@ -2036,6 +2067,7 @@ async function runLarkArchiveContinueCardAction(input: {
         chatId: input.chatId,
         conversationKey: input.conversationKey,
         bridgeChatType: input.bridgeChatType,
+        requesterUserId: input.userId,
         replyTo: input.replyTo,
         replyInThread: input.replyInThread,
         locale,
@@ -2240,7 +2272,7 @@ function parseLarkApprovalTextCommand(text: string):
     };
   }
 
-  if (/^\/deny(?:\s|$)/i.test(trimmed)) {
+  if (/^\/deny$/i.test(trimmed)) {
     return {
       kind: "chat",
       choice: "deny",
@@ -2256,9 +2288,13 @@ function findOldestPendingLarkApproval(
     chatId: string;
     conversationKey: string;
     bridgeChatType: "private" | "group";
+    userId?: number;
   },
 ): PendingLarkApproval | undefined {
-  return [...runtime.pendingApprovals.values()].find((pending) => pendingMatchesLarkConversation(pending, input));
+  return [...runtime.pendingApprovals.values()].find((pending) => (
+    pendingMatchesLarkConversation(pending, input)
+    && (pending.requesterUserId === undefined || pending.requesterUserId === input.userId)
+  ));
 }
 
 function pendingMatchesLarkConversation(
@@ -2310,6 +2346,12 @@ function renderApprovalDifferentConversation(locale: Locale): string {
   return locale === "en"
     ? "This approval request belongs to another Lark conversation."
     : "这个审批请求属于另一个飞书会话。";
+}
+
+function renderApprovalDifferentUser(locale: Locale): string {
+  return locale === "en"
+    ? "This approval request belongs to another Lark user."
+    : "这个审批请求属于另一位飞书用户。";
 }
 
 function renderAskUserQuestionNeedsCard(locale: Locale): string {
@@ -2380,13 +2422,21 @@ async function applyLarkResumeCardAction(
   }
 
   const existing = await sessionStore.findByConversationKeySafe(conversationKey);
-  const currentResume = cfg.resume;
+  const currentResume = resolveConversationResume(existing.record, cfg.resume);
+  const nextResume: ResumeState | null = (engine === "claude" || engine === "kimi") && workspacePath
+    ? {
+      sessionId,
+      dirName: typeof value.dirName === "string" ? value.dirName : sessionId,
+      workspacePath,
+    }
+    : null;
   await sessionStore.upsert({
     telegramChatId: stableLarkNumericId(conversationKey),
     conversationKey,
     codexSessionId: sessionId,
     status: "idle",
     updatedAt: new Date().toISOString(),
+    resume: nextResume,
     suspendedPrevious: buildSuspendedPreviousSnapshot({
       existingRecord: existing.record,
       currentResume,
@@ -2395,11 +2445,7 @@ async function applyLarkResumeCardAction(
 
   if ((engine === "claude" || engine === "kimi") && workspacePath) {
     await updateInstanceConfig(stateDir, (config) => {
-      config.resume = {
-        sessionId,
-        dirName: typeof value.dirName === "string" ? value.dirName : sessionId,
-        workspacePath,
-      };
+      delete config.resume;
     });
     const displayName = typeof value.displayName === "string" ? value.displayName : sessionId;
     if (engine === "kimi") {

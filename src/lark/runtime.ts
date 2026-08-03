@@ -2,7 +2,7 @@ import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/ada
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig as defaultLoadBusConfig } from "../bus/bus-config.js";
 import type { TranscribeMediaOptions } from "../runtime/asr-cloud.js";
-import { ChatQueue } from "../runtime/chat-queue.js";
+import { ChatQueue, type ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { CronScheduler } from "../runtime/cron-scheduler.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import type { CronStore } from "../state/cron-store.js";
@@ -53,6 +53,7 @@ export interface PendingLarkBatch {
   normalized: LarkNormalizedBridgeMessage;
   members: LarkNormalizedBridgeMessage[];
   texts: string[];
+  onWait: (event: ChatQueueWaitEvent) => Promise<void>;
   timer: ReturnType<typeof setTimeout>;
   resolve: Array<(value: boolean) => void>;
   reject: Array<(error: unknown) => void>;
@@ -82,6 +83,7 @@ export interface PendingLarkApproval {
   chatId: string;
   conversationKey?: string;
   bridgeChatType?: "private" | "group";
+  requesterUserId?: number;
   replyTo?: string;
   replyInThread?: boolean;
   askUserQuestionInput?: unknown;

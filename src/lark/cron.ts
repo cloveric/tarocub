@@ -164,6 +164,7 @@ export function buildLarkCronExecutor(input: {
                   chatId: job.larkChatId!,
                   conversationKey,
                   bridgeChatType,
+                  requesterUserId: job.userId,
                   ...replyFields,
                   locale,
                   request,

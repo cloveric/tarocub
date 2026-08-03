@@ -2,6 +2,7 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { isCredentialStylePath } from "../runtime/credential-files.js";
 import type { TelegramApi } from "./api.js";
 import { extractDeliveryTagMatches, stripDeliveryTags } from "./delivery-tags.js";
 import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
@@ -101,6 +102,7 @@ export async function sendFileOrPhoto(
 export type DeliveryRejectReason =
   | "outside-workspace"
   | "outside-request-output"
+  | "credentials-file"
   | "not-a-file"
   | "too-large"
   | "placeholder-path"
@@ -114,6 +116,7 @@ function renderRejectReason(reason: DeliveryRejectReason, detail: string | undef
     switch (reason) {
       case "outside-workspace": return "超出工作目录";
       case "outside-request-output": return "不在当前请求输出目录中";
+      case "credentials-file": return "凭据或私钥文件禁止发送";
       case "not-a-file": return "不是普通文件";
       case "too-large": return `文件过大（${detail} > 50MB）`;
       case "placeholder-path": return "示例占位路径，不是真实文件";
@@ -126,6 +129,7 @@ function renderRejectReason(reason: DeliveryRejectReason, detail: string | undef
   switch (reason) {
     case "outside-workspace": return "outside workspace";
     case "outside-request-output": return "outside current request output";
+    case "credentials-file": return "credentials and private-key files are not sendable";
     case "not-a-file": return "not a regular file";
     case "too-large": return `too large (${detail} > 50MB)`;
     case "placeholder-path": return "placeholder path, not a real file";
@@ -163,6 +167,15 @@ export async function deliverTelegramResponse(
   const isWholeResponseFileBlock = fileMatch && text.replace(fileMatch[0], "").trim().length === 0;
   if (fileMatch && isWholeResponseFileBlock && Buffer.byteLength(fileMatch[2] ?? "", "utf8") > 0) {
     const [, fileName, fileBody] = fileMatch;
+    if (isCredentialStylePath(fileName.trim())) {
+      await api.sendMessage(
+        chatId,
+        locale === "zh"
+          ? `拒绝发送凭据或私钥文件：${fileName.trim()}`
+          : `Refusing to send a credentials or private-key file: ${fileName.trim()}`,
+      );
+      return 0;
+    }
     await sendFileOrPhoto(api, chatId, fileName.trim(), fileBody);
     return 1;
   }
@@ -260,6 +273,10 @@ export async function deliverTelegramResponse(
   for (const { path: filePath, preferPhoto } of fileCandidates) {
     try {
       const real = await realpath(filePath);
+      if (isCredentialStylePath(filePath, real)) {
+        rejected.push({ path: filePath, reason: "credentials-file" });
+        continue;
+      }
       if (!options.allowAnyAbsolutePath) {
         if (requestOutputPrefix && real.startsWith(telegramOutPrefix) && !real.startsWith(requestOutputPrefix)) {
           rejected.push({ path: filePath, reason: "outside-request-output" });

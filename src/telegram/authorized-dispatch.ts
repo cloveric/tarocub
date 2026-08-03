@@ -25,6 +25,11 @@ import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { CodexThreadGoal, EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
 import type { DeliveryAcceptedReceipt, DeliveryRejectedReceipt, DeliverySource } from "./delivery-ledger.js";
 import { getNormalizedTelegramConversationKey } from "./conversation-key.js";
+import {
+  hasConversationResume,
+  migrateLegacyConversationResume,
+  resolveConversationResume,
+} from "../runtime/conversation-resume.js";
 
 export interface AuthorizedTelegramDispatchConfig {
   engine: InstanceEngine;
@@ -227,6 +232,21 @@ export async function dispatchAuthorizedTelegramMessage(input: {
 
   const allowTelegramCommands = context.source !== "cron";
   const conversationKey = getNormalizedTelegramConversationKey(normalized);
+  const findConversationSessionSafe = async () => {
+    const result = typeof sessionStore.findByConversationKeySafe === "function"
+      ? await sessionStore.findByConversationKeySafe(conversationKey)
+      : await sessionStore.findByChatIdSafe(normalized.chatId);
+    return result ?? { record: null };
+  };
+
+  if (cfg.resume && await migrateLegacyConversationResume(sessionStore, cfg.resume)) {
+    const migratedSessionId = cfg.resume.sessionId;
+    await updateInstanceConfig((config) => {
+      const legacy = config.resume as ResumeState | undefined;
+      if (legacy?.sessionId === migratedSessionId) delete config.resume;
+    });
+    cfg.resume = undefined;
+  }
 
   if (allowTelegramCommands && isCronCommand(normalized.text)) {
     const cronRuntime = getActiveCronRuntime();
@@ -285,6 +305,65 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     return;
   }
 
+  if (allowTelegramCommands && await handleSimpleLocalTelegramCommand({
+    stateDir,
+    startedAt,
+    locale,
+    cfg: {
+      engine: cfg.engine,
+      effort: cfg.effort,
+      model: cfg.model,
+      codexServiceTier: cfg.codexServiceTier,
+      disableRuntimeTimeout: cfg.disableRuntimeTimeout,
+    },
+    normalized,
+    context,
+    updateInstanceConfig,
+    resolveStatus: async (chatId) => {
+      const sessionResult = chatId === normalized.chatId
+        ? await findConversationSessionSafe()
+        : await sessionStore.findByChatIdSafe(chatId);
+      const workflowResult = await workflowStore.inspect();
+      const chatRecords = workflowResult.warning
+        ? []
+        : workflowResult.state.records.filter((record) => record.chatId === chatId);
+      const blockingTasks = workflowResult.warning
+        ? null
+        : chatRecords.filter((record) => isBlockingWorkflowStatus(record.status)).length;
+      const waitingTasks = workflowResult.warning
+        ? null
+        : chatRecords.filter((record) => record.status === "awaiting_continue").length;
+
+      return {
+        engine: cfg.engine,
+        sessionBound: sessionResult.warning ? null : sessionResult.record !== null,
+        threadId: sessionResult.warning || (cfg.engine !== "codex" && cfg.engine !== "antigravity" && cfg.engine !== "kimi")
+          ? null
+          : sessionResult.record?.codexSessionId ?? null,
+        blockingTasks,
+        waitingTasks,
+        sessionWarning: sessionResult.warning,
+        taskStateWarning: workflowResult.warning,
+      };
+    },
+  })) {
+    return;
+  }
+
+  const conversationSession = await findConversationSessionSafe();
+  const scopedResume = conversationSession.warning
+    ? undefined
+    : resolveConversationResume(conversationSession.record, cfg.resume);
+  if (scopedResume && conversationSession.record && !hasConversationResume(conversationSession.record)) {
+    await sessionStore.upsert({ ...conversationSession.record, resume: scopedResume });
+    await updateInstanceConfig((config) => {
+      const legacy = config.resume as ResumeState | undefined;
+      if (legacy?.sessionId === scopedResume.sessionId) delete config.resume;
+    });
+  }
+  // Downstream engine commands and turns must see only this conversation's workspace.
+  cfg.resume = scopedResume;
+
   if (allowTelegramCommands && await handleLocalEngineTelegramCommand({
     stateDir,
     startedAt,
@@ -311,51 +390,6 @@ export async function dispatchAuthorizedTelegramMessage(input: {
     },
     normalized,
     context,
-  })) {
-    return;
-  }
-
-  if (allowTelegramCommands && await handleSimpleLocalTelegramCommand({
-    stateDir,
-    startedAt,
-    locale,
-    cfg: {
-      engine: cfg.engine,
-      effort: cfg.effort,
-      model: cfg.model,
-      codexServiceTier: cfg.codexServiceTier,
-      disableRuntimeTimeout: cfg.disableRuntimeTimeout,
-    },
-    normalized,
-    context,
-    updateInstanceConfig,
-      resolveStatus: async (chatId) => {
-      const sessionResult = chatId === normalized.chatId
-        ? await sessionStore.findByConversationKeySafe(conversationKey)
-        : await sessionStore.findByChatIdSafe(chatId);
-      const workflowResult = await workflowStore.inspect();
-      const chatRecords = workflowResult.warning
-        ? []
-        : workflowResult.state.records.filter((record) => record.chatId === chatId);
-      const blockingTasks = workflowResult.warning
-        ? null
-        : chatRecords.filter((record) => isBlockingWorkflowStatus(record.status)).length;
-      const waitingTasks = workflowResult.warning
-        ? null
-        : chatRecords.filter((record) => record.status === "awaiting_continue").length;
-
-      return {
-        engine: cfg.engine,
-        sessionBound: sessionResult.warning ? null : sessionResult.record !== null,
-        threadId: sessionResult.warning || (cfg.engine !== "codex" && cfg.engine !== "antigravity" && cfg.engine !== "kimi")
-          ? null
-          : sessionResult.record?.codexSessionId ?? null,
-        blockingTasks,
-        waitingTasks,
-        sessionWarning: sessionResult.warning,
-        taskStateWarning: workflowResult.warning,
-      };
-    },
   })) {
     return;
   }

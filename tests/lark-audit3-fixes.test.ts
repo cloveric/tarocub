@@ -292,6 +292,65 @@ describe("lark audit 3 fixes", () => {
     }
   }, 20_000);
 
+  it("keeps a flushed burst queue card bound to the burst task instead of /q", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-a3-q-card-owner-"));
+    const channel = imageChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "ok" })),
+    };
+    const runtime = createLarkServiceRuntime({ queuePolicy: { batchWindowMs: 3_000 } });
+    let releaseBlocker!: () => void;
+
+    try {
+      const blocker = runtime.chatQueue.enqueue("lark:oc_chat", async () => {
+        await new Promise<void>((resolve) => {
+          releaseBlocker = resolve;
+        });
+      });
+      await vi.waitFor(() => expect(releaseBlocker).toBeTypeOf("function"));
+
+      const originalEnqueue = runtime.chatQueue.enqueue.bind(runtime.chatQueue);
+      vi.spyOn(runtime.chatQueue, "enqueue").mockImplementation((chatId, job, options = {}) => {
+        return originalEnqueue(chatId, job, { ...options, waitNotifyAfterMs: 0 });
+      });
+
+      const burst = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_wait_img",
+          content: "先看图",
+          rawContentType: "image",
+          resources: [{ type: "image", fileKey: "k1" }],
+        }),
+      });
+      await vi.waitFor(() => expect(runtime.pendingBatches.size).toBe(1));
+
+      const queued = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_wait_q", content: "/q 再回答" }),
+      });
+
+      await vi.waitFor(() => {
+        const cards = channel.send.mock.calls.map((call) => JSON.stringify(call[1]));
+        expect(cards.some((card) => card.includes('"taskId":"om_wait_img"'))).toBe(true);
+        expect(cards.some((card) => card.includes('"taskId":"om_wait_q"'))).toBe(true);
+      });
+
+      releaseBlocker();
+      await Promise.all([blocker, burst, queued]);
+    } finally {
+      releaseBlocker?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it("a quoted reply flushes a pending attachment burst first so send order (FIFO) holds", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-a3-quote-fifo-"));
     const channel = imageChannel({

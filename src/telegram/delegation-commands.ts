@@ -12,6 +12,10 @@ import {
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
+function renderNonEmptyEngineText(text: string, locale: Locale): string {
+  return text.trim() || (locale === "zh" ? "（引擎未返回文本）" : "(The engine returned no text.)");
+}
+
 function parseBtwCommand(text: string): { prompt: string } | null {
   const match = text.trim().match(/^\/btw(?:@\w+)?\s+([\s\S]+)$/i);
   if (!match) return null;
@@ -150,7 +154,8 @@ export async function handleDelegationTelegramCommand(input: {
         sessionIdOverride: `telegram-btw-${randomUUID()}`,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
-      const chunks = chunkTelegramMessage(result.text);
+      const responseText = renderNonEmptyEngineText(result.text, locale);
+      const chunks = chunkTelegramMessage(responseText);
       await context.api.sendMessage(normalized.chatId, chunks[0]!);
       for (const chunk of chunks.slice(1)) {
         await context.api.sendMessage(normalized.chatId, chunk);
@@ -160,7 +165,7 @@ export async function handleDelegationTelegramCommand(input: {
         metadata: {
           durationMs: Date.now() - startedAt,
           command: "btw",
-          responseChars: result.text.length,
+          responseChars: responseText.length,
           chunkCount: chunks.length,
         },
       });
@@ -206,9 +211,10 @@ export async function handleDelegationTelegramCommand(input: {
         abortSignal: context.abortSignal,
       });
 
+      const askText = renderNonEmptyEngineText(result.text, locale);
       const askResponse = locale === "zh"
-        ? `[来自 ${askCommand.targetInstance}]\n\n${result.text}`
-        : `[From ${askCommand.targetInstance}]\n\n${result.text}`;
+        ? `[来自 ${askCommand.targetInstance}]\n\n${askText}`
+        : `[From ${askCommand.targetInstance}]\n\n${askText}`;
       const chunks = chunkTelegramMessage(askResponse);
       await context.api.sendMessage(normalized.chatId, chunks[0]!);
       for (const chunk of chunks.slice(1)) {
@@ -304,7 +310,9 @@ export async function handleDelegationTelegramCommand(input: {
       const results = await Promise.all([selfPromise, ...peerPromises]);
       const sections: string[] = [];
       for (const r of results) {
-        sections.push(r.error ? `[${r.name}] Error: ${r.error}` : `[${r.name}]\n${r.text}`);
+        sections.push(r.error
+          ? `[${r.name}] Error: ${r.error}`
+          : `[${r.name}]\n${renderNonEmptyEngineText(r.text, locale)}`);
       }
       fanErrorCount = results.filter((r) => r.error).length;
 
@@ -388,10 +396,11 @@ export async function handleDelegationTelegramCommand(input: {
           abortSignal: context.abortSignal,
         });
 
+        const stageText = renderNonEmptyEngineText(result.text, locale);
         sections.push(
           locale === "zh"
-            ? `[链路阶段 ${index + 1}: ${target}]\n${result.text}`
-            : `[Chain stage ${index + 1}: ${target}]\n${result.text}`,
+            ? `[链路阶段 ${index + 1}: ${target}]\n${stageText}`
+            : `[Chain stage ${index + 1}: ${target}]\n${stageText}`,
         );
 
         previousInstance = target;
@@ -399,7 +408,7 @@ export async function handleDelegationTelegramCommand(input: {
           locale,
           originalPrompt: chainCommand.prompt,
           previousInstance,
-          previousOutput: result.text,
+          previousOutput: stageText,
         });
       }
 
@@ -478,6 +487,7 @@ export async function handleDelegationTelegramCommand(input: {
         abortSignal: context.abortSignal,
       });
       await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
+      const resultText = renderNonEmptyEngineText(result.text, locale);
 
       await context.api.sendMessage(
         normalized.chatId,
@@ -488,21 +498,22 @@ export async function handleDelegationTelegramCommand(input: {
         fromInstance: currentInstance,
         targetInstance: verifier,
         prompt: locale === "zh"
-          ? `请验证以下回复的正确性和质量：\n\n原始问题：${verifyCommand.prompt}\n\n回复：${result.text}`
-          : `Please verify the correctness and quality of this response:\n\nOriginal question: ${verifyCommand.prompt}\n\nResponse: ${result.text}`,
+          ? `请验证以下回复的正确性和质量：\n\n原始问题：${verifyCommand.prompt}\n\n回复：${resultText}`
+          : `Please verify the correctness and quality of this response:\n\nOriginal question: ${verifyCommand.prompt}\n\nResponse: ${resultText}`,
         depth: 0,
         stateDir,
         abortSignal: context.abortSignal,
       });
+      const verificationText = renderNonEmptyEngineText(verifyResult.text, locale);
 
       const verifyResponse = [
         locale === "zh" ? `[${currentInstance} 的回复]` : `[Response from ${currentInstance}]`,
-        result.text,
+        resultText,
         "",
         "---",
         "",
         locale === "zh" ? `[${verifier} 的验证]` : `[Verification by ${verifier}]`,
-        verifyResult.text,
+        verificationText,
       ].join("\n");
 
       const chunks = chunkTelegramMessage(verifyResponse);

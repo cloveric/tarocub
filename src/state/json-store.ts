@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { CURRENT_SCHEMA_VERSION, withSchemaVersion } from "./schema-version.js";
@@ -62,14 +62,20 @@ export class JsonStore<T> {
       : value;
 
     const tmpPath = path.join(directoryPath, `${path.basename(this.filePath)}.${randomUUID()}.tmp`);
-    await writeFile(tmpPath, JSON.stringify(versioned, null, 2), { encoding: "utf8", mode: STATE_FILE_MODE });
-    const tmpHandle = await open(tmpPath, "r");
+    let renamed = false;
     try {
-      await tmpHandle.sync();
+      await writeFile(tmpPath, JSON.stringify(versioned, null, 2), { encoding: "utf8", mode: STATE_FILE_MODE });
+      const tmpHandle = await open(tmpPath, "r");
+      try {
+        await tmpHandle.sync();
+      } finally {
+        await tmpHandle.close();
+      }
+      await rename(tmpPath, this.filePath);
+      renamed = true;
     } finally {
-      await tmpHandle.close();
+      if (!renamed) await unlink(tmpPath).catch(() => undefined);
     }
-    await rename(tmpPath, this.filePath);
     try {
       const dirHandle = await open(directoryPath, "r");
       try {

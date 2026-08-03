@@ -178,7 +178,7 @@ telegram service restart --all
 ## 为什么是这套架构
 
 - **优先保留原生 CLI 能力。** bridge 运行的是真正的 Codex、Claude Code、Kimi Code 和 Antigravity CLI，所以本地认证、项目文件、会话、审批和引擎原生行为都尽量和桌面端保持一致。
-- **随时续接电脑上的工作。** 在 Telegram 里接上本地 Codex 或 Claude Code 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。Antigravity 成功运行后会自动绑定 conversation，也可以用 `/resume conversation <id>` 手动接上。
+- **随时续接电脑上的工作。** 在 Telegram 或 Lark 里接上本地 Codex、Claude Code、Kimi 或 Antigravity 会话，人在外面也能继续发文件、补指令；回到电脑后还能接着同一个项目继续做。会话和恢复后的 workspace 按私聊、群聊或 topic 隔离，其他对话不会静默切换到这个项目。
 - **群聊 topic 可以当干净的旁路对话。** 一个 bot 可以同时服务私聊和已允许的 Telegram 群；forum topic 会有独立 session 和 cron 范围，临时任务、定时任务不会污染主对话。不同 topic 还可以组成 Mini Bus，用同一个群里的轻量 peer 跑 fan-out、chain、verify 或 crew workflow；`/board` 负责把 Kanban 任务状态持久化到模型记忆之外。
 - **多引擎不需要多套玩法。** 每个 bot 可以独立选择 Codex、Claude、Kimi 或 Antigravity，但文件投递和定时任务都走同一套 schema-backed `[tool:{...}]` bridge 协议。
 - **Telegram 能力放在 bridge，而不是模型记忆里。** 发文件、cron 持久化、receipt、权限检查和失败重试由 bridge 代码负责，所以换模型、重启实例、续接会话后仍然有稳定语义。
@@ -405,9 +405,11 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 - 小型文本/代码文件仍可用 `file:name.ext` fenced-block 形式返回。
 - helper 只在当前 Telegram turn 有效，turn 结束后不能再用。
 - `[tool:...]` / `cctb send` / `telegram send` 显式发送接受任意可读绝对路径；legacy fallback tag 仍按旧的 workspace / `/resume` 路径规则校验。
+- Telegram 与 Lark 都会拒发 `.env*`、`*.pem`、`*.key`、`id_rsa`、`id_ed25519` 等凭据形态文件，即使文件位于允许的 workspace 内也不例外。
 - 文件投递成功和拒绝都会记录为 turn 级 receipt，所以 bridge 可以用结构化交付证据判断是否完成，而不是相信文本声明。
 - 如果某个文件已经通过 stream delivery 或 side-channel helper 发过，最终 `.telegram-out` 扫描会按真实路径跳过它，避免 Telegram 重复附件。
 - request-scoped `.telegram-out/<requestId>/` 目录只是运行时缓冲区，24 小时后自动清理。
+- Telegram 收到的附件默认保留 3 天后清理，可用 `TELEGRAM_INBOUND_FILE_RETENTION_DAYS` 调整。
 - bridge 不再保留 manifest、pending contract 或基于数量的状态来推断普通聊天 turn 里的未来交付意图。
 - 纯文本任务不会误当成文件交付失败，例如图片分析、图片描述、内联报告；除非用户明确要求保存、导出、发送或交付文件。
 
@@ -763,6 +765,8 @@ npm run dev -- telegram restore ./bak.cctb.gz --instance work --force  # 覆盖�
 - `/verify <提示>` — 在当前 bot 执行，然后自动发给 `verifier` 检查
 
 `/chain` 是轻量 pipeline；`crew` 是更重的中心协调模式。
+
+每个进程最多同时处理 8 个 Agent Bus `/api/talk` 委托；达到上限时返回可重试的 `server_busy`，避免 `/fan` 或外部调用无限 fork 引擎进程。服务关停会等待在途 HTTP 请求，5 秒后强制关闭剩余连接。
 
 ### Board：持久化 Kanban 任务板
 

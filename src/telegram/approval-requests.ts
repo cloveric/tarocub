@@ -67,7 +67,10 @@ function renderEngineResumeName(engine: EngineApprovalRequest["engine"]): string
 }
 
 function truncate(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 20)}\n... [truncated]`;
+  if (value.length <= maxChars) return value;
+  let end = maxChars - 20;
+  if (end > 0 && /[\uD800-\uDBFF]/.test(value[end - 1] ?? "") && /[\uDC00-\uDFFF]/.test(value[end] ?? "")) end -= 1;
+  return `${value.slice(0, end)}\n... [truncated]`;
 }
 
 function buttonLabel(value: string): string {
@@ -468,7 +471,7 @@ function parseApprovalCommand(text: string):
     };
   }
 
-  if (/^\/deny(?:@\w+)?(?:\s|$)/i.test(trimmed)) {
+  if (/^\/deny(?:@\w+)?$/i.test(trimmed)) {
     return {
       kind: "chat",
       selection: { kind: "approval", choice: "deny" },

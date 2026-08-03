@@ -498,6 +498,7 @@ describe("lark service", () => {
   it("passes the resumed workspace to ordinary Lark messages", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-workspace-"));
     const workspacePath = path.join(stateDir, "external-workspace");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
     const channel = fakeChannel();
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
@@ -512,6 +513,13 @@ describe("lark service", () => {
           workspacePath,
         },
       }));
+      await sessionStore.upsert({
+        telegramChatId: stableLarkNumericId("lark:oc_chat"),
+        conversationKey: "lark:oc_chat",
+        codexSessionId: "claude-session-1",
+        status: "idle",
+        updatedAt: new Date().toISOString(),
+      });
 
       await handleLarkMessage({
         channel,
@@ -536,6 +544,11 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         workspaceOverride: workspacePath,
       }));
+      expect((await sessionStore.findByConversationKey("lark:oc_chat"))?.resume).toMatchObject({
+        sessionId: "claude-session-1",
+        workspacePath,
+      });
+      expect((await loadInstanceConfig(stateDir)).resume).toBeUndefined();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -5257,11 +5270,12 @@ describe("lark service", () => {
       const record = await sessionStore.findByConversationKey("lark:oc_chat");
       expect(record?.codexSessionId).toBe("kimi-abc");
       expect(bridge.validateCodexThread).toHaveBeenCalledWith("kimi-abc");
-      expect((await loadInstanceConfig(stateDir)).resume).toEqual({
+      expect(record?.resume).toEqual({
         sessionId: "kimi-abc",
         dirName: "kimi-abc",
         workspacePath: canonicalStateDir,
       });
+      expect((await loadInstanceConfig(stateDir)).resume).toBeUndefined();
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
@@ -5315,11 +5329,12 @@ describe("lark service", () => {
       expect(record?.codexSessionId).toBe("kimi-session-1");
       expect(bridge.listExternalSessions).toHaveBeenCalledWith({ limit: 20 });
       expect(bridge.validateCodexThread).toHaveBeenCalledWith("kimi-session-1");
-      expect((await loadInstanceConfig(stateDir)).resume).toEqual({
+      expect(record?.resume).toEqual({
         sessionId: "kimi-session-1",
         dirName: "kimi-session-1",
         workspacePath: canonicalStateDir,
       });
+      expect((await loadInstanceConfig(stateDir)).resume).toBeUndefined();
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(JSON.stringify(channel.send.mock.calls)).toContain("恢复 Kimi session");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Demo session");
@@ -5441,11 +5456,12 @@ describe("lark service", () => {
       expect(record?.codexSessionId).toBe("claude-session-1");
       expect(record?.telegramChatId).toBe(stableLarkNumericId("lark:oc_chat"));
       const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, any>;
-      expect(config.resume).toMatchObject({
+      expect(record?.resume).toMatchObject({
         sessionId: "claude-session-1",
         dirName: "-Users-cloveric-projects-demo",
         workspacePath: "/Users/cloveric/projects/demo",
       });
+      expect(config.resume).toBeUndefined();
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
@@ -7155,10 +7171,18 @@ describe("lark service", () => {
 
   it("forwards Claude ultrareview commands from Lark and relays the review result", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-ultrareview-"));
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
       engine: "claude",
       resume: { sessionId: "claude-session", dirName: "work", workspacePath: "/tmp/work" },
     }) + "\n");
+    await sessionStore.upsert({
+      telegramChatId: stableLarkNumericId("lark:oc_chat"),
+      conversationKey: "lark:oc_chat",
+      codexSessionId: "claude-session",
+      status: "idle",
+      updatedAt: new Date().toISOString(),
+    });
     const channel = fakeChannel();
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
@@ -12765,10 +12789,11 @@ describe("lark service", () => {
       const config = await loadInstanceConfig(stateDir);
       expect(handled).toBe(true);
       expect(record?.codexSessionId).toBe("claude-session-card");
-      expect(config.resume).toMatchObject({
+      expect(record?.resume).toMatchObject({
         sessionId: "claude-session-card",
         workspacePath: canonicalStateDir,
       });
+      expect(config.resume).toBeUndefined();
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
@@ -12825,11 +12850,12 @@ describe("lark service", () => {
       expect(handled).toBe(true);
       expect(bridge.validateCodexThread).toHaveBeenCalledWith("kimi-session-card");
       expect(record?.codexSessionId).toBe("kimi-session-card");
-      expect(config.resume).toEqual({
+      expect(record?.resume).toEqual({
         sessionId: "kimi-session-card",
         dirName: "kimi-session-card",
         workspacePath: canonicalStateDir,
       });
+      expect(config.resume).toBeUndefined();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { text: expect.stringContaining(`工作区：${canonicalStateDir}`) },

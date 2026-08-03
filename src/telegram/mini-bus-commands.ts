@@ -26,6 +26,10 @@ import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import type { ResumeState } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
+function renderNonEmptyMiniText(text: string, locale: Locale): string {
+  return text.trim() || (locale === "zh" ? "（该 Mini 未返回文本）" : "(This mini returned no text.)");
+}
+
 export interface MiniBusCommandContext extends TelegramTurnContext {
   abortSignal?: AbortSignal;
   runQueuedBridgeTurn?<T>(conversationKey: string, job: () => Promise<T>): Promise<T>;
@@ -913,7 +917,7 @@ export async function handleMiniBusTelegramCommand(input: {
     }
     const responseText = result.error
       ? `[${result.name}] Error: ${result.error}`
-      : `[${result.name}]\n\n${result.text}`;
+      : `[${result.name}]\n\n${renderNonEmptyMiniText(result.text, locale)}`;
     const chunkCount = await sendChunked(context.api, normalized.chatId, responseText);
     await appendUpdateHandleAuditEventBestEffort(stateDir, context, normalized, {
       outcome: result.error ? "error" : "success",
@@ -1116,7 +1120,9 @@ export async function handleMiniBusTelegramCommand(input: {
       }
     }
     const responseText = results
-      .map((result) => result.error ? `[${result.name}] Error: ${result.error}` : `[${result.name}]\n${result.text}`)
+      .map((result) => result.error
+        ? `[${result.name}] Error: ${result.error}`
+        : `[${result.name}]\n${renderNonEmptyMiniText(result.text, locale)}`)
       .join("\n\n---\n\n");
     const chunkCount = await sendChunked(context.api, normalized.chatId, responseText);
     await appendUpdateHandleAuditEventBestEffort(stateDir, context, normalized, {
@@ -1163,16 +1169,17 @@ export async function handleMiniBusTelegramCommand(input: {
         if (result.usage) {
           await recordTurnUsageAndBudgetAudit(stateDir, cfg.budgetUsd, context, normalized, result.usage);
         }
+        const stageText = renderNonEmptyMiniText(result.text, locale);
         sections.push(
           locale === "zh"
-            ? `[Mini 链路阶段 ${index + 1}: ${peer.name}]\n${result.text}`
-            : `[Mini chain stage ${index + 1}: ${peer.name}]\n${result.text}`,
+            ? `[Mini 链路阶段 ${index + 1}: ${peer.name}]\n${stageText}`
+            : `[Mini chain stage ${index + 1}: ${peer.name}]\n${stageText}`,
         );
         stagePrompt = buildMiniChainStagePrompt({
           locale,
           originalPrompt: action.prompt,
           previousPeer: peer.name,
-          previousOutput: result.text,
+          previousOutput: stageText,
         });
       }
       const responseText = sections.join("\n\n---\n\n");

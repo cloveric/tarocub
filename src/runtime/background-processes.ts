@@ -118,35 +118,41 @@ export function parseInstanceProcessGroup(psOutput: string, servicePid: number):
     return parent ? reachesService(parent, hops + 1) : false;
   };
 
-  const classify = (row: Row): "engine" | "child" | "orphan" => {
+  const classify = (row: Row): "engine" | "child" | "orphan" | null => {
     if (row.ppid === servicePid) {
       return "engine";
     }
     if (reachesService(row)) {
       return "child";
     }
-    // Guard the orphan class: never sweep the service's own ancestor chain, nor a
-    // process that predates the service (parseEtimeSeconds === null → can't prove
-    // it's older, so don't shield it). These would be wrappers/siblings, not the
-    // leaked-background-work the orphan class is meant to capture.
+    // Never expose the service's own ancestor chain or a process that predates
+    // the service as a killable row. Labelling these as "child" protected only
+    // /bg killall; `/bg kill <pid>` accepted every listed row and could therefore
+    // kill the npm/shell wrapper together with the bridge itself.
     const rowEtimeSeconds = parseEtimeSeconds(row.etime);
     const olderThanService = serviceEtimeSeconds !== null
       && rowEtimeSeconds !== null
       && rowEtimeSeconds > serviceEtimeSeconds;
     if (serviceAncestors.has(row.pid) || olderThanService) {
-      return "child";
+      return null;
     }
     return "orphan";
   };
 
-  return group.map((row) => ({
-    pid: row.pid,
-    ppid: row.ppid,
-    rssMb: Math.round(row.rssKb / 1024),
-    etime: row.etime,
-    command: row.command.length > 120 ? `${row.command.slice(0, 117)}...` : row.command,
-    role: classify(row),
-  })).sort((a, b) => b.rssMb - a.rssMb);
+  return group.flatMap((row): InstanceGroupProcess[] => {
+    const role = classify(row);
+    if (role === null) {
+      return [];
+    }
+    return [{
+      pid: row.pid,
+      ppid: row.ppid,
+      rssMb: Math.round(row.rssKb / 1024),
+      etime: row.etime,
+      command: row.command.length > 120 ? `${row.command.slice(0, 117)}...` : row.command,
+      role,
+    }];
+  }).sort((a, b) => b.rssMb - a.rssMb);
 }
 
 /** null = unsupported platform (Windows). */

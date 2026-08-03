@@ -5,6 +5,8 @@ import { withFileMutex } from "./file-mutex.js";
 import { JsonStore } from "./json-store.js";
 
 export const FILE_WORKFLOW_STATE_UNREADABLE_WARNING = "file workflow state unreadable";
+export const FILE_WORKFLOW_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const FILE_WORKFLOW_MAX_TERMINAL_RECORDS = 500;
 
 export type FileWorkflowKind = "image" | "document" | "archive";
 export type FileWorkflowStatus = "preparing" | "processing" | "awaiting_continue" | "completed" | "failed";
@@ -39,6 +41,25 @@ function createDefaultState(): FileWorkflowState {
 
 function isActiveWorkflowStatus(status: FileWorkflowRecord["status"]): boolean {
   return status === "preparing" || status === "processing" || status === "awaiting_continue";
+}
+
+function pruneTerminalWorkflowRecords(records: FileWorkflowRecord[], now = Date.now()): FileWorkflowRecord[] {
+  const cutoff = now - FILE_WORKFLOW_TERMINAL_RETENTION_MS;
+  const retainedTerminalIds = new Set(
+    records
+      .filter((record) => !isActiveWorkflowStatus(record.status) && Date.parse(record.updatedAt) >= cutoff)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, FILE_WORKFLOW_MAX_TERMINAL_RECORDS)
+      .map((record) => record.uploadId),
+  );
+  return records.filter((record) => isActiveWorkflowStatus(record.status) || retainedTerminalIds.has(record.uploadId));
+}
+
+function pruneTerminalWorkflowState(state: FileWorkflowState): boolean {
+  const records = pruneTerminalWorkflowRecords(state.records);
+  if (records.length === state.records.length) return false;
+  state.records = records;
+  return true;
 }
 
 function selectLatestRecord(records: FileWorkflowRecord[]): FileWorkflowRecord | null {
@@ -210,6 +231,7 @@ export class FileWorkflowStore {
 
       mutate(record);
       record.updatedAt = new Date().toISOString();
+      pruneTerminalWorkflowState(state);
       await this.store.write(state);
       updated = record;
     });
@@ -237,7 +259,8 @@ export class FileWorkflowStore {
           failed += 1;
         }
       }
-      if (failed > 0) {
+      const pruned = pruneTerminalWorkflowState(state);
+      if (failed > 0 || pruned) {
         await this.store.write(state);
       }
     });
@@ -332,6 +355,7 @@ export class FileWorkflowStore {
 
       record.status = "processing";
       record.updatedAt = new Date().toISOString();
+      pruneTerminalWorkflowState(state);
       await this.store.write(state);
       claimedRecord = { ...record };
     });

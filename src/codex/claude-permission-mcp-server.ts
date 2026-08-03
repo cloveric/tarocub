@@ -149,9 +149,15 @@ let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
+  if (Buffer.byteLength(buffer, "utf8") > 1_048_576 && !/[\r\n]/.test(buffer)) {
+    console.error("Claude permission MCP input line exceeded 1 MiB and was discarded.");
+    buffer = "";
+    return;
+  }
   const lines = buffer.split(/\r?\n/);
   buffer = lines.pop() ?? "";
   for (const line of lines) {
+    if (Buffer.byteLength(line, "utf8") > 1_048_576) continue;
     const trimmed = line.trim();
     if (!trimmed) {
       continue;

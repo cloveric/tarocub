@@ -25,7 +25,7 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 class FakeStream extends EventEmitter {
-  emitData(chunk: string) {
+  emitData(chunk: string | Buffer) {
     this.emit("data", chunk);
   }
 }
@@ -115,6 +115,32 @@ describe("ClaudeStreamAdapter", () => {
       text: "ONE",
       usage: { inputTokens: 11, outputTokens: 7, cachedTokens: 3, costUsd: 0.0012 },
     });
+  });
+
+  it("decodes UTF-8 JSON correctly when a multibyte character crosses stdout chunks", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+    const turn = adapter.sendUserMessage("telegram-12345", { text: "中文", files: [] });
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+
+    const line = Buffer.from('{"type":"result","subtype":"success","is_error":false,"result":"你好🙂","session_id":"session-utf8"}\n');
+    const marker = line.indexOf(Buffer.from("好"));
+    children[0].stdout.emitData(line.subarray(0, marker + 1));
+    children[0].stdout.emitData(line.subarray(marker + 1));
+
+    await expect(turn).resolves.toEqual({ text: "你好🙂", sessionId: "session-utf8" });
+  });
+
+  it("processes the final JSON event when the CLI exits without a newline", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+    const turn = adapter.sendUserMessage("telegram-12345", { text: "finish", files: [] });
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"FINAL","session_id":"session-final"}');
+    children[0].close(0);
+
+    await expect(turn).resolves.toEqual({ text: "FINAL", sessionId: "session-final" });
   });
 
   it("keeps a persistent Claude session alive across multiple turns", async () => {
@@ -687,6 +713,46 @@ describe("ClaudeStreamAdapter", () => {
       text: "DONE",
       sessionId: "session-123",
     });
+  });
+
+  it("coalesces overlapping identical stdio approval requests", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    let resolveDecision!: (decision: { behavior: "deny" }) => void;
+    const decision = new Promise<{ behavior: "deny" }>((resolve) => {
+      resolveDecision = resolve;
+    });
+    const approvalRequest = vi.fn(() => decision);
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+    const resultPromise = adapter.sendUserMessage("telegram-12345", {
+      text: "Use a tool",
+      files: [],
+      onApprovalRequest: approvalRequest,
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    const request = (requestId: string) => JSON.stringify({
+      type: "control_request",
+      request_id: requestId,
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Bash",
+        input: { command: "rm -rf /tmp/example" },
+      },
+    }) + "\n";
+    children[0].stdout.emitData(request("approval-1"));
+    children[0].stdout.emitData(request("approval-2"));
+    await waitFor(() => approvalRequest.mock.calls.length === 1);
+    resolveDecision({ behavior: "deny" });
+    await waitFor(() => children[0].stdin.lines.length === 3);
+
+    expect(approvalRequest).toHaveBeenCalledTimes(1);
+    expect(children[0].stdin.lines.slice(1).map((line) => JSON.parse(line).response.request_id).sort()).toEqual([
+      "approval-1",
+      "approval-2",
+    ]);
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"DONE","session_id":"session-123"}\n');
+    await expect(resultPromise).resolves.toMatchObject({ text: "DONE" });
   });
 
   it("routes AskUserQuestion through the callback even in full-auto mode", async () => {

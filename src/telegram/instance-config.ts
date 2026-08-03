@@ -380,7 +380,13 @@ export async function updateInstanceConfig(
     let config: Record<string, unknown> = {};
     try {
       const existing = await readFile(configPath, "utf8");
-      config = JSON.parse(existing) as Record<string, unknown>;
+      const parsed = JSON.parse(existing) as unknown;
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        await rename(configPath, `${configPath}.corrupt.${Date.now()}.bak`).catch(() => {});
+        console.error(`Invalid ${configPath} root; quarantined and reset.`);
+      } else {
+        config = parsed as Record<string, unknown>;
+      }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {

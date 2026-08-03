@@ -221,16 +221,14 @@ Important fields currently include:
 - `budgetUsd`
 - `effort`
 - `model`
-- `resume`
+- `resume` (legacy migration input only; new bindings are stored per conversation in `session.json`)
 - `bus`
 
 ### Authoritative data
 
 This file is authoritative for instance configuration.
 
-It is also currently authoritative for the durable `/resume` binding, which means it is partly configuration and partly state.
-
-That mixed role is acceptable for now, but should remain explicit.
+An old instance may still contain `resume`. Runtime code migrates that value onto the matching `session.json` record only when the owning session can be identified. New `/resume` and `/detach` writes never use the instance-global field.
 
 ### Write rules
 
@@ -255,7 +253,7 @@ This asymmetry is worth remembering.
 
 Moderate sensitivity.
 
-Usually not credential-bearing, but it can reveal instance topology, bus peers, resume state, model selection, and operator intent.
+Usually not credential-bearing, but it can reveal instance topology, bus peers, legacy resume state, model selection, and operator intent.
 
 ## `access.json`
 
@@ -321,26 +319,30 @@ Leaking this file exposes pairing codes, authorized chats, and chat/user linkage
 
 ### Purpose
 
-Maps Telegram chats to provider session identifiers.
+Maps Telegram and Lark conversations to provider session identifiers and conversation-scoped resumed workspaces.
 
 Schema:
 
 - `chats[]`
-  - `telegramChatId`
+  - `conversationKey` (canonical private-chat/group/topic identity)
+  - `telegramChatId` (numeric compatibility key; Lark uses a stable derived value)
+  - `telegramThreadId` (Telegram topic, when present)
   - `codexSessionId`
+  - `resume` (provider session metadata plus resumed workspace root)
+  - `suspendedPrevious` (binding restored by `/detach` when available)
   - `status`
   - `updatedAt`
 
 ### Authoritative data
 
-This file is authoritative for durable chat -> engine session binding.
+This file is authoritative for durable conversation -> engine session and resumed-workspace binding.
 
-It is what lets a Telegram chat continue an engine conversation across process restarts.
+It lets Telegram private chats/topics and Lark private chats/groups/topics continue independently across process restarts. A `/resume` in one conversation cannot change the file-delivery root or provider session of another conversation.
 
 ### Write rules
 
 - writes are serialized in-process
-- updates are upsert-style by `telegramChatId`
+- updates are upsert-style by canonical `conversationKey`, with legacy chat/thread keys normalized on read/write
 - removal supports recovery behavior on corrupt state
 
 ### Recovery rules
@@ -1050,5 +1052,5 @@ That is not automatically wrong, but the difference should be intentional and do
 
 1. Keep this file updated whenever a new persistent file is introduced.
 2. Normalize repair behavior across state stores where it materially helps operators.
-3. Decide whether `resume` should remain in `config.json` or eventually move into a dedicated runtime-state file.
-4. Add a short `docs/security-boundaries.md` that explicitly maps these state files to trust/sensitivity levels.
+3. Remove the legacy `config.json.resume` compatibility path after all supported upgrade windows have migrated.
+4. Keep `docs/security-boundaries.md` aligned whenever a state file changes trust or sensitivity.

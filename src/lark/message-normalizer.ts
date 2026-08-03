@@ -7,6 +7,8 @@ export interface LarkResourceDescriptor {
   file_key?: string;
   fileName?: string;
   file_name?: string;
+  fileSize?: number | string;
+  file_size?: number | string;
 }
 
 export interface LarkIncomingMessage {
@@ -37,6 +39,7 @@ export interface LarkNormalizedAttachment {
   kind: "image" | "file" | "audio" | "video";
   fileKey: string;
   fileName?: string;
+  fileSize?: number;
   /**
    * The Lark message that actually carries this resource. Set when an
    * attachment-burst merge moves attachments onto a merged message whose
@@ -198,6 +201,13 @@ function normalizeLarkResources(resources: LarkResourceDescriptor[]): LarkNormal
     const fileName = resource.fileName ?? resource.file_name;
     if (fileName) {
       attachment.fileName = fileName;
+    }
+    const fileSize = resource.fileSize ?? resource.file_size;
+    const parsedFileSize = typeof fileSize === "string" && /^\d+$/.test(fileSize.trim())
+      ? Number(fileSize.trim())
+      : fileSize;
+    if (typeof parsedFileSize === "number" && Number.isFinite(parsedFileSize) && parsedFileSize >= 0) {
+      attachment.fileSize = parsedFileSize;
     }
     return [attachment];
   });

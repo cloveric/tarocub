@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -28,6 +28,8 @@ export type TelegramMessageInputPreparationResult =
   };
 
 export const TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES = 20 * 1024 * 1024;
+const TELEGRAM_INBOX_SWEEP_INTERVAL_MS = 60 * 60_000;
+const telegramInboxLastSweep = new Map<string, number>();
 
 function inferExtension(attachment: NormalizedTelegramAttachment, telegramFilePath: string): string {
   const explicitExtension = attachment.fileName ? path.extname(attachment.fileName) : "";
@@ -105,6 +107,44 @@ async function ensureInboxDirExists(inboxDir: string): Promise<void> {
   await mkdir(inboxDir, { recursive: true });
 }
 
+export async function pruneTelegramInbox(
+  inboxDir: string,
+  retentionDays = parseNonNegativeNumber(process.env.TELEGRAM_INBOUND_FILE_RETENTION_DAYS, 3),
+  now = Date.now(),
+): Promise<number> {
+  const cutoff = now - retentionDays * 24 * 60 * 60_000;
+  let removed = 0;
+  try {
+    const entries = await readdir(inboxDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      const candidate = path.join(inboxDir, entry.name);
+      try {
+        const info = await stat(candidate);
+        if (info.mtimeMs <= cutoff) {
+          await rm(candidate, { force: true });
+          removed += 1;
+        }
+      } catch {
+        // A concurrent turn may already have removed it; pruning is best effort.
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn(`Telegram inbox cleanup failed: ${summarizeError(error)}`);
+    }
+  }
+  return removed;
+}
+
+async function maybePruneTelegramInbox(inboxDir: string): Promise<void> {
+  const key = path.resolve(inboxDir);
+  const now = Date.now();
+  if (now - (telegramInboxLastSweep.get(key) ?? 0) < TELEGRAM_INBOX_SWEEP_INTERVAL_MS) return;
+  telegramInboxLastSweep.set(key, now);
+  await pruneTelegramInbox(inboxDir, undefined, now);
+}
+
 // Voice transcription configuration. Override via env vars:
 //   ASR_HTTP_URL — warm ASR HTTP server (fast path)
 //   ASR_CLI_PYTHON + ASR_CLI_SCRIPT — CLI fallback (cold start)
@@ -142,6 +182,12 @@ function parsePositiveNumber(value: string | undefined, fallback: number): numbe
 
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseNonNegativeNumber(value: string | undefined, fallback: number): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function summarizeError(error: unknown): string {
@@ -488,6 +534,7 @@ async function defaultDownloadAttachments(
   }
 
   await ensureInboxDirExists(inboxDir);
+  await maybePruneTelegramInbox(inboxDir);
   const downloadedFiles: DownloadedAttachment[] = [];
 
   for (const attachment of attachments) {

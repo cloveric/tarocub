@@ -59,6 +59,10 @@ describe("dispatchAuthorizedTelegramMessage", () => {
           removeByChatId: vi.fn(),
           upsert: vi.fn(),
           findByChatIdSafe: vi.fn(),
+          findByConversationKeySafe: vi.fn().mockResolvedValue({
+            record: { codexSessionId: "session-1" },
+            warning: undefined,
+          }),
         } as never,
         turnState: createTurnState(),
         updateInstanceConfig: vi.fn(),
@@ -125,6 +129,10 @@ describe("dispatchAuthorizedTelegramMessage", () => {
           removeByChatId: vi.fn(),
           upsert: vi.fn(),
           findByChatIdSafe: vi.fn(),
+          findByConversationKeySafe: vi.fn().mockResolvedValue({
+            record: { codexSessionId: "session-1" },
+            warning: undefined,
+          }),
         } as never,
         turnState: createTurnState(),
         updateInstanceConfig: vi.fn(),

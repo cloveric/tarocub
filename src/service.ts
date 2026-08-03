@@ -38,6 +38,8 @@ export interface ServiceDependencies {
 export interface TelegramServiceContext extends TelegramDeliveryContext {
   chatQueue?: ChatQueue;
   botUsername?: string;
+  shutdownSignal?: AbortSignal;
+  activeTaskControllers?: Set<AbortController>;
 }
 
 export interface PollTelegramUpdatesOptions {
@@ -46,6 +48,15 @@ export interface PollTelegramUpdatesOptions {
   recreateApi?: (api: TelegramApi) => TelegramApi;
   mediaGroupSettleMs?: number;
 }
+
+interface TelegramProcessingRuntime {
+  controller: AbortController;
+  activeTaskControllers: Set<AbortController>;
+  tasks: Set<Promise<void>>;
+}
+
+const TELEGRAM_PROCESSING_DRAIN_TIMEOUT_MS = 10_000;
+const telegramProcessingRuntimes = new Map<string, TelegramProcessingRuntime>();
 
 export interface ResolvedInstanceEnv extends EnvSource {
   HOME?: string;
@@ -1128,6 +1139,84 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+function createTelegramShutdownError(): Error {
+  const error = new Error("Telegram update processing was aborted during shutdown");
+  error.name = "AbortError";
+  return error;
+}
+
+async function waitForAbortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
+}
+
+function createTelegramProcessingRuntime(inboxDir: string, parentSignal?: AbortSignal): TelegramProcessingRuntime {
+  const runtime: TelegramProcessingRuntime = {
+    controller: new AbortController(),
+    activeTaskControllers: new Set<AbortController>(),
+    tasks: new Set<Promise<void>>(),
+  };
+  const stateKey = path.resolve(inboxDir);
+  telegramProcessingRuntimes.set(stateKey, runtime);
+  if (parentSignal?.aborted) {
+    runtime.controller.abort(parentSignal.reason);
+  } else if (parentSignal) {
+    parentSignal.addEventListener("abort", () => runtime.controller.abort(parentSignal.reason), { once: true });
+  }
+  return runtime;
+}
+
+export async function shutdownTelegramUpdateProcessing(
+  inboxDir: string,
+  timeoutMs = TELEGRAM_PROCESSING_DRAIN_TIMEOUT_MS,
+): Promise<boolean> {
+  const stateKey = path.resolve(inboxDir);
+  const runtime = telegramProcessingRuntimes.get(stateKey);
+  if (!runtime) {
+    return true;
+  }
+  runtime.controller.abort("Telegram service shutting down");
+  for (const controller of runtime.activeTaskControllers) {
+    controller.abort("Telegram service shutting down");
+  }
+  if (runtime.tasks.size === 0) {
+    telegramProcessingRuntimes.delete(stateKey);
+    return true;
+  }
+
+  let drainTimer: ReturnType<typeof setTimeout> | undefined;
+  const drained = await Promise.race([
+    Promise.allSettled([...runtime.tasks]).then(() => true),
+    new Promise<boolean>((resolve) => {
+      drainTimer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+      drainTimer.unref?.();
+    }),
+  ]).finally(() => {
+    if (drainTimer) {
+      clearTimeout(drainTimer);
+    }
+  });
+  if (drained && telegramProcessingRuntimes.get(stateKey) === runtime) {
+    telegramProcessingRuntimes.delete(stateKey);
+  }
+  return drained;
+}
+
 function isConflictError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -1400,6 +1489,9 @@ export async function processTelegramUpdates(
   };
 
   for (const update of coalesceTelegramMediaGroupUpdates(updates)) {
+    if (context.shutdownSignal?.aborted) {
+      break;
+    }
     const updateId = getUpdateId(update);
     const completedOffset = updateId === undefined ? undefined : updateId + 1;
 
@@ -1655,7 +1747,13 @@ export async function processTelegramUpdates(
         enqueuedUpdateIds.add(updateId);
       }
       const queuedRun = chatQueue.enqueue(normalizedConversationKey(normalized), async () => {
+        if (context.shutdownSignal?.aborted) {
+          throw createTelegramShutdownError();
+        }
         const taskController = new AbortController();
+        const forwardShutdown = () => taskController.abort(context.shutdownSignal?.reason);
+        context.shutdownSignal?.addEventListener("abort", forwardShutdown, { once: true });
+        context.activeTaskControllers?.add(taskController);
         activeTasks.set(normalizedConversationKey(normalized), taskController);
         await runtimeStateStore.markTurnStarted();
         try {
@@ -1680,7 +1778,11 @@ export async function processTelegramUpdates(
             },
           });
         } finally {
-          activeTasks.delete(normalizedConversationKey(normalized));
+          context.shutdownSignal?.removeEventListener("abort", forwardShutdown);
+          context.activeTaskControllers?.delete(taskController);
+          if (activeTasks.get(normalizedConversationKey(normalized)) === taskController) {
+            activeTasks.delete(normalizedConversationKey(normalized));
+          }
           await runtimeStateStore.markTurnCompleted();
         }
       });
@@ -1690,6 +1792,12 @@ export async function processTelegramUpdates(
         run: queuedRun,
       });
     } catch (error) {
+      if (context.shutdownSignal?.aborted) {
+        if (updateId !== undefined) {
+          enqueuedUpdateIds.delete(updateId);
+        }
+        break;
+      }
       if (updateId !== undefined) {
         await markUpdateCompleted(updateId);
         enqueuedUpdateIds.delete(updateId);
@@ -1710,6 +1818,12 @@ export async function processTelegramUpdates(
       }
       nextOffset = advanceOffset(nextOffset, queued.completedOffset);
     } catch (error) {
+      if (context.shutdownSignal?.aborted) {
+        if (queued.updateId !== undefined) {
+          enqueuedUpdateIds.delete(queued.updateId);
+        }
+        continue;
+      }
       if (queued.updateId !== undefined) {
         await markUpdateCompleted(queued.updateId);
         enqueuedUpdateIds.delete(queued.updateId);
@@ -1758,16 +1872,7 @@ function mergeTelegramUpdateBatches(first: unknown[], second: unknown[]): unknow
 }
 
 async function waitForTelegramMediaGroupSettle(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0 || signal?.aborted) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timer);
-      resolve();
-    }, { once: true });
-  });
+  await waitForAbortableDelay(ms, signal);
 }
 
 export async function pollTelegramUpdatesOnce(
@@ -1797,9 +1902,21 @@ export async function pollTelegramUpdatesOnce(
     // Offset is NOT advanced here — processTelegramUpdates marks handled
     // updates in the runtime state store, and we read back the last handled
     // ID for the next poll to avoid message loss on crash.
-    void processTelegramUpdates(updates, { api, bridge, inboxDir, botUsername: options.botUsername }, logger).catch((error) => {
+    const runtime = telegramProcessingRuntimes.get(path.resolve(inboxDir));
+    let processing: Promise<void>;
+    processing = processTelegramUpdates(updates, {
+      api,
+      bridge,
+      inboxDir,
+      botUsername: options.botUsername,
+      shutdownSignal: runtime?.controller.signal,
+      activeTaskControllers: runtime?.activeTaskControllers,
+    }, logger).then(() => undefined).catch((error) => {
       logger.error(formatErrorMessage("Background update processing failed", error));
+    }).finally(() => {
+      runtime?.tasks.delete(processing);
     });
+    runtime?.tasks.add(processing);
     const lastHandled = await getLastHandledUpdateId(inboxDir);
     return {
       offset: lastHandled !== null ? lastHandled + 1 : offset,
@@ -1847,6 +1964,7 @@ export async function pollTelegramUpdates(
   signal?: AbortSignal,
   options: PollTelegramUpdatesOptions = {},
 ): Promise<void> {
+  createTelegramProcessingRuntime(inboxDir, signal);
   let currentApi = api;
   let offset: number | undefined;
   let backoffMs = 1000;
@@ -1855,55 +1973,59 @@ export async function pollTelegramUpdates(
   const recreateApi = options.recreateApi ?? ((current: TelegramApi) => current.recreate());
   let consecutiveFetchErrors = 0;
 
-  while (!signal?.aborted) {
-    const previousOffset = offset;
-    const result = await pollTelegramUpdatesOnce(currentApi, bridge, inboxDir, logger, offset, signal, options);
-    offset = result.offset;
+  try {
+    while (!signal?.aborted) {
+      const previousOffset = offset;
+      const result = await pollTelegramUpdatesOnce(currentApi, bridge, inboxDir, logger, offset, signal, options);
+      offset = result.offset;
 
-    if (result.conflict) {
-      break;
-    }
-
-    if (result.hadFetchError) {
-      consecutiveFetchErrors += 1;
-      if (consecutiveFetchErrors >= fetchErrorRecycleThreshold) {
-        try {
-          currentApi = recreateApi(currentApi);
-          await appendPollFetchRecoveredAuditEventBestEffort(
-            inboxDir,
-            consecutiveFetchErrors,
-            fetchErrorRecycleThreshold,
-            offset,
-          );
-          consecutiveFetchErrors = 0;
-        } catch (error) {
-          logger.error(formatErrorMessage("Failed to recycle Telegram API client", error));
-        }
+      if (result.conflict) {
+        break;
       }
-      backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
-    } else if (result.hadUpdates && result.offset !== previousOffset) {
-      consecutiveFetchErrors = 0;
-      // Got messages — poll again immediately for low latency
-      backoffMs = 0;
-    } else if (result.hadUpdates && result.offset === previousOffset) {
-      consecutiveFetchErrors = 0;
-      // We saw updates but did not advance the handled offset yet. That means
-      // at least one update is still in flight, was deferred, or failed before
-      // bookkeeping completed. Back off to avoid a tight loop that keeps
-      // re-fetching the same update IDs immediately.
-      backoffMs = 1000;
-    } else {
-      consecutiveFetchErrors = 0;
-      // No updates — long polling already waited ~30s on Telegram's side,
-      // just a tiny gap before the next long-poll request
-      backoffMs = 100;
-    }
 
-    if (backoffMs > 0) {
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, backoffMs);
-        signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
-      });
+      if (result.hadFetchError) {
+        consecutiveFetchErrors += 1;
+        if (consecutiveFetchErrors >= fetchErrorRecycleThreshold) {
+          try {
+            currentApi = recreateApi(currentApi);
+            await appendPollFetchRecoveredAuditEventBestEffort(
+              inboxDir,
+              consecutiveFetchErrors,
+              fetchErrorRecycleThreshold,
+              offset,
+            );
+            consecutiveFetchErrors = 0;
+          } catch (error) {
+            logger.error(formatErrorMessage("Failed to recycle Telegram API client", error));
+          }
+        }
+        backoffMs = Math.min(backoffMs * 2, maxBackoffMs);
+      } else if (result.hadUpdates && result.offset !== previousOffset) {
+        consecutiveFetchErrors = 0;
+        // Got messages — poll again immediately for low latency
+        backoffMs = 0;
+      } else if (result.hadUpdates && result.offset === previousOffset) {
+        consecutiveFetchErrors = 0;
+        // We saw updates but did not advance the handled offset yet. That means
+        // at least one update is still in flight, was deferred, or failed before
+        // bookkeeping completed. Back off to avoid a tight loop that keeps
+        // re-fetching the same update IDs immediately.
+        backoffMs = 1000;
+      } else {
+        consecutiveFetchErrors = 0;
+        // No updates — long polling already waited ~30s on Telegram's side,
+        // just a tiny gap before the next long-poll request
+        backoffMs = 100;
+      }
+
+      if (backoffMs > 0) {
+        await waitForAbortableDelay(backoffMs, signal);
+      }
     }
+  } finally {
+    // Give cooperative handlers a brief chance to stop. The service entrypoint
+    // destroys the engine next, then performs the full bounded drain before
+    // releasing the instance lock.
+    await shutdownTelegramUpdateProcessing(inboxDir, 250);
   }
 }

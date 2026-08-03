@@ -12,6 +12,7 @@ import {
   type LarkStreamControllerLike,
   requestLarkApproval,
 } from "../src/lark/service.js";
+import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
 
 describe("lark card callback security", () => {
   // ── Finding 1: engine-authored raw-card callbacks must never carry privileged
@@ -439,6 +440,61 @@ describe("lark card callback security", () => {
       expect(texts.join("\n")).not.toContain("已允许一次");
       expect(texts.some((text) => text.includes("没有待处理的审批"))).toBe(true);
     } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let another authorized group member decide the requester's approval", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cbsec-requester-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const abortController = new AbortController();
+    const pendingDecision = requestLarkApproval({
+      channel,
+      runtime,
+      chatId: "oc_chat",
+      conversationKey: "lark:oc_chat",
+      bridgeChatType: "group",
+      replyTo: "om_request",
+      requesterUserId: stableLarkNumericId("user:ou_requester"),
+      abortSignal: abortController.signal,
+      request: {
+        engine: "claude",
+        toolName: "Bash",
+        toolInput: { command: "rm -rf build" },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "unused" })),
+    };
+
+    try {
+      await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_card",
+          operator: { openId: "ou_other_authorized_user" },
+          action: { value: { cctb_lark: "approval", requestId, decision: "allow_once" } },
+        },
+      });
+
+      expect(runtime.pendingApprovals.has(requestId)).toBe(true);
+      expect(bridge.checkAccess).not.toHaveBeenCalled();
+      const texts = (channel.send.mock.calls as unknown[][])
+        .map((call) => (call[1] as { text?: string }).text)
+        .filter((text): text is string => typeof text === "string");
+      expect(texts.some((text) => text.includes("没有待处理的审批"))).toBe(true);
+
+      abortController.abort();
+      await expect(pendingDecision).resolves.toEqual({ behavior: "deny" });
+    } finally {
+      abortController.abort();
       await rm(stateDir, { recursive: true, force: true });
     }
   });

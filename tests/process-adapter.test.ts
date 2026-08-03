@@ -238,6 +238,20 @@ describe("ProcessCodexAdapter", () => {
     await expect(promise).resolves.toEqual({ text: "answer from codex" });
   });
 
+  it("decodes UTF-8 JSON correctly when a multibyte character crosses stdout chunks", async () => {
+    const { spawnCodex, child } = createSpawnHarness();
+    const adapter = new ProcessCodexAdapter("codex", spawnCodex);
+    const promise = adapter.sendUserMessage("thread-123", { text: "Hello", files: [] });
+    const line = Buffer.from('{"type":"item.completed","item":{"type":"agent_message","text":"你好🙂"}}\n');
+    const marker = line.indexOf(Buffer.from("好"));
+
+    child.stdout.emitData(line.subarray(0, marker + 1));
+    child.stdout.emitData(line.subarray(marker + 1));
+    child.close(0);
+
+    await expect(promise).resolves.toEqual({ text: "你好🙂" });
+  });
+
   it("does not emit pseudo-streaming progress from completed agent messages", async () => {
     const { spawnCodex, child } = createSpawnHarness();
     const adapter = new ProcessCodexAdapter("codex", spawnCodex);
@@ -1022,7 +1036,7 @@ describe("ProcessCodexAdapter", () => {
 });
 
 class FakeStream extends EventEmitter {
-  emitData(chunk: string) {
+  emitData(chunk: string | Buffer) {
     this.emit("data", chunk);
   }
 }

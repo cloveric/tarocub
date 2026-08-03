@@ -1973,21 +1973,20 @@ describe("polling helpers", () => {
 
     try {
       const controller = new AbortController();
-      let timerCount = 0;
       globalThis.setTimeout = (((handler: TimerHandler, timeout?: number) => {
         sleepCalls.push(Number(timeout ?? 0));
-        timerCount += 1;
-        if (timerCount >= 2) {
-          controller.abort();
-        }
         if (typeof handler === "function") {
           queueMicrotask(() => handler());
         }
         return {} as ReturnType<typeof setTimeout>;
       }) as unknown) as typeof setTimeout;
 
-      await pollTelegramUpdates(api as never, bridge as never, inboxDir, logger, controller.signal);
+      const polling = pollTelegramUpdates(api as never, bridge as never, inboxDir, logger, controller.signal);
       await started.promise;
+      await waitForCondition(() => sleepCalls.some((value) => value === 1000));
+      controller.abort();
+      release.resolve();
+      await polling;
 
       expect(sleepCalls.some((value) => value === 1000)).toBe(true);
     } finally {

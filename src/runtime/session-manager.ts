@@ -75,6 +75,7 @@ export class SessionManager {
       codexSessionId: sessionId,
       status: "idle",
       updatedAt: new Date().toISOString(),
+      resume: existing?.resume,
       suspendedPrevious: existing?.suspendedPrevious,
     });
   }

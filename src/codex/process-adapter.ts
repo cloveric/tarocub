@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readdir, readFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import type {
   CodexAdapter,
@@ -27,13 +28,14 @@ type SpawnOptions = {
 };
 
 type ProcessStreamLike = {
-  on(event: "data", listener: (chunk: { toString(): string } | string) => void): void;
+  on(event: "data", listener: (chunk: Buffer | { toString(): string } | string) => void): void;
 };
 
 type ProcessChildLike = {
   pid?: number;
   stdin?: {
     end(chunk?: string): void;
+    on?(event: "error", listener: (error: Error) => void): void;
   };
   stdout?: ProcessStreamLike;
   stderr?: ProcessStreamLike;
@@ -50,6 +52,16 @@ const MAX_STDERR_DIAGNOSTIC_BYTES = 4 * 1024;
 const MAX_CODEX_ROLLOUT_SCAN_DEPTH = 16;
 export const CODEX_PROCESS_TURN_TIMEOUT_MS = 60 * 60_000;
 export const CODEX_PROCESS_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
+
+function decodeProcessChunk(
+  decoder: StringDecoder,
+  chunk: Buffer | { toString(): string } | string,
+): string {
+  if (typeof chunk === "string") {
+    return chunk;
+  }
+  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk.toString();
+}
 
 type CodexJsonEvent =
   | {
@@ -689,6 +701,8 @@ export class ProcessCodexAdapter implements CodexAdapter {
     return await new Promise<{ state: CodexTurnState; stderrTail: string; exitCode: number | null }>((resolve, reject) => {
       let stdoutLineBuffer = "";
       let stderrTail = "";
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
       let settled = false;
       const state = createTurnState();
       let totalTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -768,6 +782,8 @@ export class ProcessCodexAdapter implements CodexAdapter {
           settled = true;
           clearTimers();
           clearAbortListener();
+          stdoutLineBuffer += stdoutDecoder.end();
+          stderrTail = appendHeadTailDiagnostic(stderrTail, stderrDecoder.end(), MAX_STDERR_DIAGNOSTIC_BYTES);
           const trailingLine = stdoutLineBuffer.trim();
           if (trailingLine) {
             updateTurnStateFromLine(state, trailingLine, emitEngineEvent);
@@ -778,7 +794,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
       child.stdout?.on("data", (chunk) => {
         resetInactivityTimeout();
-        stdoutLineBuffer += chunk.toString();
+        stdoutLineBuffer += decodeProcessChunk(stdoutDecoder, chunk);
 
         const lines = stdoutLineBuffer.split(/\r?\n/);
         stdoutLineBuffer = lines.pop() ?? "";
@@ -808,7 +824,11 @@ export class ProcessCodexAdapter implements CodexAdapter {
 
       child.stderr?.on("data", (chunk) => {
         resetInactivityTimeout();
-        stderrTail = appendHeadTailDiagnostic(stderrTail, chunk.toString(), MAX_STDERR_DIAGNOSTIC_BYTES);
+        stderrTail = appendHeadTailDiagnostic(stderrTail, decodeProcessChunk(stderrDecoder, chunk), MAX_STDERR_DIAGNOSTIC_BYTES);
+      });
+
+      child.stdin?.on?.("error", (error) => {
+        rejectAndKill(error);
       });
 
       if (abortSignal) {

@@ -15,7 +15,7 @@ The project is a local-first bot bridge, not a public SaaS control plane.
 
 The practical threat model is:
 
-- untrusted Telegram messages reaching a local coding-agent CLI
+- untrusted Telegram or Feishu/Lark messages reaching a local coding-agent CLI
 - untrusted model output being turned into user-visible replies and file reads
 - multiple local instances delegating work over loopback HTTP
 - sensitive state and credentials living on disk
@@ -27,7 +27,7 @@ Reasonable assumptions today:
 
 - the operator controls the host machine
 - the bus server listens only on loopback
-- Telegram is the only remote entry point
+- Telegram and Feishu/Lark are the remote chat entry points
 - state directories are private to the local user
 
 If those assumptions change, this document is no longer enough. The code will need a different security model.
@@ -36,7 +36,7 @@ If those assumptions change, this document is no longer enough. The code will ne
 
 The current system has six important boundaries:
 
-1. Telegram input vs authorized chat
+1. Telegram/Lark input vs authorized chat
 2. Local bus caller vs trusted peer instance
 3. Model output vs filesystem egress
 4. Per-instance state vs operational artifacts
@@ -47,7 +47,7 @@ Not all of these are equally strong.
 
 The strongest boundaries today are:
 
-- Telegram access control
+- Telegram/Lark access control
 - loopback-only bus exposure
 - file delivery sandboxing to workspace-like roots
 - owner-only permissions on structured state
@@ -58,14 +58,14 @@ The weakest or most intentionally-permeable boundaries today are:
 - any engine behavior that can modify files inside the allowed workspace
 - fallback behavior when optional config/state is missing or malformed
 
-## 1. Telegram Boundary
+## 1. Remote Chat Boundary
 
-Telegram is an untrusted remote input source until access control passes.
+Telegram and Feishu/Lark are untrusted remote input sources until access control passes.
 
 ### Trusted
 
 - chats that pass the configured access policy
-- normalized message metadata after Telegram API parsing
+- normalized message metadata after the channel SDK/API has parsed it
 
 ### Untrusted
 
@@ -81,7 +81,7 @@ Telegram is an untrusted remote input source until access control passes.
 - non-private chats require both an authorized Telegram user and an explicitly allowed group chat
 - ordinary group messages are ignored unless they mention the bot or reply to the bot
 - unauthorized group inputs are silent and audited; private unauthorized inputs are answered before engine execution
-- Telegram messages are normalized before command handling
+- Telegram and Lark messages are normalized before command handling
 - external Telegram updates are allowed only for Telegram chat types (`private`, `group`, `supergroup`, `channel`); the internal `bus` chat type is rejected at normalization
 
 ### Residual risk
@@ -92,7 +92,7 @@ Telegram is an untrusted remote input source until access control passes.
 
 ### Design rule
 
-Any new Telegram command or callback path must either:
+Any new Telegram/Lark command or callback path must either:
 
 - call the existing access check path, or
 - very explicitly justify why it is safe without it
@@ -118,6 +118,8 @@ The Agent Bus is a privileged local control plane, not a public API.
 
 - [src/bus/bus-server.ts](../src/bus/bus-server.ts:43) serves only on `127.0.0.1`
 - `/api/talk` enforces JSON shape, body size, peer allowlist, and max delegation depth
+- each process admits at most 8 active `/api/talk` requests and returns retryable `server_busy` when saturated
+- shutdown drains in-flight HTTP requests and force-closes remaining connections after 5 seconds
 - bus auth uses a bearer secret when configured
 - [src/bus/bus-registry.ts](../src/bus/bus-registry.ts:67) probes `/api/health` and validates the bridge fingerprint before treating a registry entry as alive
 - [src/runtime/bridge.ts](../src/runtime/bridge.ts:114) auto-allows `chatType === "bus"` only because bus auth is supposed to have already happened at the server boundary
@@ -135,7 +137,7 @@ Treat bus changes as security-sensitive even when they are "only local". A loopb
 
 ## 3. File Delivery Boundary
 
-File delivery is the highest-risk boundary in the product because it turns model output into filesystem reads and Telegram egress.
+File delivery is the highest-risk boundary in the product because it turns model output into filesystem reads and Telegram/Lark egress.
 
 ### Trusted
 
@@ -158,12 +160,13 @@ File delivery is the highest-risk boundary in the product because it turns model
 - [src/telegram/delivery.ts](../src/telegram/delivery.ts:581) resolves `realpath()` before policy checks
 - delivery only permits canonical paths under the bot workspace or the active `/resume` workspace override
 - non-files, oversized files, missing files, and permission failures are rejected and surfaced back to the user
+- both channels refuse credential-shaped basenames and extensions, including `.env*`, `*.pem`, `*.key`, `id_rsa`, and `id_ed25519`
 
 ### Residual risk
 
 - the engine can still read and exfiltrate any file that is already readable inside the allowed workspace tree
 - `/resume` intentionally widens the file-delivery root to a real project directory
-- users should assume that authorizing a bot on a project means the bot may send project files back over Telegram if prompted
+- users should assume that authorizing a bot on a project means the bot may send non-credential project files back over Telegram or Lark if prompted
 
 ### Design rule
 

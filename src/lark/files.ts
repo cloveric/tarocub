@@ -78,11 +78,9 @@ export function formatLarkFileSize(bytes: number): string {
 /**
  * The size Feishu advertised for this attachment, when it is known.
  *
- * Feishu's file/media message content carries `file_size`, but the normalizer
- * currently keeps only file_key/file_name — so this reads the field
- * structurally: the moment `fileSize` is plumbed onto the normalized
- * attachment, the pre-check below starts refusing oversize sends BEFORE the
- * download instead of after it.
+ * Feishu's file/media message content carries `file_size`, which the
+ * normalizer preserves as `fileSize`. This lets the pre-check refuse an
+ * oversize attachment before any bytes are downloaded.
  */
 function advertisedAttachmentBytes(attachment: LarkNormalizedAttachment): number | undefined {
   const value = (attachment as { fileSize?: unknown }).fileSize;
@@ -239,17 +237,32 @@ async function requestLarkAttachmentBody(
         type: resourceType,
       },
     });
-    return await readableToBuffer(response.getReadableStream());
+    return await readableToBuffer(response.getReadableStream(), attachment);
   }
 
   const downloadType = attachment.kind === "image" ? "image" : "file";
   return await channel.downloadResource(attachment.fileKey, downloadType);
 }
 
-async function readableToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+async function readableToBuffer(
+  stream: NodeJS.ReadableStream,
+  attachment: LarkNormalizedAttachment,
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of stream as AsyncIterable<Buffer | Uint8Array | string>) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > LARK_INBOUND_ATTACHMENT_LIMIT_BYTES) {
+      (stream as { destroy?: () => void }).destroy?.();
+      throw new LarkAttachmentTooLargeError(
+        attachment.kind,
+        totalBytes,
+        LARK_INBOUND_ATTACHMENT_LIMIT_BYTES,
+        attachment.fileName,
+      );
+    }
+    chunks.push(buffer);
   }
   return Buffer.concat(chunks);
 }

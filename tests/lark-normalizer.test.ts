@@ -174,7 +174,7 @@ describe("normalizeLarkMessage", () => {
       rawContentType: "text",
       resources: [
         { type: "image", fileKey: "img_1" },
-        { type: "file", fileKey: "file_1", fileName: "report.pdf" },
+        { type: "file", fileKey: "file_1", fileName: "report.pdf", file_size: "27500000" },
         { type: "sticker", fileKey: "sticker_1" },
       ],
       mentions: [],
@@ -185,7 +185,7 @@ describe("normalizeLarkMessage", () => {
 
     expect(normalized?.attachments).toEqual([
       { kind: "image", fileKey: "img_1" },
-      { kind: "file", fileKey: "file_1", fileName: "report.pdf" },
+      { kind: "file", fileKey: "file_1", fileName: "report.pdf", fileSize: 27_500_000 },
     ]);
   });
 

@@ -108,6 +108,7 @@ type KimiWorker = {
   currentSessionId: string | null;
   workspacePath: string;
   settingsKey: string;
+  stderrDecoder: TextDecoder;
   stderrTail: string;
   pendingTurn: PendingKimiTurn | null;
   tools: Map<string, KimiToolState>;
@@ -882,6 +883,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       currentSessionId: null,
       workspacePath,
       settingsKey,
+      stderrDecoder: new TextDecoder(),
       stderrTail: "",
       pendingTurn: null,
       tools: new Map(),
@@ -894,14 +896,27 @@ export class KimiAcpAdapter implements CodexAdapter {
 
     child.stderr.on("data", (chunk) => {
       this.markActivity(worker);
-      worker.stderrTail = `${worker.stderrTail}${chunk.toString()}`.slice(-MAX_STDERR_TAIL_CHARS);
+      const bytes = typeof chunk === "string"
+        ? new TextEncoder().encode(chunk)
+        : chunk instanceof Uint8Array
+          ? chunk
+          : new TextEncoder().encode(chunk.toString());
+      worker.stderrTail = `${worker.stderrTail}${worker.stderrDecoder.decode(bytes, { stream: true })}`.slice(-MAX_STDERR_TAIL_CHARS);
     });
+    if (typeof child.stdin.on === "function") {
+      child.stdin.on("error", (error) => {
+        this.failWorker(worker, this.withDiagnostics(worker, error));
+        this.killProcessTreeFn(worker.child.pid);
+        this.removeWorker(worker);
+      });
+    }
     child.once("error", (error) => {
       this.failWorker(worker, this.withDiagnostics(worker, error));
       this.killProcessTreeFn(worker.child.pid);
       this.removeWorker(worker);
     });
     child.once("close", (code, signal) => {
+      worker.stderrTail = `${worker.stderrTail}${worker.stderrDecoder.decode()}`.slice(-MAX_STDERR_TAIL_CHARS);
       const suffix = signal ? ` (signal ${signal})` : "";
       this.failWorker(worker, this.withDiagnostics(worker, new Error(`Kimi ACP exited with code ${code}${suffix}`)));
       this.removeWorker(worker);

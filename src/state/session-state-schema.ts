@@ -26,6 +26,7 @@ export const SessionRecordSchema = z.object({
   codexSessionId: z.string(),
   status: z.enum(["idle", "running", "queued", "blocked"]),
   updatedAt: IsoTimestampSchema,
+  resume: ResumeStateSchema.nullable().optional(),
   suspendedPrevious: SuspendedConversationStateSchema.optional(),
 });
 

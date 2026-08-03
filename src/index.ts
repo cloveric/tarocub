@@ -15,6 +15,7 @@ import {
   registerBotCommands,
   resolveServiceEnvForInstance,
   runQueuedTelegramTurn,
+  shutdownTelegramUpdateProcessing,
 } from "./service.js";
 import { loadBusConfig } from "./bus/bus-config.js";
 import { createBusServer, startBusServer, stopBusServer } from "./bus/bus-server.js";
@@ -337,6 +338,25 @@ async function main(): Promise<void> {
           detail: `cron runtime shutdown: ${renderLifecycleError(error)}`,
         });
       }
+      try {
+        bridge.destroy();
+      } catch (error) {
+        logLifecycleEvent({
+          type: "service.startup_maintenance",
+          instanceName,
+          outcome: "error",
+          detail: `bridge shutdown: ${renderLifecycleError(error)}`,
+        });
+      }
+      const telegramDrained = await shutdownTelegramUpdateProcessing(config.inboxDir);
+      if (!telegramDrained) {
+        logLifecycleEvent({
+          type: "service.startup_maintenance",
+          instanceName,
+          outcome: "error",
+          detail: "Telegram update processing did not drain before shutdown timeout",
+        });
+      }
       if (busServer) {
         await stopBusServer(busServer);
         await deregisterInstance(channelRoot, instanceName);
@@ -344,13 +364,16 @@ async function main(): Promise<void> {
       logLifecycleEvent({
         type: "service.stopped",
         instanceName,
-        outcome: "success",
+        outcome: telegramDrained ? "success" : "error",
+        ...(!telegramDrained ? { detail: "shutdown timed out; holding instance lock until process exit" } : {}),
       });
       process.removeListener("SIGTERM", shutdownSigterm);
       process.removeListener("SIGINT", shutdownSigint);
-      process.removeListener("exit", releaseLockOnExit);
-      removeUncaughtExceptionMonitor?.();
-      await instanceLock.release();
+      if (telegramDrained) {
+        process.removeListener("exit", releaseLockOnExit);
+        removeUncaughtExceptionMonitor?.();
+        await instanceLock.release();
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

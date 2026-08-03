@@ -73,6 +73,10 @@ export class ChatQueue {
       .finally(() => {
         if (this.queues.get(chatId) === run) {
           this.queues.delete(chatId);
+          if ((this.pendingCounts.get(chatId) ?? 0) === 0) {
+            this.generations.delete(chatId);
+            this.cancelledTaskIds.delete(chatId);
+          }
         }
       })
       .catch(() => undefined);
@@ -82,8 +86,9 @@ export class ChatQueue {
 
   clearPending(chatId: string | number): boolean {
     const hadPending = (this.pendingCounts.get(chatId) ?? 0) > 0;
+    if (!hadPending) return false;
     this.generations.set(chatId, (this.generations.get(chatId) ?? 0) + 1);
-    return hadPending;
+    return true;
   }
 
   /** Tasks queued behind the currently running one (the running task excluded). */

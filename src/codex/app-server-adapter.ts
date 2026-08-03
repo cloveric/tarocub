@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { StringDecoder } from "node:string_decoder";
 
 import type {
   AdapterUsage,
@@ -27,12 +28,13 @@ type SpawnOptions = {
 };
 
 type ProcessStreamLike = {
-  on(event: "data", listener: (chunk: { toString(): string } | string) => void): void;
+  on(event: "data", listener: (chunk: Buffer | { toString(): string } | string) => void): void;
 };
 
 type Writable = {
   write(chunk: string, callback?: (error?: Error | null) => void): boolean;
   end?(callback?: () => void): void;
+  on?(event: "error", listener: (error: Error) => void): void;
 };
 
 type AppServerChildProcess = {
@@ -463,6 +465,16 @@ function buildCommandInvocation(command: string, args: string[]): { command: str
 function combineInstructions(primary: string | null, secondary: string | null): string | null {
   const parts = [primary?.trim(), secondary?.trim()].filter((value): value is string => Boolean(value));
   return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function decodeProcessChunk(
+  decoder: StringDecoder,
+  chunk: Buffer | { toString(): string } | string,
+): string {
+  if (typeof chunk === "string") {
+    return chunk;
+  }
+  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : chunk.toString();
 }
 
 export class CodexAppServerAdapter implements CodexAdapter {
@@ -916,6 +928,8 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
     this.child = child;
     const childGeneration = ++this.childGeneration;
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
     // Generation-guard the data handlers exactly like close/error below: a
     // destroyed child gets SIGTERM with a grace period, so it can still flush
     // buffered output after its replacement spawned. Without the guard those
@@ -927,7 +941,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       if (childGeneration !== this.childGeneration) {
         return;
       }
-      this.handleStdout(chunk.toString());
+      this.handleStdout(decodeProcessChunk(stdoutDecoder, chunk));
     });
 
     child.stderr?.on("data", (chunk) => {
@@ -936,7 +950,16 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
       // App-server emits JSON-RPC over stdout. Keep a bounded stderr tail so
       // stalled-turn errors carry the underlying runtime context.
-      this.appendDiagnostic("stderr", chunk.toString());
+      this.appendDiagnostic("stderr", decodeProcessChunk(stderrDecoder, chunk));
+    });
+
+    child.stdin?.on?.("error", (error) => {
+      if (childGeneration !== this.childGeneration) {
+        return;
+      }
+      this.failAllPending(this.withDiagnostics(error.message));
+      this.terminateChild();
+      this.resetChildState();
     });
 
     child.once("error", (error) => {
@@ -950,6 +973,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
     child.once("close", (code) => {
       if (childGeneration !== this.childGeneration) {
         return;
+      }
+      const trailingStdout = stdoutDecoder.end();
+      // JSON-RPC is line-delimited, but process exit is also a valid record
+      // boundary. Do not lose a final response that omitted its newline.
+      this.handleStdout(`${trailingStdout}\n`);
+      const trailingStderr = stderrDecoder.end();
+      if (trailingStderr) {
+        this.appendDiagnostic("stderr", trailingStderr);
       }
       this.failAllPending(this.withDiagnostics(`codex app-server exited with code ${code}`));
       this.resetChildState();

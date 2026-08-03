@@ -156,6 +156,7 @@ type LarkBusCommandInput = {
     chatId: string;
     conversationKey?: string;
     bridgeChatType?: "private" | "group";
+    requesterUserId?: number;
     replyTo?: string;
     replyInThread?: boolean;
     locale?: Locale;
@@ -195,6 +196,7 @@ export async function handleLarkBoardCommand(
       chatId: normalized.chatId,
       conversationKey: normalized.conversationKey,
       bridgeChatType: normalized.bridgeChatType,
+      requesterUserId: normalized.bridgeUserId,
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
       locale,
@@ -323,6 +325,7 @@ export async function handleLarkMiniBusCommand(
       chatId: normalized.chatId,
       conversationKey: normalized.conversationKey,
       bridgeChatType: normalized.bridgeChatType,
+      requesterUserId: normalized.bridgeUserId,
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
       locale,
@@ -483,6 +486,7 @@ export async function handleLarkCrewWorkflow(
       chatId: normalized.chatId,
       conversationKey: normalized.conversationKey,
       bridgeChatType: normalized.bridgeChatType,
+      requesterUserId: normalized.bridgeUserId,
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
       locale,

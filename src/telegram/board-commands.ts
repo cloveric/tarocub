@@ -567,6 +567,9 @@ async function runBoardTask(input: {
           prompt,
           context: input.context,
         });
+    if (!result.text.trim()) {
+      throw new Error(`board task ${task.id} returned an empty response`);
+    }
     const completion = await input.store.completeRunningRun(task.id, runId, result.text);
     if (!completion) {
       throw new Error(`board task ${task.id} run ${runId} is no longer running`);

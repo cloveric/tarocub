@@ -19,6 +19,7 @@ import {
 } from "../codex/model-capabilities.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
+import { resolveConversationResume } from "../runtime/conversation-resume.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
 import { AccessStore } from "../state/access-store.js";
@@ -39,6 +40,7 @@ import {
   type GroupModeConfig,
   type InstanceConfig,
   type InstanceEngine,
+  type ResumeState,
   type WorkspaceProfile,
   LARK_STEER_DEFAULT_WINDOW_SECONDS,
 } from "../telegram/instance-config.js";
@@ -98,6 +100,9 @@ export type LarkCommandInput = {
   requestApproval: RequestLarkApproval;
   requireMentionInGroup?: boolean;
   abortSignal?: AbortSignal;
+  /** Explicitly null means this conversation is attached to no resumed workspace. */
+  conversationResume?: ResumeState | null;
+  workspaceOverride?: string;
   // Live run-card factory, supplied by message-handler. Typed via an erased type-query
   // so commands.ts keeps no runtime import of message-handler.ts (which imports this
   // file — a direct import would be a cycle).
@@ -163,6 +168,9 @@ export async function handleLarkSimpleCommand(
   const goalCommand = parseLarkGoalCommand(commandText);
   if (goalCommand) {
     const cfg = await loadInstanceConfig(input.stateDir);
+    if (input.conversationResume !== undefined) {
+      cfg.resume = input.conversationResume ?? undefined;
+    }
     const handled = await handleLarkGoalCommand(input, normalized, cfg, goalCommand, commandText, commandLocale);
     if (handled !== null) {
       return handled;
@@ -426,6 +434,13 @@ async function handleLarkLocalEngineCommand(
   }
 
   const cfg = await loadInstanceConfig(input.stateDir);
+  cfg.resume = input.conversationResume === undefined
+    ? resolveConversationResume(
+      (await new SessionStore(path.join(input.stateDir, "session.json"))
+        .findByConversationKeySafe(normalized.conversationKey)).record,
+      cfg.resume,
+    )
+    : input.conversationResume ?? undefined;
   return await handleLocalEngineTelegramCommand({
     stateDir: input.stateDir,
     startedAt: Date.now(),
@@ -460,6 +475,13 @@ async function handleLarkSessionCommand(
   locale: Locale,
 ): Promise<boolean> {
   const cfg = await loadInstanceConfig(input.stateDir);
+  cfg.resume = input.conversationResume === undefined
+    ? resolveConversationResume(
+      (await new SessionStore(path.join(input.stateDir, "session.json"))
+        .findByConversationKeySafe(normalized.conversationKey)).record,
+      cfg.resume,
+    )
+    : input.conversationResume ?? undefined;
   return await handleLocalSessionTelegramCommand({
     stateDir: input.stateDir,
     startedAt: Date.now(),
@@ -2435,7 +2457,7 @@ async function handleLarkGoalCommand(
     userId: normalized.bridgeUserId,
     chatType: normalized.bridgeChatType,
     conversationKey: normalized.conversationKey,
-    workspaceOverride: resolveInstanceWorkspacePath(cfg),
+    workspaceOverride: input.workspaceOverride ?? resolveInstanceWorkspacePath(cfg),
   };
   // activeRuns key for this conversation — shared by the live watcher (which claims
   // it) and by clear (which aborts it), so a detached goal watcher participates in

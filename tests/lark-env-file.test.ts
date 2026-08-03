@@ -180,6 +180,27 @@ describe("Lark env files", () => {
     }
   });
 
+  it("round-trips literal backslash-n sequences in quoted extra values", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
+    const instanceName = "ccfgg1";
+    const stateDir = path.join(tempDir, ".cctb", instanceName);
+    const selector = { USERPROFILE: tempDir, CCTB_LARK_INSTANCE: instanceName };
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "lark.env"), 'CUSTOM_PATH="C:\\\\new\\\\folder\\\\name"\n', "utf8");
+
+      await writeLarkEnvFile(selector, { appId: "cli_lark", appSecret: "secret" });
+      const target: NodeJS.ProcessEnv = {};
+      await applyLarkEnvPassthrough(selector, target);
+
+      expect(target.CUSTOM_PATH).toBe("C:\\new\\folder\\name");
+      expect(target.CUSTOM_PATH).not.toContain("\n");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses reserved bridge-namespace keys in the passthrough (denylist)", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "tarocub-lark-env-"));
     const instanceName = "ccfgg1";

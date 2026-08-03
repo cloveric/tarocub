@@ -1,4 +1,5 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { readFile, writeFile, mkdir, open, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { BusRegistryEntrySchema } from "./bus-registry-schema.js";
@@ -40,9 +41,11 @@ export async function readRegistry(channelRoot: string): Promise<BusRegistryData
         return { instances: filtered };
       }
     }
-    return { instances: {} };
-  } catch {
-    return { instances: {} };
+    throw new Error("registry root must contain an object-valued instances field");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { instances: {} };
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Bus registry is unreadable: ${detail}`, { cause: error });
   }
 }
 
@@ -169,6 +172,20 @@ async function mutateRegistry(
     await mkdir(channelRoot, { recursive: true, mode: 0o700 });
     const registry = await readRegistry(channelRoot);
     mutate(registry);
-    await writeFile(registryPath, JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    const tempPath = `${registryPath}.${randomUUID()}.tmp`;
+    let renamed = false;
+    try {
+      await writeFile(tempPath, JSON.stringify(registry, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+      const handle = await open(tempPath, "r");
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await rename(tempPath, registryPath);
+      renamed = true;
+    } finally {
+      if (!renamed) await unlink(tempPath).catch(() => undefined);
+    }
   });
 }

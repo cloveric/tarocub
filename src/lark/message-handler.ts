@@ -8,7 +8,19 @@ import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
-import { LARK_STEER_DEFAULT_WINDOW_SECONDS, loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
+import {
+  hasConversationResume,
+  migrateLegacyConversationResume,
+  resolveConversationResume,
+} from "../runtime/conversation-resume.js";
+import { SessionStore } from "../state/session-store.js";
+import {
+  LARK_STEER_DEFAULT_WINDOW_SECONDS,
+  loadInstanceConfig,
+  resolveInstanceWorkspacePath,
+  updateInstanceConfig,
+  type ResumeState,
+} from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { LarkGoalRunController, claimLarkRunSlot, handleLarkCrewWorkflow } from "./bus.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
@@ -219,13 +231,14 @@ async function resolveLarkMessageChatMode(
   const now = Date.now();
   // An explicitly-provided mode (e.g. tests) wins.
   if (message.chatMode) {
-    runtime.chatModeCache.set(message.chatId, { mode: message.chatMode, expiresAt: now + CHAT_FORM_CACHE_TTL_MS });
+    cacheLarkChatMode(runtime, message.chatId, message.chatMode, now);
     return { ...message };
   }
   const cached = runtime.chatModeCache.get(message.chatId);
   if (cached && cached.expiresAt > now) {
     return { ...message, chatMode: cached.mode };
   }
+  if (cached) runtime.chatModeCache.delete(message.chatId);
   // Resolve the chat's message form. Topic form (a native topic group, or a
   // conversation group switched to the topic message form) isolates each topic;
   // conversation form shares one group session. We map both to "topic"/"group"
@@ -233,13 +246,26 @@ async function resolveLarkMessageChatMode(
   // toggling 群消息形式 takes effect without a restart.
   const mode = await resolveLarkChatSessionMode(channel, message.chatId);
   if (mode) {
-    runtime.chatModeCache.set(message.chatId, { mode, expiresAt: now + CHAT_FORM_CACHE_TTL_MS });
+    cacheLarkChatMode(runtime, message.chatId, mode, now);
     return { ...message, chatMode: mode };
   }
   // Couldn't determine the form (no channel support, or a transient error): do
   // NOT cache, so the next message retries. A threaded message is most likely a
   // topic (isolate to avoid bleeding contexts); a plain one is a group.
   return { ...message, chatMode: message.threadId ? "topic" : "group" };
+}
+
+const LARK_CHAT_MODE_CACHE_MAX_ENTRIES = 1_000;
+
+function cacheLarkChatMode(runtime: LarkServiceRuntime, chatId: string, mode: LarkChatMode, now: number): void {
+  for (const [key, entry] of runtime.chatModeCache) {
+    if (entry.expiresAt <= now) runtime.chatModeCache.delete(key);
+  }
+  if (!runtime.chatModeCache.has(chatId) && runtime.chatModeCache.size >= LARK_CHAT_MODE_CACHE_MAX_ENTRIES) {
+    const oldestKey = runtime.chatModeCache.keys().next().value as string | undefined;
+    if (oldestKey) runtime.chatModeCache.delete(oldestKey);
+  }
+  runtime.chatModeCache.set(chatId, { mode, expiresAt: now + CHAT_FORM_CACHE_TTL_MS });
 }
 
 /**
@@ -385,12 +411,18 @@ async function runAcceptedLarkMessage(
       replyTo: normalized.messageId,
       replyInThread: Boolean(normalized.threadId),
     });
-    await appendLarkTimelineEvent(input.stateDir, normalized, {
-      type: "command.handled",
-      outcome: "denied",
-      detail,
-      metadata: { rejected: "unauthorized-user" },
-    });
+    await appendLarkTimelineEvent(input.stateDir, normalized, detail === "message"
+      ? {
+        type: "turn.completed",
+        outcome: "denied",
+        detail: "access denied",
+      }
+      : {
+        type: "command.handled",
+        outcome: "denied",
+        detail,
+        metadata: { rejected: "unauthorized-user" },
+      });
     return false;
   };
 
@@ -453,6 +485,7 @@ async function runAcceptedLarkMessage(
       messageId: normalized.messageId,
       conversationKey: normalized.conversationKey,
       bridgeChatType: normalized.bridgeChatType,
+      userId: normalized.bridgeUserId,
       replyInThread: Boolean(normalized.threadId),
       text: commandText,
       locale: messageLocale,
@@ -471,6 +504,13 @@ async function runAcceptedLarkMessage(
       });
     }
     return approvalResult.handled;
+  }
+
+  // Reject/pair before batching or entering the conversation queue. Otherwise
+  // an unknown DM sender can occupy the single-chat queue during the pairing
+  // window and delay the actual owner even though the turn will never run.
+  if (!(await checkPreQueueAccess("message"))) {
+    return true;
   }
 
   const handleConversationQueueWait = async (event: ChatQueueWaitEvent): Promise<void> => {
@@ -604,11 +644,26 @@ async function runAcceptedLarkMessage(
   // quiet window they used to enqueue AHEAD of images the user sent earlier —
   // inverting send order and answering the caption before the pictures exist.
   // Flush the burst first; this message then queues behind it.
+  let flushedBatchAhead = false;
   if (
     (queueEscape || normalized.replyContext) &&
     input.runtime.pendingBatches.has(normalized.conversationKey)
   ) {
-    await flushPendingLarkBatchNow(input, normalized.conversationKey, messageLocale, handleConversationQueueWait);
+    flushedBatchAhead = queuePendingLarkBatchNow(
+      input,
+      normalized.conversationKey,
+      messageLocale,
+    );
+  }
+  if (queueEscape && flushedBatchAhead) {
+    await input.channel.send(normalized.chatId, {
+      text: messageLocale === "zh"
+        ? "已先提交上一批附件；这条消息已紧接着排队。"
+        : "Submitted the earlier attachment batch first; this message is queued immediately after it.",
+    }, {
+      replyTo: normalized.messageId,
+      replyInThread: Boolean(normalized.threadId),
+    });
   }
 
   // A /q message must never batch (preempt-batch mode would merge it into another
@@ -1060,11 +1115,12 @@ function scheduleBatchedLarkTurn(
     };
     existing.texts.push(normalized.text);
     existing.members.push(normalized);
+    existing.onWait = onWait;
     return new Promise<boolean>((resolve, reject) => {
       existing.resolve.push(resolve);
       existing.reject.push(reject);
       existing.timer = setTimeout(() => {
-        void flushBatchedLarkTurn(input, normalized.conversationKey, locale, onWait);
+        void flushBatchedLarkTurn(input, normalized.conversationKey, locale);
       }, windowMs);
       existing.timer.unref?.();
     });
@@ -1072,13 +1128,14 @@ function scheduleBatchedLarkTurn(
 
   return new Promise<boolean>((resolve, reject) => {
     const timer = setTimeout(() => {
-      void flushBatchedLarkTurn(input, normalized.conversationKey, locale, onWait);
+      void flushBatchedLarkTurn(input, normalized.conversationKey, locale);
     }, windowMs);
     timer.unref?.();
     input.runtime.pendingBatches.set(normalized.conversationKey, {
       normalized: { ...normalized, attachments: stampedAttachments },
       members: [normalized],
       texts: [normalized.text],
+      onWait,
       timer,
       resolve: [resolve],
       reject: [reject],
@@ -1099,7 +1156,6 @@ async function flushBatchedLarkTurn(
   },
   conversationKey: string,
   locale: "zh" | "en",
-  onWait: (event: ChatQueueWaitEvent) => Promise<void>,
 ): Promise<void> {
   const batch = input.runtime.pendingBatches.get(conversationKey);
   if (!batch) {
@@ -1108,7 +1164,7 @@ async function flushBatchedLarkTurn(
   input.runtime.pendingBatches.delete(conversationKey);
   try {
     await preemptActiveLarkTurnIfEnabled(input, batch.normalized, batch.normalized.text, locale);
-    const result = await enqueueLarkTurn(input, batch.normalized, locale, onWait);
+    const result = await enqueueLarkTurn(input, batch.normalized, locale, batch.onWait);
     await markMergedBatchMembersTerminal(input.stateDir, batch, "success");
     for (const resolve of batch.resolve) {
       resolve(result);
@@ -1126,25 +1182,30 @@ async function flushBatchedLarkTurn(
 }
 
 /**
- * Force-flush a conversation's pending attachment burst NOW, awaiting the turn it
- * produces. Used by the paths that never JOIN a burst (/q and quoted replies):
- * without this they enqueue immediately while the burst is still parked in its
- * quiet window, so the later-sent message runs FIRST. Awaiting the flush keeps
- * the user's send order (FIFO). flushBatchedLarkTurn settles its own waiters and
- * never rethrows, so this can't turn a burst failure into a failure here.
+ * Atomically reserve queue order for a parked attachment batch. The enqueue
+ * call happens synchronously before this function returns, so the caller can
+ * immediately enqueue /q behind it without waiting for the batch turn itself.
  */
-async function flushPendingLarkBatchNow(
+function queuePendingLarkBatchNow(
   input: Parameters<typeof flushBatchedLarkTurn>[0],
   conversationKey: string,
   locale: "zh" | "en",
-  onWait: (event: ChatQueueWaitEvent) => Promise<void>,
-): Promise<void> {
+): boolean {
   const batch = input.runtime.pendingBatches.get(conversationKey);
-  if (!batch) {
-    return;
-  }
+  if (!batch) return false;
+
   clearTimeout(batch.timer);
-  await flushBatchedLarkTurn(input, conversationKey, locale, onWait);
+  input.runtime.pendingBatches.delete(conversationKey);
+  const turn = enqueueLarkTurn(input, batch.normalized, locale, batch.onWait);
+  void turn.then(async (result) => {
+    await markMergedBatchMembersTerminal(input.stateDir, batch, "success");
+    for (const resolve of batch.resolve) resolve(result);
+  }).catch(async (error) => {
+    await markMergedBatchMembersTerminal(input.stateDir, batch, "error");
+    for (const resolve of batch.resolve.slice(0, -1)) resolve(true);
+    batch.reject[batch.reject.length - 1]?.(error);
+  });
+  return true;
 }
 
 /**
@@ -1314,7 +1375,6 @@ async function runNormalizedLarkMessage(
     },
   });
   const cfg = await loadInstanceConfig(input.stateDir);
-  const workspaceOverride = input.workspaceOverride ?? resolveInstanceWorkspacePath(cfg);
   const locale = await resolveLarkLocale(input.stateDir);
   const accessDecision = input.bridge.checkAccess
     ? await input.bridge.checkAccess({
@@ -1338,6 +1398,29 @@ async function runNormalizedLarkMessage(
     });
     return true;
   }
+
+  const sessionStore = new SessionStore(path.join(input.stateDir, "session.json"));
+  if (cfg.resume && await migrateLegacyConversationResume(sessionStore, cfg.resume)) {
+    const migratedSessionId = cfg.resume.sessionId;
+    await updateInstanceConfig(input.stateDir, (config) => {
+      const legacy = config.resume as ResumeState | undefined;
+      if (legacy?.sessionId === migratedSessionId) delete config.resume;
+    });
+    cfg.resume = undefined;
+  }
+  const conversationSession = await sessionStore.findByConversationKeySafe(normalized.conversationKey);
+  const conversationResume = conversationSession.warning
+    ? undefined
+    : resolveConversationResume(conversationSession.record, cfg.resume);
+  if (conversationResume && conversationSession.record && !hasConversationResume(conversationSession.record)) {
+    await sessionStore.upsert({ ...conversationSession.record, resume: conversationResume });
+    await updateInstanceConfig(input.stateDir, (config) => {
+      const legacy = config.resume as ResumeState | undefined;
+      if (legacy?.sessionId === conversationResume.sessionId) delete config.resume;
+    });
+  }
+  cfg.resume = conversationResume;
+  const workspaceOverride = input.workspaceOverride ?? resolveInstanceWorkspacePath(cfg);
 
   const commandText = extractLarkMessageBody(normalized.text);
 
@@ -1368,6 +1451,8 @@ async function runNormalizedLarkMessage(
     const simpleCommandController = isLarkLocalEngineCommand(commandText) ? activateRun() : undefined;
     if (await handleLarkSimpleCommand({
       ...input,
+      conversationResume: conversationResume ?? null,
+      workspaceOverride,
       requestApproval: requestLarkApproval,
       abortSignal: simpleCommandController?.signal,
       createRunCard: createLarkRunCardController,
@@ -1838,6 +1923,7 @@ async function runNormalizedLarkMessage(
             chatId: normalized.chatId,
             conversationKey: normalized.conversationKey,
             bridgeChatType: normalized.bridgeChatType,
+            requesterUserId: normalized.bridgeUserId,
             replyTo: normalized.messageId,
             replyInThread: Boolean(normalized.threadId),
             locale,

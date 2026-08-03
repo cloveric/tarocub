@@ -10,9 +10,38 @@ function blankPreservingNewlines(value: string): string {
 }
 
 function maskMarkdownCode(text: string): string {
-  return text
-    .replace(/```[\s\S]*?(?:```|$)/g, (segment) => blankPreservingNewlines(segment))
-    .replace(/`[^`\r\n]*`/g, (segment) => blankPreservingNewlines(segment));
+  const ranges: Array<{ start: number; end: number }> = [];
+  const opener = /(^|\n)([ \t]*)(`{3,}|~{3,})[^\r\n]*\r?\n/g;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(text)) !== null) {
+    const prefix = match[1] ?? "";
+    const start = match.index + prefix.length;
+    const marker = match[3]!;
+    const closer = new RegExp(`(^|\\n)[ \\t]*${marker[0]}{${marker.length},}[ \\t]*(?=\\r?\\n|$)`, "g");
+    closer.lastIndex = opener.lastIndex;
+    const closeMatch = closer.exec(text);
+    const end = closeMatch ? closeMatch.index + closeMatch[0].length : text.length;
+    ranges.push({ start, end });
+    if (!closeMatch) break;
+    opener.lastIndex = end;
+  }
+
+  const inline = /`[^`\r\n]*`/g;
+  while ((match = inline.exec(text)) !== null) {
+    if (!ranges.some((range) => match!.index >= range.start && match!.index < range.end)) {
+      ranges.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
+  if (ranges.length === 0) return text;
+
+  let masked = "";
+  let cursor = 0;
+  for (const range of ranges.sort((left, right) => left.start - right.start)) {
+    masked += text.slice(cursor, range.start);
+    masked += blankPreservingNewlines(text.slice(range.start, range.end));
+    cursor = range.end;
+  }
+  return masked + text.slice(cursor);
 }
 
 export function extractDeliveryTagMatches(text: string): DeliveryTagMatch[] {

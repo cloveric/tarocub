@@ -466,7 +466,21 @@ function isReservedBridgeEnvKey(key: string): boolean {
 
 function parseEnvValue(value: string): string {
   if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
-    return value.slice(1, -1).replace(/\\(["\\$`])/g, "$1").replace(/\\n/g, "\n");
+    const quoted = value.slice(1, -1);
+    let parsed = "";
+    for (let index = 0; index < quoted.length; index += 1) {
+      const char = quoted[index]!;
+      if (char !== "\\" || index + 1 >= quoted.length) {
+        parsed += char;
+        continue;
+      }
+      const escaped = quoted[index + 1]!;
+      if (escaped === "n") parsed += "\n";
+      else if (escaped === "\"" || escaped === "\\" || escaped === "$" || escaped === "`") parsed += escaped;
+      else parsed += `\\${escaped}`;
+      index += 1;
+    }
+    return parsed;
   }
   if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
     return value.slice(1, -1).replace(/'\\''/g, "'");

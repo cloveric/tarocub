@@ -30,6 +30,7 @@ type ProcessChildLike = {
   pid?: number;
   stdin?: {
     end(chunk?: string): void;
+    on?(event: "error", listener: (error: Error) => void): void;
   };
   stdout?: ProcessStreamLike;
   stderr?: ProcessStreamLike;
@@ -571,6 +572,10 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
             emitEngineEvent({ type: "session", sessionId: idMatch[1].toLowerCase() });
           }
         }
+      });
+
+      child.stdin?.on?.("error", (error) => {
+        rejectAndKill(error);
       });
 
       if (abortSignal) {

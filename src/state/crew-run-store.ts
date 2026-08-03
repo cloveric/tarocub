@@ -1,10 +1,12 @@
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { JsonStore } from "./json-store.js";
 import { CrewRunRecordSchema, type CrewRunRecord } from "./crew-run-schema.js";
 
 export const CREW_RUN_STATE_UNREADABLE_WARNING = "crew run state unreadable";
+export const CREW_RUN_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const CREW_RUN_MAX_TERMINAL_RECORDS = 500;
 
 export function resolveCrewRunsDir(stateDir: string): string {
   return path.join(stateDir, "crew-runs");
@@ -65,7 +67,44 @@ export class CrewRunStore {
     mutate(record);
     record.updatedAt = new Date().toISOString();
     await this.createStore(runId).write(record);
+    if (record.status !== "running") {
+      await this.pruneTerminalRuns();
+    }
     return record;
+  }
+
+  async pruneTerminalRuns(now = Date.now()): Promise<number> {
+    const dir = resolveCrewRunsDir(this.stateDir);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const terminal: Array<{ path: string; record: CrewRunRecord }> = [];
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const filePath = path.join(dir, entry.name);
+      try {
+        const record = await readCrewRunRecord(filePath);
+        if (record.status !== "running") terminal.push({ path: filePath, record });
+      } catch {
+        // Preserve unreadable records for operator recovery instead of deleting evidence.
+      }
+    }
+
+    const cutoff = now - CREW_RUN_TERMINAL_RETENTION_MS;
+    const retained = new Set(
+      terminal
+        .filter(({ record }) => Date.parse(record.updatedAt) >= cutoff)
+        .sort((a, b) => b.record.updatedAt.localeCompare(a.record.updatedAt))
+        .slice(0, CREW_RUN_MAX_TERMINAL_RECORDS)
+        .map(({ path: filePath }) => filePath),
+    );
+    const stale = terminal.filter(({ path: filePath }) => !retained.has(filePath));
+    await Promise.all(stale.map(async ({ path: filePath }) => {
+      try {
+        await unlink(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }));
+    return stale.length;
   }
 
   async inspectLatest(): Promise<{ run: CrewRunRecord | null; warning?: string }> {
@@ -108,4 +147,3 @@ export class CrewRunStore {
     }
   }
 }
-

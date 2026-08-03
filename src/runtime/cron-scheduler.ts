@@ -138,7 +138,7 @@ export class CronScheduler {
       return;
     }
     const cron = new Cron(job.cronExpr, { timezone: job.timezone }, () => {
-      void this.runJob(job.id);
+      void this.runJob(job.id).catch((error) => this.reportSchedulerFailure(job.id, error));
     });
     this.running.set(job.id, { stop: () => cron.stop() });
   }
@@ -167,10 +167,20 @@ export class CronScheduler {
     if (this.inFlight.size === 0) {
       return;
     }
-    await Promise.race([
-      Promise.allSettled([...this.inFlight]),
-      new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS)),
-    ]);
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.allSettled([...this.inFlight]),
+        new Promise<void>((resolve) => {
+          drainTimer = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS);
+          drainTimer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (drainTimer) {
+        clearTimeout(drainTimer);
+      }
+    }
   }
 
   /** Manually trigger a job by id. Used by `/cron run` and tests. */
@@ -235,62 +245,90 @@ export class CronScheduler {
       });
       this.inFlight.add(finished);
       try {
-        await tracked.reported;
-        await this.store.recordRun(id, { success: true, ranAt });
-        await appendTimelineEventBestEffort(this.stateDir, {
-          type: "cron.completed",
-          instanceName: this.instanceName,
-          channel: job.channel,
-          chatId: job.chatId,
-          userId: job.userId,
-          outcome: "success",
-          metadata: { cronJobId: job.id },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const accessDenied = isCronAccessDeniedError(error);
-        this.logger.error(`cron: job ${id} failed: ${message}`);
-        const failedRecord = await this.store.recordRun(id, { success: false, error: message, ranAt });
-        await appendTimelineEventBestEffort(this.stateDir, {
-          type: "cron.completed",
-          instanceName: this.instanceName,
-          channel: job.channel,
-          chatId: job.chatId,
-          userId: job.userId,
-          outcome: "error",
-          detail: message,
-          metadata: { cronJobId: job.id },
-        });
-        if (failedRecord && accessDenied) {
-          await this.disableAfterFailures(
-            failedRecord,
-            "cron job disabled because the target chat is no longer authorized",
-            "access_denied",
-          );
-        } else if (failedRecord && !failedRecord.runOnce && failedRecord.failureCount >= failedRecord.maxFailures) {
-          await this.disableAfterFailures(failedRecord);
+        let executionError: unknown;
+        try {
+          await tracked.reported;
+        } catch (error) {
+          executionError = error;
         }
-        await appendAuditEventBestEffort(this.stateDir, {
-          type: "cron.failed",
-          instanceName: this.instanceName,
-          chatId: job.chatId,
-          userId: job.userId,
-          outcome: "error",
-          detail: message,
-          metadata: { cronJobId: job.id },
-        });
-        if (!accessDenied) {
-          await this.notifyJobFailure(job, message);
+
+        if (executionError === undefined) {
+          await this.recordRunBestEffort(job, { success: true, ranAt });
+          await appendTimelineEventBestEffort(this.stateDir, {
+            type: "cron.completed",
+            instanceName: this.instanceName,
+            channel: job.channel,
+            chatId: job.chatId,
+            userId: job.userId,
+            outcome: "success",
+            metadata: { cronJobId: job.id },
+          });
+        } else {
+          const message = executionError instanceof Error ? executionError.message : String(executionError);
+          const accessDenied = isCronAccessDeniedError(executionError);
+          this.logger.error(`cron: job ${id} failed: ${message}`);
+          const failedRecord = await this.recordRunBestEffort(job, {
+            success: false,
+            error: message,
+            ranAt,
+          });
+          await appendTimelineEventBestEffort(this.stateDir, {
+            type: "cron.completed",
+            instanceName: this.instanceName,
+            channel: job.channel,
+            chatId: job.chatId,
+            userId: job.userId,
+            outcome: "error",
+            detail: message,
+            metadata: { cronJobId: job.id },
+          });
+          if (failedRecord && accessDenied) {
+            await this.disableAfterFailures(
+              failedRecord,
+              "cron job disabled because the target chat is no longer authorized",
+              "access_denied",
+            );
+          } else if (failedRecord && !failedRecord.runOnce && failedRecord.failureCount >= failedRecord.maxFailures) {
+            await this.disableAfterFailures(failedRecord);
+          }
+          await appendAuditEventBestEffort(this.stateDir, {
+            type: "cron.failed",
+            instanceName: this.instanceName,
+            chatId: job.chatId,
+            userId: job.userId,
+            outcome: "error",
+            detail: message,
+            metadata: { cronJobId: job.id },
+          });
+          if (!accessDenied) {
+            await this.notifyJobFailure(job, message);
+          }
         }
       } finally {
         if (job.runOnce) {
-          await this.store.update(id, { enabled: false });
+          try {
+            await this.store.update(id, { enabled: false });
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            this.logger.warn(`cron: failed to disable one-shot job ${id}: ${detail}`);
+            await appendAuditEventBestEffort(this.stateDir, {
+              type: "cron.bookkeeping_failed",
+              instanceName: this.instanceName,
+              chatId: job.chatId,
+              userId: job.userId,
+              outcome: "error",
+              detail,
+              metadata: { cronJobId: id, operation: "disable_run_once" },
+            });
+          }
           this.unscheduleJob(id);
         }
         if (tracked.reported === tracked.finished && this.inFlightByJobId.get(id) === controller) {
           this.inFlightByJobId.delete(id);
         }
       }
+    } catch (error) {
+      await this.reportSchedulerFailure(id, error);
     } finally {
       if (!trackedStarted) {
         this.activeJobIds.delete(id);
@@ -309,6 +347,44 @@ export class CronScheduler {
       outcome: "skipped",
       detail: "cron job is already running",
       metadata: { cronJobId: id, reason: "already_running" },
+    });
+  }
+
+  private async recordRunBestEffort(
+    job: CronJobRecord,
+    result: Parameters<CronStore["recordRun"]>[1],
+  ): Promise<CronJobRecord | null> {
+    try {
+      return await this.store.recordRun(job.id, result);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`cron: failed to record run for job ${job.id}: ${detail}`);
+      await appendAuditEventBestEffort(this.stateDir, {
+        type: "cron.bookkeeping_failed",
+        instanceName: this.instanceName,
+        chatId: job.chatId,
+        userId: job.userId,
+        outcome: "error",
+        detail,
+        metadata: {
+          cronJobId: job.id,
+          operation: "record_run",
+          executionSucceeded: result.success,
+        },
+      });
+      return null;
+    }
+  }
+
+  private async reportSchedulerFailure(id: string, error: unknown): Promise<void> {
+    const detail = error instanceof Error ? error.message : String(error);
+    this.logger.error(`cron: scheduler failed for job ${id}: ${detail}`);
+    await appendAuditEventBestEffort(this.stateDir, {
+      type: "cron.scheduler_failed",
+      instanceName: this.instanceName,
+      outcome: "error",
+      detail,
+      metadata: { cronJobId: id },
     });
   }
 
@@ -398,7 +474,7 @@ export class CronScheduler {
         this.scheduleJob(job);
         return;
       }
-      void this.runJob(job.id);
+      void this.runJob(job.id).catch((error) => this.reportSchedulerFailure(job.id, error));
     }, Math.min(delay, MAX_TIMEOUT_DELAY_MS));
     timer.unref?.();
     this.running.set(job.id, { stop: () => clearTimeout(timer) });

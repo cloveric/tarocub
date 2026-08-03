@@ -158,18 +158,22 @@ describe("lark audit fixes", () => {
     }
   });
 
-  it("retries a transient Lark markdown chunk failure instead of losing the middle chunk", async () => {
+  it("surfaces a transient Lark markdown chunk failure without blindly duplicating it", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audit-markdown-retry-"));
     const sentMarkdown: string[] = [];
+    const sentText: string[] = [];
     let sendCalls = 0;
     const channel = fakeChannel({
-      send: vi.fn(async (_to: string, payload: { markdown?: string }) => {
+      send: vi.fn(async (_to: string, payload: { markdown?: string; text?: string }) => {
         sendCalls++;
         if (sendCalls === 2) {
           throw new Error("temporary Lark send failure");
         }
         if (typeof payload.markdown === "string") {
           sentMarkdown.push(payload.markdown);
+        }
+        if (typeof payload.text === "string") {
+          sentText.push(payload.text);
         }
         return { messageId: `sent_${sendCalls}` };
       }),
@@ -191,7 +195,16 @@ describe("lark audit fixes", () => {
       });
 
       expect(channel.send).toHaveBeenCalledTimes(4);
-      expect(sentMarkdown.join("")).toBe(text);
+      expect(sentMarkdown.join("")).toContain(chunks[0]);
+      expect(sentMarkdown.join("")).toContain("C".repeat(1000));
+      expect(sentMarkdown.join("")).not.toContain(chunks[1]);
+      expect(sentText.join("\n")).toContain("部分内容未送达");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event.delivery_failed",
+        outcome: "error",
+        metadata: expect.objectContaining({ failedChunks: 1 }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -425,10 +438,15 @@ describe("lark audit fixes", () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audit-batch-error-"));
     const runtime = createLarkServiceRuntime({ queuePolicy: { batchWindowMs: 150 } });
     const channel = fakeChannel();
+    let accessChecks = 0;
     const bridge = {
       // Throws OUTSIDE the per-turn engine try/catch so the failure propagates to
       // the batch flush — previously rejecting every waiter (N error replies).
       checkAccess: vi.fn(async () => {
+        accessChecks++;
+        if (accessChecks <= 2) {
+          return { kind: "allow" as const };
+        }
         throw new Error("boom-access");
       }),
       handleAuthorizedMessage: vi.fn(async () => ({ text: "unused" })),
@@ -452,8 +470,9 @@ describe("lark audit fixes", () => {
         }),
       ]);
 
-      // Both messages merged into ONE turn (single flush, single checkAccess).
-      expect(bridge.checkAccess).toHaveBeenCalledTimes(1);
+      // Each input is admitted before batching; the merged turn performs one
+      // execution-time recheck and rejects only its newest waiter on failure.
+      expect(bridge.checkAccess).toHaveBeenCalledTimes(3);
       const rejected = settled.filter((entry): entry is PromiseRejectedResult => entry.status === "rejected");
       expect(rejected).toHaveLength(1);
       expect((rejected[0]!.reason as Error).message).toContain("boom-access");

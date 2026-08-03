@@ -288,6 +288,53 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
+  it("refuses to send credential files even from inside the workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
+    const realRoot = await realpath(root);
+    const inboxDir = path.join(realRoot, "instance", "inbox");
+    const workspaceDir = path.join(realRoot, "instance", "workspace");
+    const credentialPath = path.join(workspaceDir, ".env.local");
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+    };
+
+    try {
+      await mkdir(workspaceDir, { recursive: true });
+      await writeFile(credentialPath, "TOKEN=secret", "utf8");
+
+      const filesSent = await deliverTelegramResponse(
+        api as never,
+        123,
+        `[send-file:${credentialPath}]`,
+        inboxDir,
+        undefined,
+        undefined,
+        "en",
+      );
+
+      expect(filesSent).toBe(0);
+      expect(api.sendDocument).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("credentials and private-key files are not sendable"),
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(path.dirname(inboxDir), "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.rejected",
+        channel: "telegram",
+        chatId: 123,
+        metadata: expect.objectContaining({
+          path: credentialPath,
+          reason: "credentials-file",
+        }),
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("silently ignores copied send-file placeholder paths", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);

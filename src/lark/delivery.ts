@@ -2,6 +2,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { isCredentialStylePath } from "../runtime/credential-files.js";
 import {
   extractDeliveryTagMatches,
   stripDeliveryTags,
@@ -15,7 +16,7 @@ import {
   parseTelegramToolTagPayload,
   stripTelegramToolTags,
 } from "../telegram/tool-tags.js";
-import type { Locale } from "../telegram/message-renderer.js";
+import { chunkTelegramMessage, type Locale } from "../telegram/message-renderer.js";
 import { executeCronAddTool } from "../tools/cron-add-tool.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
@@ -31,28 +32,6 @@ import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 
 type LarkSendPathKind = "file" | "image" | "audio" | "video";
 type LarkFileRejectReason = "outside-workspace" | "credentials-file" | "not-found" | "permission-denied" | "read-error" | "too-large" | "upload-failed";
-
-// Defense in depth for `[send-file:]` / send.file: dotenv files and private keys
-// are refused no matter where they sit — inside the workspace, inside the request
-// output dir, or under CCTB_LARK_ALLOW_ANY_FILE_PATH=1. The operator's Aliyun
-// keys lived inside a sandbox root for days; one injected tag must not be able to
-// turn that misplacement into an exfiltration.
-const CREDENTIALS_FILE_NAME_PATTERNS: RegExp[] = [
-  /^\.env(?:\.|$)/i,
-  /^id_rsa$/i,
-  /^id_ed25519$/i,
-  /\.pem$/i,
-  /\.key$/i,
-];
-
-function isCredentialsStyleFileName(fileName: string): boolean {
-  return CREDENTIALS_FILE_NAME_PATTERNS.some((pattern) => pattern.test(fileName));
-}
-
-/** True when either the requested path or its resolved target is credential-shaped. */
-function isCredentialsStylePath(...filePaths: Array<string | undefined>): boolean {
-  return filePaths.some((filePath) => Boolean(filePath) && isCredentialsStyleFileName(path.basename(filePath!)));
-}
 
 // Feishu rejects bot file uploads above ~30MB (HTTP 400 with no useful message).
 // Checked up front so an oversize file gets a precise "split it" notice instead
@@ -83,6 +62,17 @@ export async function deliverLarkResponse(input: {
   const locale = await resolveLarkLocale(input.stateDir);
   const wholeFileBlock = extractWholeResponseFileBlock(input.text);
   if (wholeFileBlock) {
+    if (isCredentialStylePath(wholeFileBlock.fileName)) {
+      await appendLarkFileRejectedTimeline(input, {
+        path: wholeFileBlock.fileName,
+        reason: "credentials-file",
+        kind: "file",
+      });
+      await input.channel.send(input.chatId, {
+        text: renderLarkFileDeliveryError("credentials-file", locale, { fileName: wholeFileBlock.fileName }),
+      }, larkReplyOptions(input.replyTo, input.replyInThread));
+      return;
+    }
     const body = Buffer.from(wholeFileBlock.body, "utf8");
     if (body.length > LARK_FILE_UPLOAD_MAX_BYTES) {
       await appendLarkFileRejectedTimeline(input, {
@@ -213,7 +203,7 @@ export async function deliverLarkResponse(input: {
       const filePath = match.path;
       try {
         const real = await realpath(filePath);
-        if (isCredentialsStylePath(filePath, real)) {
+        if (isCredentialStylePath(filePath, real)) {
           await appendLarkFileRejectedTimeline(input, {
             path: filePath,
             realPath: real,
@@ -325,7 +315,29 @@ export async function deliverLarkResponse(input: {
   // the rejection notices above are sent IN ADDITION to the text (Telegram
   // parity), never instead of it: one bad tag must not swallow the whole answer.
   if (input.sendText !== false && cleanedText) {
-    await sendLarkMarkdownBestEffort(input.channel, input.chatId, cleanedText, replyOptions);
+    const failedChunks = await sendLarkMarkdownBestEffort(input.channel, input.chatId, cleanedText, replyOptions);
+    if (failedChunks > 0) {
+      await appendTimelineEventBestEffort(input.stateDir, {
+        type: "engine.event.delivery_failed",
+        channel: "lark",
+        chatId: input.bridgeChatId,
+        userId: input.bridgeUserId,
+        conversationKey: input.conversationKey,
+        outcome: "error",
+        detail: `${failedChunks} markdown chunk(s) failed`,
+        metadata: {
+          phase: "final-markdown",
+          failedChunks,
+          larkChatId: input.chatId,
+          larkMessageId: input.larkMessageId ?? input.replyTo,
+        },
+      }, "Lark markdown delivery failure");
+      await input.channel.send(input.chatId, {
+        text: locale === "en"
+          ? `Part of the reply could not be delivered (${failedChunks} chunk${failedChunks === 1 ? "" : "s"}). Please ask me to resend it.`
+          : `回复有部分内容未送达（${failedChunks} 个分块）。请让我重新发送。`,
+      }, replyOptions).catch(() => undefined);
+    }
   }
 
   if (matches.length === 0) {
@@ -355,7 +367,8 @@ async function sendLarkMarkdownBestEffort(
   chatId: string,
   markdown: string,
   options: LarkSendOptions | undefined,
-): Promise<void> {
+): Promise<number> {
+  let failedChunks = 0;
   for (const chunk of chunkLarkMarkdown(markdown)) {
     try {
       const resolvedChunk = await resolveLarkMentionsInText({
@@ -364,43 +377,21 @@ async function sendLarkMarkdownBestEffort(
         chatId,
         text: chunk,
       });
-      try {
-        await channel.send(chatId, { markdown: resolvedChunk }, options);
-      } catch {
-        await channel.send(chatId, { markdown: resolvedChunk }, options);
-      }
+      await channel.send(chatId, { markdown: resolvedChunk }, options);
     } catch {
+      failedChunks++;
       // Delivery is post-turn best-effort. A later chunk failure must not turn a
       // successful engine run into a failed run card; earlier chunks are already
       // visible and the delivery error is surfaced by the channel/runtime logs.
-      // Retry once so a transient per-chunk send failure does not silently punch
-      // a hole in the middle of a long answer.
+      // A failed request may already have reached Lark. Retrying without an
+      // idempotency key can duplicate a chunk, so leave recovery to a fresh turn.
     }
   }
+  return failedChunks;
 }
 
 function chunkLarkMarkdown(markdown: string): string[] {
-  if (markdown.length <= LARK_MARKDOWN_CHUNK_LIMIT) {
-    return [markdown];
-  }
-
-  const chunks: string[] = [];
-  let remaining = markdown;
-  while (remaining.length > LARK_MARKDOWN_CHUNK_LIMIT) {
-    let splitAt = remaining.lastIndexOf("\n\n", LARK_MARKDOWN_CHUNK_LIMIT);
-    if (splitAt <= 0) {
-      splitAt = remaining.lastIndexOf("\n", LARK_MARKDOWN_CHUNK_LIMIT);
-    }
-    if (splitAt <= 0) {
-      splitAt = LARK_MARKDOWN_CHUNK_LIMIT;
-    }
-    chunks.push(remaining.slice(0, splitAt));
-    remaining = remaining.slice(splitAt);
-  }
-  if (remaining) {
-    chunks.push(remaining);
-  }
-  return chunks;
+  return chunkTelegramMessage(markdown, LARK_MARKDOWN_CHUNK_LIMIT);
 }
 
 function extractWholeResponseFileBlock(text: string): { fileName: string; body: string } | null {
@@ -756,7 +747,7 @@ async function sendLarkPath(input: {
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
-  if (isCredentialsStylePath(input.filePath, real)) {
+  if (isCredentialStylePath(input.filePath, real)) {
     await appendLarkFileRejectedTimeline(input, {
       path: input.filePath,
       realPath: real,
@@ -1184,7 +1175,7 @@ function larkAnyFilePathAllowed(): boolean {
  * only engine-generated media, so it is a sanctioned read root alongside the
  * request-output dir. Containment still applies: the check below runs on the
  * file's REALPATH, so a symlink planted inside cannot smuggle an outside file,
- * and isCredentialsStylePath screens the resolved target first regardless.
+ * and isCredentialStylePath screens the resolved target first regardless.
  */
 async function codexGeneratedImagesRoot(): Promise<string | undefined> {
   const home = (process.env.CODEX_HOME ?? "").trim()

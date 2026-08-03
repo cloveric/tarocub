@@ -51,6 +51,7 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
   let current = "";
   let inFence = false;
   let fenceOpener = "```";
+  let fenceDelimiter = "```";
 
   const pushCurrent = () => {
     if (!current) {
@@ -60,12 +61,44 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
     current = "";
   };
 
-  const appendWithinFence = (segment: string) => {
+  const closeFenceSuffix = () => `${current.endsWith("\n") ? "" : "\n"}${fenceDelimiter}`;
+  const reopenFence = () => {
+    current = `${fenceOpener}\n`;
+    // A reopened chunk must fit its worst-case closer and at least one content
+    // unit. Otherwise appendWithinFence would close/reopen forever without
+    // consuming any input.
+    if (utf16Length(current) + utf16Length(fenceDelimiter) + 1 >= limit) {
+      throw new RangeError("limit is too small to safely encode a fenced code block");
+    }
+  };
+
+  const closeAndReopenFence = () => {
+    const suffix = closeFenceSuffix();
+    if (utf16Length(current) + utf16Length(suffix) > limit) {
+      throw new RangeError("limit is too small to safely encode a fenced code block");
+    }
+    current += suffix;
+    pushCurrent();
+    reopenFence();
+  };
+
+  const appendWithinFence = (segment: string, closesFence: boolean) => {
     let remaining = segment;
     while (remaining) {
-      const closeFenceSuffix = current ? `${current.endsWith("\n") ? "" : "\n"}\`\`\`` : "```";
-      const reopenPrefix = `${fenceOpener}\n`;
-      const available = Math.max(1, limit - utf16Length(current) - utf16Length(closeFenceSuffix));
+      const rawAvailable = limit - utf16Length(current);
+      if (closesFence && utf16Length(remaining) <= rawAvailable) {
+        current += remaining;
+        return;
+      }
+
+      // Reserve the worst-case closer (newline + delimiter). The prefix we add
+      // can change a previously newline-terminated chunk into a non-terminated
+      // one, so calculating from the pre-append suffix can be one unit short.
+      const available = limit - utf16Length(current) - utf16Length(fenceDelimiter) - 1;
+      if (available <= 0) {
+        closeAndReopenFence();
+        continue;
+      }
       if (utf16Length(remaining) <= available) {
         current += remaining;
         return;
@@ -75,10 +108,8 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
         throw new RangeError("limit is too small to safely encode this message chunk");
       }
       current += prefix;
-      current += closeFenceSuffix;
-      pushCurrent();
-      current = reopenPrefix;
       remaining = remaining.slice(prefix.length);
+      closeAndReopenFence();
     }
   };
 
@@ -102,39 +133,49 @@ export function chunkTelegramMessage(text: string, limit = 4000): string[] {
 
   for (const segment of splitLineSegments(text)) {
     const lineWithoutNewline = segment.replace(/\r?\n$/, "");
-    const isFenceLine = lineWithoutNewline.trimStart().startsWith("```");
-    const nextLength = utf16Length(current) + utf16Length(segment);
+    const trimmedLine = lineWithoutNewline.trimStart();
+    const openingFence = !inFence ? trimmedLine.match(/^(`{3,}|~{3,})/)?.[1] : undefined;
+    const closingFence = inFence ? trimmedLine.match(/^(`{3,}|~{3,})\s*$/)?.[1] : undefined;
+    const closesFence = closingFence !== undefined &&
+      closingFence[0] === fenceDelimiter[0] &&
+      closingFence.length >= fenceDelimiter.length;
 
-    if (current && nextLength > limit) {
-      if (inFence) {
-        current += `${current.endsWith("\n") ? "" : "\n"}\`\`\``;
-        pushCurrent();
-        current = `${fenceOpener}\n`;
-      } else {
+    if (openingFence !== undefined) {
+      const delimiter = openingFence;
+      const suffix = `${segment.endsWith("\n") ? "" : "\n"}${delimiter}`;
+      if (current && utf16Length(current) + utf16Length(segment) + utf16Length(suffix) > limit) {
         pushCurrent();
       }
+      if (utf16Length(segment) + utf16Length(suffix) > limit) {
+        throw new RangeError("limit is too small to safely encode a fenced code block");
+      }
+      current += segment;
+      inFence = true;
+      fenceOpener = trimmedLine;
+      fenceDelimiter = delimiter;
+      continue;
     }
 
     if (inFence) {
-      appendWithinFence(segment);
+      appendWithinFence(segment, closesFence);
     } else {
       appendPlain(segment);
     }
 
-    if (isFenceLine) {
-      if (!inFence) {
-        inFence = true;
-        fenceOpener = lineWithoutNewline.trim();
-      } else {
-        inFence = false;
-        fenceOpener = "```";
-      }
+    if (closesFence) {
+      inFence = false;
+      fenceOpener = "```";
+      fenceDelimiter = "```";
     }
   }
 
   if (current) {
     if (inFence) {
-      current += `${current.endsWith("\n") ? "" : "\n"}\`\`\``;
+      const suffix = closeFenceSuffix();
+      if (utf16Length(current) + utf16Length(suffix) > limit) {
+        throw new RangeError("limit is too small to safely encode a fenced code block");
+      }
+      current += suffix;
     }
     pushCurrent();
   }

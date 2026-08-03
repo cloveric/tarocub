@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -10,6 +10,7 @@ import {
   resetPendingResumeScans,
 } from "../src/telegram/session-commands.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
+import { SessionStore } from "../src/state/session-store.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
 function createNormalizedMessage(text: string): NormalizedTelegramMessage {
@@ -173,12 +174,13 @@ describe("handleLocalSessionTelegramCommand", () => {
         telegramChatId: 123,
         codexSessionId: "kimi-session-1",
         status: "idle",
+        resume: {
+          sessionId: "kimi-session-1",
+          dirName: "kimi-session-1",
+          workspacePath: canonicalRoot,
+        },
       }));
-      expect(configState.resume).toEqual({
-        sessionId: "kimi-session-1",
-        dirName: "kimi-session-1",
-        workspacePath: canonicalRoot,
-      });
+      expect(configState.resume).toBeUndefined();
       expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Attached Kimi session: kimi-session-1"));
       expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining(`Workspace: ${canonicalRoot}`));
     } finally {
@@ -295,6 +297,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         codexSessionId: "thread-abc",
         status: "idle",
         updatedAt: expect.any(String),
+        resume: null,
         suspendedPrevious: {
           sessionId: "thread-old",
           resume: null,
@@ -354,17 +357,18 @@ describe("handleLocalSessionTelegramCommand", () => {
         codexSessionId: "kimi-new",
         status: "idle",
         updatedAt: expect.any(String),
+        resume: {
+          sessionId: "kimi-new",
+          dirName: "kimi-new",
+          workspacePath: canonicalRoot,
+        },
         suspendedPrevious: {
           sessionId: "kimi-old",
           resume: null,
         },
       });
       expect(updateInstanceConfig).toHaveBeenCalledOnce();
-      expect(configState.resume).toEqual({
-        sessionId: "kimi-new",
-        dirName: "kimi-new",
-        workspacePath: canonicalRoot,
-      });
+      expect(configState.resume).toBeUndefined();
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         `Attached Kimi session: kimi-new\nWorkspace: ${canonicalRoot}\n\nSend a message to continue. Use /detach when done.`,
@@ -449,6 +453,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         codexSessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
         status: "idle",
         updatedAt: expect.any(String),
+        resume: null,
         suspendedPrevious: {
           sessionId: "old-conversation",
           resume: null,
@@ -616,6 +621,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         codexSessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
         status: "idle",
         updatedAt: expect.any(String),
+        resume: null,
         suspendedPrevious: {
           sessionId: "old-conversation",
           resume: null,
@@ -1156,6 +1162,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         codexSessionId: "thread-old",
         status: "idle",
         updatedAt: expect.any(String),
+        resume: null,
       });
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
@@ -1261,11 +1268,7 @@ describe("handleLocalSessionTelegramCommand", () => {
     const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
       const cfg: Record<string, unknown> = {};
       mutate(cfg);
-      expect(cfg.resume).toEqual({
-        sessionId: "claude-old",
-        dirName: "old-proj",
-        workspacePath: "/tmp/old-proj",
-      });
+      expect(cfg.resume).toBeUndefined();
     });
 
     try {
@@ -1297,6 +1300,11 @@ describe("handleLocalSessionTelegramCommand", () => {
         codexSessionId: "claude-old",
         status: "idle",
         updatedAt: expect.any(String),
+        resume: {
+          sessionId: "claude-old",
+          dirName: "old-proj",
+          workspacePath: "/tmp/old-proj",
+        },
       });
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
@@ -1333,6 +1341,30 @@ describe("handleLocalSessionTelegramCommand", () => {
     const updateInstanceConfig = vi.fn();
 
     try {
+      const scanHandled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/resume"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 87,
+        },
+        sessionStore,
+        updateInstanceConfig,
+        scanRecentSessions: vi.fn().mockResolvedValue([
+          {
+            sessionId: "claude-resumed",
+            dirName: "new-proj",
+            workspacePath: "/tmp/new-proj",
+            displayName: "new-proj",
+            modifiedAt: new Date().toISOString(),
+          },
+        ]),
+        formatSessionListMessage: vi.fn().mockReturnValue("1. new-proj"),
+      });
       const resumeHandled = await handleLocalSessionTelegramCommand({
         stateDir: root,
         startedAt: Date.now() - 10,
@@ -1358,6 +1390,7 @@ describe("handleLocalSessionTelegramCommand", () => {
         formatSessionListMessage: vi.fn().mockReturnValue("1. new-proj"),
       });
 
+      expect(scanHandled).toBe(true);
       expect(resumeHandled).toBe(true);
 
       const detachHandled = await handleLocalSessionTelegramCommand({
@@ -1387,6 +1420,58 @@ describe("handleLocalSessionTelegramCommand", () => {
         123,
         "Detached from resumed session. Back to default workspace.",
       );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps resumed sessions and workspaces isolated between topics in the same chat", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const workspaceA = path.join(root, "workspace-a");
+    const workspaceB = path.join(root, "workspace-b");
+    await Promise.all([mkdir(workspaceA), mkdir(workspaceB)]);
+    const sessionStore = new SessionStore(path.join(root, "sessions.json"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const configState: Record<string, unknown> = {};
+    const updateInstanceConfig = vi.fn(async (updater: (config: Record<string, unknown>) => void) => {
+      updater(configState);
+    });
+    const validateCodexThread = vi.fn(async (sessionId: string) => ({
+      sessionId,
+      cwd: sessionId === "kimi-a" ? workspaceA : workspaceB,
+    }));
+
+    try {
+      for (const [messageThreadId, sessionId] of [[11, "kimi-a"], [22, "kimi-b"]] as const) {
+        await handleLocalSessionTelegramCommand({
+          stateDir: root,
+          startedAt: Date.now() - 10,
+          locale: "en",
+          cfg: { engine: "kimi" },
+          normalized: {
+            ...createNormalizedMessage(`/resume session ${sessionId}`),
+            chatType: "supergroup",
+            messageThreadId,
+          },
+          context: { api: api as never, instanceName: "default", updateId: messageThreadId },
+          sessionStore,
+          updateInstanceConfig,
+          validateCodexThread,
+        });
+      }
+
+      const topicA = await sessionStore.findByConversationKey("chat:123:topic:11");
+      const topicB = await sessionStore.findByConversationKey("chat:123:topic:22");
+      expect(topicA?.resume).toEqual(expect.objectContaining({
+        sessionId: "kimi-a",
+        workspacePath: await realpath(workspaceA),
+      }));
+      expect(topicB?.resume).toEqual(expect.objectContaining({
+        sessionId: "kimi-b",
+        workspacePath: await realpath(workspaceB),
+      }));
+      expect(topicA?.resume).not.toEqual(topicB?.resume);
+      expect(configState.resume).toBeUndefined();
     } finally {
       await removeTempRoot(root);
     }

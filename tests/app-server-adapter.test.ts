@@ -107,7 +107,7 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 class FakeStream extends EventEmitter {
-  emitData(chunk: string) {
+  emitData(chunk: string | Buffer) {
     this.emit("data", chunk);
   }
 }
@@ -769,6 +769,43 @@ describe("CodexAppServerAdapter", () => {
     expect(calls[0]?.command).toBe("codex");
     expect(calls[0]?.args).toEqual(["app-server"]);
     expect(calls[0]?.options.windowsHide).toBe(true);
+  });
+
+  it("decodes UTF-8 JSON correctly when a multibyte character crosses stdout chunks", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Hello", files: [] });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-utf8"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    const delta = Buffer.from('{"method":"item/agentMessage/delta","params":{"threadId":"thread-utf8","delta":"你好🙂"}}\n');
+    const marker = delta.indexOf(Buffer.from("好"));
+    child.stdout.emitData(delta.subarray(0, marker + 1));
+    child.stdout.emitData(delta.subarray(marker + 1));
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-utf8","turn":{"id":"turn-1","status":"completed"}}}\n');
+
+    await expect(promise).resolves.toMatchObject({ text: "你好🙂", sessionId: "thread-utf8" });
+  });
+
+  it("processes the final JSON-RPC event when app-server exits without a newline", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Hello", files: [] });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-final"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-final","delta":"FINAL"}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-final","turn":{"id":"turn-1","status":"completed"}}}');
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text: "FINAL", sessionId: "thread-final" });
   });
 
   it("loads instructions from agent.md and isolates CODEX_HOME", async () => {
