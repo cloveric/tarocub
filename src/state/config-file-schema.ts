@@ -22,6 +22,20 @@ export const WorkspaceProfileFileSchema = z.object({
   updatedAt: z.string().optional(),
 }).passthrough();
 
+// Feishu VC bot-in-meeting config. Every field is optional and the feature is
+// OFF unless `enabled` is explicitly true, so this section is inert on every
+// existing instance. It also requires Feishu beta (灰度) scopes the app may not
+// have — see src/lark/vc/preflight.ts.
+export const MeetingConfigFileSchema = z.object({
+  enabled: z.boolean().optional(),
+  autoJoinOnInvite: z.boolean().optional(),
+  trigger: z.string().optional(),
+  transcriptKeep: z.number().int().min(10).max(2000).optional(),
+  respondIn: z.enum(["meeting", "im", "both"]).optional(),
+  pollIntervalMs: z.number().int().min(1000).max(60000).optional(),
+  summaryOnEnd: z.boolean().optional(),
+}).passthrough();
+
 export const ConfigFileSchema = z.object({
   engine: z.enum(["codex", "claude", "antigravity", "kimi"]).optional(),
   approvalMode: z.enum(["normal", "full-auto", "bypass"]).optional(),
@@ -41,6 +55,7 @@ export const ConfigFileSchema = z.object({
   workspacePath: z.string().optional(),
   workspaceProfiles: z.array(WorkspaceProfileFileSchema).optional(),
   groupMode: GroupModeFileSchema.optional(),
+  meeting: MeetingConfigFileSchema.optional(),
   bus: z.unknown().optional(),
 }).passthrough();
 

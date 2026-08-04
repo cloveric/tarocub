@@ -217,6 +217,28 @@ Before calling a Lark app production-ready, run these checks against the real ap
 9. Trigger a permission request, a `lark.choice` / `lark.card` choice button, and an archive `Continue Analysis` card; every button should callback exactly once and respect Lark access checks.
 10. Create a Feishu Docs comment that @mentions the bot; it should fetch comment context and reply in the comment thread.
 
+## VC Bot Meeting Attendance (experimental, gated)
+
+TaroCub can join a Feishu video meeting as a bot participant, follow the live
+transcript as context, and answer when explicitly addressed. **This is inert by
+default and requires a Feishu capability the app may not have.**
+
+- **Beta allowlist (灰度).** Bot meeting attendance needs the scopes
+  `vc:meeting.bot.join:write`, `vc:meeting.message:write`, and
+  `vc:meeting.meetingevent:read`, and those only work if the app is inside
+  Feishu's beta allowlist. An app outside it gets error `20017 / ErrNotInGray`
+  no matter what scopes are granted. Whether a personal-edition (个人版)
+  PersonalAgent app can enter this allowlist is unconfirmed — request access via
+  the early-bird chat surfaced by the `lark-vc-agent` skill.
+- **Off unless enabled.** The `meeting` config block is `enabled: false` on every
+  instance; nothing joins any meeting until an operator opts in AND preflight
+  passes. Enabling it on an app without the beta scopes just returns the
+  actionable "not in beta / request access here" notice.
+- **Status.** The REST layer (`src/lark/vc/vc-api.ts`), feasibility preflight
+  (`src/lark/vc/preflight.ts`), and config schema are in place. The in-meeting
+  session tracking, event ingestion, and answer orchestration are being built
+  out and will land once beta access is confirmed on a real app.
+
 ## Product Boundary
 
 | This project is | This project is not |

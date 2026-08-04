@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyEngineSelection,
+  DEFAULT_MEETING_CONFIG,
   loadInstanceConfig,
   readValidatedConfigFile,
   updateInstanceConfig,
@@ -101,6 +102,7 @@ describe("loadInstanceConfig", () => {
           allowedChatIds: [],
           listenAllChatIds: [],
         },
+        meeting: DEFAULT_MEETING_CONFIG,
       });
     } finally {
       await removeTempRoot(root);
@@ -131,6 +133,7 @@ describe("loadInstanceConfig", () => {
           allowedChatIds: [],
           listenAllChatIds: [],
         },
+        meeting: DEFAULT_MEETING_CONFIG,
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
@@ -162,6 +165,7 @@ describe("loadInstanceConfig", () => {
           allowedChatIds: [],
           listenAllChatIds: [],
         },
+        meeting: DEFAULT_MEETING_CONFIG,
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {
@@ -301,6 +305,7 @@ describe("loadInstanceConfig", () => {
           allowedChatIds: [-100123],
           listenAllChatIds: [],
         },
+        meeting: DEFAULT_MEETING_CONFIG,
       });
     } finally {
       await removeTempRoot(root);
@@ -331,6 +336,7 @@ describe("loadInstanceConfig", () => {
           allowedChatIds: [],
           listenAllChatIds: [],
         },
+        meeting: DEFAULT_MEETING_CONFIG,
       });
       expect(errorSpy).toHaveBeenCalledOnce();
     } finally {

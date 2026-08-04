@@ -66,7 +66,29 @@ export interface InstanceConfig {
   workspacePath: string | undefined;
   workspaceProfiles: WorkspaceProfile[];
   groupMode: GroupModeConfig;
+  /** Feishu VC bot-in-meeting. OFF unless `enabled` is true; requires beta scopes. */
+  meeting: MeetingConfig;
 }
+
+export interface MeetingConfig {
+  enabled: boolean;
+  autoJoinOnInvite: boolean;
+  trigger: string;
+  transcriptKeep: number;
+  respondIn: "meeting" | "im" | "both";
+  pollIntervalMs: number;
+  summaryOnEnd: boolean;
+}
+
+export const DEFAULT_MEETING_CONFIG: MeetingConfig = {
+  enabled: false,
+  autoJoinOnInvite: false,
+  trigger: "@bot",
+  transcriptKeep: 200,
+  respondIn: "meeting",
+  pollIntervalMs: 3000,
+  summaryOnEnd: false,
+};
 
 function sanitizeConfigCompatibility(config: ConfigFile, configPath: string): ConfigFile {
   const effort = config.effort as EffortLevel | undefined;
@@ -186,7 +208,31 @@ export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
     allowedChatIds: [],
     listenAllChatIds: [],
   },
+  meeting: DEFAULT_MEETING_CONFIG,
 };
+
+function parseMeetingConfig(raw: unknown): MeetingConfig {
+  if (typeof raw !== "object" || raw === null) {
+    return DEFAULT_MEETING_CONFIG;
+  }
+  const r = raw as Record<string, unknown>;
+  const bool = (key: keyof MeetingConfig, fallback: boolean): boolean =>
+    typeof r[key] === "boolean" ? (r[key] as boolean) : fallback;
+  const clampInt = (value: unknown, min: number, max: number, fallback: number): number =>
+    typeof value === "number" && Number.isInteger(value)
+      ? Math.min(max, Math.max(min, value))
+      : fallback;
+  const respondIn = r.respondIn === "im" || r.respondIn === "both" ? r.respondIn : "meeting";
+  return {
+    enabled: bool("enabled", DEFAULT_MEETING_CONFIG.enabled),
+    autoJoinOnInvite: bool("autoJoinOnInvite", DEFAULT_MEETING_CONFIG.autoJoinOnInvite),
+    trigger: typeof r.trigger === "string" && r.trigger.trim() ? r.trigger.trim() : DEFAULT_MEETING_CONFIG.trigger,
+    transcriptKeep: clampInt(r.transcriptKeep, 10, 2000, DEFAULT_MEETING_CONFIG.transcriptKeep),
+    respondIn,
+    pollIntervalMs: clampInt(r.pollIntervalMs, 1000, 60000, DEFAULT_MEETING_CONFIG.pollIntervalMs),
+    summaryOnEnd: bool("summaryOnEnd", DEFAULT_MEETING_CONFIG.summaryOnEnd),
+  };
+}
 
 function parseGroupMode(raw: unknown): GroupModeConfig {
   if (typeof raw !== "object" || raw === null) {
@@ -368,6 +414,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
       : undefined,
     workspaceProfiles: parseWorkspaceProfiles(config.workspaceProfiles),
     groupMode: parseGroupMode(config.groupMode),
+    meeting: parseMeetingConfig(config.meeting),
   };
 }
 
