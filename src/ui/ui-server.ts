@@ -8,6 +8,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
+import { CONSOLE_HTML } from "./console-html.js";
 import { handleUiApiRequest, type UiApiDeps, type UiApiEnv } from "./ui-api.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -46,16 +47,6 @@ function isLoopbackRequest(host: string | undefined, origin: string | undefined)
   }
   return true;
 }
-
-const PLACEHOLDER_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>TaroCub</title>
-<style>body{font:15px/1.5 system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;color:#1f2937}
-code{background:#f3f4f6;padding:.1rem .3rem;border-radius:4px}h1{font-size:1.4rem}</style></head>
-<body><h1>TaroCub configuration console</h1>
-<p>The API is live. The interactive UI is being built; for now, query it directly (the token is in the URL you opened, re-send it as the <code>x-ui-token</code> header):</p>
-<pre>GET  /api/instances
-GET  /api/instances/&lt;name&gt;/config
-POST /api/instances/&lt;name&gt;/config   { "model": "...", "effort": "..." }</pre></body></html>`;
 
 async function readBody(req: import("node:http").IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -96,7 +87,7 @@ export async function startUiServer(
       const method = (req.method ?? "GET").toUpperCase();
       if (!url.pathname.startsWith("/api/")) {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8", "x-content-type-options": "nosniff" });
-        res.end(PLACEHOLDER_HTML);
+        res.end(CONSOLE_HTML);
         return;
       }
       let body: unknown;

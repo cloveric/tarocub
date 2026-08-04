@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:web": "vite build web && node scripts/inline-web.mjs",
     "dev": "tsx src/index.ts",
     "start": "node dist/src/index.js",
     "smoke:claude-auth": "bash scripts/smoke-claude-auth.sh",
@@ -28,13 +29,20 @@
     "form-data": "4.0.6",
     "postcss": "8.5.25",
     "protobufjs": "7.6.5",
-    "vite": "7.3.6"
+    "vite": "$vite"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/qrcode-terminal": "^0.12.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^5.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
+    "vite": "7.3.6",
+    "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^3.2.7"
   }
 }
