@@ -141,6 +141,8 @@ node dist/src/index.js lark doctor
 | **Board** | Durable Kanban state for tasks, model-assisted planning, dependencies, WIP, review gates, workspaces, heartbeats, stale-run recovery, Lark task cards, and execution history. |
 | **Search MCP** | Optional Brave/Tavily MCP gives source-traceable `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
 | **Operational visibility** | `status`, `doctor`, `timeline`, `audit`, `dashboard`, usage tracking, service locks, and backups make failures inspectable instead of mysterious. |
+| **Web config console** | `cctb ui` opens a loopback-only, token-gated web console that lists every instance (engine, model, service liveness) and edits the safe config subset on disk with next-restart semantics. |
+| **VC meeting attendance (experimental)** | On Feishu/Lark, the bot can join a video meeting, follow the live transcript, and answer when addressed (`/meeting join/status/ask/leave`). Off by default; requires Feishu's bot-join beta allowlist. |
 
 ## Feature Map
 
@@ -158,6 +160,8 @@ node dist/src/index.js lark doctor
 | Agent Bus fan/chain/verify | Yes | Yes | Configure peers |
 | Mini Bus topic/thread workflows | Telegram topics | Lark threads | Inspect state |
 | Docs comments and Sheets workflows | Not applicable | Yes, with `lark-cli` | Provision/auth/doctor |
+| VC meeting attendance (gated beta) | Not applicable | `/meeting` commands | Config + preflight |
+| Web config console | — | — | `cctb ui` (loopback + token) |
 | Timeline, audit, dashboard, usage | Yes | Yes | Primary ops surface |
 
 ### Kimi Code engine

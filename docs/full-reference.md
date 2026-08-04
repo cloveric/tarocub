@@ -234,10 +234,19 @@ default and requires a Feishu capability the app may not have.**
   instance; nothing joins any meeting until an operator opts in AND preflight
   passes. Enabling it on an app without the beta scopes just returns the
   actionable "not in beta / request access here" notice.
-- **Status.** The REST layer (`src/lark/vc/vc-api.ts`), feasibility preflight
-  (`src/lark/vc/preflight.ts`), and config schema are in place. The in-meeting
-  session tracking, event ingestion, and answer orchestration are being built
-  out and will land once beta access is confirmed on a real app.
+- **Status.** The full stack is implemented and wired into the Lark service:
+  REST layer (`src/lark/vc/vc-api.ts`), feasibility preflight
+  (`src/lark/vc/preflight.ts`), meeting session tracking + polling
+  (`src/lark/vc/session.ts`, `manager.ts`), answer orchestration
+  (`src/lark/vc/orchestrator.ts`), and the `/meeting` chat command
+  (`src/lark/vc/lark-integration.ts`, routed in `src/lark/message-handler.ts`).
+  It stays dormant until `"meeting": {"enabled": true}` is set in the instance
+  `config.json` AND the app has the beta scopes above.
+- **Commands.** `/meeting status` (active meetings + push health),
+  `/meeting join <9-digit no.> [password]`, `/meeting leave [no.]`,
+  `/meeting ask <question>` (answer with live-transcript context). In-meeting,
+  address the bot with @ or the configured `trigger` prefix; `respondIn`
+  controls whether answers go to the meeting chat, the IM chat, or both.
 
 ## Product Boundary
 
@@ -834,6 +843,30 @@ npm run dev -- telegram instance list                          # Show all instan
 npm run dev -- telegram instance rename old-name new-name      # Rename
 npm run dev -- telegram instance delete staging --yes          # Delete (requires --yes)
 ```
+
+---
+
+## Web Config Console (`cctb ui`)
+
+A local, read-mostly web console for looking over every instance at once and
+editing the safe subset of config fields (`engine`, `model`, `effort`,
+`locale`, `verbosity`, `budgetUsd`).
+
+```bash
+npm run dev -- ui        # starts the console and opens the browser; Ctrl-C to stop
+```
+
+- **Local only.** Binds `127.0.0.1` on an ephemeral port. Every request —
+  including the HTML shell — requires a per-process token (constant-time
+  compared), and Host/Origin are checked against loopback to block
+  DNS-rebinding. The URL printed at startup carries the token once; the SPA
+  re-sends it as a header.
+- **Disk edits, next-restart semantics.** Edits write the instance
+  `config.json` on disk only. A running service picks them up on its next
+  restart — the console never reaches into a live process.
+- **Discovery.** Instances are found by scanning `~/.cctb/`; each row shows the
+  configured engine/model and whether a service currently holds the lock (pid
+  liveness).
 
 ---
 

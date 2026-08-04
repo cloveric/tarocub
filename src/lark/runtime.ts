@@ -141,6 +141,11 @@ export interface LarkServiceRuntime {
   cancelledQueueTaskIds: Set<string>;
   appInfo?: { appId: string; appSecret?: string; domain?: string };
   cronRuntime?: LarkCronRuntime;
+  /** VC bot-meeting support; present ONLY when config.meeting.enabled (gated). */
+  meetingSupport?: {
+    handleMeetingCommand(text: string, locale: "en" | "zh"): Promise<string | null>;
+    dispose(): Promise<void>;
+  };
   busRuntime?: LarkBusRuntime;
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;
@@ -156,6 +161,11 @@ export function createLarkServiceRuntime(options: {
   createDocument?: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
   commentClient?: LarkCommentClientLike;
   cronRuntime?: LarkCronRuntime;
+  /** VC bot-meeting support; present ONLY when config.meeting.enabled (gated). */
+  meetingSupport?: {
+    handleMeetingCommand(text: string, locale: "en" | "zh"): Promise<string | null>;
+    dispose(): Promise<void>;
+  };
   busRuntime?: LarkBusRuntime;
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;

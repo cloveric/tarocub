@@ -448,6 +448,33 @@ async function runAcceptedLarkMessage(
     return true;
   }
 
+  // /meeting is VC bot-meeting control (experimental, gated). Runs pre-queue
+  // like /bg: joining/leaving a meeting must not serialize behind a running
+  // turn. When the feature is disabled (the default), reply with how to enable
+  // it instead of silently treating the command as a normal message.
+  if (/^\/meeting\b/i.test(commandText)) {
+    if (!(await checkPreQueueAccess("/meeting"))) {
+      return true;
+    }
+    const meetingReply = input.runtime.meetingSupport
+      ? await input.runtime.meetingSupport.handleMeetingCommand(commandText, messageLocale)
+      : (messageLocale === "zh"
+        ? "VC 入会功能未启用。在 `~/.cctb/<instance>/config.json` 中设置 `\"meeting\": {\"enabled\": true}` 并重启后可用。注意：机器人入会接口需要飞书侧 beta 白名单，详见 docs/full-reference.md。"
+        : "VC meeting support is disabled. Set `\"meeting\": {\"enabled\": true}` in `~/.cctb/<instance>/config.json` and restart. Note: the bot-join API additionally requires Feishu-side beta allowlisting; see docs/full-reference.md.");
+    if (meetingReply !== null) {
+      await sendLarkMarkdown(input.channel, normalized.chatId, meetingReply, {
+        replyTo: normalized.messageId,
+        replyInThread: Boolean(normalized.threadId),
+      });
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "command.handled",
+        outcome: "success",
+        detail: "/meeting",
+      });
+    }
+    return true;
+  }
+
   if (await handleLarkGroupCommandBeforeAccess({ ...input, requestApproval: requestLarkApproval }, normalized, commandText, messageLocale)) {
     return true;
   }

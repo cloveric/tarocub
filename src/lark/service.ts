@@ -17,6 +17,8 @@ import { parseTimelineEvents, resolveTimelineLogPath, type TimelineEvent } from 
 import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
+import { attachLarkMeetingSupport } from "./vc/lark-integration.js";
+import type { LarkVcRequestClient } from "./vc/vc-api.js";
 import { handleLarkComment, normalizeLarkCommentFileType } from "./comment-handler.js";
 import { createLarkCommentClient } from "./comment-client.js";
 import { resolveLarkInstanceName, resolveLarkRuntimeConfig, type LarkRuntimeConfig, type LarkRuntimeEnv } from "./config.js";
@@ -343,11 +345,11 @@ export async function runLarkService(
       failureThreshold: parsePositiveIntegerEnv(env.CCTB_LARK_HEALTH_FAILURE_THRESHOLD),
       telemetry,
     });
+    const instanceConfig = await loadInstanceConfig(stateDir);
     if (!runtime.cronRuntime) {
       // Schedule recurring jobs in the operator-configured instance timezone
       // (config.json `timezone`), matching the Telegram boot — otherwise Lark
       // cron jobs silently run in the host timezone.
-      const instanceConfig = await loadInstanceConfig(stateDir);
       const cronStore = new CronStore(stateDir, { defaultTimezone: instanceConfig.timezone });
       cronScheduler = new CronScheduler({
         store: cronStore,
@@ -369,6 +371,30 @@ export async function runLarkService(
       });
       await cronScheduler.start();
       runtime.cronRuntime = { store: cronStore, scheduler: cronScheduler };
+    }
+    if (instanceConfig.meeting.enabled && !runtime.meetingSupport) {
+      // VC bot-meeting support (experimental, beta-allowlist gated on the Feishu
+      // side). rawClient is on the concrete SDK channel, not LarkChannelLike —
+      // probe structurally so a test double without it degrades to a log line.
+      const rawClient = (channel as unknown as { rawClient?: LarkVcRequestClient }).rawClient;
+      if (rawClient && typeof rawClient.request === "function") {
+        const support = attachLarkMeetingSupport({
+          rawClient,
+          bridge,
+          im: { send: (chatId, payload) => channel!.send(chatId, payload) },
+          config: () => instanceConfig.meeting,
+          botOpenId: () => (channel as unknown as { botIdentity?: { openId?: string } }).botIdentity?.openId,
+          botName: () => (channel as unknown as { botIdentity?: { name?: string } }).botIdentity?.name,
+          locale: () => (instanceConfig.locale === "zh" ? "zh" : "en"),
+          meetingChatId: (session) => stableLarkNumericId(`lark:meeting:${session.meetingId}`),
+          log: (message) => logger.log(`${new Date().toISOString()} ${message}`),
+        });
+        if (support) {
+          runtime.meetingSupport = support;
+        }
+      } else {
+        logger.log(`${new Date().toISOString()} meeting.enabled is set but the channel exposes no rawClient; VC meeting support unavailable`);
+      }
     }
     logger.log(`${new Date().toISOString()} Lark channel connected; stateDir=${stateDir}; lock=${serviceLock.filePath}`);
     logLifecycleEvent({
@@ -396,6 +422,11 @@ export async function runLarkService(
       healthMonitor?.stop();
       if (cronScheduler) {
         await cronScheduler.stop();
+      }
+      try {
+        await runtime.meetingSupport?.dispose();
+      } catch {
+        // leaving meetings on shutdown is best-effort
       }
       try {
         await bridge.destroy?.();
