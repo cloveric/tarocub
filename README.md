@@ -17,7 +17,7 @@
 <h1 align="center">TaroCub</h1>
 
 <p align="center">
-  <strong>Run Codex, Claude Code, Kimi Code, and Antigravity locally. Control them from Telegram and Feishu/Lark.</strong><br>
+  <strong>Run Codex, Claude Code, Kimi Code, and Antigravity locally. Control them from Feishu/Lark (recommended) or Telegram.</strong><br>
   TaroCub runs real CLI agents on your own machine, then gives them durable chat surfaces, files, sessions, tasks, cron, audit logs, and multi-agent workflows.<br>
   Resume local sessions anytime from your phone, whether you are at your desk, commuting, or walking the dog.
 </p>
@@ -120,8 +120,8 @@ node dist/src/index.js lark doctor
 
 | Surface | Best for | Status |
 |---|---|---|
-| **Telegram** | Mobile control, voice input, file delivery, multi-bot operations, cron, Agent Bus | Primary and deepest-tested |
-| **Feishu/Lark** | Team chat, interactive cards, Docs comments, Sheets/Docs/Drive workflows, group/thread workflows | Production-capable with `lark-cli` |
+| **Feishu/Lark** | Team chat, interactive cards, Docs comments, Sheets/Docs/Drive workflows, group/thread workflows | **Recommended** — the primary, actively-developed channel |
+| **Telegram** | Mobile control, voice input, file delivery, multi-bot operations, cron, Agent Bus | Fully supported; longest-tested, but no longer the day-to-day focus |
 | **Local CLI** | Operations, setup, debugging, status, backups, direct sends | First-class operator interface |
 
 ## Core Highlights

@@ -60,7 +60,7 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 ## Feishu / Lark Channel
 
-Telegram remains the deepest-tested channel, but Feishu/Lark is no longer a thin demo path. It is a second entrypoint that reuses the same engine adapters, sessions, workspace, `agent.md`, approval model, file-delivery tags, scheduled jobs, Board, Mini Bus, Agent Bus, and timeline/dashboard machinery.
+Feishu/Lark is the recommended, actively-developed channel. Telegram remains fully supported and is the longest-tested path, but is no longer the day-to-day focus. Both reuse the same engine adapters, sessions, workspace, `agent.md`, approval model, file-delivery tags, scheduled jobs, Board, Mini Bus, Agent Bus, and timeline/dashboard machinery.
 
 ```bash
 npm run build

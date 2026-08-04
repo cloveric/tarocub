@@ -16,7 +16,7 @@
 </p>
 
 <h3 align="center">
-  TaroCub：本地运行 Codex、Claude Code、Kimi Code 和 Antigravity，再从 Telegram 与飞书/Lark 控制它们。<br>
+  TaroCub：本地运行 Codex、Claude Code、Kimi Code 和 Antigravity，再从飞书/Lark（推荐）或 Telegram 控制它们。<br>
   在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，也可以把同一套 bridge 暴露到团队聊天里。
 </h3>
 
@@ -54,11 +54,11 @@ npm run dev -- telegram service start
 | **稳定的长任务运维** | cron、audit、timeline、usage tracking、访问控制和服务重启都由 bridge 管，不塞进模型记忆。 |
 | **可追溯网页研究** | 可选 Brave/Tavily MCP 提供 `web_search`、`web_extract`、provider status、fallback notice 和 source log。 |
 | **多 agent 编排** | Agent Bus 做实例间 delegation，Mini Bus 做 topic 间协作，Board 做持久化 Kanban 任务。 |
-| **飞书/Lark 通道预览** | 通过官方 Lark Channel SDK 复用同一个 bridge runtime，支持 streaming card、停止按钮、审批和文件/媒体投递标签。 |
+| **飞书/Lark 通道（推荐）** | 通过官方 Lark Channel SDK 复用同一个 bridge runtime，支持 streaming card、停止按钮、审批和文件/媒体投递标签。 |
 
-## 飞书 / Lark 通道预览
+## 飞书 / Lark 通道（推荐）
 
-Telegram 仍然是最成熟的主通道。飞书/Lark 是第二入口，复用同一套 engine adapter、session、workspace、`agent.md`、审批模型和文件投递标签。
+**飞书/Lark 是目前推荐、也是主力开发的通道** —— 交互卡片、审批、Docs 评论、Sheets/Docs/Drive 工作流、群/话题协作都在这一侧。Telegram 仍然完整支持、测试时间也最久，但已不再是日常主用平台。两个通道复用同一套 engine adapter、session、workspace、`agent.md`、审批模型和文件投递标签。
 
 ```bash
 npm run build
