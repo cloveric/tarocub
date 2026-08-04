@@ -71,6 +71,7 @@ import { createLarkServiceRuntime, LARK_PENDING_TURN_LOOKBACK_MS, readLarkTimeli
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { runLarkWizard } from "../lark/wizard.js";
+import { runUiConsoleCommand } from "./ui-command.js";
 import { loadCodexUserDefaults } from "../codex/user-defaults.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
 import {
@@ -4910,6 +4911,11 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
   if (normalized.length === 0 || normalized[0] === "help" || normalized[0] === "--help") {
     logger.log(HELP_TEXT);
     return true;
+  }
+
+  if (normalized[0] === "ui") {
+    // Machine-level web config console (cross-instance). Blocks until Ctrl-C.
+    return await runUiConsoleCommand(env, logger);
   }
 
   if (normalized[0] === "configure") {
