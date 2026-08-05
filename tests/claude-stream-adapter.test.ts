@@ -953,6 +953,122 @@ describe("ClaudeStreamAdapter", () => {
     )).toHaveLength(1);
   });
 
+  it("does not retain foreground Bash calls that Claude temporarily promotes to tasks", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Run a foreground command",
+        files: [],
+        instructions: "original instructions",
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-foreground",
+            name: "Bash",
+            input: { command: "sleep 5; printf done" },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      // Claude 2.1.222 emits this lifecycle for foreground Bash calls that
+      // exceed its short synchronous wait, even without run_in_background.
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-foreground","tool_use_id":"toolu-foreground","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-foreground","tool_use_id":"toolu-foreground","status":"completed","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu-foreground",
+            content: "done",
+            is_error: false,
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Foreground answer.","session_id":"session-123"}\n');
+      await first;
+
+      expect(events.some((event) => event.type === "background_task_started")).toBe(false);
+      expect(events.some((event) => event.type === "task_notification")).toBe(false);
+
+      // A phantom background task used to reject this settings change for six
+      // hours. With no detached work, the adapter can replace the idle worker.
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Use the new instructions",
+        files: [],
+        instructions: "changed instructions",
+      });
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Reconfigured.","session_id":"session-123"}\n');
+      await expect(second).resolves.toEqual({ text: "Reconfigured." });
+    } finally {
+      adapter.destroy();
+    }
+  });
+
+  it("retains tasks whose tool call explicitly requests background execution", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; taskId?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "Run in background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "sleep 5", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-background","tool_use_id":"toolu-background","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await turn;
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "background_task_started",
+        taskId: "task-background",
+      }));
+
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-background","tool_use_id":"toolu-background","status":"completed","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Background done.","session_id":"session-123","origin":{"kind":"task-notification"}}\n');
+      await waitFor(() => events.some((event) => event.type === "task_notification"));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "task-background",
+      }));
+    } finally {
+      adapter.destroy();
+    }
+  });
+
   it("emits Claude background task notifications when the task result is empty but metadata has a summary", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: unknown[] = [];

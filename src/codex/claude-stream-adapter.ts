@@ -61,6 +61,8 @@ type ClaudeStreamEvent = {
   terminal_reason?: string;
   request_id?: string;
   task_id?: string;
+  tool_use_id?: string;
+  task_type?: string;
   status?: string;
   summary?: string;
   output_file?: string;
@@ -125,6 +127,7 @@ type PendingTurn = {
 
 type ClaudeTaskNotificationMetadata = {
   taskId?: string;
+  toolUseId?: string;
   status?: string;
   summary?: string;
   outputFile?: string;
@@ -147,6 +150,7 @@ type ClaudeWorker = {
   pendingTurn: PendingTurn | null;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   backgroundTasks: Map<string, ClaudeBackgroundTask>;
+  explicitBackgroundToolUseIds: Set<string>;
   pendingTaskNotification: ClaudeBackgroundTask | null;
   suppressNextTaskNotificationAssistant: boolean;
   lastActivityAt: number;
@@ -287,6 +291,13 @@ function flattenClaudeToolResultContent(content: unknown): string | undefined {
   return joined || undefined;
 }
 
+function isExplicitBackgroundToolInput(input: unknown): boolean {
+  return input !== null
+    && typeof input === "object"
+    && !Array.isArray(input)
+    && (input as { run_in_background?: unknown }).run_in_background === true;
+}
+
 function extractDeliveryTags(text: string): string[] {
   return Array.from(text.matchAll(/\[send-(?:file|image):[^\]]+\]/g), (match) => match[0]);
 }
@@ -302,6 +313,7 @@ function isTaskNotificationResult(event: ClaudeStreamEvent): boolean {
 function toTaskNotificationMetadata(event: ClaudeStreamEvent): ClaudeTaskNotificationMetadata {
   return {
     taskId: typeof event.task_id === "string" ? event.task_id : undefined,
+    toolUseId: typeof event.tool_use_id === "string" ? event.tool_use_id : undefined,
     status: typeof event.status === "string" ? event.status : undefined,
     summary: typeof event.summary === "string" ? event.summary : undefined,
     outputFile: typeof event.output_file === "string" ? event.output_file : undefined,
@@ -676,6 +688,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       pendingTurn: null,
       onEngineEvent: undefined,
       backgroundTasks: new Map(),
+      explicitBackgroundToolUseIds: new Set(),
       pendingTaskNotification: null,
       suppressNextTaskNotificationAssistant: false,
       lastActivityAt: Date.now(),
@@ -788,6 +801,18 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     if (parsed.type === "system" && parsed.subtype === "task_started") {
       const metadata = toTaskNotificationMetadata(parsed);
+      // Claude 2.1.222 emits task_started/task_notification for foreground
+      // local Bash calls once they run for a few seconds. Only a matching tool
+      // use with run_in_background=true is detached work; treating the
+      // foreground lifecycle as background leaves the restart guard busy after
+      // the turn has already completed. Events without tool_use_id are kept for
+      // compatibility with older Claude versions and non-tool task sources.
+      if (
+        metadata.toolUseId
+        && !worker.explicitBackgroundToolUseIds.has(metadata.toolUseId)
+      ) {
+        return;
+      }
       if (metadata.taskId) {
         worker.backgroundTasks.set(metadata.taskId, {
           ...metadata,
@@ -811,6 +836,13 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     if (parsed.type === "system" && parsed.subtype === "task_notification") {
       const metadata = toTaskNotificationMetadata(parsed);
       const task = metadata.taskId ? worker.backgroundTasks.get(metadata.taskId) : undefined;
+      if (
+        metadata.toolUseId
+        && !task
+        && !worker.explicitBackgroundToolUseIds.has(metadata.toolUseId)
+      ) {
+        return;
+      }
       worker.pendingTaskNotification = {
         ...task,
         ...metadata,
@@ -826,6 +858,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       const taskId = resultMetadata.taskId ?? worker.pendingTaskNotification?.taskId ?? resultTask?.taskId;
       const metadata = {
         taskId,
+        toolUseId: resultMetadata.toolUseId
+          ?? worker.pendingTaskNotification?.toolUseId
+          ?? resultTask?.toolUseId,
         status: resultMetadata.status ?? worker.pendingTaskNotification?.status ?? resultTask?.status,
         summary: resultMetadata.summary ?? worker.pendingTaskNotification?.summary ?? resultTask?.summary,
         outputFile: resultMetadata.outputFile ?? worker.pendingTaskNotification?.outputFile ?? resultTask?.outputFile,
@@ -837,6 +872,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.suppressNextTaskNotificationAssistant = false;
       if (taskId) {
         worker.backgroundTasks.delete(taskId);
+      }
+      if (metadata.toolUseId) {
+        worker.explicitBackgroundToolUseIds.delete(metadata.toolUseId);
       }
       const text = renderBackgroundTaskTurnResult(metadata, parsed.result);
       if (text) {
@@ -896,6 +934,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
             // Tracked so a long SILENT tool call is not mistaken for a finished
             // turn by the background-task settle timer.
             worker.pendingTurn.outstandingToolUseIds.add(item.id);
+            if (isExplicitBackgroundToolInput(item.input)) {
+              worker.explicitBackgroundToolUseIds.add(item.id);
+            }
           }
           this.emitEngineEvent(worker, {
             type: "tool_use",
@@ -1304,6 +1345,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     for (const [taskId, task] of worker.backgroundTasks.entries()) {
       if (now - task.lastSeenAt >= this.backgroundTaskMaxAgeMs) {
         worker.backgroundTasks.delete(taskId);
+        if (task.toolUseId) {
+          worker.explicitBackgroundToolUseIds.delete(task.toolUseId);
+        }
       }
     }
 
