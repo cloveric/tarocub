@@ -699,6 +699,101 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("does not emit duplicate completion while background output is still being read", async () => {
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    let signalReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      signalReadStarted = resolve;
+    });
+    let releaseRead: ((value: string | undefined) => void) | undefined;
+    const readResult = new Promise<string | undefined>((resolve) => {
+      releaseRead = resolve;
+    });
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: "/tmp/kimi-output-race",
+      hookRelayEnabled: true,
+      readBackgroundTaskOutputFn: async () => {
+        signalReadStarted?.();
+        return await readResult;
+      },
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-60", {
+        text: "observe duplicate completion hooks",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+      };
+      const sendHook = async (body: Record<string, unknown>): Promise<void> => {
+        const response = await fetch(hookUrl!, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        expect(response.status).toBe(202);
+      };
+
+      await sendHook({
+        hook_event_name: "TaskStarted",
+        session_id: "kimi-session-1",
+        task_id: "bash-output-race",
+        kind: "process",
+        description: "Race-safe build",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-output-race"
+      )));
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      const completion = {
+        hook_event_name: "Notification",
+        session_id: "kimi-session-1",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-output-race",
+        body: "Build completed.",
+      };
+      await sendHook(completion);
+      await readStarted;
+
+      await sendHook(completion);
+      await sendHook({
+        hook_event_name: "TaskStarted",
+        session_id: "kimi-session-1",
+        task_id: "bash-event-chain-marker",
+        kind: "process",
+        description: "Event-chain marker",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-event-chain-marker"
+      )));
+      releaseRead?.("build passed");
+
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-output-race"
+      )));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-output-race"
+      ))).toHaveLength(1);
+    } finally {
+      releaseRead?.(undefined);
+      await adapter.destroy();
+    }
+  });
+
   it("does not retain tool-result task metadata when no completion relay is active", async () => {
     const harness = createHarness();
     const events: EngineStreamEvent[] = [];

@@ -176,6 +176,7 @@ const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
 type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | null) => Promise<string>;
 type StartKimiHookRelay = typeof startKimiHookRelay;
+type ReadKimiBackgroundTaskOutput = typeof readKimiBackgroundTaskOutput;
 
 function combineInstructions(agentInstructions: string | null, bridgeInstructions: string | null): string | null {
   const parts = [agentInstructions, bridgeInstructions]
@@ -748,6 +749,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly hookRelayEnabled: boolean;
   private readonly hookRelayVersionProbeRequired: boolean;
   private readonly startHookRelayFn: StartKimiHookRelay;
+  private readonly readBackgroundTaskOutputFn: ReadKimiBackgroundTaskOutput;
   private readonly workers = new Map<string, KimiWorker>();
   private readonly pendingWorkers = new Map<string, Promise<KimiWorker>>();
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -779,6 +781,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       syncWorkspaceInstructionsFn?: SyncWorkspaceInstructions;
       hookRelayEnabled?: boolean;
       startHookRelayFn?: StartKimiHookRelay;
+      readBackgroundTaskOutputFn?: ReadKimiBackgroundTaskOutput;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -813,6 +816,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.hookRelayEnabled = options?.hookRelayEnabled ?? options?.spawnFn === undefined;
     this.hookRelayVersionProbeRequired = options?.hookRelayEnabled === undefined;
     this.startHookRelayFn = options?.startHookRelayFn ?? startKimiHookRelay;
+    this.readBackgroundTaskOutputFn = options?.readBackgroundTaskOutputFn ?? readKimiBackgroundTaskOutput;
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -1789,18 +1793,20 @@ export class KimiAcpAdapter implements CodexAdapter {
       clearTimeout(task.notificationTimer);
       task.notificationTimer = undefined;
     }
+    // Terminalize synchronously before output I/O yields. Otherwise a duplicate
+    // hook can re-arm this task while the completion payload is being read.
+    worker.terminalBackgroundTasks.set(task.taskId, Date.now());
+    worker.backgroundTasks.delete(task.taskId);
     const status = taskStatusFromNotificationType(notification.notificationType);
     const sessionId = task.sessionId ?? worker.currentSessionId ?? undefined;
     const processOutput = task.kind === "process" || task.taskId.startsWith("bash-")
-      ? await readKimiBackgroundTaskOutput(this.engineHomePath, sessionId, task.taskId)
+      ? await this.readBackgroundTaskOutputFn(this.engineHomePath, sessionId, task.taskId)
       : undefined;
     const text = task.subagentResponse?.trim()
       || processOutput
       || notification.body?.trim()
       || notification.title?.trim()
       || `${task.description ?? "Kimi background task"} ${status}.`;
-    worker.terminalBackgroundTasks.set(task.taskId, Date.now());
-    worker.backgroundTasks.delete(task.taskId);
     const settlesCurrentTurn = task.ownerTurnId !== undefined
       && worker.pendingTurn?.turnId === task.ownerTurnId;
     await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
