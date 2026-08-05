@@ -731,6 +731,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         worker.stderrTail = `${worker.stderrTail}${trailingStderr}`.slice(-MAX_STDERR_TAIL_CHARS);
       }
       this.failWorker(worker, new Error(renderClaudeStreamExitError(code, worker.stderrTail)));
+      this.failBackgroundTasks(worker);
       this.removeWorker(worker);
     });
 
@@ -1270,6 +1271,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         worker.pendingTurn.reject(new Error("Adapter destroyed"));
         worker.pendingTurn = null;
       }
+      this.failBackgroundTasks(worker);
     }
     this.workers.clear();
   }
@@ -1348,6 +1350,19 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         if (task.toolUseId) {
           worker.explicitBackgroundToolUseIds.delete(task.toolUseId);
         }
+        // Emit a terminal notification instead of deleting silently: the CLI
+        // sometimes loses a completion notification while the worker stays
+        // alive, and a silent delete would leave the timeline pair open (the
+        // restart busy-guard then blocks restarts until ITS stale cutoff)
+        // and the user never told the task went dark.
+        this.emitEngineEvent(worker, {
+          type: "task_notification",
+          text: `${task.summary ?? "Background task"} produced no completion notification for ${Math.round(this.backgroundTaskMaxAgeMs / 3_600_000)}h and is presumed dead.`,
+          sessionId: worker.currentSessionId ?? undefined,
+          taskId: task.taskId,
+          status: "failed",
+          ...(task.summary ? { summary: task.summary } : {}),
+        }, task.onEngineEvent);
       }
     }
 
@@ -1380,6 +1395,34 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       clearTimeout(pending.timeout);
       pending.timeout = undefined;
     }
+  }
+
+  /**
+   * Terminalize outstanding background tasks when their worker dies (parity
+   * with the Kimi adapter): the CLI process that would deliver the completion
+   * notification is gone, so without this the timeline pair stays open — the
+   * user never learns the task died, and the restart busy-guard blocks
+   * service restarts until the 6h stale cutoff (the ccfcc1 astock incident).
+   */
+  private failBackgroundTasks(worker: ClaudeWorker): void {
+    if (worker.backgroundTasks.size === 0) {
+      return;
+    }
+    for (const task of worker.backgroundTasks.values()) {
+      this.emitEngineEvent(worker, {
+        type: "task_notification",
+        text: `${task.summary ?? "Background task"} stopped because the Claude engine process exited before completion.`,
+        sessionId: worker.currentSessionId ?? undefined,
+        taskId: task.taskId,
+        status: "failed",
+        ...(task.summary ? { summary: task.summary } : {}),
+        ...(task.outputFile ? { outputFile: task.outputFile } : {}),
+      }, task.onEngineEvent);
+    }
+    worker.backgroundTasks.clear();
+    worker.explicitBackgroundToolUseIds.clear();
+    worker.pendingTaskNotification = null;
+    worker.suppressNextTaskNotificationAssistant = false;
   }
 
   private removeWorker(worker: ClaudeWorker): void {

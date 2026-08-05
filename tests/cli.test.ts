@@ -833,7 +833,7 @@ describe("runCli", () => {
         env: runEnv,
         logger: { log: () => undefined },
         larkServiceDeps: { start, stop, waitUntilRunning },
-      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+      })).rejects.toThrow('Lark instance "alpha" has 1 unfinished background task(s)');
       expect(stop).not.toHaveBeenCalled();
 
       // The task's terminal notification settles it: restart proceeds.
@@ -897,7 +897,7 @@ describe("runCli", () => {
         env: runEnv,
         logger: { log: () => undefined },
         larkServiceDeps: { start, stop, waitUntilRunning },
-      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+      })).rejects.toThrow('Lark instance "alpha" has 1 unfinished background task(s)');
       expect(stop).not.toHaveBeenCalled();
 
       await writeFile(path.join(stateDir, "timeline.log.jsonl"), [

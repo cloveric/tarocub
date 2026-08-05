@@ -2177,6 +2177,7 @@ async function readLarkPendingTurnActivity(
   readCommandLine?: (pid: number) => Promise<string | null>,
 ): Promise<{
   activeTurnCount: number;
+  backgroundTaskCount: number;
   oldestAcceptedAt?: string;
 }> {
   // A long-running turn may start just before the 10 MB timeline rotates and
@@ -2188,7 +2189,7 @@ async function readLarkPendingTurnActivity(
     sinceMs: Date.now() - LARK_PENDING_TURN_LOOKBACK_MS,
   });
   if (raw === null) {
-    return { activeTurnCount: 0 };
+    return { activeTurnCount: 0, backgroundTaskCount: 0 };
   }
 
   const pendingByConversationKey = new Map<string, TimelineEvent[]>();
@@ -2332,9 +2333,13 @@ async function readLarkPendingTurnActivity(
     .map((event) => event.timestamp)
     .filter((timestamp): timestamp is string => Boolean(timestamp))
     .sort()[0];
+  const backgroundTaskCount = freshPending
+    .filter((event) => event.type === "engine.event")
+    .length;
 
   return {
     activeTurnCount: freshPending.length,
+    backgroundTaskCount,
     ...(oldestAcceptedAt ? { oldestAcceptedAt } : {}),
   };
 }
@@ -2351,6 +2356,16 @@ async function assertNoActiveLarkTurnsBeforeServiceAction(
   }
 
   const acceptedAt = activity.oldestAcceptedAt ? ` Oldest accepted at ${activity.oldestAcceptedAt}.` : "";
+  if (activity.backgroundTaskCount > 0 && activity.backgroundTaskCount === activity.activeTurnCount) {
+    // Every blocker is a background task. Say so: a task whose completion
+    // notification was lost can hold restarts for hours looking like a live
+    // "turn", and the operator deserves the real picture plus the override.
+    throw new Error(
+      `Lark instance "${instanceName}" has ${activity.backgroundTaskCount} unfinished background task(s).` +
+        `${acceptedAt} They may still be working — or stuck. Refusing to ${action} without --force ` +
+        `(--force restarts anyway and kills the task).`,
+    );
+  }
   throw new Error(
     `Lark instance "${instanceName}" has ${activity.activeTurnCount} active or queued Lark turn(s).` +
       `${acceptedAt} Refusing to ${action} without --force.`,

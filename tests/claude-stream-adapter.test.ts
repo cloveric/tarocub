@@ -1069,6 +1069,52 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("terminalizes outstanding background tasks with a failed notification when the worker dies", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; taskId?: string; status?: string; text?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "Run in background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event as never);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "sleep 5", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-background","tool_use_id":"toolu-background","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await turn;
+
+      // The worker dies (crash/kill) BEFORE the task's completion notification
+      // arrives. The task must be terminalized — not left to block restarts
+      // silently until the stale cutoff.
+      children[0].close(1);
+      await waitFor(() => events.some((event) => event.type === "task_notification"));
+      const failure = events.find((event) => event.type === "task_notification")!;
+      expect(failure.taskId).toBe("task-background");
+      expect(failure.status).toBe("failed");
+      expect(failure.text).toContain("exited before completion");
+    } finally {
+      adapter.destroy();
+    }
+  });
+
   it("emits Claude background task notifications when the task result is empty but metadata has a summary", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: unknown[] = [];
