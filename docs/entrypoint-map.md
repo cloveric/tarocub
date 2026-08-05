@@ -190,7 +190,10 @@ See `docs/state-model.md` before changing on-disk semantics.
   Claude streaming adapter.
 - `src/codex/kimi-acp-adapter.ts`
   Persistent Kimi ACP worker, session configuration/loading, streaming event mapping,
-  approvals/questions, cancellation, and compact support.
+  approvals/questions, cancellation, compact support, and background-task lifecycle mapping.
+- `src/codex/kimi-hook-relay.ts`
+  Kimi 0.32+ observer-hook plugin registration and authenticated loopback relay. It accepts
+  `TaskStarted`, `Notification`, and `SubagentStop`; `SessionHeartbeat` is deliberately ignored.
 - `src/codex/kimi-workspace.ts`
   Atomic managed-block synchronization for Kimi workspace instructions.
 
@@ -234,6 +237,7 @@ Run focused tests for the area you touched before wider validation.
 - Shared runtime/state:
   `tests/bridge.test.ts`
   `tests/kimi-acp-adapter.test.ts`
+  `tests/kimi-hook-relay.test.ts`
   `tests/kimi-workspace.test.ts`
   `tests/cron-scheduler.test.ts`
   `tests/instance-lock.test.ts`

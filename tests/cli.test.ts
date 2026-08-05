@@ -841,7 +841,9 @@ describe("runCli", () => {
         event({ type: "input.received", metadata: { larkMessageId: "om_1" } }),
         event({ type: "engine.event", detail: "background_task_started", metadata: { larkMessageId: "om_1", taskId: "task-9" } }),
         event({ type: "turn.completed", outcome: "success", metadata: { larkMessageId: "om_1" } }),
-        event({ type: "engine.event", detail: "task_notification", metadata: { larkMessageId: "om_1", taskId: "task-9", status: "completed" } }),
+        // The start predates session-aware timeline metadata while the
+        // completion follows an in-place upgrade. They must still pair.
+        event({ type: "engine.event", detail: "task_notification", metadata: { larkMessageId: "om_1", taskId: "task-9", sessionId: "session-9", status: "completed" } }),
       ].join(""));
       const handled = await runCli(["lark", "service", "restart"], {
         env: runEnv,
@@ -850,6 +852,66 @@ describe("runCli", () => {
       });
       expect(handled).toBe(true);
       expect(stop).toHaveBeenCalled();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("does not let a matching task id in another conversation settle restart protection", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const runEnv = {
+      USERPROFILE: tempDir,
+      LARK_APP_ID: "cli_a",
+      LARK_APP_SECRET: "secret",
+      CCTB_LARK_INSTANCE: "alpha",
+      CCTB_LARK_STATE_DIR: stateDir,
+    };
+    const event = (
+      conversationKey: string,
+      detail: "background_task_started" | "task_notification",
+      sessionId: string,
+    ) => `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      channel: "lark",
+      chatId: conversationKey.endsWith("a") ? 123 : 124,
+      conversationKey,
+      userId: 456,
+      type: "engine.event",
+      detail,
+      metadata: { taskId: "shared-task-id", sessionId },
+    })}\n`;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), [
+        event("lark:chat-a", "background_task_started", "session-a"),
+        event("lark:chat-b", "background_task_started", "session-b"),
+        event("lark:chat-a", "task_notification", "session-a"),
+      ].join(""));
+
+      await expect(runCli(["lark", "service", "restart"], {
+        env: runEnv,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+      expect(stop).not.toHaveBeenCalled();
+
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), [
+        event("lark:chat-a", "background_task_started", "session-a"),
+        event("lark:chat-b", "background_task_started", "session-b"),
+        event("lark:chat-a", "task_notification", "session-a"),
+        event("lark:chat-b", "task_notification", "session-b"),
+      ].join(""));
+      await expect(runCli(["lark", "service", "restart"], {
+        env: runEnv,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).resolves.toBe(true);
+      expect(stop).toHaveBeenCalledOnce();
     } finally {
       await removeTempRoot(tempDir);
     }

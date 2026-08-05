@@ -44,6 +44,48 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
+## Kimi 0.32 Background-Task Hook Re-probe
+
+- Probe date: 2026-08-05
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `0.32.0`
+- Hook reference: <https://moonshotai.github.io/kimi-code/en/customization/hooks>
+
+A live ACP turn starting detached Bash work returned structured tool output
+containing `task_id`, `description`, and `automatic_notification: true`. When
+the task completed, Kimi wrote a `turn.steer` notification into its internal
+wire log, but the already completed ACP prompt subscription did not forward
+that later turn to TaroCub. ACP alone therefore cannot provide reliable
+out-of-band completion delivery.
+
+Kimi 0.32 observer hooks close that gap. TaroCub registers a local
+`tarocub-hook-relay` plugin in the selected `KIMI_CODE_HOME` with exactly these
+events:
+
+- `TaskStarted`, for the earliest detached-task start signal;
+- `Notification`, restricted at runtime to background-task sources and used as
+  the authoritative terminal event;
+- `SubagentStop`, used to enrich a matching agent-task completion with the
+  sub-agent response.
+
+The plugin command is inert unless its Kimi subprocess inherits a per-process
+loopback URL and random relay token from TaroCub. Accepted payloads must carry a
+live ACP session ID and are serialized before entering the shared engine-event
+path. Existing plugin records are preserved, registry updates are atomic, and
+TaroCub does not rewrite Kimi credentials, sessions, skills, MCP configuration,
+or `config.toml`. Hook failures are observer failures and never fail a Kimi
+turn. On older Kimi releases, foreground ACP behavior remains available, but
+TaroCub does not retain tool-result task metadata because no authoritative
+terminal event exists; reliable post-turn lifecycle tracking requires the 0.32
+hook surface.
+
+`SessionHeartbeat` is intentionally neither registered nor accepted by the
+relay. It indicates that a session process is alive; it does not prove that a
+turn or background task is advancing. Treating it as progress would keep a
+stuck task and restart guard alive indefinitely. ACP transport/process closure
+continues to provide process-liveness failure detection, while only
+task-specific start and terminal events affect task retention.
+
 ## Prompt-Mode Evidence
 
 ### Simple answer and session ID
@@ -323,7 +365,8 @@ Session usage:
 - Context: 0 / 1,048,576 (0.0%)
 ```
 
-Therefore the initial adapter must report Kimi token/cost accounting as
+The 0.32.0 re-probe still produced no structured per-turn usage. Therefore the
+adapter must report Kimi token/cost accounting as
 unavailable. It must not convert context occupancy into billed input/output
 tokens. If a future Kimi version starts sending protocol usage fields, support
 can be added from real fixtures.
@@ -427,6 +470,8 @@ covered by integration tests for a Kimi-configured instance:
 - `[send-file:]`, `[send-image:]`, fenced `file:` blocks, and `.lark-out`
   automatic delivery;
 - cron execution and Kimi engine labels;
+- Kimi 0.32+ detached-task start/completion mapping into shared run-card,
+  completion-notification, worker-retention, and restart-protection paths;
 - `/compact`, which was verified against a real ACP session and preserved a
   probe token across the compaction turn;
 - bare `/resume`, numbered selection, and `/resume session <session-id>`, using
@@ -464,6 +509,8 @@ extra exception.
   workspaces use Kimi's native main-agent override as system context; arbitrary
   external resumed workspaces are intentionally not modified and use ordinary
   prompt fallback.
+- Kimi versions before 0.32 do not provide the hook surface required for
+  reliable completion delivery after an ACP prompt has already returned.
 
 ## M5 Verification
 

@@ -178,10 +178,20 @@ options, and `/resume` session scanning/selection. TaroCub loads instance and
 channel guidance through a workspace `.kimi-code/agents/agent.md` main-agent
 override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
-built-in Search MCP alongside Kimi's native MCP/plugins. Kimi ACP 0.31.1 does
-not expose structured per-turn token/cost usage, mid-turn steering, a direct
-client-supplied system-prompt field, or a `/goal` command; TaroCub reports those
-gaps instead of simulating support. See
+built-in Search MCP alongside Kimi's native MCP/plugins.
+
+With Kimi Code 0.32 or newer, TaroCub also installs an inert local hook plugin
+under `KIMI_CODE_HOME` and activates it only for bridge-owned ACP subprocesses.
+`TaskStarted`, background-task `Notification`, and `SubagentStop` events feed
+the existing run cards, out-of-band completion notices, worker retention, and
+restart guard. Tool-result metadata remains the start-event fallback. The
+relay deliberately ignores `SessionHeartbeat`: it proves only that the Kimi
+process is alive, not that a turn or task is making progress. Existing Kimi
+credentials, sessions, skills, MCP servers, and `config.toml` are not replaced.
+
+Kimi ACP still does not expose structured per-turn token/cost usage, mid-turn
+steering, a direct client-supplied system-prompt field, or a `/goal` command;
+TaroCub reports those gaps instead of simulating support. See
 [Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence and the
 [Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for the four-engine
 release contract.

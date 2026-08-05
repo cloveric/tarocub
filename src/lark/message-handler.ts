@@ -1743,6 +1743,7 @@ async function runNormalizedLarkMessage(
             textChars: "text" in event ? event.text.length : undefined,
             status: "status" in event ? event.status : undefined,
             taskId: "taskId" in event ? event.taskId : undefined,
+            sessionId: "sessionId" in event ? event.sessionId : undefined,
           },
         });
 

@@ -343,6 +343,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Session resume | `codex exec resume --json <id>` | `claude -p -r <session-id>` | `/resume` lists native ACP sessions; `/resume session <id>` validates with `session/load` and resumes in the original real-path workspace | Auto-binds the first logged conversation; `/resume` scans recent agy logs; `/resume conversation <id>` uses `agy --conversation` |
 | Project instructions | `agent.md` (prepended to prompt) | `agent.md` appended to Claude's system prompt + `CLAUDE.md` auto-loaded from workspace | Bot-owned workspaces use a native `.kimi-code/agents/agent.md` main-agent override while preserving `${base_prompt}` and `${plugin_sections}`; external workspaces are not modified and use a text-turn fallback | `agent.md` (prepended to prompt) |
 | Streaming / early delivery | JSON stream events feed timeline and early file delivery | Claude stream events feed timeline and early file delivery | ACP session updates feed the timeline, tool state, questions, and early delivery | stdout chunks feed timeline and early file delivery when `agy --print` streams output |
+| Background tasks | Structured runtime task events | Structured runtime task events | Kimi 0.32+ observer hooks feed shared start/completion events, retain the ACP worker, and protect restarts; `SessionHeartbeat` is never treated as progress | Process-local only |
 | Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | ACP permission requests become native channel buttons; ACP question options remain distinct from approvals | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `full-auto` maps to ACP `yolo`; unsafe/bypass maps to ACP `auto` | `--dangerously-skip-permissions` |
 | `/goal` | Bridge-native goal API; defaults to no token budget unless `--budget` is provided | Passes through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Not exposed by Kimi ACP 0.31.1; rejected explicitly instead of being sent as ordinary text | Passes through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
@@ -350,7 +351,16 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Forwarded as Kimi's native slash command | Not supported by the bridge yet |
 | Skills / plugins / MCP | Uses the configured Codex home; isolated homes link `skills/` to the shared Codex skills dir | Uses shared Claude config plus workspace `CLAUDE.md`, skills, plugins, and native MCP | Keeps Kimi's native `~/.agents/skills`, project skills, plugins, and MCP; bot workspaces also expose `~/.codex/skills`, and TaroCub injects Search MCP on ACP new/load | Uses Antigravity's native CLI/plugin config; do not import other engines' native plugins unless explicitly chosen |
 | Working directory | Instance `workspace/`, or the validated resumed thread workspace | Instance `workspace/` | Instance `workspace/`, or the authoritative real-path `cwd` returned by ACP for a resumed session | Instance `workspace/` |
-| Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable | Persistent ACP workers are reaped after 2 hours idle; sessions remain resumable | Process exits after each turn |
+| Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable | Persistent ACP workers are reaped after 2 hours idle unless they retain a background task; sessions remain resumable | Process exits after each turn |
+
+For Kimi 0.32 or newer, TaroCub registers an inert hook plugin under the active
+`KIMI_CODE_HOME`. Only bridge-owned ACP subprocesses receive the authenticated
+loopback relay environment, so ordinary Kimi sessions do not send events to
+TaroCub. The relay consumes `TaskStarted`, background-task `Notification`, and
+`SubagentStop`; it deliberately ignores `SessionHeartbeat` because process
+liveness is not evidence of task progress. Existing Kimi credentials,
+sessions, native skills/plugins, MCP configuration, and `config.toml` remain in
+place.
 
 ## Live Web Search MCP: Brave + Tavily
 
@@ -638,7 +648,7 @@ Estimated cost: $0.3521
 Last updated: 2026-04-09T10:00:00Z
 ```
 
-Claude reports exact USD cost. Codex reports tokens without an exact bridge-side price. Kimi ACP 0.31.1 does not expose structured turn token/cost telemetry, so Kimi usage and budget accounting cannot be treated as complete until the protocol adds it.
+Claude reports exact USD cost. Codex reports tokens without an exact bridge-side price. Kimi ACP 0.32.0 still does not expose structured turn token/cost telemetry, so Kimi usage and budget accounting cannot be treated as complete until the protocol adds it.
 
 ---
 
@@ -806,7 +816,7 @@ If you already know the session ID, attach it explicitly:
 
 Before changing the chat binding, the bridge starts a short-lived ACP control connection, loads the session, and uses the authoritative `cwd` returned by Kimi. The directory is resolved through `realpath` and must still exist. Invalid IDs, unavailable validation, and missing workspaces fail closed without altering the current session or config. `/detach` restores the pre-resume conversation when available.
 
-For bot-owned workspaces, generated bridge instructions live in Kimi's native `.kimi-code/agents/agent.md` main-agent override and preserve `${base_prompt}` plus `${plugin_sections}`. External resumed projects are never modified; ordinary text turns use a prompt fallback because ACP 0.31.1 has no direct arbitrary system-prompt field. Raw slash commands such as `/compact` are not prefixed.
+For bot-owned workspaces, generated bridge instructions live in Kimi's native `.kimi-code/agents/agent.md` main-agent override and preserve `${base_prompt}` plus `${plugin_sections}`. External resumed projects are never modified; ordinary text turns use a prompt fallback because ACP has no direct arbitrary system-prompt field. Raw slash commands such as `/compact` are not prefixed.
 
 ### Antigravity conversation attach
 

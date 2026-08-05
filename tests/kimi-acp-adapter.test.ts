@@ -322,6 +322,7 @@ class FakeKimiChild extends EventEmitter {
 function createHarness(configureServer?: (server: FakeAcpServer) => void) {
   const children: FakeKimiChild[] = [];
   const spawnCalls: Array<{ command: string; args: string[]; cwd?: string }> = [];
+  const spawnEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
   const killedPids: Array<number | undefined> = [];
   const spawnFn: SpawnKimi = (command, args, options) => {
     const index = children.length + 1;
@@ -329,11 +330,13 @@ function createHarness(configureServer?: (server: FakeAcpServer) => void) {
     configureServer?.(child.server);
     children.push(child);
     spawnCalls.push({ command, args, cwd: options.cwd });
+    spawnEnvs.push(options.env);
     return child as unknown as KimiChildProcess;
   };
   return {
     children,
     spawnCalls,
+    spawnEnvs,
     killedPids,
     spawnFn,
     killProcessTreeFn: (pid: number | undefined) => killedPids.push(pid),
@@ -370,6 +373,304 @@ afterEach(() => {
 });
 
 describe("KimiAcpAdapter", () => {
+  it("relays Kimi hook background tasks into start and out-of-band completion events", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-54", {
+        text: "start a background build",
+        files: [],
+        onEngineEvent: async (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const hookToken = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN;
+      expect(hookUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
+      expect(hookToken).toMatch(/^[a-f0-9]{64}$/);
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": hookToken!,
+      };
+
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-background-build",
+        title: "Bash",
+        kind: "execute",
+        status: "pending",
+        rawInput: { command: "npm run build", run_in_background: true },
+      });
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-background-build",
+        status: "completed",
+        rawOutput: [
+          "task_id: bash-build1",
+          "status: running",
+          "description: Build release",
+          "automatic_notification: true",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => event.type === "background_task_started"));
+
+      const started = await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-build1",
+          kind: "process",
+          description: "Build release",
+          status: "running",
+          detached: true,
+        }),
+      });
+      expect(started.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(events.filter((event) => event.type === "background_task_started")).toHaveLength(1);
+
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "The build is running in the background." },
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "The build is running in the background." });
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "low" }), "utf8");
+      await expect(adapter.sendUserMessage("kimi-session-1", {
+        text: "apply the new effort",
+        files: [],
+      })).rejects.toThrow("Kimi session has 1 background task still running");
+
+      const completed = await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "Notification",
+          session_id: "kimi-session-1",
+          notification_type: "task.completed",
+          source_kind: "background_task",
+          source_id: "bash-build1",
+          title: "Background process completed",
+          body: "Build release completed.",
+        }),
+      });
+      expect(completed.status).toBe(202);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(events).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "background_task_started",
+          taskId: "bash-build1",
+          sessionId: "kimi-session-1",
+          description: "Build release",
+        }),
+        expect.objectContaining({
+          type: "task_notification",
+          taskId: "bash-build1",
+          sessionId: "kimi-session-1",
+          status: "completed",
+          text: "Build release completed.",
+        }),
+      ]));
+      const notification = events.find((event) => event.type === "task_notification");
+      expect(notification).not.toHaveProperty("settlesCurrentTurn");
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retain tool-result task metadata when no completion relay is active", async () => {
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const turn = adapter.sendUserMessage("telegram-56", {
+      text: "start a background build",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    harness.children[0].server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "tool-background-build",
+      title: "Bash",
+      kind: "execute",
+      status: "pending",
+      rawInput: { command: "npm run build", run_in_background: true },
+    });
+    harness.children[0].server.sendUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tool-background-build",
+      status: "completed",
+      rawOutput: [
+        "task_id: bash-build1",
+        "description: Build release",
+        "automatic_notification: true",
+      ].join("\n"),
+    });
+    harness.children[0].server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Background build started." },
+    });
+    harness.children[0].server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "Background build started." });
+    expect(events.some((event) => event.type === "background_task_started")).toBe(false);
+    adapter.destroy();
+  });
+
+  it("terminalizes retained background tasks when their ACP worker is destroyed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-destroy-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-57", {
+        text: "start a background build",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const hookToken = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN;
+      const started = await fetch(hookUrl!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tarocub-kimi-hook-token": hookToken!,
+        },
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-build-destroyed",
+          kind: "process",
+          description: "Build release",
+          detached: true,
+        }),
+      });
+      expect(started.status).toBe(202);
+      await waitFor(() => events.some((event) => event.type === "background_task_started"));
+
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      adapter.destroy();
+      await waitFor(() => events.some((event) => event.type === "task_notification"));
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "bash-build-destroyed",
+        sessionId: "kimi-session-1",
+        status: "failed",
+      }));
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enriches an agent-task notification with the matching SubagentStop response", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-agent-hook-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-55", {
+        text: "start a background reviewer",
+        files: [],
+        onEngineEvent: async (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+      };
+
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "agent-review1",
+          kind: "agent",
+          description: "Review the patch",
+          detached: true,
+        }),
+      });
+      await waitFor(() => events.some((event) => event.type === "background_task_started"));
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Reviewer dispatched." },
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Reviewer dispatched." });
+
+      const notification = await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "Notification",
+          session_id: "kimi-session-1",
+          notification_type: "task.completed",
+          source_kind: "background_task",
+          source_id: "agent-review1",
+          body: "Reviewer finished.",
+        }),
+      });
+      const subagentStop = await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "SubagentStop",
+          session_id: "kimi-session-1",
+          agent_name: "reviewer",
+          response: "No blocking findings.",
+        }),
+      });
+      expect(notification.status).toBe(202);
+      expect(subagentStop.status).toBe(202);
+      await waitFor(() => events.some((event) => event.type === "task_notification"));
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "agent-review1",
+        sessionId: "kimi-session-1",
+        status: "completed",
+        text: "No blocking findings.",
+      }));
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("applies advertised model, effort, and approval settings and reloads the same session after reconfiguration", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-config-test-"));
     const configPath = path.join(root, "config.json");

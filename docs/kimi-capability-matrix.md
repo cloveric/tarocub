@@ -2,8 +2,9 @@
 
 This matrix is the release contract for the initial Kimi Code engine. It
 compares Kimi with the existing Codex and Claude engines and labels every Kimi
-row as either aligned or an explicit gap. Protocol observations refer to Kimi
-Code CLI 0.31.1 and must be re-probed before removing a gap.
+row as either aligned or an explicit gap. Core ACP observations refer to Kimi
+Code CLI 0.31.1; background-task hook observations were re-probed with 0.32.0.
+Both surfaces must be re-probed before removing a remaining gap.
 
 | Capability | Codex | Claude Code | Kimi Code alignment |
 |---|---|---|---|
@@ -12,6 +13,8 @@ Code CLI 0.31.1 and must be re-probed before removing a gap.
 | Text streaming | App-server/process events | Stream-json events | **Aligned:** ACP `agent_message_chunk` -> shared `assistant_text` events |
 | Thinking streaming | App-server reasoning events | Stream-json thinking events | **Aligned:** ACP `agent_thought_chunk` -> shared `thinking` events |
 | Tool lifecycle | Structured tool events | Structured tool events | **Aligned:** ACP `tool_call` and `tool_call_update` -> shared tool events |
+| Background tasks | Structured start/completion events | Structured start/completion events | **Aligned on Kimi 0.32+:** an authenticated loopback relay maps `TaskStarted`, background-task `Notification`, and `SubagentStop` hooks into shared start/completion events; tool-result metadata is the start fallback, and task identity is scoped by conversation, session, and task ID |
+| Background liveness | Runtime task state | Runtime task state | **Aligned without false progress:** active tasks retain their ACP worker and protect restarts until a terminal notification; `SessionHeartbeat` is intentionally ignored because process liveness is not task progress |
 | Stop/cancel | Runtime interrupt/abort | Worker abort | **Aligned:** ACP `session/cancel`, then process termination after the grace period |
 | Normal approvals | App-server tool approval; process mode pre-approves the turn | Per-tool permission callback | **Aligned:** ACP permission callbacks use the shared approval policy and Lark/Telegram UI |
 | Full-auto/bypass | Native sandbox/full-auto and bypass modes | Native permission modes | **Aligned:** full-auto -> ACP `yolo`; bypass -> ACP `auto` |
@@ -26,7 +29,7 @@ Code CLI 0.31.1 and must be re-probed before removing a gap.
 | Context compaction | Stateless reset fallback | Native `/compact` | **Aligned:** real ACP `/compact`, verified to retain a probe token in the same session |
 | Goal mode | Bridge-native goal API | Native `/goal` prompt | **Gap:** live ACP returned `Unknown ACP command: /goal`; TaroCub rejects it explicitly |
 | Mid-turn steering | App-server `turn/steer` | No protocol support; later message queues | **Gap:** ACP has no mid-turn prompt injection; later messages queue as separate turns |
-| Per-turn usage | Structured token usage when emitted | Structured tokens and cost | **Gap:** ACP 0.31.1 emitted no structured token or cost telemetry in real probes |
+| Per-turn usage | Structured token usage when emitted | Structured tokens and cost | **Gap:** ACP 0.32.0 still emitted no structured token or cost telemetry in real probes |
 | Spend budgets | Metered from structured usage | Metered from structured usage | **Gap:** without structured Kimi usage, configured dollar budgets cannot account for Kimi turns |
 | Status/usage disclosure | Shared status and usage commands | Shared status and usage commands | **Aligned:** commands explicitly say Kimi turns are excluded instead of reporting false zero usage |
 | File/image response tags | Shared send tools and fenced file blocks | Shared send tools and fenced file blocks | **Aligned:** shared `[send-file:]`, `[send-image:]`, `send.*`, and whole-response fenced `file:` paths |
@@ -41,7 +44,7 @@ Code CLI 0.31.1 and must be re-probed before removing a gap.
 | Local skills | Codex/user/project skills | Claude/user/project skills | **Aligned:** Kimi keeps its native `~/.agents/skills`, project `.kimi-code/skills`/`.agents/skills`, and plugin skills; TaroCub exposes `~/.codex/skills` through the bridge-owned workspace `.kimi-code/skills` path without replacing existing project skills |
 | MCP servers | Native Codex MCP configuration | Native Claude MCP/plugins | **Aligned:** native Kimi user/project MCP/plugins remain active, and TaroCub injects its Brave/Tavily Search MCP through ACP for every new or loaded session |
 | Thought verbosity control | Runtime-dependent | Runtime-dependent | **Gap:** compatibility `verbosity` does not suppress Kimi thought events in ACP 0.31.1 |
-| Hot config during a turn | Runtime-dependent | Runtime-dependent | **Gap:** Kimi model/thinking/mode changes apply to the next turn and are rejected while that session is in flight |
+| Hot config during a turn | Runtime-dependent | Runtime-dependent | **Gap:** Kimi model/thinking/mode changes apply to the next turn and are rejected while that session has an in-flight turn or retained background task |
 
 The protocol evidence, exact probes, and end-to-end verification are recorded
 in [Kimi Engine Protocol Notes](./kimi-engine-notes.md).

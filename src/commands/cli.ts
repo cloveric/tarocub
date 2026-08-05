@@ -2117,6 +2117,60 @@ async function readLarkServiceLockState(stateDir: string): Promise<{ pid: number
   }
 }
 
+type LarkTimelineBackgroundTaskIdentity = {
+  conversationKey: string;
+  taskId: string;
+  sessionId?: string;
+  key: string;
+  legacyKey: string;
+};
+
+function getLarkTimelineBackgroundTaskIdentity(
+  event: TimelineEvent,
+): LarkTimelineBackgroundTaskIdentity | undefined {
+  const taskId = typeof event.metadata?.taskId === "string" ? event.metadata.taskId : undefined;
+  if (!taskId) {
+    return undefined;
+  }
+  const conversationKey = event.conversationKey ?? "";
+  const sessionId = typeof event.metadata?.sessionId === "string" && event.metadata.sessionId
+    ? event.metadata.sessionId
+    : undefined;
+  const legacyKey = `${conversationKey}\0\0${taskId}`;
+  return {
+    conversationKey,
+    taskId,
+    ...(sessionId ? { sessionId } : {}),
+    key: `${conversationKey}\0${sessionId ?? ""}\0${taskId}`,
+    legacyKey,
+  };
+}
+
+function settleLarkTimelineBackgroundTask(
+  pending: Map<string, TimelineEvent>,
+  identity: LarkTimelineBackgroundTaskIdentity,
+): void {
+  if (identity.sessionId) {
+    pending.delete(identity.key);
+    // Starts written before sessionId was added to timeline metadata must
+    // still pair with a terminal event written after an in-place upgrade.
+    pending.delete(identity.legacyKey);
+    return;
+  }
+  if (pending.delete(identity.legacyKey)) {
+    return;
+  }
+  // The reverse mixed-version case is safe only when the conversation/task
+  // pair identifies exactly one session. Never let a legacy terminal event
+  // settle two same-id tasks in parallel sessions.
+  const prefix = `${identity.conversationKey}\0`;
+  const suffix = `\0${identity.taskId}`;
+  const candidates = [...pending.keys()].filter((key) => key.startsWith(prefix) && key.endsWith(suffix));
+  if (candidates.length === 1) {
+    pending.delete(candidates[0]!);
+  }
+}
+
 async function readLarkPendingTurnActivity(
   stateDir: string,
   instanceName: string,
@@ -2140,12 +2194,14 @@ async function readLarkPendingTurnActivity(
   const pendingByConversationKey = new Map<string, TimelineEvent[]>();
   const pendingCronRunsByJobId = new Map<string, TimelineEvent[]>();
   const pendingCommentTurnsByKey = new Map<string, TimelineEvent[]>();
-  // Claude background tasks (run_in_background shells / subagents) outlive
+  // Engine background tasks (run_in_background shells / subagents) outlive
   // their foreground turn: the turn pairs off as completed while the engine
   // worker still owns live background work. Restarting then kills it mid-run
   // (the operator saw exactly this: a release's own self-check cut off). Pair
   // background_task_started against the task_notification that settles it.
-  const pendingBackgroundTasksById = new Map<string, TimelineEvent>();
+  // Scope by conversation + engine session + task id: task ids are only
+  // session-local for some engines, so a different chat must not settle them.
+  const pendingBackgroundTasksByKey = new Map<string, TimelineEvent>();
   for (const event of parseTimelineEvents(raw)) {
     if (event.channel !== "lark") {
       continue;
@@ -2161,11 +2217,11 @@ async function readLarkPendingTurnActivity(
 
     if (event.type === "engine.event") {
       const detail = (event as { detail?: unknown }).detail;
-      const taskId = typeof event.metadata?.taskId === "string" ? event.metadata.taskId : undefined;
-      if (detail === "background_task_started" && taskId) {
-        pendingBackgroundTasksById.set(taskId, event);
-      } else if (detail === "task_notification" && taskId) {
-        pendingBackgroundTasksById.delete(taskId);
+      const taskIdentity = getLarkTimelineBackgroundTaskIdentity(event);
+      if (detail === "background_task_started" && taskIdentity) {
+        pendingBackgroundTasksByKey.set(taskIdentity.key, event);
+      } else if (detail === "task_notification" && taskIdentity) {
+        settleLarkTimelineBackgroundTask(pendingBackgroundTasksByKey, taskIdentity);
       }
       continue;
     }
@@ -2243,7 +2299,7 @@ async function readLarkPendingTurnActivity(
     ...[...pendingByConversationKey.values()].flat(),
     ...[...pendingCronRunsByJobId.values()].flat(),
     ...[...pendingCommentTurnsByKey.values()].flat(),
-    ...pendingBackgroundTasksById.values(),
+    ...pendingBackgroundTasksByKey.values(),
   ]
     .filter((event) => {
       const timestampMs = event.timestamp ? new Date(event.timestamp).getTime() : Number.NaN;

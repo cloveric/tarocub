@@ -34,6 +34,13 @@ import {
   ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS,
   ENGINE_DEFAULT_TURN_TIMEOUT_MS,
 } from "./engine-timeouts.js";
+import {
+  isKimiHookRelayVersionSupported,
+  KIMI_HOOK_RELAY_URL_ENV,
+  startKimiHookRelay,
+  type KimiHookEvent,
+  type KimiHookRelayRuntime,
+} from "./kimi-hook-relay.js";
 import { killProcessTree } from "./process-tree.js";
 import { syncKimiWorkspaceInstructions } from "./kimi-workspace.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
@@ -72,6 +79,7 @@ export type KimiChildProcess = {
 export type SpawnKimi = (command: string, args: string[], options: SpawnOptions) => KimiChildProcess;
 
 type PendingKimiTurn = {
+  turnId: number;
   assistantText: string;
   onProgress?: (partialText: string) => void;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
@@ -101,6 +109,24 @@ type KimiToolState = {
   emittedResult: boolean;
 };
 
+type KimiTaskNotification = Extract<KimiHookEvent, { hookEventName: "Notification" }>;
+
+type KimiBackgroundTask = {
+  taskId: string;
+  sessionId?: string;
+  description?: string;
+  kind?: string;
+  status?: string;
+  subagentName?: string;
+  subagentResponse?: string;
+  ownerTurnId?: number;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  startEmitted: boolean;
+  lastSeenAt: number;
+  pendingNotification?: KimiTaskNotification;
+  notificationTimer?: ReturnType<typeof setTimeout>;
+};
+
 type KimiWorker = {
   child: KimiChildProcess;
   connection: ClientSideConnection;
@@ -108,10 +134,13 @@ type KimiWorker = {
   currentSessionId: string | null;
   workspacePath: string;
   settingsKey: string;
+  hookRelayActive: boolean;
   stderrDecoder: TextDecoder;
   stderrTail: string;
   pendingTurn: PendingKimiTurn | null;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   tools: Map<string, KimiToolState>;
+  backgroundTasks: Map<string, KimiBackgroundTask>;
   lastActivityAt: number;
   removed: boolean;
   failurePromise: Promise<never>;
@@ -138,8 +167,12 @@ const MAX_STDERR_TAIL_CHARS = 20_000;
 const MAX_ERROR_LINE_PREVIEW_CHARS = 240;
 const MAX_INSTRUCTIONS_CHARS = 100_000;
 const MAX_LISTED_SESSIONS = 200;
+const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
+const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
+const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
 type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | null) => Promise<string>;
+type StartKimiHookRelay = typeof startKimiHookRelay;
 
 function combineInstructions(agentInstructions: string | null, bridgeInstructions: string | null): string | null {
   const parts = [agentInstructions, bridgeInstructions]
@@ -252,6 +285,43 @@ function buildCommandInvocation(command: string, args: string[]): { command: str
   return { command: normalizedCommand, args, shell: false };
 }
 
+async function probeKimiHookRelayCompatibility(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const invocation = buildCommandInvocation(command, ["--version"]);
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    let output = "";
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: invocation.shell,
+      env,
+      windowsHide: true,
+    });
+    const finish = (supported: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(supported);
+    };
+    const append = (chunk: Uint8Array | string): void => {
+      output = `${output}${typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")}`.slice(-4_096);
+    };
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+    child.once("error", () => finish(false));
+    child.once("close", () => finish(isKimiHookRelayVersionSupported(output)));
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(false);
+    }, KIMI_VERSION_PROBE_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+}
+
 function stringifyOutput(value: unknown): string | undefined {
   if (typeof value === "string") {
     return value;
@@ -264,6 +334,37 @@ function stringifyOutput(value: unknown): string | undefined {
   } catch {
     return String(value);
   }
+}
+
+function parseKimiBackgroundTaskOutput(output: string | undefined): {
+  taskId: string;
+  description?: string;
+  subagentName?: string;
+} | null {
+  if (!output) {
+    return null;
+  }
+  const fields = new Map<string, string>();
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^([a-z_]+):\s*(.*)$/);
+    if (match?.[1] && match[2] !== undefined) {
+      fields.set(match[1], match[2].trim());
+    }
+  }
+  const taskId = fields.get("task_id");
+  if (!taskId || fields.get("automatic_notification") !== "true") {
+    return null;
+  }
+  const description = fields.get("description") || undefined;
+  const subagentName = fields.get("actual_subagent_type") || undefined;
+  return { taskId, description, subagentName };
+}
+
+function taskStatusFromNotificationType(notificationType: string): string {
+  const status = notificationType.startsWith("task.")
+    ? notificationType.slice("task.".length)
+    : notificationType;
+  return status.trim() || "completed";
 }
 
 function toolContentText(content: ToolCallContent[] | null | undefined): string | undefined {
@@ -548,12 +649,21 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly initializeTimeoutMs: number;
   private readonly cancelGraceMs: number;
   private readonly idleWorkerTtlMs: number;
+  private readonly backgroundTaskMaxAgeMs: number;
   private readonly killProcessTreeFn: (pid: number | undefined) => void;
   private readonly mcpServers: McpServer[];
   private readonly syncWorkspaceInstructionsFn: SyncWorkspaceInstructions;
+  private readonly hookRelayEnabled: boolean;
+  private readonly hookRelayVersionProbeRequired: boolean;
+  private readonly startHookRelayFn: StartKimiHookRelay;
   private readonly workers = new Map<string, KimiWorker>();
   private readonly pendingWorkers = new Map<string, Promise<KimiWorker>>();
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
+  private hookRelayPromise: Promise<KimiHookRelayRuntime | null> | undefined;
+  private hookRelayRuntime: KimiHookRelayRuntime | undefined;
+  private hookRelayCompatibilityPromise: Promise<boolean> | undefined;
+  private nextTurnId = 1;
+  private destroyed = false;
 
   constructor(
     private readonly kimiExecutable: string,
@@ -570,9 +680,12 @@ export class KimiAcpAdapter implements CodexAdapter {
       cancelGraceMs?: number;
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
+      backgroundTaskMaxAgeMs?: number;
       killProcessTreeFn?: (pid: number | undefined) => void;
       mcpServers?: McpServer[];
       syncWorkspaceInstructionsFn?: SyncWorkspaceInstructions;
+      hookRelayEnabled?: boolean;
+      startHookRelayFn?: StartKimiHookRelay;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -598,9 +711,15 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.initializeTimeoutMs = options?.initializeTimeoutMs ?? KIMI_ACP_INITIALIZE_TIMEOUT_MS;
     this.cancelGraceMs = options?.cancelGraceMs ?? KIMI_ACP_CANCEL_GRACE_MS;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
+    this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
     this.killProcessTreeFn = options?.killProcessTreeFn ?? killProcessTree;
     this.mcpServers = options?.mcpServers ?? resolveDefaultKimiMcpServers();
     this.syncWorkspaceInstructionsFn = options?.syncWorkspaceInstructionsFn ?? syncKimiWorkspaceInstructions;
+    // Unit/fake spawners stay hermetic unless a test explicitly opts in. Real
+    // service adapters enable the Kimi 0.32+ hook relay by default.
+    this.hookRelayEnabled = options?.hookRelayEnabled ?? options?.spawnFn === undefined;
+    this.hookRelayVersionProbeRequired = options?.hookRelayEnabled === undefined;
+    this.startHookRelayFn = options?.startHookRelayFn ?? startKimiHookRelay;
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -804,6 +923,47 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
+  private async resolveWorkerChildEnv(): Promise<NodeJS.ProcessEnv> {
+    if (!this.hookRelayEnabled || !this.engineHomePath) {
+      return this.childEnv;
+    }
+    if (this.hookRelayVersionProbeRequired) {
+      this.hookRelayCompatibilityPromise ??= probeKimiHookRelayCompatibility(
+        this.kimiExecutable,
+        this.childEnv,
+      ).then((compatible) => {
+        if (!compatible) {
+          console.error(
+            "Kimi background-task hooks require Kimi Code 0.32 or newer; continuing with ACP only.",
+          );
+        }
+        return compatible;
+      });
+      if (!await this.hookRelayCompatibilityPromise) {
+        return this.childEnv;
+      }
+    }
+    this.hookRelayPromise ??= this.startHookRelayFn({
+      engineHomePath: this.engineHomePath,
+      onEvent: async (event) => await this.handleKimiHookEvent(event),
+    }).then(async (runtime) => {
+      if (this.destroyed) {
+        await runtime.close().catch(() => undefined);
+        return null;
+      }
+      this.hookRelayRuntime = runtime;
+      return runtime;
+    }).catch((error: unknown) => {
+      console.error(
+        "Kimi background-task hook relay is unavailable; continuing without out-of-band task notifications:",
+        error instanceof Error ? error.message : String(error),
+      );
+      return null;
+    });
+    const runtime = await this.hookRelayPromise;
+    return runtime ? { ...this.childEnv, ...runtime.env } : this.childEnv;
+  }
+
   private async getOrCreateWorker(
     sessionId: string,
     workspacePath: string,
@@ -818,6 +978,14 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
       if (existing.pendingTurn) {
         throw new Error("Cannot reconfigure Kimi session while a turn is in flight");
+      }
+      this.pruneExpiredBackgroundTasks(existing, Date.now());
+      if (existing.backgroundTasks.size > 0) {
+        const count = existing.backgroundTasks.size;
+        throw new Error(
+          `Kimi session has ${count} background task${count === 1 ? "" : "s"} still running, so the new engine settings cannot be applied yet. `
+          + `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
+        );
       }
       const resumedSessionId = existing.currentSessionId ?? sessionId;
       this.killProcessTreeFn(existing.child.pid);
@@ -847,11 +1015,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     runtimeOptions: KimiRuntimeOptions,
     settingsKey: string,
   ): Promise<KimiWorker> {
+    const childEnv = await this.resolveWorkerChildEnv();
     const invocation = buildCommandInvocation(this.kimiExecutable, ["acp"]);
     const child = this.spawnKimi(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
-      env: this.childEnv,
+      env: childEnv,
       cwd: workspacePath,
       windowsHide: true,
     });
@@ -883,10 +1052,13 @@ export class KimiAcpAdapter implements CodexAdapter {
       currentSessionId: null,
       workspacePath,
       settingsKey,
+      hookRelayActive: Boolean(childEnv[KIMI_HOOK_RELAY_URL_ENV]),
       stderrDecoder: new TextDecoder(),
       stderrTail: "",
       pendingTurn: null,
+      onEngineEvent: undefined,
       tools: new Map(),
+      backgroundTasks: new Map(),
       lastActivityAt: Date.now(),
       removed: false,
       failurePromise,
@@ -1137,6 +1309,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     });
     void interruptionPromise.catch(() => undefined);
     const pending: PendingKimiTurn = {
+      turnId: this.nextTurnId++,
       assistantText: "",
       onProgress: input.onProgress,
       onApprovalRequest: input.onApprovalRequest,
@@ -1161,6 +1334,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       throw new Error("Kimi session already has an in-flight turn");
     }
     worker.pendingTurn = pending;
+    worker.onEngineEvent = input.onEngineEvent;
     worker.tools.clear();
     worker.stderrTail = "";
     this.armTurnTimeouts(worker, pending);
@@ -1342,13 +1516,192 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (!pending) {
       return;
     }
+    const output = stringifyOutput(state.rawOutput) ?? state.latestContentText;
+    this.captureBackgroundTaskToolOutput(worker, output);
     this.queueEngineEvent(pending, {
       type: "tool_result",
       toolUseId: state.toolCallId,
       toolName: state.toolName,
-      output: stringifyOutput(state.rawOutput) ?? state.latestContentText,
+      output,
       isError,
       sessionId: worker.currentSessionId ?? undefined,
+    });
+  }
+
+  private captureBackgroundTaskToolOutput(worker: KimiWorker, output: string | undefined): void {
+    // Tool output gives us a useful start fallback but no terminal signal on
+    // its own. Retain it only when this worker has the hook relay that can
+    // later deliver the authoritative Notification event.
+    if (!worker.hookRelayActive) {
+      return;
+    }
+    const metadata = parseKimiBackgroundTaskOutput(output);
+    if (!metadata) {
+      return;
+    }
+    const now = Date.now();
+    const existing = worker.backgroundTasks.get(metadata.taskId);
+    const task: KimiBackgroundTask = existing ?? {
+      taskId: metadata.taskId,
+      sessionId: worker.currentSessionId ?? undefined,
+      ownerTurnId: worker.pendingTurn?.turnId,
+      onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+      startEmitted: false,
+      lastSeenAt: now,
+    };
+    task.description = metadata.description ?? task.description;
+    task.subagentName = metadata.subagentName ?? task.subagentName;
+    task.kind = metadata.subagentName ? "agent" : task.kind;
+    task.status = "running";
+    task.lastSeenAt = now;
+    task.onEngineEvent ??= worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
+    task.ownerTurnId ??= worker.pendingTurn?.turnId;
+    worker.backgroundTasks.set(task.taskId, task);
+    this.emitBackgroundTaskStarted(worker, task);
+  }
+
+  private findWorkerForHook(sessionId: string): KimiWorker | undefined {
+    const direct = this.workers.get(sessionId);
+    if (direct?.currentSessionId === sessionId && !direct.removed) {
+      return direct;
+    }
+    const seen = new Set<KimiWorker>();
+    for (const worker of this.workers.values()) {
+      if (seen.has(worker)) {
+        continue;
+      }
+      seen.add(worker);
+      if (!worker.removed && worker.currentSessionId === sessionId) {
+        return worker;
+      }
+    }
+    return undefined;
+  }
+
+  private async handleKimiHookEvent(event: KimiHookEvent): Promise<void> {
+    const worker = this.findWorkerForHook(event.sessionId);
+    if (!worker) {
+      return;
+    }
+    if (event.hookEventName === "TaskStarted") {
+      // Foreground tools also use Kimi's task service. Only detached work can
+      // outlive the foreground turn and therefore belongs in restart guards.
+      if (event.detached === false) {
+        return;
+      }
+      const now = Date.now();
+      const existing = worker.backgroundTasks.get(event.taskId);
+      const task: KimiBackgroundTask = existing ?? {
+        taskId: event.taskId,
+        sessionId: event.sessionId,
+        ownerTurnId: worker.pendingTurn?.turnId,
+        onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+        startEmitted: false,
+        lastSeenAt: now,
+      };
+      task.sessionId = event.sessionId;
+      task.description = event.description ?? task.description;
+      task.kind = event.kind ?? task.kind;
+      task.status = event.status ?? "running";
+      task.lastSeenAt = now;
+      task.onEngineEvent ??= worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
+      task.ownerTurnId ??= worker.pendingTurn?.turnId;
+      worker.backgroundTasks.set(task.taskId, task);
+      this.emitBackgroundTaskStarted(worker, task);
+      return;
+    }
+
+    if (event.hookEventName === "SubagentStop") {
+      const candidates = [...worker.backgroundTasks.values()].filter((task) => (
+        task.kind === "agent" && !task.subagentResponse
+      ));
+      const nameMatches = event.agentName
+        ? candidates.filter((task) => task.subagentName === event.agentName)
+        : [];
+      const task = nameMatches.length === 1
+        ? nameMatches[0]
+        : candidates.length === 1
+          ? candidates[0]
+          : undefined;
+      if (!task || !event.response) {
+        return;
+      }
+      task.subagentResponse = event.response;
+      task.lastSeenAt = Date.now();
+      if (task.pendingNotification) {
+        await this.flushKimiTaskNotification(worker, task);
+      }
+      return;
+    }
+
+    if (event.sourceKind && event.sourceKind !== "background_task") {
+      return;
+    }
+    const now = Date.now();
+    const existing = worker.backgroundTasks.get(event.sourceId);
+    const task: KimiBackgroundTask = existing ?? {
+      taskId: event.sourceId,
+      sessionId: event.sessionId,
+      onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+      startEmitted: false,
+      lastSeenAt: now,
+    };
+    task.status = taskStatusFromNotificationType(event.notificationType);
+    task.lastSeenAt = now;
+    task.pendingNotification = event;
+    worker.backgroundTasks.set(task.taskId, task);
+    if (task.subagentResponse) {
+      await this.flushKimiTaskNotification(worker, task);
+      return;
+    }
+    if (task.notificationTimer) {
+      clearTimeout(task.notificationTimer);
+    }
+    task.notificationTimer = setTimeout(() => {
+      void this.flushKimiTaskNotification(worker, task);
+    }, SUBAGENT_NOTIFICATION_GRACE_MS);
+    task.notificationTimer.unref?.();
+  }
+
+  private emitBackgroundTaskStarted(worker: KimiWorker, task: KimiBackgroundTask): void {
+    if (task.startEmitted) {
+      return;
+    }
+    task.startEmitted = true;
+    void this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
+      type: "background_task_started",
+      taskId: task.taskId,
+      sessionId: task.sessionId ?? worker.currentSessionId ?? undefined,
+      ...(task.description ? { description: task.description } : {}),
+    });
+  }
+
+  private async flushKimiTaskNotification(worker: KimiWorker, task: KimiBackgroundTask): Promise<void> {
+    const notification = task.pendingNotification;
+    if (!notification) {
+      return;
+    }
+    task.pendingNotification = undefined;
+    if (task.notificationTimer) {
+      clearTimeout(task.notificationTimer);
+      task.notificationTimer = undefined;
+    }
+    const status = taskStatusFromNotificationType(notification.notificationType);
+    const text = task.subagentResponse?.trim()
+      || notification.body?.trim()
+      || notification.title?.trim()
+      || `${task.description ?? "Kimi background task"} ${status}.`;
+    worker.backgroundTasks.delete(task.taskId);
+    const settlesCurrentTurn = task.ownerTurnId !== undefined
+      && worker.pendingTurn?.turnId === task.ownerTurnId;
+    await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
+      type: "task_notification",
+      text,
+      sessionId: task.sessionId ?? worker.currentSessionId ?? undefined,
+      taskId: task.taskId,
+      status,
+      ...(task.description ? { summary: task.description } : {}),
+      ...(settlesCurrentTurn ? { settlesCurrentTurn: true } : {}),
     });
   }
 
@@ -1530,6 +1883,7 @@ export class KimiAcpAdapter implements CodexAdapter {
 
   private failWorker(worker: KimiWorker, error: Error): void {
     worker.rejectFailure(error);
+    this.failBackgroundTasks(worker);
     const pending = worker.pendingTurn;
     if (!pending) {
       return;
@@ -1584,7 +1938,12 @@ export class KimiAcpAdapter implements CodexAdapter {
         continue;
       }
       seen.add(worker);
-      if (worker.pendingTurn || now - worker.lastActivityAt < this.idleWorkerTtlMs) {
+      this.pruneExpiredBackgroundTasks(worker, now);
+      if (
+        worker.pendingTurn
+        || worker.backgroundTasks.size > 0
+        || now - worker.lastActivityAt < this.idleWorkerTtlMs
+      ) {
         continue;
       }
       this.killProcessTreeFn(worker.child.pid);
@@ -1592,8 +1951,53 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
+  private pruneExpiredBackgroundTasks(worker: KimiWorker, now: number): void {
+    if (this.backgroundTaskMaxAgeMs <= 0) {
+      return;
+    }
+    for (const [taskId, task] of worker.backgroundTasks.entries()) {
+      if (now - task.lastSeenAt < this.backgroundTaskMaxAgeMs) {
+        continue;
+      }
+      if (task.notificationTimer) {
+        clearTimeout(task.notificationTimer);
+      }
+      worker.backgroundTasks.delete(taskId);
+    }
+  }
+
+  private failBackgroundTasks(worker: KimiWorker): void {
+    if (worker.removed || worker.backgroundTasks.size === 0) {
+      return;
+    }
+    for (const task of worker.backgroundTasks.values()) {
+      if (task.notificationTimer) {
+        clearTimeout(task.notificationTimer);
+      }
+      void this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
+        type: "task_notification",
+        text: `${task.description ?? "Kimi background task"} stopped because the Kimi engine process exited before completion.`,
+        sessionId: task.sessionId ?? worker.currentSessionId ?? undefined,
+        taskId: task.taskId,
+        status: "failed",
+        ...(task.description ? { summary: task.description } : {}),
+      });
+    }
+    worker.backgroundTasks.clear();
+  }
+
   private removeWorker(worker: KimiWorker): void {
+    // Any path that removes the worker also ends its detached work. Emit a
+    // terminal event before marking it removed so timeline restart guards do
+    // not retain dead tasks until the six-hour stale cutoff.
+    this.failBackgroundTasks(worker);
     worker.removed = true;
+    for (const task of worker.backgroundTasks.values()) {
+      if (task.notificationTimer) {
+        clearTimeout(task.notificationTimer);
+      }
+    }
+    worker.backgroundTasks.clear();
     for (const [key, candidate] of this.workers.entries()) {
       if (candidate === worker) {
         this.workers.delete(key);
@@ -1602,8 +2006,14 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   destroy(): void {
+    this.destroyed = true;
     if (this.idleSweepTimer) {
       clearInterval(this.idleSweepTimer);
+    }
+    const hookRelayRuntime = this.hookRelayRuntime;
+    this.hookRelayRuntime = undefined;
+    if (hookRelayRuntime) {
+      void hookRelayRuntime.close().catch(() => undefined);
     }
     const seen = new Set<KimiWorker>();
     for (const worker of this.workers.values()) {
