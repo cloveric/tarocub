@@ -1111,7 +1111,73 @@ describe("ClaudeStreamAdapter", () => {
       expect(failure.status).toBe("failed");
       expect(failure.text).toContain("exited before completion");
     } finally {
-      adapter.destroy();
+      await adapter.destroy();
+    }
+  });
+
+  it("waits for background-task terminal delivery before destroy resolves", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; taskId?: string; status?: string }> = [];
+    let releaseDelivery!: () => void;
+    const deliveryGate = new Promise<void>((resolve) => {
+      releaseDelivery = resolve;
+    });
+    let deliveryFinished = false;
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "Run in background",
+        files: [],
+        onEngineEvent: async (event) => {
+          events.push(event as never);
+          if (event.type === "task_notification") {
+            await deliveryGate;
+            deliveryFinished = true;
+          }
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "sleep 5", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-background","tool_use_id":"toolu-background","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await turn;
+
+      const destroying = adapter.destroy();
+      await waitFor(() => events.some((event) => event.type === "task_notification"));
+      let destroySettled = false;
+      void destroying.then(() => {
+        destroySettled = true;
+      });
+      await Promise.resolve();
+
+      expect(destroySettled).toBe(false);
+      expect(deliveryFinished).toBe(false);
+      releaseDelivery();
+      await destroying;
+      expect(deliveryFinished).toBe(true);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "task-background",
+        status: "failed",
+      }));
+      expect(adapter.destroy()).toBe(destroying);
+    } finally {
+      releaseDelivery();
+      await adapter.destroy();
     }
   });
 
@@ -1565,6 +1631,7 @@ describe("ClaudeStreamAdapter", () => {
   it("prunes stale Claude background tasks so never-complete tasks do not pin workers forever", async () => {
     vi.useFakeTimers();
     const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; taskId?: string; status?: string; text?: string }> = [];
     const adapter = new ClaudeStreamAdapter("claude", {
       spawnFn,
       idleWorkerTtlMs: 10,
@@ -1576,6 +1643,9 @@ describe("ClaudeStreamAdapter", () => {
       const first = adapter.sendUserMessage("telegram-12345", {
         text: "Start background work",
         files: [],
+        onEngineEvent: (event) => {
+          events.push(event as never);
+        },
       });
 
       await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
@@ -1585,6 +1655,12 @@ describe("ClaudeStreamAdapter", () => {
       await first;
 
       await vi.advanceTimersByTimeAsync(30);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "task-1",
+        status: "failed",
+        text: expect.stringContaining("presumed dead"),
+      }));
 
       const second = adapter.sendUserMessage("session-123", {
         text: "After stale task cleanup",
@@ -1596,7 +1672,7 @@ describe("ClaudeStreamAdapter", () => {
       children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Fresh worker.","session_id":"session-123"}\n');
       await second;
     } finally {
-      adapter.destroy();
+      await adapter.destroy();
       vi.useRealTimers();
     }
   });

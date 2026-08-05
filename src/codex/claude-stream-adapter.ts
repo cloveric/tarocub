@@ -445,6 +445,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly disallowedTools: string[];
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
+  private destroyPromise: Promise<void> | undefined;
 
   constructor(
     private readonly claudeExecutable: string,
@@ -588,6 +589,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private async getOrCreateWorker(sessionId: string, agentInstructions: string | null, bridgeInstructions: string | null, approvalMode: ApprovalMode, workspacePath: string | undefined, engineOptions?: { effort?: string; model?: string }): Promise<ClaudeWorker> {
+    if (this.destroyPromise) {
+      throw new Error("Adapter destroyed");
+    }
     const combinedKey = combineInstructions(agentInstructions, bridgeInstructions);
     const optionsKey = `${engineOptions?.effort ?? ""}:${engineOptions?.model ?? ""}`;
     const existing = this.workers.get(sessionId);
@@ -731,7 +735,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         worker.stderrTail = `${worker.stderrTail}${trailingStderr}`.slice(-MAX_STDERR_TAIL_CHARS);
       }
       this.failWorker(worker, new Error(renderClaudeStreamExitError(code, worker.stderrTail)));
-      this.failBackgroundTasks(worker);
+      // A crash notification is best-effort while the service remains alive;
+      // destroyInternal() separately awaits the same delivery during shutdown.
+      void this.failBackgroundTasks(worker);
       this.removeWorker(worker);
     });
 
@@ -1247,33 +1253,49 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     worker: ClaudeWorker,
     event: EngineStreamEvent,
     handlerOverride?: (event: EngineStreamEvent) => void | Promise<void>,
-  ): void {
+  ): Promise<void> {
     const handler = handlerOverride ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
     if (!handler) {
-      return;
+      return Promise.resolve();
     }
 
     try {
-      void Promise.resolve(handler(event)).catch(() => undefined);
+      return Promise.resolve(handler(event)).catch(() => undefined);
     } catch {
       // Event delivery is best-effort; it must not break the engine turn.
+      return Promise.resolve();
     }
   }
 
-  destroy(): void {
+  destroy(): Promise<void> {
+    if (!this.destroyPromise) {
+      // Publish the shared promise before cleanup invokes any event handler;
+      // a handler that re-enters destroy() must join this same shutdown.
+      this.destroyPromise = Promise.resolve().then(() => this.destroyInternal());
+    }
+    return this.destroyPromise;
+  }
+
+  private async destroyInternal(): Promise<void> {
     if (this.idleSweepTimer) {
       clearInterval(this.idleSweepTimer);
     }
-    for (const worker of this.workers.values()) {
-      killProcessTree(worker.child.pid);
+    const deliveries: Array<Promise<void>> = [];
+    const workers = [...new Set(this.workers.values())];
+    this.workers.clear();
+    for (const worker of workers) {
       if (worker.pendingTurn) {
         this.clearPendingTurnTimeout(worker.pendingTurn);
         worker.pendingTurn.reject(new Error("Adapter destroyed"));
         worker.pendingTurn = null;
       }
-      this.failBackgroundTasks(worker);
+      // failBackgroundTasks clears its in-memory records before its first await,
+      // so the ensuing child close cannot emit duplicate terminal events.
+      deliveries.push(this.failBackgroundTasks(worker));
+      killProcessTree(worker.child.pid);
+      this.removeWorker(worker);
     }
-    this.workers.clear();
+    await Promise.allSettled(deliveries);
   }
 
   private markWorkerActivity(worker: ClaudeWorker): void {
@@ -1404,12 +1426,13 @@ export class ClaudeStreamAdapter implements CodexAdapter {
    * user never learns the task died, and the restart busy-guard blocks
    * service restarts until the 6h stale cutoff (the ccfcc1 astock incident).
    */
-  private failBackgroundTasks(worker: ClaudeWorker): void {
+  private async failBackgroundTasks(worker: ClaudeWorker): Promise<void> {
     if (worker.backgroundTasks.size === 0) {
       return;
     }
+    const deliveries: Array<Promise<void>> = [];
     for (const task of worker.backgroundTasks.values()) {
-      this.emitEngineEvent(worker, {
+      deliveries.push(this.emitEngineEvent(worker, {
         type: "task_notification",
         text: `${task.summary ?? "Background task"} stopped because the Claude engine process exited before completion.`,
         sessionId: worker.currentSessionId ?? undefined,
@@ -1417,12 +1440,13 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         status: "failed",
         ...(task.summary ? { summary: task.summary } : {}),
         ...(task.outputFile ? { outputFile: task.outputFile } : {}),
-      }, task.onEngineEvent);
+      }, task.onEngineEvent));
     }
     worker.backgroundTasks.clear();
     worker.explicitBackgroundToolUseIds.clear();
     worker.pendingTaskNotification = null;
     worker.suppressNextTaskNotificationAssistant = false;
+    await Promise.allSettled(deliveries);
   }
 
   private removeWorker(worker: ClaudeWorker): void {

@@ -27,4 +27,17 @@ describe("release checklist", () => {
     expect(packageJson.files).toBeUndefined();
     expect(packageJson.publishConfig).toBeUndefined();
   });
+
+  it("keeps package and lockfile release versions aligned", async () => {
+    const [packageJson, packageLock] = await Promise.all([
+      readFile(path.join(process.cwd(), "package.json"), "utf8").then((raw) => JSON.parse(raw) as { version?: string }),
+      readFile(path.join(process.cwd(), "package-lock.json"), "utf8").then((raw) => JSON.parse(raw) as {
+        version?: string;
+        packages?: Record<string, { version?: string }>;
+      }),
+    ]);
+
+    expect(packageLock.version).toBe(packageJson.version);
+    expect(packageLock.packages?.[""]?.version).toBe(packageJson.version);
+  });
 });
