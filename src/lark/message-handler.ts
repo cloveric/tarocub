@@ -1701,6 +1701,11 @@ async function runNormalizedLarkMessage(
     let completedEngineText: string | undefined;
     let runCardFinished = false;
     let obligationId: string | null = null;
+    // True once the FULL answer is visible to the user (card, continuation
+    // cards, or overflow doc) — a later post-engine failure (file upload,
+    // bookkeeping) must then settle the obligation delivered, not failed,
+    // or the next boot would redeliver an answer the user already has.
+    let answerVisibleToUser = false;
     try {
       // If a "queued" card was already shown for this conversation, take it over
       // as the run card so it transitions in place instead of being orphaned: a
@@ -1780,6 +1785,23 @@ async function runNormalizedLarkMessage(
           larkMessageId: normalized.messageId,
           instanceName: input.instanceName,
         };
+        // A background-task result is the costliest thing to lose: it arrives
+        // out-of-band (possibly hours after the triggering turn) and nothing
+        // retries it. Ledger it like a final answer.
+        let notificationObligationId: string | null = null;
+        if (deliveryLedgerEnabled()) {
+          notificationObligationId = await recordDeliveryObligation(input.stateDir, {
+            channel: "lark",
+            chatId: normalized.chatId,
+            conversationKey: normalized.conversationKey,
+            replyTo: normalized.messageId,
+            replyInThread: Boolean(normalized.threadId),
+            content: notificationText,
+          });
+          if (notificationObligationId) {
+            await markDeliveryAttempting(input.stateDir, notificationObligationId);
+          }
+        }
         try {
           if (notificationCard) {
             // Still deliver any files/images/tool-tags embedded in the
@@ -1825,7 +1847,13 @@ async function runNormalizedLarkMessage(
               text: isWholeResponseFileBlockText(event.text) ? event.text : notificationText,
             });
           }
+          if (notificationObligationId) {
+            await markDeliveryDelivered(input.stateDir, notificationObligationId);
+          }
         } catch (error) {
+          if (notificationObligationId) {
+            await markDeliveryFailed(input.stateDir, notificationObligationId, redactLarkErrorDetail(error));
+          }
           await appendLarkTimelineEvent(input.stateDir, normalized, {
             type: "engine.event.delivery_failed",
             outcome: "error",
@@ -2018,6 +2046,9 @@ async function runNormalizedLarkMessage(
           : undefined;
         runCardFinished = Boolean(runCard);
         const answerShownInCard = finishResult?.shown ?? false;
+        if (answerShownInCard && !spillToContinuationCards) {
+          answerVisibleToUser = true;
+        }
         if (finishResult) {
           // Record whether the answer actually landed in a card (and why) — card-vs-text
           // finish was previously unlogged, so a "no card" report could only be guessed at.
@@ -2049,6 +2080,7 @@ async function runNormalizedLarkMessage(
             locale,
           });
           overflowDelivered = true;
+          answerVisibleToUser = true;
         } else if (
           // The card couldn't fit the answer and it's too big to spill into a bounded
           // number of cards → stash the full text in a Feishu Doc and post just the link,
@@ -2069,6 +2101,9 @@ async function runNormalizedLarkMessage(
             locale,
           });
           overflowDelivered = overflow.delivered;
+          if (overflow.delivered) {
+            answerVisibleToUser = true;
+          }
           if (overflow.mode !== "doc") {
             // The Feishu Doc step failed — surface why (it is otherwise swallowed) so
             // the .md-file fallback the operator sees can be traced to its cause.
@@ -2107,6 +2142,7 @@ async function runNormalizedLarkMessage(
           larkMessageId: normalized.messageId,
           instanceName: input.instanceName,
         });
+        answerVisibleToUser = true;
         if (obligationId) {
           await markDeliveryDelivered(input.stateDir, obligationId);
         }
@@ -2135,14 +2171,15 @@ async function runNormalizedLarkMessage(
         if (completedEngineText === undefined) {
           throw error;
         }
-        let salvaged = false;
+        let salvaged = answerVisibleToUser;
         if (runCard && !runCardFinished) {
           const salvageResult = await runCard.finish(completedEngineText).catch(() => undefined);
-          salvaged = salvageResult?.shown === true;
+          salvaged = salvaged || salvageResult?.shown === true;
         }
         if (obligationId) {
-          // Card salvage showed the full text → the reply reached the user;
-          // otherwise leave the obligation failed so the next boot redelivers.
+          // The user already has the full answer (card/continuations/doc), or
+          // the salvage finish just showed it → settle delivered; otherwise
+          // leave the obligation failed so the next boot redelivers.
           await (salvaged
             ? markDeliveryDelivered(input.stateDir, obligationId)
             : markDeliveryFailed(input.stateDir, obligationId, redactLarkErrorDetail(error)));
@@ -2167,10 +2204,10 @@ async function runNormalizedLarkMessage(
         // continuation delivery, file upload, usage recording, or workflow cleanup
         // must not rewrite that completed run as "execution failed" and encourage a
         // duplicate rerun. Preserve/finish the card and record a partial delivery.
-        let salvaged = false;
+        let salvaged = answerVisibleToUser;
         if (runCard && !runCardFinished) {
           const salvageResult = await runCard.finish(completedEngineText).catch(() => undefined);
-          salvaged = salvageResult?.shown === true;
+          salvaged = salvaged || salvageResult?.shown === true;
         }
         if (obligationId) {
           await (salvaged

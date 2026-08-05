@@ -1411,6 +1411,28 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 
 ---
 
+## Delivery Reliability
+
+Two always-on (env-gated) stability layers protect final replies:
+
+- **Delivery-obligation ledger.** Every ordinary-turn final answer and every
+  background-task result notification is checkpointed on disk
+  (`delivery-obligations.json`: pending → attempting → delivered/failed)
+  around the send. If the service dies before Feishu confirms receipt, the
+  next boot redelivers: plainly when the send never started, prefixed with a
+  visible ♻️ recovered-reply marker when the platform may already have it —
+  honest at-least-once, never a silent duplicate. Attempts are capped (3),
+  replies older than 24h are abandoned, and the file is bounded. Disable with
+  `CCTB_DELIVERY_LEDGER=off`.
+- **Restart-loop breaker.** Unclean endings (stale service lock at boot, or a
+  fatal-error exit) are recorded in `restart-loop.json`; three inside 10
+  minutes make the next boot skip recovery work (interrupted-turn marking +
+  ledger redelivery) so a poison replay cannot keep killing a supervised
+  service. Operator restarts shut down cleanly and never count; all breaker
+  failures fail open. Delete the file to reset manually.
+
+See `docs/state-model.md` for the on-disk contracts.
+
 ## Service Operations
 
 | Command | Description |
