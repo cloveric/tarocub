@@ -339,7 +339,7 @@ async function main(): Promise<void> {
         });
       }
       try {
-        bridge.destroy();
+        await bridge.destroy();
       } catch (error) {
         logLifecycleEvent({
           type: "service.startup_maintenance",

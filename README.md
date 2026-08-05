@@ -184,10 +184,16 @@ With Kimi Code 0.32 or newer, TaroCub also installs an inert local hook plugin
 under `KIMI_CODE_HOME` and activates it only for bridge-owned ACP subprocesses.
 `TaskStarted`, background-task `Notification`, and `SubagentStop` events feed
 the existing run cards, out-of-band completion notices, worker retention, and
-restart guard. Tool-result metadata remains the start-event fallback. The
-relay deliberately ignores `SessionHeartbeat`: it proves only that the Kimi
-process is alive, not that a turn or task is making progress. Existing Kimi
-credentials, sessions, skills, MCP servers, and `config.toml` are not replaced.
+restart guard. Tool-result metadata remains the start-event fallback; terminal
+task tombstones reject late/duplicate start events, and detached Bash notices
+read the real bounded `output.log` tail from that Kimi session instead of
+showing only a generic completion title. Accepted hooks are drained before the
+ACP worker is destroyed, and timeline identity stays scoped by conversation,
+session, and task across ordinary messages, card actions, comments, and bus
+turns. The relay deliberately ignores `SessionHeartbeat`: it proves only that
+the Kimi process is alive, not that a turn or task is making progress. Existing
+Kimi credentials, sessions, skills, MCP servers, and `config.toml` are not
+replaced.
 
 Kimi ACP still does not expose structured per-turn token/cost usage, mid-turn
 steering, a direct client-supplied system-prompt field, or a `/goal` command;

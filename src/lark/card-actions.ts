@@ -11,7 +11,7 @@ import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridg
 import { resolveConversationResume } from "../runtime/conversation-resume.js";
 import { prepareArchiveContinueWorkflow } from "../runtime/file-workflow.js";
 import { scanRecentAntigravityConversations, scanRecentClaudeSessions } from "../runtime/session-scanner.js";
-import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { appendTimelineEventBestEffort, engineEventTimelineMetadata } from "../runtime/timeline-events.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
 import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
@@ -1821,12 +1821,7 @@ async function runLarkCardChoice(input: {
         type: "engine.event",
         action: "choice",
         detail: event.type,
-        metadata: {
-          toolName: "toolName" in event ? event.toolName : undefined,
-          textChars: "text" in event ? event.text.length : undefined,
-          status: "status" in event ? event.status : undefined,
-          taskId: "taskId" in event ? event.taskId : undefined,
-        },
+        metadata: engineEventTimelineMetadata(event),
       });
 
       if (event.type !== "task_notification" || event.settlesCurrentTurn) {
@@ -2012,10 +2007,7 @@ async function runLarkArchiveContinueCardAction(input: {
         metadata: {
           uploadId: input.uploadId,
           workflowRecordId: workflowResult.workflowRecordId,
-          toolName: "toolName" in event ? event.toolName : undefined,
-          textChars: "text" in event ? event.text.length : undefined,
-          status: "status" in event ? event.status : undefined,
-          taskId: "taskId" in event ? event.taskId : undefined,
+          ...engineEventTimelineMetadata(event),
         },
       });
 

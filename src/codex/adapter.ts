@@ -176,5 +176,5 @@ export interface CodexAdapter {
     abortSignal?: AbortSignal;
   }): Promise<CodexThreadGoalResponse>;
   clearThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<{ cleared: boolean; sessionId?: string }>;
-  destroy?(): void;
+  destroy?(): void | Promise<void>;
 }

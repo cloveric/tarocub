@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { open, readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -141,6 +141,7 @@ type KimiWorker = {
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   tools: Map<string, KimiToolState>;
   backgroundTasks: Map<string, KimiBackgroundTask>;
+  terminalBackgroundTasks: Map<string, number>;
   lastActivityAt: number;
   removed: boolean;
   failurePromise: Promise<never>;
@@ -168,6 +169,8 @@ const MAX_ERROR_LINE_PREVIEW_CHARS = 240;
 const MAX_INSTRUCTIONS_CHARS = 100_000;
 const MAX_LISTED_SESSIONS = 200;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
+const DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS = 6 * 60 * 60_000;
+const MAX_BACKGROUND_TASK_OUTPUT_BYTES = 64 * 1024;
 const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
 const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
@@ -358,6 +361,95 @@ function parseKimiBackgroundTaskOutput(output: string | undefined): {
   const description = fields.get("description") || undefined;
   const subagentName = fields.get("actual_subagent_type") || undefined;
   return { taskId, description, subagentName };
+}
+
+function isSafeKimiPathSegment(value: string): boolean {
+  return value !== "." && value !== ".." && /^[A-Za-z0-9._-]+$/.test(value);
+}
+
+async function resolveKimiBackgroundTaskOutputPath(
+  engineHomePath: string,
+  sessionId: string,
+  taskId: string,
+): Promise<string | undefined> {
+  if (!isSafeKimiPathSegment(sessionId) || !isSafeKimiPathSegment(taskId)) {
+    return undefined;
+  }
+  const sessionsRoot = path.join(engineHomePath, "sessions");
+  let realSessionsRoot: string;
+  let sessionParents: string[];
+  try {
+    realSessionsRoot = await realpath(sessionsRoot);
+    const entries = await readdir(sessionsRoot, { withFileTypes: true });
+    sessionParents = [sessionsRoot, ...entries
+      .filter((entry) => entry.isDirectory() && isSafeKimiPathSegment(entry.name))
+      .map((entry) => path.join(sessionsRoot, entry.name))];
+  } catch {
+    return undefined;
+  }
+
+  const sessionDirName = sessionId.startsWith("session_") ? sessionId : `session_${sessionId}`;
+  for (const parent of sessionParents) {
+    const agentsDir = path.join(parent, sessionDirName, "agents");
+    const agents = await readdir(agentsDir, { withFileTypes: true }).catch(() => null);
+    if (!agents) {
+      continue;
+    }
+    for (const agent of agents) {
+      if (!agent.isDirectory() || !isSafeKimiPathSegment(agent.name)) {
+        continue;
+      }
+      const candidate = path.join(agentsDir, agent.name, "tasks", taskId, "output.log");
+      try {
+        const resolved = await realpath(candidate);
+        const relative = path.relative(realSessionsRoot, resolved);
+        if (relative && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)) {
+          return resolved;
+        }
+      } catch {
+        // The task may belong to a different agent directory.
+      }
+    }
+  }
+  return undefined;
+}
+
+async function readKimiBackgroundTaskOutput(
+  engineHomePath: string | undefined,
+  sessionId: string | undefined,
+  taskId: string,
+): Promise<string | undefined> {
+  if (!engineHomePath || !sessionId) {
+    return undefined;
+  }
+  const outputPath = await resolveKimiBackgroundTaskOutputPath(engineHomePath, sessionId, taskId);
+  if (!outputPath) {
+    return undefined;
+  }
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(outputPath, "r");
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.size <= 0) {
+      return undefined;
+    }
+    const bytesToRead = Math.min(stats.size, MAX_BACKGROUND_TASK_OUTPUT_BYTES);
+    const start = Math.max(0, stats.size - bytesToRead);
+    const buffer = Buffer.alloc(bytesToRead);
+    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, start);
+    let text = buffer.subarray(0, bytesRead).toString("utf8").replace(/^\uFFFD/, "").trim();
+    if (!text || text.includes("\0")) {
+      return undefined;
+    }
+    if (start > 0) {
+      text = `[Earlier output omitted; showing the last ${MAX_BACKGROUND_TASK_OUTPUT_BYTES} bytes.]\n${text}`;
+    }
+    return text;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 function taskStatusFromNotificationType(notificationType: string): string {
@@ -662,6 +754,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private hookRelayPromise: Promise<KimiHookRelayRuntime | null> | undefined;
   private hookRelayRuntime: KimiHookRelayRuntime | undefined;
   private hookRelayCompatibilityPromise: Promise<boolean> | undefined;
+  private destroyPromise: Promise<void> | undefined;
   private nextTurnId = 1;
   private destroyed = false;
 
@@ -1059,6 +1152,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       onEngineEvent: undefined,
       tools: new Map(),
       backgroundTasks: new Map(),
+      terminalBackgroundTasks: new Map(),
       lastActivityAt: Date.now(),
       removed: false,
       failurePromise,
@@ -1540,6 +1634,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       return;
     }
     const now = Date.now();
+    if (this.isTerminalBackgroundTask(worker, metadata.taskId, now)) {
+      return;
+    }
     const existing = worker.backgroundTasks.get(metadata.taskId);
     const task: KimiBackgroundTask = existing ?? {
       taskId: metadata.taskId,
@@ -1590,6 +1687,9 @@ export class KimiAcpAdapter implements CodexAdapter {
         return;
       }
       const now = Date.now();
+      if (this.isTerminalBackgroundTask(worker, event.taskId, now)) {
+        return;
+      }
       const existing = worker.backgroundTasks.get(event.taskId);
       const task: KimiBackgroundTask = existing ?? {
         taskId: event.taskId,
@@ -1638,6 +1738,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       return;
     }
     const now = Date.now();
+    if (this.isTerminalBackgroundTask(worker, event.sourceId, now)) {
+      return;
+    }
     const existing = worker.backgroundTasks.get(event.sourceId);
     const task: KimiBackgroundTask = existing ?? {
       taskId: event.sourceId,
@@ -1687,22 +1790,40 @@ export class KimiAcpAdapter implements CodexAdapter {
       task.notificationTimer = undefined;
     }
     const status = taskStatusFromNotificationType(notification.notificationType);
+    const sessionId = task.sessionId ?? worker.currentSessionId ?? undefined;
+    const processOutput = task.kind === "process" || task.taskId.startsWith("bash-")
+      ? await readKimiBackgroundTaskOutput(this.engineHomePath, sessionId, task.taskId)
+      : undefined;
     const text = task.subagentResponse?.trim()
+      || processOutput
       || notification.body?.trim()
       || notification.title?.trim()
       || `${task.description ?? "Kimi background task"} ${status}.`;
+    worker.terminalBackgroundTasks.set(task.taskId, Date.now());
     worker.backgroundTasks.delete(task.taskId);
     const settlesCurrentTurn = task.ownerTurnId !== undefined
       && worker.pendingTurn?.turnId === task.ownerTurnId;
     await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
       type: "task_notification",
       text,
-      sessionId: task.sessionId ?? worker.currentSessionId ?? undefined,
+      sessionId,
       taskId: task.taskId,
       status,
       ...(task.description ? { summary: task.description } : {}),
       ...(settlesCurrentTurn ? { settlesCurrentTurn: true } : {}),
     });
+  }
+
+  private isTerminalBackgroundTask(worker: KimiWorker, taskId: string, now: number): boolean {
+    const terminalAt = worker.terminalBackgroundTasks.get(taskId);
+    if (terminalAt === undefined) {
+      return false;
+    }
+    if (now - terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
+      worker.terminalBackgroundTasks.delete(taskId);
+      return false;
+    }
+    return true;
   }
 
   private async handlePermissionRequest(
@@ -1952,45 +2073,52 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   private pruneExpiredBackgroundTasks(worker: KimiWorker, now: number): void {
-    if (this.backgroundTaskMaxAgeMs <= 0) {
-      return;
+    if (this.backgroundTaskMaxAgeMs > 0) {
+      for (const [taskId, task] of worker.backgroundTasks.entries()) {
+        if (now - task.lastSeenAt < this.backgroundTaskMaxAgeMs) {
+          continue;
+        }
+        if (task.notificationTimer) {
+          clearTimeout(task.notificationTimer);
+        }
+        worker.backgroundTasks.delete(taskId);
+      }
     }
-    for (const [taskId, task] of worker.backgroundTasks.entries()) {
-      if (now - task.lastSeenAt < this.backgroundTaskMaxAgeMs) {
-        continue;
+    for (const [taskId, terminalAt] of worker.terminalBackgroundTasks.entries()) {
+      if (now - terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
+        worker.terminalBackgroundTasks.delete(taskId);
       }
-      if (task.notificationTimer) {
-        clearTimeout(task.notificationTimer);
-      }
-      worker.backgroundTasks.delete(taskId);
     }
   }
 
-  private failBackgroundTasks(worker: KimiWorker): void {
+  private async failBackgroundTasks(worker: KimiWorker): Promise<void> {
     if (worker.removed || worker.backgroundTasks.size === 0) {
       return;
     }
+    const deliveries: Array<Promise<void>> = [];
     for (const task of worker.backgroundTasks.values()) {
       if (task.notificationTimer) {
         clearTimeout(task.notificationTimer);
       }
-      void this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
+      worker.terminalBackgroundTasks.set(task.taskId, Date.now());
+      deliveries.push(this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
         type: "task_notification",
         text: `${task.description ?? "Kimi background task"} stopped because the Kimi engine process exited before completion.`,
         sessionId: task.sessionId ?? worker.currentSessionId ?? undefined,
         taskId: task.taskId,
         status: "failed",
         ...(task.description ? { summary: task.description } : {}),
-      });
+      }));
     }
     worker.backgroundTasks.clear();
+    await Promise.allSettled(deliveries);
   }
 
   private removeWorker(worker: KimiWorker): void {
     // Any path that removes the worker also ends its detached work. Emit a
     // terminal event before marking it removed so timeline restart guards do
     // not retain dead tasks until the six-hour stale cutoff.
-    this.failBackgroundTasks(worker);
+    void this.failBackgroundTasks(worker);
     worker.removed = true;
     for (const task of worker.backgroundTasks.values()) {
       if (task.notificationTimer) {
@@ -1998,6 +2126,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
     }
     worker.backgroundTasks.clear();
+    worker.terminalBackgroundTasks.clear();
     for (const [key, candidate] of this.workers.entries()) {
       if (candidate === worker) {
         this.workers.delete(key);
@@ -2005,15 +2134,22 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
-  destroy(): void {
-    this.destroyed = true;
+  destroy(): Promise<void> {
+    if (!this.destroyPromise) {
+      this.destroyed = true;
+      this.destroyPromise = this.destroyInternal();
+    }
+    return this.destroyPromise;
+  }
+
+  private async destroyInternal(): Promise<void> {
     if (this.idleSweepTimer) {
       clearInterval(this.idleSweepTimer);
     }
     const hookRelayRuntime = this.hookRelayRuntime;
     this.hookRelayRuntime = undefined;
     if (hookRelayRuntime) {
-      void hookRelayRuntime.close().catch(() => undefined);
+      await hookRelayRuntime.close().catch(() => undefined);
     }
     const seen = new Set<KimiWorker>();
     for (const worker of this.workers.values()) {
@@ -2028,6 +2164,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         this.finishPendingTurn(worker, pending);
       }
       worker.rejectFailure(pending?.stopError ?? new Error("Adapter destroyed"));
+      await this.failBackgroundTasks(worker);
       this.killProcessTreeFn(worker.child.pid);
       this.removeWorker(worker);
     }

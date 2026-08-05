@@ -86,6 +86,23 @@ stuck task and restart guard alive indefinitely. ACP transport/process closure
 continues to provide process-liveness failure detection, while only
 task-specific start and terminal events affect task retention.
 
+Kimi invokes observer hooks concurrently and does not guarantee delivery order.
+TaroCub therefore keeps a bounded terminal tombstone per session/task: once a
+terminal notification has been emitted, a late `TaskStarted`, duplicate
+`Notification`, or delayed tool-result fallback cannot recreate a running task
+or hold the restart guard for six hours. The loopback relay also stops accepting
+new posts and drains every already accepted handler before adapter shutdown
+kills the ACP worker.
+
+The 0.32 `Notification` payload carries only a title/body summary; it omits the
+background process children that contain the real output. For detached Bash
+tasks, TaroCub resolves `output.log` only inside the matching
+`KIMI_CODE_HOME/sessions/.../session_<id>/agents/<agent>/tasks/<task>/`
+directory, verifies the resolved path stays under the sessions root, and reads
+at most the final 64 KiB. Small outputs are delivered in full; large outputs are
+explicitly marked as truncated. Agent tasks continue to prefer the matching
+`SubagentStop` response.
+
 ## Prompt-Mode Evidence
 
 ### Simple answer and session ID
@@ -471,7 +488,9 @@ covered by integration tests for a Kimi-configured instance:
   automatic delivery;
 - cron execution and Kimi engine labels;
 - Kimi 0.32+ detached-task start/completion mapping into shared run-card,
-  completion-notification, worker-retention, and restart-protection paths;
+  completion-notification, real Bash-output, worker-retention, and
+  restart-protection paths, with conversation/session/task identity preserved
+  for ordinary messages, card actions, comments, and bus turns;
 - `/compact`, which was verified against a real ACP session and preserved a
   probe token across the compaction turn;
 - bare `/resume`, numbered selection, and `/resume session <session-id>`, using

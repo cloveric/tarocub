@@ -316,8 +316,14 @@ export async function startKimiHookRelay(options: {
   await ensureKimiHookRelayPlugin(options.engineHomePath);
   const token = randomBytes(32).toString("hex");
   let eventChain = Promise.resolve();
+  let closing = false;
+  let closePromise: Promise<void> | undefined;
   const server = createServer((request, response) => {
     void (async () => {
+      if (closing) {
+        reply(response, 503, "shutting down");
+        return;
+      }
       if (request.method !== "POST" || request.url !== "/kimi-hook") {
         reply(response, 404, "not found");
         return;
@@ -378,9 +384,19 @@ export async function startKimiHookRelay(options: {
       [KIMI_HOOK_RELAY_URL_ENV]: `http://127.0.0.1:${address.port}/kimi-hook`,
       [KIMI_HOOK_RELAY_TOKEN_ENV]: token,
     },
-    close: async () => {
-      server.closeAllConnections?.();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+    close: () => {
+      if (closePromise) {
+        return closePromise;
+      }
+      closing = true;
+      closePromise = (async () => {
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+          server.closeIdleConnections?.();
+        });
+        await eventChain;
+      })();
+      return closePromise;
     },
   };
 }

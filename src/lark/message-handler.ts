@@ -7,6 +7,7 @@ import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridg
 import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
+import { engineEventTimelineMetadata } from "../runtime/timeline-events.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import {
   hasConversationResume,
@@ -1738,13 +1739,7 @@ async function runNormalizedLarkMessage(
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "engine.event",
           detail: event.type,
-          metadata: {
-            toolName: "toolName" in event ? event.toolName : undefined,
-            textChars: "text" in event ? event.text.length : undefined,
-            status: "status" in event ? event.status : undefined,
-            taskId: "taskId" in event ? event.taskId : undefined,
-            sessionId: "sessionId" in event ? event.sessionId : undefined,
-          },
+          metadata: engineEventTimelineMetadata(event),
         });
 
         if (event.type !== "task_notification" || event.settlesCurrentTurn) {

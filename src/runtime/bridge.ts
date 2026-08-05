@@ -176,8 +176,8 @@ export class Bridge {
     this.supportsTurnScopedEnv = adapter.supportsTurnScopedEnv !== false;
   }
 
-  destroy(): void {
-    this.adapter.destroy?.();
+  async destroy(): Promise<void> {
+    await this.adapter.destroy?.();
   }
 
   async validateCodexThread(

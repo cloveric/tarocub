@@ -187,4 +187,56 @@ describe("Kimi hook relay", () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  it("waits for accepted hook handlers before close resolves", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "tarocub-kimi-hook-drain-"));
+    let releaseHandler: (() => void) | undefined;
+    let markHandlerStarted: (() => void) | undefined;
+    const handlerStarted = new Promise<void>((resolve) => {
+      markHandlerStarted = resolve;
+    });
+    const handlerReleased = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const runtime = await startKimiHookRelay({
+      engineHomePath: home,
+      onEvent: async () => {
+        markHandlerStarted?.();
+        await handlerReleased;
+      },
+    });
+
+    try {
+      const response = await fetch(runtime.env[KIMI_HOOK_RELAY_URL_ENV]!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tarocub-kimi-hook-token": runtime.env[KIMI_HOOK_RELAY_TOKEN_ENV]!,
+        },
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "session-1",
+          task_id: "bash-drain",
+          detached: true,
+        }),
+      });
+      expect(response.status).toBe(202);
+      await handlerStarted;
+
+      let closeResolved = false;
+      const closePromise = runtime.close().then(() => {
+        closeResolved = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(closeResolved).toBe(false);
+
+      releaseHandler?.();
+      await closePromise;
+      expect(closeResolved).toBe(true);
+    } finally {
+      releaseHandler?.();
+      await runtime.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 });

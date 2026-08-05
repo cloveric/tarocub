@@ -1,4 +1,5 @@
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
+import { engineEventTimelineMetadata } from "../runtime/timeline-events.js";
 import { handleBoardTelegramCommand, type BoardCommandContext } from "../telegram/board-commands.js";
 import { BoardStore, normalizeBoardTaskId } from "../state/board-store.js";
 import {
@@ -537,10 +538,7 @@ function createLarkBusEngineEventHandler(
       detail: event.type,
       metadata: {
         source: options.source,
-        toolName: "toolName" in event ? event.toolName : undefined,
-        textChars: "text" in event ? event.text.length : undefined,
-        status: "status" in event ? event.status : undefined,
-        taskId: "taskId" in event ? event.taskId : undefined,
+        ...engineEventTimelineMetadata(event),
       },
     });
 

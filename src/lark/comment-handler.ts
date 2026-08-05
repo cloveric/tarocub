@@ -5,7 +5,7 @@ import type { CommentEvent } from "@larksuiteoapi/node-sdk";
 
 import type { EngineStreamEvent } from "../codex/adapter.js";
 import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridge-turn.js";
-import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { appendTimelineEventBestEffort, engineEventTimelineMetadata } from "../runtime/timeline-events.js";
 import { extractCronAddTagMatches, stripCronAddTags } from "../telegram/cron-tags.js";
 import { extractDeliveryTagMatches, stripDeliveryTags } from "../telegram/delivery-tags.js";
 import type { Locale } from "../telegram/message-renderer.js";
@@ -139,12 +139,7 @@ export async function handleLarkComment(input: {
           detail: event.type,
           event: input.event,
           fileType,
-          metadata: {
-            toolName: "toolName" in event ? event.toolName : undefined,
-            textChars: "text" in event ? event.text.length : undefined,
-            status: "status" in event ? event.status : undefined,
-            taskId: "taskId" in event ? event.taskId : undefined,
-          },
+          metadata: engineEventTimelineMetadata(event),
         });
 
         if (event.type !== "task_notification" || event.settlesCurrentTurn) {
