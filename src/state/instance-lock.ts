@@ -18,6 +18,13 @@ export interface InstanceLockRecord {
 export interface InstanceLockHandle {
   filePath: string;
   pid: number;
+  /**
+   * True when acquiring required removing a stale lock left by a dead (or
+   * corrupt) previous owner — i.e. the previous run ended WITHOUT a clean
+   * release. A clean shutdown deletes the lock, so this is the boot-time
+   * "previous run crashed" signal the restart-loop breaker keys on.
+   */
+  recoveredStale: boolean;
   release: () => Promise<void>;
   releaseSync: () => void;
 }
@@ -116,6 +123,7 @@ export async function acquireInstanceLock(stateDir: string, pid: number = proces
   const filePath = resolveInstanceLockPath(stateDir);
   const token = randomUUID();
   const serializedRecord = formatLockRecord(pid, token);
+  let recoveredStale = false;
 
   try {
     await writeExclusiveLock(filePath, serializedRecord);
@@ -145,6 +153,7 @@ export async function acquireInstanceLock(stateDir: string, pid: number = proces
         }
         await removeStaleLock(filePath);
         await writeExclusiveLock(filePath, serializedRecord);
+        recoveredStale = true;
         return;
       }
 
@@ -153,6 +162,7 @@ export async function acquireInstanceLock(stateDir: string, pid: number = proces
       }
       await removeStaleLock(filePath);
       await writeExclusiveLock(filePath, serializedRecord);
+      recoveredStale = true;
     });
   }
 
@@ -181,6 +191,7 @@ export async function acquireInstanceLock(stateDir: string, pid: number = proces
   return {
     filePath,
     pid,
+    recoveredStale,
     release,
     releaseSync,
   };

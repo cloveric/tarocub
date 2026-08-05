@@ -109,6 +109,8 @@ The Telegram path is now intentionally layered.
   Running/terminal card state and rendering.
 - `src/lark/delivery.ts`
   Final text/file/image/video delivery and card overflow fallback.
+- `src/lark/delivery-recovery.ts`
+  Boot-time redelivery of unconfirmed final replies from the delivery-obligation ledger.
 - `src/lark/config-card.ts`
   `/config` card construction and group-message scope warnings.
 - `src/lark/cron.ts`
@@ -160,7 +162,11 @@ The Telegram path is now intentionally layered.
 - `src/state/cron-store.ts`
   Durable cron task records and cross-process writes.
 - `src/state/instance-lock.ts`
-  Single-owner process lock and stale-lock recovery.
+  Single-owner process lock and stale-lock recovery (`recoveredStale` = crash signal).
+- `src/state/delivery-obligation-store.ts`
+  Durable delivery-obligation ledger for final replies (pending → attempting → delivered/failed; boot-time sweep).
+- `src/runtime/restart-loop-guard.ts`
+  Unclean-boot circuit breaker that skips boot recovery during a crash/respawn loop.
 - `src/state/file-mutex.ts`
   Cross-process mutex used by durable state stores.
 - `src/state/audit-log.ts`

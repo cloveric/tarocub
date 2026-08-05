@@ -37,6 +37,8 @@ file-workflow.json
 cron-jobs.json
 board.json
 mini-bus.json
+delivery-obligations.json
+restart-loop.json
 audit.log.jsonl
 instance.lock.json
 workspace/
@@ -72,6 +74,7 @@ These files define how the instance should run.
 - `cron-jobs.json`
 - `board.json`
 - `mini-bus.json`
+- `delivery-obligations.json`
 
 These files represent the durable control state of the instance.
 
@@ -91,6 +94,7 @@ These help with auditability and debugging, but the instance should not need the
 - `usage.last-good.json` (validated recovery snapshot for `usage.json`)
 - migration leftovers
 - `instance.lock.json`
+- `restart-loop.json` (unclean-boot window for the restart-loop breaker; cleared on clean shutdown)
 - `.bus-registry.json`
 
 These files are important, but they are not all the same. Some are transient coordination files, others are user data or deliverables.
@@ -1054,3 +1058,46 @@ That is not automatically wrong, but the difference should be intentional and do
 2. Normalize repair behavior across state stores where it materially helps operators.
 3. Remove the legacy `config.json.resume` compatibility path after all supported upgrade windows have migrated.
 4. Keep `docs/security-boundaries.md` aligned whenever a state file changes trust or sensitivity.
+
+## `delivery-obligations.json`
+
+### Path
+
+`<stateDir>/delivery-obligations.json`
+
+### Owner
+
+`src/state/delivery-obligation-store.ts`. Written by the Lark service process during ordinary-turn final delivery and by the boot-time sweep.
+
+### Purpose
+
+Durable delivery-obligation ledger (Hermes-inspired): one row per outbound final engine response with checkpoints around the send (`pending` → `attempting` → `delivered`/`failed`). On boot, `sweepRecoverable` claims undelivered rows whose owning process is dead and `src/lark/delivery-recovery.ts` redelivers them — plainly for `pending` (send never started), with a visible ♻️ recovered-reply marker for `attempting`/`failed` (the platform may already have the message; honest at-least-once, never a silent duplicate).
+
+### Write rules
+
+- Atomic tmp+rename writes serialized by a file mutex; every operation is best-effort and must never block or fail an actual send.
+- Attempts are capped (3) and rows older than 24h are `abandoned` — a poison reply cannot crash-loop redelivery, and a day-old reply never suddenly reappears.
+- Bounded: settled rows pruned after 7 days, 200-row cap, replies over 200KB are never recorded (Doc-overflow territory).
+- Kill-switch: `CCTB_DELIVERY_LEDGER=off` disables recording and sweeping.
+
+### Recovery rules
+
+Corrupt file → treated as empty and rewritten on the next record; never fatal.
+
+## `restart-loop.json`
+
+### Path
+
+`<stateDir>/restart-loop.json`
+
+### Owner
+
+`src/runtime/restart-loop-guard.ts`.
+
+### Purpose
+
+Rolling window of UNCLEAN boot timestamps (boot recovered a stale service lock = previous run died without clean shutdown). Three unclean boots inside 10 minutes trips the breaker: that boot skips boot-recovery work (interrupted-turn marking, delivery-ledger redelivery) so a poison replay cannot keep killing a supervised service; live traffic is still served. Operator restarts shut down cleanly, release the lock, and are never counted; a clean shutdown also deletes this file.
+
+### Recovery rules
+
+All failures fail OPEN (no trip). Delete the file to manually reset the window.

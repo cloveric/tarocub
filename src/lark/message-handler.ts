@@ -62,6 +62,13 @@ import {
   isStopCommand,
 } from "./commands.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
+import {
+  deliveryLedgerEnabled,
+  markDeliveryAttempting,
+  markDeliveryDelivered,
+  markDeliveryFailed,
+  recordDeliveryObligation,
+} from "../state/delivery-obligation-store.js";
 import { LARK_OVERFLOW_DOC_MIN_CHARS, postLarkOverflowAnswerDoc } from "./overflow-doc.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { LarkGroupModeStore } from "./group-mode-store.js";
@@ -1693,6 +1700,7 @@ async function runNormalizedLarkMessage(
     let runCard: LarkRunCardController | undefined;
     let completedEngineText: string | undefined;
     let runCardFinished = false;
+    let obligationId: string | null = null;
     try {
       // If a "queued" card was already shown for this conversation, take it over
       // as the run card so it transitions in place instead of being orphaned: a
@@ -1970,6 +1978,19 @@ async function runNormalizedLarkMessage(
           },
         });
         completedEngineText = result.text;
+        if (deliveryLedgerEnabled()) {
+          // Durable delivery obligation: the engine's answer now exists only in
+          // this local. If the process dies before platform ACK, the next boot
+          // redelivers it (state/delivery-obligation-store.ts).
+          obligationId = await recordDeliveryObligation(input.stateDir, {
+            channel: "lark",
+            chatId: normalized.chatId,
+            conversationKey: normalized.conversationKey,
+            replyTo: normalized.messageId,
+            replyInThread: Boolean(normalized.threadId),
+            content: result.text,
+          });
+        }
         // A reply too long for one card spills into continuation cards (card 2 continues
         // card 1) rather than a Feishu Doc, which the operator finds more natural to read
         // inline. The run card becomes card 1 (chunk 1); the rest follow as their own
@@ -1987,6 +2008,11 @@ async function runNormalizedLarkMessage(
         const spillToContinuationCards = runCard !== undefined
           && answerChunks.length > 1
           && answerChunks.length <= LARK_MAX_OVERFLOW_CARDS;
+        if (obligationId) {
+          // From here on the platform may have (part of) the answer — a crash
+          // past this point redelivers WITH the recovered-reply marker.
+          await markDeliveryAttempting(input.stateDir, obligationId);
+        }
         const finishResult = runCard
           ? await runCard.finish(spillToContinuationCards ? answerChunks[0]! : cardDisplayText)
           : undefined;
@@ -2081,6 +2107,9 @@ async function runNormalizedLarkMessage(
           larkMessageId: normalized.messageId,
           instanceName: input.instanceName,
         });
+        if (obligationId) {
+          await markDeliveryDelivered(input.stateDir, obligationId);
+        }
         if (workflowRecordId) {
           await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
             record.status = "completed";
@@ -2106,8 +2135,17 @@ async function runNormalizedLarkMessage(
         if (completedEngineText === undefined) {
           throw error;
         }
+        let salvaged = false;
         if (runCard && !runCardFinished) {
-          await runCard.finish(completedEngineText).catch(() => undefined);
+          const salvageResult = await runCard.finish(completedEngineText).catch(() => undefined);
+          salvaged = salvageResult?.shown === true;
+        }
+        if (obligationId) {
+          // Card salvage showed the full text → the reply reached the user;
+          // otherwise leave the obligation failed so the next boot redelivers.
+          await (salvaged
+            ? markDeliveryDelivered(input.stateDir, obligationId)
+            : markDeliveryFailed(input.stateDir, obligationId, redactLarkErrorDetail(error)));
         }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "engine.event.delivery_failed",
@@ -2129,8 +2167,15 @@ async function runNormalizedLarkMessage(
         // continuation delivery, file upload, usage recording, or workflow cleanup
         // must not rewrite that completed run as "execution failed" and encourage a
         // duplicate rerun. Preserve/finish the card and record a partial delivery.
+        let salvaged = false;
         if (runCard && !runCardFinished) {
-          await runCard.finish(completedEngineText).catch(() => undefined);
+          const salvageResult = await runCard.finish(completedEngineText).catch(() => undefined);
+          salvaged = salvageResult?.shown === true;
+        }
+        if (obligationId) {
+          await (salvaged
+            ? markDeliveryDelivered(input.stateDir, obligationId)
+            : markDeliveryFailed(input.stateDir, obligationId, redactLarkErrorDetail(error)));
         }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "engine.event.delivery_failed",

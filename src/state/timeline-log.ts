@@ -30,6 +30,7 @@ export interface TimelineEvent {
     | "service.error"
     | "service.health"
     | "delivery.ledger_mismatch"
+    | "delivery.recovered"
     | "file.accepted"
     | "file.rejected"
     | "budget.blocked"

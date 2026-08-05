@@ -17,6 +17,9 @@ import { parseTimelineEvents, resolveTimelineLogPath, type TimelineEvent } from 
 import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
+import { redeliverRecoveredLarkObligations } from "./delivery-recovery.js";
+import { deliveryLedgerEnabled } from "../state/delivery-obligation-store.js";
+import { clearRestartLoopState, isRestartLoopTripped, recordUncleanBootAndCheck } from "../runtime/restart-loop-guard.js";
 import { attachLarkMeetingSupport } from "./vc/lark-integration.js";
 import type { LarkVcRequestClient } from "./vc/vc-api.js";
 import { handleLarkComment, normalizeLarkCommentFileType } from "./comment-handler.js";
@@ -178,9 +181,32 @@ export async function runLarkService(
   let cronScheduler: CronScheduler | undefined;
   let healthMonitor: LarkHealthMonitor | undefined;
   let stopOutcome: "success" | "error" = "success";
+  // Restart-loop breaker: a stale service lock means the previous run died
+  // without a clean shutdown. Too many such boots in a short window looks like
+  // a crash/respawn loop whose driver may be boot recovery itself — skip the
+  // recovery work for this boot (the service still serves live traffic) so a
+  // poison replay cannot keep killing the process. Operator restarts release
+  // the lock cleanly and are never counted.
+  let skipBootRecovery = false;
+  {
+    const loopCheck = serviceLock.recoveredStale
+      ? await recordUncleanBootAndCheck(stateDir)
+      : await isRestartLoopTripped(stateDir);
+    if (loopCheck.tripped) {
+      skipBootRecovery = true;
+      logLifecycleEvent({
+        type: "service.startup_maintenance",
+        outcome: "success",
+        detail: `restart-loop breaker tripped (${loopCheck.recentBoots.length} unclean endings in window); skipping boot recovery`,
+        metadata: {
+          uncleanBoots: loopCheck.recentBoots.length,
+        },
+      });
+    }
+  }
   try {
     try {
-      const recoveredTurns = await recoverInterruptedLarkTurns(stateDir, instanceName);
+      const recoveredTurns = skipBootRecovery ? 0 : await recoverInterruptedLarkTurns(stateDir, instanceName);
       if (recoveredTurns > 0) {
         logLifecycleEvent({
           type: "service.startup_maintenance",
@@ -372,6 +398,33 @@ export async function runLarkService(
       await cronScheduler.start();
       runtime.cronRuntime = { store: cronStore, scheduler: cronScheduler };
     }
+    if (!skipBootRecovery && deliveryLedgerEnabled()) {
+      // Redeliver final replies the previous run generated but never confirmed
+      // sent (delivery-obligation ledger). Best-effort; never blocks startup.
+      try {
+        const redelivery = await redeliverRecoveredLarkObligations({
+          channel,
+          stateDir,
+          instanceName,
+          locale: instanceConfig.locale === "zh" ? "zh" : "en",
+          log: (message) => logger.log(`${new Date().toISOString()} ${message}`),
+        });
+        if (redelivery.recovered > 0 || redelivery.failed > 0) {
+          logLifecycleEvent({
+            type: "service.startup_maintenance",
+            outcome: redelivery.failed > 0 ? "error" : "success",
+            detail: `delivery ledger: redelivered ${redelivery.recovered}, failed ${redelivery.failed}`,
+            metadata: { ...redelivery },
+          });
+        }
+      } catch (error) {
+        logLifecycleEvent({
+          type: "service.startup_maintenance",
+          outcome: "error",
+          detail: `delivery ledger sweep: ${redactLarkErrorDetail(error)}`,
+        });
+      }
+    }
     if (instanceConfig.meeting.enabled && !runtime.meetingSupport) {
       // VC bot-meeting support (experimental, beta-allowlist gated on the Feishu
       // side). rawClient is on the concrete SDK channel, not LarkChannelLike —
@@ -408,6 +461,10 @@ export async function runLarkService(
     await waitForAbort(options.signal);
   } catch (error) {
     stopOutcome = "error";
+    // A fatal-error exit unwinds cleanly (the finally releases the lock), so
+    // the NEXT boot cannot detect it via a stale lock — record it here so a
+    // supervised fatal-crash loop still fills the breaker window.
+    await recordUncleanBootAndCheck(stateDir).catch(() => undefined);
     logLifecycleEvent({
       type: "service.fatal",
       outcome: "error",
@@ -444,6 +501,9 @@ export async function runLarkService(
         await channel.disconnect();
       }
     } finally {
+      if (stopOutcome === "success") {
+        await clearRestartLoopState(stateDir);
+      }
       await serviceLock.release();
       logLifecycleEvent({
         type: "service.stopped",
