@@ -103,6 +103,36 @@ at most the final 64 KiB. Small outputs are delivered in full; large outputs are
 explicitly marked as truncated. Agent tasks continue to prefer the matching
 `SubagentStop` response.
 
+## Kimi 0.33 Agent-Core-v2 Re-probe
+
+- Probe date: 2026-08-06
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `0.33.0`
+- Engine: default `agent-core-v2` (no legacy fallback flag)
+
+The 0.33 default engine completed real ACP initialization and session creation
+without an interactive workspace-trust prompt blocking stdio. TaroCub then
+successfully applied the ACP-advertised K3 model, `max` effort, and `auto`
+approval mode; the local K3 model catalog declares a 1,048,576-token context
+window. Text/thought/tool streaming, the injected `cctb_search` MCP, a native
+plugin MCP, and the 0.32 observer-hook relay all worked in live turns.
+
+The detached-task probe emitted `background_task_started`, delivered the
+authoritative `task_notification` with the bounded real `output.log`, and did
+not leave retained work after completion. Agent-core-v2 can continue the same
+foreground turn after an earlier assistant message and tool call. ACP exposes
+those as unlabelled text deltas, so TaroCub now inserts a paragraph boundary
+when assistant output resumes after a tool boundary; token fragments within a
+single assistant message remain unchanged.
+
+Kimi 0.33's first-request MCP startup wait and `structuredContent`/`_meta`
+support require no bridge-side protocol change. Native and injected MCP tools
+were both callable in the same ACP session. Per-turn usage remained absent,
+and live `/goal` and `/plugins list` probes both returned `Unknown ACP command`.
+The official Computer Use and WebBridge capabilities must therefore be
+installed through the local interactive TUI, then loaded by a fresh Bot
+session; TaroCub does not modify the user-wide plugin registry on its own.
+
 ## Prompt-Mode Evidence
 
 ### Simple answer and session ID
@@ -382,7 +412,7 @@ Session usage:
 - Context: 0 / 1,048,576 (0.0%)
 ```
 
-The 0.32.0 re-probe still produced no structured per-turn usage. Therefore the
+The 0.32.0 and 0.33.0 re-probes still produced no structured per-turn usage. Therefore the
 adapter must report Kimi token/cost accounting as
 unavailable. It must not convert context occupancy into billed input/output
 tokens. If a future Kimi version starts sending protocol usage fields, support
@@ -512,7 +542,7 @@ extra exception.
   messages queue as separate turns.
 - The live ACP `/goal` probe returned `Unknown ACP command: /goal`. The bridge
   rejects `/goal` explicitly rather than disguising a normal prompt as a goal.
-- ACP 0.31.1 emits no structured per-turn token or cost telemetry. `/usage` and
+- ACP 0.33.0 still emits no structured per-turn token or cost telemetry. `/usage` and
   `/status` say that Kimi turns are excluded; configured dollar budgets cannot
   meter them.
 - ACP questions support selecting an advertised option ID, but not arbitrary

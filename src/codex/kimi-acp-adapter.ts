@@ -81,6 +81,7 @@ export type SpawnKimi = (command: string, args: string[], options: SpawnOptions)
 type PendingKimiTurn = {
   turnId: number;
   assistantText: string;
+  assistantBoundaryPending: boolean;
   onProgress?: (partialText: string) => void;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
@@ -1409,6 +1410,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     const pending: PendingKimiTurn = {
       turnId: this.nextTurnId++,
       assistantText: "",
+      assistantBoundaryPending: false,
       onProgress: input.onProgress,
       onApprovalRequest: input.onApprovalRequest,
       onEngineEvent: input.onEngineEvent,
@@ -1512,11 +1514,18 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (update.content.type !== "text" || !update.content.text) {
         return;
       }
-      pending.assistantText += update.content.text;
+      let text = update.content.text;
+      if (pending.assistantBoundaryPending) {
+        pending.assistantBoundaryPending = false;
+        const trailingNewlines = pending.assistantText.match(/\n*$/)?.[0].length ?? 0;
+        const normalizedText = text.startsWith(" ") ? text.slice(1) : text;
+        text = `${"\n".repeat(Math.max(0, 2 - trailingNewlines))}${normalizedText}`;
+      }
+      pending.assistantText += text;
       pending.onProgress?.(pending.assistantText);
       this.queueEngineEvent(pending, {
         type: "assistant_text",
-        text: update.content.text,
+        text,
         delta: true,
         sessionId,
       });
@@ -1535,6 +1544,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     if (update.sessionUpdate === "tool_call") {
+      if (pending.assistantText) {
+        pending.assistantBoundaryPending = true;
+      }
       const state: KimiToolState = {
         toolCallId: update.toolCallId,
         toolName: update.title || "Unknown tool",
@@ -1553,6 +1565,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     if (update.sessionUpdate === "tool_call_update") {
+      if (pending.assistantText) {
+        pending.assistantBoundaryPending = true;
+      }
       const state = worker.tools.get(update.toolCallId) ?? {
         toolCallId: update.toolCallId,
         toolName: update.title || "Unknown tool",
@@ -1809,6 +1824,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       || `${task.description ?? "Kimi background task"} ${status}.`;
     const settlesCurrentTurn = task.ownerTurnId !== undefined
       && worker.pendingTurn?.turnId === task.ownerTurnId;
+    if (settlesCurrentTurn && worker.pendingTurn?.assistantText) {
+      worker.pendingTurn.assistantBoundaryPending = true;
+    }
     await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
       type: "task_notification",
       text,

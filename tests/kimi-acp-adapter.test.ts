@@ -1449,6 +1449,142 @@ describe("KimiAcpAdapter", () => {
     adapter.destroy();
   });
 
+  it("separates assistant messages that resume after a tool call", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const events: EngineStreamEvent[] = [];
+    const progress: string[] = [];
+    const turn = adapter.sendUserMessage("telegram-42", {
+      text: "run a tool between two replies",
+      files: [],
+      onProgress: (text) => progress.push(text),
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+
+    server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Before tool." },
+    });
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "tool-boundary",
+      title: "Read",
+      kind: "read",
+      status: "pending",
+      rawInput: { path: "/tmp/result.txt" },
+    });
+    server.sendUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tool-boundary",
+      status: "completed",
+      rawOutput: "ok",
+    });
+    server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: " After tool." },
+    });
+    server.respondPrompt();
+
+    await expect(turn).resolves.toEqual({
+      text: "Before tool.\n\nAfter tool.",
+      sessionId: "kimi-session-1",
+    });
+    expect(progress).toEqual([
+      "Before tool.",
+      "Before tool.\n\nAfter tool.",
+    ]);
+    expect(events).toContainEqual({
+      type: "assistant_text",
+      text: "\n\nAfter tool.",
+      delta: true,
+      sessionId: "kimi-session-1",
+    });
+    await adapter.destroy();
+  });
+
+  it("separates assistant messages that resume after an in-turn task notification", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-notification-boundary-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+      readBackgroundTaskOutputFn: vi.fn(async () => undefined),
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-43", {
+        text: "continue after a background notification",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const hookToken = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": hookToken!,
+      };
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Before notification." },
+      });
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "process-boundary",
+          kind: "process",
+          description: "Boundary task",
+          detached: true,
+        }),
+      });
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "Notification",
+          session_id: "kimi-session-1",
+          notification_type: "task.completed",
+          source_kind: "background_task",
+          source_id: "process-boundary",
+          body: "Boundary task completed.",
+        }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(events.some((event) => event.type === "task_notification")).toBe(true);
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: " After notification." },
+      });
+      server.respondPrompt();
+
+      await expect(turn).resolves.toEqual({
+        text: "Before notification.\n\nAfter notification.",
+        sessionId: "kimi-session-1",
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "process-boundary",
+        settlesCurrentTurn: true,
+      }));
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("delivers queued engine events before the final result", async () => {
     const harness = createHarness();
     const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));

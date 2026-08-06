@@ -180,6 +180,21 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
+Kimi Code 0.33's default `agent-core-v2` ACP path is supported and has been
+live-probed with K3/1M/max settings, native tools, injected Search MCP, native
+plugin MCP, session creation, and detached-task hooks. The 0.33 MCP startup,
+OAuth reauthorization, structured-result, and large-skill-tree fixes are
+consumed by Kimi itself; TaroCub does not need a second compatibility shim.
+`KIMI_CODE_LEGACY_FLAG=1` is therefore only a rollback escape hatch, not the
+recommended Bot configuration.
+
+Kimi's `/plugins` manager is not exposed by ACP 0.33 (`/plugins` returns
+`Unknown ACP command`). Optional official capabilities such as Kimi Computer
+Use and Kimi WebBridge must be installed or updated once in the local
+interactive Kimi TUI, then activated for the Bot with a fresh TaroCub session
+(`/reset`). Plugins are user-wide and may add browser/computer-control MCP
+servers, so TaroCub deliberately does not auto-install them.
+
 With Kimi Code 0.32 or newer, TaroCub also installs an inert local hook plugin
 under `KIMI_CODE_HOME` and activates it only for bridge-owned ACP subprocesses.
 `TaskStarted`, background-task `Notification`, and `SubagentStop` events feed
@@ -195,7 +210,7 @@ the Kimi process is alive, not that a turn or task is making progress. Existing
 Kimi credentials, sessions, skills, MCP servers, and `config.toml` are not
 replaced.
 
-Kimi ACP still does not expose structured per-turn token/cost usage, mid-turn
+Kimi ACP 0.33 still does not expose structured per-turn token/cost usage, mid-turn
 steering, a direct client-supplied system-prompt field, or a `/goal` command;
 TaroCub reports those gaps instead of simulating support. See
 [Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence and the

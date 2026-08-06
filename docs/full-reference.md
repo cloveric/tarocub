@@ -346,10 +346,10 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Background tasks | Structured runtime task events | Structured runtime task events | Kimi 0.32+ observer hooks feed shared start/completion events, retain the ACP worker, and protect restarts; `SessionHeartbeat` is never treated as progress | Process-local only |
 | Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | ACP permission requests become native channel buttons; ACP question options remain distinct from approvals | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `full-auto` maps to ACP `yolo`; unsafe/bypass maps to ACP `auto` | `--dangerously-skip-permissions` |
-| `/goal` | Bridge-native goal API; defaults to no token budget unless `--budget` is provided | Passes through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Not exposed by Kimi ACP 0.31.1; rejected explicitly instead of being sent as ordinary text | Passes through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
+| `/goal` | Bridge-native goal API; defaults to no token budget unless `--budget` is provided | Passes through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Still not exposed by Kimi ACP 0.33.0; rejected explicitly instead of being sent as ordinary text | Passes through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
 | `/model` | Bridge config passed to Codex startup | Bridge config passed to Claude startup | Applied through ACP-advertised configuration values on the next turn | Not available from Telegram in `agy --print`; use local interactive `agy /model` |
 | `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Forwarded as Kimi's native slash command | Not supported by the bridge yet |
-| Skills / plugins / MCP | Uses the configured Codex home; isolated homes link `skills/` to the shared Codex skills dir | Uses shared Claude config plus workspace `CLAUDE.md`, skills, plugins, and native MCP | Keeps Kimi's native `~/.agents/skills`, project skills, plugins, and MCP; bot workspaces also expose `~/.codex/skills`, and TaroCub injects Search MCP on ACP new/load | Uses Antigravity's native CLI/plugin config; do not import other engines' native plugins unless explicitly chosen |
+| Skills / plugins / MCP | Uses the configured Codex home; isolated homes link `skills/` to the shared Codex skills dir | Uses shared Claude config plus workspace `CLAUDE.md`, skills, plugins, and native MCP | Keeps Kimi's native `~/.agents/skills`, project skills, plugins, and MCP; bot workspaces also expose `~/.codex/skills`, and TaroCub injects Search MCP on ACP new/load. Kimi 0.33 optional Computer Use/WebBridge plugins require local TUI installation because ACP does not expose `/plugins` | Uses Antigravity's native CLI/plugin config; do not import other engines' native plugins unless explicitly chosen |
 | Working directory | Instance `workspace/`, or the validated resumed thread workspace | Instance `workspace/` | Instance `workspace/`, or the authoritative real-path `cwd` returned by ACP for a resumed session | Instance `workspace/` |
 | Idle workers | Process exits after each turn | Stream workers are reaped after 30 minutes idle; sessions remain resumable | Persistent ACP workers are reaped after 2 hours idle unless they retain a background task; sessions remain resumable | Process exits after each turn |
 
@@ -648,7 +648,7 @@ Estimated cost: $0.3521
 Last updated: 2026-04-09T10:00:00Z
 ```
 
-Claude reports exact USD cost. Codex reports tokens without an exact bridge-side price. Kimi ACP 0.32.0 still does not expose structured turn token/cost telemetry, so Kimi usage and budget accounting cannot be treated as complete until the protocol adds it.
+Claude reports exact USD cost. Codex reports tokens without an exact bridge-side price. Kimi ACP 0.33.0 still does not expose structured turn token/cost telemetry, so Kimi usage and budget accounting cannot be treated as complete until the protocol adds it.
 
 ---
 
@@ -1492,7 +1492,7 @@ Telegram users can also use:
 - `/effort [low|medium|high|xhigh|max|ultra|off]` — set reasoning effort level; Kimi applies only ACP-advertised thinking values, and other engines still enforce their own model-specific limits
 - `/model [name|off]` — switch model for Codex/Claude/Kimi; Kimi validates ACP-advertised provider values on the next turn, while Antigravity explains the `agy --print` limitation
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
-- `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex stores the budget structurally, while Claude Code and Antigravity receive explicit budgets as native goal guidance. Kimi ACP 0.31.1 does not expose goals, so the bridge rejects this command explicitly.
+- `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex stores the budget structurally, while Claude Code and Antigravity receive explicit budgets as native goal guidance. Kimi ACP 0.33.0 still does not expose goals, so the bridge rejects this command explicitly.
 - `/btw <question>` — ask a side question without affecting the current session
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
 - `/fan <prompt>` — query current bot plus configured parallel bots
