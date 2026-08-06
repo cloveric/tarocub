@@ -1443,6 +1443,52 @@ describe("CodexAppServerAdapter", () => {
     });
   });
 
+  it("uses turn/completed summary items without issuing a redundant thread/read", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const imagePath = "/tmp/codex-generated/summary.png";
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData(JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-123",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          error: null,
+          usage: { inputTokens: 5, outputTokens: 2, cachedTokens: 1 },
+          itemsView: "summary",
+          items: [
+            { type: "agentMessage", text: "READY from completion summary" },
+            { type: "imageGenerationCall", result: { saved_path: imagePath } },
+          ],
+        },
+      },
+    }) + "\n");
+
+    await expect(promise).resolves.toEqual({
+      text: `READY from completion summary\n[send-image:${imagePath}]`,
+      sessionId: "thread-123",
+      usage: {
+        inputTokens: 5,
+        outputTokens: 2,
+        cachedTokens: 1,
+      },
+    });
+    expect(child.stdin.lines).toHaveLength(3);
+  });
+
   it("emits generated image items as send-image stream output", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

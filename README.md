@@ -133,6 +133,7 @@ node dist/src/index.js lark doctor
 | **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
+| **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer, and reports sanitized MCP startup failures instead of silently losing tools. |
 | **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources are downloaded and transcribed automatically before any Claude/Codex/Kimi/Antigravity adapter runs: short audio uses the local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription — with chunked local fallback on cloud failure. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
@@ -337,7 +338,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | `/resume [n]` · `/resume thread <id>` · `/resume session <id>` · `/resume conversation <id>` | Resume Claude sessions / bind a Codex thread / a Kimi ACP session / an Antigravity conversation |
 | `/detach` | Detach the resumed session/thread/conversation |
 | `/goal <objective>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | Conversation goal (autonomous pursuit on Codex) |
-| `/btw <question>` | Side question without touching the session |
+| `/btw <question>` | Isolated side question on a fresh temporary session; it neither changes nor inherits the current session |
 | `/q <message>` (alias `/queue`) | **Lark** — force a queued turn (skip mid-turn steering) |
 | `/steer [on\|off\|<seconds>\|unlimited\|default\|status]` | **Lark** — mid-turn steering eligibility window (default 30s; past it messages queue; accepts `5m` minutes, `0`=unlimited) |
 | `/continue` | Continue the waiting archive analysis |

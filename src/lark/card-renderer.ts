@@ -148,6 +148,18 @@ export function applyLarkEngineEvent(
         ...state,
         blocks: applyToolResult(state.blocks, event),
       };
+    case "tool_progress": {
+      const blocks = applyToolProgress(state.blocks, event);
+      if (blocks === state.blocks) {
+        return state;
+      }
+      return {
+        ...state,
+        blocks,
+        reasoning: { ...state.reasoning, active: false },
+        footer: "tool_running",
+      };
+    }
     case "result":
       return finalizeWithResult(state, event.text);
     case "background_task_started":
@@ -234,6 +246,47 @@ function applyToolResult(
       ...target.tool,
       status,
       ...(event.output !== undefined ? { output: event.output } : {}),
+    },
+  };
+  return next;
+}
+
+function applyToolProgress(
+  blocks: LarkRunBlock[],
+  event: Extract<EngineStreamEvent, { type: "tool_progress" }>,
+): LarkRunBlock[] {
+  if (!event.text) {
+    return blocks;
+  }
+  const targetIndex = blocks.findIndex((block) =>
+    block.kind === "tool" && block.tool.toolUseId === event.toolUseId,
+  );
+  if (targetIndex === -1) {
+    return blocks;
+  }
+  const target = blocks[targetIndex]!;
+  if (target.kind !== "tool" || target.tool.status !== "running") {
+    return blocks;
+  }
+
+  const combined = target.tool.output
+    ? `${target.tool.output}\n${event.text}`
+    : event.text;
+  let output = combined;
+  if (output.length > TOOL_OUTPUT_MAX) {
+    let start = output.length - (TOOL_OUTPUT_MAX - 2);
+    if (/^[\uDC00-\uDFFF]$/.test(output[start] ?? "") && /[\uD800-\uDBFF]/.test(output[start - 1] ?? "")) {
+      start += 1;
+    }
+    output = `…\n${output.slice(start)}`;
+  }
+
+  const next = [...blocks];
+  next[targetIndex] = {
+    kind: "tool",
+    tool: {
+      ...target.tool,
+      output,
     },
   };
   return next;

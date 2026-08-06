@@ -21,6 +21,7 @@ import type {
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
 import { renderBackgroundTaskHeader } from "../runtime/background-task-header.js";
+import { redactSecrets } from "../runtime/secret-redaction.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -66,6 +67,8 @@ type ClaudeStreamEvent = {
   status?: string;
   summary?: string;
   output_file?: string;
+  parent_tool_use_id?: string;
+  mcp_server_errors?: unknown;
   origin?: {
     kind?: string;
   } | null;
@@ -105,6 +108,7 @@ type PendingTurn = {
   turnId: number;
   assistantText: string;
   intermediateDeliveryText: string;
+  engineWarnings: string[];
   resolve: (value: CodexAdapterResponse) => void;
   reject: (error: Error) => void;
   onProgress?: (partialText: string) => void;
@@ -170,6 +174,8 @@ const MAX_LINE_BUFFER_BYTES = 1024 * 1024;
 // non-JSON runaway output hard-fails at MAX_LINE_BUFFER_BYTES.
 const MAX_STRUCTURED_LINE_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_STDERR_TAIL_CHARS = 20_000;
+const MAX_MCP_SERVER_WARNINGS = 20;
+const MAX_MCP_SERVER_WARNING_CHARS = 2_000;
 // A cold Claude worker spawn costs ~5-7s before the first token (measured),
 // which is the single biggest "bot feels slower than the CLI" factor — the
 // operator's usage pattern is bursts separated by hours, so a 30min TTL made
@@ -251,6 +257,55 @@ function appendAssistantText(existing: string, next: string): string {
   }
 
   return existing ? `${existing}\n${next}` : next;
+}
+
+function readClaudeMcpServerWarnings(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const warnings: string[] = [];
+  for (const item of value.slice(0, MAX_MCP_SERVER_WARNINGS)) {
+    let warning = "";
+    if (typeof item === "string") {
+      warning = item;
+    } else if (item && typeof item === "object") {
+      const record = item as Record<string, unknown>;
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      const message = typeof record.message === "string" ? record.message.trim() : "";
+      const type = typeof record.type === "string" ? record.type.trim() : "";
+      const detail = message || type;
+      warning = name && detail ? `${name}: ${detail}` : detail || name;
+    }
+    warning = redactSecrets(warning.replace(/\s+/g, " ").trim())
+      // Diagnostics are protocol data, not model instructions. Neutralize every
+      // bracket so a malformed MCP error cannot smuggle [tool:...] or legacy
+      // [send-file:...] directives into either channel's delivery parser.
+      .replace(/\[/g, "&#91;")
+      .replace(/\]/g, "&#93;");
+    if (!warning) {
+      continue;
+    }
+    if (warning.length > MAX_MCP_SERVER_WARNING_CHARS) {
+      warning = `${warning.slice(0, MAX_MCP_SERVER_WARNING_CHARS - 1)}…`;
+    }
+    if (!warnings.includes(warning)) {
+      warnings.push(warning);
+    }
+  }
+  return warnings;
+}
+
+function renderClaudeMcpWarnings(warnings: string[]): string {
+  const label = warnings.length === 1 ? "MCP startup warning" : "MCP startup warnings";
+  return `⚠️ ${label}:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
+}
+
+function appendClaudeMcpWarnings(text: string, warnings: string[]): string {
+  if (warnings.length === 0) {
+    return text;
+  }
+  return [text.trim(), renderClaudeMcpWarnings(warnings)].filter(Boolean).join("\n\n");
 }
 
 function renderBackgroundTaskTurnResult(metadata: ClaudeTaskNotificationMetadata, text?: string): string {
@@ -637,6 +692,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       "stream-json",
       "--output-format",
       "stream-json",
+      "--forward-subagent-text",
       "--permission-prompt-tool",
       "stdio",
     ];
@@ -911,10 +967,44 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
 
     if (parsed.type === "system" && parsed.subtype === "init" && worker.pendingTurn) {
+      const warnings = readClaudeMcpServerWarnings(parsed.mcp_server_errors)
+        .filter((warning) => !worker.pendingTurn!.engineWarnings.includes(warning));
+      if (warnings.length > 0) {
+        worker.pendingTurn.engineWarnings.push(...warnings);
+        this.emitEngineEvent(worker, {
+          type: "assistant_text",
+          text: renderClaudeMcpWarnings(warnings),
+          sessionId: worker.currentSessionId ?? undefined,
+        });
+      }
       this.emitEngineEvent(worker, {
         type: "session",
         sessionId: worker.currentSessionId ?? undefined,
       });
+      return;
+    }
+
+    // --forward-subagent-text marks child events with the parent Agent tool id.
+    // Keep those events out of the main transcript and out of the parent's tool
+    // completion accounting; only child text is useful as live tool progress.
+    if (typeof parsed.parent_tool_use_id === "string" && parsed.parent_tool_use_id) {
+      if (worker.pendingTurn) {
+        this.clearBackgroundTaskTurnSettlement(worker.pendingTurn);
+        if (parsed.type === "assistant") {
+          const text = (parsed.message?.content ?? [])
+            .filter((item) => item.type === "text" && typeof item.text === "string")
+            .map((item) => item.text as string)
+            .join("");
+          if (text) {
+            this.emitEngineEvent(worker, {
+              type: "tool_progress",
+              toolUseId: parsed.parent_tool_use_id,
+              text,
+              sessionId: worker.currentSessionId ?? undefined,
+            });
+          }
+        }
+      }
       return;
     }
 
@@ -1016,12 +1106,23 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         this.markWorkerActivity(worker);
         this.clearPendingTurnTimeout(pending);
         const detail = parsed.result?.trim() || pending.assistantText.trim() || renderClaudeStreamError(parsed, worker.stderrTail);
-        pending.reject(new Error(detail));
+        pending.reject(new Error(appendClaudeMcpWarnings(detail, pending.engineWarnings)));
         return;
       }
-      const text = parsed.result
+      const resultText = parsed.result
         ? mergeIntermediateDeliveryText(parsed.result, pending.intermediateDeliveryText)
         : pending.assistantText;
+      // A direct-result turn has no streamed answer block. When an init warning
+      // created one, seed the actual result explicitly so the run card cannot
+      // finish showing only the warning.
+      if (pending.engineWarnings.length > 0 && !pending.assistantText.trim() && resultText.trim()) {
+        this.emitEngineEvent(worker, {
+          type: "assistant_text",
+          text: resultText,
+          sessionId: worker.currentSessionId ?? undefined,
+        });
+      }
+      const text = appendClaudeMcpWarnings(resultText, pending.engineWarnings);
       this.emitEngineEvent(worker, {
         type: "result",
         text,
@@ -1182,6 +1283,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         turnId: ++nextPendingTurnId,
         assistantText: "",
         intermediateDeliveryText: "",
+        engineWarnings: [],
         onProgress: input.onProgress,
         onApprovalRequest: input.onApprovalRequest,
         onEngineEvent: input.onEngineEvent,
@@ -1402,7 +1504,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       const pending = worker.pendingTurn;
       worker.pendingTurn = null;
       this.clearPendingTurnTimeout(pending);
-      pending.reject(error);
+      pending.reject(pending.engineWarnings.length > 0
+        ? new Error(appendClaudeMcpWarnings(error.message, pending.engineWarnings))
+        : error);
     }
   }
 

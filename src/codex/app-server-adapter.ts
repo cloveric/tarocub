@@ -353,6 +353,34 @@ function readTurnUsage(value: unknown): AdapterUsage | undefined {
   return readAdapterUsage(turn.usage) ?? readAdapterUsage(turn);
 }
 
+function readTurnItems(value: unknown): { text: string; generatedImagePaths: string[] } {
+  if (!Array.isArray(value)) {
+    return { text: "", generatedImagePaths: [] };
+  }
+
+  const generatedImagePaths: string[] = [];
+  let text = "";
+  for (let index = value.length - 1; index >= 0; index--) {
+    const item = value[index];
+    const generatedImagePath = extractGeneratedImagePath(item);
+    if (generatedImagePath && !generatedImagePaths.includes(generatedImagePath)) {
+      generatedImagePaths.unshift(generatedImagePath);
+    }
+    if (
+      !text &&
+      typeof item === "object" &&
+      item !== null &&
+      (item as { type?: unknown }).type === "agentMessage" &&
+      typeof (item as { text?: unknown }).text === "string" &&
+      (item as { text: string }).text.trim()
+    ) {
+      text = (item as { text: string }).text;
+    }
+  }
+
+  return { text, generatedImagePaths };
+}
+
 function readThreadGoal(value: unknown): CodexThreadGoal | null {
   if (typeof value !== "object" || value === null) {
     return null;
@@ -1241,7 +1269,25 @@ export class CodexAppServerAdapter implements CodexAdapter {
       if (!pending) {
         return;
       }
-      pending.usage = readTurnUsage(parsed.params?.turn) ?? readTurnUsage(parsed.params?.usage) ?? pending.usage;
+      const completedTurn = parsed.params?.turn;
+      pending.usage = readTurnUsage(completedTurn) ?? readTurnUsage(parsed.params?.usage) ?? pending.usage;
+
+      // Modern app-server versions include the authoritative final item summary
+      // on turn/completed. Consume it before falling back to thread/read: an
+      // item/completed notification can be delayed or dropped independently,
+      // and waiting for a redundant read used to make an already-finished turn
+      // appear stuck for up to the thread/read timeout.
+      const completedItems = readTurnItems(
+        typeof completedTurn === "object" && completedTurn !== null
+          ? (completedTurn as { items?: unknown }).items
+          : undefined,
+      );
+      if (completedItems.text.trim()) {
+        pending.finalText = completedItems.text;
+      }
+      for (const generatedImagePath of completedItems.generatedImagePaths) {
+        this.addGeneratedImageTag(pending, threadId, generatedImagePath);
+      }
 
       pending.inactivityTimeout && clearTimeout(pending.inactivityTimeout);
       pending.inactivityTimeout = undefined;
@@ -2310,25 +2356,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
       };
     }
 
-    const items = targetTurn?.items ?? [];
-    const generatedImageTags: string[] = [];
-    let agentText = "";
-    for (let index = items.length - 1; index >= 0; index--) {
-      const item = items[index];
-      const generatedImagePath = extractGeneratedImagePath(item);
-      if (generatedImagePath) {
-        const tag = sendImageTag(generatedImagePath);
-        if (!generatedImageTags.includes(tag)) {
-          generatedImageTags.unshift(tag);
-        }
-      }
-      if (!agentText && item?.type === "agentMessage" && typeof item.text === "string" && item.text.trim()) {
-        agentText = item.text;
-      }
-    }
-
-    let text = agentText.trim();
-    for (const tag of generatedImageTags) {
+    const turnItems = readTurnItems(targetTurn?.items);
+    let text = turnItems.text.trim();
+    for (const generatedImagePath of turnItems.generatedImagePaths) {
+      const tag = sendImageTag(generatedImagePath);
       if (!text.includes(tag)) {
         text = [text, tag].filter(Boolean).join("\n");
       }

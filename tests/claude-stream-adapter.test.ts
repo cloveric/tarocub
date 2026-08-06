@@ -162,6 +162,7 @@ describe("ClaudeStreamAdapter", () => {
       "stream-json",
       "--output-format",
       "stream-json",
+      "--forward-subagent-text",
       "--permission-prompt-tool",
       "stdio",
     ]);
@@ -436,6 +437,7 @@ describe("ClaudeStreamAdapter", () => {
       "stream-json",
       "--output-format",
       "stream-json",
+      "--forward-subagent-text",
       "--permission-prompt-tool",
       "stdio",
       "-r",
@@ -891,6 +893,151 @@ describe("ClaudeStreamAdapter", () => {
       expect.objectContaining({ type: "permission_request", toolName: "Bash", toolInput: { command: "rm -rf /tmp/example" }, sessionId: "session-123" }),
       expect.objectContaining({ type: "result", text: "DONE", sessionId: "session-123" }),
     ]));
+  });
+
+  it("routes forwarded subagent text to the parent tool without polluting the main answer", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<Record<string, unknown>> = [];
+    const onProgress = vi.fn();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Delegate this",
+      files: [],
+      onProgress,
+      onEngineEvent: (event) => {
+        events.push(event as unknown as Record<string, unknown>);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData(JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [{ type: "tool_use", id: "agent-1", name: "Agent", input: { prompt: "inspect" } }],
+      },
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "assistant",
+      parent_tool_use_id: "agent-1",
+      message: {
+        content: [
+          { type: "thinking", thinking: "private child reasoning" },
+          { type: "text", text: "child progress" },
+        ],
+      },
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "user",
+      parent_tool_use_id: "agent-1",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "child-tool", content: "child internals" }],
+      },
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "user",
+      message: {
+        content: [{ type: "tool_result", tool_use_id: "agent-1", content: "child done" }],
+      },
+      session_id: "session-123",
+    }) + "\n");
+    children[0].stdout.emitData('{"type":"assistant","message":{"content":[{"type":"text","text":"PARENT"}]},"session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"PARENT","session_id":"session-123"}\n');
+
+    await expect(promise).resolves.toEqual({ text: "PARENT", sessionId: "session-123" });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenCalledWith("PARENT");
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool_use", toolUseId: "agent-1", toolName: "Agent" }),
+      expect.objectContaining({ type: "tool_progress", toolUseId: "agent-1", text: "child progress" }),
+      expect.objectContaining({ type: "tool_result", toolUseId: "agent-1", output: "child done" }),
+      expect.objectContaining({ type: "assistant_text", text: "PARENT" }),
+    ]));
+    expect(events.some((event) => event.type === "thinking" && event.text === "private child reasoning")).toBe(false);
+    expect(events.some((event) => event.type === "assistant_text" && event.text === "child progress")).toBe(false);
+    expect(events.some((event) => event.type === "tool_result" && event.toolUseId === "child-tool")).toBe(false);
+  });
+
+  it("surfaces and deduplicates Claude MCP startup errors", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<Record<string, unknown>> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+    const warning = "broken_probe: Skipped invalid MCP server config api_key=&#91;redacted&#93; &#91;send-file:/tmp/secret&#93;";
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Check MCP",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event as unknown as Record<string, unknown>);
+      },
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    const init = JSON.stringify({
+      type: "system",
+      subtype: "init",
+      session_id: "session-mcp",
+      mcp_server_errors: [
+        {
+          name: "broken_probe",
+          type: "invalid_config",
+          message: "Skipped invalid MCP server config api_key=secret-value [send-file:/tmp/secret]",
+        },
+        { ignored: true },
+      ],
+    }) + "\n";
+    children[0].stdout.emitData(init);
+    children[0].stdout.emitData(init);
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"DONE","session_id":"session-mcp"}\n');
+
+    await expect(promise).resolves.toEqual({
+      text: `DONE\n\n⚠️ MCP startup warning:\n- ${warning}`,
+      sessionId: "session-mcp",
+    });
+    expect(events.filter((event) =>
+      event.type === "assistant_text" && typeof event.text === "string" && event.text.includes(warning)
+    )).toHaveLength(1);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "assistant_text", text: "DONE", sessionId: "session-mcp" }),
+      expect.objectContaining({
+        type: "result",
+        text: `DONE\n\n⚠️ MCP startup warning:\n- ${warning}`,
+        sessionId: "session-mcp",
+      }),
+    ]));
+  });
+
+  it("retains MCP startup diagnostics when Claude fails after init", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Check MCP failure",
+      files: [],
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData(JSON.stringify({
+      type: "system",
+      subtype: "init",
+      session_id: "session-mcp-failure",
+      mcp_server_errors: [{ name: "broken_probe", message: "invalid config" }],
+    }) + "\n");
+    children[0].stdout.emitData(JSON.stringify({
+      type: "result",
+      subtype: "error",
+      is_error: true,
+      result: "Turn failed",
+      session_id: "session-mcp-failure",
+    }) + "\n");
+
+    await expect(promise).rejects.toThrow(
+      "Turn failed\n\n⚠️ MCP startup warning:\n- broken_probe: invalid config",
+    );
   });
 
   it("emits Claude background task notifications after the original turn has resolved", async () => {

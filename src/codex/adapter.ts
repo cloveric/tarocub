@@ -99,6 +99,14 @@ export type EngineStreamEvent =
       sessionId?: string;
     }
   | {
+      /** Incremental text produced by a child agent while its parent tool call
+       * is still running. It belongs to the tool panel, not the main answer. */
+      type: "tool_progress";
+      toolUseId: string;
+      text: string;
+      sessionId?: string;
+    }
+  | {
       type: "permission_request";
       toolName: string;
       toolInput?: unknown;

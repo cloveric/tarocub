@@ -455,6 +455,33 @@ describe("lark card renderer", () => {
     expect(bash).toMatchObject({ kind: "tool", tool: { toolName: "Bash", status: "running" } });
   });
 
+  it("attaches child-agent progress only to its running parent tool", () => {
+    let state = initialLarkRunState("lark:oc_chat", "group");
+    state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "Agent", toolUseId: "agent-1" });
+    state = applyLarkEngineEvent(state, { type: "tool_progress", toolUseId: "missing", text: "wrong task" });
+    state = applyLarkEngineEvent(state, { type: "tool_progress", toolUseId: "agent-1", text: "first update" });
+    state = applyLarkEngineEvent(state, {
+      type: "tool_progress",
+      toolUseId: "agent-1",
+      text: `${"later ".repeat(250)}latest marker`,
+    });
+
+    const running = state.blocks.find((block) => block.kind === "tool");
+    expect(running).toMatchObject({ kind: "tool", tool: { toolName: "Agent", status: "running" } });
+    if (!running || running.kind !== "tool") {
+      throw new Error("Agent tool block missing");
+    }
+    expect(running.tool.output).toContain("latest marker");
+    expect(running.tool.output).not.toContain("wrong task");
+    expect(running.tool.output!.length).toBeLessThanOrEqual(1200);
+
+    state = applyLarkEngineEvent(state, { type: "tool_result", toolUseId: "agent-1", output: "final child result" });
+    const done = state.blocks.find((block) => block.kind === "tool");
+    expect(done).toMatchObject({ kind: "tool", tool: { status: "done", output: "final child result" } });
+    const unchanged = applyLarkEngineEvent(state, { type: "tool_progress", toolUseId: "agent-1", text: "late update" });
+    expect(unchanged).toBe(state);
+  });
+
   it("renders MCP tool names as a friendly 'server · tool'", () => {
     let state = initialLarkRunState("lark:oc_chat", "group");
     state = applyLarkEngineEvent(state, { type: "tool_use", toolName: "mcp__chrome-devtools__click", toolInput: {}, toolUseId: "t1" });
