@@ -61,7 +61,14 @@ export function classifyFailure(error: unknown): FailureCategory {
     return "file-workflow";
   }
 
-  const text = normalizeErrorText(error).toLowerCase();
+  // Claude MCP startup warnings are appended to error text for DISPLAY; their
+  // content (frequently "server x: 401 Unauthorized" style) must not steer
+  // classification of the underlying failure — a misconfigured MCP server
+  // would otherwise turn every failure on the instance into "auth" and
+  // trigger a spurious full-turn auth retry (duplicating side effects).
+  const rawText = normalizeErrorText(error);
+  const mcpWarningIndex = rawText.search(/⚠️ MCP startup warnings?:/u);
+  const text = (mcpWarningIndex >= 0 ? rawText.slice(0, mcpWarningIndex) : rawText).toLowerCase();
 
   if (
     text.includes("not logged in") ||

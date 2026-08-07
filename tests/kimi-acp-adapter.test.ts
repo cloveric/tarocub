@@ -730,12 +730,15 @@ describe("KimiAcpAdapter", () => {
       await waitFor(() => events.some((event) => (
         event.type === "task_notification" && event.taskId === "bash-lost-review"
       )));
-      expect(events).toContainEqual(expect.objectContaining({
-        type: "task_notification",
-        taskId: "bash-lost-review",
-        status: "failed",
-        text: expect.stringContaining("safety timeout"),
-      }));
+      const expiryNotification = events.find((event) => (
+        event.type === "task_notification" && event.taskId === "bash-lost-review"
+      ))! as { status?: string; text?: string };
+      // The TASK completed (its Notification was captured) — only the review
+      // timed out. The captured result must be delivered, not dropped, and
+      // the status must not lie "failed".
+      expect(expiryNotification.status).toBe("completed");
+      expect(expiryNotification.text).toContain("The process exited, but the synthetic review turn never arrived.");
+      expect(expiryNotification.text).toContain("safety timeout");
     } finally {
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });
@@ -1143,6 +1146,21 @@ describe("KimiAcpAdapter", () => {
         method: "POST",
         headers,
         body: JSON.stringify(terminalPayload),
+      });
+      // A late task-origin TurnStarted (the synthetic review of the settled
+      // task) must not resurrect it either — this was the one lifecycle entry
+      // point missing the tombstone check.
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "TurnStarted",
+          session_id: "kimi-session-1",
+          turn_id: "turn-late-review",
+          origin_kind: "task",
+          origin_name: "bash-finished-first",
+          prompt: '<notification type="task.completed" source_id="bash-finished-first">done</notification>',
+        }),
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
 

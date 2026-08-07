@@ -182,3 +182,19 @@ describe("getBusErrorSemantics", () => {
     expect(getBusErrorSemantics("unknown")).toEqual({ code: "unknown", retryable: true });
   });
 });
+
+describe("MCP startup warnings do not steer classification", () => {
+  it("classifies by the underlying error, not the appended warning text", () => {
+    const error = new Error(
+      "turn became inactive after 30 minutes\n\n⚠️ MCP startup warning:\n- server github: 401 Unauthorized",
+    );
+    expect(classifyFailure(error)).not.toBe("auth");
+  });
+
+  it("still classifies a genuine auth failure that carries a warning", () => {
+    const error = new Error(
+      "not logged in — please run /login\n\n⚠️ MCP startup warnings:\n- server tavily: timeout",
+    );
+    expect(classifyFailure(error)).toBe("auth");
+  });
+});

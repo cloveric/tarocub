@@ -159,6 +159,7 @@ type KimiHookTurn = {
 type KimiHookTerminal = {
   status: "completed" | "failed";
   errorText?: string;
+  safetyExpiry?: boolean;
 };
 
 type PendingKimiHookTerminal = {
@@ -1850,6 +1851,21 @@ export class KimiAcpAdapter implements CodexAdapter {
       ?? (event.originName && worker.backgroundTasks.has(event.originName) ? event.originName : undefined)
       ?? (unmatchedContinuations.length === 1 ? unmatchedContinuations[0].taskId : undefined)
       ?? `kimi-task-turn-${event.turnId}`;
+    {
+      // Tombstone parity with the other lifecycle entry points: a late or
+      // duplicate task-origin TurnStarted must not resurrect a settled task
+      // (fresh started event + re-armed restart guard + duplicate final
+      // notification). A LIVE continuation awaiting its review is the
+      // exception — the transfer path tombstones at hand-off, and the review
+      // turn legitimately starts after that.
+      const now = Date.now();
+      const reviewIsExpected = worker.backgroundContinuations.size > 0
+        || worker.pendingHookTerminal !== undefined;
+      const resurrectionProbe = [taskId, event.originName].filter((id): id is string => Boolean(id));
+      if (!reviewIsExpected && resurrectionProbe.some((id) => this.isTerminalBackgroundTask(worker, id, now))) {
+        return;
+      }
+    }
     const sourceTask = worker.backgroundTasks.get(taskId) ?? {
       taskId,
       sessionId: event.sessionId,
@@ -2010,15 +2026,19 @@ export class KimiAcpAdapter implements CodexAdapter {
       task.taskId !== continuation.taskId && task.continuationTaskId === continuation.taskId
     ));
     const intermediate = linkedTasks.length > 0;
-    const finalStatus = terminal.status === "failed"
+    // The underlying task's own completion survives a failed or timed-out
+    // REVIEW turn: the result was already captured (continuation.rawText), so
+    // a lost Stop hook or the safety timeout degrades to "deliver what we
+    // have, with a note" — never to "failed" with the real output dropped.
+    const finalStatus = continuation.status === "failed"
       ? "failed"
-      : continuation.status === "failed"
+      : terminal.status === "failed" && !(terminal.safetyExpiry && continuation.status === "completed")
         ? "failed"
         : "completed";
-    const rawText = [continuation.assistantText.trim(), terminal.errorText?.trim()]
+    const bodyText = continuation.assistantText.trim() || continuation.rawText?.trim() || "";
+    const rawText = [bodyText, terminal.errorText?.trim()]
       .filter(Boolean)
       .join("\n\n")
-      || continuation.rawText?.trim()
       || `${continuation.summary ?? "Kimi background task"} ${finalStatus}.`;
     const text = finalStatus === "completed"
       ? await appendSavedArtifactDeliveryTags(rawText, worker.workspacePath)
@@ -2554,6 +2574,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         void this.finishKimiBackgroundContinuation(worker, continuation, {
           status: "failed",
           errorText: "Kimi did not finish reviewing this background result before the safety timeout.",
+          safetyExpiry: true,
         });
       }
     }
