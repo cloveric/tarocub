@@ -1216,6 +1216,53 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("suppresses the death notice for a long-silent task (result was consumed in-turn)", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; taskId?: string; suppressUserDelivery?: boolean }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", {
+      spawnFn,
+      // Threshold 0 → every retained task counts as long-silent.
+      backgroundTaskSilentSuppressMs: 0,
+    });
+
+    try {
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "Run in background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event as never);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "sleep 5", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-background","tool_use_id":"toolu-background","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await turn;
+
+      children[0].close(1);
+      await waitFor(() => events.some((event) => event.type === "task_notification"));
+      const notice = events.find((event) => event.type === "task_notification")!;
+      expect(notice.taskId).toBe("task-background");
+      // Settles the timeline pairing without alarming the user.
+      expect(notice.suppressUserDelivery).toBe(true);
+    } finally {
+      adapter.destroy();
+    }
+  });
+
   it("terminalizes outstanding background tasks with a failed notification when the worker dies", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: Array<{ type?: string; taskId?: string; status?: string; text?: string }> = [];
@@ -1806,7 +1853,8 @@ describe("ClaudeStreamAdapter", () => {
         type: "task_notification",
         taskId: "task-1",
         status: "failed",
-        text: expect.stringContaining("presumed dead"),
+        text: expect.stringContaining("settled quietly"),
+        suppressUserDelivery: true,
       }));
 
       const second = adapter.sendUserMessage("session-123", {

@@ -184,6 +184,7 @@ const MAX_MCP_SERVER_WARNING_CHARS = 2_000;
 const DEFAULT_IDLE_WORKER_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const BACKGROUND_TASK_SILENT_SUPPRESS_MS = 60 * 60_000;
 const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
 // There is deliberately NO total-turn cap for Claude: long autonomous tasks
 // (large refactors, image generation, /goal-style runs) are expected to run for
@@ -497,6 +498,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly idleWorkerTtlMs: number;
   private readonly turnInactivityTimeoutMs: number | null;
   private readonly backgroundTaskMaxAgeMs: number;
+  private readonly backgroundTaskSilentSuppressMs: number;
   private readonly disallowedTools: string[];
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
@@ -515,6 +517,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       idleSweepIntervalMs?: number;
       turnInactivityTimeoutMs?: number | null;
       backgroundTaskMaxAgeMs?: number;
+      backgroundTaskSilentSuppressMs?: number;
       disallowedTools?: string[];
     },
   ) {
@@ -536,6 +539,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       ? CLAUDE_STREAM_INACTIVITY_TIMEOUT_MS
       : options.turnInactivityTimeoutMs;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
+    this.backgroundTaskSilentSuppressMs = options?.backgroundTaskSilentSuppressMs ?? BACKGROUND_TASK_SILENT_SUPPRESS_MS;
     this.disallowedTools = options?.disallowedTools ?? [];
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
@@ -1474,17 +1478,19 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         if (task.toolUseId) {
           worker.explicitBackgroundToolUseIds.delete(task.toolUseId);
         }
-        // Emit a terminal notification instead of deleting silently: the CLI
-        // sometimes loses a completion notification while the worker stays
-        // alive, and a silent delete would leave the timeline pair open (the
-        // restart busy-guard then blocks restarts until ITS stale cutoff)
-        // and the user never told the task went dark.
+        // Emit a terminal notification so the timeline pair settles (the
+        // restart busy-guard would otherwise block restarts until ITS stale
+        // cutoff) — but SUPPRESSED: six silent hours with a live worker means
+        // the result was almost always consumed in-turn (TaskOutput), where
+        // the CLI never sends an out-of-band completion. The first real-world
+        // firing produced only false "failed" alarms for succeeded gates.
         this.emitEngineEvent(worker, {
           type: "task_notification",
-          text: `${task.summary ?? "Background task"} produced no completion notification for ${Math.round(this.backgroundTaskMaxAgeMs / 3_600_000)}h and is presumed dead.`,
+          text: `${task.summary ?? "Background task"} produced no completion notification for ${Math.round(this.backgroundTaskMaxAgeMs / 3_600_000)}h and was settled quietly.`,
           sessionId: worker.currentSessionId ?? undefined,
           taskId: task.taskId,
           status: "failed",
+          suppressUserDelivery: true,
           ...(task.summary ? { summary: task.summary } : {}),
         }, task.onEngineEvent);
       }
@@ -1535,13 +1541,22 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       return;
     }
     const deliveries: Array<Promise<void>> = [];
+    const now = Date.now();
     for (const task of worker.backgroundTasks.values()) {
+      // A task that has been silent for over an hour was almost always
+      // consumed in-turn already (no out-of-band completion ever comes for
+      // those) — settle its pairing quietly instead of alarming the user.
+      // A recently-active task killed mid-run stays visible: that is a real
+      // interruption worth reporting.
+      const silentMs = now - task.lastSeenAt;
+      const suppressAfterMs = this.backgroundTaskSilentSuppressMs;
       deliveries.push(this.emitEngineEvent(worker, {
         type: "task_notification",
         text: `${task.summary ?? "Background task"} stopped because the Claude engine process exited before completion.`,
         sessionId: worker.currentSessionId ?? undefined,
         taskId: task.taskId,
         status: "failed",
+        ...(silentMs >= suppressAfterMs ? { suppressUserDelivery: true } : {}),
         ...(task.summary ? { summary: task.summary } : {}),
         ...(task.outputFile ? { outputFile: task.outputFile } : {}),
       }, task.onEngineEvent));
