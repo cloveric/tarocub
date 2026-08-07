@@ -5,6 +5,13 @@ import path from "node:path";
 import AdmZip from "adm-zip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// The polling-helper tests assert ordering/dedup with REAL timers. Under
+// full-suite parallelism a starved worker can stretch 1s of scheduled waiting
+// past the 5s default test timeout (the recurring service.test.ts flake in
+// full runs). Give the file headroom — fast runs finish as soon as their
+// conditions hold and are unaffected.
+vi.setConfig({ testTimeout: 30_000 });
+
 import {
   createServiceDependencies,
   createServiceDependenciesForInstance,
@@ -58,7 +65,7 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function waitForCondition(condition: () => boolean | Promise<boolean>, timeoutMs = 1_000): Promise<void> {
+async function waitForCondition(condition: () => boolean | Promise<boolean>, timeoutMs = 10_000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (await condition()) {
