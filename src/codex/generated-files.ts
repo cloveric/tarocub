@@ -1,6 +1,9 @@
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 const IMAGE_FILE_PATTERN = /\.(?:png|jpe?g|webp|gif)$/i;
+const AUTO_DELIVERABLE_FILE_PATTERN = /\.(?:csv|tsv|pdf|docx?|xlsx?|pptx?|html?|zip)$/i;
+const SAVED_ARTIFACT_LINE_PATTERN = /^\s*(?:saved|wrote|written|created|generated|exported)(?:\s+(?:image|file|chart|plot|report|output))?(?:\s+(?:to|at))?\s*[:：]?\s*(.+?)\s*$/i;
 
 export function sendImageTag(filePath: string): string {
   return `[send-image:${filePath}]`;
@@ -12,6 +15,90 @@ export function appendUniqueSendImageTag(text: string, filePath: string): string
     return text;
   }
   return [text.trim(), tag].filter(Boolean).join("\n");
+}
+
+/**
+ * Convert an explicit final-process save marker into a bridge delivery tag.
+ * This is intentionally narrower than general path extraction: only regular,
+ * non-hidden files inside the worker workspace and with a known output type
+ * are eligible. The channel delivery layer still performs its own sandbox,
+ * credential, size, and MIME checks before sending anything.
+ */
+export async function appendSavedArtifactDeliveryTags(text: string, workspacePath: string): Promise<string> {
+  const candidates = extractSavedArtifactCandidates(text);
+  if (candidates.length === 0) {
+    return text;
+  }
+
+  const workspaceRoot = await realpath(workspacePath).catch(() => null);
+  if (!workspaceRoot) {
+    return text;
+  }
+
+  let next = text.trim();
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const resolved = await realpath(candidate).catch(() => null);
+    if (!resolved || seen.has(resolved)) {
+      continue;
+    }
+    const relative = path.relative(workspaceRoot, resolved);
+    if (
+      !relative
+      || relative.startsWith(`..${path.sep}`)
+      || relative === ".."
+      || path.isAbsolute(relative)
+      || relative.split(path.sep).some((segment) => segment.startsWith("."))
+    ) {
+      continue;
+    }
+    const info = await stat(resolved).catch(() => null);
+    if (!info?.isFile()) {
+      continue;
+    }
+
+    seen.add(resolved);
+    const tag = IMAGE_FILE_PATTERN.test(resolved)
+      ? `[send-image:${candidate}]`
+      : `[send-file:${candidate}]`;
+    if (!next.includes(tag)) {
+      next = [next, tag].filter(Boolean).join("\n");
+    }
+  }
+  return next;
+}
+
+function extractSavedArtifactCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const raw = line.match(SAVED_ARTIFACT_LINE_PATTERN)?.[1];
+    if (!raw) {
+      continue;
+    }
+    const candidate = unwrapSavedPath(raw);
+    if (
+      path.isAbsolute(candidate)
+      && !candidate.includes("\0")
+      && (IMAGE_FILE_PATTERN.test(candidate) || AUTO_DELIVERABLE_FILE_PATTERN.test(candidate))
+    ) {
+      candidates.push(candidate);
+    }
+  }
+  return candidates;
+}
+
+function unwrapSavedPath(value: string): string {
+  let candidate = value.trim().replace(/[.,;，。；]+$/, "");
+  const first = candidate[0];
+  const last = candidate[candidate.length - 1];
+  if (candidate.length >= 2 && (
+    (first === '"' && last === '"')
+    || (first === "'" && last === "'")
+    || (first === "`" && last === "`")
+  )) {
+    candidate = candidate.slice(1, -1).trim();
+  }
+  return candidate;
 }
 
 export function extractGeneratedImagePath(value: unknown): string | null {

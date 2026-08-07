@@ -119,7 +119,11 @@ plugin MCP, and the 0.32 observer-hook relay all worked in live turns.
 
 The detached-task probe emitted `background_task_started`, delivered the
 authoritative `task_notification` with the bounded real `output.log`, and did
-not leave retained work after completion. Agent-core-v2 can continue the same
+not leave retained work after completion. Successful process output that
+explicitly reports a supported workspace artifact with a final `saved`,
+`wrote`, or `generated` line is normalized into the shared delivery layer;
+failed tasks and paths that are missing, hidden, unsupported, or outside the
+real workspace are never auto-delivered. Agent-core-v2 can continue the same
 foreground turn after an earlier assistant message and tool call. ACP exposes
 those as unlabelled text deltas, so TaroCub now inserts a paragraph boundary
 when assistant output resumes after a tool boundary; token fragments within a

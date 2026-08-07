@@ -203,7 +203,12 @@ the existing run cards, out-of-band completion notices, worker retention, and
 restart guard. Tool-result metadata remains the start-event fallback; terminal
 task tombstones reject late/duplicate start events, and detached Bash notices
 read the real bounded `output.log` tail from that Kimi session instead of
-showing only a generic completion title. Accepted hooks are drained before the
+showing only a generic completion title. Successful background output that
+explicitly ends with `saved` / `wrote` / `generated` plus a supported workspace
+artifact path is normalized into the shared file/image delivery layer; failed,
+missing, hidden, unsupported, or workspace-escaping paths remain plain text.
+Agents are also told to emit exact delivery tags from the background command
+instead of treating a saved path as delivery. Accepted hooks are drained before the
 ACP worker is destroyed, and timeline identity stays scoped by conversation,
 session, and task across ordinary messages, card actions, comments, and bus
 turns. The relay deliberately ignores `SessionHeartbeat`: it proves only that

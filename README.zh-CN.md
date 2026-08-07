@@ -229,6 +229,8 @@ npm run dev -- telegram engine --instance review-bot
 | 工作目录 | 实例 `workspace/` | 实例或恢复 session 的原工作区 | 实例或恢复 session 的原 `cwd`（绑定前用真实 `session/load` 校验） | 实例 `workspace/` |
 | 空闲 worker | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每轮退出 |
 
+Kimi 后台任务完成后，TaroCub 会读取真实的任务输出；若成功输出明确以 `saved` / `wrote` / `generated` 报告了工作区内的受支持产物，会自动进入同一套文件/图片投递层。失败任务、不存在文件、隐藏路径、非支持类型和越出工作区的路径只保留为文字，不会自动发送。系统提示也会要求后台命令直接输出交付标签，不能把“已保存到某路径”冒充为已经交付。
+
 Kimi 的实测事件、取消、提问、恢复和 gap 证据见 [`docs/kimi-engine-notes.md`](./docs/kimi-engine-notes.md)，四引擎逐项对照见 [`docs/kimi-capability-matrix.md`](./docs/kimi-capability-matrix.md)。
 
 ## 实时网页搜索 MCP：Brave + Tavily

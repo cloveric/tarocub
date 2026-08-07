@@ -34,6 +34,7 @@ import {
   ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS,
   ENGINE_DEFAULT_TURN_TIMEOUT_MS,
 } from "./engine-timeouts.js";
+import { appendSavedArtifactDeliveryTags } from "./generated-files.js";
 import {
   isKimiHookRelayVersionSupported,
   KIMI_HOOK_RELAY_URL_ENV,
@@ -1817,11 +1818,14 @@ export class KimiAcpAdapter implements CodexAdapter {
     const processOutput = task.kind === "process" || task.taskId.startsWith("bash-")
       ? await this.readBackgroundTaskOutputFn(this.engineHomePath, sessionId, task.taskId)
       : undefined;
-    const text = task.subagentResponse?.trim()
+    const rawText = task.subagentResponse?.trim()
       || processOutput
       || notification.body?.trim()
       || notification.title?.trim()
       || `${task.description ?? "Kimi background task"} ${status}.`;
+    const text = status === "completed"
+      ? await appendSavedArtifactDeliveryTags(rawText, worker.workspacePath)
+      : rawText;
     const settlesCurrentTurn = task.ownerTurnId !== undefined
       && worker.pendingTurn?.turnId === task.ownerTurnId;
     if (settlesCurrentTurn && worker.pendingTurn?.assistantText) {

@@ -9,7 +9,7 @@ describe("larkAgentInstructions", () => {
     // Bound covers the two optional ASR lines, appended only where the machine
     // actually has a local ASR backend / a configured Tingwu dir (e.g. the dev
     // box running the suite); CI has neither, so both stay absent there.
-    expect(instructions.length).toBeLessThan(2800);
+    expect(instructions.length).toBeLessThan(3000);
     expect(instructions.split("\n").length).toBeLessThanOrEqual(10);
   });
 
@@ -131,6 +131,14 @@ describe("larkAgentInstructions", () => {
 
     expect(instructions).toContain("workspace-sandboxed");
     expect(instructions).toContain("copy it into your workspace first");
+  });
+
+  it("tells background jobs to emit delivery tags instead of only reporting saved paths", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("background job that creates artifacts");
+    expect(instructions).toContain("print the exact delivery tags");
+    expect(instructions).toContain("saved PATH");
   });
 
   it("tells agents to give each image its own title via send.batch {path, caption} or [send-image:] title-above", () => {

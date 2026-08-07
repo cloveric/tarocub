@@ -495,10 +495,15 @@ describe("KimiAcpAdapter", () => {
 
   it("delivers real background Bash output instead of only the generic hook summary", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-output-test-"));
+    const workspace = path.join(root, "workspace");
+    const generatedImage = path.join(workspace, "build-chart.png");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(generatedImage, "png", "utf8");
     const harness = createHarness();
     const events: EngineStreamEvent[] = [];
     const adapter = new KimiAcpAdapter("kimi", {
       ...adapterOptions(harness),
+      workspacePath: workspace,
       engineHomePath: root,
       hookRelayEnabled: true,
     });
@@ -544,7 +549,11 @@ describe("KimiAcpAdapter", () => {
         "bash-real-output",
       );
       await mkdir(outputDir, { recursive: true });
-      await writeFile(path.join(outputDir, "output.log"), "build passed\n12 tests passed\n", "utf8");
+      await writeFile(
+        path.join(outputDir, "output.log"),
+        `build passed\n12 tests passed\nsaved ${generatedImage}\n`,
+        "utf8",
+      );
 
       const completed = await fetch(hookUrl!, {
         method: "POST",
@@ -567,8 +576,54 @@ describe("KimiAcpAdapter", () => {
         type: "task_notification",
         taskId: "bash-real-output",
         status: "completed",
-        text: "build passed\n12 tests passed",
+        text: `build passed\n12 tests passed\nsaved ${generatedImage}\n[send-image:${generatedImage}]`,
       }));
+
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-failed-artifact",
+          kind: "process",
+          description: "Failed chart",
+          detached: true,
+        }),
+      });
+      const failedOutputDir = path.join(
+        root,
+        "sessions",
+        "wd-test",
+        "session_kimi-session-1",
+        "agents",
+        "main",
+        "tasks",
+        "bash-failed-artifact",
+      );
+      await mkdir(failedOutputDir, { recursive: true });
+      await writeFile(path.join(failedOutputDir, "output.log"), `saved ${generatedImage}\n`, "utf8");
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "Notification",
+          session_id: "kimi-session-1",
+          notification_type: "task.failed",
+          source_kind: "background_task",
+          source_id: "bash-failed-artifact",
+          body: "Chart generation failed.",
+        }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const failedNotification = events.find((event) => (
+        event.type === "task_notification" && event.taskId === "bash-failed-artifact"
+      ));
+      expect(failedNotification).toMatchObject({
+        status: "failed",
+        text: `saved ${generatedImage}`,
+      });
+      expect(failedNotification).not.toMatchObject({ text: expect.stringContaining("[send-image:") });
 
       await fetch(hookUrl!, {
         method: "POST",
