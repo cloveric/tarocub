@@ -370,6 +370,91 @@ function adapterOptions(harness: ReturnType<typeof createHarness>) {
   };
 }
 
+async function postKimiHook(
+  harness: ReturnType<typeof createHarness>,
+  body: Record<string, unknown>,
+): Promise<void> {
+  const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+  const hookToken = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN;
+  expect(hookUrl).toBeTruthy();
+  expect(hookToken).toBeTruthy();
+  const response = await fetch(hookUrl!, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-tarocub-kimi-hook-token": hookToken!,
+    },
+    body: JSON.stringify({ session_id: "kimi-session-1", ...body }),
+  });
+  expect(response.status).toBe(202);
+}
+
+async function createCrossTaskHookScenario(): Promise<{
+  root: string;
+  harness: ReturnType<typeof createHarness>;
+  adapter: KimiAcpAdapter;
+  server: FakeAcpServer;
+  events: EngineStreamEvent[];
+}> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-cross-task-hook-test-"));
+  const harness = createHarness();
+  const events: EngineStreamEvent[] = [];
+  const adapter = new KimiAcpAdapter("kimi", {
+    ...adapterOptions(harness),
+    engineHomePath: root,
+    backgroundContinuationGraceMs: 2_000,
+    hookRelayEnabled: true,
+  });
+
+  const firstTurn = adapter.sendUserMessage("telegram-cross-task", {
+    text: "settle task A",
+    files: [],
+    onEngineEvent: (event) => {
+      events.push(event);
+    },
+  });
+  await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+  const server = harness.children[0].server;
+  await postKimiHook(harness, {
+    hook_event_name: "Notification",
+    notification_type: "task.completed",
+    source_kind: "background_task",
+    source_id: "task-a",
+    body: "Task A is settled.",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  server.respondPrompt();
+  await expect(firstTurn).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+  const secondTurn = adapter.sendUserMessage("kimi-session-1", {
+    text: "start task B",
+    files: [],
+    onEngineEvent: (event) => {
+      events.push(event);
+    },
+  });
+  await waitFor(() => server.prompts.length === 2);
+  await postKimiHook(harness, {
+    hook_event_name: "TaskStarted",
+    task_id: "task-b",
+    kind: "process",
+    description: "Task B",
+    detached: true,
+  });
+  server.respondPrompt();
+  await expect(secondTurn).resolves.toMatchObject({ text: "Kimi completed the request." });
+  await postKimiHook(harness, {
+    hook_event_name: "Notification",
+    notification_type: "task.completed",
+    source_kind: "background_task",
+    source_id: "task-b",
+    body: "Task B raw result.",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  return { root, harness, adapter, server, events };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -752,6 +837,7 @@ describe("KimiAcpAdapter", () => {
     const adapter = new KimiAcpAdapter("kimi", {
       ...adapterOptions(harness),
       engineHomePath: root,
+      backgroundContinuationGraceMs: 2_000,
       hookRelayEnabled: true,
     });
     try {
@@ -1168,6 +1254,136 @@ describe("KimiAcpAdapter", () => {
       expect(events.filter((event) => event.type === "task_notification")).toHaveLength(1);
       harness.children[0].server.respondPrompt();
       await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps one task's tombstone effective while another continuation is waiting", async () => {
+    const { root, harness, adapter, events } = await createCrossTaskHookScenario();
+    try {
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-late-a",
+        origin_kind: "task",
+        origin_name: "task-a",
+        prompt: '<notification type="task.completed" source_id="task-a">done</notification>',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await postKimiHook(harness, { hook_event_name: "Stop" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(events.filter((event) => (
+        event.type === "background_task_started" && event.taskId === "task-a"
+      ))).toHaveLength(0);
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "task-b"
+      ))).toHaveLength(0);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a late settled-task turn preempt another active review", async () => {
+    const { root, harness, adapter, server, events } = await createCrossTaskHookScenario();
+    try {
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-b",
+        origin_kind: "task",
+        origin_name: "task-b",
+        prompt: '<notification type="task.completed" source_id="task-b">done</notification>',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Partial review B." },
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-late-a",
+        origin_kind: "task",
+        origin_name: "task-a",
+        prompt: '<notification type="task.completed" source_id="task-a">done</notification>',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "task-b"
+      ))).toHaveLength(0);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves captured task output when a partially written review fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-partial-review-failure-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 2_000,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-partial-review", {
+        text: "start detached work",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "task-partial",
+        kind: "process",
+        description: "Partial review task",
+        detached: true,
+      });
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "task-partial",
+        body: "AUTHORITATIVE RAW TASK RESULT",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-partial",
+        origin_kind: "task",
+        origin_name: "task-partial",
+        prompt: '<notification type="task.completed" source_id="task-partial">done</notification>',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "I began reviewing but did not finish." },
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "StopFailure",
+        error_type: "review_failed",
+        error_message: "Synthetic review crashed.",
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "task-partial"
+      )));
+
+      const notification = events.find((event) => (
+        event.type === "task_notification" && event.taskId === "task-partial"
+      )) as Extract<EngineStreamEvent, { type: "task_notification" }>;
+      expect(notification.status).toBe("failed");
+      expect(notification.text).toContain("AUTHORITATIVE RAW TASK RESULT");
+      expect(notification.text).toContain("I began reviewing but did not finish.");
+      expect(notification.text).toContain("Synthetic review crashed.");
     } finally {
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });

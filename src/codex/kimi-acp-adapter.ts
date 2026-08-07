@@ -185,6 +185,7 @@ type KimiWorker = {
   terminalBackgroundTasks: Map<string, number>;
   activeHookTurn?: KimiHookTurn;
   pendingHookTerminal?: PendingKimiHookTerminal;
+  ignoredHookTerminalStarts: number[];
   lastActivityAt: number;
   removed: boolean;
   failurePromise: Promise<never>;
@@ -1229,6 +1230,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       backgroundTasks: new Map(),
       backgroundContinuations: new Map(),
       terminalBackgroundTasks: new Map(),
+      ignoredHookTerminalStarts: [],
       lastActivityAt: Date.now(),
       removed: false,
       failurePromise,
@@ -1823,16 +1825,15 @@ export class KimiAcpAdapter implements CodexAdapter {
     worker: KimiWorker,
     event: Extract<KimiHookEvent, { hookEventName: "TurnStarted" }>,
   ): Promise<void> {
-    if (worker.activeHookTurn?.originKind === "task") {
-      const previous = worker.activeHookTurn.continuationTaskId
-        ? worker.backgroundContinuations.get(worker.activeHookTurn.continuationTaskId)
-        : undefined;
-      if (previous) {
-        await this.finishKimiBackgroundContinuation(worker, previous, { status: "completed" });
-      }
-    }
-
     if (event.originKind !== "task") {
+      if (worker.activeHookTurn?.originKind === "task") {
+        const previous = worker.activeHookTurn.continuationTaskId
+          ? worker.backgroundContinuations.get(worker.activeHookTurn.continuationTaskId)
+          : undefined;
+        if (previous) {
+          await this.finishKimiBackgroundContinuation(worker, previous, { status: "completed" });
+        }
+      }
       const terminalAlreadyArrived = Boolean(this.takePendingKimiHookTerminal(worker));
       worker.activeHookTurn = terminalAlreadyArrived
         ? undefined
@@ -1842,28 +1843,44 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     const promptMetadata = parseKimiTaskTurnPrompt(event.prompt);
-    const existingContinuation = promptMetadata.taskId
-      ? worker.backgroundContinuations.get(promptMetadata.taskId)
-      : undefined;
+    const explicitTaskIds = [...new Set(
+      [promptMetadata.taskId, event.originName].filter((id): id is string => Boolean(id)),
+    )];
     const unmatchedContinuations = [...worker.backgroundContinuations.values()]
       .filter((entry) => !entry.activeTurnId);
     const taskId = promptMetadata.taskId
-      ?? (event.originName && worker.backgroundTasks.has(event.originName) ? event.originName : undefined)
+      ?? (event.originName && (
+        worker.backgroundTasks.has(event.originName)
+        || worker.backgroundContinuations.has(event.originName)
+      ) ? event.originName : undefined)
       ?? (unmatchedContinuations.length === 1 ? unmatchedContinuations[0].taskId : undefined)
       ?? `kimi-task-turn-${event.turnId}`;
-    {
-      // Tombstone parity with the other lifecycle entry points: a late or
-      // duplicate task-origin TurnStarted must not resurrect a settled task
-      // (fresh started event + re-armed restart guard + duplicate final
-      // notification). A LIVE continuation awaiting its review is the
-      // exception — the transfer path tombstones at hand-off, and the review
-      // turn legitimately starts after that.
-      const now = Date.now();
-      const reviewIsExpected = worker.backgroundContinuations.size > 0
-        || worker.pendingHookTerminal !== undefined;
-      const resurrectionProbe = [taskId, event.originName].filter((id): id is string => Boolean(id));
-      if (!reviewIsExpected && resurrectionProbe.some((id) => this.isTerminalBackgroundTask(worker, id, now))) {
+    const now = Date.now();
+    const resurrectionProbe = [...new Set([...explicitTaskIds, taskId])];
+    if (
+      resurrectionProbe.some((id) => (
+        this.isTerminalBackgroundTask(worker, id, now)
+        && !worker.backgroundContinuations.has(id)
+      ))
+    ) {
+      this.markIgnoredKimiHookTurn(worker, now);
+      return;
+    }
+
+    const existingContinuation = worker.backgroundContinuations.get(taskId);
+    if (worker.activeHookTurn?.originKind === "task") {
+      const activeTaskId = worker.activeHookTurn.continuationTaskId;
+      const previous = activeTaskId
+        ? worker.backgroundContinuations.get(activeTaskId)
+        : undefined;
+      if (worker.activeHookTurn.turnId === event.turnId || (previous && activeTaskId === taskId)) {
+        if (previous) {
+          previous.lastSeenAt = now;
+        }
         return;
+      }
+      if (previous) {
+        await this.finishKimiBackgroundContinuation(worker, previous, { status: "completed" });
       }
     }
     const sourceTask = worker.backgroundTasks.get(taskId) ?? {
@@ -1926,7 +1943,39 @@ export class KimiAcpAdapter implements CodexAdapter {
     return pending.terminal;
   }
 
+  private pruneIgnoredKimiHookTerminals(worker: KimiWorker, now: number): void {
+    while (
+      worker.ignoredHookTerminalStarts.length > 0
+      && now - worker.ignoredHookTerminalStarts[0] > PENDING_HOOK_TERMINAL_TTL_MS
+    ) {
+      worker.ignoredHookTerminalStarts.shift();
+    }
+  }
+
+  private markIgnoredKimiHookTurn(worker: KimiWorker, now: number): void {
+    this.pruneIgnoredKimiHookTerminals(worker, now);
+    // Stop/StopFailure can arrive before TurnStarted. If one is already
+    // buffered, it belongs to this ignored tombstoned turn and must not be
+    // inherited by the next live continuation.
+    if (this.takePendingKimiHookTerminal(worker)) {
+      return;
+    }
+    worker.ignoredHookTerminalStarts.push(now);
+  }
+
+  private consumeIgnoredKimiHookTerminal(worker: KimiWorker): boolean {
+    this.pruneIgnoredKimiHookTerminals(worker, Date.now());
+    if (worker.ignoredHookTerminalStarts.length === 0) {
+      return false;
+    }
+    worker.ignoredHookTerminalStarts.shift();
+    return true;
+  }
+
   private async handleKimiHookTerminal(worker: KimiWorker, terminal: KimiHookTerminal): Promise<void> {
+    if (this.consumeIgnoredKimiHookTerminal(worker)) {
+      return;
+    }
     const active = worker.activeHookTurn;
     if (!active) {
       worker.pendingHookTerminal = { terminal, receivedAt: Date.now() };
@@ -2035,7 +2084,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       : terminal.status === "failed" && !(terminal.safetyExpiry && continuation.status === "completed")
         ? "failed"
         : "completed";
-    const bodyText = continuation.assistantText.trim() || continuation.rawText?.trim() || "";
+    const assistantText = continuation.assistantText.trim();
+    const capturedText = continuation.rawText?.trim() || "";
+    const bodyText = terminal.status === "failed"
+      ? [...new Set([capturedText, assistantText].filter(Boolean))].join("\n\n")
+      : assistantText || capturedText;
     const rawText = [bodyText, terminal.errorText?.trim()]
       .filter(Boolean)
       .join("\n\n")
@@ -2583,6 +2636,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         worker.terminalBackgroundTasks.delete(taskId);
       }
     }
+    this.pruneIgnoredKimiHookTerminals(worker, now);
   }
 
   private async failBackgroundTasks(worker: KimiWorker): Promise<void> {
@@ -2637,6 +2691,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     worker.backgroundTasks.clear();
     worker.activeHookTurn = undefined;
     worker.pendingHookTerminal = undefined;
+    worker.ignoredHookTerminalStarts.length = 0;
     await Promise.allSettled(deliveries);
   }
 
@@ -2665,6 +2720,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     worker.terminalBackgroundTasks.clear();
     worker.activeHookTurn = undefined;
     worker.pendingHookTerminal = undefined;
+    worker.ignoredHookTerminalStarts.length = 0;
     for (const [key, candidate] of this.workers.entries()) {
       if (candidate === worker) {
         this.workers.delete(key);

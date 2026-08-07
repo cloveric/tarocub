@@ -188,7 +188,7 @@ describe("MCP startup warnings do not steer classification", () => {
     const error = new Error(
       "turn became inactive after 30 minutes\n\n⚠️ MCP startup warning:\n- server github: 401 Unauthorized",
     );
-    expect(classifyFailure(error)).not.toBe("auth");
+    expect(classifyFailure(error)).toBe("engine-timeout");
   });
 
   it("still classifies a genuine auth failure that carries a warning", () => {
