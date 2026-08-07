@@ -21,7 +21,51 @@ describe("Kimi hook relay", () => {
     expect(isKimiHookRelayVersionSupported("unknown\n")).toBe(false);
   });
 
-  it("accepts only task lifecycle hooks and deliberately rejects SessionHeartbeat", () => {
+  it("accepts turn and task lifecycle hooks and deliberately rejects SessionHeartbeat", () => {
+    expect(parseKimiHookEvent({
+      hook_event_name: "TurnStarted",
+      session_id: "session-1",
+      turn_id: 52,
+      origin_kind: "task",
+      prompt: "<notification source_id=\"bash-1\">done</notification>",
+    })).toEqual({
+      hookEventName: "TurnStarted",
+      sessionId: "session-1",
+      turnId: "52",
+      originKind: "task",
+      prompt: "<notification source_id=\"bash-1\">done</notification>",
+    });
+    expect(parseKimiHookEvent({
+      hook_event_name: "Stop",
+      session_id: "session-1",
+      stop_hook_active: false,
+    })).toEqual({
+      hookEventName: "Stop",
+      sessionId: "session-1",
+      stopHookActive: false,
+    });
+    expect(parseKimiHookEvent({
+      hook_event_name: "StopFailure",
+      session_id: "session-1",
+      error_type: "ToolError",
+      error_message: "background repair failed",
+    })).toEqual({
+      hookEventName: "StopFailure",
+      sessionId: "session-1",
+      errorType: "ToolError",
+      errorMessage: "background repair failed",
+    });
+    expect(parseKimiHookEvent({
+      hook_event_name: "Interrupt",
+      session_id: "session-1",
+      turn_id: "53",
+      reason: "cancelled",
+    })).toEqual({
+      hookEventName: "Interrupt",
+      sessionId: "session-1",
+      turnId: "53",
+      reason: "cancelled",
+    });
     expect(parseKimiHookEvent({
       hook_event_name: "TaskStarted",
       session_id: "session-1",
@@ -111,6 +155,10 @@ describe("Kimi hook relay", () => {
         hooks: Array<{ event: string; command: string }>;
       };
       expect(manifest.hooks.map((hook) => hook.event)).toEqual([
+        "TurnStarted",
+        "Stop",
+        "StopFailure",
+        "Interrupt",
         "TaskStarted",
         "Notification",
         "SubagentStop",

@@ -9,10 +9,39 @@ export const KIMI_HOOK_RELAY_URL_ENV = "TAROCUB_KIMI_HOOK_URL";
 export const KIMI_HOOK_RELAY_TOKEN_ENV = "TAROCUB_KIMI_HOOK_TOKEN";
 
 const PLUGIN_ID = "tarocub-hook-relay";
-const PLUGIN_VERSION = "1";
+const PLUGIN_VERSION = "2";
 const MAX_HOOK_BODY_BYTES = 1024 * 1024;
 
 export type KimiHookEvent =
+  | {
+      hookEventName: "TurnStarted";
+      sessionId: string;
+      cwd?: string;
+      turnId: string;
+      originKind: string;
+      originName?: string;
+      prompt?: string;
+    }
+  | {
+      hookEventName: "Stop";
+      sessionId: string;
+      cwd?: string;
+      stopHookActive?: boolean;
+    }
+  | {
+      hookEventName: "StopFailure";
+      sessionId: string;
+      cwd?: string;
+      errorType?: string;
+      errorMessage?: string;
+    }
+  | {
+      hookEventName: "Interrupt";
+      sessionId: string;
+      cwd?: string;
+      turnId?: string;
+      reason?: string;
+    }
   | {
       hookEventName: "TaskStarted";
       sessionId: string;
@@ -87,6 +116,13 @@ function optionalNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function optionalIdentifier(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return optionalString(value);
+}
+
 export function parseKimiHookEvent(input: unknown): KimiHookEvent | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     return null;
@@ -98,6 +134,52 @@ export function parseKimiHookEvent(input: unknown): KimiHookEvent | null {
     return null;
   }
   const cwd = optionalString(raw.cwd);
+
+  if (hookEventName === "TurnStarted") {
+    const turnId = optionalIdentifier(raw.turn_id);
+    const originKind = requiredString(raw.origin_kind);
+    if (!turnId || !originKind) {
+      return null;
+    }
+    return {
+      hookEventName,
+      sessionId,
+      turnId,
+      originKind,
+      ...(cwd ? { cwd } : {}),
+      ...(optionalString(raw.origin_name) ? { originName: optionalString(raw.origin_name) } : {}),
+      ...(optionalString(raw.prompt) ? { prompt: optionalString(raw.prompt) } : {}),
+    };
+  }
+
+  if (hookEventName === "Stop") {
+    return {
+      hookEventName,
+      sessionId,
+      ...(cwd ? { cwd } : {}),
+      ...(typeof raw.stop_hook_active === "boolean" ? { stopHookActive: raw.stop_hook_active } : {}),
+    };
+  }
+
+  if (hookEventName === "StopFailure") {
+    return {
+      hookEventName,
+      sessionId,
+      ...(cwd ? { cwd } : {}),
+      ...(optionalString(raw.error_type) ? { errorType: optionalString(raw.error_type) } : {}),
+      ...(optionalString(raw.error_message) ? { errorMessage: optionalString(raw.error_message) } : {}),
+    };
+  }
+
+  if (hookEventName === "Interrupt") {
+    return {
+      hookEventName,
+      sessionId,
+      ...(cwd ? { cwd } : {}),
+      ...(optionalIdentifier(raw.turn_id) ? { turnId: optionalIdentifier(raw.turn_id) } : {}),
+      ...(optionalString(raw.reason) ? { reason: optionalString(raw.reason) } : {}),
+    };
+  }
 
   if (hookEventName === "TaskStarted") {
     const taskId = requiredString(raw.task_id);
@@ -222,8 +304,12 @@ function relayManifest(command: string): string {
   return `${JSON.stringify({
     name: PLUGIN_ID,
     version: PLUGIN_VERSION,
-    description: "Relays Kimi background-task lifecycle events to a local TaroCub process.",
+    description: "Relays Kimi turn and background-task lifecycle events to a local TaroCub process.",
     hooks: [
+      { event: "TurnStarted", command, timeout: 5 },
+      { event: "Stop", command, timeout: 5 },
+      { event: "StopFailure", command, timeout: 5 },
+      { event: "Interrupt", command, timeout: 5 },
       { event: "TaskStarted", command, timeout: 5 },
       { event: "Notification", command, timeout: 5 },
       { event: "SubagentStop", command, timeout: 5 },

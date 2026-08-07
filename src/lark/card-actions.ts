@@ -1824,7 +1824,7 @@ async function runLarkCardChoice(input: {
         metadata: engineEventTimelineMetadata(event),
       });
 
-      if (event.type !== "task_notification" || event.settlesCurrentTurn) {
+      if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
         return;
       }
 
@@ -2011,7 +2011,7 @@ async function runLarkArchiveContinueCardAction(input: {
         },
       });
 
-      if (event.type !== "task_notification" || event.settlesCurrentTurn) {
+      if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
         return;
       }
 

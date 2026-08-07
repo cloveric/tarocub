@@ -137,6 +137,8 @@ export type EngineStreamEvent =
       outputFile?: string;
       /** True when this notification is being promoted into the active turn's final answer. */
       settlesCurrentTurn?: boolean;
+      /** Persist lifecycle state but do not render or deliver this internal transition to the user. */
+      suppressUserDelivery?: boolean;
     };
 
 export interface CodexUserMessageInput {

@@ -563,11 +563,14 @@ export async function executeWorkflowAwareTelegramTurn(input: {
         textChars: "text" in event ? event.text.length : undefined,
         status: "status" in event ? event.status : undefined,
         taskId: "taskId" in event ? event.taskId : undefined,
+        userDeliverySuppressed: event.type === "task_notification"
+          ? event.suppressUserDelivery
+          : undefined,
         hasSendFileTag: event.type === "assistant_text" ? hasSendFileTag(event.text) : undefined,
       },
     });
 
-    if (event.type === "task_notification" && !event.settlesCurrentTurn) {
+    if (event.type === "task_notification" && !event.settlesCurrentTurn && !event.suppressUserDelivery) {
       const notificationText = isWholeResponseFileBlockText(event.text)
         ? event.text
         : [

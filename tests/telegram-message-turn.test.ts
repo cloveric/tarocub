@@ -842,6 +842,81 @@ describe("executeWorkflowAwareTelegramTurn", () => {
     }
   });
 
+  it("records suppressed background transitions without delivering them to Telegram", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-suppressed-"));
+    const state = {
+      archiveSummaryDelivered: false,
+      workflowRecordId: undefined as string | undefined,
+      failureHint: undefined as string | undefined,
+    };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockImplementation(async (input) => {
+        input.onEngineEvent?.({
+          type: "task_notification",
+          taskId: "bash-first-attempt",
+          status: "failed",
+          text: "INTERNAL_RETRY_FAILURE",
+          suppressUserDelivery: true,
+        });
+        return { text: "The repair is still running." };
+      }),
+    };
+    const deliverTelegramResponse = vi.fn().mockResolvedValue(1);
+
+    try {
+      await executeWorkflowAwareTelegramTurn({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "kimi" },
+        normalized: createNormalizedMessage("generate and verify the image"),
+        context: {
+          api: {
+            sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+            sendDocument: vi.fn(),
+            sendPhoto: vi.fn(),
+            sendVoice: vi.fn(),
+            getFile: vi.fn(),
+            downloadFile: vi.fn(),
+          },
+          bridge: bridge as never,
+          inboxDir: path.join(root, "inbox"),
+          instanceName: "default",
+          updateId: 102,
+        },
+        workflowStore: { update: vi.fn() } as never,
+        downloadedAttachments: [],
+        state,
+        deliverTelegramResponse,
+        sendTelegramOutFile: vi.fn(),
+      });
+
+      expect(deliverTelegramResponse).toHaveBeenCalledTimes(1);
+      expect(deliverTelegramResponse).toHaveBeenCalledWith(
+        expect.anything(),
+        123,
+        "The repair is still running.",
+        expect.any(String),
+        undefined,
+        undefined,
+        "en",
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(root, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event",
+        detail: "task_notification",
+        metadata: expect.objectContaining({
+          taskId: "bash-first-attempt",
+          status: "failed",
+          textChars: "INTERNAL_RETRY_FAILURE".length,
+          userDeliverySuppressed: true,
+        }),
+      }));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("delivers a whole-file Claude background notification without prepending a text header", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-turn-"));
     const fileBlock = "```file:report.md\nbackground report\n```";

@@ -3,7 +3,10 @@ import path from "node:path";
 
 const IMAGE_FILE_PATTERN = /\.(?:png|jpe?g|webp|gif)$/i;
 const AUTO_DELIVERABLE_FILE_PATTERN = /\.(?:csv|tsv|pdf|docx?|xlsx?|pptx?|html?|zip)$/i;
-const SAVED_ARTIFACT_LINE_PATTERN = /^\s*(?:saved|wrote|written|created|generated|exported)(?:\s+(?:image|file|chart|plot|report|output))?(?:\s+(?:to|at))?\s*[:：]?\s*(.+?)\s*$/i;
+const SAVED_ARTIFACT_LINE_PATTERNS = [
+  /^\s*(?:saved|wrote|written|created|generated|exported)(?:\s+(?:image|file|chart|plot|report|output))?(?:\s+(?:to|at))?\s*[:：]?\s*(.+?)\s*$/i,
+  /^\s*(?:(?:结果|图片|文件|图表|图像|报告|输出)\s*)?(?:已)?(?:保存|写入|生成|导出|输出)(?:\s*(?:图片|文件|图表|图像|报告|结果))?\s*(?:到|至|为)?\s*[:：]?\s*(.+?)\s*$/,
+];
 
 export function sendImageTag(filePath: string): string {
   return `[send-image:${filePath}]`;
@@ -71,7 +74,9 @@ export async function appendSavedArtifactDeliveryTags(text: string, workspacePat
 function extractSavedArtifactCandidates(text: string): string[] {
   const candidates: string[] = [];
   for (const line of text.split(/\r?\n/)) {
-    const raw = line.match(SAVED_ARTIFACT_LINE_PATTERN)?.[1];
+    const raw = SAVED_ARTIFACT_LINE_PATTERNS
+      .map((pattern) => line.match(pattern)?.[1])
+      .find((value): value is string => Boolean(value));
     if (!raw) {
       continue;
     }

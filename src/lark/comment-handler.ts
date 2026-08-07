@@ -142,7 +142,7 @@ export async function handleLarkComment(input: {
           metadata: engineEventTimelineMetadata(event),
         });
 
-        if (event.type !== "task_notification" || event.settlesCurrentTurn) {
+        if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
           return;
         }
 

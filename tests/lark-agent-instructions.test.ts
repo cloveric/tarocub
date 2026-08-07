@@ -133,12 +133,14 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("copy it into your workspace first");
   });
 
-  it("tells background jobs to emit delivery tags instead of only reporting saved paths", () => {
+  it("tells background jobs to validate output and emit delivery tags", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions).toContain("background job that creates artifacts");
-    expect(instructions).toContain("print the exact delivery tags");
+    expect(instructions).toContain("Background jobs: verify output, not exit status");
+    expect(instructions).toContain("final stdout must include exact delivery tags");
     expect(instructions).toContain("saved PATH");
+    expect(instructions).toContain("empty/all-zero/corrupt results");
+    expect(instructions).toContain("one user-facing conclusion");
   });
 
   it("tells agents to give each image its own title via send.batch {path, caption} or [send-image:] title-above", () => {

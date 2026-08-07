@@ -21,6 +21,8 @@ describe("appendSavedArtifactDeliveryTags", () => {
         `saved ${imagePath}`,
         `Saved image to ${imagePath}`,
         `wrote file "${csvPath}"`,
+        `结果已保存到：${imagePath}`,
+        `报告已生成 ${csvPath}`,
       ].join("\n"), workspace);
 
       expect(result.match(/\[send-image:/g)).toHaveLength(1);

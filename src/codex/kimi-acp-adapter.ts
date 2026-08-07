@@ -123,10 +123,47 @@ type KimiBackgroundTask = {
   subagentResponse?: string;
   ownerTurnId?: number;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  continuationTaskId?: string;
   startEmitted: boolean;
   lastSeenAt: number;
   pendingNotification?: KimiTaskNotification;
   notificationTimer?: ReturnType<typeof setTimeout>;
+  terminalObserved?: boolean;
+};
+
+type KimiBackgroundContinuation = {
+  taskId: string;
+  sessionId?: string;
+  status?: string;
+  summary?: string;
+  rawText?: string;
+  lastSeenAt: number;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  approvalAbortController: AbortController;
+  assistantText: string;
+  assistantBoundaryPending: boolean;
+  activeTurnId?: string;
+  fallbackTimer?: ReturnType<typeof setTimeout>;
+  terminalTimer?: ReturnType<typeof setTimeout>;
+  pendingTerminal?: KimiHookTerminal;
+};
+
+type KimiHookTurn = {
+  turnId: string;
+  originKind: string;
+  continuationTaskId?: string;
+};
+
+type KimiHookTerminal = {
+  status: "completed" | "failed";
+  errorText?: string;
+};
+
+type PendingKimiHookTerminal = {
+  terminal: KimiHookTerminal;
+  receivedAt: number;
 };
 
 type KimiWorker = {
@@ -143,7 +180,10 @@ type KimiWorker = {
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   tools: Map<string, KimiToolState>;
   backgroundTasks: Map<string, KimiBackgroundTask>;
+  backgroundContinuations: Map<string, KimiBackgroundContinuation>;
   terminalBackgroundTasks: Map<string, number>;
+  activeHookTurn?: KimiHookTurn;
+  pendingHookTerminal?: PendingKimiHookTerminal;
   lastActivityAt: number;
   removed: boolean;
   failurePromise: Promise<never>;
@@ -174,6 +214,9 @@ const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
 const DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS = 6 * 60 * 60_000;
 const MAX_BACKGROUND_TASK_OUTPUT_BYTES = 64 * 1024;
 const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
+const DEFAULT_BACKGROUND_CONTINUATION_GRACE_MS = 10_000;
+const DEFAULT_HOOK_TERMINAL_GRACE_MS = 250;
+const PENDING_HOOK_TERMINAL_TTL_MS = 5_000;
 const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
 type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | null) => Promise<string>;
@@ -364,6 +407,24 @@ function parseKimiBackgroundTaskOutput(output: string | undefined): {
   const description = fields.get("description") || undefined;
   const subagentName = fields.get("actual_subagent_type") || undefined;
   return { taskId, description, subagentName };
+}
+
+function parseKimiTaskTurnPrompt(prompt: string | undefined): {
+  taskId?: string;
+  status?: string;
+} {
+  if (!prompt) {
+    return {};
+  }
+  const sourceMatch = prompt.match(/\bsource_id=(?:"([^"]+)"|'([^']+)'|([^\s>]+))/);
+  const notificationMatch = prompt.match(/\bid=(?:"|')task:([^:"']+):([^"']+)(?:"|')/);
+  const taskId = sourceMatch?.[1] ?? sourceMatch?.[2] ?? sourceMatch?.[3] ?? notificationMatch?.[1];
+  const typeMatch = prompt.match(/\btype=(?:"|')task\.([^"']+)(?:"|')/);
+  const status = typeMatch?.[1] ?? notificationMatch?.[2];
+  return {
+    ...(taskId ? { taskId } : {}),
+    ...(status ? { status } : {}),
+  };
 }
 
 function isSafeKimiPathSegment(value: string): boolean {
@@ -745,6 +806,8 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly cancelGraceMs: number;
   private readonly idleWorkerTtlMs: number;
   private readonly backgroundTaskMaxAgeMs: number;
+  private readonly backgroundContinuationGraceMs: number;
+  private readonly hookTerminalGraceMs: number;
   private readonly killProcessTreeFn: (pid: number | undefined) => void;
   private readonly mcpServers: McpServer[];
   private readonly syncWorkspaceInstructionsFn: SyncWorkspaceInstructions;
@@ -778,6 +841,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
       backgroundTaskMaxAgeMs?: number;
+      backgroundContinuationGraceMs?: number;
+      hookTerminalGraceMs?: number;
       killProcessTreeFn?: (pid: number | undefined) => void;
       mcpServers?: McpServer[];
       syncWorkspaceInstructionsFn?: SyncWorkspaceInstructions;
@@ -810,6 +875,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.cancelGraceMs = options?.cancelGraceMs ?? KIMI_ACP_CANCEL_GRACE_MS;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
+    this.backgroundContinuationGraceMs = options?.backgroundContinuationGraceMs
+      ?? DEFAULT_BACKGROUND_CONTINUATION_GRACE_MS;
+    this.hookTerminalGraceMs = options?.hookTerminalGraceMs ?? DEFAULT_HOOK_TERMINAL_GRACE_MS;
     this.killProcessTreeFn = options?.killProcessTreeFn ?? killProcessTree;
     this.mcpServers = options?.mcpServers ?? resolveDefaultKimiMcpServers();
     this.syncWorkspaceInstructionsFn = options?.syncWorkspaceInstructionsFn ?? syncKimiWorkspaceInstructions;
@@ -1079,10 +1147,10 @@ export class KimiAcpAdapter implements CodexAdapter {
         throw new Error("Cannot reconfigure Kimi session while a turn is in flight");
       }
       this.pruneExpiredBackgroundTasks(existing, Date.now());
-      if (existing.backgroundTasks.size > 0) {
-        const count = existing.backgroundTasks.size;
+      if (existing.backgroundTasks.size > 0 || existing.backgroundContinuations.size > 0) {
+        const count = Math.max(existing.backgroundTasks.size, existing.backgroundContinuations.size);
         throw new Error(
-          `Kimi session has ${count} background task${count === 1 ? "" : "s"} still running, so the new engine settings cannot be applied yet. `
+          `Kimi session has ${count} background task${count === 1 ? "" : "s"} still running or being reviewed, so the new engine settings cannot be applied yet. `
           + `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
         );
       }
@@ -1158,6 +1226,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       onEngineEvent: undefined,
       tools: new Map(),
       backgroundTasks: new Map(),
+      backgroundContinuations: new Map(),
       terminalBackgroundTasks: new Map(),
       lastActivityAt: Date.now(),
       removed: false,
@@ -1434,9 +1503,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (worker.pendingTurn) {
       throw new Error("Kimi session already has an in-flight turn");
     }
+    const autonomousTurnActive = Boolean(this.backgroundContinuationForUpdate(worker));
     worker.pendingTurn = pending;
     worker.onEngineEvent = input.onEngineEvent;
-    worker.tools.clear();
+    if (!autonomousTurnActive) {
+      worker.tools.clear();
+    }
     worker.stderrTail = "";
     this.armTurnTimeouts(worker, pending);
 
@@ -1499,15 +1571,18 @@ export class KimiAcpAdapter implements CodexAdapter {
 
   private handleSessionUpdate(worker: KimiWorker, notification: SessionNotification): void {
     this.markActivity(worker);
-    // Replayed history (session/load) arrives while no turn is pending — the
-    // null check drops it. session/load only ever runs during worker creation
-    // or pre-binding validation, both of which hold no pending turn; a separate
-    // replayingHistory flag existed but was unreachable defense the tests could
-    // not exercise, so it was removed rather than kept untestable.
-    if (!worker.pendingTurn) {
+    const continuation = this.backgroundContinuationForUpdate(worker);
+    if (continuation) {
+      continuation.lastSeenAt = Date.now();
+    }
+    const pending = continuation ? null : worker.pendingTurn;
+    // Replayed history arrives with neither a foreground turn nor a retained
+    // task-origin continuation, so it remains ignored. Kimi 0.33 can start a
+    // synthetic task-origin turn after the foreground ACP prompt has returned;
+    // those updates must be captured by the continuation instead of dropped.
+    if (!pending && !continuation) {
       return;
     }
-    const pending = worker.pendingTurn;
     const update = notification.update;
     const sessionId = worker.currentSessionId ?? notification.sessionId;
 
@@ -1516,6 +1591,19 @@ export class KimiAcpAdapter implements CodexAdapter {
         return;
       }
       let text = update.content.text;
+      if (continuation) {
+        if (continuation.assistantBoundaryPending) {
+          continuation.assistantBoundaryPending = false;
+          const trailingNewlines = continuation.assistantText.match(/\n*$/)?.[0].length ?? 0;
+          const normalizedText = text.startsWith(" ") ? text.slice(1) : text;
+          text = `${"\n".repeat(Math.max(0, 2 - trailingNewlines))}${normalizedText}`;
+        }
+        continuation.assistantText += text;
+        return;
+      }
+      if (!pending) {
+        return;
+      }
       if (pending.assistantBoundaryPending) {
         pending.assistantBoundaryPending = false;
         const trailingNewlines = pending.assistantText.match(/\n*$/)?.[0].length ?? 0;
@@ -1534,7 +1622,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     if (update.sessionUpdate === "agent_thought_chunk") {
-      if (update.content.type === "text" && update.content.text) {
+      if (pending && update.content.type === "text" && update.content.text) {
         this.queueEngineEvent(pending, {
           type: "thinking",
           text: update.content.text,
@@ -1545,7 +1633,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     if (update.sessionUpdate === "tool_call") {
-      if (pending.assistantText) {
+      if (continuation?.assistantText) {
+        continuation.assistantBoundaryPending = true;
+      } else if (pending?.assistantText) {
         pending.assistantBoundaryPending = true;
       }
       const state: KimiToolState = {
@@ -1566,7 +1656,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     if (update.sessionUpdate === "tool_call_update") {
-      if (pending.assistantText) {
+      if (continuation?.assistantText) {
+        continuation.assistantBoundaryPending = true;
+      } else if (pending?.assistantText) {
         pending.assistantBoundaryPending = true;
       }
       const state = worker.tools.get(update.toolCallId) ?? {
@@ -1596,6 +1688,20 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
+  private backgroundContinuationForUpdate(worker: KimiWorker): KimiBackgroundContinuation | undefined {
+    const activeTaskId = worker.activeHookTurn?.originKind === "task"
+      ? worker.activeHookTurn.continuationTaskId
+      : undefined;
+    if (activeTaskId) {
+      return worker.backgroundContinuations.get(activeTaskId);
+    }
+    if (worker.pendingTurn) {
+      return undefined;
+    }
+    const candidates = [...worker.backgroundContinuations.values()].filter((entry) => !entry.activeTurnId);
+    return candidates.length === 1 ? candidates[0] : undefined;
+  }
+
   private maybeEmitToolUse(worker: KimiWorker, state: KimiToolState): void {
     if (state.emittedUse) {
       return;
@@ -1607,6 +1713,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       return;
     }
     state.emittedUse = true;
+    if (this.backgroundContinuationForUpdate(worker)) {
+      return;
+    }
     const pending = worker.pendingTurn;
     if (!pending) {
       return;
@@ -1626,12 +1735,15 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     this.maybeEmitToolUse(worker, state);
     state.emittedResult = true;
+    const output = stringifyOutput(state.rawOutput) ?? state.latestContentText;
+    this.captureBackgroundTaskToolOutput(worker, output);
+    if (this.backgroundContinuationForUpdate(worker)) {
+      return;
+    }
     const pending = worker.pendingTurn;
     if (!pending) {
       return;
     }
-    const output = stringifyOutput(state.rawOutput) ?? state.latestContentText;
-    this.captureBackgroundTaskToolOutput(worker, output);
     this.queueEngineEvent(pending, {
       type: "tool_result",
       toolUseId: state.toolCallId,
@@ -1657,12 +1769,21 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (this.isTerminalBackgroundTask(worker, metadata.taskId, now)) {
       return;
     }
+    const continuation = this.backgroundContinuationForUpdate(worker);
+    if (continuation) {
+      continuation.lastSeenAt = now;
+    }
     const existing = worker.backgroundTasks.get(metadata.taskId);
+    if (existing?.terminalObserved) {
+      return;
+    }
     const task: KimiBackgroundTask = existing ?? {
       taskId: metadata.taskId,
       sessionId: worker.currentSessionId ?? undefined,
       ownerTurnId: worker.pendingTurn?.turnId,
-      onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+      onEngineEvent: continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+      onApprovalRequest: continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest,
+      continuationTaskId: continuation?.taskId,
       startEmitted: false,
       lastSeenAt: now,
     };
@@ -1671,7 +1792,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     task.kind = metadata.subagentName ? "agent" : task.kind;
     task.status = "running";
     task.lastSeenAt = now;
-    task.onEngineEvent ??= worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
+    task.onEngineEvent ??= continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
+    task.onApprovalRequest ??= continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest;
+    task.continuationTaskId ??= continuation?.taskId;
     task.ownerTurnId ??= worker.pendingTurn?.turnId;
     worker.backgroundTasks.set(task.taskId, task);
     this.emitBackgroundTaskStarted(worker, task);
@@ -1695,9 +1818,248 @@ export class KimiAcpAdapter implements CodexAdapter {
     return undefined;
   }
 
+  private async handleKimiTurnStarted(
+    worker: KimiWorker,
+    event: Extract<KimiHookEvent, { hookEventName: "TurnStarted" }>,
+  ): Promise<void> {
+    if (worker.activeHookTurn?.originKind === "task") {
+      const previous = worker.activeHookTurn.continuationTaskId
+        ? worker.backgroundContinuations.get(worker.activeHookTurn.continuationTaskId)
+        : undefined;
+      if (previous) {
+        await this.finishKimiBackgroundContinuation(worker, previous, { status: "completed" });
+      }
+    }
+
+    if (event.originKind !== "task") {
+      const terminalAlreadyArrived = Boolean(this.takePendingKimiHookTerminal(worker));
+      worker.activeHookTurn = terminalAlreadyArrived
+        ? undefined
+        : { turnId: event.turnId, originKind: event.originKind };
+      worker.tools.clear();
+      return;
+    }
+
+    const promptMetadata = parseKimiTaskTurnPrompt(event.prompt);
+    const existingContinuation = promptMetadata.taskId
+      ? worker.backgroundContinuations.get(promptMetadata.taskId)
+      : undefined;
+    const unmatchedContinuations = [...worker.backgroundContinuations.values()]
+      .filter((entry) => !entry.activeTurnId);
+    const taskId = promptMetadata.taskId
+      ?? (event.originName && worker.backgroundTasks.has(event.originName) ? event.originName : undefined)
+      ?? (unmatchedContinuations.length === 1 ? unmatchedContinuations[0].taskId : undefined)
+      ?? `kimi-task-turn-${event.turnId}`;
+    const sourceTask = worker.backgroundTasks.get(taskId) ?? {
+      taskId,
+      sessionId: event.sessionId,
+      onEngineEvent: worker.onEngineEvent,
+      startEmitted: false,
+      lastSeenAt: Date.now(),
+    };
+    sourceTask.sessionId ??= event.sessionId;
+    sourceTask.status = promptMetadata.status ?? sourceTask.status;
+    sourceTask.lastSeenAt = Date.now();
+    sourceTask.onEngineEvent ??= worker.onEngineEvent;
+    worker.backgroundTasks.set(taskId, sourceTask);
+    this.emitBackgroundTaskStarted(worker, sourceTask);
+
+    const continuation = existingContinuation ?? worker.backgroundContinuations.get(taskId) ?? {
+      taskId,
+      sessionId: event.sessionId,
+      status: promptMetadata.status,
+      summary: sourceTask.description,
+      lastSeenAt: Date.now(),
+      onEngineEvent: sourceTask.onEngineEvent ?? worker.onEngineEvent,
+      onApprovalRequest: sourceTask.onApprovalRequest,
+      approvalAbortController: new AbortController(),
+      assistantText: "",
+      assistantBoundaryPending: false,
+    };
+    continuation.sessionId ??= event.sessionId;
+    continuation.status ??= promptMetadata.status;
+    continuation.summary ??= sourceTask.description;
+    continuation.lastSeenAt = Date.now();
+    continuation.onEngineEvent ??= sourceTask.onEngineEvent ?? worker.onEngineEvent;
+    continuation.onApprovalRequest ??= sourceTask.onApprovalRequest;
+    continuation.activeTurnId = event.turnId;
+    if (continuation.fallbackTimer) {
+      clearTimeout(continuation.fallbackTimer);
+      continuation.fallbackTimer = undefined;
+    }
+    worker.backgroundContinuations.set(taskId, continuation);
+    worker.activeHookTurn = {
+      turnId: event.turnId,
+      originKind: event.originKind,
+      continuationTaskId: taskId,
+    };
+    worker.tools.clear();
+
+    const pendingTerminal = this.takePendingKimiHookTerminal(worker);
+    if (pendingTerminal) {
+      this.scheduleKimiContinuationFinish(worker, continuation, pendingTerminal);
+    }
+  }
+
+  private takePendingKimiHookTerminal(worker: KimiWorker): KimiHookTerminal | undefined {
+    const pending = worker.pendingHookTerminal;
+    worker.pendingHookTerminal = undefined;
+    if (!pending || Date.now() - pending.receivedAt > PENDING_HOOK_TERMINAL_TTL_MS) {
+      return undefined;
+    }
+    return pending.terminal;
+  }
+
+  private async handleKimiHookTerminal(worker: KimiWorker, terminal: KimiHookTerminal): Promise<void> {
+    const active = worker.activeHookTurn;
+    if (!active) {
+      worker.pendingHookTerminal = { terminal, receivedAt: Date.now() };
+      return;
+    }
+    worker.activeHookTurn = undefined;
+    if (active.originKind !== "task" || !active.continuationTaskId) {
+      return;
+    }
+    const continuation = worker.backgroundContinuations.get(active.continuationTaskId);
+    if (continuation) {
+      this.scheduleKimiContinuationFinish(worker, continuation, terminal);
+    }
+  }
+
+  private scheduleKimiContinuationFinish(
+    worker: KimiWorker,
+    continuation: KimiBackgroundContinuation,
+    terminal: KimiHookTerminal,
+  ): void {
+    continuation.activeTurnId = undefined;
+    continuation.lastSeenAt = Date.now();
+    continuation.pendingTerminal = terminal;
+    if (continuation.terminalTimer) {
+      clearTimeout(continuation.terminalTimer);
+    }
+    if (this.hookTerminalGraceMs <= 0) {
+      continuation.terminalTimer = undefined;
+      continuation.pendingTerminal = undefined;
+      void this.finishKimiBackgroundContinuation(worker, continuation, terminal);
+      return;
+    }
+    continuation.terminalTimer = setTimeout(() => {
+      continuation.terminalTimer = undefined;
+      const pendingTerminal = continuation.pendingTerminal;
+      continuation.pendingTerminal = undefined;
+      if (!pendingTerminal) {
+        return;
+      }
+      void this.finishKimiBackgroundContinuation(worker, continuation, pendingTerminal);
+    }, this.hookTerminalGraceMs);
+    continuation.terminalTimer.unref?.();
+  }
+
+  private armKimiContinuationFallback(worker: KimiWorker, continuation: KimiBackgroundContinuation): void {
+    if (continuation.fallbackTimer || this.backgroundContinuationGraceMs <= 0) {
+      return;
+    }
+    continuation.fallbackTimer = setTimeout(() => {
+      continuation.fallbackTimer = undefined;
+      if (!worker.backgroundContinuations.has(continuation.taskId)) {
+        return;
+      }
+      if (worker.pendingTurn || worker.activeHookTurn) {
+        this.armKimiContinuationFallback(worker, continuation);
+        return;
+      }
+      const pendingTerminal = this.takePendingKimiHookTerminal(worker);
+      void this.finishKimiBackgroundContinuation(worker, continuation, pendingTerminal ?? {
+        status: continuation.status === "failed" ? "failed" : "completed",
+      });
+    }, this.backgroundContinuationGraceMs);
+    continuation.fallbackTimer.unref?.();
+  }
+
+  private async finishKimiBackgroundContinuation(
+    worker: KimiWorker,
+    continuation: KimiBackgroundContinuation,
+    terminal: KimiHookTerminal,
+  ): Promise<void> {
+    if (worker.backgroundContinuations.get(continuation.taskId) !== continuation) {
+      return;
+    }
+    if (continuation.fallbackTimer) {
+      clearTimeout(continuation.fallbackTimer);
+      continuation.fallbackTimer = undefined;
+    }
+    if (continuation.terminalTimer) {
+      clearTimeout(continuation.terminalTimer);
+      continuation.terminalTimer = undefined;
+    }
+    continuation.pendingTerminal = undefined;
+    continuation.approvalAbortController.abort();
+    worker.backgroundContinuations.delete(continuation.taskId);
+    if (worker.activeHookTurn?.continuationTaskId === continuation.taskId) {
+      worker.activeHookTurn = undefined;
+    }
+
+    const sourceTask = worker.backgroundTasks.get(continuation.taskId);
+    if (sourceTask?.notificationTimer) {
+      clearTimeout(sourceTask.notificationTimer);
+    }
+    worker.backgroundTasks.delete(continuation.taskId);
+    worker.terminalBackgroundTasks.set(continuation.taskId, Date.now());
+
+    const linkedTasks = [...worker.backgroundTasks.values()].filter((task) => (
+      task.taskId !== continuation.taskId && task.continuationTaskId === continuation.taskId
+    ));
+    const intermediate = linkedTasks.length > 0;
+    const finalStatus = terminal.status === "failed"
+      ? "failed"
+      : continuation.status === "failed"
+        ? "failed"
+        : "completed";
+    const rawText = [continuation.assistantText.trim(), terminal.errorText?.trim()]
+      .filter(Boolean)
+      .join("\n\n")
+      || continuation.rawText?.trim()
+      || `${continuation.summary ?? "Kimi background task"} ${finalStatus}.`;
+    const text = finalStatus === "completed"
+      ? await appendSavedArtifactDeliveryTags(rawText, worker.workspacePath)
+      : rawText;
+    await this.emitEngineEvent(continuation.onEngineEvent ?? sourceTask?.onEngineEvent ?? worker.onEngineEvent, {
+      type: "task_notification",
+      text,
+      sessionId: continuation.sessionId ?? sourceTask?.sessionId ?? worker.currentSessionId ?? undefined,
+      taskId: continuation.taskId,
+      status: finalStatus,
+      ...(continuation.summary ? { summary: continuation.summary } : {}),
+      ...(intermediate ? { suppressUserDelivery: true } : {}),
+    });
+  }
+
   private async handleKimiHookEvent(event: KimiHookEvent): Promise<void> {
     const worker = this.findWorkerForHook(event.sessionId);
     if (!worker) {
+      return;
+    }
+    this.markActivity(worker);
+    if (event.hookEventName === "TurnStarted") {
+      await this.handleKimiTurnStarted(worker, event);
+      return;
+    }
+    if (event.hookEventName === "Stop") {
+      await this.handleKimiHookTerminal(worker, { status: "completed" });
+      return;
+    }
+    if (event.hookEventName === "StopFailure") {
+      await this.handleKimiHookTerminal(worker, {
+        status: "failed",
+        errorText: event.errorMessage ?? event.errorType ?? "Kimi background review failed.",
+      });
+      return;
+    }
+    if (event.hookEventName === "Interrupt") {
+      await this.handleKimiHookTerminal(worker, {
+        status: "failed",
+        errorText: event.reason ?? "Kimi background review was interrupted.",
+      });
       return;
     }
     if (event.hookEventName === "TaskStarted") {
@@ -1710,12 +2072,18 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (this.isTerminalBackgroundTask(worker, event.taskId, now)) {
         return;
       }
+      const continuation = this.backgroundContinuationForUpdate(worker);
       const existing = worker.backgroundTasks.get(event.taskId);
+      if (existing?.terminalObserved) {
+        return;
+      }
       const task: KimiBackgroundTask = existing ?? {
         taskId: event.taskId,
         sessionId: event.sessionId,
         ownerTurnId: worker.pendingTurn?.turnId,
-        onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+        onEngineEvent: continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest,
+        continuationTaskId: continuation?.taskId,
         startEmitted: false,
         lastSeenAt: now,
       };
@@ -1724,7 +2092,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       task.kind = event.kind ?? task.kind;
       task.status = event.status ?? "running";
       task.lastSeenAt = now;
-      task.onEngineEvent ??= worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
+      task.onEngineEvent ??= continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
+      task.onApprovalRequest ??= continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest;
+      task.continuationTaskId ??= continuation?.taskId;
       task.ownerTurnId ??= worker.pendingTurn?.turnId;
       worker.backgroundTasks.set(task.taskId, task);
       this.emitBackgroundTaskStarted(worker, task);
@@ -1762,10 +2132,15 @@ export class KimiAcpAdapter implements CodexAdapter {
       return;
     }
     const existing = worker.backgroundTasks.get(event.sourceId);
+    if (existing?.terminalObserved) {
+      return;
+    }
     const task: KimiBackgroundTask = existing ?? {
       taskId: event.sourceId,
       sessionId: event.sessionId,
+      ownerTurnId: worker.pendingTurn?.turnId,
       onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+      onApprovalRequest: worker.pendingTurn?.onApprovalRequest,
       startEmitted: false,
       lastSeenAt: now,
     };
@@ -1801,18 +2176,19 @@ export class KimiAcpAdapter implements CodexAdapter {
 
   private async flushKimiTaskNotification(worker: KimiWorker, task: KimiBackgroundTask): Promise<void> {
     const notification = task.pendingNotification;
-    if (!notification) {
+    if (!notification || task.terminalObserved) {
       return;
     }
+    task.terminalObserved = true;
     task.pendingNotification = undefined;
     if (task.notificationTimer) {
       clearTimeout(task.notificationTimer);
       task.notificationTimer = undefined;
     }
-    // Terminalize synchronously before output I/O yields. Otherwise a duplicate
-    // hook can re-arm this task while the completion payload is being read.
-    worker.terminalBackgroundTasks.set(task.taskId, Date.now());
-    worker.backgroundTasks.delete(task.taskId);
+    // Mark terminal observation synchronously before output I/O yields. The
+    // task remains in the active ledger until Kimi's synthetic task-origin turn
+    // reviews the result; this keeps restart protection continuous while also
+    // rejecting duplicate or late lifecycle hooks.
     const status = taskStatusFromNotificationType(notification.notificationType);
     const sessionId = task.sessionId ?? worker.currentSessionId ?? undefined;
     const processOutput = task.kind === "process" || task.taskId.startsWith("bash-")
@@ -1828,18 +2204,47 @@ export class KimiAcpAdapter implements CodexAdapter {
       : rawText;
     const settlesCurrentTurn = task.ownerTurnId !== undefined
       && worker.pendingTurn?.turnId === task.ownerTurnId;
-    if (settlesCurrentTurn && worker.pendingTurn?.assistantText) {
-      worker.pendingTurn.assistantBoundaryPending = true;
+    if (settlesCurrentTurn) {
+      if (worker.pendingTurn?.assistantText) {
+        worker.pendingTurn.assistantBoundaryPending = true;
+      }
+      worker.backgroundTasks.delete(task.taskId);
+      worker.terminalBackgroundTasks.set(task.taskId, Date.now());
+      await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
+        type: "task_notification",
+        text,
+        sessionId,
+        taskId: task.taskId,
+        status,
+        ...(task.description ? { summary: task.description } : {}),
+        settlesCurrentTurn: true,
+        suppressUserDelivery: true,
+      });
+      return;
     }
-    await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
-      type: "task_notification",
-      text,
-      sessionId,
+    const continuation = worker.backgroundContinuations.get(task.taskId) ?? {
       taskId: task.taskId,
-      status,
-      ...(task.description ? { summary: task.description } : {}),
-      ...(settlesCurrentTurn ? { settlesCurrentTurn: true } : {}),
-    });
+      sessionId,
+      lastSeenAt: Date.now(),
+      onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
+      onApprovalRequest: task.onApprovalRequest,
+      approvalAbortController: new AbortController(),
+      assistantText: "",
+      assistantBoundaryPending: false,
+    };
+    continuation.sessionId ??= sessionId;
+    continuation.status = status;
+    continuation.summary ??= task.description;
+    continuation.rawText = text;
+    continuation.lastSeenAt = Date.now();
+    continuation.onEngineEvent ??= task.onEngineEvent ?? worker.onEngineEvent;
+    continuation.onApprovalRequest ??= task.onApprovalRequest;
+    worker.backgroundContinuations.set(task.taskId, continuation);
+    worker.backgroundTasks.set(task.taskId, task);
+    this.emitBackgroundTaskStarted(worker, task);
+    if (!continuation.activeTurnId) {
+      this.armKimiContinuationFallback(worker, continuation);
+    }
   }
 
   private isTerminalBackgroundTask(worker: KimiWorker, taskId: string, now: number): boolean {
@@ -1860,12 +2265,46 @@ export class KimiAcpAdapter implements CodexAdapter {
   ): Promise<RequestPermissionResponse> {
     this.markActivity(worker);
     const pending = worker.pendingTurn;
-    if (!pending) {
+    const continuation = this.backgroundContinuationForUpdate(worker);
+    if (!pending && !continuation) {
       return { outcome: { outcome: "cancelled" } };
     }
     const state = worker.tools.get(request.toolCall.toolCallId);
     if (state) {
       this.maybeEmitToolUse(worker, state);
+    }
+    const toolName = requestToolName(request, state);
+    const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
+    const toolInput = toolName === "AskUserQuestion"
+      ? normalizeKimiQuestionInput(request, rawToolInput)
+      : rawToolInput;
+    if (continuation) {
+      await this.emitEngineEvent(continuation.onEngineEvent ?? worker.onEngineEvent, {
+        type: "permission_request",
+        toolName,
+        toolInput,
+        sessionId: worker.currentSessionId ?? request.sessionId,
+      });
+      const approvalRequest: EngineApprovalRequest = {
+        engine: "kimi",
+        toolName,
+        toolInput,
+        cwd: worker.workspacePath,
+        sessionId: worker.currentSessionId ?? request.sessionId,
+        abortSignal: continuation.approvalAbortController.signal,
+        permissionSuggestions: request.options,
+      };
+      const denyOnFailure = (): EngineApprovalDecision => ({ behavior: "deny" });
+      const decision = continuation.onApprovalRequest
+        ? await Promise.race([
+            Promise.resolve().then(() => continuation.onApprovalRequest!(approvalRequest)).catch(denyOnFailure),
+            worker.failurePromise.catch(denyOnFailure),
+          ])
+        : { behavior: "deny" as const };
+      return renderPermissionResponse(request, toolName, decision);
+    }
+    if (!pending) {
+      return { outcome: { outcome: "cancelled" } };
     }
     // Both awaits below race the failure promise: an unanswered ACP
     // session/request_permission wedges the CLI, so eviction (stop/timeout/
@@ -1875,11 +2314,6 @@ export class KimiAcpAdapter implements CodexAdapter {
       pending.failurePromise.catch(() => undefined),
       pending.interruptionPromise.catch(() => undefined),
     ]);
-    const toolName = requestToolName(request, state);
-    const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
-    const toolInput = toolName === "AskUserQuestion"
-      ? normalizeKimiQuestionInput(request, rawToolInput)
-      : rawToolInput;
     this.queueEngineEvent(pending, {
       type: "permission_request",
       toolName,
@@ -2091,6 +2525,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (
         worker.pendingTurn
         || worker.backgroundTasks.size > 0
+        || worker.backgroundContinuations.size > 0
+        || worker.activeHookTurn?.originKind === "task"
         || now - worker.lastActivityAt < this.idleWorkerTtlMs
       ) {
         continue;
@@ -2111,6 +2547,15 @@ export class KimiAcpAdapter implements CodexAdapter {
         }
         worker.backgroundTasks.delete(taskId);
       }
+      for (const continuation of worker.backgroundContinuations.values()) {
+        if (now - continuation.lastSeenAt < this.backgroundTaskMaxAgeMs) {
+          continue;
+        }
+        void this.finishKimiBackgroundContinuation(worker, continuation, {
+          status: "failed",
+          errorText: "Kimi did not finish reviewing this background result before the safety timeout.",
+        });
+      }
     }
     for (const [taskId, terminalAt] of worker.terminalBackgroundTasks.entries()) {
       if (now - terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
@@ -2120,10 +2565,40 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   private async failBackgroundTasks(worker: KimiWorker): Promise<void> {
-    if (worker.removed || worker.backgroundTasks.size === 0) {
+    if (worker.removed || (worker.backgroundTasks.size === 0 && worker.backgroundContinuations.size === 0)) {
       return;
     }
     const deliveries: Array<Promise<void>> = [];
+    for (const continuation of worker.backgroundContinuations.values()) {
+      if (continuation.fallbackTimer) {
+        clearTimeout(continuation.fallbackTimer);
+      }
+      if (continuation.terminalTimer) {
+        clearTimeout(continuation.terminalTimer);
+      }
+      continuation.approvalAbortController.abort();
+      const task = worker.backgroundTasks.get(continuation.taskId);
+      if (task?.notificationTimer) {
+        clearTimeout(task.notificationTimer);
+      }
+      worker.backgroundTasks.delete(continuation.taskId);
+      worker.terminalBackgroundTasks.set(continuation.taskId, Date.now());
+      const hasLinkedReplacement = [...worker.backgroundTasks.values()].some((candidate) => (
+        candidate.continuationTaskId === continuation.taskId
+      ));
+      deliveries.push(this.emitEngineEvent(continuation.onEngineEvent ?? task?.onEngineEvent ?? worker.onEngineEvent, {
+        type: "task_notification",
+        text: `${continuation.summary ?? task?.description ?? "Kimi background task"} stopped because the Kimi engine process exited before its result review completed.`,
+        sessionId: continuation.sessionId ?? task?.sessionId ?? worker.currentSessionId ?? undefined,
+        taskId: continuation.taskId,
+        status: "failed",
+        ...(continuation.summary || task?.description
+          ? { summary: continuation.summary ?? task?.description }
+          : {}),
+        ...(hasLinkedReplacement ? { suppressUserDelivery: true } : {}),
+      }));
+    }
+    worker.backgroundContinuations.clear();
     for (const task of worker.backgroundTasks.values()) {
       if (task.notificationTimer) {
         clearTimeout(task.notificationTimer);
@@ -2139,6 +2614,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       }));
     }
     worker.backgroundTasks.clear();
+    worker.activeHookTurn = undefined;
+    worker.pendingHookTerminal = undefined;
     await Promise.allSettled(deliveries);
   }
 
@@ -2154,7 +2631,19 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
     }
     worker.backgroundTasks.clear();
+    for (const continuation of worker.backgroundContinuations.values()) {
+      if (continuation.fallbackTimer) {
+        clearTimeout(continuation.fallbackTimer);
+      }
+      if (continuation.terminalTimer) {
+        clearTimeout(continuation.terminalTimer);
+      }
+      continuation.approvalAbortController.abort();
+    }
+    worker.backgroundContinuations.clear();
     worker.terminalBackgroundTasks.clear();
+    worker.activeHookTurn = undefined;
+    worker.pendingHookTerminal = undefined;
     for (const [key, candidate] of this.workers.entries()) {
       if (candidate === worker) {
         this.workers.delete(key);

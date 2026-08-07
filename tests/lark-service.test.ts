@@ -1151,6 +1151,53 @@ describe("lark service", () => {
     }
   });
 
+  it("records suppressed background transitions without delivering them to Lark", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-suppressed-"));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({
+          type: "task_notification",
+          taskId: "bash-first-attempt",
+          status: "failed",
+          text: "INTERNAL_RETRY_FAILURE",
+          suppressUserDelivery: true,
+        });
+        return { text: "任务仍在自动修复。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_task_suppressed", content: "生成并检查图片" }),
+      });
+
+      expect((channel.send.mock.calls as unknown[][]).some((call) => (
+        JSON.stringify(call[1]).includes("INTERNAL_RETRY_FAILURE")
+      ))).toBe(false);
+      expectLarkFinalAnswer(channel, "任务仍在自动修复。");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event",
+        detail: "task_notification",
+        metadata: expect.objectContaining({
+          taskId: "bash-first-attempt",
+          status: "failed",
+          textChars: "INTERNAL_RETRY_FAILURE".length,
+          userDeliverySuppressed: true,
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("headers a stopped background task as stopped, not completed", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-stopped-"));
     const channel = fakeChannel();

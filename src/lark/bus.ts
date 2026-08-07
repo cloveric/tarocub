@@ -542,7 +542,7 @@ function createLarkBusEngineEventHandler(
       },
     });
 
-    if (event.type !== "task_notification" || event.settlesCurrentTurn) {
+    if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
       return;
     }
 

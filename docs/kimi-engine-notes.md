@@ -103,6 +103,32 @@ at most the final 64 KiB. Small outputs are delivered in full; large outputs are
 explicitly marked as truncated. Agent tasks continue to prefer the matching
 `SubagentStop` response.
 
+### Kimi 0.33 task-origin review turns
+
+Kimi 0.33 does not treat a process `Notification` as the final user answer. It
+creates a synthetic turn whose origin is `task`, injects the notification as
+that turn's prompt, and may inspect the output, explain a failure, launch a
+replacement detached task, or produce corrected delivery tags. The original
+ACP `session/prompt` subscription has already completed at that point, but the
+persistent ACP connection continues to emit `session/update` messages.
+
+TaroCub therefore also relays `TurnStarted`, `Stop`, `StopFailure`, and
+`Interrupt`. A task-origin `TurnStarted` retains those otherwise orphaned ACP
+updates and associates replacement task IDs discovered in tool output. Raw
+process `Notification` events become internal state transitions rather than
+immediate user messages. When the task-origin turn stops, an intermediate turn
+that launched a replacement task is terminalized in the timeline with user
+delivery suppressed; the final task-origin turn emits one reviewed completion
+or failure. This preserves continuous restart protection without showing every
+failed implementation attempt as the answer.
+
+If a compatible Kimi build sends a terminal process notification but never
+starts a task-origin review, TaroCub waits for a short bounded grace period and
+then falls back to the bounded task output described above. A retained review
+also shares the six-hour task safety bound, so a lost terminal Hook cannot block
+configuration changes or graceful restart indefinitely. `SessionHeartbeat`
+still does not extend either bound.
+
 ## Kimi 0.33 Agent-Core-v2 Re-probe
 
 - Probe date: 2026-08-06

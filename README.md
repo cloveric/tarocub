@@ -198,23 +198,31 @@ servers, so TaroCub deliberately does not auto-install them.
 
 With Kimi Code 0.32 or newer, TaroCub also installs an inert local hook plugin
 under `KIMI_CODE_HOME` and activates it only for bridge-owned ACP subprocesses.
-`TaskStarted`, background-task `Notification`, and `SubagentStop` events feed
-the existing run cards, out-of-band completion notices, worker retention, and
-restart guard. Tool-result metadata remains the start-event fallback; terminal
-task tombstones reject late/duplicate start events, and detached Bash notices
-read the real bounded `output.log` tail from that Kimi session instead of
-showing only a generic completion title. Successful background output that
-explicitly ends with `saved` / `wrote` / `generated` plus a supported workspace
-artifact path is normalized into the shared file/image delivery layer; failed,
-missing, hidden, unsupported, or workspace-escaping paths remain plain text.
-Agents are also told to emit exact delivery tags from the background command
-instead of treating a saved path as delivery. Accepted hooks are drained before the
-ACP worker is destroyed, and timeline identity stays scoped by conversation,
-session, and task across ordinary messages, card actions, comments, and bus
-turns. The relay deliberately ignores `SessionHeartbeat`: it proves only that
-the Kimi process is alive, not that a turn or task is making progress. Existing
-Kimi credentials, sessions, skills, MCP servers, and `config.toml` are not
-replaced.
+`TaskStarted`, background-task `Notification`, `SubagentStop`, `TurnStarted`,
+`Stop`, `StopFailure`, and `Interrupt` feed the existing run cards, worker
+retention, and restart guard. Kimi 0.33 handles a completed process in a
+synthetic task-origin turn where it may inspect bad output and retry. TaroCub
+retains that autonomous ACP stream after the original user turn has ended,
+keeps intermediate process failures in the audit timeline without sending
+misleading failure cards, and delivers only Kimi's final reviewed conclusion.
+If no review turn arrives, a bounded fallback delivers the real task output;
+lost reviews expire instead of blocking that session forever.
+
+Tool-result metadata remains the start-event fallback; terminal task tombstones
+reject late/duplicate start events, and detached Bash notices read the real
+bounded `output.log` tail from that Kimi session instead of showing only a
+generic completion title. Successful background output that explicitly ends
+with `saved` / `wrote` / `generated` plus a supported workspace artifact path is
+normalized into the shared file/image delivery layer; failed, missing, hidden,
+unsupported, or workspace-escaping paths remain plain text. Agents are also
+told to validate actual output rather than trust exit status, and to emit exact
+delivery tags instead of treating a saved path as delivery. Accepted hooks are
+drained before the ACP worker is destroyed, and timeline identity stays scoped
+by conversation, session, and task across ordinary messages, card actions,
+comments, and bus turns. The relay deliberately ignores `SessionHeartbeat`: it
+proves only that the Kimi process is alive, not that a turn or task is making
+progress. Existing Kimi credentials, sessions, skills, MCP servers, and
+`config.toml` are not replaced.
 
 Kimi ACP 0.33 still does not expose structured per-turn token/cost usage, mid-turn
 steering, a direct client-supplied system-prompt field, or a `/goal` command;

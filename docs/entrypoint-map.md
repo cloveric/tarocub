@@ -193,7 +193,8 @@ See `docs/state-model.md` before changing on-disk semantics.
   approvals/questions, cancellation, compact support, and background-task lifecycle mapping.
 - `src/codex/kimi-hook-relay.ts`
   Kimi 0.32+ observer-hook plugin registration and authenticated loopback relay. It accepts
-  `TaskStarted`, `Notification`, and `SubagentStop`; `SessionHeartbeat` is deliberately ignored.
+  task lifecycle plus `TurnStarted`/`Stop`/`StopFailure`/`Interrupt` events so Kimi 0.33
+  task-origin review turns can be retained; `SessionHeartbeat` is deliberately ignored.
 - `src/codex/kimi-workspace.ts`
   Atomic managed-block synchronization for Kimi workspace instructions.
 

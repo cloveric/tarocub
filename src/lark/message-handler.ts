@@ -1735,14 +1735,16 @@ async function runNormalizedLarkMessage(
         activeHandle.hasRunCard = Boolean(runCard);
       }
       const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
-        await runCard?.apply(event);
+        if (event.type !== "task_notification" || !event.suppressUserDelivery) {
+          await runCard?.apply(event);
+        }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "engine.event",
           detail: event.type,
           metadata: engineEventTimelineMetadata(event),
         });
 
-        if (event.type !== "task_notification" || event.settlesCurrentTurn) {
+        if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
           return;
         }
 

@@ -362,6 +362,8 @@ function adapterOptions(harness: ReturnType<typeof createHarness>) {
     workspacePath: "/tmp/kimi-workspace",
     idleWorkerTtlMs: 0,
     idleSweepIntervalMs: 0,
+    backgroundContinuationGraceMs: 25,
+    hookTerminalGraceMs: 25,
     turnTimeoutMs: null,
     inactivityTimeoutMs: null,
     syncWorkspaceInstructionsFn: vi.fn(async (_workspacePath: string, instructions: string | null) => instructions ?? ""),
@@ -489,6 +491,406 @@ describe("KimiAcpAdapter", () => {
       expect(notification).not.toHaveProperty("settlesCurrentTurn");
     } finally {
       adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("hides failed retry stages and delivers only the final task-origin result", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-retry-test-"));
+    const workspace = path.join(root, "workspace");
+    const generatedImage = path.join(workspace, "final-chart.png");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(generatedImage, "png", "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      workspacePath: workspace,
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 2_000,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-54-retry", {
+        text: "generate and verify a chart in the background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+      };
+      const sendHook = async (body: Record<string, unknown>) => {
+        const response = await fetch(hookUrl!, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ session_id: "kimi-session-1", ...body }),
+        });
+        expect(response.status).toBe(202);
+      };
+      const visibleNotifications = () => events.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ));
+
+      await sendHook({
+        hook_event_name: "TaskStarted",
+        task_id: "bash-first-attempt",
+        kind: "process",
+        description: "Generate chart",
+        status: "running",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-first-attempt"
+      )));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "I started the chart generation in the background." },
+      });
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({
+        text: "I started the chart generation in the background.",
+      });
+
+      await sendHook({
+        hook_event_name: "Notification",
+        notification_type: "task.failed",
+        source_kind: "background_task",
+        source_id: "bash-first-attempt",
+        title: "Background process failed",
+        body: "The first chart attempt failed.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(visibleNotifications()).toHaveLength(0);
+
+      await sendHook({
+        hook_event_name: "TurnStarted",
+        turn_id: 52,
+        origin_kind: "task",
+        prompt: [
+          '<notification id="task:bash-first-attempt:failed" type="task.failed"',
+          'source_kind="background_task" source_id="bash-first-attempt">',
+          "The first chart attempt failed.",
+          "</notification>",
+        ].join(" "),
+      });
+      await waitFor(() => visibleNotifications().length === 0);
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "The first attempt was invalid, so I am fixing it." },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-chart-retry",
+        title: "Bash",
+        status: "completed",
+        rawOutput: [
+          "task_id: bash-retry",
+          "status: running",
+          "description: Regenerate and validate chart",
+          "automatic_notification: true",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-retry"
+      )));
+      await sendHook({
+        hook_event_name: "TaskStarted",
+        task_id: "bash-retry",
+        kind: "process",
+        description: "Regenerate and validate chart",
+        status: "running",
+        detached: true,
+      });
+      await sendHook({ hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification"
+        && event.taskId === "bash-first-attempt"
+        && event.suppressUserDelivery === true
+      )));
+      expect(visibleNotifications()).toHaveLength(0);
+
+      await sendHook({
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-retry",
+        title: "Background process completed",
+        body: "Chart retry completed.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(visibleNotifications()).toHaveLength(0);
+
+      await sendHook({
+        hook_event_name: "TurnStarted",
+        turn_id: 53,
+        origin_kind: "task",
+        prompt: [
+          '<notification id="task:bash-retry:completed" type="task.completed"',
+          'source_kind="background_task" source_id="bash-retry">',
+          "Chart retry completed.",
+          "</notification>",
+        ].join(" "),
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: `Verified the corrected chart.\n[send-image:${generatedImage}]`,
+        },
+      });
+      await sendHook({ hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => visibleNotifications().length === 1);
+
+      expect(visibleNotifications()).toEqual([
+        expect.objectContaining({
+          type: "task_notification",
+          taskId: "bash-retry",
+          sessionId: "kimi-session-1",
+          status: "completed",
+          text: `Verified the corrected chart.\n[send-image:${generatedImage}]`,
+        }),
+      ]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("expires a lost task-origin review instead of blocking the session forever", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-expiry-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      backgroundTaskMaxAgeMs: 25,
+      backgroundContinuationGraceMs: 2_000,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-expiry", {
+        text: "start detached work",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+      };
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-lost-review",
+          kind: "process",
+          description: "Lost review",
+          detached: true,
+        }),
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "Notification",
+          session_id: "kimi-session-1",
+          notification_type: "task.completed",
+          source_kind: "background_task",
+          source_id: "bash-lost-review",
+          body: "The process exited, but the synthetic review turn never arrived.",
+        }),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "low" }), "utf8");
+      const nextTurn = adapter.sendUserMessage("kimi-session-1", {
+        text: "continue after stale review",
+        files: [],
+      });
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      harness.children[1].server.respondPrompt();
+      await expect(nextTurn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-lost-review"
+      )));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "bash-lost-review",
+        status: "failed",
+        text: expect.stringContaining("safety timeout"),
+      }));
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for late ACP text when a Stop hook arrives before TurnStarted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-terminal-order-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-terminal-order", {
+        text: "finish this in the background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+      };
+      const sendHook = async (body: Record<string, unknown>) => {
+        const response = await fetch(hookUrl!, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ session_id: "kimi-session-1", ...body }),
+        });
+        expect(response.status).toBe(202);
+      };
+
+      await sendHook({
+        hook_event_name: "TaskStarted",
+        task_id: "bash-terminal-order",
+        kind: "process",
+        description: "Terminal ordering probe",
+        detached: true,
+      });
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await sendHook({
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-terminal-order",
+        body: "Generic process completion.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // TurnStarted is fire-and-forget while Stop is blocking. Their local HTTP
+      // posts can arrive in this order even though the ACP text belongs to the
+      // same already-finished task-origin turn.
+      await sendHook({ hook_event_name: "Stop", stop_hook_active: false });
+      await sendHook({
+        hook_event_name: "TurnStarted",
+        turn_id: 71,
+        origin_kind: "task",
+        prompt: '<notification type="task.completed" source_id="bash-terminal-order">done</notification>',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Late but authoritative reviewed result." },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-terminal-order"
+      )));
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "bash-terminal-order",
+        status: "completed",
+        text: "Late but authoritative reviewed result.",
+      }));
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves StopFailure when the matching TurnStarted hook is lost", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-failure-fallback-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-failure-fallback", {
+        text: "run detached work",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+      };
+      const sendHook = async (body: Record<string, unknown>) => {
+        const response = await fetch(hookUrl!, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ session_id: "kimi-session-1", ...body }),
+        });
+        expect(response.status).toBe(202);
+      };
+
+      await sendHook({
+        hook_event_name: "TaskStarted",
+        task_id: "bash-failure-fallback",
+        kind: "process",
+        description: "Failure fallback",
+        detached: true,
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await sendHook({
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-failure-fallback",
+        body: "The process itself completed.",
+      });
+      await sendHook({
+        hook_event_name: "StopFailure",
+        error_type: "ReviewError",
+        error_message: "Kimi could not validate the generated output.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 340));
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-failure-fallback"
+      )));
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "bash-failure-fallback",
+        status: "failed",
+        text: expect.stringContaining("Kimi could not validate the generated output."),
+      }));
+    } finally {
+      await adapter.destroy();
       await rm(root, { recursive: true, force: true });
     }
   });

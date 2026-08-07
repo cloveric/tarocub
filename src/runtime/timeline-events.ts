@@ -7,6 +7,7 @@ export function engineEventTimelineMetadata(event: EngineStreamEvent): {
   status: string | undefined;
   taskId: string | undefined;
   sessionId: string | undefined;
+  userDeliverySuppressed: boolean | undefined;
 } {
   return {
     toolName: "toolName" in event ? event.toolName : undefined,
@@ -14,6 +15,9 @@ export function engineEventTimelineMetadata(event: EngineStreamEvent): {
     status: "status" in event ? event.status : undefined,
     taskId: "taskId" in event ? event.taskId : undefined,
     sessionId: "sessionId" in event ? event.sessionId : undefined,
+    userDeliverySuppressed: event.type === "task_notification"
+      ? event.suppressUserDelivery
+      : undefined,
   };
 }
 

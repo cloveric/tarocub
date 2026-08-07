@@ -219,6 +219,7 @@ npm run dev -- telegram engine --instance review-bot
 | 会话恢复 | `/resume thread <id>` | `/resume` 扫描并选择 | `/resume` 通过 ACP `session/list` 扫描并选择，也支持 `/resume session <id>` | 自动绑定日志 conversation；`/resume` 扫描；`/resume conversation <id>` |
 | 项目指令 | `agent.md` prompt 注入 | `agent.md` system prompt + workspace `CLAUDE.md` | workspace `.kimi-code/agents/agent.md` 主代理 override；保留 `${base_prompt}` 与 `${plugin_sections}`，实例/Lark 指令进入原生 system context | `agent.md` prompt 注入 |
 | 流式与工具 | 原生事件 | 原生事件 | ACP 文本、思考、工具、审批事件 | stdout chunk |
+| 后台任务 | 结构化生命周期 | 结构化生命周期 | Kimi 0.32+ Hook；0.33 的任务复核与自动重试会合并为一次最终用户结果，中间失败只进时间线 | 仅进程内 |
 | 审批 | app-server 沙箱 / process 整轮预审批 | 单工具审批 | ACP 单工具审批；Lark/Telegram 单选提问 | 整轮预审批 |
 | 本地 skill / MCP | 原生 skill/MCP | 原生 skill/MCP/plugin | 原生 Kimi skill/MCP/plugin + workspace 暴露 `~/.codex/skills` + 自动注入 Search MCP | 原生能力 |
 | `/goal` | bridge 原生 goal | 原生命令透传 | **gap**：真机返回 `Unknown ACP command` | 原生命令透传 |
@@ -229,7 +230,9 @@ npm run dev -- telegram engine --instance review-bot
 | 工作目录 | 实例 `workspace/` | 实例或恢复 session 的原工作区 | 实例或恢复 session 的原 `cwd`（绑定前用真实 `session/load` 校验） | 实例 `workspace/` |
 | 空闲 worker | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每轮退出 |
 
-Kimi 后台任务完成后，TaroCub 会读取真实的任务输出；若成功输出明确以 `saved` / `wrote` / `generated` 报告了工作区内的受支持产物，会自动进入同一套文件/图片投递层。失败任务、不存在文件、隐藏路径、非支持类型和越出工作区的路径只保留为文字，不会自动发送。系统提示也会要求后台命令直接输出交付标签，不能把“已保存到某路径”冒充为已经交付。
+Kimi 0.33 的后台进程结束后还会启动一个内部“任务复核回合”，模型可能检查错误并自动重试。TaroCub 会在原用户回合结束后继续接收这段 ACP 输出，把多轮重试关联到同一任务链；中间失败保留在审计时间线但不直接误报给用户，最终只发送一次 Kimi 复核后的结论。若复核 Hook 没有到达，则在短暂等待后回退到真实任务输出；丢失的复核状态也会超时释放，不会永久阻塞会话或重启。
+
+对于最终成功的后台任务，TaroCub 会读取真实输出；若输出明确以 `saved` / `wrote` / `generated` 报告了工作区内的受支持产物，会自动进入同一套文件/图片投递层。失败任务、不存在文件、隐藏路径、非支持类型和越出工作区的路径只保留为文字，不会自动发送。系统提示同时要求模型检查实际结果，不能只凭退出码判断成功，并直接输出交付标签，不能把“已保存到某路径”冒充为已经交付。
 
 Kimi 的实测事件、取消、提问、恢复和 gap 证据见 [`docs/kimi-engine-notes.md`](./docs/kimi-engine-notes.md)，四引擎逐项对照见 [`docs/kimi-capability-matrix.md`](./docs/kimi-capability-matrix.md)。
 

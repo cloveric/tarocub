@@ -343,7 +343,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Session resume | `codex exec resume --json <id>` | `claude -p -r <session-id>` | `/resume` lists native ACP sessions; `/resume session <id>` validates with `session/load` and resumes in the original real-path workspace | Auto-binds the first logged conversation; `/resume` scans recent agy logs; `/resume conversation <id>` uses `agy --conversation` |
 | Project instructions | `agent.md` (prepended to prompt) | `agent.md` appended to Claude's system prompt + `CLAUDE.md` auto-loaded from workspace | Bot-owned workspaces use a native `.kimi-code/agents/agent.md` main-agent override while preserving `${base_prompt}` and `${plugin_sections}`; external workspaces are not modified and use a text-turn fallback | `agent.md` (prepended to prompt) |
 | Streaming / early delivery | App-server events feed timeline and early file delivery; final `turn/completed.items` is authoritative before the `thread/read` fallback | Claude stream events feed timeline and early file delivery; `--forward-subagent-text` routes child text to its parent tool panel, and sanitized `mcp_server_errors` remain visible | ACP session updates feed the timeline, tool state, questions, and early delivery | stdout chunks feed timeline and early file delivery when `agy --print` streams output |
-| Background tasks | Structured runtime task events | Structured runtime task events | Kimi 0.32+ observer hooks feed shared start/completion events, retain the ACP worker, and protect restarts; `SessionHeartbeat` is never treated as progress | Process-local only |
+| Background tasks | Structured runtime task events | Structured runtime task events | Kimi 0.32+ observer hooks retain the ACP worker and protect restarts; Kimi 0.33 task-origin review streams and automatic retries are aggregated into one final user result, while intermediate failures stay timeline-only; `SessionHeartbeat` is never treated as progress | Process-local only |
 | Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | ACP permission requests become native channel buttons; ACP question options remain distinct from approvals | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `full-auto` maps to ACP `yolo`; unsafe/bypass maps to ACP `auto` | `--dangerously-skip-permissions` |
 | `/goal` | Bridge-native goal API; defaults to no token budget unless `--budget` is provided | Passes through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Still not exposed by Kimi ACP 0.33.0; rejected explicitly instead of being sent as ordinary text | Passes through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
@@ -356,11 +356,13 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 For Kimi 0.32 or newer, TaroCub registers an inert hook plugin under the active
 `KIMI_CODE_HOME`. Only bridge-owned ACP subprocesses receive the authenticated
 loopback relay environment, so ordinary Kimi sessions do not send events to
-TaroCub. The relay consumes `TaskStarted`, background-task `Notification`, and
-`SubagentStop`; it deliberately ignores `SessionHeartbeat` because process
-liveness is not evidence of task progress. Existing Kimi credentials,
-sessions, native skills/plugins, MCP configuration, and `config.toml` remain in
-place.
+TaroCub. The relay consumes task start/notification/subagent events plus
+`TurnStarted`, `Stop`, `StopFailure`, and `Interrupt`. The turn hooks preserve
+Kimi 0.33's autonomous post-task review: retries remain linked to the original
+work, intermediate failures are timeline-only, and the final reviewed answer is
+delivered once. It deliberately ignores `SessionHeartbeat` because process
+liveness is not evidence of task progress. Existing Kimi credentials, sessions,
+native skills/plugins, MCP configuration, and `config.toml` remain in place.
 
 ## Live Web Search MCP: Brave + Tavily
 
