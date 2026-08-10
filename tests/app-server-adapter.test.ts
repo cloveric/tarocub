@@ -1683,6 +1683,67 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(0);
   });
 
+  it("interrupts a turn aborted before its turn id arrived (writer-leak fix)", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const controller = new AbortController();
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+      abortSignal: controller.signal,
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    expect(turnStart.method).toBe("turn/start");
+
+    // Abort BEFORE the turn/start response delivers the turn id: the interrupt
+    // has no addressable turn yet.
+    controller.abort();
+    await expect(promise).rejects.toThrow("Codex app-server turn aborted");
+
+    // The app-server started the turn anyway. Its late response must trigger
+    // the deferred interrupt, or the server-side turn keeps the thread's
+    // writer and every later turn fails with "already has an active writer".
+    child.stdout.emitData(`{"id":${turnStart.id},"result":{"turn":{"id":"turn-late"}}}\n`);
+    await waitFor(() => child.stdin.lines.some((line) => {
+      const parsed = JSON.parse(line || "{}") as { method?: string; params?: { turnId?: string } };
+      return parsed.method === "turn/interrupt" && parsed.params?.turnId === "turn-late";
+    }));
+    expect(child.killCalls).toBe(0);
+  });
+
+  it("recovers a thread whose writer leaked instead of failing every later turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+
+    child.stdout.emitData(`{"id":${turnStart.id},"error":{"code":-32603,"message":"thread thread-123 already has an active writer"}}\n`);
+    await expect(promise).rejects.toThrow("already has an active writer");
+
+    // Self-heal: interrupt the thread so the NEXT turn is not dead on arrival.
+    await waitFor(() => child.stdin.lines.some((line) => {
+      const parsed = JSON.parse(line || "{}") as { method?: string; params?: { threadId?: string } };
+      return parsed.method === "turn/interrupt" && parsed.params?.threadId === "thread-123";
+    }));
+  });
+
   it("rejects when thread/read shows the completed turn actually failed", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

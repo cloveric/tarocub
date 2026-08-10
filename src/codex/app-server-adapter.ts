@@ -114,6 +114,12 @@ function isThreadReadTimeoutError(error: unknown): error is ThreadReadTimeoutErr
   return error instanceof ThreadReadTimeoutError || (error instanceof Error && error.name === "ThreadReadTimeoutError");
 }
 
+/** True for the app-server's "thread <id> already has an active writer" error,
+ *  which means a previous turn's writer leaked and the thread is unusable. */
+function isActiveWriterConflict(error: Error): boolean {
+  return /already has an active writer/i.test(error.message);
+}
+
 type PendingTurn = {
   chunks: string[];
   finalText?: string;
@@ -142,6 +148,15 @@ type PendingTurn = {
   onProgress?: (partialText: string) => void;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  /**
+   * Set when this turn was aborted/timed out BEFORE its `turn/start` response
+   * delivered a turn id. The interrupt could not be addressed yet, so the
+   * app-server kept executing the turn and held the thread's writer — every
+   * later turn on that thread then failed with "thread ... already has an
+   * active writer" until the service restarted. The `turn/start` response
+   * handler sends the deferred interrupt as soon as the id arrives.
+   */
+  abortedBeforeTurnId?: boolean;
   timeout?: ReturnType<typeof setTimeout>;
   inactivityTimeout?: ReturnType<typeof setTimeout>;
   inactivityTimeoutDisabled?: boolean;
@@ -2074,6 +2089,12 @@ export class CodexAppServerAdapter implements CodexAdapter {
           this.pendingTurns.delete(threadId);
         }
         this.loadedThreads.delete(threadId);
+        if (!pendingTurn.turnId) {
+          // No id yet: the interrupt cannot be addressed. Remember to send it
+          // when the turn/start response resolves the id, or the server-side
+          // turn keeps running and wedges the thread's writer.
+          pendingTurn.abortedBeforeTurnId = true;
+        }
         this.interruptTurn(threadId, pendingTurn.turnId);
         this.drainUnidentifiedTurnLines(pendingTurn, error.message);
         pendingTurn.reject(error);
@@ -2131,11 +2152,18 @@ export class CodexAppServerAdapter implements CodexAdapter {
         // this turn's notifications can be told apart from any other turn running
         // on the same thread. This response is id-correlated, so it is the
         // authoritative source for the turn id.
+        const turn = (result as { turn?: { id?: unknown } } | null | undefined)?.turn;
+        const startedTurnId = turn && typeof turn.id === "string" ? turn.id : undefined;
         if (this.isPendingTurnTracked(threadId, pendingTurn) && !pendingTurn.turnId) {
-          const turn = (result as { turn?: { id?: unknown } } | null | undefined)?.turn;
-          if (turn && typeof turn.id === "string") {
-            this.registerTurnId(pendingTurn, turn.id);
+          if (startedTurnId) {
+            this.registerTurnId(pendingTurn, startedTurnId);
           }
+        } else if (pendingTurn.abortedBeforeTurnId && startedTurnId) {
+          // The turn was aborted during the id-unknown window: it is no longer
+          // tracked, but the app-server started it anyway and still holds the
+          // thread's writer. Interrupt it now that it is addressable.
+          pendingTurn.abortedBeforeTurnId = false;
+          this.interruptTurn(threadId, startedTurnId);
         }
       }, (error) => {
         const pendingTurnState = this.pendingTurns.get(threadId);
@@ -2146,6 +2174,15 @@ export class CodexAppServerAdapter implements CodexAdapter {
         this.pendingTurns.delete(threadId);
         this.notifyIdleWaitersIfIdle();
         const turnStartError = error instanceof Error ? error : new Error(String(error));
+        if (isActiveWriterConflict(turnStartError)) {
+          // A leaked writer from an earlier turn owns this thread server-side,
+          // so EVERY later turn on it fails identically until the service is
+          // restarted (observed in the field). Drop the cached thread state and
+          // fire a best-effort interrupt for the leaked turn so the next turn
+          // can proceed instead of the conversation staying dead.
+          this.loadedThreads.delete(threadId);
+          this.interruptLeakedThreadWriter(threadId);
+        }
         this.drainUnidentifiedTurnLines(pendingTurn, turnStartError.message);
         pendingTurn.reject(turnStartError);
       });
@@ -2197,6 +2234,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
           this.pendingTurns.delete(threadId);
         }
         this.loadedThreads.delete(threadId);
+        if (!pending.turnId) {
+          pending.abortedBeforeTurnId = true;
+        }
         this.interruptTurn(threadId, pending.turnId);
         this.drainUnidentifiedTurnLines(pending, "Codex app-server turn became inactive");
         pending.reject(
@@ -2223,8 +2263,27 @@ export class CodexAppServerAdapter implements CodexAdapter {
    * app-server JSON schema). Fire-and-forget: the local rejection already
    * happened; this only stops the engine from continuing to execute. turnId is
    * briefly unknown until the turn/start response arrives — in that window
-   * there is no addressable turn to interrupt yet, so this is a no-op.
+   * there is no addressable turn to interrupt yet, so this is a no-op HERE;
+   * the caller marks `abortedBeforeTurnId` and the `turn/start` response
+   * handler sends the deferred interrupt once the id lands.
    */
+  /**
+   * Best-effort recovery from "thread ... already has an active writer": ask the
+   * app-server to interrupt whatever turn still owns the thread. The leaked
+   * turn's id is not knowable locally (its owner is gone), so address the
+   * thread itself — the app-server ignores an unknown/absent turn id, making
+   * this a no-op when the diagnosis was wrong.
+   */
+  private interruptLeakedThreadWriter(threadId: string): void {
+    if (!this.child?.stdin) {
+      return;
+    }
+    void this.request("turn/interrupt", { threadId }, {
+      idleBlocking: false,
+      timeoutMs: CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS,
+    }).catch(() => {});
+  }
+
   private interruptTurn(threadId: string, turnId: string | undefined): void {
     if (!turnId || !this.child?.stdin) {
       return;
