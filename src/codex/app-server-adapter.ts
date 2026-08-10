@@ -16,6 +16,11 @@ import type {
 } from "./adapter.js";
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { killProcessTree } from "./process-tree.js";
+import {
+  findThreadWriterLockHolder,
+  renderThreadWriterLockDiagnosis,
+  resolveCodexHome,
+} from "./thread-writer-lock.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
@@ -582,7 +587,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     childEnvOrSpawn?: NodeJS.ProcessEnv | AppServerSpawnCodex,
     spawnCodexArg?: AppServerSpawnCodex,
     instructionsPath?: string,
-    engineHomePath?: string,
+    private readonly engineHomePath?: string,
     configPath?: string,
     private readonly turnTimeoutMs: number = CODEX_APP_SERVER_TURN_TIMEOUT_MS,
     private readonly turnInactivityTimeoutMs: number | null = CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
@@ -2175,13 +2180,26 @@ export class CodexAppServerAdapter implements CodexAdapter {
         this.notifyIdleWaitersIfIdle();
         const turnStartError = error instanceof Error ? error : new Error(String(error));
         if (isActiveWriterConflict(turnStartError)) {
-          // A leaked writer from an earlier turn owns this thread server-side,
-          // so EVERY later turn on it fails identically until the service is
-          // restarted (observed in the field). Drop the cached thread state and
-          // fire a best-effort interrupt for the leaked turn so the next turn
-          // can proceed instead of the conversation staying dead.
+          // Another writer owns this thread server-side, so EVERY later turn on
+          // it fails identically. Two very different causes look the same here:
+          // a turn this bridge leaked (interrupt + retry fixes it) or an
+          // EXTERNAL app holding the lock — the ChatGPT desktop app keeps the
+          // writer lock of every thread it has open, and no bridge restart can
+          // clear that. Name the holder so the operator is not left guessing.
           this.loadedThreads.delete(threadId);
           this.interruptLeakedThreadWriter(threadId);
+          void findThreadWriterLockHolder({
+            codexHome: resolveCodexHome(this.engineHomePath),
+            threadId,
+            ...(this.child?.pid !== undefined ? { ownPid: this.child.pid } : {}),
+          })
+            .catch(() => null)
+            .then((holder) => {
+              const diagnosis = renderThreadWriterLockDiagnosis(holder);
+              this.drainUnidentifiedTurnLines(pendingTurn, turnStartError.message);
+              pendingTurn.reject(new Error(`${turnStartError.message}\n\n${diagnosis}`));
+            });
+          return;
         }
         this.drainUnidentifiedTurnLines(pendingTurn, turnStartError.message);
         pendingTurn.reject(turnStartError);

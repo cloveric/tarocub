@@ -9,6 +9,7 @@ export type FailureCategory =
   | "engine-backend"
   | "engine-timeout"
   | "engine-busy"
+  | "engine-thread-locked"
   | "file-workflow"
   | "workflow-state"
   | "session-state"
@@ -69,6 +70,13 @@ export function classifyFailure(error: unknown): FailureCategory {
   const rawText = normalizeErrorText(error);
   const mcpWarningIndex = rawText.search(/⚠️ MCP startup warnings?:/u);
   const text = (mcpWarningIndex >= 0 ? rawText.slice(0, mcpWarningIndex) : rawText).toLowerCase();
+
+  // A Codex thread whose writer lock is held elsewhere. The adapter appends an
+  // actionable diagnosis naming the holder; keep it as its own category so the
+  // channel renderers show that text instead of a generic "run failed".
+  if (text.includes("already has an active writer")) {
+    return "engine-thread-locked";
+  }
 
   if (
     text.includes("not logged in") ||
@@ -222,6 +230,10 @@ export function getBusErrorSemantics(failureCategory: FailureCategory): BusError
     case "engine-busy":
       // Transient: the same call succeeds once the in-flight background work ends.
       return { code: "engine_busy", retryable: true };
+    case "engine-thread-locked":
+      // Another writer (often an external app) owns the thread; retrying the
+      // same call just fails again until a human frees it or resets the thread.
+      return { code: "engine_thread_locked", retryable: false };
     case "file-workflow":
       return { code: "file_workflow", retryable: false };
     case "workflow-state":

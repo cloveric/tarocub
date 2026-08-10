@@ -38,6 +38,16 @@ export function renderLarkUserFacingError(
     return tooLarge;
   }
   const category = classifyFailure(error);
+  if (category === "engine-thread-locked") {
+    // The adapter already produced an operator-actionable explanation (who
+    // holds the lock, what to do). Surfacing it verbatim is the whole point —
+    // a generic "run failed" is exactly what sent the operator hunting.
+    const detail = error instanceof Error ? error.message.split("\n\n").slice(1).join("\n\n").trim() : "";
+    const header = locale === "en"
+      ? "Error: this conversation's Codex thread is locked by another writer."
+      : "错误：该会话的 Codex 线程被其他写入方占用。";
+    return detail ? `${header}\n${detail}` : header;
+  }
   if (locale === "en") {
     if (category === "auth") {
       return "Error: engine or Lark authentication has expired. Please sign in again and retry.";
