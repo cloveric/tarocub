@@ -45,6 +45,7 @@ describe("Bridge", () => {
       chatId: 84,
       userId: 42,
       chatType: "private",
+      locale: "zh",
       text: "hello",
       replyContext: undefined,
       files: [],
@@ -55,6 +56,7 @@ describe("Bridge", () => {
     expect(adapter.sendUserMessage).toHaveBeenCalledWith("telegram-84", expect.objectContaining({
       text: "hello",
       files: [],
+      locale: "zh",
       instructions: undefined,
       requestOutputDir: undefined,
     }));

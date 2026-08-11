@@ -2268,8 +2268,23 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
-  it("tells the operator once when a settings change had to be deferred", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-defer-notice-test-"));
+  it.each([
+    {
+      locale: "zh" as const,
+      expectedText: "后台任务",
+      unexpectedText: "background task",
+    },
+    {
+      locale: "en" as const,
+      expectedText: "background task",
+      unexpectedText: "后台任务",
+    },
+  ])("tells the operator once in $locale when a settings change had to be deferred", async ({
+    locale,
+    expectedText,
+    unexpectedText,
+  }) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), `kimi-acp-defer-notice-${locale}-test-`));
     const configPath = path.join(root, "config.json");
     await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
     const harness = createHarness();
@@ -2303,18 +2318,82 @@ describe("KimiAcpAdapter", () => {
       // Deferring keeps the session usable, but a SILENT defer reads as "my
       // /effort did nothing" — the operator must be told, exactly once.
       await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
-      const second = adapter.sendUserMessage("kimi-session-1", { text: "after change", files: [] });
+      const second = adapter.sendUserMessage("kimi-session-1", {
+        text: "after change",
+        files: [],
+        locale,
+      });
       await waitFor(() => harness.children[0]?.server.prompts.length === 2);
       harness.children[0].server.respondPrompt();
       const secondResult = await second;
-      expect(secondResult.text).toContain("后台任务");
+      expect(secondResult.text).toContain(expectedText);
+      expect(secondResult.text).not.toContain(unexpectedText);
       expect(secondResult.text).toContain("/reset");
 
       // Not repeated on the following turn.
-      const third = adapter.sendUserMessage("kimi-session-1", { text: "again", files: [] });
+      const third = adapter.sendUserMessage("kimi-session-1", { text: "again", files: [], locale });
       await waitFor(() => harness.children[0]?.server.prompts.length === 3);
       harness.children[0].server.respondPrompt();
-      expect((await third).text).not.toContain("后台任务");
+      expect((await third).text).not.toContain(expectedText);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("clears a deferred settings notice when a failed turn is followed by a settings rollback", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-defer-notice-rollback-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-73", { text: "start work", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      await fetch(harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+        },
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-running",
+          kind: "process",
+          description: "Long job",
+          detached: true,
+        }),
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const failed = adapter.sendUserMessage("kimi-session-1", {
+        text: "after change",
+        files: [],
+        locale: "zh",
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      harness.children[0].server.respondPrompt({ stopReason: "refused" });
+      await expect(failed).rejects.toThrow("Kimi ACP stopped the turn with reason refused");
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+      const rolledBack = adapter.sendUserMessage("kimi-session-1", {
+        text: "after rollback",
+        files: [],
+        locale: "zh",
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 3);
+      harness.children[0].server.respondPrompt();
+      const rolledBackResult = await rolledBack;
+      expect(rolledBackResult.text).not.toContain("后台任务");
+      expect(rolledBackResult.text).not.toContain("/reset");
     } finally {
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });

@@ -184,6 +184,10 @@ type KimiTerminalBackgroundTask = {
   taskOriginReviewStarted: boolean;
 };
 
+type KimiDeferredSettingsNotice = {
+  taskCount: number;
+};
+
 type KimiWorker = {
   child: KimiChildProcess;
   connection: ClientSideConnection;
@@ -193,9 +197,9 @@ type KimiWorker = {
   settingsKey: string;
   runtimeMode: NonNullable<KimiRuntimeOptions["mode"]>;
   deferredSettingsKey?: string;
-  /** Set when a settings change was deferred; appended ONCE to the next reply so
-   *  the operator is not left thinking their /model or /effort silently failed. */
-  deferredSettingsNotice?: string;
+  /** Set when a settings change was deferred; rendered in the request locale
+   *  and appended once after a successful turn. */
+  deferredSettingsNotice?: KimiDeferredSettingsNotice;
   hookRelayActive: boolean;
   stderrDecoder: TextDecoder;
   stderrTail: string;
@@ -240,6 +244,17 @@ const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
 const DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS = 6 * 60 * 60_000;
 const MAX_BACKGROUND_TASK_OUTPUT_BYTES = 64 * 1024;
 const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
+
+function renderDeferredSettingsNotice(
+  notice: KimiDeferredSettingsNotice,
+  locale: NonNullable<CodexUserMessageInput["locale"]>,
+): string {
+  if (locale === "zh") {
+    return `⏳ 新的引擎设置已记录，但本会话还有 ${notice.taskCount} 个后台任务在跑，会在它们结束后的下一轮生效（本轮仍用当前设置）。想立刻生效可发 /reset 开新会话。`;
+  }
+  const taskLabel = notice.taskCount === 1 ? "background task" : "background tasks";
+  return `⏳ New engine settings were saved, but this session still has ${notice.taskCount} ${taskLabel} running. They will take effect on the next turn after the background work finishes (this turn still uses the current settings). Send /reset to start a new session if you want them to take effect immediately.`;
+}
 const DEFAULT_BACKGROUND_CONTINUATION_GRACE_MS = 10_000;
 const DEFAULT_HOOK_TERMINAL_GRACE_MS = 250;
 const HOOK_RELAY_DRAIN_TIMEOUT_MS = 5_000;
@@ -1036,7 +1051,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     const deferredNotice = worker.deferredSettingsNotice;
     worker.deferredSettingsNotice = undefined;
     return {
-      text: deferredNotice ? [result.text.trim(), deferredNotice].filter(Boolean).join("\n\n") : result.text,
+      text: deferredNotice
+        ? [
+            result.text.trim(),
+            renderDeferredSettingsNotice(deferredNotice, input.locale ?? "en"),
+          ].filter(Boolean).join("\n\n")
+        : result.text,
       ...(actualSessionId !== sessionId ? { sessionId: actualSessionId } : {}),
       ...(result.usage ? { usage: result.usage } : {}),
     };
@@ -1172,6 +1192,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (existing) {
       if (existing.workspacePath === workspacePath && existing.settingsKey === settingsKey) {
         existing.deferredSettingsKey = undefined;
+        existing.deferredSettingsNotice = undefined;
         return existing;
       }
       if (existing.pendingTurn) {
@@ -1206,7 +1227,7 @@ export class KimiAcpAdapter implements CodexAdapter {
           // every later turn), but a silent defer reads as "my /model did
           // nothing". Tell the operator once, on the reply they are already
           // waiting for.
-          existing.deferredSettingsNotice = `⏳ 新的引擎设置已记录，但本会话还有 ${count} 个后台任务在跑，会在它们结束后的下一轮生效（本轮仍用当前设置）。想立刻生效可发 /reset 开新会话。`;
+          existing.deferredSettingsNotice = { taskCount: count };
         }
         return existing;
       }

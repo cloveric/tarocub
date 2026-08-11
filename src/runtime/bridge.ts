@@ -396,6 +396,7 @@ export class Bridge {
           const adapterResponse = await this.adapter.sendUserMessage(session.sessionId, {
             text,
             files: input.files,
+            locale: input.locale,
             instructions: input.instructions,
             onProgress: input.onProgress,
             onApprovalRequest: input.onApprovalRequest,

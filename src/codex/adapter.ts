@@ -144,6 +144,7 @@ export type EngineStreamEvent =
 export interface CodexUserMessageInput {
   text: string;
   files: string[];
+  locale?: "en" | "zh";
   instructions?: string;
   onProgress?: (partialText: string) => void;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
