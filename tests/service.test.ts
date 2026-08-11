@@ -3337,10 +3337,12 @@ describe("polling helpers", () => {
       expect(onAuthRetry).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
-      expect((bridge.handleAuthorizedMessage as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0].text)).toEqual([
-        "What did I say?\nspoken transcript",
-        "What did I say?\nspoken transcript",
-      ]);
+      const retryTexts = (bridge.handleAuthorizedMessage as ReturnType<typeof vi.fn>)
+        .mock.calls.map((call) => call[0].text as string);
+      expect(retryTexts[0]).toBe(retryTexts[1]);
+      expect(retryTexts[0]).toContain("What did I say?\n[Bridge media transcription completed]");
+      expect(retryTexts[0]?.match(/\[Bridge media transcription completed\]/g)).toHaveLength(1);
+      expect(retryTexts[0]?.match(/spoken transcript/g)).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
       await removeTempRoot(root);
@@ -6739,8 +6741,9 @@ describe("polling helpers", () => {
       );
 
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
-        text: "What did I say?\nspoken transcript",
+        text: expect.stringContaining("What did I say?\n[Bridge media transcription completed]"),
       }));
+      expect(bridge.handleAuthorizedMessage.mock.calls[0]?.[0].text).toContain("spoken transcript");
       expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "preferred_layout", { parseMode: "Markdown" });
       expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "preferred_layout");
     } finally {

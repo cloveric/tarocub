@@ -27,7 +27,7 @@ describe("larkAgentInstructions", () => {
       expect(asr).toContain("http://127.0.0.1:8412/transcribe");
       expect(asr).toContain("whisper");
       // It is wired into the injected Lark prompt when ASR is available.
-      expect(larkAgentInstructions()).toContain("do NOT default to whisper");
+      expect(larkAgentInstructions()).toContain("do NOT use whisper");
     } finally {
       if (previous === undefined) {
         delete process.env.ASR_HTTP_URL;
@@ -49,9 +49,10 @@ describe("larkAgentInstructions", () => {
       // anyway, so a 24-minute recording got chunked through the local model
       // instead of the cloud route the bridge had picked.
       const asr = localAsrAgentInstruction() ?? "";
-      expect(asr).toContain("normally pre-transcribed");
+      expect(asr).toContain("[Bridge media transcription completed]");
+      expect(asr).toContain("do NOT inspect/probe/split/re-transcribe");
       expect(asr).toContain("marked unavailable");
-      expect(asr).toMatch(/fetched audio\/video/);
+      expect(asr).toMatch(/media you fetch/);
     } finally {
       if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
       else process.env.ASR_HTTP_URL = previousUrl;
@@ -68,7 +69,7 @@ describe("larkAgentInstructions", () => {
     delete process.env.TINGWU_ASR_DIR;
     resetCloudAsrConfiguredCacheForTests();
     try {
-      expect(localAsrAgentInstruction() ?? "").not.toContain("normally pre-transcribed");
+      expect(localAsrAgentInstruction() ?? "").not.toContain("[Bridge media transcription completed]");
     } finally {
       if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
       else process.env.ASR_HTTP_URL = previousUrl;
@@ -89,8 +90,8 @@ describe("larkAgentInstructions", () => {
       // enough: without the split remedy the agent reports failure and stops.
       const asr = localAsrAgentInstruction() ?? "";
       expect(asr).toContain("Max 300s per request");
-      expect(asr).toContain("the model is shared");
-      expect(asr).toContain("never be retried as-is");
+      expect(asr).toContain("shared model");
+      expect(asr).toContain("Never retry longer input as-is");
       expect(asr).toContain("-segment_time 270");
       expect(asr).not.toContain("-segment_time 300");
       expect(asr).toContain("-vn -ac 1 -ar 16000 -c:a pcm_s16le");

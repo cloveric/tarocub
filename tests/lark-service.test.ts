@@ -1937,6 +1937,8 @@ describe("lark service", () => {
         text: expect.stringContaining("整理这两段素材"),
       }));
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.text.match(/\[Bridge media transcription completed\]/g)).toHaveLength(2);
+      expect(bridgeInput.text).toContain("Do not inspect, probe, split, or transcribe the attached media again");
       expect(bridgeInput.text).toContain("transcript:voice.m4a");
       expect(bridgeInput.text).toContain("transcript:clip.mp4");
       expectLarkFinalAnswer(channel, "done");
@@ -1980,6 +1982,8 @@ describe("lark service", () => {
       expect(transcribeMedia).toHaveBeenCalledTimes(1);
       expect(transcribeMedia.mock.calls[0]![0]).toContain("会议录音.m4a");
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.text).toContain("[Bridge media transcription completed]");
+      expect(bridgeInput.text).toContain('File: "会议录音.m4a"');
       expect(bridgeInput.text).toContain("transcript:会议录音.m4a");
       // The document is still a workflow file, AND the promoted recording keeps
       // its path so the engine can act on the file itself.

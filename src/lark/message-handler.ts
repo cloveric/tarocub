@@ -64,6 +64,7 @@ import {
 } from "./commands.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
+import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
 import {
   deliveryLedgerEnabled,
   markDeliveryAttempting,
@@ -1535,7 +1536,9 @@ async function runNormalizedLarkMessage(
               abortSignal: runController.signal,
             });
             if (transcript.trim()) {
-              requestText = requestText.trim() ? `${requestText.trim()}\n${transcript.trim()}` : transcript.trim();
+              const fileName = media.attachment.fileName ?? path.basename(media.localPath);
+              const transcriptBlock = formatBridgeMediaTranscript(fileName, transcript);
+              requestText = requestText.trim() ? `${requestText.trim()}\n${transcriptBlock}` : transcriptBlock;
             } else if (media.attachment.kind === "file") {
               const fileName = (media.attachment.fileName ?? path.basename(media.localPath))
                 .replace(/[\r\n\t]+/g, " ")

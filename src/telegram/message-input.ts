@@ -11,6 +11,7 @@ import {
   isCloudAsrCancelledError,
 } from "../runtime/asr-cloud.js";
 import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
+import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
 import type { DownloadedAttachment } from "../runtime/file-workflow.js";
 import type { TelegramApi } from "./api.js";
 import { createAsrWatchdogFromEnv, type AsrWatchdog } from "./asr-watchdog.js";
@@ -668,7 +669,9 @@ export async function prepareTelegramMessageInput(input: {
         const transcript = (await transcribeVoice(media.localPath, transcribeOptions)).trim();
         if (transcript) {
           producedAnyTranscript = true;
-          text = text ? `${text}\n${transcript}` : transcript;
+          const fileName = media.attachment.fileName ?? path.basename(media.localPath);
+          const transcriptBlock = formatBridgeMediaTranscript(fileName, transcript);
+          text = text ? `${text}\n${transcriptBlock}` : transcriptBlock;
         } else if (media.attachment.kind === "document") {
           text = appendPromotedMediaFallback(text, media);
         } else {

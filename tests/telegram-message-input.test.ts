@@ -52,15 +52,19 @@ describe("prepareTelegramMessageInput", () => {
         transcribeVoice,
       });
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         kind: "ready",
-        text: "hello\nspoken transcript",
         downloadedAttachments: [
           expect.objectContaining({
             attachment: expect.objectContaining({ fileId: "doc-1", kind: "document" }),
           }),
         ],
       });
+      expect(result.kind === "ready" ? result.text : "").toContain(
+        "hello\n[Bridge media transcription completed]",
+      );
+      expect(result.kind === "ready" ? result.text : "").toContain('File: "voice-1.ogg"');
+      expect(result.kind === "ready" ? result.text : "").toContain("spoken transcript");
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
       expect(downloadFile).toHaveBeenCalledTimes(2);
     } finally {
@@ -174,11 +178,15 @@ describe("prepareTelegramMessageInput", () => {
         transcribeVoice,
       });
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         kind: "ready",
-        text: "please use this\naudio transcript",
         downloadedAttachments: [],
       });
+      expect(result.kind === "ready" ? result.text : "").toContain(
+        "please use this\n[Bridge media transcription completed]",
+      );
+      expect(result.kind === "ready" ? result.text : "").toContain('File: "brief.m4a"');
+      expect(result.kind === "ready" ? result.text : "").toContain("audio transcript");
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
       expect(transcribeVoice).toHaveBeenCalledWith(
         expect.stringMatching(/brief\.m4a$/),
@@ -208,11 +216,15 @@ describe("prepareTelegramMessageInput", () => {
         transcribeVoice,
       });
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         kind: "ready",
-        text: "make subtitles\nvideo transcript",
         downloadedAttachments: [],
       });
+      expect(result.kind === "ready" ? result.text : "").toContain(
+        "make subtitles\n[Bridge media transcription completed]",
+      );
+      expect(result.kind === "ready" ? result.text : "").toContain('File: "lesson.mp4"');
+      expect(result.kind === "ready" ? result.text : "").toContain("video transcript");
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
       expect(transcribeVoice).toHaveBeenCalledWith(
         expect.stringMatching(/lesson\.mp4$/),
@@ -422,11 +434,15 @@ describe("prepareTelegramMessageInput", () => {
 
       expect(result).toMatchObject({
         kind: "ready",
-        text: "summarize this\nmeeting transcript",
         downloadedAttachments: [expect.objectContaining({
           attachment: expect.objectContaining({ fileId: "recording-1", kind: "document" }),
         })],
       });
+      expect(result.kind === "ready" ? result.text : "").toContain(
+        "summarize this\n[Bridge media transcription completed]",
+      );
+      expect(result.kind === "ready" ? result.text : "").toContain('File: "recording-1.m4a"');
+      expect(result.kind === "ready" ? result.text : "").toContain("meeting transcript");
       expect(transcribeVoice).toHaveBeenCalledTimes(1);
       expect(transcribeVoice.mock.calls[0]?.[0]).toMatch(/\.m4a$/);
     } finally {
