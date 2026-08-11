@@ -1216,6 +1216,135 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("settles a background task immediately when TaskOutput collects its terminal result", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{
+      type?: string;
+      taskId?: string;
+      suppressUserDelivery?: boolean;
+    }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Run and collect background work",
+        files: [],
+        instructions: "original instructions",
+        onEngineEvent: (event) => {
+          events.push(event as never);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "npm test", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-collected","tool_use_id":"toolu-background","task_type":"local_bash","summary":"Full suite gate","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu-background",
+            content: "Command running in background with ID: task-collected.",
+            is_error: false,
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+
+      // A non-TaskOutput tool result containing similar XML must not settle it.
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-read",
+            name: "Read",
+            input: { file_path: "/tmp/example.xml" },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu-read",
+            content: "<task_id>task-collected</task_id><status>completed</status>",
+            is_error: false,
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      expect(events.filter((event) => event.type === "task_notification")).toHaveLength(0);
+
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-task-output",
+            name: "TaskOutput",
+            input: { task_id: "task-collected", block: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu-task-output",
+            content: "<retrieval_status>success</retrieval_status>\n<task_id>task-collected</task_id>\n<task_type>local_bash</task_type>\n<status>completed</status>\n<exit_code>0</exit_code>",
+            is_error: false,
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"All checks passed.","session_id":"session-123"}\n');
+      await expect(first).resolves.toMatchObject({ text: "All checks passed." });
+
+      expect(events.filter((event) => event.type === "task_notification")).toEqual([
+        expect.objectContaining({
+          taskId: "task-collected",
+          suppressUserDelivery: true,
+        }),
+      ]);
+
+      // Claude may still emit the ordinary out-of-band pair after TaskOutput.
+      // The collected-task tombstone must suppress that duplicate.
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-collected","tool_use_id":"toolu-background","status":"completed","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Background done.","session_id":"session-123","origin":{"kind":"task-notification"}}\n');
+      expect(events.filter((event) => event.type === "task_notification")).toHaveLength(1);
+
+      // The consumed task no longer pins worker reconfiguration.
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Use new instructions",
+        files: [],
+        instructions: "changed instructions",
+      });
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Reconfigured.","session_id":"session-123"}\n');
+      await expect(second).resolves.toEqual({ text: "Reconfigured." });
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
   it("suppresses the death notice for a long-silent task (result was consumed in-turn)", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: Array<{ type?: string; taskId?: string; suppressUserDelivery?: boolean }> = [];
