@@ -193,6 +193,9 @@ type KimiWorker = {
   settingsKey: string;
   runtimeMode: NonNullable<KimiRuntimeOptions["mode"]>;
   deferredSettingsKey?: string;
+  /** Set when a settings change was deferred; appended ONCE to the next reply so
+   *  the operator is not left thinking their /model or /effort silently failed. */
+  deferredSettingsNotice?: string;
   hookRelayActive: boolean;
   stderrDecoder: TextDecoder;
   stderrTail: string;
@@ -1030,8 +1033,10 @@ export class KimiAcpAdapter implements CodexAdapter {
       input,
     );
     this.rekeyWorker(worker, actualSessionId);
+    const deferredNotice = worker.deferredSettingsNotice;
+    worker.deferredSettingsNotice = undefined;
     return {
-      text: result.text,
+      text: deferredNotice ? [result.text.trim(), deferredNotice].filter(Boolean).join("\n\n") : result.text,
       ...(actualSessionId !== sessionId ? { sessionId: actualSessionId } : {}),
       ...(result.usage ? { usage: result.usage } : {}),
     };
@@ -1197,6 +1202,11 @@ export class KimiAcpAdapter implements CodexAdapter {
           console.warn(
             `Deferring Kimi engine settings for session ${existing.currentSessionId ?? sessionId} until ${count} background task${count === 1 ? "" : "s"} finish.`,
           );
+          // Deferring keeps the session usable (the previous behavior failed
+          // every later turn), but a silent defer reads as "my /model did
+          // nothing". Tell the operator once, on the reply they are already
+          // waiting for.
+          existing.deferredSettingsNotice = `⏳ 新的引擎设置已记录，但本会话还有 ${count} 个后台任务在跑，会在它们结束后的下一轮生效（本轮仍用当前设置）。想立刻生效可发 /reset 开新会话。`;
         }
         return existing;
       }

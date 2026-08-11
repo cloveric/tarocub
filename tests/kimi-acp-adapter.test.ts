@@ -543,7 +543,9 @@ describe("KimiAcpAdapter", () => {
       await waitFor(() => harness.children[0]?.server.prompts.length === 2);
       expect(harness.children).toHaveLength(1);
       harness.children[0].server.respondPrompt();
-      await expect(reconfigured).resolves.toMatchObject({ text: "Kimi completed the request." });
+      // The retained background task defers the settings change, which appends a
+      // one-time operator notice — assert the answer, not the whole string.
+      expect((await reconfigured).text).toContain("Kimi completed the request.");
 
       const completed = await fetch(hookUrl!, {
         method: "POST",
@@ -2203,7 +2205,7 @@ describe("KimiAcpAdapter", () => {
       expect(harness.children).toHaveLength(1);
       expect(harness.killedPids).toEqual([]);
       harness.children[0].server.respondPrompt();
-      await expect(second).resolves.toMatchObject({ text: "Kimi completed the request." });
+      expect((await second).text).toContain("Kimi completed the request.");
     } finally {
       nowSpy?.mockRestore();
       await adapter.destroy();
@@ -2260,6 +2262,59 @@ describe("KimiAcpAdapter", () => {
       })).rejects.toThrow(/workspace cannot be changed/);
       expect(harness.children).toHaveLength(1);
       expect(harness.killedPids).toEqual([]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tells the operator once when a settings change had to be deferred", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-defer-notice-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-72", { text: "start work", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      await fetch(harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+        },
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-running",
+          kind: "process",
+          description: "Long job",
+          detached: true,
+        }),
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      // Deferring keeps the session usable, but a SILENT defer reads as "my
+      // /effort did nothing" — the operator must be told, exactly once.
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const second = adapter.sendUserMessage("kimi-session-1", { text: "after change", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      harness.children[0].server.respondPrompt();
+      const secondResult = await second;
+      expect(secondResult.text).toContain("后台任务");
+      expect(secondResult.text).toContain("/reset");
+
+      // Not repeated on the following turn.
+      const third = adapter.sendUserMessage("kimi-session-1", { text: "again", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 3);
+      harness.children[0].server.respondPrompt();
+      expect((await third).text).not.toContain("后台任务");
     } finally {
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });
