@@ -63,6 +63,7 @@ import {
   isStopCommand,
 } from "./commands.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
+import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
 import {
   deliveryLedgerEnabled,
   markDeliveryAttempting,
@@ -1544,6 +1545,25 @@ async function runNormalizedLarkMessage(
             if (isCloudAsrCancelledError(error) || runController.signal.aborted) {
               throw error;
             }
+            // A PROMOTED file (a recording sent as a document) still has the
+            // file itself to work with, so a failed transcription must NOT end
+            // the turn with "转写失败" — before this promotion existed the file
+            // simply reached the engine. Log it and fall through; the engine
+            // gets the path and can handle it. A genuine voice/video MESSAGE
+            // has nothing else, so it keeps the failure reply.
+            if (media.attachment.kind === "file") {
+              await appendLarkTimelineEvent(input.stateDir, normalized, {
+                type: "file.accepted",
+                outcome: "accepted",
+                detail: "promoted media transcription failed; file passed through",
+                metadata: {
+                  fileName: media.attachment.fileName,
+                  kind: media.attachment.kind,
+                  phase: "prepare",
+                },
+              });
+              continue;
+            }
             await input.channel.send(normalized.chatId, {
               text: renderLarkMediaTranscriptionFailure(locale),
             }, {
@@ -1563,7 +1583,15 @@ async function runNormalizedLarkMessage(
           }
         }
       }
-      files = workflowDownloads.map((attachment) => attachment.localPath);
+      // A PROMOTED media file (an .m4a sent as a document, not as a Feishu voice
+      // message) is transcribed above, but it is still a file the user handed
+      // over — keep its path so the engine can also act on the file itself
+      // (convert it, upload it, attach it). Genuine audio/video MESSAGES keep
+      // their long-standing transcript-only behavior.
+      const promotedMediaPaths = mediaDownloads
+        .filter((downloaded) => downloaded.attachment.kind === "file")
+        .map((downloaded) => downloaded.localPath);
+      files = [...workflowDownloads.map((attachment) => attachment.localPath), ...promotedMediaPaths];
       const workflowResult = await prepareLarkFileWorkflow({
         stateDir: input.stateDir,
         normalized: { ...normalized, text: requestText },
@@ -3128,5 +3156,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isTranscribableLarkMedia(downloaded: DownloadedLarkAttachment): boolean {
-  return downloaded.attachment.kind === "audio" || downloaded.attachment.kind === "video";
+  if (downloaded.attachment.kind === "audio" || downloaded.attachment.kind === "video") {
+    return true;
+  }
+  // A recording FORWARDED from another app (WeChat, a recorder, a meeting
+  // export) arrives as an ordinary `file`, not as Feishu's `audio` kind. Those
+  // used to skip transcription entirely — so a 24-minute .m4a never reached the
+  // long-audio cloud route and the engine transcribed it locally by hand.
+  // Decide by container instead. Images and documents are unaffected.
+  if (downloaded.attachment.kind !== "file") {
+    return false;
+  }
+  return hasTranscribableMediaExtension(downloaded.attachment.fileName ?? downloaded.localPath);
 }

@@ -2025,6 +2025,98 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("lets a settings change through once a background task has gone silent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-stale-block-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    // Blocking staleness of 0: any retained task counts as "gone silent".
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+      backgroundTaskBlockingStaleMs: 0,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-70", { text: "start work", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+        },
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-stuck",
+          kind: "process",
+          description: "Never reports back",
+          detached: true,
+        }),
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      // A task whose completion notification never arrives used to block EVERY
+      // later turn for the full 6h max age — one instructions/settings edit
+      // bricked the session. A silent task must no longer block.
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const second = adapter.sendUserMessage("kimi-session-1", { text: "after change", files: [] });
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      harness.children[1].server.respondPrompt();
+      await expect(second).resolves.toMatchObject({ text: "Kimi completed the request." });
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("still blocks a settings change while a background task is genuinely active", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-fresh-block-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+      // Default-sized window: a task seen seconds ago is still "active".
+      backgroundTaskBlockingStaleMs: 60_000,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-71", { text: "start work", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      await fetch(harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+        },
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-live",
+          kind: "process",
+          description: "Still running",
+          detached: true,
+        }),
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      await expect(adapter.sendUserMessage("kimi-session-1", { text: "after change", files: [] }))
+        .rejects.toThrow(/background task/);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a settings change while the same Kimi session has an in-flight turn", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-inflight-config-test-"));
     const configPath = path.join(root, "config.json");

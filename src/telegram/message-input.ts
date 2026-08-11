@@ -10,6 +10,7 @@ import {
   type TranscribeMediaOptions,
   isCloudAsrCancelledError,
 } from "../runtime/asr-cloud.js";
+import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
 import type { DownloadedAttachment } from "../runtime/file-workflow.js";
 import type { TelegramApi } from "./api.js";
 import { createAsrWatchdogFromEnv, type AsrWatchdog } from "./asr-watchdog.js";
@@ -552,7 +553,17 @@ async function defaultDownloadAttachments(
 }
 
 function isTranscribableAttachment(attachment: NormalizedTelegramAttachment): boolean {
-  return attachment.kind === "voice" || attachment.kind === "audio" || attachment.kind === "video";
+  if (attachment.kind === "voice" || attachment.kind === "audio" || attachment.kind === "video") {
+    return true;
+  }
+  // Parity with the Lark side: a recording forwarded from another app arrives
+  // as a `document`, not as `voice`/`audio`, and used to skip ASR entirely —
+  // so a long recording never reached the ≥15min cloud route. Decide by
+  // container. Photos and real documents are unaffected.
+  if (attachment.kind !== "document") {
+    return false;
+  }
+  return hasTranscribableMediaExtension(attachment.fileName ?? "");
 }
 
 function renderTranscriptionFailureMessage(
@@ -612,7 +623,13 @@ export async function prepareTelegramMessageInput(input: {
 
   const allDownloaded = await downloadAttachments(api, inboxDir, normalized.attachments);
   const transcribableDownloads = allDownloaded.filter((downloaded) => isTranscribableAttachment(downloaded.attachment));
-  const downloadedAttachments = allDownloaded.filter((downloaded) => !isTranscribableAttachment(downloaded.attachment));
+  // A PROMOTED media document (a recording sent as a file) is transcribed, but
+  // it is still a file the user handed over — keep it in the engine's
+  // attachment list so the file itself remains actionable. Genuine
+  // voice/audio/video MESSAGES keep their transcript-only behavior.
+  const downloadedAttachments = allDownloaded.filter((downloaded) => (
+    !isTranscribableAttachment(downloaded.attachment) || downloaded.attachment.kind === "document"
+  ));
   const quotedAudioDownloads = normalized.replyContext?.audioAttachment
     ? await downloadAttachments(api, inboxDir, [normalized.replyContext.audioAttachment])
     : [];
@@ -639,7 +656,9 @@ export async function prepareTelegramMessageInput(input: {
         if (transcript) {
           producedAnyTranscript = true;
           text = text ? `${text}\n${transcript}` : transcript;
-        } else {
+        } else if (media.attachment.kind !== "document") {
+          // Only a genuine voice/audio/video message can leave the turn with
+          // nothing; a promoted document still carries its file.
           lastEmptyAttachment = media.attachment;
         }
       } catch (error) {
@@ -648,6 +667,14 @@ export async function prepareTelegramMessageInput(input: {
         // reports the interruption (same rule as the Lark handler).
         if (isCloudAsrCancelledError(error) || abortSignal?.aborted) {
           throw error;
+        }
+        // A PROMOTED document (a recording sent as a file) still has the file
+        // itself to work with — before promotion existed it simply reached the
+        // engine. Do not replace the whole turn with "转写失败"; fall through so
+        // the engine gets the attachment. A genuine voice/audio/video MESSAGE
+        // has nothing else, so it keeps the failure reply.
+        if (media.attachment.kind === "document") {
+          continue;
         }
         return {
           kind: "reply",

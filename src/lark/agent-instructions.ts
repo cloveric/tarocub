@@ -44,6 +44,24 @@ function localAsrSegmentSeconds(maxSeconds: number): number {
   return Math.max(1, Math.floor(maxSeconds * 0.9));
 }
 
+/**
+ * Whether the cloud ASR route exists, resolved once. The instruction is rebuilt
+ * on every turn and readCloudAsrConfig() stats the venv on each call — cheap,
+ * but per-turn synchronous fs work on the hot path is worth avoiding, and the
+ * answer cannot change without a restart (env is read at process start).
+ */
+let cloudAsrConfiguredCache: boolean | undefined;
+
+function cloudAsrConfigured(): boolean {
+  cloudAsrConfiguredCache ??= readCloudAsrConfig(process.env) !== null;
+  return cloudAsrConfiguredCache;
+}
+
+/** Test-only: forget the cached probe so env changes take effect. */
+export function resetCloudAsrConfiguredCacheForTests(): void {
+  cloudAsrConfiguredCache = undefined;
+}
+
 export function localAsrAgentInstruction(): string | undefined {
   if (!isLocalAsrAvailable()) {
     return undefined;
@@ -57,7 +75,13 @@ export function localAsrAgentInstruction(): string | undefined {
   // then timed out. The service now rejects over-long input outright; this tells
   // the agent where the edge is and what to do at it, so a rejection becomes a
   // split-and-retry instead of a reported failure.
-  return `Local speech-to-text is installed. For audio/video you transcribe, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR is available. Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request — the model is shared, longer input is rejected and must never be retried as-is; split it first with headroom (ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} -reset_timestamps 1 part_%03d.wav) and transcribe each part in order. Use frames/OCR only if it fails.`;
+  // Without this, a user-sent recording that arrived as a FILE got transcribed
+  // locally (slowly, chunked) even though the bridge had already routed it —
+  // the "use it FIRST" rule read as an instruction to do so.
+  const cloudFirst = cloudAsrConfigured()
+    ? " User media (incl. files) is pre-transcribed — use that."
+    : "";
+  return `Local speech-to-text is installed. For audio YOU fetched, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR.${cloudFirst} Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request — the model is shared, longer input is rejected and must never be retried as-is; split first with headroom (ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} part_%03d.wav), transcribe parts in order. Frames/OCR only if it fails.`;
 }
 
 /**

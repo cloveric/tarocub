@@ -1945,6 +1945,89 @@ describe("lark service", () => {
     }
   });
 
+  it("transcribes a recording forwarded as a FILE, and keeps the file actionable", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-file-"));
+    const transcribeMedia = vi.fn(async (filePath: string) => `transcript:${path.basename(filePath)}`);
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async (key: string) => Buffer.from(`media:${key}`)),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string; files: string[] }) => ({ text: "done" })),
+    };
+    const runtime = createLarkServiceRuntime({ transcribeMedia });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_forwarded_recording",
+          content: "帮我听一下这个录音",
+          resources: [
+            // A recording forwarded from another app: Feishu calls it a FILE,
+            // not an audio message. It must still be transcribed — otherwise
+            // the long-audio cloud route never gets a chance.
+            { type: "file", fileKey: "rec_key", fileName: "会议录音.m4a" },
+            // A real document alongside it must NOT be transcribed.
+            { type: "file", fileKey: "doc_key", fileName: "合同.docx" },
+          ],
+        }),
+      });
+
+      expect(transcribeMedia).toHaveBeenCalledTimes(1);
+      expect(transcribeMedia.mock.calls[0]![0]).toContain("会议录音.m4a");
+      const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.text).toContain("transcript:会议录音.m4a");
+      // The document is still a workflow file, AND the promoted recording keeps
+      // its path so the engine can act on the file itself.
+      expect(bridgeInput.files.some((f: string) => f.includes("合同.docx"))).toBe(true);
+      expect(bridgeInput.files.some((f: string) => f.includes("会议录音.m4a"))).toBe(true);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still hands over a promoted recording when its transcription fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-file-fail-"));
+    const transcribeMedia = vi.fn(async () => {
+      throw new Error("asr exploded");
+    });
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async (key: string) => Buffer.from(`media:${key}`)),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string; files: string[] }) => ({ text: "done" })),
+    };
+    const runtime = createLarkServiceRuntime({ transcribeMedia });
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_promoted_fail",
+          content: "这个文件处理一下",
+          resources: [{ type: "file", fileKey: "rec_key", fileName: "录音.m4a" }],
+        }),
+      });
+
+      // Before promotion existed this file simply reached the engine. A failed
+      // transcription must not turn that into a dead-end "转写失败" reply.
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.files.some((f: string) => f.includes("录音.m4a"))).toBe(true);
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("转写");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("downloads user-sent Lark audio as a file resource before transcription", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-audio-resource-"));
     const messageResourceGet = vi.fn(async () => ({

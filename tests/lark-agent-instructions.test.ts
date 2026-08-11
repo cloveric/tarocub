@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { cloudAsrAgentInstruction, larkAgentInstructions, localAsrAgentInstruction } from "../src/lark/agent-instructions.js";
+import {
+  cloudAsrAgentInstruction,
+  larkAgentInstructions,
+  localAsrAgentInstruction,
+  resetCloudAsrConfiguredCacheForTests,
+} from "../src/lark/agent-instructions.js";
 
 describe("larkAgentInstructions", () => {
   it("keeps the injected Lark system prompt compact enough for every-turn use", () => {
@@ -29,6 +34,45 @@ describe("larkAgentInstructions", () => {
       } else {
         process.env.ASR_HTTP_URL = previous;
       }
+    }
+  });
+
+  it("stops agents re-transcribing user media the bridge already routed", () => {
+    const previousUrl = process.env.ASR_HTTP_URL;
+    const previousDir = process.env.TINGWU_ASR_DIR;
+    process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
+    process.env.TINGWU_ASR_DIR = "/tmp/tingwu";
+    resetCloudAsrConfiguredCacheForTests();
+    try {
+      // A recording forwarded as a FILE reached the engine while the bridge had
+      // already transcribed it; "use it FIRST" read as an order to transcribe
+      // anyway, so a 24-minute recording got chunked through the local model
+      // instead of the cloud route the bridge had picked.
+      const asr = localAsrAgentInstruction() ?? "";
+      expect(asr).toContain("pre-transcribed");
+      expect(asr).toMatch(/audio YOU fetched/);
+    } finally {
+      if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
+      else process.env.ASR_HTTP_URL = previousUrl;
+      if (previousDir === undefined) delete process.env.TINGWU_ASR_DIR;
+      else process.env.TINGWU_ASR_DIR = previousDir;
+      resetCloudAsrConfiguredCacheForTests();
+    }
+  });
+
+  it("omits the pre-transcribed note when no cloud route is configured", () => {
+    const previousUrl = process.env.ASR_HTTP_URL;
+    const previousDir = process.env.TINGWU_ASR_DIR;
+    process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
+    delete process.env.TINGWU_ASR_DIR;
+    resetCloudAsrConfiguredCacheForTests();
+    try {
+      expect(localAsrAgentInstruction() ?? "").not.toContain("pre-transcribed");
+    } finally {
+      if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
+      else process.env.ASR_HTTP_URL = previousUrl;
+      if (previousDir !== undefined) process.env.TINGWU_ASR_DIR = previousDir;
+      resetCloudAsrConfiguredCacheForTests();
     }
   });
 

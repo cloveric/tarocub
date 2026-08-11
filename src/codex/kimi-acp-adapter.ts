@@ -213,6 +213,14 @@ const MAX_ERROR_LINE_PREVIEW_CHARS = 240;
 const MAX_INSTRUCTIONS_CHARS = 100_000;
 const MAX_LISTED_SESSIONS = 200;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
+// A background task only BLOCKS a settings change while it is plausibly alive.
+// Tasks whose completion notification never arrives linger until the 6h max age
+// (consumed-in-turn results are the common case), and blocking on those made a
+// single instructions edit brick a session for hours — every later turn failed,
+// not just the config change. Fifteen minutes of total silence is presumed dead
+// for THIS purpose only; the task itself is still tracked and still protects
+// restarts until it settles or ages out.
+const BACKGROUND_TASK_BLOCKING_STALE_MS = 15 * 60_000;
 const DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS = 6 * 60 * 60_000;
 const MAX_BACKGROUND_TASK_OUTPUT_BYTES = 64 * 1024;
 const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
@@ -808,6 +816,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly cancelGraceMs: number;
   private readonly idleWorkerTtlMs: number;
   private readonly backgroundTaskMaxAgeMs: number;
+  private readonly backgroundTaskBlockingStaleMs: number;
   private readonly backgroundContinuationGraceMs: number;
   private readonly hookTerminalGraceMs: number;
   private readonly killProcessTreeFn: (pid: number | undefined) => void;
@@ -843,6 +852,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
       backgroundTaskMaxAgeMs?: number;
+      backgroundTaskBlockingStaleMs?: number;
       backgroundContinuationGraceMs?: number;
       hookTerminalGraceMs?: number;
       killProcessTreeFn?: (pid: number | undefined) => void;
@@ -877,6 +887,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.cancelGraceMs = options?.cancelGraceMs ?? KIMI_ACP_CANCEL_GRACE_MS;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
+    this.backgroundTaskBlockingStaleMs = options?.backgroundTaskBlockingStaleMs ?? BACKGROUND_TASK_BLOCKING_STALE_MS;
     this.backgroundContinuationGraceMs = options?.backgroundContinuationGraceMs
       ?? DEFAULT_BACKGROUND_CONTINUATION_GRACE_MS;
     this.hookTerminalGraceMs = options?.hookTerminalGraceMs ?? DEFAULT_HOOK_TERMINAL_GRACE_MS;
@@ -1148,9 +1159,15 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (existing.pendingTurn) {
         throw new Error("Cannot reconfigure Kimi session while a turn is in flight");
       }
-      this.pruneExpiredBackgroundTasks(existing, Date.now());
-      if (existing.backgroundTasks.size > 0 || existing.backgroundContinuations.size > 0) {
-        const count = Math.max(existing.backgroundTasks.size, existing.backgroundContinuations.size);
+      const now = Date.now();
+      this.pruneExpiredBackgroundTasks(existing, now);
+      const isFresh = (lastSeenAt: number): boolean =>
+        now - lastSeenAt < this.backgroundTaskBlockingStaleMs;
+      const activeTasks = [...existing.backgroundTasks.values()].filter((task) => isFresh(task.lastSeenAt));
+      const activeContinuations = [...existing.backgroundContinuations.values()]
+        .filter((continuation) => isFresh(continuation.lastSeenAt));
+      if (activeTasks.length > 0 || activeContinuations.length > 0) {
+        const count = Math.max(activeTasks.length, activeContinuations.length);
         throw new Error(
           `Kimi session has ${count} background task${count === 1 ? "" : "s"} still running or being reviewed, so the new engine settings cannot be applied yet. `
           + `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
