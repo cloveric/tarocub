@@ -134,7 +134,7 @@ node dist/src/index.js lark doctor
 | **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
 | **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer, and reports sanitized MCP startup failures instead of silently losing tools. |
-| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources are downloaded and transcribed automatically before any Claude/Codex/Kimi/Antigravity adapter runs: short audio uses the local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription — with chunked local fallback on cloud failure. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
+| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources, plus recordings forwarded as ordinary files/documents, are downloaded and transcribed automatically before any Claude/Codex/Kimi/Antigravity adapter runs. Media documents are recognized from their declared name or downloaded path, so Telegram files without `file_name` still work. Short audio uses local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription, with chunked local fallback on cloud failure. If bridge transcription is unavailable, the original media file remains attached with an explicit fallback note instead of being silently treated as already transcribed. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
 | **Agent Bus** | Multiple bot instances can call each other as local workers for delegation, fan-out, chain, verifier, and coordinator-led crew workflows. |
@@ -206,7 +206,8 @@ retains that autonomous ACP stream after the original user turn has ended,
 keeps intermediate process failures in the audit timeline without sending
 misleading failure cards, and delivers only Kimi's final reviewed conclusion.
 If no review turn arrives, a bounded fallback delivers the real task output;
-lost reviews expire instead of blocking that session forever.
+accepted relay events are drained before that fallback decides no review exists,
+and lost reviews expire instead of blocking that session forever.
 
 Tool-result metadata remains the start-event fallback; terminal task tombstones
 reject late/duplicate start events, and detached Bash notices read the real
@@ -223,6 +224,13 @@ comments, and bus turns. The relay deliberately ignores `SessionHeartbeat`: it
 proves only that the Kimi process is alive, not that a turn or task is making
 progress. Existing Kimi credentials, sessions, skills, MCP servers, and
 `config.toml` are not replaced.
+
+While detached work is retained, TaroCub never assumes that a quiet task is
+dead and never kills its ACP worker merely to apply model, effort, or instruction
+changes. Same-workspace non-security changes are deferred while later turns keep
+using the existing worker. Workspace and approval-mode changes fail closed until
+the task finishes (or the operator explicitly uses `/reset`); after terminal or
+six-hour safety expiry, the next turn applies the pending configuration normally.
 
 Kimi ACP 0.33 still does not expose structured per-turn token/cost usage, mid-turn
 steering, a direct client-supplied system-prompt field, or a `/goal` command;
@@ -411,7 +419,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 
 ## Long-audio Cloud ASR
 
-Short audio is transcribed by the local Qwen ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to chunked local transcription. This routing runs at the channel layer, before engine selection, so Claude, Codex, Kimi, and Antigravity receive the same transcript behavior. `/stop` aborts the bridge-side local HTTP wait or terminates CLI/chunking/cloud work, and never starts a fallback after cancellation. The local HTTP server may still finish an already-running model kernel before it notices that its client disconnected.
+Short audio is transcribed by the local Qwen ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to chunked local transcription. Recordings sent as ordinary Telegram documents or Lark files enter the same router based on their declared filename or downloaded path. This routing runs at the channel layer, before engine selection, so Claude, Codex, Kimi, and Antigravity receive the same transcript behavior. A promoted media file whose transcription fails or returns empty is still passed to the engine with an explicit bridge fallback note. `/stop` aborts the bridge-side local HTTP wait or terminates CLI/chunking/cloud work, and never starts a fallback after cancellation. The local HTTP server may still finish an already-running model kernel before it notices that its client disconnected.
 
 | Variable | Default | Meaning |
 |---|---|---|

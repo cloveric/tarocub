@@ -162,6 +162,7 @@ type ClaudeWorker = {
   instructionsFile: ClaudeInstructionsFile | null;
   approvalMode: ApprovalMode;
   engineOptionsKey: string;
+  deferredSettingsKey?: string;
   sessionApprovedKeys: Set<string>;
   pendingApprovalByKey: Map<string, Promise<EngineApprovalDecision>>;
 };
@@ -185,10 +186,6 @@ const DEFAULT_IDLE_WORKER_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const BACKGROUND_TASK_SILENT_SUPPRESS_MS = 60 * 60_000;
-// Parity with the Kimi adapter: a task only BLOCKS a settings change while it is
-// plausibly alive. A lost completion notification otherwise bricked the session
-// for the whole 6h max age — every later turn failed, not just the change.
-const BACKGROUND_TASK_BLOCKING_STALE_MS = 15 * 60_000;
 const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
 // There is deliberately NO total-turn cap for Claude: long autonomous tasks
 // (large refactors, image generation, /goal-style runs) are expected to run for
@@ -503,7 +500,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly turnInactivityTimeoutMs: number | null;
   private readonly backgroundTaskMaxAgeMs: number;
   private readonly backgroundTaskSilentSuppressMs: number;
-  private readonly backgroundTaskBlockingStaleMs: number;
   private readonly disallowedTools: string[];
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
@@ -523,7 +519,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       turnInactivityTimeoutMs?: number | null;
       backgroundTaskMaxAgeMs?: number;
       backgroundTaskSilentSuppressMs?: number;
-      backgroundTaskBlockingStaleMs?: number;
       disallowedTools?: string[];
     },
   ) {
@@ -546,7 +541,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       : options.turnInactivityTimeoutMs;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
     this.backgroundTaskSilentSuppressMs = options?.backgroundTaskSilentSuppressMs ?? BACKGROUND_TASK_SILENT_SUPPRESS_MS;
-    this.backgroundTaskBlockingStaleMs = options?.backgroundTaskBlockingStaleMs ?? BACKGROUND_TASK_BLOCKING_STALE_MS;
     this.disallowedTools = options?.disallowedTools ?? [];
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
@@ -668,6 +662,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         existing.engineOptionsKey === optionsKey &&
         existing.workspacePath === workspacePath
       ) {
+        existing.deferredSettingsKey = undefined;
         return existing;
       }
 
@@ -680,17 +675,28 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       // whole window — the idle sweeper only prunes workers it visits.
       const now = Date.now();
       this.pruneExpiredBackgroundTasks(existing, now);
-      const activeTasks = [...existing.backgroundTasks.values()]
-        .filter((task) => now - task.lastSeenAt < this.backgroundTaskBlockingStaleMs);
-      if (activeTasks.length > 0) {
-        const count = activeTasks.length;
-        // Phrased so classifyFailure() returns "engine-busy" instead of the
-        // "engine runtime failed, restart the instance" engine-cli message: this
-        // is a transient busy state, not a crash.
-        throw new Error(
-          `Claude session has ${count} background task${count === 1 ? "" : "s"} still running, so the new engine settings cannot be applied yet. ` +
-          `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
-        );
+      const count = existing.backgroundTasks.size;
+      if (count > 0) {
+        if (existing.workspacePath !== workspacePath) {
+          throw new Error(
+            `Claude session has ${count} background task${count === 1 ? "" : "s"} still running, so its workspace cannot be changed yet. ` +
+            `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
+          );
+        }
+        if (existing.approvalMode !== approvalMode) {
+          throw new Error(
+            `Claude session has ${count} background task${count === 1 ? "" : "s"} still running, so its approval mode cannot be changed yet. ` +
+            `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
+          );
+        }
+        const deferredSettingsKey = `${combinedKey ?? ""}:${optionsKey}`;
+        if (existing.deferredSettingsKey !== deferredSettingsKey) {
+          existing.deferredSettingsKey = deferredSettingsKey;
+          console.warn(
+            `Deferring Claude engine settings for session ${existing.currentSessionId ?? sessionId} until ${count} background task${count === 1 ? "" : "s"} finish.`,
+          );
+        }
+        return existing;
       }
 
       const resumedSessionId = existing.currentSessionId ?? sessionId;

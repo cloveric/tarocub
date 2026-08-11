@@ -1745,32 +1745,48 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
-  it("does not reconfigure a Claude worker while background tasks are active", async () => {
+  it("defers non-security settings without killing a long-silent background task", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {
       spawnFn,
     });
 
-    const first = adapter.sendUserMessage("telegram-12345", {
-      text: "Start background work",
-      files: [],
-      instructions: "original instructions",
-    });
+    let nowSpy: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Start background work",
+        files: [],
+        instructions: "original instructions",
+      });
 
-    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
-    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
-    children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
-    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
-    await first;
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-1","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started in the background.","session_id":"session-123"}\n');
+      await first;
 
-    // Precise, non-alarming wording (classified engine-busy, not engine-cli):
-    // a live background task blocks the reconfigure; restarting does not help.
-    await expect(adapter.sendUserMessage("session-123", {
-      text: "New instructions",
-      files: [],
-      instructions: "changed instructions",
-    })).rejects.toThrow(/background task still running/);
-    await waitFor(() => children.length === 1);
+      nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 16 * 60_000);
+      const second = adapter.sendUserMessage("session-123", {
+        text: "New instructions",
+        files: [],
+        instructions: "changed instructions",
+      });
+      await waitFor(() => children[0].stdin.lines.length === 2);
+      expect(children).toHaveLength(1);
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Continued safely.","session_id":"session-123"}\n');
+      await expect(second).resolves.toEqual({ text: "Continued safely." });
+
+      await expect(adapter.sendUserMessage("session-123", {
+        text: "Switch workspace",
+        files: [],
+        instructions: "original instructions",
+        workspaceOverride: "/tmp/other-workspace",
+      })).rejects.toThrow(/workspace cannot be changed/);
+      expect(children).toHaveLength(1);
+    } finally {
+      nowSpy?.mockRestore();
+      adapter.destroy();
+    }
   });
 
   it("clears background tasks when a foreground result arrives between task notification events", async () => {

@@ -87,6 +87,7 @@ type InstalledPluginFile = {
 
 export type KimiHookRelayRuntime = {
   env: NodeJS.ProcessEnv;
+  drainAcceptedEvents: () => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -404,6 +405,15 @@ export async function startKimiHookRelay(options: {
   let eventChain = Promise.resolve();
   let closing = false;
   let closePromise: Promise<void> | undefined;
+  const drainAcceptedEvents = async (): Promise<void> => {
+    while (true) {
+      const acceptedThrough = eventChain;
+      await acceptedThrough;
+      if (acceptedThrough === eventChain) {
+        return;
+      }
+    }
+  };
   const server = createServer((request, response) => {
     void (async () => {
       if (closing) {
@@ -470,6 +480,7 @@ export async function startKimiHookRelay(options: {
       [KIMI_HOOK_RELAY_URL_ENV]: `http://127.0.0.1:${address.port}/kimi-hook`,
       [KIMI_HOOK_RELAY_TOKEN_ENV]: token,
     },
+    drainAcceptedEvents,
     close: () => {
       if (closePromise) {
         return closePromise;
@@ -480,7 +491,7 @@ export async function startKimiHookRelay(options: {
           server.close(() => resolve());
           server.closeIdleConnections?.();
         });
-        await eventChain;
+        await drainAcceptedEvents();
       })();
       return closePromise;
     },

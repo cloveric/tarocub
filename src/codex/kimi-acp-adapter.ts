@@ -174,6 +174,8 @@ type KimiWorker = {
   currentSessionId: string | null;
   workspacePath: string;
   settingsKey: string;
+  runtimeMode: NonNullable<KimiRuntimeOptions["mode"]>;
+  deferredSettingsKey?: string;
   hookRelayActive: boolean;
   stderrDecoder: TextDecoder;
   stderrTail: string;
@@ -213,19 +215,12 @@ const MAX_ERROR_LINE_PREVIEW_CHARS = 240;
 const MAX_INSTRUCTIONS_CHARS = 100_000;
 const MAX_LISTED_SESSIONS = 200;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
-// A background task only BLOCKS a settings change while it is plausibly alive.
-// Tasks whose completion notification never arrives linger until the 6h max age
-// (consumed-in-turn results are the common case), and blocking on those made a
-// single instructions edit brick a session for hours — every later turn failed,
-// not just the config change. Fifteen minutes of total silence is presumed dead
-// for THIS purpose only; the task itself is still tracked and still protects
-// restarts until it settles or ages out.
-const BACKGROUND_TASK_BLOCKING_STALE_MS = 15 * 60_000;
 const DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS = 6 * 60 * 60_000;
 const MAX_BACKGROUND_TASK_OUTPUT_BYTES = 64 * 1024;
 const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
 const DEFAULT_BACKGROUND_CONTINUATION_GRACE_MS = 10_000;
 const DEFAULT_HOOK_TERMINAL_GRACE_MS = 250;
+const HOOK_RELAY_DRAIN_TIMEOUT_MS = 5_000;
 const PENDING_HOOK_TERMINAL_TTL_MS = 5_000;
 const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
@@ -816,7 +811,6 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly cancelGraceMs: number;
   private readonly idleWorkerTtlMs: number;
   private readonly backgroundTaskMaxAgeMs: number;
-  private readonly backgroundTaskBlockingStaleMs: number;
   private readonly backgroundContinuationGraceMs: number;
   private readonly hookTerminalGraceMs: number;
   private readonly killProcessTreeFn: (pid: number | undefined) => void;
@@ -852,7 +846,6 @@ export class KimiAcpAdapter implements CodexAdapter {
       idleWorkerTtlMs?: number;
       idleSweepIntervalMs?: number;
       backgroundTaskMaxAgeMs?: number;
-      backgroundTaskBlockingStaleMs?: number;
       backgroundContinuationGraceMs?: number;
       hookTerminalGraceMs?: number;
       killProcessTreeFn?: (pid: number | undefined) => void;
@@ -887,7 +880,6 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.cancelGraceMs = options?.cancelGraceMs ?? KIMI_ACP_CANCEL_GRACE_MS;
     this.idleWorkerTtlMs = options?.idleWorkerTtlMs ?? DEFAULT_IDLE_WORKER_TTL_MS;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
-    this.backgroundTaskBlockingStaleMs = options?.backgroundTaskBlockingStaleMs ?? BACKGROUND_TASK_BLOCKING_STALE_MS;
     this.backgroundContinuationGraceMs = options?.backgroundContinuationGraceMs
       ?? DEFAULT_BACKGROUND_CONTINUATION_GRACE_MS;
     this.hookTerminalGraceMs = options?.hookTerminalGraceMs ?? DEFAULT_HOOK_TERMINAL_GRACE_MS;
@@ -1154,6 +1146,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     const existing = this.workers.get(sessionId);
     if (existing) {
       if (existing.workspacePath === workspacePath && existing.settingsKey === settingsKey) {
+        existing.deferredSettingsKey = undefined;
         return existing;
       }
       if (existing.pendingTurn) {
@@ -1161,17 +1154,31 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
       const now = Date.now();
       this.pruneExpiredBackgroundTasks(existing, now);
-      const isFresh = (lastSeenAt: number): boolean =>
-        now - lastSeenAt < this.backgroundTaskBlockingStaleMs;
-      const activeTasks = [...existing.backgroundTasks.values()].filter((task) => isFresh(task.lastSeenAt));
-      const activeContinuations = [...existing.backgroundContinuations.values()]
-        .filter((continuation) => isFresh(continuation.lastSeenAt));
-      if (activeTasks.length > 0 || activeContinuations.length > 0) {
-        const count = Math.max(activeTasks.length, activeContinuations.length);
-        throw new Error(
-          `Kimi session has ${count} background task${count === 1 ? "" : "s"} still running or being reviewed, so the new engine settings cannot be applied yet. `
-          + `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
-        );
+      const count = new Set([
+        ...existing.backgroundTasks.keys(),
+        ...existing.backgroundContinuations.keys(),
+      ]).size;
+      if (count > 0) {
+        if (existing.workspacePath !== workspacePath) {
+          throw new Error(
+            `Kimi session has ${count} background task${count === 1 ? "" : "s"} still running or being reviewed, so its workspace cannot be changed yet. `
+            + `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
+          );
+        }
+        const requestedMode = runtimeOptions.mode ?? "default";
+        if (existing.runtimeMode !== requestedMode) {
+          throw new Error(
+            `Kimi session has ${count} background task${count === 1 ? "" : "s"} still running or being reviewed, so its approval mode cannot be changed yet. `
+            + `Retry once ${count === 1 ? "it finishes" : "they finish"}, or send /reset to start a fresh session.`,
+          );
+        }
+        if (existing.deferredSettingsKey !== settingsKey) {
+          existing.deferredSettingsKey = settingsKey;
+          console.warn(
+            `Deferring Kimi engine settings for session ${existing.currentSessionId ?? sessionId} until ${count} background task${count === 1 ? "" : "s"} finish.`,
+          );
+        }
+        return existing;
       }
       const resumedSessionId = existing.currentSessionId ?? sessionId;
       this.killProcessTreeFn(existing.child.pid);
@@ -1238,6 +1245,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       currentSessionId: null,
       workspacePath,
       settingsKey,
+      runtimeMode: runtimeOptions.mode ?? "default",
       hookRelayActive: Boolean(childEnv[KIMI_HOOK_RELAY_URL_ENV]),
       stderrDecoder: new TextDecoder(),
       stderrTail: "",
@@ -2043,19 +2051,35 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     continuation.fallbackTimer = setTimeout(() => {
       continuation.fallbackTimer = undefined;
-      if (!worker.backgroundContinuations.has(continuation.taskId)) {
-        return;
-      }
-      if (worker.pendingTurn || worker.activeHookTurn) {
-        this.armKimiContinuationFallback(worker, continuation);
-        return;
-      }
-      const pendingTerminal = this.takePendingKimiHookTerminal(worker);
-      void this.finishKimiBackgroundContinuation(worker, continuation, pendingTerminal ?? {
-        status: continuation.status === "failed" ? "failed" : "completed",
-      });
+      void this.finishKimiContinuationAfterRelayDrain(worker, continuation);
     }, this.backgroundContinuationGraceMs);
     continuation.fallbackTimer.unref?.();
+  }
+
+  private async finishKimiContinuationAfterRelayDrain(
+    worker: KimiWorker,
+    continuation: KimiBackgroundContinuation,
+  ): Promise<void> {
+    if (this.hookRelayRuntime) {
+      await withTimeout(
+        this.hookRelayRuntime.drainAcceptedEvents(),
+        HOOK_RELAY_DRAIN_TIMEOUT_MS,
+        "Kimi Hook relay drain timed out",
+      ).catch((error: unknown) => {
+        console.error(error instanceof Error ? error.message : String(error));
+      });
+    }
+    if (!worker.backgroundContinuations.has(continuation.taskId)) {
+      return;
+    }
+    if (worker.pendingTurn || worker.activeHookTurn) {
+      this.armKimiContinuationFallback(worker, continuation);
+      return;
+    }
+    const pendingTerminal = this.takePendingKimiHookTerminal(worker);
+    await this.finishKimiBackgroundContinuation(worker, continuation, pendingTerminal ?? {
+      status: continuation.status === "failed" ? "failed" : "completed",
+    });
   }
 
   private async finishKimiBackgroundContinuation(

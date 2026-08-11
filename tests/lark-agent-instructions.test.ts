@@ -49,8 +49,9 @@ describe("larkAgentInstructions", () => {
       // anyway, so a 24-minute recording got chunked through the local model
       // instead of the cloud route the bridge had picked.
       const asr = localAsrAgentInstruction() ?? "";
-      expect(asr).toContain("pre-transcribed");
-      expect(asr).toMatch(/audio YOU fetched/);
+      expect(asr).toContain("normally pre-transcribed");
+      expect(asr).toContain("marked unavailable");
+      expect(asr).toMatch(/fetched audio\/video/);
     } finally {
       if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
       else process.env.ASR_HTTP_URL = previousUrl;
@@ -67,7 +68,7 @@ describe("larkAgentInstructions", () => {
     delete process.env.TINGWU_ASR_DIR;
     resetCloudAsrConfiguredCacheForTests();
     try {
-      expect(localAsrAgentInstruction() ?? "").not.toContain("pre-transcribed");
+      expect(localAsrAgentInstruction() ?? "").not.toContain("normally pre-transcribed");
     } finally {
       if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
       else process.env.ASR_HTTP_URL = previousUrl;

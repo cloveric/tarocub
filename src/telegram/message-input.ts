@@ -552,7 +552,8 @@ async function defaultDownloadAttachments(
   return downloadedFiles;
 }
 
-function isTranscribableAttachment(attachment: NormalizedTelegramAttachment): boolean {
+function isTranscribableAttachment(downloaded: DownloadedAttachment): boolean {
+  const { attachment, localPath } = downloaded;
   if (attachment.kind === "voice" || attachment.kind === "audio" || attachment.kind === "video") {
     return true;
   }
@@ -563,7 +564,19 @@ function isTranscribableAttachment(attachment: NormalizedTelegramAttachment): bo
   if (attachment.kind !== "document") {
     return false;
   }
-  return hasTranscribableMediaExtension(attachment.fileName ?? "");
+  return hasTranscribableMediaExtension(attachment.fileName ?? "")
+    || hasTranscribableMediaExtension(localPath);
+}
+
+function appendPromotedMediaFallback(
+  text: string,
+  downloaded: DownloadedAttachment,
+): string {
+  const fileName = (downloaded.attachment.fileName ?? path.basename(downloaded.localPath))
+    .replace(/[\r\n\t]+/g, " ")
+    .slice(0, 240);
+  const marker = `[Bridge media transcription unavailable for ${fileName}; inspect or transcribe the attached file if needed.]`;
+  return text.trim() ? `${text.trim()}\n${marker}` : marker;
 }
 
 function renderTranscriptionFailureMessage(
@@ -622,13 +635,13 @@ export async function prepareTelegramMessageInput(input: {
   } = input;
 
   const allDownloaded = await downloadAttachments(api, inboxDir, normalized.attachments);
-  const transcribableDownloads = allDownloaded.filter((downloaded) => isTranscribableAttachment(downloaded.attachment));
+  const transcribableDownloads = allDownloaded.filter(isTranscribableAttachment);
   // A PROMOTED media document (a recording sent as a file) is transcribed, but
   // it is still a file the user handed over — keep it in the engine's
   // attachment list so the file itself remains actionable. Genuine
   // voice/audio/video MESSAGES keep their transcript-only behavior.
   const downloadedAttachments = allDownloaded.filter((downloaded) => (
-    !isTranscribableAttachment(downloaded.attachment) || downloaded.attachment.kind === "document"
+    !isTranscribableAttachment(downloaded) || downloaded.attachment.kind === "document"
   ));
   const quotedAudioDownloads = normalized.replyContext?.audioAttachment
     ? await downloadAttachments(api, inboxDir, [normalized.replyContext.audioAttachment])
@@ -656,7 +669,9 @@ export async function prepareTelegramMessageInput(input: {
         if (transcript) {
           producedAnyTranscript = true;
           text = text ? `${text}\n${transcript}` : transcript;
-        } else if (media.attachment.kind !== "document") {
+        } else if (media.attachment.kind === "document") {
+          text = appendPromotedMediaFallback(text, media);
+        } else {
           // Only a genuine voice/audio/video message can leave the turn with
           // nothing; a promoted document still carries its file.
           lastEmptyAttachment = media.attachment;
@@ -674,6 +689,7 @@ export async function prepareTelegramMessageInput(input: {
         // the engine gets the attachment. A genuine voice/audio/video MESSAGE
         // has nothing else, so it keeps the failure reply.
         if (media.attachment.kind === "document") {
+          text = appendPromotedMediaFallback(text, media);
           continue;
         }
         return {

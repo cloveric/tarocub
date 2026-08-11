@@ -146,7 +146,7 @@ Most bridge-level features now exist on both channels. The remaining differences
 | Group self-service | `/group allow`, `/group all`, `/group at` | Same commands; `/group all` also needs the app scopes `im:message` and `im:message.group_msg`; multi-agent @bot groups should also grant `im:message.group_at_msg.include_bot:readonly` |
 | Running feedback | Native `typing...` action | Best-effort message reactions: `OnIt` while processing, `DONE` on success, `ERROR` on uncaught failure; ordinary turns still return final answers directly |
 | Scheduled work | `/cron` and `cron.add` return to the Telegram chat/topic | `/cron` and `cron.add` preserve raw Lark chat/thread routing |
-| Files and media | Files/images/voice/audio/video, subject to Telegram Bot API limits | Files/images/audio/video through Lark resources and the shared Qwen/Tingwu ASR router |
+| Files and media | Files/images/voice/audio/video, including media documents detected from their downloaded path when `file_name` is absent; subject to Telegram Bot API limits | Files/images/audio/video, including recordings forwarded as ordinary files, through Lark resources and the shared Qwen/Tingwu ASR router |
 | Interactive workflows | Inline buttons for stop, approvals, and continue-analysis | Card 2.0 callbacks for stop, approvals, choices, and continue-analysis |
 | Outgoing @mentions | Telegram text mentions | Optional native `@name` resolution with `CCTB_LARK_RESOLVE_MENTIONS=1` and `im:chat.members:read` |
 | Docs comments | Not a Telegram concept | Feishu Docs comment @mentions can run the bridge and reply in-thread |
@@ -343,7 +343,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Session resume | `codex exec resume --json <id>` | `claude -p -r <session-id>` | `/resume` lists native ACP sessions; `/resume session <id>` validates with `session/load` and resumes in the original real-path workspace | Auto-binds the first logged conversation; `/resume` scans recent agy logs; `/resume conversation <id>` uses `agy --conversation` |
 | Project instructions | `agent.md` (prepended to prompt) | `agent.md` appended to Claude's system prompt + `CLAUDE.md` auto-loaded from workspace | Bot-owned workspaces use a native `.kimi-code/agents/agent.md` main-agent override while preserving `${base_prompt}` and `${plugin_sections}`; external workspaces are not modified and use a text-turn fallback | `agent.md` (prepended to prompt) |
 | Streaming / early delivery | App-server events feed timeline and early file delivery; final `turn/completed.items` is authoritative before the `thread/read` fallback | Claude stream events feed timeline and early file delivery; `--forward-subagent-text` routes child text to its parent tool panel, and sanitized `mcp_server_errors` remain visible | ACP session updates feed the timeline, tool state, questions, and early delivery | stdout chunks feed timeline and early file delivery when `agy --print` streams output |
-| Background tasks | Structured runtime task events | Structured runtime task events | Kimi 0.32+ observer hooks retain the ACP worker and protect restarts; Kimi 0.33 task-origin review streams and automatic retries are aggregated into one final user result, while intermediate failures stay timeline-only; `SessionHeartbeat` is never treated as progress | Process-local only |
+| Background tasks | Structured runtime task events | Structured runtime task events | Kimi 0.32+ observer hooks retain the ACP worker and protect restarts; Kimi 0.33 task-origin review streams and automatic retries are aggregated into one final user result, while intermediate failures stay timeline-only; accepted Hook events drain before fallback/shutdown, and `SessionHeartbeat` is never treated as progress | Process-local only |
 | Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | ACP permission requests become native channel buttons; ACP question options remain distinct from approvals | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
 | YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `full-auto` maps to ACP `yolo`; unsafe/bypass maps to ACP `auto` | `--dangerously-skip-permissions` |
 | `/goal` | Bridge-native goal API; defaults to no token budget unless `--budget` is provided | Passes through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Still not exposed by Kimi ACP 0.33.0; rejected explicitly instead of being sent as ordinary text | Passes through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
@@ -352,6 +352,13 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Skills / plugins / MCP | Uses the configured Codex home; isolated homes link `skills/` to the shared Codex skills dir | Uses shared Claude config plus workspace `CLAUDE.md`, skills, plugins, and native MCP | Keeps Kimi's native `~/.agents/skills`, project skills, plugins, and MCP; bot workspaces also expose `~/.codex/skills`, and TaroCub injects Search MCP on ACP new/load. Kimi 0.33 optional Computer Use/WebBridge plugins require local TUI installation because ACP does not expose `/plugins` | Uses Antigravity's native CLI/plugin config; do not import other engines' native plugins unless explicitly chosen |
 | Working directory | Instance `workspace/`, or the validated resumed thread workspace | Instance `workspace/` | Instance `workspace/`, or the authoritative real-path `cwd` returned by ACP for a resumed session | Instance `workspace/` |
 | Idle workers | App-server stays warm and is reaped by service lifecycle | Stream workers are reaped after 2 hours idle; sessions remain resumable | Persistent ACP workers are reaped after 2 hours idle unless they retain a background task; sessions remain resumable | Process exits after each turn |
+
+Claude and Kimi never rebuild a worker merely because retained background work
+has been quiet for 15 minutes: neither runtime provides a trustworthy task
+heartbeat. While such work is retained, same-workspace model/effort/instruction
+changes are deferred and later turns continue on the existing worker. Workspace
+or approval-mode changes fail closed until completion, safety expiry, or an
+explicit `/reset`.
 
 For Kimi 0.32 or newer, TaroCub registers an inert hook plugin under the active
 `KIMI_CODE_HOME`. Only bridge-owned ACP subprocesses receive the authenticated
@@ -684,11 +691,11 @@ Budget is enforced in real-time — the bot replies with a bilingual message whe
 
 ## Voice Input (ASR)
 
-Send voice/audio/video in Telegram, or audio/video resources through Lark. The bridge transcribes them before forwarding text to the selected engine: short media uses the local Qwen ASR, while media at or above the configured threshold (15 minutes by default) uses Aliyun Tongyi Tingwu when enabled. Cloud ASR is optional; without it, all media stays local.
+Send voice/audio/video in Telegram, or audio/video resources through Lark. Recordings forwarded as ordinary Telegram documents or Lark files use the same path; media type is detected from the declared filename and, on Telegram, the downloaded Bot API path when `file_name` is absent. The bridge transcribes them before forwarding text to the selected engine: short media uses the local Qwen ASR, while media at or above the configured threshold (15 minutes by default) uses Aliyun Tongyi Tingwu when enabled. Cloud ASR is optional; without it, all media stays local. If a promoted media file cannot be transcribed or yields no text, the bridge preserves the attachment and adds an explicit fallback note so the engine can inspect or transcribe it.
 
 **How it works:**
 
-1. User sends a voice/audio/video message in Telegram or a Lark audio/video resource
+1. User sends a voice/audio/video message, or forwards a recording as a Telegram document/Lark file
 2. The bridge downloads the media and probes its duration
 3. Short media uses local Qwen ASR (HTTP first, CLI fallback); long media uses Tingwu when configured, with safe chunked local fallback on cloud failure
 4. The transcript is appended to the user's text message

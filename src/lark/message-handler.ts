@@ -1536,6 +1536,12 @@ async function runNormalizedLarkMessage(
             });
             if (transcript.trim()) {
               requestText = requestText.trim() ? `${requestText.trim()}\n${transcript.trim()}` : transcript.trim();
+            } else if (media.attachment.kind === "file") {
+              const fileName = (media.attachment.fileName ?? path.basename(media.localPath))
+                .replace(/[\r\n\t]+/g, " ")
+                .slice(0, 240);
+              const marker = `[Bridge media transcription unavailable for ${fileName}; inspect or transcribe the attached file if needed.]`;
+              requestText = requestText.trim() ? `${requestText.trim()}\n${marker}` : marker;
             }
           } catch (error) {
             // An operator stop is not a transcription failure: reporting it as
@@ -1552,6 +1558,11 @@ async function runNormalizedLarkMessage(
             // gets the path and can handle it. A genuine voice/video MESSAGE
             // has nothing else, so it keeps the failure reply.
             if (media.attachment.kind === "file") {
+              const fileName = (media.attachment.fileName ?? path.basename(media.localPath))
+                .replace(/[\r\n\t]+/g, " ")
+                .slice(0, 240);
+              const marker = `[Bridge media transcription unavailable for ${fileName}; inspect or transcribe the attached file if needed.]`;
+              requestText = requestText.trim() ? `${requestText.trim()}\n${marker}` : marker;
               await appendLarkTimelineEvent(input.stateDir, normalized, {
                 type: "file.accepted",
                 outcome: "accepted",

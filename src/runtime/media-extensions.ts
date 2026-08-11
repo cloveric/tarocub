@@ -15,10 +15,14 @@ import path from "node:path";
 /** Container extensions ffmpeg/ffprobe can read as audio for transcription. */
 export const TRANSCRIBABLE_AUDIO_EXTENSIONS = new Set([
   ".aac",
+  ".aif",
   ".aiff",
   ".amr",
+  ".caf",
   ".flac",
   ".m4a",
+  ".m4b",
+  ".mka",
   ".mp3",
   ".oga",
   ".ogg",
@@ -30,6 +34,8 @@ export const TRANSCRIBABLE_AUDIO_EXTENSIONS = new Set([
 /** Video containers whose audio track is transcribed the same way. */
 export const TRANSCRIBABLE_VIDEO_EXTENSIONS = new Set([
   ".avi",
+  ".3gp",
+  ".3gpp",
   ".m4v",
   ".mkv",
   ".mov",

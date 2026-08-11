@@ -79,9 +79,9 @@ export function localAsrAgentInstruction(): string | undefined {
   // locally (slowly, chunked) even though the bridge had already routed it —
   // the "use it FIRST" rule read as an instruction to do so.
   const cloudFirst = cloudAsrConfigured()
-    ? " User media (incl. files) is pre-transcribed — use that."
+    ? " Media is normally pre-transcribed; if marked unavailable, transcribe it."
     : "";
-  return `Local speech-to-text is installed. For audio YOU fetched, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR.${cloudFirst} Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request — the model is shared, longer input is rejected and must never be retried as-is; split first with headroom (ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} part_%03d.wav), transcribe parts in order. Frames/OCR only if it fails.`;
+  return `Local STT is installed. For fetched audio/video, use it FIRST; do NOT default to whisper/mlx_whisper/parakeet or claim no ASR.${cloudFirst} Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request—the model is shared. Longer input is rejected and must never be retried as-is; split with headroom (ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} part_%03d.wav), then transcribe parts in order. Frames/OCR only if ASR fails.`;
 }
 
 /**

@@ -400,6 +400,71 @@ describe("prepareTelegramMessageInput", () => {
       await removeTempRoot(root);
     }
   });
+
+  it("transcribes a media document without a Telegram file_name using its downloaded path", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("summarize this", [
+      { fileId: "recording-1", kind: "document" },
+    ]);
+    const transcribeVoice = vi.fn().mockResolvedValue("meeting transcript");
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "documents/recording.m4a" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice,
+      });
+
+      expect(result).toMatchObject({
+        kind: "ready",
+        text: "summarize this\nmeeting transcript",
+        downloadedAttachments: [expect.objectContaining({
+          attachment: expect.objectContaining({ fileId: "recording-1", kind: "document" }),
+        })],
+      });
+      expect(transcribeVoice).toHaveBeenCalledTimes(1);
+      expect(transcribeVoice.mock.calls[0]?.[0]).toMatch(/\.m4a$/);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps a promoted media document and marks it when bridge transcription fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("summarize this", [
+      { fileId: "recording-1", fileName: "meeting.m4a", kind: "document" },
+    ]);
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "documents/meeting.m4a" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice: vi.fn().mockRejectedValue(new Error("ASR unavailable")),
+      });
+
+      expect(result).toMatchObject({
+        kind: "ready",
+        downloadedAttachments: [expect.objectContaining({
+          attachment: expect.objectContaining({ fileName: "meeting.m4a" }),
+        })],
+      });
+      expect(result.kind === "ready" ? result.text : "").toContain(
+        "Bridge media transcription unavailable for meeting.m4a",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
 });
 
 describe("pruneTelegramInbox", () => {

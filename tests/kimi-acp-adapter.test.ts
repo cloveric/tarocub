@@ -536,10 +536,14 @@ describe("KimiAcpAdapter", () => {
       await expect(turn).resolves.toMatchObject({ text: "The build is running in the background." });
 
       await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "low" }), "utf8");
-      await expect(adapter.sendUserMessage("kimi-session-1", {
+      const reconfigured = adapter.sendUserMessage("kimi-session-1", {
         text: "apply the new effort",
         files: [],
-      })).rejects.toThrow("Kimi session has 1 background task still running");
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      expect(harness.children).toHaveLength(1);
+      harness.children[0].server.respondPrompt();
+      await expect(reconfigured).resolves.toMatchObject({ text: "Kimi completed the request." });
 
       const completed = await fetch(hookUrl!, {
         method: "POST",
@@ -1594,6 +1598,7 @@ describe("KimiAcpAdapter", () => {
       hookRelayEnabled: true,
       startHookRelayFn: async () => ({
         env: {},
+        drainAcceptedEvents: async () => undefined,
         close: async () => {
           closeStarted = true;
           await relayReleased;
@@ -2025,21 +2030,27 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
-  it("lets a settings change through once a background task has gone silent", async () => {
+  it("defers a settings change without killing a long-silent background task", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-stale-block-test-"));
     const configPath = path.join(root, "config.json");
     await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
     const harness = createHarness();
-    // Blocking staleness of 0: any retained task counts as "gone silent".
+    const events: EngineStreamEvent[] = [];
     const adapter = new KimiAcpAdapter("kimi", {
       ...adapterOptions(harness),
       configPath,
       engineHomePath: root,
       hookRelayEnabled: true,
-      backgroundTaskBlockingStaleMs: 0,
     });
+    let nowSpy: ReturnType<typeof vi.spyOn> | undefined;
     try {
-      const first = adapter.sendUserMessage("telegram-70", { text: "start work", files: [] });
+      const first = adapter.sendUserMessage("telegram-70", {
+        text: "start work",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
       await waitFor(() => harness.children[0]?.server.prompts.length === 1);
       const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
       await fetch(hookUrl!, {
@@ -2057,24 +2068,31 @@ describe("KimiAcpAdapter", () => {
           detached: true,
         }),
       });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-stuck"
+      )));
       harness.children[0].server.respondPrompt();
       await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
 
-      // A task whose completion notification never arrives used to block EVERY
-      // later turn for the full 6h max age — one instructions/settings edit
-      // bricked the session. A silent task must no longer block.
+      // No Hook heartbeat exists for detached work. Advancing past the old
+      // 15-minute silence threshold must not make the adapter kill a real task.
+      const later = Date.now() + 16 * 60_000;
+      nowSpy = vi.spyOn(Date, "now").mockReturnValue(later);
       await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
       const second = adapter.sendUserMessage("kimi-session-1", { text: "after change", files: [] });
-      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
-      harness.children[1].server.respondPrompt();
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      expect(harness.children).toHaveLength(1);
+      expect(harness.killedPids).toEqual([]);
+      harness.children[0].server.respondPrompt();
       await expect(second).resolves.toMatchObject({ text: "Kimi completed the request." });
     } finally {
+      nowSpy?.mockRestore();
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("still blocks a settings change while a background task is genuinely active", async () => {
+  it("blocks a workspace change while a background task is active", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-fresh-block-test-"));
     const configPath = path.join(root, "config.json");
     await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
@@ -2084,11 +2102,16 @@ describe("KimiAcpAdapter", () => {
       configPath,
       engineHomePath: root,
       hookRelayEnabled: true,
-      // Default-sized window: a task seen seconds ago is still "active".
-      backgroundTaskBlockingStaleMs: 60_000,
     });
+    const events: EngineStreamEvent[] = [];
     try {
-      const first = adapter.sendUserMessage("telegram-71", { text: "start work", files: [] });
+      const first = adapter.sendUserMessage("telegram-71", {
+        text: "start work",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
       await waitFor(() => harness.children[0]?.server.prompts.length === 1);
       await fetch(harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL!, {
         method: "POST",
@@ -2105,12 +2128,19 @@ describe("KimiAcpAdapter", () => {
           detached: true,
         }),
       });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-live"
+      )));
       harness.children[0].server.respondPrompt();
       await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
 
-      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
-      await expect(adapter.sendUserMessage("kimi-session-1", { text: "after change", files: [] }))
-        .rejects.toThrow(/background task/);
+      await expect(adapter.sendUserMessage("kimi-session-1", {
+        text: "after change",
+        files: [],
+        workspaceOverride: path.join(root, "other-workspace"),
+      })).rejects.toThrow(/workspace cannot be changed/);
+      expect(harness.children).toHaveLength(1);
+      expect(harness.killedPids).toEqual([]);
     } finally {
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });

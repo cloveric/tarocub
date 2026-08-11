@@ -623,7 +623,7 @@ describe("audit3 fix 7: stale background tasks no longer block Claude reconfigur
     }
   });
 
-  it("reports a live background task as engine-busy, not an engine crash", async () => {
+  it("reports a blocked workspace change as engine-busy, not an engine crash", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
 
@@ -642,7 +642,8 @@ describe("audit3 fix 7: stale background tasks no longer block Claude reconfigur
       const error = await adapter.sendUserMessage("session-1", {
         text: "new settings",
         files: [],
-        instructions: "changed instructions",
+        instructions: "original instructions",
+        workspaceOverride: "/tmp/other-workspace",
       }).then(() => undefined, (reason: unknown) => reason);
 
       expect((error as Error).message).toMatch(/1 background task still running/);

@@ -2022,6 +2022,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
       expect(bridgeInput.files.some((f: string) => f.includes("录音.m4a"))).toBe(true);
+      expect(bridgeInput.text).toContain("Bridge media transcription unavailable for 录音.m4a");
       expect(JSON.stringify(channel.send.mock.calls)).not.toContain("转写");
     } finally {
       await rm(stateDir, { recursive: true, force: true });

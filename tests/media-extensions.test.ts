@@ -10,11 +10,13 @@ describe("transcribable media extensions", () => {
   it("accepts the recording containers people actually forward", () => {
     // The field case: a 24-minute meeting recording forwarded as a document.
     expect(hasTranscribableMediaExtension("吴毅飞豫园股份@180_1775_8921_20260811141335.m4a")).toBe(true);
-    for (const name of ["a.mp3", "a.wav", "a.ogg", "a.opus", "a.aac", "a.flac", "a.amr", "a.wma"]) {
+    for (const name of ["a.mp3", "a.wav", "a.ogg", "a.opus", "a.aac", "a.flac", "a.amr", "a.wma",
+      "a.aif", "a.m4b", "a.mka", "a.caf"]) {
       expect(hasTranscribableAudioExtension(name)).toBe(true);
       expect(hasTranscribableMediaExtension(name)).toBe(true);
     }
-    for (const name of ["clip.mp4", "clip.mov", "clip.mkv", "clip.webm", "clip.m4v", "clip.avi"]) {
+    for (const name of ["clip.mp4", "clip.mov", "clip.mkv", "clip.webm", "clip.m4v", "clip.avi",
+      "clip.3gp", "clip.3gpp"]) {
       expect(hasTranscribableVideoExtension(name)).toBe(true);
       expect(hasTranscribableMediaExtension(name)).toBe(true);
     }

@@ -124,9 +124,15 @@ failed implementation attempt as the answer.
 
 If a compatible Kimi build sends a terminal process notification but never
 starts a task-origin review, TaroCub waits for a short bounded grace period and
-then falls back to the bounded task output described above. A retained review
-also shares the six-hour task safety bound, so a lost terminal Hook cannot block
-configuration changes or graceful restart indefinitely. `SessionHeartbeat`
+then falls back to the bounded task output described above. Before making that
+decision it performs a bounded drain of every Hook already accepted by the
+loopback relay, so a queued `TurnStarted` cannot lose a race to the fallback
+timer under load without letting a hung renderer block fallback forever. A
+retained review also shares the six-hour task safety bound, so a lost terminal
+Hook cannot block configuration changes or graceful restart indefinitely.
+Silence before that bound never kills the ACP worker: same-workspace model,
+thinking, or instruction changes are deferred, while workspace and approval-mode
+changes fail closed until completion or explicit `/reset`. `SessionHeartbeat`
 still does not extend either bound.
 
 ## Kimi 0.33 Agent-Core-v2 Re-probe
