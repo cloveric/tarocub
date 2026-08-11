@@ -596,7 +596,7 @@ describe("KimiAcpAdapter", () => {
       ...adapterOptions(harness),
       workspacePath: workspace,
       engineHomePath: root,
-      backgroundContinuationGraceMs: 2_000,
+      backgroundContinuationGraceMs: 10_000,
       hookRelayEnabled: true,
     });
     try {
@@ -1170,7 +1170,7 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
-  it("does not resurrect a terminal background task from late or duplicate events", async () => {
+  it("does not duplicate a terminal background task when a late review has no new text", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-order-test-"));
     const harness = createHarness();
     const events: EngineStreamEvent[] = [];
@@ -1237,9 +1237,8 @@ describe("KimiAcpAdapter", () => {
         headers,
         body: JSON.stringify(terminalPayload),
       });
-      // A late task-origin TurnStarted (the synthetic review of the settled
-      // task) must not resurrect it either — this was the one lifecycle entry
-      // point missing the tombstone check.
+      // A late synthetic review is allowed to restore its routing context, but
+      // without any new ACP text it must not emit the raw fallback twice.
       await fetch(hookUrl!, {
         method: "POST",
         headers,
@@ -1252,12 +1251,132 @@ describe("KimiAcpAdapter", () => {
           prompt: '<notification type="task.completed" source_id="bash-finished-first">done</notification>',
         }),
       });
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "Stop",
+          session_id: "kimi-session-1",
+          stop_hook_active: false,
+        }),
+      });
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       expect(events.filter((event) => event.type === "background_task_started")).toHaveLength(0);
       expect(events.filter((event) => event.type === "task_notification")).toHaveLength(1);
       harness.children[0].server.respondPrompt();
       await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers a review that starts after fallback without leaking it into a foreground turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-late-review-routing-test-"));
+    const harness = createHarness();
+    const taskEvents: EngineStreamEvent[] = [];
+    const foregroundEvents: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 25,
+      hookTerminalGraceMs: 100,
+      hookRelayEnabled: true,
+    });
+    try {
+      const firstTurn = adapter.sendUserMessage("telegram-late-review", {
+        text: "run detached validation",
+        files: [],
+        onEngineEvent: (event) => {
+          taskEvents.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-late-review",
+        kind: "process",
+        description: "Validate output",
+        detached: true,
+      });
+      server.respondPrompt();
+      await expect(firstTurn).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-late-review",
+        body: "Initial completion summary.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(taskEvents.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ))).toHaveLength(1);
+
+      const foregroundTurn = adapter.sendUserMessage("kimi-session-1", {
+        text: "answer an unrelated foreground question",
+        files: [],
+        onEngineEvent: (event) => {
+          foregroundEvents.push(event);
+        },
+      });
+      await waitFor(() => server.prompts.length === 2);
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-late-review",
+        origin_kind: "task",
+        origin_name: "bash-late-review",
+        prompt: '<notification type="task.completed" source_id="bash-late-review">done</notification>',
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Final validation passed." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      const visibleTaskNotifications = taskEvents.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ));
+      expect(visibleTaskNotifications).toHaveLength(2);
+      expect(visibleTaskNotifications[1]).toMatchObject({
+        taskId: "bash-late-review",
+        status: "completed",
+        text: "Final validation passed.",
+      });
+      expect(foregroundEvents).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "assistant_text", text: "Final validation passed." }),
+      ]));
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-late-review-duplicate",
+        origin_kind: "task",
+        origin_name: "bash-late-review",
+        prompt: '<notification type="task.completed" source_id="bash-late-review">done</notification>',
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Duplicate stale review." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(taskEvents.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ))).toHaveLength(2);
+      expect(foregroundEvents).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "assistant_text", text: "Duplicate stale review." }),
+      ]));
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground answer." },
+      });
+      server.respondPrompt();
+      await expect(foregroundTurn).resolves.toMatchObject({ text: "Foreground answer." });
     } finally {
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });

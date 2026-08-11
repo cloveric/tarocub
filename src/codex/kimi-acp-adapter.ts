@@ -148,12 +148,19 @@ type KimiBackgroundContinuation = {
   fallbackTimer?: ReturnType<typeof setTimeout>;
   terminalTimer?: ReturnType<typeof setTimeout>;
   pendingTerminal?: KimiHookTerminal;
+  taskOriginReviewStarted?: boolean;
+  lateAfterFallback?: boolean;
 };
 
 type KimiHookTurn = {
   turnId: string;
   originKind: string;
   continuationTaskId?: string;
+};
+
+type IgnoredKimiHookTurn = {
+  turnId: string;
+  startedAt: number;
 };
 
 type KimiHookTerminal = {
@@ -165,6 +172,16 @@ type KimiHookTerminal = {
 type PendingKimiHookTerminal = {
   terminal: KimiHookTerminal;
   receivedAt: number;
+};
+
+type KimiTerminalBackgroundTask = {
+  terminalAt: number;
+  sessionId?: string;
+  status?: string;
+  summary?: string;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  taskOriginReviewStarted: boolean;
 };
 
 type KimiWorker = {
@@ -180,12 +197,14 @@ type KimiWorker = {
   stderrDecoder: TextDecoder;
   stderrTail: string;
   pendingTurn: PendingKimiTurn | null;
+  sessionUpdateChain: Promise<void>;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   tools: Map<string, KimiToolState>;
   backgroundTasks: Map<string, KimiBackgroundTask>;
   backgroundContinuations: Map<string, KimiBackgroundContinuation>;
-  terminalBackgroundTasks: Map<string, number>;
+  terminalBackgroundTasks: Map<string, KimiTerminalBackgroundTask>;
   activeHookTurn?: KimiHookTurn;
+  ignoredHookTurn?: IgnoredKimiHookTurn;
   pendingHookTerminal?: PendingKimiHookTerminal;
   ignoredHookTerminalStarts: number[];
   lastActivityAt: number;
@@ -221,6 +240,7 @@ const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
 const DEFAULT_BACKGROUND_CONTINUATION_GRACE_MS = 10_000;
 const DEFAULT_HOOK_TERMINAL_GRACE_MS = 250;
 const HOOK_RELAY_DRAIN_TIMEOUT_MS = 5_000;
+const SESSION_UPDATE_HOOK_DRAIN_TIMEOUT_MS = 2_000;
 const PENDING_HOOK_TERMINAL_TTL_MS = 5_000;
 const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 
@@ -1236,7 +1256,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     });
     const connection = new ClientSideConnection(() => ({
       requestPermission: async (request) => await this.handlePermissionRequest(worker, request),
-      sessionUpdate: async (notification) => this.handleSessionUpdate(worker, notification),
+      sessionUpdate: (notification) => this.queueKimiSessionUpdate(worker, notification),
     }), stream);
     worker = {
       child,
@@ -1250,6 +1270,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       stderrDecoder: new TextDecoder(),
       stderrTail: "",
       pendingTurn: null,
+      sessionUpdateChain: Promise.resolve(),
       onEngineEvent: undefined,
       tools: new Map(),
       backgroundTasks: new Map(),
@@ -1573,6 +1594,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (result.stopReason !== "end_turn") {
         throw new Error(`Kimi ACP stopped the turn with reason ${result.stopReason}`);
       }
+      await Promise.race([
+        this.drainKimiSessionUpdates(worker),
+        pending.failurePromise,
+        pending.interruptionPromise,
+      ]);
       // Raced against the failure promise: eventChain delivery is best-effort,
       // and with runtime timeouts disabled a hung onEngineEvent (e.g. a Lark
       // API call that never settles) would otherwise pin pendingTurn forever —
@@ -1597,8 +1623,43 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
-  private handleSessionUpdate(worker: KimiWorker, notification: SessionNotification): void {
+  private queueKimiSessionUpdate(worker: KimiWorker, notification: SessionNotification): Promise<void> {
+    const delivery = worker.sessionUpdateChain.then(async () => {
+      await this.handleSessionUpdate(worker, notification);
+    });
+    worker.sessionUpdateChain = delivery.catch((error: unknown) => {
+      console.error(`Kimi ACP session update failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return delivery;
+  }
+
+  private async drainKimiSessionUpdates(worker: KimiWorker): Promise<void> {
+    while (true) {
+      const acceptedThrough = worker.sessionUpdateChain;
+      await acceptedThrough;
+      if (acceptedThrough === worker.sessionUpdateChain) {
+        return;
+      }
+    }
+  }
+
+  private async handleSessionUpdate(worker: KimiWorker, notification: SessionNotification): Promise<void> {
     this.markActivity(worker);
+    if (worker.hookRelayActive && this.hookRelayRuntime) {
+      await withTimeout(
+        this.hookRelayRuntime.drainAcceptedEvents(),
+        SESSION_UPDATE_HOOK_DRAIN_TIMEOUT_MS,
+        "Kimi Hook relay drain before ACP update timed out",
+      ).catch((error: unknown) => {
+        console.error(error instanceof Error ? error.message : String(error));
+      });
+    }
+    if (worker.removed) {
+      return;
+    }
+    if (this.isIgnoredKimiHookTurnActive(worker, Date.now())) {
+      return;
+    }
     const continuation = this.backgroundContinuationForUpdate(worker);
     if (continuation) {
       continuation.lastSeenAt = Date.now();
@@ -1851,6 +1912,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     event: Extract<KimiHookEvent, { hookEventName: "TurnStarted" }>,
   ): Promise<void> {
     if (event.originKind !== "task") {
+      worker.ignoredHookTurn = undefined;
       if (worker.activeHookTurn?.originKind === "task") {
         const previous = worker.activeHookTurn.continuationTaskId
           ? worker.backgroundContinuations.get(worker.activeHookTurn.continuationTaskId)
@@ -1882,13 +1944,54 @@ export class KimiAcpAdapter implements CodexAdapter {
       ?? `kimi-task-turn-${event.turnId}`;
     const now = Date.now();
     const resurrectionProbe = [...new Set([...explicitTaskIds, taskId])];
-    if (
-      resurrectionProbe.some((id) => (
-        this.isTerminalBackgroundTask(worker, id, now)
-        && !worker.backgroundContinuations.has(id)
-      ))
-    ) {
-      this.markIgnoredKimiHookTurn(worker, now);
+    const lateTerminal = resurrectionProbe
+      .map((id) => ({ id, terminal: this.getTerminalBackgroundTask(worker, id, now) }))
+      .find(({ id, terminal }) => terminal && !worker.backgroundContinuations.has(id));
+    if (lateTerminal?.terminal) {
+      const activeTaskId = worker.activeHookTurn?.originKind === "task"
+        ? worker.activeHookTurn.continuationTaskId
+        : undefined;
+      if (
+        lateTerminal.terminal.taskOriginReviewStarted
+        || (activeTaskId && activeTaskId !== lateTerminal.id)
+      ) {
+        this.markIgnoredKimiHookTurn(worker, event.turnId, now);
+        return;
+      }
+
+      // The raw Notification fallback may have already been delivered, but a
+      // later synthetic review still owns its ACP text. Restore only the
+      // continuation route (not the completed task entry), so the final review
+      // is delivered as a follow-up without emitting another start event.
+      lateTerminal.terminal.taskOriginReviewStarted = true;
+      lateTerminal.terminal.terminalAt = now;
+      const continuation: KimiBackgroundContinuation = {
+        taskId: lateTerminal.id,
+        sessionId: event.sessionId ?? lateTerminal.terminal.sessionId,
+        status: promptMetadata.status ?? lateTerminal.terminal.status,
+        summary: lateTerminal.terminal.summary,
+        lastSeenAt: now,
+        onEngineEvent: lateTerminal.terminal.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: lateTerminal.terminal.onApprovalRequest,
+        approvalAbortController: new AbortController(),
+        assistantText: "",
+        assistantBoundaryPending: false,
+        activeTurnId: event.turnId,
+        taskOriginReviewStarted: true,
+        lateAfterFallback: true,
+      };
+      worker.backgroundContinuations.set(lateTerminal.id, continuation);
+      worker.ignoredHookTurn = undefined;
+      worker.activeHookTurn = {
+        turnId: event.turnId,
+        originKind: event.originKind,
+        continuationTaskId: lateTerminal.id,
+      };
+      worker.tools.clear();
+      const pendingTerminal = this.takePendingKimiHookTerminal(worker);
+      if (pendingTerminal) {
+        this.scheduleKimiContinuationFinish(worker, continuation, pendingTerminal);
+      }
       return;
     }
 
@@ -1941,11 +2044,13 @@ export class KimiAcpAdapter implements CodexAdapter {
     continuation.onEngineEvent ??= sourceTask.onEngineEvent ?? worker.onEngineEvent;
     continuation.onApprovalRequest ??= sourceTask.onApprovalRequest;
     continuation.activeTurnId = event.turnId;
+    continuation.taskOriginReviewStarted = true;
     if (continuation.fallbackTimer) {
       clearTimeout(continuation.fallbackTimer);
       continuation.fallbackTimer = undefined;
     }
     worker.backgroundContinuations.set(taskId, continuation);
+    worker.ignoredHookTurn = undefined;
     worker.activeHookTurn = {
       turnId: event.turnId,
       originKind: event.originKind,
@@ -1977,8 +2082,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
-  private markIgnoredKimiHookTurn(worker: KimiWorker, now: number): void {
+  private markIgnoredKimiHookTurn(worker: KimiWorker, turnId: string, now: number): void {
     this.pruneIgnoredKimiHookTerminals(worker, now);
+    worker.ignoredHookTurn = { turnId, startedAt: now };
     // Stop/StopFailure can arrive before TurnStarted. If one is already
     // buffered, it belongs to this ignored tombstoned turn and must not be
     // inherited by the next live continuation.
@@ -1994,6 +2100,21 @@ export class KimiAcpAdapter implements CodexAdapter {
       return false;
     }
     worker.ignoredHookTerminalStarts.shift();
+    if (worker.ignoredHookTerminalStarts.length === 0) {
+      worker.ignoredHookTurn = undefined;
+    }
+    return true;
+  }
+
+  private isIgnoredKimiHookTurnActive(worker: KimiWorker, now: number): boolean {
+    const ignored = worker.ignoredHookTurn;
+    if (!ignored) {
+      return false;
+    }
+    if (now - ignored.startedAt > PENDING_HOOK_TERMINAL_TTL_MS) {
+      worker.ignoredHookTurn = undefined;
+      return false;
+    }
     return true;
   }
 
@@ -2110,7 +2231,6 @@ export class KimiAcpAdapter implements CodexAdapter {
       clearTimeout(sourceTask.notificationTimer);
     }
     worker.backgroundTasks.delete(continuation.taskId);
-    worker.terminalBackgroundTasks.set(continuation.taskId, Date.now());
 
     const linkedTasks = [...worker.backgroundTasks.values()].filter((task) => (
       task.taskId !== continuation.taskId && task.continuationTaskId === continuation.taskId
@@ -2127,6 +2247,21 @@ export class KimiAcpAdapter implements CodexAdapter {
         : "completed";
     const assistantText = continuation.assistantText.trim();
     const capturedText = continuation.rawText?.trim() || "";
+    const deliverySessionId = continuation.sessionId ?? sourceTask?.sessionId ?? worker.currentSessionId ?? undefined;
+    const deliveryHandler = continuation.onEngineEvent ?? sourceTask?.onEngineEvent ?? worker.onEngineEvent;
+    const deliveryApprovalHandler = continuation.onApprovalRequest ?? sourceTask?.onApprovalRequest;
+    const deliverySummary = continuation.summary ?? sourceTask?.description;
+    if (continuation.lateAfterFallback && !assistantText && !capturedText && !terminal.errorText?.trim()) {
+      this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
+        sessionId: deliverySessionId,
+        status: finalStatus,
+        summary: deliverySummary,
+        onEngineEvent: deliveryHandler,
+        onApprovalRequest: deliveryApprovalHandler,
+        taskOriginReviewStarted: true,
+      });
+      return;
+    }
     const bodyText = terminal.status === "failed"
       ? [...new Set([capturedText, assistantText].filter(Boolean))].join("\n\n")
       : assistantText || capturedText;
@@ -2137,13 +2272,21 @@ export class KimiAcpAdapter implements CodexAdapter {
     const text = finalStatus === "completed"
       ? await appendSavedArtifactDeliveryTags(rawText, worker.workspacePath)
       : rawText;
-    await this.emitEngineEvent(continuation.onEngineEvent ?? sourceTask?.onEngineEvent ?? worker.onEngineEvent, {
+    this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
+      sessionId: deliverySessionId,
+      status: finalStatus,
+      summary: deliverySummary,
+      onEngineEvent: deliveryHandler,
+      onApprovalRequest: deliveryApprovalHandler,
+      taskOriginReviewStarted: continuation.taskOriginReviewStarted === true,
+    });
+    await this.emitEngineEvent(deliveryHandler, {
       type: "task_notification",
       text,
-      sessionId: continuation.sessionId ?? sourceTask?.sessionId ?? worker.currentSessionId ?? undefined,
+      sessionId: deliverySessionId,
       taskId: continuation.taskId,
       status: finalStatus,
-      ...(continuation.summary ? { summary: continuation.summary } : {}),
+      ...(deliverySummary ? { summary: deliverySummary } : {}),
       ...(intermediate ? { suppressUserDelivery: true } : {}),
     });
   }
@@ -2323,7 +2466,14 @@ export class KimiAcpAdapter implements CodexAdapter {
         worker.pendingTurn.assistantBoundaryPending = true;
       }
       worker.backgroundTasks.delete(task.taskId);
-      worker.terminalBackgroundTasks.set(task.taskId, Date.now());
+      this.rememberTerminalBackgroundTask(worker, task.taskId, {
+        sessionId,
+        status,
+        summary: task.description,
+        onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: task.onApprovalRequest,
+        taskOriginReviewStarted: false,
+      });
       await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
         type: "task_notification",
         text,
@@ -2361,16 +2511,41 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
-  private isTerminalBackgroundTask(worker: KimiWorker, taskId: string, now: number): boolean {
-    const terminalAt = worker.terminalBackgroundTasks.get(taskId);
-    if (terminalAt === undefined) {
-      return false;
+  private rememberTerminalBackgroundTask(
+    worker: KimiWorker,
+    taskId: string,
+    context: Omit<KimiTerminalBackgroundTask, "terminalAt">,
+  ): void {
+    const existing = worker.terminalBackgroundTasks.get(taskId);
+    worker.terminalBackgroundTasks.set(taskId, {
+      terminalAt: Date.now(),
+      sessionId: context.sessionId ?? existing?.sessionId,
+      status: context.status ?? existing?.status,
+      summary: context.summary ?? existing?.summary,
+      onEngineEvent: context.onEngineEvent ?? existing?.onEngineEvent,
+      onApprovalRequest: context.onApprovalRequest ?? existing?.onApprovalRequest,
+      taskOriginReviewStarted: context.taskOriginReviewStarted || existing?.taskOriginReviewStarted === true,
+    });
+  }
+
+  private getTerminalBackgroundTask(
+    worker: KimiWorker,
+    taskId: string,
+    now: number,
+  ): KimiTerminalBackgroundTask | undefined {
+    const terminal = worker.terminalBackgroundTasks.get(taskId);
+    if (!terminal) {
+      return undefined;
     }
-    if (now - terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
+    if (now - terminal.terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
       worker.terminalBackgroundTasks.delete(taskId);
-      return false;
+      return undefined;
     }
-    return true;
+    return terminal;
+  }
+
+  private isTerminalBackgroundTask(worker: KimiWorker, taskId: string, now: number): boolean {
+    return this.getTerminalBackgroundTask(worker, taskId, now) !== undefined;
   }
 
   private async handlePermissionRequest(
@@ -2672,8 +2847,8 @@ export class KimiAcpAdapter implements CodexAdapter {
         });
       }
     }
-    for (const [taskId, terminalAt] of worker.terminalBackgroundTasks.entries()) {
-      if (now - terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
+    for (const [taskId, terminal] of worker.terminalBackgroundTasks.entries()) {
+      if (now - terminal.terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
         worker.terminalBackgroundTasks.delete(taskId);
       }
     }
@@ -2698,7 +2873,14 @@ export class KimiAcpAdapter implements CodexAdapter {
         clearTimeout(task.notificationTimer);
       }
       worker.backgroundTasks.delete(continuation.taskId);
-      worker.terminalBackgroundTasks.set(continuation.taskId, Date.now());
+      this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
+        sessionId: continuation.sessionId ?? task?.sessionId ?? worker.currentSessionId ?? undefined,
+        status: "failed",
+        summary: continuation.summary ?? task?.description,
+        onEngineEvent: continuation.onEngineEvent ?? task?.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: continuation.onApprovalRequest ?? task?.onApprovalRequest,
+        taskOriginReviewStarted: continuation.taskOriginReviewStarted === true,
+      });
       const hasLinkedReplacement = [...worker.backgroundTasks.values()].some((candidate) => (
         candidate.continuationTaskId === continuation.taskId
       ));
@@ -2719,7 +2901,14 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (task.notificationTimer) {
         clearTimeout(task.notificationTimer);
       }
-      worker.terminalBackgroundTasks.set(task.taskId, Date.now());
+      this.rememberTerminalBackgroundTask(worker, task.taskId, {
+        sessionId: task.sessionId ?? worker.currentSessionId ?? undefined,
+        status: "failed",
+        summary: task.description,
+        onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: task.onApprovalRequest,
+        taskOriginReviewStarted: false,
+      });
       deliveries.push(this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
         type: "task_notification",
         text: `${task.description ?? "Kimi background task"} stopped because the Kimi engine process exited before completion.`,
@@ -2731,6 +2920,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     worker.backgroundTasks.clear();
     worker.activeHookTurn = undefined;
+    worker.ignoredHookTurn = undefined;
     worker.pendingHookTerminal = undefined;
     worker.ignoredHookTerminalStarts.length = 0;
     await Promise.allSettled(deliveries);
