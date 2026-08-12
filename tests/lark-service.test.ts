@@ -322,6 +322,46 @@ describe("lark service", () => {
     }
   });
 
+  it("streams an ordinary technical answer containing '没看到' without delivery repair", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-followup-false-positive-"));
+    const channel = fakeChannel();
+    const answer = "这个字段是后续版本加的，我会说明对应的配置位置。";
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+        await input.onEngineEvent?.({ type: "assistant_text", text: answer, delta: true });
+        await input.onEngineEvent?.({ type: "result", text: answer });
+        return { text: answer };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_delivery_followup_false_positive",
+          content: "我没看到 config.json 里有这个字段",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage.mock.calls[0]![0]).toEqual(expect.objectContaining({
+        instructions: expect.not.stringContaining("verify platform delivery"),
+      }));
+      const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).toContain(answer);
+      expect(rendered).not.toContain("交付未确认");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).not.toContainEqual(expect.objectContaining({
+        metadata: expect.objectContaining({ suppressedBy: "delivery-followup-guard" }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("isolates a private Lark thread while authorizing against the parent p2p chat", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-private-thread-session-"));
     const channel = fakeChannel();

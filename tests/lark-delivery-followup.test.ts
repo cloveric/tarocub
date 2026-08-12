@@ -25,6 +25,25 @@ describe("Lark delivery follow-up guard", () => {
     expect(larkDeliveryFollowupInstruction(text)).toBeUndefined();
   });
 
+  it.each([
+    "我没看到 config.json 里有这个字段",
+    "帮我查一下为什么日志里没看到 ERROR",
+    "你没收到我上一条消息吗",
+    "config 文件里没看到这个字段",
+  ])("does not mistake a technical or conversational message for a delivery follow-up: %s", (text) => {
+    expect(isLarkDeliveryFollowupRequest(text)).toBe(false);
+    expect(larkDeliveryFollowupInstruction(text)).toBeUndefined();
+  });
+
+  it.each([
+    "我没有收到",
+    "没看到图片",
+    "这边还没收到附件。",
+    "结果到底在哪里？",
+  ])("keeps recognizing an anchored delivery status: %s", (text) => {
+    expect(isLarkDeliveryFollowupRequest(text)).toBe(true);
+  });
+
   it("repairs a historical delivery claim that has no current-turn delivery directive", () => {
     expect(shouldRepairLarkDeliveryFollowup(
       "好了吗",

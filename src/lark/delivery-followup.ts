@@ -18,8 +18,8 @@ export function isLarkDeliveryFollowupRequest(text: string): boolean {
   }
 
   return /^(?:好了吗|好了没|完成了吗|完成了没|发了吗|发了没|发出来了吗|发出来没|图片呢|图呢|文件呢|附件呢|结果呢|再发(?:一次|一遍|一下)?|重新发(?:一次|一遍|一下)?)[？?!！。.]?$/u.test(normalized)
-    || /(?:我(?:这边)?(?:还)?|这边)?(?:没|没有|未)(?:收到|看到|看见)(?:图片|图|文件|附件|结果|它|它们)?/u.test(normalized)
-    || /(?:图片|图|文件|附件|结果).{0,10}(?:在哪|在哪里|没发|没收到|没看到|没看见)/u.test(normalized)
+    || /^(?:我(?:这边)?|这边)?(?:还)?(?:没|没有|未)(?:收到|看到|看见)(?:图片|图|文件|附件|结果|它|它们)?(?:了|啊|呀|呢)?[？?!！。.]?$/u.test(normalized)
+    || /^(?:图片|图|文件|附件|结果).{0,10}(?:在哪|在哪里|没发|没收到|没看到|没看见)[？?!！。.]?$/u.test(normalized)
     || /^(?:is it done|done yet|did you send (?:it|them)|sent yet|where (?:is|are) (?:the )?(?:file|files|image|images|attachment|attachments)|(?:i |we )?(?:did not|didn't|haven't|have not) (?:receive|see) (?:it|them|the files?|the images?))[?!.]?$/i.test(normalized);
 }
 
