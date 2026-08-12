@@ -147,6 +147,7 @@ type KimiBackgroundContinuation = {
   assistantText: string;
   assistantBoundaryPending: boolean;
   activeTurnId?: string;
+  reviewTurnId?: string;
   fallbackTimer?: ReturnType<typeof setTimeout>;
   terminalTimer?: ReturnType<typeof setTimeout>;
   pendingTerminal?: KimiHookTerminal;
@@ -270,6 +271,7 @@ type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | 
 type StartKimiHookRelay = typeof startKimiHookRelay;
 type ReadKimiBackgroundTaskOutput = typeof readKimiBackgroundTaskOutput;
 type ResolveKimiTaskOrigin = typeof resolveKimiTaskOriginFromWire;
+type ReadKimiTaskReviewText = typeof readKimiTaskReviewTextFromWire;
 
 function combineInstructions(agentInstructions: string | null, bridgeInstructions: string | null): string | null {
   const parts = [agentInstructions, bridgeInstructions]
@@ -503,6 +505,90 @@ function isSafeKimiPathSegment(value: string): boolean {
   return value !== "." && value !== ".." && /^[A-Za-z0-9._-]+$/.test(value);
 }
 
+async function listKimiSessionWirePaths(
+  engineHomePath: string | undefined,
+  sessionId: string,
+): Promise<string[]> {
+  if (!engineHomePath || !isSafeKimiPathSegment(sessionId)) {
+    return [];
+  }
+
+  const sessionsRoot = path.join(engineHomePath, "sessions");
+  let realSessionsRoot: string;
+  let sessionParents: string[];
+  try {
+    realSessionsRoot = await realpath(sessionsRoot);
+    const entries = await readdir(sessionsRoot, { withFileTypes: true });
+    sessionParents = [sessionsRoot, ...entries
+      .filter((entry) => entry.isDirectory() && isSafeKimiPathSegment(entry.name))
+      .map((entry) => path.join(sessionsRoot, entry.name))];
+  } catch {
+    return [];
+  }
+
+  const sessionDirName = sessionId.startsWith("session_") ? sessionId : `session_${sessionId}`;
+  const wirePaths: string[] = [];
+  for (const parent of sessionParents) {
+    const agentsDir = path.join(parent, sessionDirName, "agents");
+    const agents = await readdir(agentsDir, { withFileTypes: true }).catch(() => null);
+    if (!agents) {
+      continue;
+    }
+    for (const agent of agents) {
+      if (!agent.isDirectory() || !isSafeKimiPathSegment(agent.name)) {
+        continue;
+      }
+      try {
+        const resolved = await realpath(path.join(agentsDir, agent.name, "wire.jsonl"));
+        const relative = path.relative(realSessionsRoot, resolved);
+        if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+          continue;
+        }
+        wirePaths.push(resolved);
+      } catch {
+        // Kimi may rotate or replace a wire while a task-origin turn runs.
+      }
+    }
+  }
+  return wirePaths;
+}
+
+async function readKimiWireTailLines(wirePath: string): Promise<string[]> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(wirePath, "r");
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.size <= 0) {
+      return [];
+    }
+    const bytesToRead = Math.min(stats.size, MAX_KIMI_WIRE_TAIL_BYTES);
+    const start = stats.size - bytesToRead;
+    const buffer = Buffer.alloc(bytesToRead);
+    const { bytesRead } = await handle.read(buffer, 0, bytesToRead, start);
+    let tail = buffer.subarray(0, bytesRead).toString("utf8");
+    if (start > 0) {
+      const firstNewline = tail.indexOf("\n");
+      tail = firstNewline >= 0 ? tail.slice(firstNewline + 1) : "";
+    }
+    return tail.split("\n");
+  } catch {
+    return [];
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+function parseKimiWireRecord(line: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveKimiTaskOriginFromWire(
   engineHomePath: string | undefined,
   sessionId: string,
@@ -516,92 +602,138 @@ async function resolveKimiTaskOriginFromWire(
     return undefined;
   }
 
-  const sessionsRoot = path.join(engineHomePath, "sessions");
-  let realSessionsRoot: string;
-  let sessionParents: string[];
-  try {
-    realSessionsRoot = await realpath(sessionsRoot);
-    const entries = await readdir(sessionsRoot, { withFileTypes: true });
-    sessionParents = [sessionsRoot, ...entries
-      .filter((entry) => entry.isDirectory() && isSafeKimiPathSegment(entry.name))
-      .map((entry) => path.join(sessionsRoot, entry.name))];
-  } catch {
-    return undefined;
-  }
-
-  const sessionDirName = sessionId.startsWith("session_") ? sessionId : `session_${sessionId}`;
   let latest: { taskId: string; time: number } | undefined;
-  for (const parent of sessionParents) {
-    const agentsDir = path.join(parent, sessionDirName, "agents");
-    const agents = await readdir(agentsDir, { withFileTypes: true }).catch(() => null);
-    if (!agents) {
-      continue;
-    }
-    for (const agent of agents) {
-      if (!agent.isDirectory() || !isSafeKimiPathSegment(agent.name)) {
+  const wirePaths = await listKimiSessionWirePaths(engineHomePath, sessionId);
+  for (const wirePath of wirePaths) {
+    const lines = await readKimiWireTailLines(wirePath);
+    for (let index = lines.length - 1; index >= 0; index--) {
+      const line = lines[index]?.trim();
+      if (!line) {
         continue;
       }
-      let handle: Awaited<ReturnType<typeof open>> | undefined;
-      try {
-        const resolved = await realpath(path.join(agentsDir, agent.name, "wire.jsonl"));
-        const relative = path.relative(realSessionsRoot, resolved);
-        if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
-          continue;
-        }
-        handle = await open(resolved, "r");
-        const stats = await handle.stat();
-        if (!stats.isFile() || stats.size <= 0) {
-          continue;
-        }
-        const bytesToRead = Math.min(stats.size, MAX_KIMI_WIRE_TAIL_BYTES);
-        const start = stats.size - bytesToRead;
-        const buffer = Buffer.alloc(bytesToRead);
-        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, start);
-        let tail = buffer.subarray(0, bytesRead).toString("utf8");
-        if (start > 0) {
-          const firstNewline = tail.indexOf("\n");
-          tail = firstNewline >= 0 ? tail.slice(firstNewline + 1) : "";
-        }
-        const lines = tail.split("\n");
-        for (let index = lines.length - 1; index >= 0; index--) {
-          const line = lines[index]?.trim();
-          if (!line) {
-            continue;
-          }
-          let record: Record<string, unknown>;
-          try {
-            const parsed = JSON.parse(line) as unknown;
-            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-              continue;
-            }
-            record = parsed as Record<string, unknown>;
-          } catch {
-            continue;
-          }
-          if (record.type !== "turn.prompt") {
-            continue;
-          }
-          const origin = typeof record.origin === "object" && record.origin !== null && !Array.isArray(record.origin)
-            ? record.origin as Record<string, unknown>
-            : undefined;
-          const taskId = typeof origin?.taskId === "string" ? origin.taskId : undefined;
-          if (origin?.kind !== "task" || !taskId || !candidates.has(taskId)) {
-            continue;
-          }
-          const time = typeof record.time === "number" && Number.isFinite(record.time) ? record.time : 0;
-          if (!latest || time >= latest.time) {
-            latest = { taskId, time };
-          }
-          break;
-        }
-      } catch {
-        // Kimi may rotate or replace a wire while a task-origin turn starts.
-      } finally {
-        await handle?.close().catch(() => undefined);
+      const record = parseKimiWireRecord(line);
+      if (!record || record.type !== "turn.prompt") {
+        continue;
       }
+      const origin = typeof record.origin === "object" && record.origin !== null && !Array.isArray(record.origin)
+        ? record.origin as Record<string, unknown>
+        : undefined;
+      const taskId = typeof origin?.taskId === "string" ? origin.taskId : undefined;
+      if (origin?.kind !== "task" || !taskId || !candidates.has(taskId)) {
+        continue;
+      }
+      const time = typeof record.time === "number" && Number.isFinite(record.time) ? record.time : 0;
+      if (!latest || time >= latest.time) {
+        latest = { taskId, time };
+      }
+      break;
     }
   }
   return latest?.taskId;
+}
+
+async function readKimiTaskReviewTextFromWire(
+  engineHomePath: string | undefined,
+  sessionId: string,
+  taskId: string,
+  turnId: string,
+): Promise<string | undefined> {
+  if (
+    !engineHomePath
+    || !isSafeKimiPathSegment(sessionId)
+    || !isSafeKimiPathSegment(taskId)
+    || !isSafeKimiPathSegment(turnId)
+  ) {
+    return undefined;
+  }
+
+  let latest: { text: string; time: number } | undefined;
+  const wirePaths = await listKimiSessionWirePaths(engineHomePath, sessionId);
+  for (const wirePath of wirePaths) {
+    const lines = await readKimiWireTailLines(wirePath);
+    let pendingOriginTaskId: string | undefined;
+    let originCompatible = true;
+    let sawTargetTurn = false;
+    let completed = false;
+    let latestTime = 0;
+    let textParts: string[] = [];
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+      const record = parseKimiWireRecord(line);
+      if (!record) {
+        continue;
+      }
+      if (record.type === "turn.prompt") {
+        const origin = typeof record.origin === "object" && record.origin !== null && !Array.isArray(record.origin)
+          ? record.origin as Record<string, unknown>
+          : undefined;
+        pendingOriginTaskId = origin?.kind === "task" && typeof origin.taskId === "string"
+          ? origin.taskId
+          : undefined;
+        continue;
+      }
+      if (record.type === "turn.ended") {
+        if (String(record.turnId ?? "") === turnId && originCompatible) {
+          sawTargetTurn = true;
+          completed = true;
+          latestTime = typeof record.time === "number" && Number.isFinite(record.time)
+            ? record.time
+            : latestTime;
+        }
+        continue;
+      }
+      if (record.type !== "context.append_loop_event") {
+        continue;
+      }
+      const event = typeof record.event === "object" && record.event !== null && !Array.isArray(record.event)
+        ? record.event as Record<string, unknown>
+        : undefined;
+      if (!event || String(event.turnId ?? "") !== turnId) {
+        continue;
+      }
+      if (!sawTargetTurn) {
+        originCompatible = pendingOriginTaskId === undefined || pendingOriginTaskId === taskId;
+      }
+      sawTargetTurn = true;
+      if (!originCompatible) {
+        continue;
+      }
+      latestTime = typeof record.time === "number" && Number.isFinite(record.time)
+        ? record.time
+        : latestTime;
+
+      if (event.type === "tool.call") {
+        textParts = [];
+        completed = false;
+        continue;
+      }
+      if (event.type === "content.part") {
+        const part = typeof event.part === "object" && event.part !== null && !Array.isArray(event.part)
+          ? event.part as Record<string, unknown>
+          : undefined;
+        if (part?.type === "text" && typeof part.text === "string") {
+          textParts.push(part.text);
+        }
+        continue;
+      }
+      if (event.type === "step.end") {
+        completed = event.finishReason === "end_turn";
+        if (!completed) {
+          textParts = [];
+        }
+      }
+    }
+
+    const text = textParts.join("").trim();
+    if (sawTargetTurn && completed && text && !text.includes("\0") && (!latest || latestTime >= latest.time)) {
+      latest = { text, time: latestTime };
+    }
+  }
+  return latest?.text;
 }
 
 async function resolveKimiBackgroundTaskOutputPath(
@@ -989,6 +1121,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly startHookRelayFn: StartKimiHookRelay;
   private readonly readBackgroundTaskOutputFn: ReadKimiBackgroundTaskOutput;
   private readonly resolveTaskOriginFn: ResolveKimiTaskOrigin;
+  private readonly readTaskReviewTextFn: ReadKimiTaskReviewText;
   private readonly workers = new Map<string, KimiWorker>();
   private readonly pendingWorkers = new Map<string, Promise<KimiWorker>>();
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -1024,6 +1157,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       startHookRelayFn?: StartKimiHookRelay;
       readBackgroundTaskOutputFn?: ReadKimiBackgroundTaskOutput;
       resolveTaskOriginFn?: ResolveKimiTaskOrigin;
+      readTaskReviewTextFn?: ReadKimiTaskReviewText;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -1063,6 +1197,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.startHookRelayFn = options?.startHookRelayFn ?? startKimiHookRelay;
     this.readBackgroundTaskOutputFn = options?.readBackgroundTaskOutputFn ?? readKimiBackgroundTaskOutput;
     this.resolveTaskOriginFn = options?.resolveTaskOriginFn ?? resolveKimiTaskOriginFromWire;
+    this.readTaskReviewTextFn = options?.readTaskReviewTextFn ?? readKimiTaskReviewTextFromWire;
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -2248,6 +2383,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         assistantText: "",
         assistantBoundaryPending: false,
         activeTurnId: event.turnId,
+        reviewTurnId: event.turnId,
         taskOriginReviewStarted: true,
         lateAfterFallback: true,
       };
@@ -2319,6 +2455,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     continuation.onEngineEvent ??= sourceTask.onEngineEvent ?? worker.onEngineEvent;
     continuation.onApprovalRequest ??= sourceTask.onApprovalRequest;
     continuation.activeTurnId = event.turnId;
+    continuation.reviewTurnId = event.turnId;
     continuation.taskOriginReviewStarted = true;
     if (continuation.fallbackTimer) {
       clearTimeout(continuation.fallbackTimer);
@@ -2543,22 +2680,33 @@ export class KimiAcpAdapter implements CodexAdapter {
       : terminal.status === "failed" && !(terminal.safetyExpiry && continuation.status === "completed")
         ? "failed"
         : "completed";
-    const assistantText = continuation.assistantText.trim();
+    const streamedAssistantText = continuation.assistantText.trim();
     const capturedText = continuation.rawText?.trim() || "";
     const deliverySessionId = continuation.sessionId ?? sourceTask?.sessionId ?? worker.currentSessionId ?? undefined;
     const deliveryHandler = continuation.onEngineEvent ?? sourceTask?.onEngineEvent ?? worker.onEngineEvent;
     const deliveryApprovalHandler = continuation.onApprovalRequest ?? sourceTask?.onApprovalRequest;
     const deliverySummary = continuation.summary ?? sourceTask?.description;
+    this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
+      workflowId: continuation.workflowId,
+      sessionId: deliverySessionId,
+      status: finalStatus,
+      summary: deliverySummary,
+      onEngineEvent: deliveryHandler,
+      onApprovalRequest: deliveryApprovalHandler,
+      taskOriginReviewStarted: continuation.taskOriginReviewStarted === true,
+    });
+    const recoveredAssistantText = continuation.taskOriginReviewStarted
+      && deliverySessionId
+      && continuation.reviewTurnId
+      ? await this.readTaskReviewTextFn(
+        this.engineHomePath,
+        deliverySessionId,
+        continuation.taskId,
+        continuation.reviewTurnId,
+      ).catch(() => undefined)
+      : undefined;
+    const assistantText = recoveredAssistantText?.trim() || streamedAssistantText;
     if (continuation.lateAfterFallback && !assistantText && !capturedText && !terminal.errorText?.trim()) {
-      this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
-        workflowId: continuation.workflowId,
-        sessionId: deliverySessionId,
-        status: finalStatus,
-        summary: deliverySummary,
-        onEngineEvent: deliveryHandler,
-        onApprovalRequest: deliveryApprovalHandler,
-        taskOriginReviewStarted: true,
-      });
       return;
     }
     const bodyText = terminal.status === "failed"
@@ -2571,15 +2719,6 @@ export class KimiAcpAdapter implements CodexAdapter {
     const text = finalStatus === "completed"
       ? await appendSavedArtifactDeliveryTags(rawText, worker.workspacePath)
       : rawText;
-    this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
-      workflowId: continuation.workflowId,
-      sessionId: deliverySessionId,
-      status: finalStatus,
-      summary: deliverySummary,
-      onEngineEvent: deliveryHandler,
-      onApprovalRequest: deliveryApprovalHandler,
-      taskOriginReviewStarted: continuation.taskOriginReviewStarted === true,
-    });
     await this.emitEngineEvent(deliveryHandler, {
       type: "task_notification",
       text,

@@ -919,6 +919,156 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("recovers the final task review from Kimi wire when ACP text arrives before its Hook route", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-wire-review-test-"));
+    const workspace = path.join(root, "workspace");
+    const generatedImage = path.join(workspace, "verified-final.png");
+    const wirePath = path.join(
+      root,
+      "sessions",
+      "wd-test",
+      "session_kimi-session-1",
+      "agents",
+      "main",
+      "wire.jsonl",
+    );
+    await mkdir(path.dirname(wirePath), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(generatedImage, "png", "utf8");
+    const wireRecords: Array<Record<string, unknown>> = [{
+      type: "turn.prompt",
+      origin: {
+        kind: "task",
+        taskId: "bash-final-review",
+        status: "completed",
+      },
+      time: 1,
+    }];
+    await writeFile(wirePath, `${wireRecords.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      workspacePath: workspace,
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 10_000,
+      hookRelayEnabled: true,
+    });
+    try {
+      const foreground = adapter.sendUserMessage("telegram-wire-review", {
+        text: "generate and review an image in the background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-final-review",
+        kind: "process",
+        description: "Generate and review image",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-final-review"
+      )));
+      server.respondPrompt();
+      await expect(foreground).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      const finalText = `Verified final image.\n[send-image:${generatedImage}]`;
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: finalText },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // Kimi 0.34 omits the task id from this Hook. The adapter recovers it
+      // from turn.prompt, but under load the ACP text can precede that route.
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: 51,
+        origin_kind: "task",
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-final-review",
+        body: "🏁 Done",
+      });
+
+      wireRecords.push(
+        {
+          type: "context.append_loop_event",
+          event: { type: "step.begin", turnId: "51" },
+          time: 2,
+        },
+        {
+          type: "context.append_loop_event",
+          event: {
+            type: "content.part",
+            turnId: "51",
+            part: { type: "text", text: "The first attempt still needs review." },
+          },
+          time: 3,
+        },
+        {
+          type: "context.append_loop_event",
+          event: { type: "tool.call", turnId: "51" },
+          time: 4,
+        },
+        {
+          type: "context.append_loop_event",
+          event: { type: "step.end", turnId: "51", finishReason: "tool_use" },
+          time: 5,
+        },
+        {
+          type: "context.append_loop_event",
+          event: { type: "step.begin", turnId: "51" },
+          time: 6,
+        },
+        {
+          type: "context.append_loop_event",
+          event: {
+            type: "content.part",
+            turnId: "51",
+            part: { type: "text", text: finalText },
+          },
+          time: 7,
+        },
+        {
+          type: "context.append_loop_event",
+          event: { type: "step.end", turnId: "51", finishReason: "end_turn" },
+          time: 8,
+        },
+        { type: "turn.ended", turnId: 51, time: 9 },
+      );
+      await writeFile(wirePath, `${wireRecords.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification"
+        && event.taskId === "bash-final-review"
+        && !event.suppressUserDelivery
+      )));
+
+      expect(events.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ))).toEqual([
+        expect.objectContaining({
+          taskId: "bash-final-review",
+          status: "completed",
+          text: finalText,
+        }),
+      ]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("expires a lost task-origin review instead of blocking the session forever", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-expiry-test-"));
     const configPath = path.join(root, "config.json");
