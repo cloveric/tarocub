@@ -1709,6 +1709,255 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("silently settles a task stopped by TaskStop before worker destruction", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-task-stop-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-task-stop", {
+        text: "start a background image retry",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const hookToken = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN;
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tarocub-kimi-hook-token": hookToken!,
+        },
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-image-retry",
+          kind: "process",
+          description: "Retry watercolor P4",
+          detached: true,
+        }),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-image-retry"
+      )));
+
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-stop-image-retry",
+        title: "TaskStop",
+        kind: "other",
+        status: "pending",
+        rawInput: { task_id: "bash-image-retry" },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-stop-image-retry",
+        title: "TaskStop",
+        status: "completed",
+        rawOutput: [
+          "task_id: bash-image-retry",
+          "status: killed",
+          "reason: A replacement image is already valid",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-image-retry"
+      )));
+
+      const terminalEventsBeforeDestroy = events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-image-retry"
+      ));
+      expect(terminalEventsBeforeDestroy).toEqual([
+        expect.objectContaining({
+          type: "task_notification",
+          taskId: "bash-image-retry",
+          status: "cancelled",
+          suppressUserDelivery: true,
+        }),
+      ]);
+
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-stop-before-start",
+        title: "TaskStop",
+        kind: "other",
+        status: "pending",
+        rawInput: { task_id: "bash-stop-before-start" },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-stop-before-start",
+        title: "TaskStop",
+        status: "completed",
+        rawOutput: "task_id: bash-stop-before-start\nstatus: killed",
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-stop-before-start"
+      )));
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-stop-before-start",
+        kind: "process",
+        description: "Late stale start",
+        detached: true,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(events.filter((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-stop-before-start"
+      ))).toHaveLength(0);
+
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      const nextTurn = adapter.sendUserMessage("kimi-session-1", {
+        text: "answer an unrelated question",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => server.prompts.length === 2);
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-stopped-image-retry",
+        origin_kind: "task",
+        origin_name: "bash-image-retry",
+        prompt: '<notification type="task.failed" source_id="bash-image-retry">stopped</notification>',
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Stale stopped-task review." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.failed",
+        source_kind: "background_task",
+        source_id: "bash-image-retry",
+        body: "The stopped task failed.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground answer." },
+      });
+      server.respondPrompt();
+      await expect(nextTurn).resolves.toMatchObject({ text: "Foreground answer." });
+
+      expect(events).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "assistant_text", text: "Stale stopped-task review." }),
+      ]));
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-image-retry"
+      ))).toHaveLength(1);
+
+      await adapter.destroy();
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-image-retry"
+      ))).toHaveLength(1);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resurrect a stopped task when output backfill is already in flight", async () => {
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    let signalReadStarted: (() => void) | undefined;
+    const readStarted = new Promise<void>((resolve) => {
+      signalReadStarted = resolve;
+    });
+    let releaseRead: ((value: string | undefined) => void) | undefined;
+    const readResult = new Promise<string | undefined>((resolve) => {
+      releaseRead = resolve;
+    });
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: "/tmp/kimi-task-stop-output-race",
+      hookRelayEnabled: true,
+      readBackgroundTaskOutputFn: async () => {
+        signalReadStarted?.();
+        return await readResult;
+      },
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-task-stop-output-race", {
+        text: "stop a task while its output is being read",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-stop-output-race",
+        kind: "process",
+        description: "Read then stop",
+        detached: true,
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-stop-output-race",
+        body: "Intermediate completion.",
+      });
+      await readStarted;
+
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-stop-output-race",
+        title: "TaskStop",
+        kind: "other",
+        status: "pending",
+        rawInput: { task_id: "bash-stop-output-race" },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-stop-output-race",
+        title: "TaskStop",
+        status: "completed",
+        rawOutput: "task_id: bash-stop-output-race\nstatus: killed\nreason: Superseded",
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-stop-output-race"
+      )));
+      releaseRead?.("stale completed output");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const terminalEvents = events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-stop-output-race"
+      ));
+      expect(terminalEvents).toEqual([
+        expect.objectContaining({
+          status: "cancelled",
+          suppressUserDelivery: true,
+        }),
+      ]);
+
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await adapter.destroy();
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-stop-output-race"
+      ))).toHaveLength(1);
+    } finally {
+      releaseRead?.(undefined);
+      await adapter.destroy();
+    }
+  });
+
   it("waits for the hook relay to drain before destroying Kimi workers", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-destroy-drain-test-"));
     const harness = createHarness();

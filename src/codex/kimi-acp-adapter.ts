@@ -428,21 +428,26 @@ function stringifyOutput(value: unknown): string | undefined {
   }
 }
 
-function parseKimiBackgroundTaskOutput(output: string | undefined): {
-  taskId: string;
-  description?: string;
-  subagentName?: string;
-} | null {
-  if (!output) {
-    return null;
-  }
+function parseKimiTaskOutputFields(output: string | undefined): Map<string, string> {
   const fields = new Map<string, string>();
+  if (!output) {
+    return fields;
+  }
   for (const line of output.split(/\r?\n/)) {
     const match = line.match(/^([a-z_]+):\s*(.*)$/);
     if (match?.[1] && match[2] !== undefined) {
       fields.set(match[1], match[2].trim());
     }
   }
+  return fields;
+}
+
+function parseKimiBackgroundTaskOutput(output: string | undefined): {
+  taskId: string;
+  description?: string;
+  subagentName?: string;
+} | null {
+  const fields = parseKimiTaskOutputFields(output);
   const taskId = fields.get("task_id");
   if (!taskId || fields.get("automatic_notification") !== "true") {
     return null;
@@ -450,6 +455,25 @@ function parseKimiBackgroundTaskOutput(output: string | undefined): {
   const description = fields.get("description") || undefined;
   const subagentName = fields.get("actual_subagent_type") || undefined;
   return { taskId, description, subagentName };
+}
+
+function parseKimiStoppedTaskOutput(toolName: string, output: string | undefined): {
+  taskId: string;
+  reason?: string;
+} | null {
+  if (toolName.replace(/[\s_-]+/g, "").toLowerCase() !== "taskstop") {
+    return null;
+  }
+  const fields = parseKimiTaskOutputFields(output);
+  const taskId = fields.get("task_id");
+  const status = fields.get("status")?.toLowerCase();
+  if (!taskId || !status || !["killed", "stopped", "cancelled", "canceled"].includes(status)) {
+    return null;
+  }
+  return {
+    taskId,
+    ...(fields.get("reason") ? { reason: fields.get("reason") } : {}),
+  };
 }
 
 function parseKimiTaskTurnPrompt(prompt: string | undefined): {
@@ -1770,7 +1794,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       worker.tools.set(update.toolCallId, state);
       this.maybeEmitToolUse(worker, state);
       if (update.status === "completed" || update.status === "failed") {
-        this.emitToolResult(worker, state, update.status === "failed");
+        await this.emitToolResult(worker, state, update.status === "failed");
       }
       return;
     }
@@ -1803,7 +1827,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       worker.tools.set(update.toolCallId, state);
       this.maybeEmitToolUse(worker, state);
       if (update.status === "completed" || update.status === "failed") {
-        this.emitToolResult(worker, state, update.status === "failed");
+        await this.emitToolResult(worker, state, update.status === "failed");
       }
     }
   }
@@ -1849,14 +1873,14 @@ export class KimiAcpAdapter implements CodexAdapter {
     });
   }
 
-  private emitToolResult(worker: KimiWorker, state: KimiToolState, isError: boolean): void {
+  private async emitToolResult(worker: KimiWorker, state: KimiToolState, isError: boolean): Promise<void> {
     if (state.emittedResult) {
       return;
     }
     this.maybeEmitToolUse(worker, state);
     state.emittedResult = true;
     const output = stringifyOutput(state.rawOutput) ?? state.latestContentText;
-    this.captureBackgroundTaskToolOutput(worker, output);
+    await this.captureBackgroundTaskToolOutput(worker, state.toolName, output);
     if (this.backgroundContinuationForUpdate(worker)) {
       return;
     }
@@ -1874,11 +1898,19 @@ export class KimiAcpAdapter implements CodexAdapter {
     });
   }
 
-  private captureBackgroundTaskToolOutput(worker: KimiWorker, output: string | undefined): void {
-    // Tool output gives us a useful start fallback but no terminal signal on
-    // its own. Retain it only when this worker has the hook relay that can
-    // later deliver the authoritative Notification event.
+  private async captureBackgroundTaskToolOutput(
+    worker: KimiWorker,
+    toolName: string,
+    output: string | undefined,
+  ): Promise<void> {
+    // TaskStop is an authoritative terminal signal. Other tool output is only
+    // a start fallback and still relies on the hook relay for completion.
     if (!worker.hookRelayActive) {
+      return;
+    }
+    const stopped = parseKimiStoppedTaskOutput(toolName, output);
+    if (stopped) {
+      await this.settleStoppedBackgroundTask(worker, stopped);
       return;
     }
     const metadata = parseKimiBackgroundTaskOutput(output);
@@ -1918,6 +1950,60 @@ export class KimiAcpAdapter implements CodexAdapter {
     task.ownerTurnId ??= worker.pendingTurn?.turnId;
     worker.backgroundTasks.set(task.taskId, task);
     this.emitBackgroundTaskStarted(worker, task);
+  }
+
+  private async settleStoppedBackgroundTask(
+    worker: KimiWorker,
+    stopped: { taskId: string; reason?: string },
+  ): Promise<void> {
+    const task = worker.backgroundTasks.get(stopped.taskId);
+    const continuation = worker.backgroundContinuations.get(stopped.taskId);
+    if (
+      !task
+      && !continuation
+      && this.isTerminalBackgroundTask(worker, stopped.taskId, Date.now())
+    ) {
+      return;
+    }
+    if (task?.notificationTimer) {
+      clearTimeout(task.notificationTimer);
+    }
+    if (continuation?.fallbackTimer) {
+      clearTimeout(continuation.fallbackTimer);
+    }
+    if (continuation?.terminalTimer) {
+      clearTimeout(continuation.terminalTimer);
+    }
+    continuation?.approvalAbortController.abort();
+    worker.backgroundTasks.delete(stopped.taskId);
+    worker.backgroundContinuations.delete(stopped.taskId);
+    if (worker.activeHookTurn?.continuationTaskId === stopped.taskId) {
+      worker.activeHookTurn = undefined;
+    }
+
+    const sessionId = continuation?.sessionId ?? task?.sessionId ?? worker.currentSessionId ?? undefined;
+    const summary = continuation?.summary ?? task?.description;
+    const handler = continuation?.onEngineEvent ?? task?.onEngineEvent ?? worker.onEngineEvent;
+    const approvalHandler = continuation?.onApprovalRequest ?? task?.onApprovalRequest;
+    this.rememberTerminalBackgroundTask(worker, stopped.taskId, {
+      sessionId,
+      status: "cancelled",
+      summary,
+      onEngineEvent: handler,
+      onApprovalRequest: approvalHandler,
+      taskOriginReviewStarted: continuation?.taskOriginReviewStarted === true,
+    });
+    await this.emitEngineEvent(handler, {
+      type: "task_notification",
+      text: stopped.reason
+        ? `${summary ?? "Kimi background task"} was stopped: ${stopped.reason}`
+        : `${summary ?? "Kimi background task"} was stopped.`,
+      sessionId,
+      taskId: stopped.taskId,
+      status: "cancelled",
+      ...(summary ? { summary } : {}),
+      suppressUserDelivery: true,
+    });
   }
 
   private findWorkerForHook(sessionId: string): KimiWorker | undefined {
@@ -1983,7 +2069,8 @@ export class KimiAcpAdapter implements CodexAdapter {
         ? worker.activeHookTurn.continuationTaskId
         : undefined;
       if (
-        lateTerminal.terminal.taskOriginReviewStarted
+        lateTerminal.terminal.status === "cancelled"
+        || lateTerminal.terminal.taskOriginReviewStarted
         || (activeTaskId && activeTaskId !== lateTerminal.id)
       ) {
         this.markIgnoredKimiHookTurn(worker, event.turnId, now);
@@ -2490,6 +2577,14 @@ export class KimiAcpAdapter implements CodexAdapter {
     const text = status === "completed"
       ? await appendSavedArtifactDeliveryTags(rawText, worker.workspacePath)
       : rawText;
+    // TaskStop can race this output read. Once another terminal path removes
+    // the task or installs a tombstone, this stale flush must not resurrect it.
+    if (
+      worker.backgroundTasks.get(task.taskId) !== task
+      || this.isTerminalBackgroundTask(worker, task.taskId, Date.now())
+    ) {
+      return;
+    }
     const settlesCurrentTurn = task.ownerTurnId !== undefined
       && worker.pendingTurn?.turnId === task.ownerTurnId;
     if (settlesCurrentTurn) {
