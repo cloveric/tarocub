@@ -124,6 +124,24 @@ function optionalIdentifier(value: unknown): string | undefined {
   return optionalString(value);
 }
 
+function optionalPromptText(value: unknown): string | undefined {
+  const direct = optionalString(value);
+  if (direct || !Array.isArray(value)) {
+    return direct;
+  }
+  const parts = value.flatMap((block) => {
+    if (typeof block === "string") {
+      return [block];
+    }
+    if (typeof block !== "object" || block === null || Array.isArray(block)) {
+      return [];
+    }
+    const text = optionalString((block as Record<string, unknown>).text);
+    return text ? [text] : [];
+  });
+  return optionalString(parts.join("\n"));
+}
+
 export function parseKimiHookEvent(input: unknown): KimiHookEvent | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     return null;
@@ -142,14 +160,16 @@ export function parseKimiHookEvent(input: unknown): KimiHookEvent | null {
     if (!turnId || !originKind) {
       return null;
     }
+    const originName = optionalString(raw.origin_name);
+    const prompt = optionalPromptText(raw.prompt);
     return {
       hookEventName,
       sessionId,
       turnId,
       originKind,
       ...(cwd ? { cwd } : {}),
-      ...(optionalString(raw.origin_name) ? { originName: optionalString(raw.origin_name) } : {}),
-      ...(optionalString(raw.prompt) ? { prompt: optionalString(raw.prompt) } : {}),
+      ...(originName ? { originName } : {}),
+      ...(prompt ? { prompt } : {}),
     };
   }
 

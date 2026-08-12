@@ -649,6 +649,20 @@ describe("KimiAcpAdapter", () => {
       });
 
       await sendHook({
+        hook_event_name: "TurnStarted",
+        turn_id: 52,
+        origin_kind: "task",
+        prompt: [{
+          type: "text",
+          text: [
+            '<notification id="task:bash-first-attempt:failed" type="task.failed"',
+            'source_kind="background_task" source_id="bash-first-attempt">',
+            "The first chart attempt failed.",
+            "</notification>",
+          ].join(" "),
+        }],
+      });
+      await sendHook({
         hook_event_name: "Notification",
         notification_type: "task.failed",
         source_kind: "background_task",
@@ -657,19 +671,6 @@ describe("KimiAcpAdapter", () => {
         body: "The first chart attempt failed.",
       });
       await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(visibleNotifications()).toHaveLength(0);
-
-      await sendHook({
-        hook_event_name: "TurnStarted",
-        turn_id: 52,
-        origin_kind: "task",
-        prompt: [
-          '<notification id="task:bash-first-attempt:failed" type="task.failed"',
-          'source_kind="background_task" source_id="bash-first-attempt">',
-          "The first chart attempt failed.",
-          "</notification>",
-        ].join(" "),
-      });
       await waitFor(() => visibleNotifications().length === 0);
       server.sendUpdate({
         sessionUpdate: "agent_message_chunk",
@@ -721,12 +722,15 @@ describe("KimiAcpAdapter", () => {
         hook_event_name: "TurnStarted",
         turn_id: 53,
         origin_kind: "task",
-        prompt: [
-          '<notification id="task:bash-retry:completed" type="task.completed"',
-          'source_kind="background_task" source_id="bash-retry">',
-          "Chart retry completed.",
-          "</notification>",
-        ].join(" "),
+        prompt: [{
+          type: "text",
+          text: [
+            '<notification id="task:bash-retry:completed" type="task.completed"',
+            'source_kind="background_task" source_id="bash-retry">',
+            "Chart retry completed.",
+            "</notification>",
+          ].join(" "),
+        }],
       });
       server.sendUpdate({
         sessionUpdate: "agent_message_chunk",
