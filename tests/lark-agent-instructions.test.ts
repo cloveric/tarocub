@@ -189,6 +189,16 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("one user-facing conclusion");
   });
 
+  it("requires current-turn tags when the user checks a prior delivery", () => {
+    const instructions = larkAgentInstructions("好了吗");
+
+    expect(instructions).toContain("Delivery follow-up for THIS turn");
+    expect(instructions).toContain("verify platform delivery, not session memory");
+    expect(instructions).toContain("never tell the user to scroll up");
+    expect(instructions).toContain("repeats every intended artifact");
+    expect(larkAgentInstructions("解释交付机制")).not.toContain("Delivery follow-up for THIS turn");
+  });
+
   it("tells agents to give each image its own title via send.batch {path, caption} or [send-image:] title-above", () => {
     const instructions = larkAgentInstructions();
 

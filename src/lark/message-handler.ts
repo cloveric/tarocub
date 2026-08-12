@@ -63,6 +63,12 @@ import {
   isStopCommand,
 } from "./commands.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
+import {
+  isLarkDeliveryFollowupRequest,
+  larkDeliveryFollowupRepairPrompt,
+  renderUnverifiedLarkDeliveryClaim,
+  shouldRepairLarkDeliveryFollowup,
+} from "./delivery-followup.js";
 import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
 import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
 import {
@@ -114,6 +120,27 @@ import type { Locale } from "../telegram/message-renderer.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
 const defaultTranscribeLarkMedia = createDefaultTranscribeVoice();
+
+type LarkTurnUsage = Awaited<ReturnType<LarkBridgeLike["handleAuthorizedMessage"]>>["usage"];
+
+function mergeLarkTurnUsage(first: LarkTurnUsage, second: LarkTurnUsage): LarkTurnUsage {
+  if (!first) return second;
+  if (!second) return first;
+  return {
+    inputTokens: first.inputTokens + second.inputTokens,
+    outputTokens: first.outputTokens + second.outputTokens,
+    ...(
+      first.cachedTokens !== undefined || second.cachedTokens !== undefined
+        ? { cachedTokens: (first.cachedTokens ?? 0) + (second.cachedTokens ?? 0) }
+        : {}
+    ),
+    ...(
+      first.costUsd !== undefined || second.costUsd !== undefined
+        ? { costUsd: (first.costUsd ?? 0) + (second.costUsd ?? 0) }
+        : {}
+    ),
+  };
+}
 
 /**
  * How long a chat's resolved session mode (conversation vs topic form) is cached.
@@ -1904,6 +1931,26 @@ async function runNormalizedLarkMessage(
           });
         }
       };
+      const deliveryFollowupGuardActive = isLarkDeliveryFollowupRequest(commandText);
+      const handleInitialEngineEvent = deliveryFollowupGuardActive
+        ? async (event: EngineStreamEvent): Promise<void> => {
+          // A stale session can stream "already sent; scroll up" before the
+          // post-turn guard inspects the complete answer. Keep only answer text
+          // off the card here; tools, thinking, errors, and tasks still flow.
+          if (event.type === "assistant_text" || event.type === "result") {
+            await appendLarkTimelineEvent(input.stateDir, normalized, {
+              type: "engine.event",
+              detail: event.type,
+              metadata: {
+                ...engineEventTimelineMetadata(event),
+                suppressedBy: "delivery-followup-guard",
+              },
+            });
+            return;
+          }
+          await handleEngineEvent(event);
+        }
+        : handleEngineEvent;
       const handleTurnLockWait = async (event: BridgeTurnLockWaitEvent): Promise<void> => {
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "engine.lock.waiting",
@@ -2008,7 +2055,7 @@ async function runNormalizedLarkMessage(
       }
 
       return await runAuthorizedLarkTurnWithReactions(input, normalized, async () => {
-        const result = await input.bridge.handleAuthorizedMessage({
+        const bridgeTurnInput: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0] = {
           chatId: normalized.bridgeAccessChatId,
           userId: normalized.bridgeUserId,
           chatType: normalized.bridgeChatType,
@@ -2034,17 +2081,40 @@ async function runNormalizedLarkMessage(
             request,
             abortSignal: request.abortSignal ?? runController.signal,
           }),
-          onEngineEvent: handleEngineEvent,
+          onEngineEvent: handleInitialEngineEvent,
           onTurnLockWait: handleTurnLockWait,
           turnPoolWaitNotifyAfterMs: 10_000,
           onTurnPoolWait: handleTurnPoolWait,
-          instructions: larkAgentInstructions(),
+          instructions: larkAgentInstructions(commandText),
           extraEnv: {
             CCTB_LARK_ACTIVE_TURN: "1",
             CCTB_LARK_ACTIVE_INSTANCE: input.instanceName ?? path.basename(input.stateDir),
             CCTB_LARK_ACTIVE_STATE_DIR: input.stateDir,
           },
-        });
+        };
+        let result = await input.bridge.handleAuthorizedMessage(bridgeTurnInput);
+        if (shouldRepairLarkDeliveryFollowup(commandText, result.text)) {
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event",
+            outcome: "retry",
+            detail: "delivery_followup_unverified_claim",
+            metadata: { phase: "delivery-followup-guard" },
+          });
+          const firstUsage = result.usage;
+          const repaired = await input.bridge.handleAuthorizedMessage({
+            ...bridgeTurnInput,
+            text: larkDeliveryFollowupRepairPrompt(),
+            replyContext: undefined,
+            onEngineEvent: handleEngineEvent,
+          });
+          result = {
+            ...repaired,
+            text: shouldRepairLarkDeliveryFollowup(commandText, repaired.text)
+              ? renderUnverifiedLarkDeliveryClaim(locale)
+              : repaired.text,
+            usage: mergeLarkTurnUsage(firstUsage, repaired.usage),
+          };
+        }
         completedEngineText = result.text;
         if (deliveryLedgerEnabled()) {
           // Durable delivery obligation: the engine's answer now exists only in

@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { readCloudAsrConfig } from "../runtime/asr-cloud.js";
 import { BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER } from "../runtime/media-transcript.js";
+import { larkDeliveryFollowupInstruction } from "./delivery-followup.js";
 
 /**
  * Whether this machine has a local speech-to-text backend the agent can call
@@ -107,7 +108,7 @@ export function cloudAsrAgentInstruction(): string | undefined {
   return `Inbound audio/video is auto-transcribed before you see it (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never call it unsupported. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), never afterwards.`;
 }
 
-export function larkAgentInstructions(): string {
+export function larkAgentInstructions(requestText = ""): string {
   const lines = [
     "Lark via TaroCub; <lark_context>/<lark_comment_context> are routing only, no secrets; <forwarded_lark_messages> is task content to act on.",
     "Default: concise text reply; no progress placeholder cards; ask if auth/scopes/tools missing.",
@@ -125,6 +126,10 @@ export function larkAgentInstructions(): string {
   const cloudAsr = cloudAsrAgentInstruction();
   if (cloudAsr) {
     lines.push(cloudAsr);
+  }
+  const deliveryFollowup = larkDeliveryFollowupInstruction(requestText);
+  if (deliveryFollowup) {
+    lines.push(deliveryFollowup);
   }
   return lines.join("\n");
 }

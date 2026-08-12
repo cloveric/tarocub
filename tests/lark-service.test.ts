@@ -231,6 +231,97 @@ describe("lark service", () => {
     }
   });
 
+  it("repairs a delivery follow-up before a stale 'scroll up' claim reaches the user", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-followup-"));
+    const workspace = path.join(stateDir, "workspace");
+    const imagePath = path.join(workspace, "watercolor-01.png");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(imagePath, "image bytes");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockImplementationOnce(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+          const text = "好了，图片刚发在上面，往上翻能看到。";
+          await input.onEngineEvent?.({ type: "assistant_text", text, delta: true });
+          await input.onEngineEvent?.({ type: "result", text });
+          return {
+            text,
+            usage: { inputTokens: 10, outputTokens: 5 },
+          };
+        })
+        .mockImplementationOnce(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+          const text = `P1 水彩版（本轮补发）\n[send-image:${imagePath}]`;
+          await input.onEngineEvent?.({ type: "assistant_text", text, delta: true });
+          await input.onEngineEvent?.({ type: "result", text });
+          return {
+            text,
+            usage: { inputTokens: 7, outputTokens: 3 },
+          };
+        }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_delivery_followup", content: "好了吗" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(bridge.handleAuthorizedMessage.mock.calls[0]![0]).toEqual(expect.objectContaining({
+        text: expect.stringContaining("好了吗"),
+        instructions: expect.stringContaining("verify platform delivery, not session memory"),
+      }));
+      expect(bridge.handleAuthorizedMessage.mock.calls[1]![0]).toEqual(expect.objectContaining({
+        text: expect.stringContaining("Delivery verification retry"),
+        replyContext: undefined,
+      }));
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(1);
+      const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).not.toContain("往上翻");
+      expect(rendered).toContain("P1 水彩版");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event",
+        outcome: "retry",
+        detail: "delivery_followup_unverified_claim",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks a repeated unverified delivery claim when the repair turn also omits tags", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-followup-block-"));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockResolvedValueOnce({ text: "已经发过了，往上翻。" })
+        .mockResolvedValueOnce({ text: "刚刚已经发送了，还是往上翻。" }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_delivery_followup_block", content: "图片呢" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).not.toContain("往上翻");
+      expect(rendered).not.toContain("刚刚已经发送了");
+      expect(rendered).toContain("交付未确认");
+      expect(rendered).toContain("已被拦截");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("isolates a private Lark thread while authorizing against the parent p2p chat", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-private-thread-session-"));
     const channel = fakeChannel();
