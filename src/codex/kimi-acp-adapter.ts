@@ -115,6 +115,7 @@ type KimiTaskNotification = Extract<KimiHookEvent, { hookEventName: "Notificatio
 
 type KimiBackgroundTask = {
   taskId: string;
+  workflowId: string;
   sessionId?: string;
   description?: string;
   kind?: string;
@@ -134,6 +135,7 @@ type KimiBackgroundTask = {
 
 type KimiBackgroundContinuation = {
   taskId: string;
+  workflowId: string;
   sessionId?: string;
   status?: string;
   summary?: string;
@@ -176,6 +178,7 @@ type PendingKimiHookTerminal = {
 
 type KimiTerminalBackgroundTask = {
   terminalAt: number;
+  workflowId: string;
   sessionId?: string;
   status?: string;
   summary?: string;
@@ -243,6 +246,7 @@ const MAX_LISTED_SESSIONS = 200;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
 const DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS = 6 * 60 * 60_000;
 const MAX_BACKGROUND_TASK_OUTPUT_BYTES = 64 * 1024;
+const MAX_KIMI_WIRE_TAIL_BYTES = 256 * 1024;
 const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
 
 function renderDeferredSettingsNotice(
@@ -265,6 +269,7 @@ const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | null) => Promise<string>;
 type StartKimiHookRelay = typeof startKimiHookRelay;
 type ReadKimiBackgroundTaskOutput = typeof readKimiBackgroundTaskOutput;
+type ResolveKimiTaskOrigin = typeof resolveKimiTaskOriginFromWire;
 
 function combineInstructions(agentInstructions: string | null, bridgeInstructions: string | null): string | null {
   const parts = [agentInstructions, bridgeInstructions]
@@ -496,6 +501,107 @@ function parseKimiTaskTurnPrompt(prompt: string | undefined): {
 
 function isSafeKimiPathSegment(value: string): boolean {
   return value !== "." && value !== ".." && /^[A-Za-z0-9._-]+$/.test(value);
+}
+
+async function resolveKimiTaskOriginFromWire(
+  engineHomePath: string | undefined,
+  sessionId: string,
+  candidateTaskIds: readonly string[],
+): Promise<string | undefined> {
+  if (!engineHomePath || !isSafeKimiPathSegment(sessionId)) {
+    return undefined;
+  }
+  const candidates = new Set(candidateTaskIds.filter(isSafeKimiPathSegment));
+  if (candidates.size === 0) {
+    return undefined;
+  }
+
+  const sessionsRoot = path.join(engineHomePath, "sessions");
+  let realSessionsRoot: string;
+  let sessionParents: string[];
+  try {
+    realSessionsRoot = await realpath(sessionsRoot);
+    const entries = await readdir(sessionsRoot, { withFileTypes: true });
+    sessionParents = [sessionsRoot, ...entries
+      .filter((entry) => entry.isDirectory() && isSafeKimiPathSegment(entry.name))
+      .map((entry) => path.join(sessionsRoot, entry.name))];
+  } catch {
+    return undefined;
+  }
+
+  const sessionDirName = sessionId.startsWith("session_") ? sessionId : `session_${sessionId}`;
+  let latest: { taskId: string; time: number } | undefined;
+  for (const parent of sessionParents) {
+    const agentsDir = path.join(parent, sessionDirName, "agents");
+    const agents = await readdir(agentsDir, { withFileTypes: true }).catch(() => null);
+    if (!agents) {
+      continue;
+    }
+    for (const agent of agents) {
+      if (!agent.isDirectory() || !isSafeKimiPathSegment(agent.name)) {
+        continue;
+      }
+      let handle: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        const resolved = await realpath(path.join(agentsDir, agent.name, "wire.jsonl"));
+        const relative = path.relative(realSessionsRoot, resolved);
+        if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+          continue;
+        }
+        handle = await open(resolved, "r");
+        const stats = await handle.stat();
+        if (!stats.isFile() || stats.size <= 0) {
+          continue;
+        }
+        const bytesToRead = Math.min(stats.size, MAX_KIMI_WIRE_TAIL_BYTES);
+        const start = stats.size - bytesToRead;
+        const buffer = Buffer.alloc(bytesToRead);
+        const { bytesRead } = await handle.read(buffer, 0, bytesToRead, start);
+        let tail = buffer.subarray(0, bytesRead).toString("utf8");
+        if (start > 0) {
+          const firstNewline = tail.indexOf("\n");
+          tail = firstNewline >= 0 ? tail.slice(firstNewline + 1) : "";
+        }
+        const lines = tail.split("\n");
+        for (let index = lines.length - 1; index >= 0; index--) {
+          const line = lines[index]?.trim();
+          if (!line) {
+            continue;
+          }
+          let record: Record<string, unknown>;
+          try {
+            const parsed = JSON.parse(line) as unknown;
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+              continue;
+            }
+            record = parsed as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if (record.type !== "turn.prompt") {
+            continue;
+          }
+          const origin = typeof record.origin === "object" && record.origin !== null && !Array.isArray(record.origin)
+            ? record.origin as Record<string, unknown>
+            : undefined;
+          const taskId = typeof origin?.taskId === "string" ? origin.taskId : undefined;
+          if (origin?.kind !== "task" || !taskId || !candidates.has(taskId)) {
+            continue;
+          }
+          const time = typeof record.time === "number" && Number.isFinite(record.time) ? record.time : 0;
+          if (!latest || time >= latest.time) {
+            latest = { taskId, time };
+          }
+          break;
+        }
+      } catch {
+        // Kimi may rotate or replace a wire while a task-origin turn starts.
+      } finally {
+        await handle?.close().catch(() => undefined);
+      }
+    }
+  }
+  return latest?.taskId;
 }
 
 async function resolveKimiBackgroundTaskOutputPath(
@@ -882,6 +988,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly hookRelayVersionProbeRequired: boolean;
   private readonly startHookRelayFn: StartKimiHookRelay;
   private readonly readBackgroundTaskOutputFn: ReadKimiBackgroundTaskOutput;
+  private readonly resolveTaskOriginFn: ResolveKimiTaskOrigin;
   private readonly workers = new Map<string, KimiWorker>();
   private readonly pendingWorkers = new Map<string, Promise<KimiWorker>>();
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -916,6 +1023,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       hookRelayEnabled?: boolean;
       startHookRelayFn?: StartKimiHookRelay;
       readBackgroundTaskOutputFn?: ReadKimiBackgroundTaskOutput;
+      resolveTaskOriginFn?: ResolveKimiTaskOrigin;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -954,6 +1062,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.hookRelayVersionProbeRequired = options?.hookRelayEnabled === undefined;
     this.startHookRelayFn = options?.startHookRelayFn ?? startKimiHookRelay;
     this.readBackgroundTaskOutputFn = options?.readBackgroundTaskOutputFn ?? readKimiBackgroundTaskOutput;
+    this.resolveTaskOriginFn = options?.resolveTaskOriginFn ?? resolveKimiTaskOriginFromWire;
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -1846,6 +1955,27 @@ export class KimiAcpAdapter implements CodexAdapter {
     return candidates.length === 1 ? candidates[0] : undefined;
   }
 
+  private adoptKimiWorkflow(worker: KimiWorker, currentWorkflowId: string, workflowId: string): void {
+    if (currentWorkflowId === workflowId) {
+      return;
+    }
+    for (const task of worker.backgroundTasks.values()) {
+      if (task.workflowId === currentWorkflowId) {
+        task.workflowId = workflowId;
+      }
+    }
+    for (const continuation of worker.backgroundContinuations.values()) {
+      if (continuation.workflowId === currentWorkflowId) {
+        continuation.workflowId = workflowId;
+      }
+    }
+    for (const terminal of worker.terminalBackgroundTasks.values()) {
+      if (terminal.workflowId === currentWorkflowId) {
+        terminal.workflowId = workflowId;
+      }
+    }
+  }
+
   private maybeEmitToolUse(worker: KimiWorker, state: KimiToolState): void {
     if (state.emittedUse) {
       return;
@@ -1931,6 +2061,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     const task: KimiBackgroundTask = existing ?? {
       taskId: metadata.taskId,
+      workflowId: continuation?.workflowId ?? metadata.taskId,
       sessionId: worker.currentSessionId ?? undefined,
       ownerTurnId: worker.pendingTurn?.turnId,
       onEngineEvent: continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
@@ -1939,6 +2070,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       startEmitted: false,
       lastSeenAt: now,
     };
+    if (continuation) {
+      this.adoptKimiWorkflow(worker, task.workflowId, continuation.workflowId);
+    }
     task.description = metadata.description ?? task.description;
     task.subagentName = metadata.subagentName ?? task.subagentName;
     task.kind = metadata.subagentName ? "agent" : task.kind;
@@ -1947,6 +2081,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     task.onEngineEvent ??= continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
     task.onApprovalRequest ??= continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest;
     task.continuationTaskId ??= continuation?.taskId;
+    task.workflowId = continuation?.workflowId ?? task.workflowId;
     task.ownerTurnId ??= worker.pendingTurn?.turnId;
     worker.backgroundTasks.set(task.taskId, task);
     this.emitBackgroundTaskStarted(worker, task);
@@ -1986,6 +2121,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     const handler = continuation?.onEngineEvent ?? task?.onEngineEvent ?? worker.onEngineEvent;
     const approvalHandler = continuation?.onApprovalRequest ?? task?.onApprovalRequest;
     this.rememberTerminalBackgroundTask(worker, stopped.taskId, {
+      workflowId: continuation?.workflowId ?? task?.workflowId ?? stopped.taskId,
       sessionId,
       status: "cancelled",
       summary,
@@ -2048,16 +2184,32 @@ export class KimiAcpAdapter implements CodexAdapter {
 
     const promptMetadata = parseKimiTaskTurnPrompt(event.prompt);
     const explicitTaskIds = [...new Set(
-      [promptMetadata.taskId, event.originName].filter((id): id is string => Boolean(id)),
+      [promptMetadata.taskId, event.originTaskId, event.originName].filter((id): id is string => Boolean(id)),
     )];
     const unmatchedContinuations = [...worker.backgroundContinuations.values()]
       .filter((entry) => !entry.activeTurnId);
+    const matchedOriginName = event.originName && (
+      worker.backgroundTasks.has(event.originName)
+      || worker.backgroundContinuations.has(event.originName)
+    ) ? event.originName : undefined;
+    const wireCandidateIds = [...new Set([
+      ...worker.backgroundTasks.keys(),
+      ...worker.backgroundContinuations.keys(),
+      ...worker.terminalBackgroundTasks.keys(),
+    ])];
+    const recoveredTaskId = promptMetadata.taskId || event.originTaskId || matchedOriginName
+      ? undefined
+      : await this.resolveTaskOriginFn(this.engineHomePath, event.sessionId, wireCandidateIds)
+        .catch(() => undefined);
+    const unmatchedTasks = [...worker.backgroundTasks.values()].filter((entry) => (
+      !worker.backgroundContinuations.has(entry.taskId)
+    ));
     const taskId = promptMetadata.taskId
-      ?? (event.originName && (
-        worker.backgroundTasks.has(event.originName)
-        || worker.backgroundContinuations.has(event.originName)
-      ) ? event.originName : undefined)
+      ?? event.originTaskId
+      ?? matchedOriginName
+      ?? recoveredTaskId
       ?? (unmatchedContinuations.length === 1 ? unmatchedContinuations[0].taskId : undefined)
+      ?? (unmatchedTasks.length === 1 ? unmatchedTasks[0].taskId : undefined)
       ?? `kimi-task-turn-${event.turnId}`;
     const now = Date.now();
     const resurrectionProbe = [...new Set([...explicitTaskIds, taskId])];
@@ -2085,6 +2237,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       lateTerminal.terminal.terminalAt = now;
       const continuation: KimiBackgroundContinuation = {
         taskId: lateTerminal.id,
+        workflowId: lateTerminal.terminal.workflowId,
         sessionId: event.sessionId ?? lateTerminal.terminal.sessionId,
         status: promptMetadata.status ?? lateTerminal.terminal.status,
         summary: lateTerminal.terminal.summary,
@@ -2131,6 +2284,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     const sourceTask = worker.backgroundTasks.get(taskId) ?? {
       taskId,
+      workflowId: taskId,
       sessionId: event.sessionId,
       onEngineEvent: worker.onEngineEvent,
       startEmitted: false,
@@ -2145,6 +2299,7 @@ export class KimiAcpAdapter implements CodexAdapter {
 
     const continuation = existingContinuation ?? worker.backgroundContinuations.get(taskId) ?? {
       taskId,
+      workflowId: sourceTask.workflowId,
       sessionId: event.sessionId,
       status: promptMetadata.status,
       summary: sourceTask.description,
@@ -2155,6 +2310,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       assistantText: "",
       assistantBoundaryPending: false,
     };
+    this.adoptKimiWorkflow(worker, continuation.workflowId, sourceTask.workflowId);
+    continuation.workflowId = sourceTask.workflowId;
     continuation.sessionId ??= event.sessionId;
     continuation.status ??= promptMetadata.status;
     continuation.summary ??= sourceTask.description;
@@ -2245,13 +2402,15 @@ export class KimiAcpAdapter implements CodexAdapter {
       worker.pendingHookTerminal = { terminal, receivedAt: Date.now() };
       return;
     }
-    worker.activeHookTurn = undefined;
     if (active.originKind !== "task" || !active.continuationTaskId) {
+      worker.activeHookTurn = undefined;
       return;
     }
     const continuation = worker.backgroundContinuations.get(active.continuationTaskId);
     if (continuation) {
       this.scheduleKimiContinuationFinish(worker, continuation, terminal);
+    } else {
+      worker.activeHookTurn = undefined;
     }
   }
 
@@ -2268,20 +2427,40 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     if (this.hookTerminalGraceMs <= 0) {
       continuation.terminalTimer = undefined;
-      continuation.pendingTerminal = undefined;
-      void this.finishKimiBackgroundContinuation(worker, continuation, terminal);
+      this.finishKimiContinuationAfterSessionUpdates(worker, continuation, terminal);
       return;
     }
     continuation.terminalTimer = setTimeout(() => {
       continuation.terminalTimer = undefined;
       const pendingTerminal = continuation.pendingTerminal;
-      continuation.pendingTerminal = undefined;
       if (!pendingTerminal) {
         return;
       }
-      void this.finishKimiBackgroundContinuation(worker, continuation, pendingTerminal);
+      this.finishKimiContinuationAfterSessionUpdates(worker, continuation, pendingTerminal);
     }, this.hookTerminalGraceMs);
     continuation.terminalTimer.unref?.();
+  }
+
+  private finishKimiContinuationAfterSessionUpdates(
+    worker: KimiWorker,
+    continuation: KimiBackgroundContinuation,
+    terminal: KimiHookTerminal,
+  ): void {
+    // ACP text and the independent Stop Hook can arrive in either order. Queue
+    // terminal delivery behind every accepted ACP update so finishing cannot
+    // clear the continuation route while its final text is being dispatched.
+    void this.drainKimiSessionUpdates(worker).then(async () => {
+      if (
+        worker.backgroundContinuations.get(continuation.taskId) !== continuation
+        || continuation.pendingTerminal !== terminal
+      ) {
+        return;
+      }
+      continuation.pendingTerminal = undefined;
+      await this.finishKimiBackgroundContinuation(worker, continuation, terminal);
+    }).catch((error: unknown) => {
+      console.error(`Kimi continuation drain failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   private armKimiContinuationFallback(worker: KimiWorker, continuation: KimiBackgroundContinuation): void {
@@ -2350,10 +2529,11 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     worker.backgroundTasks.delete(continuation.taskId);
 
-    const linkedTasks = [...worker.backgroundTasks.values()].filter((task) => (
-      task.taskId !== continuation.taskId && task.continuationTaskId === continuation.taskId
+    const intermediate = [...worker.backgroundTasks.values()].some((task) => (
+      task.workflowId === continuation.workflowId
+    )) || [...worker.backgroundContinuations.values()].some((candidate) => (
+      candidate.workflowId === continuation.workflowId
     ));
-    const intermediate = linkedTasks.length > 0;
     // The underlying task's own completion survives a failed or timed-out
     // REVIEW turn: the result was already captured (continuation.rawText), so
     // a lost Stop hook or the safety timeout degrades to "deliver what we
@@ -2371,6 +2551,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     const deliverySummary = continuation.summary ?? sourceTask?.description;
     if (continuation.lateAfterFallback && !assistantText && !capturedText && !terminal.errorText?.trim()) {
       this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
+        workflowId: continuation.workflowId,
         sessionId: deliverySessionId,
         status: finalStatus,
         summary: deliverySummary,
@@ -2391,6 +2572,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       ? await appendSavedArtifactDeliveryTags(rawText, worker.workspacePath)
       : rawText;
     this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
+      workflowId: continuation.workflowId,
       sessionId: deliverySessionId,
       status: finalStatus,
       summary: deliverySummary,
@@ -2454,6 +2636,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
       const task: KimiBackgroundTask = existing ?? {
         taskId: event.taskId,
+        workflowId: continuation?.workflowId ?? event.taskId,
         sessionId: event.sessionId,
         ownerTurnId: worker.pendingTurn?.turnId,
         onEngineEvent: continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
@@ -2462,6 +2645,9 @@ export class KimiAcpAdapter implements CodexAdapter {
         startEmitted: false,
         lastSeenAt: now,
       };
+      if (continuation) {
+        this.adoptKimiWorkflow(worker, task.workflowId, continuation.workflowId);
+      }
       task.sessionId = event.sessionId;
       task.description = event.description ?? task.description;
       task.kind = event.kind ?? task.kind;
@@ -2470,6 +2656,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       task.onEngineEvent ??= continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
       task.onApprovalRequest ??= continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest;
       task.continuationTaskId ??= continuation?.taskId;
+      task.workflowId = continuation?.workflowId ?? task.workflowId;
       task.ownerTurnId ??= worker.pendingTurn?.turnId;
       worker.backgroundTasks.set(task.taskId, task);
       this.emitBackgroundTaskStarted(worker, task);
@@ -2512,6 +2699,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     const task: KimiBackgroundTask = existing ?? {
       taskId: event.sourceId,
+      workflowId: event.sourceId,
       sessionId: event.sessionId,
       ownerTurnId: worker.pendingTurn?.turnId,
       onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
@@ -2593,6 +2781,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
       worker.backgroundTasks.delete(task.taskId);
       this.rememberTerminalBackgroundTask(worker, task.taskId, {
+        workflowId: task.workflowId,
         sessionId,
         status,
         summary: task.description,
@@ -2614,6 +2803,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     const continuation = worker.backgroundContinuations.get(task.taskId) ?? {
       taskId: task.taskId,
+      workflowId: task.workflowId,
       sessionId,
       lastSeenAt: Date.now(),
       onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
@@ -2622,6 +2812,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       assistantText: "",
       assistantBoundaryPending: false,
     };
+    this.adoptKimiWorkflow(worker, continuation.workflowId, task.workflowId);
+    continuation.workflowId = task.workflowId;
     continuation.sessionId ??= sessionId;
     continuation.status = status;
     continuation.summary ??= task.description;
@@ -2645,6 +2837,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     const existing = worker.terminalBackgroundTasks.get(taskId);
     worker.terminalBackgroundTasks.set(taskId, {
       terminalAt: Date.now(),
+      workflowId: context.workflowId ?? existing?.workflowId ?? taskId,
       sessionId: context.sessionId ?? existing?.sessionId,
       status: context.status ?? existing?.status,
       summary: context.summary ?? existing?.summary,
@@ -3000,6 +3193,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
       worker.backgroundTasks.delete(continuation.taskId);
       this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
+        workflowId: continuation.workflowId,
         sessionId: continuation.sessionId ?? task?.sessionId ?? worker.currentSessionId ?? undefined,
         status: "failed",
         summary: continuation.summary ?? task?.description,
@@ -3008,7 +3202,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         taskOriginReviewStarted: continuation.taskOriginReviewStarted === true,
       });
       const hasLinkedReplacement = [...worker.backgroundTasks.values()].some((candidate) => (
-        candidate.continuationTaskId === continuation.taskId
+        candidate.workflowId === continuation.workflowId
       ));
       deliveries.push(this.emitEngineEvent(continuation.onEngineEvent ?? task?.onEngineEvent ?? worker.onEngineEvent, {
         type: "task_notification",
@@ -3028,6 +3222,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         clearTimeout(task.notificationTimer);
       }
       this.rememberTerminalBackgroundTask(worker, task.taskId, {
+        workflowId: task.workflowId,
         sessionId: task.sessionId ?? worker.currentSessionId ?? undefined,
         status: "failed",
         summary: task.description,

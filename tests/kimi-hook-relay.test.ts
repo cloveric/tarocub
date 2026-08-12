@@ -52,6 +52,26 @@ describe("Kimi hook relay", () => {
       prompt: "<notification source_id=\"bash-2\">retry</notification>",
     });
     expect(parseKimiHookEvent({
+      hook_event_name: "TurnStarted",
+      session_id: "session-1",
+      turn_id: 54,
+      origin: {
+        kind: "task",
+        taskId: "bash-3",
+      },
+      input: [{
+        type: "text",
+        text: "<notification source_id=\"bash-3\">done</notification>",
+      }],
+    })).toEqual({
+      hookEventName: "TurnStarted",
+      sessionId: "session-1",
+      turnId: "54",
+      originKind: "task",
+      originTaskId: "bash-3",
+      prompt: "<notification source_id=\"bash-3\">done</notification>",
+    });
+    expect(parseKimiHookEvent({
       hook_event_name: "Stop",
       session_id: "session-1",
       stop_hook_active: false,

@@ -20,6 +20,7 @@ export type KimiHookEvent =
       turnId: string;
       originKind: string;
       originName?: string;
+      originTaskId?: string;
       prompt?: string;
     }
   | {
@@ -124,6 +125,12 @@ function optionalIdentifier(value: unknown): string | undefined {
   return optionalString(value);
 }
 
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 function optionalPromptText(value: unknown): string | undefined {
   const direct = optionalString(value);
   if (direct || !Array.isArray(value)) {
@@ -155,13 +162,17 @@ export function parseKimiHookEvent(input: unknown): KimiHookEvent | null {
   const cwd = optionalString(raw.cwd);
 
   if (hookEventName === "TurnStarted") {
+    const origin = optionalRecord(raw.origin);
     const turnId = optionalIdentifier(raw.turn_id);
-    const originKind = requiredString(raw.origin_kind);
+    const originKind = requiredString(raw.origin_kind) ?? requiredString(origin?.kind);
     if (!turnId || !originKind) {
       return null;
     }
-    const originName = optionalString(raw.origin_name);
-    const prompt = optionalPromptText(raw.prompt);
+    const originName = optionalString(raw.origin_name) ?? optionalString(origin?.name);
+    const originTaskId = optionalIdentifier(raw.origin_task_id)
+      ?? optionalIdentifier(origin?.taskId)
+      ?? optionalIdentifier(origin?.task_id);
+    const prompt = optionalPromptText(raw.prompt) ?? optionalPromptText(raw.input);
     return {
       hookEventName,
       sessionId,
@@ -169,6 +180,7 @@ export function parseKimiHookEvent(input: unknown): KimiHookEvent | null {
       originKind,
       ...(cwd ? { cwd } : {}),
       ...(originName ? { originName } : {}),
+      ...(originTaskId ? { originTaskId } : {}),
       ...(prompt ? { prompt } : {}),
     };
   }

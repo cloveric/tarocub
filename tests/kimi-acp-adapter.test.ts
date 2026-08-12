@@ -757,6 +757,168 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("recovers Kimi 0.34 task origins and delivers only the final workflow branch", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-workflow-origin-test-"));
+    const wirePath = path.join(
+      root,
+      "sessions",
+      "wd-test",
+      "session_kimi-session-1",
+      "agents",
+      "main",
+      "wire.jsonl",
+    );
+    await mkdir(path.dirname(wirePath), { recursive: true });
+    const wireRecords: Array<Record<string, unknown>> = [];
+    const recordTaskTurn = async (taskId: string, status = "completed") => {
+      wireRecords.push({
+        type: "turn.prompt",
+        input: [{
+          type: "text",
+          text: `<notification type="task.${status}" source_id="${taskId}">done</notification>`,
+        }],
+        origin: {
+          kind: "task",
+          taskId,
+          status,
+          notificationId: `task:${taskId}:${status}`,
+        },
+        time: Date.now(),
+      });
+      await writeFile(wirePath, `${wireRecords.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+    };
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 10_000,
+      hookRelayEnabled: true,
+    });
+    try {
+      const foreground = adapter.sendUserMessage("telegram-workflow-origin", {
+        text: "run a multi-stage background workflow",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-root",
+        kind: "process",
+        description: "Root stage",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-root"
+      )));
+      server.respondPrompt();
+      await expect(foreground).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await recordTaskTurn("bash-root");
+      // Kimi 0.34 deliberately hides task prompts and task ids from this Hook.
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: 32,
+        origin_kind: "task",
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-root",
+        body: "Root stage completed.",
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-branch-a",
+        kind: "process",
+        description: "First branch",
+        detached: true,
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-branch-b",
+        kind: "process",
+        description: "Second branch",
+        detached: true,
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification"
+        && event.taskId === "bash-root"
+        && event.suppressUserDelivery === true
+      )));
+
+      await recordTaskTurn("bash-branch-a");
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: 33,
+        origin_kind: "task",
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-branch-a",
+        body: "First branch completed.",
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "First branch reviewed." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification"
+        && event.taskId === "bash-branch-a"
+        && event.suppressUserDelivery === true
+      )));
+
+      await recordTaskTurn("bash-branch-b");
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: 34,
+        origin_kind: "task",
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-branch-b",
+        body: "Second branch completed.",
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "All background work is complete." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification"
+        && event.taskId === "bash-branch-b"
+        && !event.suppressUserDelivery
+      )));
+
+      expect(events.filter((event) => (
+        event.type === "background_task_started" && event.taskId.startsWith("kimi-task-turn-")
+      ))).toHaveLength(0);
+      expect(events.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ))).toEqual([
+        expect.objectContaining({
+          taskId: "bash-branch-b",
+          status: "completed",
+          text: "All background work is complete.",
+        }),
+      ]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("expires a lost task-origin review instead of blocking the session forever", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-expiry-test-"));
     const configPath = path.join(root, "config.json");
@@ -1280,6 +1442,16 @@ describe("KimiAcpAdapter", () => {
 
   it("delivers a review that starts after fallback without leaking it into a foreground turn", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-late-review-routing-test-"));
+    const wirePath = path.join(
+      root,
+      "sessions",
+      "wd-test",
+      "session_kimi-session-1",
+      "agents",
+      "main",
+      "wire.jsonl",
+    );
+    await mkdir(path.dirname(wirePath), { recursive: true });
     const harness = createHarness();
     const taskEvents: EngineStreamEvent[] = [];
     const foregroundEvents: EngineStreamEvent[] = [];
@@ -1330,12 +1502,24 @@ describe("KimiAcpAdapter", () => {
         },
       });
       await waitFor(() => server.prompts.length === 2);
+      await writeFile(wirePath, `${JSON.stringify({
+        type: "turn.prompt",
+        input: [{
+          type: "text",
+          text: '<notification type="task.completed" source_id="bash-late-review">done</notification>',
+        }],
+        origin: {
+          kind: "task",
+          taskId: "bash-late-review",
+          status: "completed",
+          notificationId: "task:bash-late-review:completed",
+        },
+        time: Date.now(),
+      })}\n`, "utf8");
       await postKimiHook(harness, {
         hook_event_name: "TurnStarted",
         turn_id: "turn-late-review",
         origin_kind: "task",
-        origin_name: "bash-late-review",
-        prompt: '<notification type="task.completed" source_id="bash-late-review">done</notification>',
       });
       server.sendUpdate({
         sessionUpdate: "agent_message_chunk",
