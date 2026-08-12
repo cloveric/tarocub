@@ -19,6 +19,49 @@ describe("Lark delivery follow-up guard", () => {
     expect(larkDeliveryFollowupInstruction(text)).toContain("THIS turn");
   });
 
+  it("catches real delivery follow-ups with modifiers, word order, and file names", () => {
+    // These are how the operator actually asks. The first narrowing pass
+    // required the artifact noun to sit immediately after the negation, so
+    // every one of these silently skipped verification — the exact class of
+    // "you said you sent it, I never got it" this guard exists for.
+    for (const text of [
+      "怎么没收到文件",
+      "我没收到那个 docx",
+      "刚才的图我没收到",
+      "那份报告我没看到",
+      "没看到你发的图",
+      "图片在哪",
+      "没收到附件",
+      "图片没收到",
+      "我没有收到",
+      "好了吗",
+      "文件呢",
+      "再发一次",
+    ]) {
+      expect(isLarkDeliveryFollowupRequest(text), text).toBe(true);
+    }
+  });
+
+  it("still ignores ordinary talk that merely contains 没收到 / 没看到", () => {
+    // Unanchored matching made ANY sentence with these words trigger the
+    // guard, which suppressed the streamed answer and could replace a correct
+    // reply with a blocked-claim notice. Widening must never reintroduce that.
+    for (const text of [
+      "我没看到你说的那个函数在哪",
+      "我没看到 config.json 里有这个字段",
+      "刚才那个报错我没看到具体行号",
+      "帮我查一下为什么日志里没看到 ERROR",
+      "这段代码我没看懂,你没看到问题吗",
+      "你没收到我上一条消息吗",
+      "日志里没看到 ERROR 是不是级别配错了",
+      "我没看到收益提升",
+      "这个报告写得不错",
+      "文件读取失败了吗",
+    ]) {
+      expect(isLarkDeliveryFollowupRequest(text), text).toBe(false);
+    }
+  });
+
   it("does not classify a longer diagnostic discussion as a delivery follow-up", () => {
     const text = "请解释为什么机器人有时会回复‘往上翻’，以及整个交付机制应该如何重构";
     expect(isLarkDeliveryFollowupRequest(text)).toBe(false);

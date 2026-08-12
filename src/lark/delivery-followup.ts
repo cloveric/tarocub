@@ -17,11 +17,34 @@ export function isLarkDeliveryFollowupRequest(text: string): boolean {
     return false;
   }
 
-  return /^(?:好了吗|好了没|完成了吗|完成了没|发了吗|发了没|发出来了吗|发出来没|图片呢|图呢|文件呢|附件呢|结果呢|再发(?:一次|一遍|一下)?|重新发(?:一次|一遍|一下)?)[？?!！。.]?$/u.test(normalized)
-    || /^(?:我(?:这边)?|这边)?(?:还)?(?:没|没有|未)(?:收到|看到|看见)(?:图片|图|文件|附件|结果|它|它们)?(?:了|啊|呀|呢)?[？?!！。.]?$/u.test(normalized)
-    || /^(?:图片|图|文件|附件|结果).{0,10}(?:在哪|在哪里|没发|没收到|没看到|没看见)[？?!！。.]?$/u.test(normalized)
-    || /^(?:is it done|done yet|did you send (?:it|them)|sent yet|where (?:is|are) (?:the )?(?:file|files|image|images|attachment|attachments)|(?:i |we )?(?:did not|didn't|haven't|have not) (?:receive|see) (?:it|them|the files?|the images?))[?!.]?$/i.test(normalized);
+  return DELIVERY_FOLLOWUP_PATTERNS.some((pattern) => pattern.test(normalized));
 }
+
+// Kept STRICTLY whole-message (every pattern is anchored). An unanchored
+// "没收到|没看到" matched any sentence containing those words — "我没看到
+// config.json 里有这个字段" then triggered the guard, suppressed the streamed
+// answer, and could replace a correct reply with a blocked-claim notice.
+// Widening happens only inside the anchors: which NOUNS count as an artifact,
+// and which modifiers may sit next to them.
+const DELIVERY_NOUN = "(?:图片|图|照片|截图|文件|附件|结果|报告|文档|资料|表格|压缩包|视频|音频|录音|它|它们"
+  + "|\\S*\\.(?:docx?|xlsx?|pptx?|pdf|png|jpe?g|gif|webp|zip|csv|md|txt|mp4|mp3|m4a|wav)"
+  + "|docx?|xlsx?|pptx?|pdf|png|jpe?g|zip|csv)";
+const DELIVERY_MODIFIER = "(?:那个|这个|那份|这份|那张|这张|刚才|刚刚|之前|上面|新|你(?:刚)?(?:发|发来|发过来)|我要的|说的)的? ?";
+const NEGATION = "(?:还)?(?:没|没有|未)(?:收到|看到|看见)";
+const SUBJECT = "(?:我(?:这边)?|这边|咱们)?";
+const TAIL = "(?:了|啊|呀|呢|吧)?[？?!！。.]?";
+
+const DELIVERY_FOLLOWUP_PATTERNS: RegExp[] = [
+  // Bare status questions: 好了吗 / 图呢 / 再发一次
+  /^(?:好了吗|好了没|完成了吗|完成了没|发了吗|发了没|发出来了吗|发出来没|图片呢|图呢|文件呢|附件呢|结果呢|再发(?:一次|一遍|一下)?|重新发(?:一次|一遍|一下)?)[？?!！。.]?$/u,
+  // Negation first: (怎么)(我)没收到(那个)(文件) — noun optional, so "我没有收到" still matches.
+  new RegExp(`^(?:怎么|为什么|为啥)?${SUBJECT}${NEGATION}(?:${DELIVERY_MODIFIER})*(?:${DELIVERY_NOUN})?${TAIL}$`, "u"),
+  // Noun first: (刚才的)(图)(我)没收到 — the other common word order.
+  new RegExp(`^(?:怎么|为什么|为啥)?(?:${DELIVERY_MODIFIER})*${DELIVERY_NOUN}${SUBJECT}${NEGATION}${TAIL}$`, "u"),
+  // Noun + explicit complaint: 图片在哪 / 文件没发
+  new RegExp(`^(?:${DELIVERY_MODIFIER})*${DELIVERY_NOUN}.{0,6}(?:在哪|在哪里|没发|没发出来|没收到|没看到|没看见)${TAIL}$`, "u"),
+  /^(?:is it done|done yet|did you send (?:it|them)|sent yet|where (?:is|are) (?:the )?(?:file|files|image|images|attachment|attachments)|(?:i |we )?(?:did not|didn't|haven't|have not) (?:receive|see) (?:it|them|the files?|the images?))[?!.]?$/i,
+];
 
 export function larkDeliveryFollowupInstruction(text: string): string | undefined {
   if (!isLarkDeliveryFollowupRequest(text)) {
