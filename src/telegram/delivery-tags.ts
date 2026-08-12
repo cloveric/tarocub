@@ -49,13 +49,37 @@ function maskMarkdownCode(text: string): string {
 
 export function extractDeliveryTagMatches(text: string): DeliveryTagMatch[] {
   const searchable = maskMarkdownCode(text);
-  const pattern = /\[send-(file|image):([^\]]+)\]/g;
+  const pattern = /\[send-(file|image):/g;
   const matches: DeliveryTagMatch[] = [];
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(searchable)) !== null) {
+    const pathStart = pattern.lastIndex;
+    let nestedBrackets = 0;
+    let tagEnd = -1;
+    for (let index = pathStart; index < searchable.length; index++) {
+      const char = searchable[index];
+      if (char === "[") {
+        nestedBrackets++;
+      } else if (char === "]") {
+        if (nestedBrackets > 0) {
+          nestedBrackets--;
+        } else {
+          tagEnd = index + 1;
+          break;
+        }
+      }
+    }
+    if (tagEnd === -1) {
+      continue;
+    }
+    const filePath = text.slice(pathStart, tagEnd - 1).trim();
+    pattern.lastIndex = tagEnd;
+    if (!filePath) {
+      continue;
+    }
     matches.push({
-      tag: text.slice(match.index, match.index + match[0].length),
-      path: match[2]!.trim(),
+      tag: text.slice(match.index, tagEnd),
+      path: filePath,
       preferPhoto: match[1] === "image",
       index: match.index,
     });

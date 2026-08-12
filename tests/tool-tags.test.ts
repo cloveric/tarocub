@@ -471,3 +471,18 @@ describe("empty fenced block off-by-one (v0.1.205)", () => {
     expect(extractDeliveryTagMatches("~~~\n~~~\n[send-file:/tmp/b.txt]")).toHaveLength(1);
   });
 });
+
+describe("legacy delivery tag paths", () => {
+  it("preserves bracketed media IDs inside file names", async () => {
+    const { extractDeliveryTagMatches, stripDeliveryTags } = await import("../src/telegram/delivery-tags.js");
+    const filePath = "/tmp/佛法所說的「分別心」有何意義 [HO4ZZd9VQsQ].mp4";
+    const text = `已下载并校验。\n[send-file:${filePath}]`;
+
+    expect(extractDeliveryTagMatches(text)).toEqual([expect.objectContaining({
+      tag: `[send-file:${filePath}]`,
+      path: filePath,
+      preferPhoto: false,
+    })]);
+    expect(stripDeliveryTags(text)).toBe("已下载并校验。");
+  });
+});

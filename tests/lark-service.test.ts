@@ -8932,10 +8932,10 @@ describe("lark service", () => {
     }
   });
 
-  it("delivers generated files from bridge delivery tags", async () => {
+  it("delivers generated files with bracketed names from bridge delivery tags", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-"));
     const outputDir = path.join(stateDir, "workspace", "out");
-    const filePath = path.join(outputDir, "report.txt");
+    const filePath = path.join(outputDir, "report [video-id].txt");
     await mkdir(outputDir, { recursive: true });
     await writeFile(filePath, "report body");
     const channel = fakeChannel();
@@ -8972,7 +8972,7 @@ describe("lark service", () => {
       expect(channel.stream).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { file: { source: Buffer.from("report body"), fileName: "report.txt" } },
+        { file: { source: Buffer.from("report body"), fileName: "report [video-id].txt" } },
         { replyTo: "om_1" },
       );
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
@@ -8981,7 +8981,7 @@ describe("lark service", () => {
         channel: "lark",
         chatId: stableLarkNumericId("lark:oc_chat"),
         metadata: expect.objectContaining({
-          fileName: "report.txt",
+          fileName: "report [video-id].txt",
           bytes: Buffer.byteLength("report body"),
           via: "post-turn",
         }),
