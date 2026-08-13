@@ -7,6 +7,8 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CODEX_APP_SERVER_AUTO_COMPACT_RATIO,
+  CODEX_APP_SERVER_COMPACTION_TIMEOUT_MS,
   CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS,
   CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
   CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS,
@@ -182,6 +184,91 @@ describe("CodexAppServerAdapter", () => {
 
   it("defaults the inactivity diagnostic interval to thirty minutes", () => {
     expect(CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS).toBe(30 * 60_000);
+  });
+
+  it("compacts a saturated thread before starting its next user turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    expect(CODEX_APP_SERVER_AUTO_COMPACT_RATIO).toBe(0.8);
+    expect(CODEX_APP_SERVER_COMPACTION_TIMEOUT_MS).toBeGreaterThan(0);
+
+    const first = adapter.sendUserMessage("telegram-compact", { text: "first", files: [] });
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-compact"}}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const firstTurnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    child.stdout.emitData(`{"id":${firstTurnStart.id},"result":{"turn":{"id":"turn-1"}}}\n`);
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-compact","turnId":"turn-1","delta":"first answer"}}\n');
+    child.stdout.emitData('{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-compact","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":999999,"inputTokens":999999,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"last":{"totalTokens":212435,"inputTokens":211344,"cachedInputTokens":209280,"cacheWriteInputTokens":0,"outputTokens":1091,"reasoningOutputTokens":392},"modelContextWindow":258400}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-compact","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    await expect(first).resolves.toMatchObject({ text: "first answer", sessionId: "thread-compact" });
+
+    const second = adapter.sendUserMessage("thread-compact", { text: "second", files: [] });
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const compactStart = JSON.parse(child.stdin.lines[3] ?? "{}");
+    expect(compactStart.method).toBe("thread/compact/start");
+    expect(compactStart.params).toEqual({ threadId: "thread-compact" });
+    expect(child.stdin.lines.slice(3).map((line) => JSON.parse(line).method)).toEqual([
+      "thread/compact/start",
+    ]);
+    child.stdout.emitData(`{"id":${compactStart.id},"result":{}}\n`);
+    child.stdout.emitData('{"method":"turn/started","params":{"threadId":"thread-compact","turn":{"id":"turn-compact","items":[],"status":"inProgress","error":null}}}\n');
+    child.stdout.emitData('{"method":"thread/compacted","params":{"threadId":"thread-compact","turnId":"turn-compact"}}\n');
+
+    await waitFor(() => child.stdin.lines.length >= 5);
+    const secondTurnStart = JSON.parse(child.stdin.lines[4] ?? "{}");
+    expect(secondTurnStart.method).toBe("turn/start");
+    expect(secondTurnStart.params.threadId).toBe("thread-compact");
+    child.stdout.emitData(`{"id":${secondTurnStart.id},"result":{"turn":{"id":"turn-2"}}}\n`);
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-compact","turnId":"turn-2","delta":"second answer"}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-compact","turn":{"id":"turn-2","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(second).resolves.toMatchObject({ text: "second answer" });
+  });
+
+  it("starts a fresh thread when preventive compaction is unavailable", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const first = adapter.sendUserMessage("telegram-compact-fallback", { text: "first", files: [] });
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const firstThreadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    child.stdout.emitData(`{"id":${firstThreadStart.id},"result":{"thread":{"id":"thread-saturated"}}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const firstTurnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    child.stdout.emitData(`{"id":${firstTurnStart.id},"result":{"turn":{"id":"turn-1"}}}\n`);
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-saturated","turnId":"turn-1","delta":"first answer"}}\n');
+    child.stdout.emitData('{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-saturated","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":999999,"inputTokens":999999,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"last":{"totalTokens":212435,"inputTokens":211344,"cachedInputTokens":209280,"cacheWriteInputTokens":0,"outputTokens":1091,"reasoningOutputTokens":392},"modelContextWindow":258400}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-saturated","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    await expect(first).resolves.toMatchObject({ sessionId: "thread-saturated" });
+
+    const second = adapter.sendUserMessage("thread-saturated", { text: "second", files: [] });
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const compactStart = JSON.parse(child.stdin.lines[3] ?? "{}");
+    expect(compactStart.method).toBe("thread/compact/start");
+    child.stdout.emitData(`{"id":${compactStart.id},"error":{"message":"method not found"}}\n`);
+
+    await waitFor(() => child.stdin.lines.length >= 5);
+    const replacementThreadStart = JSON.parse(child.stdin.lines[4] ?? "{}");
+    expect(replacementThreadStart.method).toBe("thread/start");
+    child.stdout.emitData(`{"id":${replacementThreadStart.id},"result":{"thread":{"id":"thread-fresh"}}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 6);
+    const secondTurnStart = JSON.parse(child.stdin.lines[5] ?? "{}");
+    expect(secondTurnStart.method).toBe("turn/start");
+    expect(secondTurnStart.params.threadId).toBe("thread-fresh");
+    child.stdout.emitData(`{"id":${secondTurnStart.id},"result":{"turn":{"id":"turn-2"}}}\n`);
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-fresh","turnId":"turn-2","delta":"fresh answer"}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-fresh","turn":{"id":"turn-2","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(second).resolves.toMatchObject({ text: "fresh answer", sessionId: "thread-fresh" });
   });
 
   it("sets a Codex thread goal through the app-server protocol", async () => {
@@ -695,6 +782,23 @@ describe("CodexAppServerAdapter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not compact underneath a live goal pursuit", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn) as unknown as {
+      goalWatchers: Map<string, unknown>;
+      threadContextUsage: Map<string, { totalTokens: number; modelContextWindow: number }>;
+      prepareThreadForTurn: (threadId: string, cwd: string) => Promise<string>;
+    };
+    adapter.goalWatchers.set("thread-goal", {});
+    adapter.threadContextUsage.set("thread-goal", {
+      totalTokens: 240_000,
+      modelContextWindow: 258_400,
+    });
+
+    await expect(adapter.prepareThreadForTurn("thread-goal", process.cwd())).resolves.toBe("thread-goal");
+    expect(child.stdin.lines).toHaveLength(0);
   });
 
   it("creates a logical telegram session placeholder", async () => {

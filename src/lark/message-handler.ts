@@ -69,6 +69,7 @@ import {
   renderUnverifiedLarkDeliveryClaim,
   shouldRepairLarkDeliveryFollowup,
 } from "./delivery-followup.js";
+import { shouldRetryLarkStaleResponse } from "./stale-response-guard.js";
 import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
 import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
 import {
@@ -1932,8 +1933,12 @@ async function runNormalizedLarkMessage(
         }
       };
       const deliveryFollowupGuardActive = isLarkDeliveryFollowupRequest(commandText);
-      const handleInitialEngineEvent = deliveryFollowupGuardActive
-        ? async (event: EngineStreamEvent): Promise<void> => {
+      let initialTurnSawToolActivity = false;
+      const handleInitialEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
+        if (event.type === "tool_use" || event.type === "tool_result" || event.type === "tool_progress") {
+          initialTurnSawToolActivity = true;
+        }
+        if (deliveryFollowupGuardActive) {
           // A stale session can stream "already sent; scroll up" before the
           // post-turn guard inspects the complete answer. Keep only answer text
           // off the card here; tools, thinking, errors, and tasks still flow.
@@ -1948,9 +1953,9 @@ async function runNormalizedLarkMessage(
             });
             return;
           }
-          await handleEngineEvent(event);
         }
-        : handleEngineEvent;
+        await handleEngineEvent(event);
+      };
       const handleTurnLockWait = async (event: BridgeTurnLockWaitEvent): Promise<void> => {
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "engine.lock.waiting",
@@ -2093,6 +2098,34 @@ async function runNormalizedLarkMessage(
           },
         };
         let result = await input.bridge.handleAuthorizedMessage(bridgeTurnInput);
+        if (await shouldRetryLarkStaleResponse({
+          stateDir: input.stateDir,
+          conversationKey: normalized.conversationKey,
+          replyTo: normalized.messageId,
+          responseText: result.text,
+          sawToolActivity: initialTurnSawToolActivity,
+        })) {
+          const reset = await sessionStore.removeByConversationKeyRecovering(normalized.conversationKey);
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event",
+            outcome: "retry",
+            detail: "stale_response_truncated_previous_answer",
+            metadata: {
+              phase: "stale-response-guard",
+              removedSession: reset.removed,
+              repairedSessionStore: reset.repaired,
+            },
+          });
+          const firstUsage = result.usage;
+          const repaired = await input.bridge.handleAuthorizedMessage({
+            ...bridgeTurnInput,
+            onEngineEvent: handleEngineEvent,
+          });
+          result = {
+            ...repaired,
+            usage: mergeLarkTurnUsage(firstUsage, repaired.usage),
+          };
+        }
         // Use the sender's complete root set and preflight, not only an optional
         // workspace override. Most instances use the default state workspace.
         const deliveryPreflight = { stateDir: input.stateDir, requestOutputDir, workspaceOverride };

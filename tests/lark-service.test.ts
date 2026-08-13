@@ -30,6 +30,10 @@ import { FileWorkflowStore } from "../src/state/file-workflow-store.js";
 import { MiniBusStore } from "../src/state/mini-bus-store.js";
 import { BoardStore } from "../src/state/board-store.js";
 import { SessionStore } from "../src/state/session-store.js";
+import {
+  markDeliveryDelivered,
+  recordDeliveryObligation,
+} from "../src/state/delivery-obligation-store.js";
 import { AccessStore } from "../src/state/access-store.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import { UsageStore } from "../src/state/usage-store.js";
@@ -287,6 +291,75 @@ describe("lark service", () => {
         type: "engine.event",
         outcome: "retry",
         detail: "delivery_followup_unverified_claim",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries a tool-backed answer that truncates a previous delivered response", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stale-answer-"));
+    const conversationKey = "lark:oc_chat";
+    const previousAnswer = "可以，这版更像微信一点，但抓手还在：第一，保留核心结论；第二，补充执行步骤；第三，明确下一步负责人。";
+    const staleAnswer = "可以，这版更像微信一点，但抓手还在。";
+    const obligationId = await recordDeliveryObligation(stateDir, {
+      channel: "lark",
+      chatId: "oc_chat",
+      conversationKey,
+      replyTo: "om_previous",
+      content: previousAnswer,
+    });
+    await markDeliveryDelivered(stateDir, obligationId!);
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    await sessionStore.upsert({
+      telegramChatId: stableLarkNumericId(conversationKey),
+      conversationKey,
+      codexSessionId: "codex-saturated-thread",
+      status: "idle",
+      updatedAt: new Date().toISOString(),
+    });
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockImplementationOnce(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+          await input.onEngineEvent?.({ type: "tool_use", toolName: "WebSearch", toolUseId: "search-1" });
+          await input.onEngineEvent?.({ type: "tool_result", toolName: "WebSearch", toolUseId: "search-1", output: "results" });
+          await input.onEngineEvent?.({ type: "assistant_text", text: staleAnswer, delta: true });
+          await input.onEngineEvent?.({ type: "result", text: staleAnswer });
+          return { text: staleAnswer, usage: { inputTokens: 20, outputTokens: 5 } };
+        })
+        .mockImplementationOnce(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+          const text = "天元今年收到两项监管措施，分别来自浙江证监局和深圳证券交易所。";
+          await input.onEngineEvent?.({ type: "assistant_text", text, delta: true });
+          await input.onEngineEvent?.({ type: "result", text });
+          return { text, usage: { inputTokens: 8, outputTokens: 4 } };
+        }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_regulatory_question",
+          content: "帮我看看天元今年什么时候收的证监会、交易所处罚",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(bridge.handleAuthorizedMessage.mock.calls[1]![0]).toEqual(expect.objectContaining({
+        text: expect.stringContaining("帮我看看天元今年"),
+      }));
+      expect(await sessionStore.findByConversationKey(conversationKey)).toBeNull();
+      expectLarkFinalAnswer(channel, "天元今年收到两项监管措施");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event",
+        outcome: "retry",
+        detail: "stale_response_truncated_previous_answer",
+        metadata: expect.objectContaining({ removedSession: true }),
       }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });

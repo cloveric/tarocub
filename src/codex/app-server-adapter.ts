@@ -72,6 +72,8 @@ export const CODEX_APP_SERVER_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 export const CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS = 5_000;
 export const CODEX_APP_SERVER_TURN_STEER_TIMEOUT_MS = 5_000;
 export const CODEX_APP_SERVER_GOAL_RPC_TIMEOUT_MS = 60_000;
+export const CODEX_APP_SERVER_COMPACTION_TIMEOUT_MS = 180_000;
+export const CODEX_APP_SERVER_AUTO_COMPACT_RATIO = 0.8;
 type AppServerApprovalPolicy = "untrusted" | "on-failure" | "on-request" | "never";
 
 type JsonRpcId = number | string;
@@ -168,6 +170,19 @@ type PendingTurn = {
   abortCleanup?: () => void;
   resolve: (result: { text: string; usage?: AdapterUsage }) => void;
   reject: (error: Error) => void;
+};
+
+type ThreadContextUsage = {
+  totalTokens: number;
+  modelContextWindow: number;
+};
+
+type PendingCompaction = {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  turnId?: string;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 type AppServerProtocolDiagnostic = {
@@ -570,6 +585,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
     latestGoal: CodexThreadGoal | null;
   }>();
   private readonly loadedThreads = new Set<string>();
+  // Codex publishes the active context size separately from per-turn billing.
+  // Keep it thread-scoped so a long-lived topic can compact before its next turn
+  // instead of crossing the model limit and leaking an unrelated old answer.
+  private readonly threadContextUsage = new Map<string, ThreadContextUsage>();
+  private readonly pendingCompactions = new Map<string, PendingCompaction>();
   private completingTurns = 0;
   private readonly idleWaiters = new Set<() => void>();
   // Remembers the initializeKey whose pending config change we have already
@@ -630,7 +650,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
       input.instructions ?? null,
     );
     const prompt = this.buildPrompt(input, instructions);
-    const threadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, input.workspaceOverride ?? this.cwd);
+    const cwd = input.workspaceOverride ?? this.cwd;
+    const resolvedThreadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, cwd);
+    const threadId = await this.prepareThreadForTurn(resolvedThreadId, cwd);
     // Announce the thread BEFORE the turn can fail. Every other adapter emits a
     // mid-turn `session` event that Bridge.handleAuthorizedTurn binds on; the
     // app-server adapter only reported its thread id through a SUCCESSFUL
@@ -1134,6 +1156,43 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
     }
 
+    if (parsed.method === "thread/tokenUsage/updated") {
+      const threadId = this.readString(parsed.params?.threadId);
+      const tokenUsage = parsed.params?.tokenUsage;
+      if (threadId && typeof tokenUsage === "object" && tokenUsage !== null) {
+        const usage = tokenUsage as Record<string, unknown>;
+        const last = typeof usage.last === "object" && usage.last !== null
+          ? usage.last as Record<string, unknown>
+          : undefined;
+        const totalTokens = last ? readUsageNumber(last, "totalTokens", "total_tokens") : undefined;
+        const modelContextWindow = readUsageNumber(usage, "modelContextWindow", "model_context_window");
+        if (
+          totalTokens !== undefined
+          && modelContextWindow !== undefined
+          && totalTokens >= 0
+          && modelContextWindow > 0
+        ) {
+          this.threadContextUsage.set(threadId, { totalTokens, modelContextWindow });
+        }
+
+        const pending = this.matchPendingTurn(threadId, this.readString(parsed.params?.turnId));
+        if (pending && last) {
+          pending.usage = readAdapterUsage(last) ?? pending.usage;
+        }
+      }
+      return;
+    }
+
+    if (parsed.method === "thread/compacted") {
+      const threadId = this.readString(parsed.params?.threadId);
+      const turnId = this.readString(parsed.params?.turnId);
+      const pending = threadId ? this.pendingCompactions.get(threadId) : undefined;
+      if (threadId && pending && (!pending.turnId || !turnId || pending.turnId === turnId)) {
+        this.settleCompaction(threadId);
+      }
+      return;
+    }
+
     if (parsed.method === "turn/started") {
       // Capture the turn id so an abort/inactivity interrupt can address it.
       const threadId = this.readString(parsed.params?.threadId);
@@ -1142,10 +1201,21 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // the goal's own turn — claiming that id would mislabel the user's turn.
       // The id-correlated turn/start RESPONSE is authoritative there; this
       // notification only fills in when nothing else can (no watcher).
+      const turn = parsed.params?.turn;
       if (pending && !pending.turnId && threadId && !this.goalWatchers.has(threadId)) {
-        const turn = parsed.params?.turn;
         if (typeof turn === "object" && turn !== null && typeof (turn as { id?: unknown }).id === "string") {
           this.registerTurnId(pending, (turn as { id: string }).id);
+        }
+      } else if (threadId && !pending) {
+        const compaction = this.pendingCompactions.get(threadId);
+        if (
+          compaction
+          && !compaction.turnId
+          && typeof turn === "object"
+          && turn !== null
+          && typeof (turn as { id?: unknown }).id === "string"
+        ) {
+          compaction.turnId = (turn as { id: string }).id;
         }
       }
       return;
@@ -1276,6 +1346,21 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const threadId = this.readString(parsed.params?.threadId);
       const turnId = this.readTurnIdFromParams(parsed.params);
       if (!threadId) {
+        return;
+      }
+
+      const compaction = this.pendingCompactions.get(threadId);
+      if (
+        compaction
+        && !this.pendingTurns.has(threadId)
+        && (!compaction.turnId || !turnId || compaction.turnId === turnId)
+      ) {
+        const compactionError = this.readTurnErrorMessage(parsed.params?.turn);
+        if (compactionError) {
+          this.settleCompaction(threadId, new Error(compactionError));
+        } else {
+          this.settleCompaction(threadId);
+        }
         return;
       }
 
@@ -2008,6 +2093,104 @@ export class CodexAppServerAdapter implements CodexAdapter {
     );
   }
 
+  private async prepareThreadForTurn(threadId: string, cwd: string): Promise<string> {
+    // A self-running /goal owns this same thread outside the ordinary turn
+    // queue. Compacting underneath it can terminate or misroute the pursuit;
+    // leave its context lifecycle to Codex until the watcher settles.
+    if (this.goalWatchers.has(threadId)) {
+      return threadId;
+    }
+    const usage = this.threadContextUsage.get(threadId);
+    const compactionInFlight = this.pendingCompactions.has(threadId);
+    const contextPressure = usage
+      ? usage.totalTokens / usage.modelContextWindow
+      : 0;
+    if (!compactionInFlight && contextPressure < CODEX_APP_SERVER_AUTO_COMPACT_RATIO) {
+      return threadId;
+    }
+
+    try {
+      await this.compactThread(threadId);
+      return threadId;
+    } catch (error) {
+      // Compaction is preventive, not a reason to strand the user's message. If
+      // the old CLI does not implement the RPC or the compaction itself wedges,
+      // retire only this saturated thread and continue in a clean one.
+      console.error(
+        `Codex app-server context compaction failed for ${threadId}; starting a fresh thread: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      this.threadContextUsage.delete(threadId);
+      this.loadedThreads.delete(threadId);
+      return await this.startThread(cwd);
+    }
+  }
+
+  private compactThread(threadId: string): Promise<void> {
+    const existing = this.pendingCompactions.get(threadId);
+    if (existing) {
+      return existing.promise;
+    }
+
+    let resolvePromise!: () => void;
+    let rejectPromise!: (error: Error) => void;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+    const timeout = setTimeout(() => {
+      this.settleCompaction(
+        threadId,
+        new Error(
+          `Codex app-server context compaction timed out after ${Math.max(
+            1,
+            Math.round(CODEX_APP_SERVER_COMPACTION_TIMEOUT_MS / 1000),
+          )} seconds`,
+        ),
+      );
+    }, CODEX_APP_SERVER_COMPACTION_TIMEOUT_MS);
+    timeout.unref?.();
+    this.pendingCompactions.set(threadId, {
+      promise,
+      resolve: resolvePromise,
+      reject: rejectPromise,
+      timeout,
+    });
+
+    void this.request("thread/compact/start", { threadId }, {
+      idleBlocking: false,
+      timeoutMs: CODEX_APP_SERVER_COMPACTION_TIMEOUT_MS,
+      timeoutMessage: `Codex app-server thread/compact/start timed out after ${Math.max(
+        1,
+        Math.round(CODEX_APP_SERVER_COMPACTION_TIMEOUT_MS / 1000),
+      )} seconds`,
+    }).catch((error) => {
+      this.settleCompaction(threadId, error instanceof Error ? error : new Error(String(error)));
+    });
+
+    return promise;
+  }
+
+  private settleCompaction(threadId: string, error?: Error): void {
+    const pending = this.pendingCompactions.get(threadId);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingCompactions.delete(threadId);
+    clearTimeout(pending.timeout);
+    if (error) {
+      pending.reject(error);
+    } else {
+      // A later normal turn will publish a fresh usage snapshot. Deleting the
+      // pre-compaction high-water mark prevents an immediate second compaction.
+      this.threadContextUsage.delete(threadId);
+      pending.resolve();
+    }
+    this.notifyIdleWaitersIfIdle();
+  }
+
   private async retryThreadReadAfterTimeout<T>(
     operation: () => Promise<T>,
     runtimeOptions: Awaited<ReturnType<CodexAppServerAdapter["loadRuntimeOptions"]>>,
@@ -2493,6 +2676,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
       watcher.resolve(watcher.latestGoal);
     }
     this.goalWatchers.clear();
+    for (const threadId of [...this.pendingCompactions.keys()]) {
+      this.settleCompaction(threadId, error);
+    }
+    this.threadContextUsage.clear();
     this.loadedThreads.clear();
     this.notifyIdleWaitersIfIdle();
   }
@@ -2508,7 +2695,8 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // A turn displaced from the thread key is still running.
       this.pendingTurnsByTurnId.size === 0 &&
       this.completingTurns === 0 &&
-      this.goalWatchers.size === 0
+      this.goalWatchers.size === 0 &&
+      this.pendingCompactions.size === 0
     );
   }
 
