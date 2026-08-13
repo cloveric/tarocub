@@ -41,6 +41,19 @@ function markdownCodeRanges(text: string): Array<{ start: number; end: number }>
       ranges.push({ start, end });
     }
   }
+  // A blockquote shows someone else's words. A structured [tool:{…}] tag
+  // quoted from an earlier message must not execute (parity with the
+  // [send-file:] path, which masks quotes for the same reason).
+  const quoted = /(^|\n)[ \t]*>[^\n]*/g;
+  let quotedMatch: RegExpExecArray | null;
+  while ((quotedMatch = quoted.exec(text)) !== null) {
+    const prefix = quotedMatch[1] ?? "";
+    ranges.push({
+      start: quotedMatch.index + prefix.length,
+      end: quotedMatch.index + quotedMatch[0].length,
+    });
+  }
+
   return ranges;
 }
 

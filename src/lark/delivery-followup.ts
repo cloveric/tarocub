@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
+import path from "node:path";
 
 import { extractDeliveryTagMatches } from "../telegram/delivery-tags.js";
 import {
@@ -62,14 +63,17 @@ export function larkDeliveryFollowupInstruction(text: string): string | undefine
   return "Delivery follow-up for THIS turn: verify platform delivery, not session memory. Never say prior files/images were sent and never tell the user to scroll up unless this response itself repeats every intended artifact using exact [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags after checking each path exists. If work is unfinished or files are missing, state the exact status instead.";
 }
 
-function hasCurrentTurnDeliveryDirective(text: string): boolean {
+function hasCurrentTurnDeliveryDirective(text: string, workspaceRoot?: string): boolean {
   // The instruction handed to the engine says to verify each path EXISTS before
   // claiming delivery. Only checking that a tag is present let an invented path
   // satisfy the guard: the claim passed, the send then failed downstream, and
   // the operator got a delivery error instead of the file. Hold the guard to
   // the promise it makes.
+  // EVERY artifact named must be deliverable. Accepting a response because ONE
+  // of several paths exists cleared claims that then half-failed, which is the
+  // same "you said you sent it" complaint from the user's side.
   const tagged = extractDeliveryTagMatches(text);
-  if (tagged.some((match) => pathExistsForDelivery(match.path))) {
+  if (tagged.length > 0 && tagged.every((match) => pathExistsForDelivery(match.path, workspaceRoot))) {
     return true;
   }
   if (/```file:[^\n`]+\n[\s\S]+?```/u.test(text)) {
@@ -78,8 +82,14 @@ function hasCurrentTurnDeliveryDirective(text: string): boolean {
   }
   for (const match of extractTelegramToolTagMatches(text)) {
     try {
-      const { name } = parseTelegramToolTagPayload(match.payload);
-      if (["send.file", "send.image", "send.audio", "send.video", "send.batch"].includes(name)) {
+      const { name, payload } = parseTelegramToolTagPayload(match.payload);
+      if (!["send.file", "send.image", "send.audio", "send.video", "send.batch"].includes(name)) {
+        continue;
+      }
+      // A send.* tag with no resolvable path delivers nothing; the tool name
+      // alone used to satisfy the guard.
+      const paths = structuredSendPaths(payload);
+      if (paths.length > 0 && paths.every((candidate) => pathExistsForDelivery(candidate, workspaceRoot))) {
         return true;
       }
     } catch {
@@ -90,17 +100,57 @@ function hasCurrentTurnDeliveryDirective(text: string): boolean {
 }
 
 /** True when a tagged path points at something the delivery layer can send. */
-function pathExistsForDelivery(rawPath: string | undefined): boolean {
+function pathExistsForDelivery(rawPath: string | undefined, workspaceRoot?: string): boolean {
   const candidate = (rawPath ?? "").trim();
   if (!candidate) {
     return false;
   }
   try {
-    return existsSync(candidate);
+    // A directory is not a deliverable artifact, and the send layer rejects it.
+    if (!statSync(candidate).isFile()) {
+      return false;
+    }
   } catch {
-    // An unreadable path is not evidence of delivery either.
+    // Missing or unreadable is not evidence of delivery either.
     return false;
   }
+  if (!workspaceRoot) {
+    return true;
+  }
+  // The send layer is workspace-sandboxed: a path outside it will be refused,
+  // so accepting it here would clear a claim that cannot possibly deliver.
+  const resolved = path.resolve(candidate);
+  const root = path.resolve(workspaceRoot);
+  return resolved === root || resolved.startsWith(`${root}${path.sep}`);
+}
+
+/** Paths a structured send.* tool tag would actually deliver. */
+function structuredSendPaths(input: unknown): string[] {
+  if (typeof input !== "object" || input === null) {
+    return [];
+  }
+  const record = input as Record<string, unknown>;
+  const collected: string[] = [];
+  const push = (value: unknown): void => {
+    if (typeof value === "string" && value.trim()) {
+      collected.push(value.trim());
+    } else if (typeof value === "object" && value !== null) {
+      const nested = (value as { path?: unknown }).path;
+      if (typeof nested === "string" && nested.trim()) {
+        collected.push(nested.trim());
+      }
+    }
+  };
+  push(record.path);
+  for (const key of ["paths", "items", "files", "images"]) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        push(entry);
+      }
+    }
+  }
+  return collected;
 }
 
 function claimsHistoricalDelivery(text: string): boolean {
@@ -119,10 +169,14 @@ function claimsHistoricalDelivery(text: string): boolean {
     || /\b(?:already|just|previously) (?:sent|uploaded|delivered)\b|\b(?:sent|uploaded|delivered) (?:it|them|the files?|the images?)?\s*(?:already|above|earlier)\b|\bscroll up\b/i.test(normalized);
 }
 
-export function shouldRepairLarkDeliveryFollowup(requestText: string, responseText: string): boolean {
+export function shouldRepairLarkDeliveryFollowup(
+  requestText: string,
+  responseText: string,
+  workspaceRoot?: string,
+): boolean {
   return isLarkDeliveryFollowupRequest(requestText)
     && claimsHistoricalDelivery(responseText)
-    && !hasCurrentTurnDeliveryDirective(responseText);
+    && !hasCurrentTurnDeliveryDirective(responseText, workspaceRoot);
 }
 
 export function larkDeliveryFollowupRepairPrompt(): string {

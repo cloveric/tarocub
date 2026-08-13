@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -113,6 +117,54 @@ describe("Lark delivery follow-up guard", () => {
       "我没有收到",
       "已经发过了:\n```file:note.txt\nhello\n```",
     )).toBe(false);
+  });
+
+  it("requires EVERY named artifact to be deliverable, not just one", () => {
+    const ws = mkdtempSync(path.join(os.tmpdir(), "cctb-followup-ws-"));
+    const good = path.join(ws, "ok.txt");
+    writeFileSync(good, "x");
+    try {
+      const tag = (p: string) => `[send-file:${p}]`;
+      // One real + one missing used to clear the claim, and the user then got
+      // half a delivery — the same complaint from their side.
+      expect(shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        `已经发过了:${tag(good)} ${tag(path.join(ws, "missing.docx"))}`,
+        ws,
+      )).toBe(true);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:${tag(good)}`, ws)).toBe(false);
+      // A directory is not a deliverable artifact.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:${tag(ws)}`, ws)).toBe(true);
+      // The send layer is workspace-sandboxed: an outside path cannot deliver.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", "已经发过了:[send-file:/etc/hosts]", ws)).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("does not accept a structured send.* tag that carries no usable path", () => {
+    const ws = mkdtempSync(path.join(os.tmpdir(), "cctb-followup-tool-"));
+    const good = path.join(ws, "ok.txt");
+    writeFileSync(good, "x");
+    const tool = (name: string, payload: unknown) => `已经发过了 [tool:${JSON.stringify({ name, payload })}]`;
+    try {
+      // The tool NAME alone used to satisfy the guard.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.file", {}), ws)).toBe(true);
+      expect(shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        tool("send.file", { path: path.join(ws, "missing.docx") }),
+        ws,
+      )).toBe(true);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.file", { path: good }), ws)).toBe(false);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { items: [{ path: good }] }), ws)).toBe(false);
+      expect(shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        tool("send.batch", { items: [{ path: good }, { path: path.join(ws, "no.png") }] }),
+        ws,
+      )).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
   });
 
   it("matches English follow-ups the way the Chinese patterns do", () => {

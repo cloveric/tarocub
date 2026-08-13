@@ -50,9 +50,24 @@ function maskMarkdownCode(text: string): string {
   }
   if (ranges.length === 0) return text;
 
+  // Ranges CAN overlap (a quoted line containing an inline code span yields
+  // two overlapping ranges). The writer below walks forward once, so an
+  // unmerged overlap made `cursor` jump past text that was never emitted —
+  // a real delivery tag written after such a quote silently vanished.
+  const sorted = [...ranges].sort((left, right) => left.start - right.start);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) {
+      last.end = Math.max(last.end, range.end);
+      continue;
+    }
+    merged.push({ ...range });
+  }
+
   let masked = "";
   let cursor = 0;
-  for (const range of ranges.sort((left, right) => left.start - right.start)) {
+  for (const range of merged) {
     masked += text.slice(cursor, range.start);
     masked += blankPreservingNewlines(text.slice(range.start, range.end));
     cursor = range.end;
