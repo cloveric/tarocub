@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -107,16 +107,29 @@ describe("Lark delivery follow-up guard", () => {
       "我没有收到",
       "已经发过了,再发一次:[send-file:/tmp/definitely-missing-9f3a1c.docx]",
     )).toBe(true);
-    // A real path still satisfies it.
-    expect(shouldRepairLarkDeliveryFollowup(
-      "我没有收到",
-      "已经发过了,再发一次:[send-file:/etc/hosts]",
-    )).toBe(false);
-    // An inline file block carries its own content — nothing to look up.
+    // A real path INSIDE the workspace still satisfies it. (/etc/hosts was the
+    // original example here and was wrong: the sender is workspace-sandboxed,
+    // so an outside path can never deliver.)
+    const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-ok-")));
+    const good = path.join(ws, "ok.txt");
+    writeFileSync(good, "x");
+    try {
+      expect(shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        `已经发过了,再发一次:[send-file:${good}]`,
+        ws,
+      )).toBe(false);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+    // A fenced file: block carries its own content — but the sender uploads it
+    // ONLY when it is the entire reply, so prose around it means nothing was
+    // delivered. (This example previously had the prose and still passed.)
+    expect(shouldRepairLarkDeliveryFollowup("我没有收到", "```file:note.txt\nhello\n```")).toBe(false);
     expect(shouldRepairLarkDeliveryFollowup(
       "我没有收到",
       "已经发过了:\n```file:note.txt\nhello\n```",
-    )).toBe(false);
+    )).toBe(true);
   });
 
   it("requires EVERY named artifact to be deliverable, not just one", () => {
@@ -156,12 +169,73 @@ describe("Lark delivery follow-up guard", () => {
         ws,
       )).toBe(true);
       expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.file", { path: good }), ws)).toBe(false);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { items: [{ path: good }] }), ws)).toBe(false);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { files: [good] }), ws)).toBe(false);
       expect(shouldRepairLarkDeliveryFollowup(
         "我没有收到",
-        tool("send.batch", { items: [{ path: good }, { path: path.join(ws, "no.png") }] }),
+        tool("send.batch", { files: [good, path.join(ws, "no.png")] }),
         ws,
       )).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses paths the real sender would refuse", () => {
+    const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-sandbox-")));
+    const outside = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-outside-")));
+    const good = path.join(ws, "ok.txt");
+    writeFileSync(good, "x");
+    const secret = path.join(ws, ".env");
+    writeFileSync(secret, "KEY=v");
+    const escaping = path.join(ws, "link.txt");
+    writeFileSync(path.join(outside, "outside.txt"), "x");
+    symlinkSync(path.join(outside, "outside.txt"), escaping);
+    try {
+      // Without a known workspace root the sender still sandboxes, so an
+      // arbitrary path is NOT evidence — the guard used to accept it.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", "已经发过了:[send-file:/etc/hosts]")).toBe(true);
+      // Credential-style files are refused by the sender.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${secret}]`, ws)).toBe(true);
+      // A symlink pointing outside the workspace escapes the sandbox.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${escaping}]`, ws)).toBe(true);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${good}]`, ws)).toBe(false);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("speaks the send tool's real protocol, not an invented one", () => {
+    const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-proto-")));
+    const good = path.join(ws, "ok.txt");
+    writeFileSync(good, "x");
+    const tool = (name: string, payload: unknown) => `已经发过了 [tool:${JSON.stringify({ name, payload })}]`;
+    try {
+      // send.batch reads images[]/files[]. An earlier guard accepted invented
+      // `items`/`paths` keys the sender never reads, so an unusable batch
+      // cleared the claim.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { files: [good] }), ws)).toBe(false);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { images: [good] }), ws)).toBe(false);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { items: [{ path: good }] }), ws)).toBe(true);
+      // A batch carrying only a message delivers no artifact.
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { message: "hi" }), ws)).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a fenced file: block only when it is the entire reply", () => {
+    const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-block-")));
+    try {
+      // The sender uploads a fenced file: block ONLY when it is the whole
+      // response; surrounded by prose it posts plain markdown and delivers
+      // nothing, so accepting it anywhere cleared an empty claim.
+      expect(shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        "已经发过了:\n```file:a.txt\nhi\n```\n就这样",
+        ws,
+      )).toBe(true);
+      expect(shouldRepairLarkDeliveryFollowup("我没有收到", "```file:a.txt\nhi\n```", ws)).toBe(false);
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }
