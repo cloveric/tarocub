@@ -35,6 +35,19 @@ function maskMarkdownCode(text: string): string {
       ranges.push({ start: match.index, end: match.index + match[0].length });
     }
   }
+
+  // A blockquote is someone ELSE's words being shown, not this turn's
+  // instruction — quoting a message that happens to contain a send tag must
+  // not re-send it. Same rule as code: quoted text is displayed, not executed.
+  const quoted = /(^|\n)[ \t]*>[^\n]*/g;
+  while ((match = quoted.exec(text)) !== null) {
+    const prefix = match[1] ?? "";
+    const start = match.index + prefix.length;
+    const end = match.index + match[0].length;
+    if (!ranges.some((range) => start >= range.start && start < range.end)) {
+      ranges.push({ start, end });
+    }
+  }
   if (ranges.length === 0) return text;
 
   let masked = "";

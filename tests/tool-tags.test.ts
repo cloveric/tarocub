@@ -472,6 +472,27 @@ describe("empty fenced block off-by-one (v0.1.205)", () => {
   });
 });
 
+describe("quoted delivery tags are shown, not executed", () => {
+  it("does not deliver a send tag that appears inside a blockquote", async () => {
+    const { extractDeliveryTagMatches } = await import("../src/telegram/delivery-tags.js");
+    // A blockquote is someone else's words being displayed — quoting a message
+    // that contains a send tag must not re-send it. (Code spans and fences
+    // were already masked; quotes were the remaining hole.)
+    expect(extractDeliveryTagMatches("> [send-file:/tmp/a.docx]")).toHaveLength(0);
+    expect(extractDeliveryTagMatches("  > 他说 [send-image:/tmp/b.png] 发了")).toHaveLength(0);
+    expect(extractDeliveryTagMatches("回复中:\n> 之前的 [send-file:/tmp/old.pdf]\n以上")).toHaveLength(0);
+  });
+
+  it("still delivers a real tag written after a quote", async () => {
+    const { extractDeliveryTagMatches } = await import("../src/telegram/delivery-tags.js");
+    const matches = extractDeliveryTagMatches(
+      "> 引用 [send-file:/tmp/quoted.docx]\n现在真发:[send-file:/tmp/real.docx]",
+    );
+    expect(matches).toHaveLength(1);
+    expect(matches[0]!.path).toBe("/tmp/real.docx");
+  });
+});
+
 describe("legacy delivery tag paths", () => {
   it("preserves bracketed media IDs inside file names", async () => {
     const { extractDeliveryTagMatches, stripDeliveryTags } = await import("../src/telegram/delivery-tags.js");

@@ -1,5 +1,19 @@
 export const BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER = "Bridge media transcription completed";
 
+/**
+ * A transcript is UNTRUSTED third-party speech — forwarded meeting recordings
+ * are exactly the common case. Someone speaking this block's own delimiters
+ * would appear to close the transcript and have the words after it read as
+ * bridge-level instruction. Defang the delimiters inside the body; the text
+ * stays readable.
+ */
+function neutralizeTranscriptMarkers(transcript: string): string {
+  return transcript
+    .replace(/\[End bridge media transcription\]/gi, "(End bridge media transcription)")
+    .replace(new RegExp(`\\[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}\\]`, "gi"),
+      `(${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER})`);
+}
+
 function sanitizeMediaFileName(fileName: string): string {
   return fileName
     .replace(/[\r\n\t]+/g, " ")
@@ -12,7 +26,7 @@ function sanitizeMediaFileName(fileName: string): string {
  * receives the original file does not start a second transcription pass.
  */
 export function formatBridgeMediaTranscript(fileName: string, transcript: string): string {
-  const cleanTranscript = transcript.trim();
+  const cleanTranscript = neutralizeTranscriptMarkers(transcript.trim());
   if (!cleanTranscript) return "";
 
   return [
