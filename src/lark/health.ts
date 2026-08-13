@@ -38,6 +38,35 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
   let stopped = false;
   let running = false;
   let consecutiveFailures = 0;
+  const reconnectChannel = async (): Promise<boolean> => {
+    try {
+      await options.channel.disconnect().catch(() => undefined);
+      await options.channel.connect();
+      await appendLarkHealthTimelineEvent(options, {
+        outcome: "reconnected",
+        detail: "Lark channel reconnected after health failures",
+        metadata: { consecutiveFailures, failureThreshold },
+      });
+      await Promise.resolve(options.telemetry?.recordMetric?.("ws_reconnect", 1, {
+        channel: "lark",
+        instanceName: options.instanceName,
+        outcome: "success",
+      })).catch(() => undefined);
+      return true;
+    } catch (error) {
+      await appendLarkHealthTimelineEvent(options, {
+        outcome: "reconnect_failed",
+        detail: redactLarkErrorDetail(error),
+        metadata: { consecutiveFailures, failureThreshold },
+      });
+      await Promise.resolve(options.telemetry?.recordMetric?.("ws_reconnect", 1, {
+        channel: "lark",
+        instanceName: options.instanceName,
+        outcome: "error",
+      })).catch(() => undefined);
+      return false;
+    }
+  };
   const tick = async (): Promise<void> => {
     if (stopped || running) {
       return;
@@ -46,11 +75,21 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
     try {
       const ok = await probe().catch(() => false);
       if (ok) {
+        const recoveredFailures = consecutiveFailures;
+        // A successful HTTP probe only proves the network is back. If a prior
+        // channel reconnect failed, the persistent callback connection can
+        // still be offline even though the probe now succeeds.
+        if (recoveredFailures >= failureThreshold && !(await reconnectChannel())) {
+          return;
+        }
         if (consecutiveFailures > 0) {
           await appendLarkHealthTimelineEvent(options, {
             outcome: "recovered",
             detail: "Lark health probe recovered",
-            metadata: { consecutiveFailures },
+            metadata: {
+              consecutiveFailures: recoveredFailures,
+              channelReconnected: recoveredFailures >= failureThreshold,
+            },
           });
         }
         consecutiveFailures = 0;
@@ -67,31 +106,8 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
         return;
       }
 
-      try {
-        await options.channel.disconnect().catch(() => undefined);
-        await options.channel.connect();
-        await appendLarkHealthTimelineEvent(options, {
-          outcome: "reconnected",
-          detail: "Lark channel reconnected after health failures",
-          metadata: { consecutiveFailures, failureThreshold },
-        });
-        await Promise.resolve(options.telemetry?.recordMetric?.("ws_reconnect", 1, {
-          channel: "lark",
-          instanceName: options.instanceName,
-          outcome: "success",
-        })).catch(() => undefined);
+      if (await reconnectChannel()) {
         consecutiveFailures = 0;
-      } catch (error) {
-        await appendLarkHealthTimelineEvent(options, {
-          outcome: "reconnect_failed",
-          detail: redactLarkErrorDetail(error),
-          metadata: { consecutiveFailures, failureThreshold },
-        });
-        await Promise.resolve(options.telemetry?.recordMetric?.("ws_reconnect", 1, {
-          channel: "lark",
-          instanceName: options.instanceName,
-          outcome: "error",
-        })).catch(() => undefined);
       }
     } finally {
       running = false;

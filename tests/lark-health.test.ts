@@ -98,4 +98,73 @@ describe("Lark health monitor", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("reconnects the callback channel when the network recovers after a failed reconnect", async () => {
+    vi.useFakeTimers();
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-health-recovery-"));
+    const channel = {
+      connect: vi.fn()
+        .mockRejectedValueOnce(new Error("network offline"))
+        .mockResolvedValue(undefined),
+      disconnect: vi.fn(async () => undefined),
+    };
+    const probe = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    try {
+      const monitor = startLarkHealthMonitor({
+        stateDir,
+        instanceName: "lark-recovery",
+        channel,
+        intervalMs: 1_000,
+        failureThreshold: 2,
+        probe,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(probe).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(channel.connect).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(channel.disconnect).toHaveBeenCalledTimes(2);
+        expect(channel.connect).toHaveBeenCalledTimes(2);
+      });
+      await vi.waitFor(async () => {
+        expect(await readTimeline(stateDir)).toContainEqual(expect.objectContaining({
+          type: "service.health",
+          outcome: "recovered",
+        }));
+      });
+
+      monitor.stop();
+      const timeline = await readTimeline(stateDir);
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "service.health",
+        outcome: "reconnect_failed",
+      }));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "service.health",
+        outcome: "reconnected",
+      }));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "service.health",
+        outcome: "recovered",
+        metadata: expect.objectContaining({
+          consecutiveFailures: 2,
+          channelReconnected: true,
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
