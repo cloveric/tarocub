@@ -29,6 +29,15 @@ export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
 export const DEFAULT_CODEX_EFFORT: EffortLevel = "xhigh";
 export const KIMI_EFFORT_LEVELS = ["low", "high", "max"] as const satisfies readonly EffortLevel[];
 export const DEFAULT_KIMI_EFFORT: EffortLevel = "high";
+
+export function normalizeModelCommandInput(engine: InstanceEngine | undefined, model: string): string {
+  const trimmed = model.trim();
+  if (engine !== "claude") {
+    return trimmed;
+  }
+  const spacedContextSuffix = trimmed.match(/^(\S+)\s+\[1m\]$/i);
+  return spacedContextSuffix ? `${spacedContextSuffix[1]}[1m]` : trimmed;
+}
 // Default steer eligibility window: a running turn accepts mid-turn steering for
 // its first 30s; later messages queue as their own turn. /steer <seconds> tunes it,
 // 0 = unlimited, /steer off disables steering entirely.

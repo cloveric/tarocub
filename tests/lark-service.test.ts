@@ -4836,7 +4836,7 @@ describe("lark service", () => {
         bridge,
         runtime: createLarkServiceRuntime(),
         stateDir,
-        message: fakeLarkMessage({ messageId: "om_model", content: "/model claude-opus-5[1m]" }),
+        message: fakeLarkMessage({ messageId: "om_model", content: "/model claude-opus-5 [1m]" }),
       });
       await handleLarkMessage({
         channel,
@@ -4850,8 +4850,36 @@ describe("lark service", () => {
       expect(config.model).toBe("claude-opus-5[1m]");
       expect(config.effort).toBe("max");
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 claude-opus-5[1m]");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 `claude-opus-5[1m]`");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Effort 已设为 max");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("renders Claude model commands as code so Lark preserves the 1m suffix", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-model-help-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude", locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_model_help", content: "/model" }),
+      });
+
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("Current model: `default`");
+      expect(rendered).toContain("`/model claude-opus-5[1m]`");
+      expect(rendered).toContain("Latest Opus alias: `/model opus[1m]`");
+      expect(rendered).not.toContain("claude-opus-5 [1m]");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -4886,7 +4914,7 @@ describe("lark service", () => {
       expect(config.model).toBe("gpt-5.6-sol");
       expect(config.effort).toBe("ultra");
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 gpt-5.6-sol");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("模型已设为 `gpt-5.6-sol`");
       expect(JSON.stringify(channel.send.mock.calls)).toContain("Effort 已设为 ultra");
     } finally {
       await rm(stateDir, { recursive: true, force: true });

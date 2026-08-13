@@ -847,6 +847,33 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("normalizes Claude's spaced 1m suffix without accepting general multi-token model names", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, unknown>) => void) => {
+      const cfg: Record<string, unknown> = {};
+      mutate(cfg);
+      expect(cfg.model).toBe("opus[1m]");
+    });
+
+    try {
+      await expect(handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "claude" },
+        normalized: createNormalizedMessage("/model opus [1m]"),
+        context: { api: api as never, instanceName: "default", updateId: 81 },
+        updateInstanceConfig,
+      })).resolves.toBe(true);
+
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Model set to opus[1m].");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("returns false for non-simple commands", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
 

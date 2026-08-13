@@ -34,6 +34,7 @@ import {
   CLAUDE_MODEL_CHOICES,
   KIMI_EFFORT_LEVELS,
   loadInstanceConfig,
+  normalizeModelCommandInput,
   resolveInstanceWorkspacePath,
   updateInstanceConfig,
   type EffortLevel,
@@ -1903,19 +1904,19 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
   if (cfg.engine === "claude") {
     if (locale === "en") {
       return [
-        `Current model: ${current}`,
+        `Current model: \`${current}\``,
         "Choose a model with /model <name>:",
-        ...CLAUDE_MODEL_CHOICES.map((model) => `/model ${model}`),
-        "/model off",
-        "Latest Opus alias: /model opus[1m]",
+        ...CLAUDE_MODEL_CHOICES.map((model) => `\`/model ${model}\``),
+        "`/model off`",
+        "Latest Opus alias: `/model opus[1m]`",
       ].join("\n");
     }
     return [
-      `当前模型: ${current}`,
+      `当前模型: \`${current}\``,
       "用 /model <名称> 选择模型：",
-      ...CLAUDE_MODEL_CHOICES.map((model) => `/model ${model}`),
-      "/model off",
-      "跟随最新 Opus 的别名：/model opus[1m]",
+      ...CLAUDE_MODEL_CHOICES.map((model) => `\`/model ${model}\``),
+      "`/model off`",
+      "跟随最新 Opus 的别名：`/model opus[1m]`",
     ].join("\n");
   }
   if (cfg.engine === "codex") {
@@ -1977,10 +1978,11 @@ async function handleLarkModelCommand(
   if (!model) {
     return renderLarkModelSelectionMessage(cfg, locale);
   }
-  if (!isSingleTokenLarkModelName(model)) {
+  const normalizedModel = normalizeModelCommandInput(cfg.engine, model);
+  if (!isSingleTokenLarkModelName(normalizedModel)) {
     return locale === "en" ? "Usage: /model <single-token-name|off>" : "用法: /model <单个模型名|off>";
   }
-  if (model === "off" || model === "default") {
+  if (normalizedModel === "off" || normalizedModel === "default") {
     if (cfg.engine === "codex" && isExtendedCodexEffort(cfg.effort)) {
       return locale === "en"
         ? `Cannot restore the default model while effort is ${cfg.effort}; reset /effort first.`
@@ -1994,22 +1996,22 @@ async function handleLarkModelCommand(
   if (
     cfg.engine === "codex" &&
     cfg.effort &&
-    (knownCodexModelSupportsEffort(model, cfg.effort) === false ||
-      (knownCodexModelSupportsEffort(model, cfg.effort) === undefined && isExtendedCodexEffort(cfg.effort)))
+    (knownCodexModelSupportsEffort(normalizedModel, cfg.effort) === false ||
+      (knownCodexModelSupportsEffort(normalizedModel, cfg.effort) === undefined && isExtendedCodexEffort(cfg.effort)))
   ) {
-    const maxEffort = knownCodexModelMaxEffort(model);
+    const maxEffort = knownCodexModelMaxEffort(normalizedModel);
     return maxEffort
       ? locale === "en"
-        ? `${model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
-        : `${model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
+        ? `${normalizedModel} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
+        : `${normalizedModel} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
       : locale === "en"
-        ? `Compatibility between ${model} and effort ${cfg.effort} is unknown; lower /effort or choose a listed model first.`
-        : `无法确认 ${model} 是否支持 ${cfg.effort}；请先降低 /effort 或选择列表中的模型。`;
+        ? `Compatibility between ${normalizedModel} and effort ${cfg.effort} is unknown; lower /effort or choose a listed model first.`
+        : `无法确认 ${normalizedModel} 是否支持 ${cfg.effort}；请先降低 /effort 或选择列表中的模型。`;
   }
   await updateInstanceConfig(stateDir, (config) => {
-    config.model = model;
+    config.model = normalizedModel;
   });
-  return locale === "en" ? `Model set to ${model}.` : `模型已设为 ${model}。`;
+  return locale === "en" ? `Model set to \`${normalizedModel}\`.` : `模型已设为 \`${normalizedModel}\`。`;
 }
 
 async function handleLarkEffortCommand(

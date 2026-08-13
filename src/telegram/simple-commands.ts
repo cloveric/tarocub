@@ -22,6 +22,7 @@ import {
   CLAUDE_MODEL_CHOICES,
   KIMI_EFFORT_LEVELS,
   loadInstanceConfig,
+  normalizeModelCommandInput,
   type InstanceEngine,
 } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
@@ -351,22 +352,23 @@ export async function handleSimpleLocalTelegramCommand(input: {
   const modelCmd = parseModelCommand(normalized.text);
   if (modelCmd) {
     let modelMessage: string;
-    let auditValue = modelCmd.model || "query";
+    const normalizedModel = normalizeModelCommandInput(cfg.engine, modelCmd.model);
+    let auditValue = normalizedModel || "query";
     if (cfg.engine === "antigravity") {
       auditValue = "unsupported-print-mode";
       modelMessage = renderAntigravityNativeModelMessage(locale);
       await context.api.sendMessage(normalized.chatId, modelMessage);
-    } else if (!modelCmd.model) {
+    } else if (!normalizedModel) {
       modelMessage = renderModelSelectionMessage();
       await context.api.sendMessage(normalized.chatId, modelMessage);
-    } else if (!isSingleTokenModelName(modelCmd.model)) {
+    } else if (!isSingleTokenModelName(normalizedModel)) {
       auditValue = "invalid";
       modelMessage = locale === "zh"
         ? "用法: /model <单个模型名|off>"
         : "Usage: /model <single-token-name|off>";
       await context.api.sendMessage(normalized.chatId, modelMessage);
     } else if (
-      (modelCmd.model === "off" || modelCmd.model === "default") &&
+      (normalizedModel === "off" || normalizedModel === "default") &&
       cfg.engine === "codex" &&
       isExtendedCodexEffort(cfg.effort as EffortLevel | undefined)
     ) {
@@ -375,7 +377,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
         ? `当前 effort 为 ${cfg.effort}，不能恢复默认模型；请先重置 /effort。`
         : `Cannot restore the default model while effort is ${cfg.effort}; reset /effort first.`;
       await context.api.sendMessage(normalized.chatId, modelMessage);
-    } else if (modelCmd.model === "off" || modelCmd.model === "default") {
+    } else if (normalizedModel === "off" || normalizedModel === "default") {
       await updateInstanceConfig((c) => { delete c.model; });
       modelMessage = locale === "zh" ? "模型已恢复默认。" : "Model reset to default.";
       await context.api.sendMessage(normalized.chatId, modelMessage);
@@ -383,23 +385,23 @@ export async function handleSimpleLocalTelegramCommand(input: {
       cfg.engine === "codex" &&
       cfg.effort &&
       VALID_EFFORT_LEVELS.includes(cfg.effort as EffortLevel) &&
-      (knownCodexModelSupportsEffort(modelCmd.model, cfg.effort as EffortLevel) === false ||
-        (knownCodexModelSupportsEffort(modelCmd.model, cfg.effort as EffortLevel) === undefined &&
+      (knownCodexModelSupportsEffort(normalizedModel, cfg.effort as EffortLevel) === false ||
+        (knownCodexModelSupportsEffort(normalizedModel, cfg.effort as EffortLevel) === undefined &&
           isExtendedCodexEffort(cfg.effort as EffortLevel)))
     ) {
       auditValue = "unsupported-model-effort";
-      const maxEffort = knownCodexModelMaxEffort(modelCmd.model);
+      const maxEffort = knownCodexModelMaxEffort(normalizedModel);
       modelMessage = maxEffort
         ? locale === "zh"
-          ? `${modelCmd.model} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
-          : `${modelCmd.model} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
+          ? `${normalizedModel} 最高支持 ${maxEffort}，与当前 effort ${cfg.effort} 不兼容；请先调整 /effort。`
+          : `${normalizedModel} supports up to ${maxEffort}, which is incompatible with current effort ${cfg.effort}; change /effort first.`
         : locale === "zh"
-          ? `无法确认 ${modelCmd.model} 是否支持 ${cfg.effort}；请先降低 /effort 或选择列表中的模型。`
-          : `Compatibility between ${modelCmd.model} and effort ${cfg.effort} is unknown; lower /effort or choose a listed model first.`;
+          ? `无法确认 ${normalizedModel} 是否支持 ${cfg.effort}；请先降低 /effort 或选择列表中的模型。`
+          : `Compatibility between ${normalizedModel} and effort ${cfg.effort} is unknown; lower /effort or choose a listed model first.`;
       await context.api.sendMessage(normalized.chatId, modelMessage);
     } else {
-      await updateInstanceConfig((c) => { c.model = modelCmd.model; });
-      modelMessage = locale === "zh" ? `模型已设为 ${modelCmd.model}。` : `Model set to ${modelCmd.model}.`;
+      await updateInstanceConfig((c) => { c.model = normalizedModel; });
+      modelMessage = locale === "zh" ? `模型已设为 ${normalizedModel}。` : `Model set to ${normalizedModel}.`;
       await context.api.sendMessage(normalized.chatId, modelMessage);
     }
 
