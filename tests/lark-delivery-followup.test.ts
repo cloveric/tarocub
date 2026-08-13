@@ -94,6 +94,47 @@ describe("Lark delivery follow-up guard", () => {
     )).toBe(true);
   });
 
+  it("does not accept an invented path as proof of delivery", () => {
+    // The instruction handed to the engine says to verify each path exists.
+    // Checking only that a TAG is present let a made-up path satisfy the
+    // guard: the claim passed review, the send failed downstream, and the
+    // operator got a delivery error instead of the file.
+    expect(shouldRepairLarkDeliveryFollowup(
+      "我没有收到",
+      "已经发过了,再发一次:[send-file:/tmp/definitely-missing-9f3a1c.docx]",
+    )).toBe(true);
+    // A real path still satisfies it.
+    expect(shouldRepairLarkDeliveryFollowup(
+      "我没有收到",
+      "已经发过了,再发一次:[send-file:/etc/hosts]",
+    )).toBe(false);
+    // An inline file block carries its own content — nothing to look up.
+    expect(shouldRepairLarkDeliveryFollowup(
+      "我没有收到",
+      "已经发过了:\n```file:note.txt\nhello\n```",
+    )).toBe(false);
+  });
+
+  it("matches English follow-ups the way the Chinese patterns do", () => {
+    for (const text of [
+      "we have not seen the images",
+      "i did not receive them",
+      "did you send the files",
+      "where are the images",
+      "the file never arrived",
+      "done yet",
+    ]) {
+      expect(isLarkDeliveryFollowupRequest(text), text).toBe(true);
+    }
+    for (const text of [
+      "i did not see the error in the log",
+      "i haven't seen that function anywhere",
+      "we did not receive approval from legal",
+    ]) {
+      expect(isLarkDeliveryFollowupRequest(text), text).toBe(false);
+    }
+  });
+
   it("accepts a current-turn resend with exact image tags", () => {
     expect(shouldRepairLarkDeliveryFollowup(
       "好了吗",

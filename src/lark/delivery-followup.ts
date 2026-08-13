@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+
 import { extractDeliveryTagMatches } from "../telegram/delivery-tags.js";
 import {
   extractTelegramToolTagMatches,
@@ -43,7 +45,14 @@ const DELIVERY_FOLLOWUP_PATTERNS: RegExp[] = [
   new RegExp(`^(?:怎么|为什么|为啥)?(?:${DELIVERY_MODIFIER})*${DELIVERY_NOUN}${SUBJECT}${NEGATION}${TAIL}$`, "u"),
   // Noun + explicit complaint: 图片在哪 / 文件没发
   new RegExp(`^(?:${DELIVERY_MODIFIER})*${DELIVERY_NOUN}.{0,6}(?:在哪|在哪里|没发|没发出来|没收到|没看到|没看见)${TAIL}$`, "u"),
-  /^(?:is it done|done yet|did you send (?:it|them)|sent yet|where (?:is|are) (?:the )?(?:file|files|image|images|attachment|attachments)|(?:i |we )?(?:did not|didn't|haven't|have not) (?:receive|see) (?:it|them|the files?|the images?))[?!.]?$/i,
+  // English parity with the Chinese patterns: same artifact nouns, same
+  // optional modifiers. Still whole-message anchored, so "i did not see the
+  // error in the log" stays out.
+  /^(?:is it done|done yet|sent yet|any luck)[?!.]?$/i,
+  /^(?:did|didn't) you (?:send|upload|share) (?:it|them|the )?(?:file|files|image|images|photo|photos|attachment|attachments|report|doc|document|documents)?[?!.]?$/i,
+  /^where (?:is|are) (?:the |my |that |those )?(?:file|files|image|images|photo|photos|attachment|attachments|report|doc|document|documents)[?!.]?$/i,
+  /^(?:i |we )?(?:did not|didn't|haven't|have not|never) (?:receive|receive[d]?|see|seen|get|got) (?:it|them|any of them|the |that |those |your )?(?:file|files|image|images|photo|photos|attachment|attachments|report|doc|document|documents)?[?!.]?$/i,
+  /^(?:the |that )?(?:file|files|image|images|attachment|attachments|report)\s+(?:never (?:arrived|came)|(?:did not|didn't) (?:arrive|come|show up)|(?:is|are) missing)[?!.]?$/i,
 ];
 
 export function larkDeliveryFollowupInstruction(text: string): string | undefined {
@@ -54,7 +63,17 @@ export function larkDeliveryFollowupInstruction(text: string): string | undefine
 }
 
 function hasCurrentTurnDeliveryDirective(text: string): boolean {
-  if (extractDeliveryTagMatches(text).length > 0 || /```file:[^\n`]+\n[\s\S]+?```/u.test(text)) {
+  // The instruction handed to the engine says to verify each path EXISTS before
+  // claiming delivery. Only checking that a tag is present let an invented path
+  // satisfy the guard: the claim passed, the send then failed downstream, and
+  // the operator got a delivery error instead of the file. Hold the guard to
+  // the promise it makes.
+  const tagged = extractDeliveryTagMatches(text);
+  if (tagged.some((match) => pathExistsForDelivery(match.path))) {
+    return true;
+  }
+  if (/```file:[^\n`]+\n[\s\S]+?```/u.test(text)) {
+    // An inline file block carries its own content — nothing to look up.
     return true;
   }
   for (const match of extractTelegramToolTagMatches(text)) {
@@ -68,6 +87,20 @@ function hasCurrentTurnDeliveryDirective(text: string): boolean {
     }
   }
   return false;
+}
+
+/** True when a tagged path points at something the delivery layer can send. */
+function pathExistsForDelivery(rawPath: string | undefined): boolean {
+  const candidate = (rawPath ?? "").trim();
+  if (!candidate) {
+    return false;
+  }
+  try {
+    return existsSync(candidate);
+  } catch {
+    // An unreadable path is not evidence of delivery either.
+    return false;
+  }
 }
 
 function claimsHistoricalDelivery(text: string): boolean {

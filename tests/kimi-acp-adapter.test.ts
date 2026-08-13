@@ -2928,6 +2928,77 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("applies the deferred settings once the background task settles", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-defer-apply-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-90", { text: "start work", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const hookUrl = harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_URL;
+      const headers = {
+        "content-type": "application/json",
+        "x-tarocub-kimi-hook-token": harness.spawnEnvs[0]?.TAROCUB_KIMI_HOOK_TOKEN ?? "",
+      };
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "TaskStarted",
+          session_id: "kimi-session-1",
+          task_id: "bash-holding",
+          kind: "process",
+          description: "Holds the settings change",
+          detached: true,
+        }),
+      });
+      harness.children[0].server.respondPrompt();
+      await first;
+
+      // Change settings while the task is retained: deferred, same worker.
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const deferred = adapter.sendUserMessage("kimi-session-1", { text: "after change", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      harness.children[0].server.respondPrompt();
+      await deferred;
+      expect(harness.children).toHaveLength(1);
+
+      // The task settles — the deferred change must now actually take effect,
+      // i.e. the worker is reconfigured (a NEW child) instead of the setting
+      // staying stuck on the old value forever.
+      await fetch(hookUrl!, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          hook_event_name: "Notification",
+          session_id: "kimi-session-1",
+          notification_type: "task.completed",
+          source_kind: "background_task",
+          source_id: "bash-holding",
+          body: "done",
+        }),
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      const applied = adapter.sendUserMessage("kimi-session-1", { text: "settings should be live now", files: [] });
+      await waitFor(() => harness.children.length === 2);
+      harness.children[1].server.respondPrompt();
+      await applied;
+      expect(harness.children).toHaveLength(2);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("clears a deferred settings notice when a failed turn is followed by a settings rollback", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-defer-notice-rollback-test-"));
     const configPath = path.join(root, "config.json");
