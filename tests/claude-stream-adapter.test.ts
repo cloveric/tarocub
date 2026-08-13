@@ -1326,6 +1326,103 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("keeps a task review attached to its parent when a nested background task completes", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{
+      type?: string;
+      taskId?: string;
+      status?: string;
+      text?: string;
+      suppressUserDelivery?: boolean;
+    }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Generate assets in the background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event as never);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-parent",
+            name: "Bash",
+            input: { command: "generate-assets", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-parent","tool_use_id":"toolu-parent","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await first;
+
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-parent","tool_use_id":"toolu-parent","status":"completed","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            "<task-notification>",
+            "<task-id>task-parent</task-id>",
+            "<tool-use-id>toolu-parent</tool-use-id>",
+            "<status>completed</status>",
+            "<summary>Parent generation completed</summary>",
+            "</task-notification>",
+          ].join("\n"),
+        },
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-nested",
+            name: "Bash",
+            input: { command: "repair-assets", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-nested","tool_use_id":"toolu-nested","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-nested","tool_use_id":"toolu-nested","status":"completed","summary":"Nested repair completed","session_id":"session-123"}\n');
+
+      // Claude 2.1.229 omits task_id on the result that closes the parent review.
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Final verified parent result.","session_id":"session-123"}\n');
+      await waitFor(() => events.some((event) =>
+        event.type === "task_notification" && event.text === "Final verified parent result."
+      ));
+
+      children[0].close(0);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const visibleTerminalEvents = events.filter((event) =>
+        event.type === "task_notification" && event.suppressUserDelivery !== true
+      );
+      expect(visibleTerminalEvents).toEqual([
+        expect.objectContaining({
+          taskId: "task-parent",
+          status: "completed",
+          text: "Final verified parent result.",
+        }),
+      ]);
+      expect(events).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("engine process exited") }),
+      ]));
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
   it("settles a background task immediately when TaskOutput collects its terminal result", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: Array<{

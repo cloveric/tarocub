@@ -1021,6 +1021,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     if (parsed.type === "system" && parsed.subtype === "task_notification") {
       const metadata = toTaskNotificationMetadata(parsed);
+      if (this.settleNestedTaskNotification(worker, metadata)) {
+        return;
+      }
       if (metadata.taskId && worker.collectedBackgroundTaskIds.has(metadata.taskId)) {
         // Preserve the id until the associated origin=result arrives so that a
         // result without task_id can still be recognized and suppressed.
@@ -1050,6 +1053,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     const userTaskNotification = toUserTaskNotificationMetadata(parsed);
     if (userTaskNotification) {
+      if (this.settleNestedTaskNotification(worker, userTaskNotification)) {
+        return;
+      }
       const task = userTaskNotification.taskId
         ? worker.backgroundTasks.get(userTaskNotification.taskId)
         : undefined;
@@ -1399,6 +1405,45 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       ...(task.summary ? { summary: task.summary } : {}),
       ...(task.outputFile ? { outputFile: task.outputFile } : {}),
     }, task.onEngineEvent);
+  }
+
+  private settleNestedTaskNotification(
+    worker: ClaudeWorker,
+    metadata: ClaudeTaskNotificationMetadata,
+  ): boolean {
+    const parent = worker.taskNotificationTurnActive ? worker.pendingTaskNotification : null;
+    if (!parent?.taskId || !metadata.taskId || metadata.taskId === parent.taskId) {
+      return false;
+    }
+    if (worker.collectedBackgroundTaskIds.has(metadata.taskId)) {
+      return true;
+    }
+
+    const task = worker.backgroundTasks.get(metadata.taskId);
+    if (!task || parent.turnId === undefined || task.turnId !== parent.turnId) {
+      return false;
+    }
+
+    worker.backgroundTasks.delete(metadata.taskId);
+    worker.collectedBackgroundTaskIds.add(metadata.taskId);
+    const toolUseId = metadata.toolUseId ?? task.toolUseId;
+    if (toolUseId) {
+      worker.explicitBackgroundToolUseIds.delete(toolUseId);
+    }
+    const status = metadata.status ?? task.status ?? "completed";
+    const summary = metadata.summary ?? task.summary;
+    const outputFile = metadata.outputFile ?? task.outputFile;
+    this.emitEngineEvent(worker, {
+      type: "task_notification",
+      text: `${summary?.trim() || "Nested background task"}: ${status}; result folded into the parent task review.`,
+      sessionId: worker.currentSessionId ?? undefined,
+      taskId: metadata.taskId,
+      status,
+      suppressUserDelivery: true,
+      ...(summary ? { summary } : {}),
+      ...(outputFile ? { outputFile } : {}),
+    }, task.onEngineEvent);
+    return true;
   }
 
   private armBackgroundTaskTurnSettlement(
