@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -91,19 +91,19 @@ describe("Lark delivery follow-up guard", () => {
     expect(isLarkDeliveryFollowupRequest(text)).toBe(true);
   });
 
-  it("repairs a historical delivery claim that has no current-turn delivery directive", () => {
-    expect(shouldRepairLarkDeliveryFollowup(
+  it("repairs a historical delivery claim that has no current-turn delivery directive", async () => {
+    expect(await shouldRepairLarkDeliveryFollowup(
       "好了吗",
       "好了，水彩版 6 张刚发在上面，往上翻能看到。",
     )).toBe(true);
   });
 
-  it("does not accept an invented path as proof of delivery", () => {
+  it("does not accept an invented path as proof of delivery", async () => {
     // The instruction handed to the engine says to verify each path exists.
     // Checking only that a TAG is present let a made-up path satisfy the
     // guard: the claim passed review, the send failed downstream, and the
     // operator got a delivery error instead of the file.
-    expect(shouldRepairLarkDeliveryFollowup(
+    expect(await shouldRepairLarkDeliveryFollowup(
       "我没有收到",
       "已经发过了,再发一次:[send-file:/tmp/definitely-missing-9f3a1c.docx]",
     )).toBe(true);
@@ -114,7 +114,7 @@ describe("Lark delivery follow-up guard", () => {
     const good = path.join(ws, "ok.txt");
     writeFileSync(good, "x");
     try {
-      expect(shouldRepairLarkDeliveryFollowup(
+      expect(await shouldRepairLarkDeliveryFollowup(
         "我没有收到",
         `已经发过了,再发一次:[send-file:${good}]`,
         ws,
@@ -125,14 +125,14 @@ describe("Lark delivery follow-up guard", () => {
     // A fenced file: block carries its own content — but the sender uploads it
     // ONLY when it is the entire reply, so prose around it means nothing was
     // delivered. (This example previously had the prose and still passed.)
-    expect(shouldRepairLarkDeliveryFollowup("我没有收到", "```file:note.txt\nhello\n```")).toBe(false);
-    expect(shouldRepairLarkDeliveryFollowup(
+    expect(await shouldRepairLarkDeliveryFollowup("我没有收到", "```file:note.txt\nhello\n```")).toBe(false);
+    expect(await shouldRepairLarkDeliveryFollowup(
       "我没有收到",
       "已经发过了:\n```file:note.txt\nhello\n```",
     )).toBe(true);
   });
 
-  it("requires EVERY named artifact to be deliverable, not just one", () => {
+  it("requires EVERY named artifact to be deliverable, not just one", async () => {
     const ws = mkdtempSync(path.join(os.tmpdir(), "cctb-followup-ws-"));
     const good = path.join(ws, "ok.txt");
     writeFileSync(good, "x");
@@ -140,37 +140,54 @@ describe("Lark delivery follow-up guard", () => {
       const tag = (p: string) => `[send-file:${p}]`;
       // One real + one missing used to clear the claim, and the user then got
       // half a delivery — the same complaint from their side.
-      expect(shouldRepairLarkDeliveryFollowup(
+      expect(await shouldRepairLarkDeliveryFollowup(
         "我没有收到",
         `已经发过了:${tag(good)} ${tag(path.join(ws, "missing.docx"))}`,
         ws,
       )).toBe(true);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:${tag(good)}`, ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:${tag(good)}`, ws)).toBe(false);
       // A directory is not a deliverable artifact.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:${tag(ws)}`, ws)).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:${tag(ws)}`, ws)).toBe(true);
       // The send layer is workspace-sandboxed: an outside path cannot deliver.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", "已经发过了:[send-file:/etc/hosts]", ws)).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", "已经发过了:[send-file:/etc/hosts]", ws)).toBe(true);
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }
   });
 
-  it("does not accept a structured send.* tag that carries no usable path", () => {
+  it("uses the instance's default workspace when there is no workspace override", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "cctb-followup-default-root-"));
+    const workspace = path.join(stateDir, "workspace");
+    const good = path.join(workspace, "result.txt");
+    mkdirSync(workspace);
+    writeFileSync(good, "ok");
+    try {
+      expect(await shouldRepairLarkDeliveryFollowup(
+        "我没有收到文件",
+        `已经发过了 [send-file:${good}]`,
+        { stateDir },
+      )).toBe(false);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not accept a structured send.* tag that carries no usable path", async () => {
     const ws = mkdtempSync(path.join(os.tmpdir(), "cctb-followup-tool-"));
     const good = path.join(ws, "ok.txt");
     writeFileSync(good, "x");
     const tool = (name: string, payload: unknown) => `已经发过了 [tool:${JSON.stringify({ name, payload })}]`;
     try {
       // The tool NAME alone used to satisfy the guard.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.file", {}), ws)).toBe(true);
-      expect(shouldRepairLarkDeliveryFollowup(
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.file", {}), ws)).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup(
         "我没有收到",
         tool("send.file", { path: path.join(ws, "missing.docx") }),
         ws,
       )).toBe(true);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.file", { path: good }), ws)).toBe(false);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { files: [good] }), ws)).toBe(false);
-      expect(shouldRepairLarkDeliveryFollowup(
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.file", { path: good }), ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { files: [good] }), ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup(
         "我没有收到",
         tool("send.batch", { files: [good, path.join(ws, "no.png")] }),
         ws,
@@ -180,7 +197,7 @@ describe("Lark delivery follow-up guard", () => {
     }
   });
 
-  it("refuses paths the real sender would refuse", () => {
+  it("refuses paths the real sender would refuse", async () => {
     const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-sandbox-")));
     const outside = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-outside-")));
     const good = path.join(ws, "ok.txt");
@@ -193,49 +210,98 @@ describe("Lark delivery follow-up guard", () => {
     try {
       // Without a known workspace root the sender still sandboxes, so an
       // arbitrary path is NOT evidence — the guard used to accept it.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", "已经发过了:[send-file:/etc/hosts]")).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", "已经发过了:[send-file:/etc/hosts]")).toBe(true);
       // Credential-style files are refused by the sender.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${secret}]`, ws)).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${secret}]`, ws)).toBe(true);
       // A symlink pointing outside the workspace escapes the sandbox.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${escaping}]`, ws)).toBe(true);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${good}]`, ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${escaping}]`, ws)).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", `已经发过了:[send-file:${good}]`, ws)).toBe(false);
     } finally {
       rmSync(ws, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
   });
 
-  it("speaks the send tool's real protocol, not an invented one", () => {
+  it("speaks the send tool's real protocol, not an invented one", async () => {
     const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-proto-")));
     const good = path.join(ws, "ok.txt");
     writeFileSync(good, "x");
     const tool = (name: string, payload: unknown) => `已经发过了 [tool:${JSON.stringify({ name, payload })}]`;
     try {
-      // send.batch reads images[]/files[]. An earlier guard accepted invented
-      // `items`/`paths` keys the sender never reads, so an unusable batch
-      // cleared the claim.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { files: [good] }), ws)).toBe(false);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { images: [good] }), ws)).toBe(false);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { items: [{ path: good }] }), ws)).toBe(true);
+      // send.batch reads images/files/audios/videos. An earlier guard accepted
+      // invented `items`/`paths` keys while missing valid media shapes.
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { files: [good] }), ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { images: [good] }), ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        tool("send.batch", { images: [{ path: good, caption: "P1 · 封面" }] }),
+        ws,
+      )).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { audios: [good] }), ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { videos: [good] }), ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { items: [{ path: good }] }), ws)).toBe(true);
       // A batch carrying only a message delivers no artifact.
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { message: "hi" }), ws)).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", tool("send.batch", { message: "hi" }), ws)).toBe(true);
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }
   });
 
-  it("counts a fenced file: block only when it is the entire reply", () => {
+  it("checks every directive across legacy and structured syntax", async () => {
+    const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-cross-syntax-")));
+    const good = path.join(ws, "ok.txt");
+    const missing = path.join(ws, "missing.txt");
+    writeFileSync(good, "x");
+    const tool = (filePath: string) => `[tool:${JSON.stringify({ name: "send.file", payload: { path: filePath } })}]`;
+    try {
+      expect(await shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        `已经发过了 [send-file:${good}] ${tool(missing)}`,
+        ws,
+      )).toBe(true);
+      expect(await shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        `已经发过了 ${tool(good)} ${tool(missing)}`,
+        ws,
+      )).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a path above the sender's 30MB upload cap", async () => {
+    const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-oversize-")));
+    const huge = path.join(ws, "huge.bin");
+    writeFileSync(huge, "");
+    truncateSync(huge, 31 * 1024 * 1024);
+    try {
+      expect(await shouldRepairLarkDeliveryFollowup(
+        "我没有收到文件",
+        `已经发过了 [send-file:${huge}]`,
+        ws,
+      )).toBe(true);
+    } finally {
+      rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a fenced file: block only when it is the entire reply", async () => {
     const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-block-")));
     try {
       // The sender uploads a fenced file: block ONLY when it is the whole
       // response; surrounded by prose it posts plain markdown and delivers
       // nothing, so accepting it anywhere cleared an empty claim.
-      expect(shouldRepairLarkDeliveryFollowup(
+      expect(await shouldRepairLarkDeliveryFollowup(
         "我没有收到",
         "已经发过了:\n```file:a.txt\nhi\n```\n就这样",
         ws,
       )).toBe(true);
-      expect(shouldRepairLarkDeliveryFollowup("我没有收到", "```file:a.txt\nhi\n```", ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup("我没有收到", "```file:a.txt\nhi\n```", ws)).toBe(false);
+      expect(await shouldRepairLarkDeliveryFollowup(
+        "我没有收到",
+        "```file:.env\n已经发过了\n```",
+        ws,
+      )).toBe(true);
     } finally {
       rmSync(ws, { recursive: true, force: true });
     }
@@ -261,24 +327,24 @@ describe("Lark delivery follow-up guard", () => {
     }
   });
 
-  it("accepts a current-turn resend with exact image tags", () => {
-    expect(shouldRepairLarkDeliveryFollowup(
+  it("accepts a current-turn resend with exact image tags", async () => {
+    expect(await shouldRepairLarkDeliveryFollowup(
       "好了吗",
       "P1\n[send-image:/tmp/workspace/p1.png]\nP2\n[send-image:/tmp/workspace/p2.png]",
     )).toBe(false);
   });
 
-  it("accepts send.batch and honest unfinished/missing statuses", () => {
-    expect(shouldRepairLarkDeliveryFollowup(
+  it("accepts send.batch and honest unfinished/missing statuses", async () => {
+    expect(await shouldRepairLarkDeliveryFollowup(
       "没收到图片",
       '[tool:{"name":"send.batch","payload":{"images":["/tmp/workspace/p1.png"]}}]',
     )).toBe(false);
-    expect(shouldRepairLarkDeliveryFollowup("好了吗", "还在生成第 5 张，尚未发送。")).toBe(false);
-    expect(shouldRepairLarkDeliveryFollowup("文件呢", "文件不存在，无法发送。")).toBe(false);
+    expect(await shouldRepairLarkDeliveryFollowup("好了吗", "还在生成第 5 张，尚未发送。")).toBe(false);
+    expect(await shouldRepairLarkDeliveryFollowup("文件呢", "文件不存在，无法发送。")).toBe(false);
   });
 
-  it("does not repair an unrelated response even if it discusses historical delivery", () => {
-    expect(shouldRepairLarkDeliveryFollowup(
+  it("does not repair an unrelated response even if it discusses historical delivery", async () => {
+    expect(await shouldRepairLarkDeliveryFollowup(
       "审查交付模块",
       "问题在于它之前已经发送过一次。",
     )).toBe(false);

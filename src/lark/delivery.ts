@@ -1,8 +1,7 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
-import { isCredentialStylePath } from "../runtime/credential-files.js";
 import {
   extractDeliveryTagMatches,
   stripDeliveryTags,
@@ -20,6 +19,17 @@ import { chunkTelegramMessage, type Locale } from "../telegram/message-renderer.
 import { executeCronAddTool } from "../tools/cron-add-tool.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
+import {
+  extractWholeResponseFileBlock,
+  isLarkSendToolName,
+  LARK_FILE_UPLOAD_MAX_BYTES,
+  normalizeLarkSendTool,
+  preflightLarkDeliveryPath,
+  preflightLarkInlineFile,
+  resolveLarkDeliveryRoots,
+  type LarkFileRejectReason,
+  type LarkSendPathKind,
+} from "./delivery-preflight.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { resolveLarkLocale } from "./locale.js";
@@ -30,13 +40,10 @@ import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 
-type LarkSendPathKind = "file" | "image" | "audio" | "video";
-type LarkFileRejectReason = "outside-workspace" | "credentials-file" | "not-found" | "permission-denied" | "read-error" | "too-large" | "upload-failed";
-
 // Feishu rejects bot file uploads above ~30MB (HTTP 400 with no useful message).
 // Checked up front so an oversize file gets a precise "split it" notice instead
 // of a generic upload failure — the 31MB-archive case that confused the operator.
-export const LARK_FILE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
+export { LARK_FILE_UPLOAD_MAX_BYTES } from "./delivery-preflight.js";
 const LARK_MARKDOWN_CHUNK_LIMIT = 3500;
 
 export async function deliverLarkResponse(input: {
@@ -62,33 +69,25 @@ export async function deliverLarkResponse(input: {
   const locale = await resolveLarkLocale(input.stateDir);
   const wholeFileBlock = extractWholeResponseFileBlock(input.text);
   if (wholeFileBlock) {
-    if (isCredentialStylePath(wholeFileBlock.fileName)) {
+    const inlinePreflight = preflightLarkInlineFile(wholeFileBlock);
+    if (!inlinePreflight.ok) {
       await appendLarkFileRejectedTimeline(input, {
         path: wholeFileBlock.fileName,
-        reason: "credentials-file",
+        reason: inlinePreflight.reason,
+        ...(inlinePreflight.reason === "too-large"
+          ? { detail: `${inlinePreflight.fileBytes} bytes > ${LARK_FILE_UPLOAD_MAX_BYTES}` }
+          : {}),
         kind: "file",
       });
       await input.channel.send(input.chatId, {
-        text: renderLarkFileDeliveryError("credentials-file", locale, { fileName: wholeFileBlock.fileName }),
-      }, larkReplyOptions(input.replyTo, input.replyInThread));
-      return;
-    }
-    const body = Buffer.from(wholeFileBlock.body, "utf8");
-    if (body.length > LARK_FILE_UPLOAD_MAX_BYTES) {
-      await appendLarkFileRejectedTimeline(input, {
-        path: wholeFileBlock.fileName,
-        reason: "too-large",
-        detail: `${body.length} bytes > ${LARK_FILE_UPLOAD_MAX_BYTES}`,
-        kind: "file",
-      });
-      await input.channel.send(input.chatId, {
-        text: renderLarkFileDeliveryError("too-large", locale, {
+        text: renderLarkFileDeliveryError(inlinePreflight.reason, locale, {
           fileName: wholeFileBlock.fileName,
-          fileBytes: body.length,
+          fileBytes: inlinePreflight.fileBytes,
         }),
       }, larkReplyOptions(input.replyTo, input.replyInThread));
       return;
     }
+    const body = Buffer.from(wholeFileBlock.body, "utf8");
     try {
       await input.channel.send(input.chatId, {
         file: {
@@ -171,19 +170,7 @@ export async function deliverLarkResponse(input: {
   }
 
   if (matches.length > 0) {
-    const workspaceRoot = await realpath(path.join(input.stateDir, "workspace"))
-      .catch(() => path.join(input.stateDir, "workspace"));
-    const outputRoot = input.requestOutputDir
-      ? await realpath(input.requestOutputDir).catch(() => input.requestOutputDir)
-      : undefined;
-    const overrideRoot = input.workspaceOverride
-      ? await realpath(input.workspaceOverride).catch(() => input.workspaceOverride)
-      : undefined;
-    const generatedImagesRoot = await codexGeneratedImagesRoot();
-    const workspacePrefix = workspaceRoot + path.sep;
-    const outputPrefix = outputRoot ? `${outputRoot}${path.sep}` : undefined;
-    const overridePrefix = overrideRoot ? `${overrideRoot}${path.sep}` : undefined;
-    const generatedImagesPrefix = generatedImagesRoot ? `${generatedImagesRoot}${path.sep}` : undefined;
+    const deliveryRoots = await resolveLarkDeliveryRoots(input);
     // One identical failure notice per delivery, not one per file: a reply
     // carrying five refused tags posted the same lecture five times. The
     // timeline still records every rejected path individually.
@@ -201,49 +188,24 @@ export async function deliverLarkResponse(input: {
     const pendingImages: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }> = [];
     for (const match of matches) {
       const filePath = match.path;
+      const pathPreflight = await preflightLarkDeliveryPath(filePath, deliveryRoots);
+      if (!pathPreflight.ok) {
+        await appendLarkFileRejectedTimeline(input, {
+          path: filePath,
+          ...(pathPreflight.realPath ? { realPath: pathPreflight.realPath } : {}),
+          reason: pathPreflight.reason,
+          ...(pathPreflight.detail ? { detail: pathPreflight.detail } : {}),
+          kind: match.preferPhoto ? "image" : "file",
+        });
+        await sendDeliveryErrorOnce(renderLarkFileDeliveryError(pathPreflight.reason, locale, {
+          workspaceRoot: pathPreflight.workspaceRoot,
+          fileName: path.basename(filePath),
+          fileBytes: pathPreflight.fileBytes,
+        }));
+        continue;
+      }
+      const real = pathPreflight.realPath;
       try {
-        const real = await realpath(filePath);
-        if (isCredentialStylePath(filePath, real)) {
-          await appendLarkFileRejectedTimeline(input, {
-            path: filePath,
-            realPath: real,
-            reason: "credentials-file",
-            kind: match.preferPhoto ? "image" : "file",
-          });
-          await sendDeliveryErrorOnce(renderLarkFileDeliveryError("credentials-file", locale, { fileName: path.basename(filePath) }));
-          continue;
-        }
-        if (
-          !input.allowAnyAbsolutePath &&
-          !larkAnyFilePathAllowed() &&
-          !real.startsWith(workspacePrefix) &&
-          !(outputPrefix && real.startsWith(outputPrefix)) &&
-          !(overridePrefix && real.startsWith(overridePrefix)) &&
-          !(generatedImagesPrefix && real.startsWith(generatedImagesPrefix))
-        ) {
-          await appendLarkFileRejectedTimeline(input, {
-            path: filePath,
-            realPath: real,
-            reason: "outside-workspace",
-            kind: match.preferPhoto ? "image" : "file",
-          });
-          await sendDeliveryErrorOnce(renderLarkFileDeliveryError("outside-workspace", locale, { workspaceRoot }));
-          continue;
-        }
-        const fileSize = (await stat(real)).size;
-        if (fileSize > LARK_FILE_UPLOAD_MAX_BYTES) {
-          await appendLarkFileRejectedTimeline(input, {
-            path: filePath,
-            realPath: real,
-            reason: "too-large",
-            detail: `${fileSize} bytes > ${LARK_FILE_UPLOAD_MAX_BYTES}`,
-            kind: match.preferPhoto ? "image" : "file",
-          });
-          await input.channel.send(input.chatId, {
-            text: renderLarkFileDeliveryError("too-large", locale, { fileName: path.basename(real), fileBytes: fileSize }),
-          }, replyOptions);
-          continue;
-        }
         const body = await readFile(real);
         if (match.preferPhoto) {
           // Pair each image with the caption that precedes its tag; the whole batch
@@ -394,19 +356,6 @@ function chunkLarkMarkdown(markdown: string): string[] {
   return chunkTelegramMessage(markdown, LARK_MARKDOWN_CHUNK_LIMIT);
 }
 
-function extractWholeResponseFileBlock(text: string): { fileName: string; body: string } | null {
-  const fileMatch = text.match(/```file:([^\n`]+)\n([\s\S]*?)```/);
-  if (!fileMatch || text.replace(fileMatch[0], "").trim().length > 0) {
-    return null;
-  }
-  const fileName = path.basename((fileMatch[1] ?? "").trim());
-  const body = fileMatch[2] ?? "";
-  if (!fileName || Buffer.byteLength(body, "utf8") === 0) {
-    return null;
-  }
-  return { fileName, body };
-}
-
 function larkReplyOptions(replyTo: string | undefined, replyInThread: boolean | undefined): LarkSendOptions | undefined {
   if (!replyTo) {
     return undefined;
@@ -458,6 +407,7 @@ async function executeLarkToolTag(input: {
   stateDir: string;
   requestOutputDir?: string;
   workspaceOverride?: string;
+  allowAnyAbsolutePath?: boolean;
   conversationKey?: string;
   bridgeChatType?: "private" | "group";
   bridgeChatId?: number;
@@ -510,58 +460,30 @@ async function executeLarkToolTag(input: {
     return result.ok;
   }
 
-  if (
-    input.name === "send.file" ||
-    input.name === "send.image" ||
-    input.name === "send.audio" ||
-    input.name === "send.video"
-  ) {
-    if (typeof payload?.path !== "string" || payload.path.trim() === "") {
+  if (isLarkSendToolName(input.name)) {
+    const normalized = normalizeLarkSendTool(input.name, input.payload);
+    if (!normalized.ok) {
       await input.channel.send(input.chatId, {
-        text: renderInvalidLarkToolPayload(input.name, "requires_path", input.locale),
+        text: renderInvalidLarkToolPayload(input.name, normalized.reason, input.locale, normalized.field),
       }, larkReplyOptions(input.replyTo, input.replyInThread));
       return false;
     }
-    return await sendLarkPath({
-      ...input,
-      filePath: payload.path,
-      kind: input.name.slice("send.".length) as LarkSendPathKind,
-      ...(typeof payload?.caption === "string" && payload.caption.trim() ? { caption: payload.caption.trim() } : {}),
-    });
-  }
-
-  if (input.name === "send.batch") {
     let ok = true;
-    const invalidField = invalidStringArrayField(payload, ["files", "audios", "videos"]);
-    if (invalidField) {
-      await input.channel.send(input.chatId, {
-        text: renderInvalidLarkToolPayload("send.batch", "string_array", input.locale, invalidField),
-      }, larkReplyOptions(input.replyTo, input.replyInThread));
-      return false;
+    for (const artifact of normalized.artifacts) {
+      ok = await sendLarkPath({
+        ...input,
+        filePath: artifact.path,
+        kind: artifact.kind,
+        ...(artifact.caption ? { caption: artifact.caption } : {}),
+      }) && ok;
     }
-    // images accept paths OR {path, caption} objects so a batch can carry per-image titles.
-    const imageEntries = normalizeLarkBatchImages(payload?.images);
-    if (imageEntries === null) {
-      await input.channel.send(input.chatId, {
-        text: renderInvalidLarkToolPayload("send.batch", "image_entries", input.locale, "images"),
-      }, larkReplyOptions(input.replyTo, input.replyInThread));
-      return false;
-    }
-    const message = typeof payload?.message === "string" ? payload.message : "";
-    for (const image of imageEntries) {
-      ok = await sendLarkPath({ ...input, filePath: image.path, kind: "image", ...(image.caption ? { caption: image.caption } : {}) }) && ok;
-    }
-    for (const file of stringArray(payload?.files)) {
-      ok = await sendLarkPath({ ...input, filePath: file, kind: "file" }) && ok;
-    }
-    for (const audio of stringArray(payload?.audios)) {
-      ok = await sendLarkPath({ ...input, filePath: audio, kind: "audio" }) && ok;
-    }
-    for (const video of stringArray(payload?.videos)) {
-      ok = await sendLarkPath({ ...input, filePath: video, kind: "video" }) && ok;
-    }
-    if (ok && message.trim()) {
-      await sendLarkMarkdown(input.channel, input.chatId, message.trim(), larkReplyOptions(input.replyTo, input.replyInThread));
+    if (ok && normalized.message.trim()) {
+      await sendLarkMarkdown(
+        input.channel,
+        input.chatId,
+        normalized.message.trim(),
+        larkReplyOptions(input.replyTo, input.replyInThread),
+      );
     }
     return ok;
   }
@@ -638,41 +560,6 @@ async function executeLarkToolTag(input: {
   return false;
 }
 
-/**
- * Normalizes a send.batch `images` field, which accepts either a path string or
- * a `{ path, caption }` object (so a batch can carry per-image titles). Returns
- * the normalized entries, [] when absent, or null when malformed.
- */
-function normalizeLarkBatchImages(value: unknown): Array<{ path: string; caption?: string }> | null {
-  if (value === undefined || value === null) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  const out: Array<{ path: string; caption?: string }> = [];
-  for (const entry of value) {
-    if (typeof entry === "string") {
-      if (!entry.trim()) {
-        return null;
-      }
-      out.push({ path: entry });
-      continue;
-    }
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return null;
-    }
-    const pathValue = (entry as { path?: unknown }).path;
-    if (typeof pathValue !== "string" || !pathValue.trim()) {
-      return null;
-    }
-    const captionRaw = (entry as { caption?: unknown }).caption;
-    const caption = typeof captionRaw === "string" && captionRaw.trim() ? captionRaw.trim() : undefined;
-    out.push(caption ? { path: pathValue, caption } : { path: pathValue });
-  }
-  return out;
-}
-
 function renderInvalidLarkToolPayload(
   toolName: string,
   reason: "requires_path" | "string_array" | "image_entries",
@@ -707,6 +594,7 @@ async function sendLarkPath(input: {
   stateDir: string;
   requestOutputDir?: string;
   workspaceOverride?: string;
+  allowAnyAbsolutePath?: boolean;
   conversationKey?: string;
   bridgeChatId?: number;
   bridgeUserId?: number;
@@ -716,73 +604,26 @@ async function sendLarkPath(input: {
   /** Optional title for an image — renders it as a caption + image card. */
   caption?: string;
 }): Promise<boolean> {
-  const workspaceRoot = await realpath(path.join(input.stateDir, "workspace"))
-    .catch(() => path.join(input.stateDir, "workspace"));
-  const outputRoot = input.requestOutputDir
-    ? await realpath(input.requestOutputDir).catch(() => input.requestOutputDir)
-    : undefined;
-  const overrideRoot = input.workspaceOverride
-    ? await realpath(input.workspaceOverride).catch(() => input.workspaceOverride)
-    : undefined;
-  const generatedImagesRoot = await codexGeneratedImagesRoot();
-  const prefixes = [
-    workspaceRoot + path.sep,
-    ...(outputRoot ? [outputRoot + path.sep] : []),
-    ...(overrideRoot ? [overrideRoot + path.sep] : []),
-    ...(generatedImagesRoot ? [generatedImagesRoot + path.sep] : []),
-  ];
-  let real: string;
-  try {
-    real = await realpath(input.filePath);
-  } catch (error) {
-    const reason = larkFileRejectReasonFromError(error);
+  const deliveryRoots = await resolveLarkDeliveryRoots(input);
+  const pathPreflight = await preflightLarkDeliveryPath(input.filePath, deliveryRoots);
+  if (!pathPreflight.ok) {
     await appendLarkFileRejectedTimeline(input, {
       path: input.filePath,
-      reason,
-      detail: errorDetail(error),
+      ...(pathPreflight.realPath ? { realPath: pathPreflight.realPath } : {}),
+      reason: pathPreflight.reason,
+      ...(pathPreflight.detail ? { detail: pathPreflight.detail } : {}),
       kind: input.kind,
     });
     await input.channel.send(input.chatId, {
-      text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(input.filePath) }),
+      text: renderLarkFileDeliveryError(pathPreflight.reason, input.locale, {
+        workspaceRoot: pathPreflight.workspaceRoot,
+        fileName: path.basename(input.filePath),
+        fileBytes: pathPreflight.fileBytes,
+      }),
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
-  if (isCredentialStylePath(input.filePath, real)) {
-    await appendLarkFileRejectedTimeline(input, {
-      path: input.filePath,
-      realPath: real,
-      reason: "credentials-file",
-      kind: input.kind,
-    });
-    await input.channel.send(input.chatId, {
-      text: renderLarkFileDeliveryError("credentials-file", input.locale, { fileName: path.basename(input.filePath) }),
-    }, larkReplyOptions(input.replyTo, input.replyInThread));
-    return false;
-  }
-  if (!larkAnyFilePathAllowed() && !prefixes.some((prefix) => real.startsWith(prefix))) {
-    await appendLarkFileRejectedTimeline(input, {
-      path: input.filePath,
-      realPath: real,
-      reason: "outside-workspace",
-      kind: input.kind,
-    });
-    await input.channel.send(input.chatId, { text: renderLarkFileDeliveryError("outside-workspace", input.locale, { workspaceRoot }) }, larkReplyOptions(input.replyTo, input.replyInThread));
-    return false;
-  }
-  const pathFileSize = await stat(real).then((s) => s.size).catch(() => undefined);
-  if (pathFileSize !== undefined && pathFileSize > LARK_FILE_UPLOAD_MAX_BYTES) {
-    await appendLarkFileRejectedTimeline(input, {
-      path: input.filePath,
-      realPath: real,
-      reason: "too-large",
-      detail: `${pathFileSize} bytes > ${LARK_FILE_UPLOAD_MAX_BYTES}`,
-      kind: input.kind,
-    });
-    await input.channel.send(input.chatId, {
-      text: renderLarkFileDeliveryError("too-large", input.locale, { fileName: path.basename(real), fileBytes: pathFileSize }),
-    }, larkReplyOptions(input.replyTo, input.replyInThread));
-    return false;
-  }
+  const real = pathPreflight.realPath;
   let body: Buffer;
   try {
     body = await readFile(real);
@@ -1158,38 +999,6 @@ async function sendLarkImageWithFileFallback(input: {
   }
 }
 
-function larkAnyFilePathAllowed(): boolean {
-  // Opt-in per instance (set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 in the instance's
-  // lark.env): when on, the file/image delivery sandbox is disabled and the bot may
-  // send a file from ANY absolute path on the machine. Off by default — only files
-  // under the workspace / output / override roots are sendable.
-  return /^(?:1|true|yes|on)$/i.test((process.env.CCTB_LARK_ALLOW_ANY_FILE_PATH ?? "").trim());
-}
-
-/**
- * Codex writes its GPT-Image outputs under `$CODEX_HOME/generated_images/` and
- * references them with `[send-image:]` tags — a documented flow on the Telegram
- * channel that the Lark sandbox refused wholesale: a Codex bot's own generated
- * images bounced with the "copy into your workspace" lecture, once per image
- * (the operator got the same refusal five times for one reply). The dir holds
- * only engine-generated media, so it is a sanctioned read root alongside the
- * request-output dir. Containment still applies: the check below runs on the
- * file's REALPATH, so a symlink planted inside cannot smuggle an outside file,
- * and isCredentialStylePath screens the resolved target first regardless.
- */
-async function codexGeneratedImagesRoot(): Promise<string | undefined> {
-  const home = (process.env.CODEX_HOME ?? "").trim()
-    || (process.env.HOME ? path.join(process.env.HOME, ".codex") : "");
-  if (!home) {
-    return undefined;
-  }
-  try {
-    return await realpath(path.join(home, "generated_images"));
-  } catch {
-    return undefined;
-  }
-}
-
 function renderLarkFileDeliveryError(
   reason: LarkFileRejectReason,
   locale: Locale,
@@ -1340,26 +1149,6 @@ function payloadObject(payload: unknown): Record<string, unknown> | null {
   return payload && typeof payload === "object" && !Array.isArray(payload)
     ? payload as Record<string, unknown>
     : null;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function invalidStringArrayField(payload: Record<string, unknown> | null, keys: string[]): string | null {
-  if (!payload) {
-    return null;
-  }
-  for (const key of keys) {
-    const value = payload[key];
-    if (value === undefined) {
-      continue;
-    }
-    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-      return key;
-    }
-  }
-  return null;
 }
 
 function buildLarkToolCard(

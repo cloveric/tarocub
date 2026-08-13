@@ -2093,9 +2093,10 @@ async function runNormalizedLarkMessage(
           },
         };
         let result = await input.bridge.handleAuthorizedMessage(bridgeTurnInput);
-        // The send layer is workspace-sandboxed, so a path outside it can never
-        // deliver — pass the root so the guard rejects those claims too.
-        if (shouldRepairLarkDeliveryFollowup(commandText, result.text, workspaceOverride)) {
+        // Use the sender's complete root set and preflight, not only an optional
+        // workspace override. Most instances use the default state workspace.
+        const deliveryPreflight = { stateDir: input.stateDir, requestOutputDir, workspaceOverride };
+        if (await shouldRepairLarkDeliveryFollowup(commandText, result.text, deliveryPreflight)) {
           await appendLarkTimelineEvent(input.stateDir, normalized, {
             type: "engine.event",
             outcome: "retry",
@@ -2111,7 +2112,7 @@ async function runNormalizedLarkMessage(
           });
           result = {
             ...repaired,
-            text: shouldRepairLarkDeliveryFollowup(commandText, repaired.text, workspaceOverride)
+            text: await shouldRepairLarkDeliveryFollowup(commandText, repaired.text, deliveryPreflight)
               ? renderUnverifiedLarkDeliveryClaim(locale)
               : repaired.text,
             usage: mergeLarkTurnUsage(firstUsage, repaired.usage),

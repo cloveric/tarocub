@@ -1,13 +1,17 @@
-import { realpathSync, statSync } from "node:fs";
-import path from "node:path";
-
-import { isCredentialStylePath } from "../runtime/credential-files.js";
-
 import { extractDeliveryTagMatches } from "../telegram/delivery-tags.js";
 import {
   extractTelegramToolTagMatches,
   parseTelegramToolTagPayload,
 } from "../telegram/tool-tags.js";
+import {
+  extractWholeResponseFileBlock,
+  isLarkSendToolName,
+  normalizeLarkSendTool,
+  preflightLarkDeliveryPath,
+  preflightLarkInlineFile,
+  resolveLarkDeliveryRoots,
+  type LarkDeliveryPreflightInput,
+} from "./delivery-preflight.js";
 
 const DELIVERY_FOLLOWUP_MAX_CHARS = 160;
 
@@ -65,132 +69,57 @@ export function larkDeliveryFollowupInstruction(text: string): string | undefine
   return "Delivery follow-up for THIS turn: verify platform delivery, not session memory. Never say prior files/images were sent and never tell the user to scroll up unless this response itself repeats every intended artifact using exact [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags after checking each path exists. If work is unfinished or files are missing, state the exact status instead.";
 }
 
-function hasCurrentTurnDeliveryDirective(text: string, workspaceRoot?: string): boolean {
-  // The instruction handed to the engine says to verify each path EXISTS before
-  // claiming delivery. Only checking that a tag is present let an invented path
-  // satisfy the guard: the claim passed, the send then failed downstream, and
-  // the operator got a delivery error instead of the file. Hold the guard to
-  // the promise it makes.
-  // EVERY artifact named must be deliverable. Accepting a response because ONE
-  // of several paths exists cleared claims that then half-failed, which is the
-  // same "you said you sent it" complaint from the user's side.
-  const tagged = extractDeliveryTagMatches(text);
-  if (tagged.length > 0 && tagged.every((match) => pathExistsForDelivery(match.path, workspaceRoot))) {
-    return true;
+async function hasCurrentTurnDeliveryDirective(
+  text: string,
+  context?: string | LarkDeliveryPreflightInput,
+): Promise<boolean> {
+  const wholeFileBlock = extractWholeResponseFileBlock(text);
+  if (wholeFileBlock) {
+    return preflightLarkInlineFile(wholeFileBlock).ok;
   }
-  if (isWholeResponseFileBlock(text)) {
-    // A fenced file: block is uploaded ONLY when it is the entire response —
-    // surrounded by prose the sender treats it as an example and posts plain
-    // markdown, so accepting it anywhere cleared claims that delivered nothing.
-    return true;
-  }
+
+  // Collect every artifact across BOTH legacy and structured syntax before
+  // deciding. Returning after the first valid group let a good file conceal a
+  // second missing file in another tag family.
+  const artifactPaths = extractDeliveryTagMatches(text).map((match) => match.path);
+  let sawDeliveryDirective = artifactPaths.length > 0;
+
   for (const match of extractTelegramToolTagMatches(text)) {
     try {
       const { name, payload } = parseTelegramToolTagPayload(match.payload);
-      if (!["send.file", "send.image", "send.audio", "send.video", "send.batch"].includes(name)) {
+      if (!isLarkSendToolName(name)) {
         continue;
       }
-      // A send.* tag with no resolvable path delivers nothing; the tool name
-      // alone used to satisfy the guard.
-      const paths = structuredSendPaths(name, payload);
-      if (paths && paths.every((candidate) => pathExistsForDelivery(candidate, workspaceRoot))) {
-        return true;
+      sawDeliveryDirective = true;
+      const normalized = normalizeLarkSendTool(name, payload);
+      // An invalid send.* payload, or a message-only batch, delivers no artifact.
+      if (!normalized.ok || normalized.artifacts.length === 0) {
+        return false;
       }
+      artifactPaths.push(...normalized.artifacts.map((artifact) => artifact.path));
     } catch {
-      // Malformed tags are handled by normal delivery; they are not evidence.
+      // The real sender emits a parse error for malformed tool JSON. If it was
+      // intended as a send tool, it cannot prove delivery even when another tag
+      // in the same response is valid.
+      if (/send\.(?:file|image|audio|video|batch)/u.test(match.payload)) {
+        return false;
+      }
     }
   }
-  return false;
-}
 
-/** The sender's rule: a fenced file: block uploads only when it IS the reply. */
-function isWholeResponseFileBlock(text: string): boolean {
-  const match = text.match(/```file:([^\n`]+)\n([\s\S]*?)```/u);
-  if (!match?.[1]?.trim() || !(match[2] ?? "").trim()) {
+  if (!sawDeliveryDirective || artifactPaths.length === 0) {
     return false;
   }
-  return text.replace(match[0], "").trim().length === 0;
-}
-
-/** True when a tagged path points at something the delivery layer can send. */
-/**
- * Whether the send layer could actually deliver this path. Mirrors the checks
- * the sender performs — regular file, not a credential file, inside the
- * workspace after symlink resolution — so the guard never clears a claim that
- * is certain to fail downstream. It stays deliberately CONSERVATIVE: when the
- * workspace root is unknown, an outside path is rejected rather than assumed
- * fine, because the sender's default is to refuse it.
- */
-function pathExistsForDelivery(rawPath: string | undefined, workspaceRoot?: string): boolean {
-  const candidate = (rawPath ?? "").trim();
-  if (!candidate) {
-    return false;
-  }
-  let real: string;
-  try {
-    // realpath first: the sender resolves symlinks before its sandbox check,
-    // so a link pointing outside the workspace must not pass here either.
-    real = realpathSync(candidate);
-    if (!statSync(real).isFile()) {
+  const preflightInput: LarkDeliveryPreflightInput = typeof context === "string"
+    ? { explicitAllowedRoots: [context] }
+    : context ?? {};
+  const roots = await resolveLarkDeliveryRoots(preflightInput);
+  for (const artifactPath of artifactPaths) {
+    if (!(await preflightLarkDeliveryPath(artifactPath, roots)).ok) {
       return false;
     }
-  } catch {
-    // Missing or unreadable is not evidence of delivery either.
-    return false;
   }
-  if (isCredentialStylePath(candidate, real)) {
-    return false;
-  }
-  if (!workspaceRoot) {
-    // Without a known root the sender still sandboxes to the instance
-    // workspace; treating an arbitrary path as deliverable would clear claims
-    // that cannot deliver. Only a path under the process CWD-independent
-    // temp-free heuristic is impossible to verify, so refuse.
-    return false;
-  }
-  let root: string;
-  try {
-    root = realpathSync(workspaceRoot);
-  } catch {
-    root = path.resolve(workspaceRoot);
-  }
-  return real === root || real.startsWith(`${root}${path.sep}`);
-}
-
-/**
- * Paths a structured send.* tool tag would ACTUALLY deliver, using the same
- * shape the send tool itself parses: single-path tools read `path`, and
- * send.batch reads `images[]` and `files[]`. An earlier version invented
- * `items`/`paths` keys the sender never reads (so an invalid batch passed
- * review) while missing nothing it does read — maintaining a second protocol
- * is exactly how the guard and the sender drift apart.
- */
-function structuredSendPaths(name: string, payload: unknown): string[] | null {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
-    return null;
-  }
-  const record = payload as Record<string, unknown>;
-  const asPath = (value: unknown): string | null =>
-    typeof value === "string" && value.trim() ? value.trim() : null;
-
-  if (name === "send.batch") {
-    const collected: string[] = [];
-    for (const key of ["images", "files"]) {
-      const value = record[key];
-      if (value === undefined) continue;
-      if (!Array.isArray(value)) return null; // the sender throws on this
-      for (const entry of value) {
-        const resolved = asPath(entry);
-        if (!resolved) return null;
-        collected.push(resolved);
-      }
-    }
-    // A batch with only a message delivers no artifact — not proof of a file.
-    return collected.length > 0 ? collected : null;
-  }
-
-  const single = asPath(record.path);
-  return single ? [single] : null;
+  return true;
 }
 
 function claimsHistoricalDelivery(text: string): boolean {
@@ -209,14 +138,15 @@ function claimsHistoricalDelivery(text: string): boolean {
     || /\b(?:already|just|previously) (?:sent|uploaded|delivered)\b|\b(?:sent|uploaded|delivered) (?:it|them|the files?|the images?)?\s*(?:already|above|earlier)\b|\bscroll up\b/i.test(normalized);
 }
 
-export function shouldRepairLarkDeliveryFollowup(
+export async function shouldRepairLarkDeliveryFollowup(
   requestText: string,
   responseText: string,
-  workspaceRoot?: string,
-): boolean {
-  return isLarkDeliveryFollowupRequest(requestText)
-    && claimsHistoricalDelivery(responseText)
-    && !hasCurrentTurnDeliveryDirective(responseText, workspaceRoot);
+  context?: string | LarkDeliveryPreflightInput,
+): Promise<boolean> {
+  if (!isLarkDeliveryFollowupRequest(requestText) || !claimsHistoricalDelivery(responseText)) {
+    return false;
+  }
+  return !(await hasCurrentTurnDeliveryDirective(responseText, context));
 }
 
 export function larkDeliveryFollowupRepairPrompt(): string {

@@ -293,6 +293,41 @@ describe("lark service", () => {
     }
   });
 
+  it("accepts a verified resend from the default instance workspace without a repair turn", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-followup-default-root-"));
+    const workspace = path.join(stateDir, "workspace");
+    const filePath = path.join(workspace, "result.txt");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(filePath, "verified result");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: `已经发过了，本轮重新发送。[send-file:${filePath}]`,
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_delivery_followup_default_root", content: "我没有收到文件" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { file: { source: Buffer.from("verified result"), fileName: "result.txt" } },
+        { replyTo: "om_delivery_followup_default_root" },
+      );
+      const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).not.toContain("交付未确认");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks a repeated unverified delivery claim when the repair turn also omits tags", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-followup-block-"));
     const channel = fakeChannel();
