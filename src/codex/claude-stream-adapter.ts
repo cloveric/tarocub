@@ -161,6 +161,9 @@ type ClaudeWorker = {
   explicitBackgroundToolUseIds: Set<string>;
   pendingTaskNotification: ClaudeBackgroundTask | null;
   suppressNextTaskNotificationAssistant: boolean;
+  taskNotificationTurnActive: boolean;
+  taskNotificationAssistantText: string;
+  taskNotificationDeliveryText: string;
   lastActivityAt: number;
   instructions: string | null;
   instructionsFile: ClaudeInstructionsFile | null;
@@ -408,6 +411,57 @@ function toTaskNotificationMetadata(event: ClaudeStreamEvent): ClaudeTaskNotific
     summary: typeof event.summary === "string" ? event.summary : undefined,
     outputFile: typeof event.output_file === "string" ? event.output_file : undefined,
   };
+}
+
+function decodeClaudeTaskNotificationXml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function readClaudeTaskNotificationTag(text: string, tag: string): string | undefined {
+  const value = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, "i").exec(text)?.[1]?.trim();
+  return value ? decodeClaudeTaskNotificationXml(value) : undefined;
+}
+
+/** Claude 2.1.228 emits the terminal envelope as a user-origin stream frame
+ * before running its task-review turn, instead of the older system event. */
+function toUserTaskNotificationMetadata(event: ClaudeStreamEvent): ClaudeTaskNotificationMetadata | null {
+  if (event.type !== "user" || event.origin?.kind !== "task-notification") {
+    return null;
+  }
+  const content = (event.message as { content?: unknown } | undefined)?.content;
+  const text = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+        .map((item) => {
+          if (!item || typeof item !== "object") {
+            return "";
+          }
+          const record = item as { text?: unknown; content?: unknown };
+          if (typeof record.text === "string") {
+            return record.text;
+          }
+          return typeof record.content === "string" ? record.content : "";
+        })
+        .join("\n")
+      : "";
+  if (!/<task-notification>/i.test(text)) {
+    return null;
+  }
+  const direct = toTaskNotificationMetadata(event);
+  const metadata = {
+    taskId: direct.taskId ?? readClaudeTaskNotificationTag(text, "task-id"),
+    toolUseId: direct.toolUseId ?? readClaudeTaskNotificationTag(text, "tool-use-id"),
+    status: direct.status ?? readClaudeTaskNotificationTag(text, "status"),
+    summary: direct.summary ?? readClaudeTaskNotificationTag(text, "summary"),
+    outputFile: direct.outputFile ?? readClaudeTaskNotificationTag(text, "output-file"),
+  };
+  return metadata.taskId ? metadata : null;
 }
 
 function mergeIntermediateDeliveryText(finalResult: string, intermediateDeliveryText: string): string {
@@ -806,6 +860,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       explicitBackgroundToolUseIds: new Set(),
       pendingTaskNotification: null,
       suppressNextTaskNotificationAssistant: false,
+      taskNotificationTurnActive: false,
+      taskNotificationAssistantText: "",
+      taskNotificationDeliveryText: "",
       lastActivityAt: Date.now(),
       instructions: combinedKey,
       instructionsFile,
@@ -932,11 +989,21 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         return;
       }
       if (metadata.taskId) {
+        const taskNotificationOwner = worker.taskNotificationTurnActive
+          ? worker.pendingTaskNotification
+          : null;
+        const onEngineEvent = taskNotificationOwner?.onEngineEvent
+          ?? worker.pendingTurn?.onEngineEvent
+          ?? worker.onEngineEvent;
         worker.collectedBackgroundTaskIds.delete(metadata.taskId);
         worker.backgroundTasks.set(metadata.taskId, {
           ...metadata,
-          ...(worker.pendingTurn ? { turnId: worker.pendingTurn.turnId } : {}),
-          onEngineEvent: worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
+          ...(taskNotificationOwner?.turnId !== undefined
+            ? { turnId: taskNotificationOwner.turnId }
+            : worker.pendingTurn
+              ? { turnId: worker.pendingTurn.turnId }
+              : {}),
+          onEngineEvent,
           lastSeenAt: eventSeenAt,
         });
         // Surface the start on the timeline: the deferred-restart busy guard
@@ -947,7 +1014,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           taskId: metadata.taskId,
           sessionId: worker.currentSessionId ?? undefined,
           ...(metadata.summary ? { description: metadata.summary } : {}),
-        }, worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent);
+        }, onEngineEvent);
       }
       return;
     }
@@ -981,12 +1048,32 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       return;
     }
 
-    if (isTaskNotificationResult(parsed)) {
+    const userTaskNotification = toUserTaskNotificationMetadata(parsed);
+    if (userTaskNotification) {
+      const task = userTaskNotification.taskId
+        ? worker.backgroundTasks.get(userTaskNotification.taskId)
+        : undefined;
+      worker.pendingTaskNotification = {
+        ...task,
+        ...userTaskNotification,
+        onEngineEvent: task?.onEngineEvent ?? worker.onEngineEvent,
+        lastSeenAt: eventSeenAt,
+      };
+      worker.taskNotificationTurnActive = true;
+      worker.taskNotificationAssistantText = "";
+      worker.taskNotificationDeliveryText = "";
+      return;
+    }
+
+    if (isTaskNotificationResult(parsed) || (parsed.type === "result" && worker.taskNotificationTurnActive)) {
       const resultMetadata = toTaskNotificationMetadata(parsed);
       const collectedTaskId = resultMetadata.taskId ?? worker.pendingTaskNotification?.taskId;
       if (collectedTaskId && worker.collectedBackgroundTaskIds.delete(collectedTaskId)) {
         worker.pendingTaskNotification = null;
         worker.suppressNextTaskNotificationAssistant = false;
+        worker.taskNotificationTurnActive = false;
+        worker.taskNotificationAssistantText = "";
+        worker.taskNotificationDeliveryText = "";
         return;
       }
       const resultTask = resultMetadata.taskId ? worker.backgroundTasks.get(resultMetadata.taskId) : undefined;
@@ -1005,13 +1092,19 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       };
       worker.pendingTaskNotification = null;
       worker.suppressNextTaskNotificationAssistant = false;
+      worker.taskNotificationTurnActive = false;
       if (taskId) {
         worker.backgroundTasks.delete(taskId);
       }
       if (metadata.toolUseId) {
         worker.explicitBackgroundToolUseIds.delete(metadata.toolUseId);
       }
-      const text = renderBackgroundTaskTurnResult(metadata, parsed.result);
+      const resultText = parsed.result
+        ? mergeIntermediateDeliveryText(parsed.result, worker.taskNotificationDeliveryText)
+        : worker.taskNotificationAssistantText;
+      worker.taskNotificationAssistantText = "";
+      worker.taskNotificationDeliveryText = "";
+      const text = renderBackgroundTaskTurnResult(metadata, resultText);
       if (text) {
         const settlesCurrentTurn = metadata.turnId !== undefined && worker.pendingTurn?.turnId === metadata.turnId;
         this.emitEngineEvent(worker, {
@@ -1035,6 +1128,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     // turn. The pendingTurn init handler below covers the in-turn re-init case.
     if (parsed.type === "system" && parsed.subtype === "init" && worker.pendingTaskNotification && !worker.pendingTurn) {
       worker.suppressNextTaskNotificationAssistant = true;
+      worker.taskNotificationTurnActive = true;
+      worker.taskNotificationAssistantText = "";
+      worker.taskNotificationDeliveryText = "";
       return;
     }
 
@@ -1053,6 +1149,48 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         type: "session",
         sessionId: worker.currentSessionId ?? undefined,
       });
+      return;
+    }
+
+    if (parsed.type === "assistant" && worker.taskNotificationTurnActive) {
+      for (const item of parsed.message?.content ?? []) {
+        if (item.type === "tool_use" && typeof item.id === "string" && item.id) {
+          if (isExplicitBackgroundToolInput(item.input)) {
+            worker.explicitBackgroundToolUseIds.add(item.id);
+          }
+          const taskId = taskOutputTaskId(item.name, item.input);
+          if (taskId) {
+            worker.taskOutputToolUseIds.set(item.id, taskId);
+          }
+          continue;
+        }
+        if (item.type === "text" && typeof item.text === "string" && item.text) {
+          worker.taskNotificationAssistantText = appendAssistantText(
+            worker.taskNotificationAssistantText,
+            item.text,
+          );
+          if (hasDeliveryTag(item.text)) {
+            worker.taskNotificationDeliveryText = appendAssistantText(
+              worker.taskNotificationDeliveryText,
+              item.text,
+            );
+          }
+        }
+      }
+      return;
+    }
+
+    if (parsed.type === "user" && worker.taskNotificationTurnActive) {
+      for (const item of parsed.message?.content ?? []) {
+        if (item.type !== "tool_result" || typeof item.tool_use_id !== "string" || !item.tool_use_id) {
+          continue;
+        }
+        const taskId = worker.taskOutputToolUseIds.get(item.tool_use_id);
+        worker.taskOutputToolUseIds.delete(item.tool_use_id);
+        if (taskId) {
+          this.settleCollectedBackgroundTask(worker, taskId, item.content);
+        }
+      }
       return;
     }
 
@@ -1230,6 +1368,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     if (parsed.type === "result") {
       worker.pendingTaskNotification = null;
       worker.suppressNextTaskNotificationAssistant = false;
+      worker.taskNotificationTurnActive = false;
+      worker.taskNotificationAssistantText = "";
+      worker.taskNotificationDeliveryText = "";
     }
   }
 
@@ -1606,6 +1747,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     ) {
       worker.pendingTaskNotification = null;
       worker.suppressNextTaskNotificationAssistant = false;
+      worker.taskNotificationTurnActive = false;
+      worker.taskNotificationAssistantText = "";
+      worker.taskNotificationDeliveryText = "";
     }
   }
 
@@ -1670,6 +1814,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     worker.explicitBackgroundToolUseIds.clear();
     worker.pendingTaskNotification = null;
     worker.suppressNextTaskNotificationAssistant = false;
+    worker.taskNotificationTurnActive = false;
+    worker.taskNotificationAssistantText = "";
+    worker.taskNotificationDeliveryText = "";
     await Promise.allSettled(deliveries);
   }
 

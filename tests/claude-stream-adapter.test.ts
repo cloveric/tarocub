@@ -1216,6 +1216,116 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("handles Claude 2.1.228 user-origin task reviews without leaking them into a queued turn", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const firstEvents: Array<{ type?: string; taskId?: string; status?: string; text?: string }> = [];
+    const secondEvents: Array<{ type?: string; text?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Run in background",
+        files: [],
+        onEngineEvent: (event) => {
+          firstEvents.push(event);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "sleep 5", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-background","tool_use_id":"toolu-background","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await first;
+
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            "<task-notification>",
+            "<task-id>task-background</task-id>",
+            "<tool-use-id>toolu-background</tool-use-id>",
+            "<output-file>/tmp/task-background.output</output-file>",
+            "<status>failed</status>",
+            "<summary>Initial attempt failed; reviewing the result</summary>",
+            "</task-notification>",
+          ].join("\n"),
+        },
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Intermediate retry failed." }] },
+        session_id: "session-123",
+      }) + "\n");
+
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Unrelated foreground question",
+        files: [],
+        onEngineEvent: (event) => {
+          secondEvents.push(event);
+        },
+      });
+      await waitFor(() => children[0].stdin.lines.length === 2);
+
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Final background review chunk." }] },
+        session_id: "session-123",
+      }) + "\n");
+      // Claude 2.1.228 can omit origin on the result that closes the user-origin
+      // review frame. The active review state still identifies its ownership.
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Final verified task result.","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Foreground answer." }] },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Foreground answer.","session_id":"session-123"}\n');
+
+      await expect(second).resolves.toEqual({ text: "Foreground answer." });
+      await waitFor(() => firstEvents.some((event) => event.type === "task_notification"));
+      expect(firstEvents).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "task-background",
+        status: "failed",
+        text: "Final verified task result.",
+      }));
+      expect(secondEvents).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringMatching(/background|retry/i) }),
+      ]));
+      expect(secondEvents).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "task_notification" }),
+      ]));
+
+      // The terminal user-origin frame must also clear the background-task
+      // ledger, otherwise a settings change would stay deferred for six hours.
+      const third = adapter.sendUserMessage("session-123", {
+        text: "Use changed instructions",
+        files: [],
+        instructions: "changed instructions",
+      });
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Reconfigured.","session_id":"session-123"}\n');
+      await expect(third).resolves.toEqual({ text: "Reconfigured." });
+    } finally {
+      adapter.destroy();
+    }
+  });
+
   it("settles a background task immediately when TaskOutput collects its terminal result", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: Array<{
