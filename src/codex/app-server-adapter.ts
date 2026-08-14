@@ -2050,6 +2050,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       {
         threadId,
         approvalPolicy: "never",
+        excludeTurns: true,
       },
       {
         timeoutMs: this.threadReadTimeoutMs,
@@ -2737,6 +2738,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private resetChildState(): void {
+    if (this.child !== null) {
+      // Reject output from the retired child immediately, including the window
+      // before a replacement child increments the generation during spawn.
+      this.childGeneration += 1;
+    }
     this.child = null;
     this.initializePromise = null;
     this.initializeKey = null;

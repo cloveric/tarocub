@@ -455,6 +455,44 @@ describe("CodexAppServerAdapter", () => {
     }
   });
 
+  it("ignores late stdout from a retired app-server before its replacement starts", async () => {
+    vi.useFakeTimers();
+    const childA = new FakeChildProcess();
+    const childB = new FakeChildProcess();
+    const children = [childA, childB];
+    const spawnFn = () => {
+      const child = children.shift();
+      if (!child) {
+        throw new Error("no more fake children");
+      }
+      return child;
+    };
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn as never);
+
+    try {
+      const firstInitialize = adapter.validateExternalSession("telegram-first");
+      await vi.advanceTimersByTimeAsync(0);
+      const initializeA = JSON.parse(childA.stdin.lines[0] ?? "{}");
+      childA.stdout.emitData(`{"id":${initializeA.id},"result":{"platformOs":"macos"}}\n`);
+      await expect(firstInitialize).resolves.toBeUndefined();
+
+      adapter.destroy();
+      childA.stdout.emitData("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB");
+
+      const secondInitialize = adapter.validateExternalSession("telegram-second");
+      const assertion = expect(secondInitialize).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(0);
+      const initializeB = JSON.parse(childB.stdin.lines[0] ?? "{}");
+      childB.stdout.emitData(`{"id":${initializeB.id},"result":{"platformOs":"macos"}}\n`);
+      await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MS);
+
+      await assertion;
+    } finally {
+      adapter.destroy();
+      vi.useRealTimers();
+    }
+  });
+
   it("times out and destroys app-server when thread/start never replies", async () => {
     vi.useFakeTimers();
     try {
@@ -571,6 +609,7 @@ describe("CodexAppServerAdapter", () => {
       params: {
         threadId: "thread-existing",
         approvalPolicy: "never",
+        excludeTurns: true,
       },
     });
     child.stdout.emitData(`{"id":${resume.id},"result":{"thread":{"id":"thread-existing"}}}\n`);
