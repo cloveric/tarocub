@@ -143,6 +143,13 @@ type ClaudeBackgroundTask = ClaudeTaskNotificationMetadata & {
   lastSeenAt: number;
 };
 
+type ClaudeTaskNotificationWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  abortSignal?: AbortSignal;
+  abortHandler?: () => void;
+};
+
 type ClaudeWorker = {
   child: ClaudeChildProcess;
   stdoutDecoder: StringDecoder;
@@ -162,6 +169,7 @@ type ClaudeWorker = {
   pendingTaskNotification: ClaudeBackgroundTask | null;
   suppressNextTaskNotificationAssistant: boolean;
   taskNotificationTurnActive: boolean;
+  taskNotificationWaiters: Set<ClaudeTaskNotificationWaiter>;
   taskNotificationAssistantText: string;
   taskNotificationDeliveryText: string;
   lastActivityAt: number;
@@ -700,7 +708,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const prompt = this.buildPrompt(input);
     const effectiveWorkspace = input.workspaceOverride ?? this.workspacePath;
     const worker = await this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, effectiveWorkspace, engineOptions);
-    worker.onEngineEvent = input.onEngineEvent;
 
     const response = await this.sendTurn(worker, prompt, input);
     const nextSessionId = response.sessionId;
@@ -861,6 +868,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       pendingTaskNotification: null,
       suppressNextTaskNotificationAssistant: false,
       taskNotificationTurnActive: false,
+      taskNotificationWaiters: new Set(),
       taskNotificationAssistantText: "",
       taskNotificationDeliveryText: "",
       lastActivityAt: Date.now(),
@@ -1080,6 +1088,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         worker.taskNotificationTurnActive = false;
         worker.taskNotificationAssistantText = "";
         worker.taskNotificationDeliveryText = "";
+        this.resolveTaskNotificationWaiters(worker);
         return;
       }
       const resultTask = resultMetadata.taskId ? worker.backgroundTasks.get(resultMetadata.taskId) : undefined;
@@ -1099,6 +1108,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.pendingTaskNotification = null;
       worker.suppressNextTaskNotificationAssistant = false;
       worker.taskNotificationTurnActive = false;
+      this.resolveTaskNotificationWaiters(worker);
       if (taskId) {
         worker.backgroundTasks.delete(taskId);
       }
@@ -1377,6 +1387,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.taskNotificationTurnActive = false;
       worker.taskNotificationAssistantText = "";
       worker.taskNotificationDeliveryText = "";
+      this.resolveTaskNotificationWaiters(worker);
     }
   }
 
@@ -1493,6 +1504,63 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     }
   }
 
+  private taskNotificationTurnBusy(worker: ClaudeWorker): boolean {
+    return worker.taskNotificationTurnActive || worker.pendingTaskNotification !== null;
+  }
+
+  private waitForTaskNotificationTurn(
+    worker: ClaudeWorker,
+    abortSignal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.taskNotificationTurnBusy(worker)) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const waiter: ClaudeTaskNotificationWaiter = { resolve, reject, abortSignal };
+      if (abortSignal) {
+        waiter.abortHandler = () => {
+          worker.taskNotificationWaiters.delete(waiter);
+          abortSignal.removeEventListener("abort", waiter.abortHandler!);
+          reject(new Error("Task was stopped by user"));
+        };
+        if (abortSignal.aborted) {
+          waiter.abortHandler();
+          return;
+        }
+        abortSignal.addEventListener("abort", waiter.abortHandler, { once: true });
+      }
+
+      worker.taskNotificationWaiters.add(waiter);
+      if (!this.taskNotificationTurnBusy(worker)) {
+        this.resolveTaskNotificationWaiters(worker);
+      }
+    });
+  }
+
+  private resolveTaskNotificationWaiters(worker: ClaudeWorker): void {
+    if (this.taskNotificationTurnBusy(worker)) {
+      return;
+    }
+    for (const waiter of worker.taskNotificationWaiters) {
+      if (waiter.abortSignal && waiter.abortHandler) {
+        waiter.abortSignal.removeEventListener("abort", waiter.abortHandler);
+      }
+      waiter.resolve();
+    }
+    worker.taskNotificationWaiters.clear();
+  }
+
+  private rejectTaskNotificationWaiters(worker: ClaudeWorker, error: Error): void {
+    for (const waiter of worker.taskNotificationWaiters) {
+      if (waiter.abortSignal && waiter.abortHandler) {
+        waiter.abortSignal.removeEventListener("abort", waiter.abortHandler);
+      }
+      waiter.reject(error);
+    }
+    worker.taskNotificationWaiters.clear();
+  }
+
   private async handleControlRequest(worker: ClaudeWorker, parsed: ClaudeStreamEvent): Promise<void> {
     const requestId = parsed.request_id;
     const pending = worker.pendingTurn;
@@ -1567,6 +1635,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private async sendTurn(worker: ClaudeWorker, prompt: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
+    // Claude can fold a prompt written during a synthetic task-notification
+    // review into that review turn. The prompt then receives no independent
+    // terminal result, leaving the bridge's foreground slot stuck forever.
+    // Keep it outside Claude's stdin until the synthetic frame has closed.
+    if (this.taskNotificationTurnBusy(worker)) {
+      await this.waitForTaskNotificationTurn(worker, input.abortSignal);
+    }
+    worker.onEngineEvent = input.onEngineEvent;
+
     if (worker.pendingTurn) {
       throw new Error("Claude session already has an in-flight turn");
     }
@@ -1680,6 +1757,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const workers = [...new Set(this.workers.values())];
     this.workers.clear();
     for (const worker of workers) {
+      this.rejectTaskNotificationWaiters(worker, new Error("Adapter destroyed"));
       if (worker.pendingTurn) {
         this.clearPendingTurnTimeout(worker.pendingTurn);
         worker.pendingTurn.reject(new Error("Adapter destroyed"));
@@ -1746,7 +1824,12 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }
       seen.add(worker);
       this.pruneExpiredBackgroundTasks(worker, now);
-      if (worker.pendingTurn || worker.backgroundTasks.size > 0) {
+      if (
+        worker.pendingTurn
+        || worker.backgroundTasks.size > 0
+        || this.taskNotificationTurnBusy(worker)
+        || worker.taskNotificationWaiters.size > 0
+      ) {
         continue;
       }
       if (now - worker.lastActivityAt < this.idleWorkerTtlMs) {
@@ -1795,10 +1878,12 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.taskNotificationTurnActive = false;
       worker.taskNotificationAssistantText = "";
       worker.taskNotificationDeliveryText = "";
+      this.resolveTaskNotificationWaiters(worker);
     }
   }
 
   private failWorker(worker: ClaudeWorker, error: Error): void {
+    this.rejectTaskNotificationWaiters(worker, error);
     if (worker.pendingTurn) {
       const pending = worker.pendingTurn;
       worker.pendingTurn = null;

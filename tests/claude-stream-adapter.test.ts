@@ -1216,7 +1216,7 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
-  it("handles Claude 2.1.228 user-origin task reviews without leaking them into a queued turn", async () => {
+  it("waits for a Claude task review to finish before writing the queued foreground turn", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const firstEvents: Array<{ type?: string; taskId?: string; status?: string; text?: string }> = [];
     const secondEvents: Array<{ type?: string; text?: string }> = [];
@@ -1278,7 +1278,8 @@ describe("ClaudeStreamAdapter", () => {
           secondEvents.push(event);
         },
       });
-      await waitFor(() => children[0].stdin.lines.length === 2);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(children[0].stdin.lines).toHaveLength(1);
 
       children[0].stdout.emitData(JSON.stringify({
         type: "assistant",
@@ -1288,6 +1289,8 @@ describe("ClaudeStreamAdapter", () => {
       // Claude 2.1.228 can omit origin on the result that closes the user-origin
       // review frame. The active review state still identifies its ownership.
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Final verified task result.","session_id":"session-123"}\n');
+
+      await waitFor(() => children[0].stdin.lines.length === 2);
       children[0].stdout.emitData(JSON.stringify({
         type: "assistant",
         message: { content: [{ type: "text", text: "Foreground answer." }] },
