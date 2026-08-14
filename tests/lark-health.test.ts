@@ -167,4 +167,83 @@ describe("Lark health monitor", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("does not reconnect after stop while an asynchronous health probe is still in flight", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-health-stop-race-"));
+    const channel = {
+      connect: vi.fn(async () => undefined),
+      disconnect: vi.fn(async () => undefined),
+    };
+    let resolveProbe!: (value: boolean) => void;
+    const probe = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveProbe = resolve;
+    }));
+
+    try {
+      const monitor = startLarkHealthMonitor({
+        stateDir,
+        instanceName: "lark-stopped",
+        channel,
+        intervalMs: 1_000,
+        failureThreshold: 1,
+        probe,
+      });
+
+      await vi.waitFor(() => {
+        expect(probe).toHaveBeenCalledTimes(1);
+      }, { timeout: 1_500 });
+      expect(probe).toHaveBeenCalledTimes(1);
+      monitor.stop();
+      resolveProbe(false);
+      // Let the probe continuation and its asynchronous timeline write settle.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(channel.disconnect).not.toHaveBeenCalled();
+      expect(channel.connect).not.toHaveBeenCalled();
+      await expect(readTimeline(stateDir)).resolves.toHaveLength(0);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("disconnects a channel whose reconnect finishes after the monitor is stopped", async () => {
+    vi.useFakeTimers();
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-health-connect-stop-race-"));
+    let resolveConnect!: () => void;
+    const channel = {
+      connect: vi.fn(() => new Promise<void>((resolve) => {
+        resolveConnect = resolve;
+      })),
+      disconnect: vi.fn(async () => undefined),
+    };
+    const probe = vi.fn(async () => false);
+
+    try {
+      const monitor = startLarkHealthMonitor({
+        stateDir,
+        instanceName: "lark-connect-stopped",
+        channel,
+        intervalMs: 1_000,
+        failureThreshold: 1,
+        probe,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(channel.connect).toHaveBeenCalledTimes(1);
+      });
+      expect(channel.disconnect).toHaveBeenCalledTimes(1);
+
+      monitor.stop();
+      resolveConnect();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(channel.disconnect).toHaveBeenCalledTimes(2);
+      expect(await readTimeline(stateDir)).not.toContainEqual(expect.objectContaining({
+        outcome: "reconnected",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });

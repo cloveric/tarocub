@@ -140,6 +140,7 @@ type ClaudeTaskNotificationMetadata = {
 type ClaudeBackgroundTask = ClaudeTaskNotificationMetadata & {
   turnId?: number;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   lastSeenAt: number;
 };
 
@@ -148,6 +149,7 @@ type ClaudeTaskNotificationWaiter = {
   reject: (error: Error) => void;
   abortSignal?: AbortSignal;
   abortHandler?: () => void;
+  graceTimer?: ReturnType<typeof setTimeout>;
 };
 
 type ClaudeWorker = {
@@ -200,6 +202,7 @@ const MAX_MCP_SERVER_WARNING_CHARS = 2_000;
 const DEFAULT_IDLE_WORKER_TTL_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_TASK_NOTIFICATION_START_GRACE_MS = 1000;
 const BACKGROUND_TASK_SILENT_SUPPRESS_MS = 60 * 60_000;
 const BACKGROUND_TASK_TURN_SETTLE_GRACE_MS = 1500;
 // There is deliberately NO total-turn cap for Claude: long autonomous tasks
@@ -595,6 +598,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly turnInactivityTimeoutMs: number | null;
   private readonly backgroundTaskMaxAgeMs: number;
   private readonly backgroundTaskSilentSuppressMs: number;
+  private readonly taskNotificationStartGraceMs: number;
   private readonly disallowedTools: string[];
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
@@ -614,6 +618,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       turnInactivityTimeoutMs?: number | null;
       backgroundTaskMaxAgeMs?: number;
       backgroundTaskSilentSuppressMs?: number;
+      taskNotificationStartGraceMs?: number;
       disallowedTools?: string[];
     },
   ) {
@@ -636,6 +641,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       : options.turnInactivityTimeoutMs;
     this.backgroundTaskMaxAgeMs = options?.backgroundTaskMaxAgeMs ?? DEFAULT_BACKGROUND_TASK_MAX_AGE_MS;
     this.backgroundTaskSilentSuppressMs = options?.backgroundTaskSilentSuppressMs ?? BACKGROUND_TASK_SILENT_SUPPRESS_MS;
+    this.taskNotificationStartGraceMs = Math.max(
+      0,
+      options?.taskNotificationStartGraceMs ?? DEFAULT_TASK_NOTIFICATION_START_GRACE_MS,
+    );
     this.disallowedTools = options?.disallowedTools ?? [];
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
@@ -769,7 +778,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       // whole window — the idle sweeper only prunes workers it visits.
       const now = Date.now();
       this.pruneExpiredBackgroundTasks(existing, now);
-      const count = existing.backgroundTasks.size;
+      const pendingTaskId = existing.pendingTaskNotification?.taskId;
+      const hasUntrackedTaskReview = this.taskNotificationTurnBusy(existing)
+        && (!pendingTaskId || !existing.backgroundTasks.has(pendingTaskId));
+      const count = existing.backgroundTasks.size + (hasUntrackedTaskReview ? 1 : 0);
       if (count > 0) {
         if (existing.workspacePath !== workspacePath) {
           throw new Error(
@@ -981,6 +993,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       this.workers.set(parsed.session_id, worker);
     }
     const eventSeenAt = Date.now();
+    if (worker.taskNotificationTurnActive && worker.pendingTaskNotification) {
+      worker.pendingTaskNotification.lastSeenAt = eventSeenAt;
+    }
 
     if (parsed.type === "system" && parsed.subtype === "task_started") {
       const metadata = toTaskNotificationMetadata(parsed);
@@ -1003,6 +1018,8 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         const onEngineEvent = taskNotificationOwner?.onEngineEvent
           ?? worker.pendingTurn?.onEngineEvent
           ?? worker.onEngineEvent;
+        const onApprovalRequest = taskNotificationOwner?.onApprovalRequest
+          ?? worker.pendingTurn?.onApprovalRequest;
         worker.collectedBackgroundTaskIds.delete(metadata.taskId);
         worker.backgroundTasks.set(metadata.taskId, {
           ...metadata,
@@ -1012,6 +1029,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
               ? { turnId: worker.pendingTurn.turnId }
               : {}),
           onEngineEvent,
+          onApprovalRequest,
           lastSeenAt: eventSeenAt,
         });
         // Surface the start on the timeline: the deferred-restart busy guard
@@ -1054,6 +1072,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         ...task,
         ...metadata,
         onEngineEvent: task?.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: task?.onApprovalRequest,
         lastSeenAt: eventSeenAt,
       };
       return;
@@ -1071,6 +1090,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         ...task,
         ...userTaskNotification,
         onEngineEvent: task?.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: task?.onApprovalRequest,
         lastSeenAt: eventSeenAt,
       };
       worker.taskNotificationTurnActive = true;
@@ -1466,6 +1486,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     if (!pending || metadata.turnId === undefined || metadata.turnId !== pending.turnId) {
       return;
     }
+    if (metadata.toolUseId) {
+      pending.outstandingToolUseIds.delete(metadata.toolUseId);
+    }
     this.clearBackgroundTaskTurnSettlement(pending);
     const resultText = renderBackgroundTaskTurnResult(metadata, text);
     pending.backgroundCompletionTimer = setTimeout(() => {
@@ -1476,9 +1499,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       // event clears this timer, so the dangerous case is a LONG SILENT tool call:
       // settling there would resolve the turn with the background task's text and
       // throw away the real answer (and its usage) that arrives seconds later.
-      // A turn that produced no assistant text of its own has nothing to lose, so
-      // the background task result is still its answer.
-      if (pending.outstandingToolUseIds.size > 0 && pending.assistantText.trim()) {
+      if (pending.outstandingToolUseIds.size > 0) {
         return;
       }
       worker.pendingTurn = null;
@@ -1505,7 +1526,16 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private taskNotificationTurnBusy(worker: ClaudeWorker): boolean {
-    return worker.taskNotificationTurnActive || worker.pendingTaskNotification !== null;
+    if (worker.taskNotificationTurnActive) {
+      return true;
+    }
+
+    // The terminal system notification only records ownership metadata. Give
+    // Claude a bounded window to start its synthetic review, but do not reserve
+    // stdin forever when that follow-up frame never arrives.
+    const pending = worker.pendingTaskNotification;
+    return pending !== null
+      && Date.now() - pending.lastSeenAt < this.taskNotificationStartGraceMs;
   }
 
   private waitForTaskNotificationTurn(
@@ -1521,6 +1551,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       if (abortSignal) {
         waiter.abortHandler = () => {
           worker.taskNotificationWaiters.delete(waiter);
+          if (waiter.graceTimer) {
+            clearTimeout(waiter.graceTimer);
+          }
           abortSignal.removeEventListener("abort", waiter.abortHandler!);
           reject(new Error("Task was stopped by user"));
         };
@@ -1532,6 +1565,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }
 
       worker.taskNotificationWaiters.add(waiter);
+      if (!worker.taskNotificationTurnActive && worker.pendingTaskNotification) {
+        const elapsedMs = Date.now() - worker.pendingTaskNotification.lastSeenAt;
+        const remainingMs = Math.max(0, this.taskNotificationStartGraceMs - elapsedMs);
+        waiter.graceTimer = setTimeout(() => {
+          waiter.graceTimer = undefined;
+          this.resolveTaskNotificationWaiters(worker);
+        }, remainingMs + 1);
+        waiter.graceTimer.unref?.();
+      }
       if (!this.taskNotificationTurnBusy(worker)) {
         this.resolveTaskNotificationWaiters(worker);
       }
@@ -1543,6 +1585,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       return;
     }
     for (const waiter of worker.taskNotificationWaiters) {
+      if (waiter.graceTimer) {
+        clearTimeout(waiter.graceTimer);
+      }
       if (waiter.abortSignal && waiter.abortHandler) {
         waiter.abortSignal.removeEventListener("abort", waiter.abortHandler);
       }
@@ -1553,6 +1598,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
   private rejectTaskNotificationWaiters(worker: ClaudeWorker, error: Error): void {
     for (const waiter of worker.taskNotificationWaiters) {
+      if (waiter.graceTimer) {
+        clearTimeout(waiter.graceTimer);
+      }
       if (waiter.abortSignal && waiter.abortHandler) {
         waiter.abortSignal.removeEventListener("abort", waiter.abortHandler);
       }
@@ -1564,12 +1612,16 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private async handleControlRequest(worker: ClaudeWorker, parsed: ClaudeStreamEvent): Promise<void> {
     const requestId = parsed.request_id;
     const pending = worker.pendingTurn;
+    const taskNotificationOwner = worker.taskNotificationTurnActive
+      ? worker.pendingTaskNotification
+      : null;
+    const approvalHandler = taskNotificationOwner?.onApprovalRequest ?? pending?.onApprovalRequest;
     if (!requestId) {
       return;
     }
 
     const request = toApprovalInput(parsed, worker.currentSessionId);
-    if (request.abortSignal === undefined && pending?.approvalAbortController) {
+    if (request.abortSignal === undefined && !taskNotificationOwner && pending?.approvalAbortController) {
       request.abortSignal = pending.approvalAbortController.signal;
     }
 
@@ -1579,21 +1631,21 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       toolName: request.toolName,
       toolInput: request.toolInput,
       sessionId: worker.currentSessionId ?? undefined,
-    });
+    }, taskNotificationOwner?.onEngineEvent);
     let decision: EngineApprovalDecision;
     if (isAskUserQuestionRequest(request)) {
-      if (!pending?.onApprovalRequest) {
+      if (!approvalHandler) {
         decision = { behavior: "deny" };
       } else {
         try {
-          decision = await pending.onApprovalRequest(request);
+          decision = await approvalHandler(request);
         } catch {
           decision = { behavior: "deny" };
         }
       }
     } else if (worker.approvalMode !== "normal") {
       decision = { behavior: "allow", scope: "session" };
-    } else if (!pending?.onApprovalRequest) {
+    } else if (!approvalHandler) {
       decision = { behavior: "deny" };
     } else {
       const key = sessionApprovalKey(request);
@@ -1605,7 +1657,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           if (inFlight) {
             decision = await inFlight;
           } else {
-            const decisionPromise = pending.onApprovalRequest(request);
+            const decisionPromise = approvalHandler(request);
             worker.pendingApprovalByKey.set(key, decisionPromise);
             try {
               decision = await decisionPromise;
@@ -1639,7 +1691,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     // review into that review turn. The prompt then receives no independent
     // terminal result, leaving the bridge's foreground slot stuck forever.
     // Keep it outside Claude's stdin until the synthetic frame has closed.
-    if (this.taskNotificationTurnBusy(worker)) {
+    while (this.taskNotificationTurnBusy(worker)) {
       await this.waitForTaskNotificationTurn(worker, input.abortSignal);
     }
     worker.onEngineEvent = input.onEngineEvent;
@@ -1845,9 +1897,13 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       return;
     }
 
+    let prunedPendingTaskNotification = false;
     for (const [taskId, task] of worker.backgroundTasks.entries()) {
       if (now - task.lastSeenAt >= this.backgroundTaskMaxAgeMs) {
         worker.backgroundTasks.delete(taskId);
+        if (worker.pendingTaskNotification?.taskId === taskId) {
+          prunedPendingTaskNotification = true;
+        }
         if (task.toolUseId) {
           worker.explicitBackgroundToolUseIds.delete(task.toolUseId);
         }
@@ -1869,10 +1925,31 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }
     }
 
-    if (
-      worker.pendingTaskNotification?.taskId &&
-      !worker.backgroundTasks.has(worker.pendingTaskNotification.taskId)
-    ) {
+    const pendingTaskNotification = worker.pendingTaskNotification;
+    const untrackedPendingExpired = Boolean(
+      pendingTaskNotification
+      && now - pendingTaskNotification.lastSeenAt >= this.backgroundTaskMaxAgeMs
+      && (
+        !pendingTaskNotification.taskId
+        || !worker.backgroundTasks.has(pendingTaskNotification.taskId)
+      ),
+    );
+    if (untrackedPendingExpired && !prunedPendingTaskNotification && pendingTaskNotification) {
+      if (pendingTaskNotification.toolUseId) {
+        worker.explicitBackgroundToolUseIds.delete(pendingTaskNotification.toolUseId);
+      }
+      this.emitEngineEvent(worker, {
+        type: "task_notification",
+        text: `${pendingTaskNotification.summary ?? "Background task review"} produced no terminal result before the safety timeout and was settled quietly.`,
+        sessionId: worker.currentSessionId ?? undefined,
+        taskId: pendingTaskNotification.taskId,
+        status: "failed",
+        suppressUserDelivery: true,
+        ...(pendingTaskNotification.summary ? { summary: pendingTaskNotification.summary } : {}),
+      }, pendingTaskNotification.onEngineEvent);
+    }
+
+    if (prunedPendingTaskNotification || untrackedPendingExpired) {
       worker.pendingTaskNotification = null;
       worker.suppressNextTaskNotificationAssistant = false;
       worker.taskNotificationTurnActive = false;

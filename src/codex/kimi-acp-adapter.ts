@@ -192,6 +192,13 @@ type KimiDeferredSettingsNotice = {
   taskCount: number;
 };
 
+type KimiBackgroundContinuationWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  abortSignal?: AbortSignal;
+  abortHandler?: () => void;
+};
+
 type KimiWorker = {
   child: KimiChildProcess;
   connection: ClientSideConnection;
@@ -213,6 +220,7 @@ type KimiWorker = {
   tools: Map<string, KimiToolState>;
   backgroundTasks: Map<string, KimiBackgroundTask>;
   backgroundContinuations: Map<string, KimiBackgroundContinuation>;
+  backgroundContinuationWaiters: Set<KimiBackgroundContinuationWaiter>;
   terminalBackgroundTasks: Map<string, KimiTerminalBackgroundTask>;
   activeHookTurn?: KimiHookTurn;
   ignoredHookTurn?: IgnoredKimiHookTurn;
@@ -729,7 +737,10 @@ async function readKimiTaskReviewTextFromWire(
     }
 
     const text = textParts.join("").trim();
-    if (sawTargetTurn && completed && text && !text.includes("\0") && (!latest || latestTime >= latest.time)) {
+    // An empty completed turn is still a useful lifecycle signal. Callers can
+    // fall back to the captured task result while using `undefined` to mean the
+    // wire has not proved that this review ended yet.
+    if (sawTargetTurn && completed && !text.includes("\0") && (!latest || latestTime >= latest.time)) {
       latest = { text, time: latestTime };
     }
   }
@@ -1466,6 +1477,27 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (existing.pendingTurn) {
         throw new Error("Cannot reconfigure Kimi session while a turn is in flight");
       }
+      // The relay replies 202 before its async event handler finishes. A late
+      // task-origin TurnStarted can therefore be accepted while ownership is
+      // still being recovered from wire/tombstone state and before it appears
+      // in either background map. Killing the worker in that window orphans the
+      // review and lets its ACP text leak into the replacement worker's turn.
+      if (existing.hookRelayActive && this.hookRelayRuntime) {
+        await withTimeout(
+          this.hookRelayRuntime.drainAcceptedEvents(),
+          HOOK_RELAY_DRAIN_TIMEOUT_MS,
+          "Kimi Hook relay did not settle before reconfiguring the session",
+        );
+        const refreshed = this.workers.get(sessionId);
+        if (existing.removed || (refreshed && refreshed !== existing)) {
+          return await this.getOrCreateWorker(
+            sessionId,
+            workspacePath,
+            runtimeOptions,
+            instructionSettingsKey,
+          );
+        }
+      }
       const now = Date.now();
       this.pruneExpiredBackgroundTasks(existing, now);
       const count = new Set([
@@ -1574,6 +1606,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       tools: new Map(),
       backgroundTasks: new Map(),
       backgroundContinuations: new Map(),
+      backgroundContinuationWaiters: new Set(),
       terminalBackgroundTasks: new Map(),
       ignoredHookTerminalStarts: [],
       lastActivityAt: Date.now(),
@@ -1813,6 +1846,21 @@ export class KimiAcpAdapter implements CodexAdapter {
     prompt: string,
     input: CodexUserMessageInput,
   ): Promise<{ text: string; usage?: AdapterUsage }> {
+    if (worker.hookRelayActive && this.hookRelayRuntime) {
+      await withTimeout(
+        this.hookRelayRuntime.drainAcceptedEvents(),
+        HOOK_RELAY_DRAIN_TIMEOUT_MS,
+        "Kimi Hook relay did not settle before the foreground turn",
+      );
+    }
+    // Kimi can start a synthetic task-origin review independently of ACP
+    // prompt calls. Sending a foreground prompt while that continuation exists
+    // makes both turns share one update stream, so one answer can consume the
+    // other's text. Re-check after every wake-up because another review can
+    // start in the same relay batch that completed the previous one.
+    while (this.backgroundContinuationTurnBusy(worker)) {
+      await this.waitForBackgroundContinuation(worker, input.abortSignal);
+    }
     let rejectFailure!: (error: Error) => void;
     const failurePromise = new Promise<never>((_resolve, reject) => {
       rejectFailure = reject;
@@ -2090,6 +2138,53 @@ export class KimiAcpAdapter implements CodexAdapter {
     return candidates.length === 1 ? candidates[0] : undefined;
   }
 
+  private backgroundContinuationTurnBusy(worker: KimiWorker): boolean {
+    return worker.backgroundContinuations.size > 0;
+  }
+
+  private async waitForBackgroundContinuation(worker: KimiWorker, abortSignal?: AbortSignal): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const waiter: KimiBackgroundContinuationWaiter = { resolve, reject, abortSignal };
+      if (abortSignal) {
+        waiter.abortHandler = () => {
+          worker.backgroundContinuationWaiters.delete(waiter);
+          abortSignal.removeEventListener("abort", waiter.abortHandler!);
+          reject(new Error("Task was stopped by user"));
+        };
+        if (abortSignal.aborted) {
+          waiter.abortHandler();
+          return;
+        }
+        abortSignal.addEventListener("abort", waiter.abortHandler, { once: true });
+      }
+      worker.backgroundContinuationWaiters.add(waiter);
+      this.resolveBackgroundContinuationWaiters(worker);
+    });
+  }
+
+  private resolveBackgroundContinuationWaiters(worker: KimiWorker): void {
+    if (this.backgroundContinuationTurnBusy(worker)) {
+      return;
+    }
+    for (const waiter of worker.backgroundContinuationWaiters) {
+      if (waiter.abortSignal && waiter.abortHandler) {
+        waiter.abortSignal.removeEventListener("abort", waiter.abortHandler);
+      }
+      waiter.resolve();
+    }
+    worker.backgroundContinuationWaiters.clear();
+  }
+
+  private rejectBackgroundContinuationWaiters(worker: KimiWorker, error: Error): void {
+    for (const waiter of worker.backgroundContinuationWaiters) {
+      if (waiter.abortSignal && waiter.abortHandler) {
+        waiter.abortSignal.removeEventListener("abort", waiter.abortHandler);
+      }
+      waiter.reject(error);
+    }
+    worker.backgroundContinuationWaiters.clear();
+  }
+
   private adoptKimiWorkflow(worker: KimiWorker, currentWorkflowId: string, workflowId: string): void {
     if (currentWorkflowId === workflowId) {
       return;
@@ -2250,6 +2345,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (worker.activeHookTurn?.continuationTaskId === stopped.taskId) {
       worker.activeHookTurn = undefined;
     }
+    this.resolveBackgroundContinuationWaiters(worker);
 
     const sessionId = continuation?.sessionId ?? task?.sessionId ?? worker.currentSessionId ?? undefined;
     const summary = continuation?.summary ?? task?.description;
@@ -2398,6 +2494,8 @@ export class KimiAcpAdapter implements CodexAdapter {
       const pendingTerminal = this.takePendingKimiHookTerminal(worker);
       if (pendingTerminal) {
         this.scheduleKimiContinuationFinish(worker, continuation, pendingTerminal);
+      } else {
+        this.armKimiContinuationFallback(worker, continuation);
       }
       return;
     }
@@ -2411,6 +2509,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (worker.activeHookTurn.turnId === event.turnId || (previous && activeTaskId === taskId)) {
         if (previous) {
           previous.lastSeenAt = now;
+          this.armKimiContinuationFallback(worker, previous);
         }
         return;
       }
@@ -2473,6 +2572,8 @@ export class KimiAcpAdapter implements CodexAdapter {
     const pendingTerminal = this.takePendingKimiHookTerminal(worker);
     if (pendingTerminal) {
       this.scheduleKimiContinuationFinish(worker, continuation, pendingTerminal);
+    } else {
+      this.armKimiContinuationFallback(worker, continuation);
     }
   }
 
@@ -2627,8 +2728,41 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (!worker.backgroundContinuations.has(continuation.taskId)) {
       return;
     }
-    if (worker.pendingTurn || worker.activeHookTurn) {
+    if (worker.pendingTurn) {
       this.armKimiContinuationFallback(worker, continuation);
+      return;
+    }
+    const activeHookTurn = worker.activeHookTurn;
+    if (activeHookTurn) {
+      const ownsActiveReview = activeHookTurn.originKind === "task"
+        && activeHookTurn.continuationTaskId === continuation.taskId;
+      if (!ownsActiveReview) {
+        this.armKimiContinuationFallback(worker, continuation);
+        return;
+      }
+
+      const reviewSessionId = continuation.sessionId ?? worker.currentSessionId;
+      const reviewTurnId = continuation.reviewTurnId ?? continuation.activeTurnId;
+      const recoveredReview = reviewSessionId && reviewTurnId
+        ? await this.readTaskReviewTextFn(
+            this.engineHomePath,
+            reviewSessionId,
+            continuation.taskId,
+            reviewTurnId,
+          ).catch(() => undefined)
+        : undefined;
+      if (recoveredReview === undefined) {
+        // The review may be in a long silent tool call. Keep waiting until the
+        // wire itself records turn.ended; elapsed time alone is not terminal.
+        this.armKimiContinuationFallback(worker, continuation);
+        return;
+      }
+      if (!continuation.assistantText.trim() && recoveredReview.trim()) {
+        continuation.assistantText = recoveredReview;
+      }
+      await this.finishKimiBackgroundContinuation(worker, continuation, {
+        status: continuation.status === "failed" ? "failed" : "completed",
+      });
       return;
     }
     const pendingTerminal = this.takePendingKimiHookTerminal(worker);
@@ -2659,6 +2793,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (worker.activeHookTurn?.continuationTaskId === continuation.taskId) {
       worker.activeHookTurn = undefined;
     }
+    this.resolveBackgroundContinuationWaiters(worker);
 
     const sourceTask = worker.backgroundTasks.get(continuation.taskId);
     if (sourceTask?.notificationTimer) {
@@ -3213,6 +3348,7 @@ export class KimiAcpAdapter implements CodexAdapter {
 
   private failWorker(worker: KimiWorker, error: Error): void {
     worker.rejectFailure(error);
+    this.rejectBackgroundContinuationWaiters(worker, error);
     this.failBackgroundTasks(worker);
     const pending = worker.pendingTurn;
     if (!pending) {
@@ -3293,6 +3429,27 @@ export class KimiAcpAdapter implements CodexAdapter {
           clearTimeout(task.notificationTimer);
         }
         worker.backgroundTasks.delete(taskId);
+        if (!worker.backgroundContinuations.has(taskId)) {
+          const sessionId = task.sessionId ?? worker.currentSessionId ?? undefined;
+          this.rememberTerminalBackgroundTask(worker, taskId, {
+            workflowId: task.workflowId,
+            sessionId,
+            status: "failed",
+            summary: task.description,
+            onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
+            onApprovalRequest: task.onApprovalRequest,
+            taskOriginReviewStarted: false,
+          });
+          void this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
+            type: "task_notification",
+            text: `${task.description ?? "Kimi background task"} produced no terminal notification before the safety timeout and was settled quietly.`,
+            sessionId,
+            taskId,
+            status: "failed",
+            suppressUserDelivery: true,
+            ...(task.description ? { summary: task.description } : {}),
+          });
+        }
       }
       for (const continuation of worker.backgroundContinuations.values()) {
         if (now - continuation.lastSeenAt < this.backgroundTaskMaxAgeMs) {
@@ -3392,6 +3549,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     // not retain dead tasks until the six-hour stale cutoff.
     void this.failBackgroundTasks(worker);
     worker.removed = true;
+    this.rejectBackgroundContinuationWaiters(worker, new Error("Kimi ACP worker was removed"));
     for (const task of worker.backgroundTasks.values()) {
       if (task.notificationTimer) {
         clearTimeout(task.notificationTimer);

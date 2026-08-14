@@ -1861,6 +1861,129 @@ describe("CodexAppServerAdapter", () => {
     expect(child.killCalls).toBe(0);
   });
 
+  it("does not overwrite an in-flight turn when the same thread is entered twice", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const internals = adapter as unknown as {
+      threadContextUsage: Map<string, { totalTokens: number; modelContextWindow: number }>;
+    };
+
+    const first = adapter.sendUserMessage("telegram-overlap", {
+      text: "first",
+      files: [],
+    });
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-overlap"}}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const firstTurnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    child.stdout.emitData(`{"id":${firstTurnStart.id},"result":{"turn":{"id":"turn-first"}}}\n`);
+
+    // A saturated context must not trigger compaction underneath the live turn.
+    internals.threadContextUsage.set("thread-overlap", {
+      totalTokens: 90,
+      modelContextWindow: 100,
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const second = adapter.sendUserMessage("thread-overlap", {
+      text: "second",
+      files: [],
+      abortSignal: controller.signal,
+    });
+    await expect(Promise.race([
+      second,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("second turn did not reject promptly")), 100);
+      }),
+    ])).rejects.toThrow("already has an in-flight turn");
+    expect(child.stdin.lines.map((line) => JSON.parse(line).method).filter(Boolean)).toEqual([
+      "initialize",
+      "thread/start",
+      "turn/start",
+    ]);
+
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-overlap","turnId":"turn-first","delta":"first answer"}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-overlap","turn":{"id":"turn-first","items":[],"status":"completed","error":null}}}\n');
+    await expect(first).resolves.toMatchObject({ text: "first answer" });
+  });
+
+  it("does not compact a thread while its first turn is still in asynchronous preparation", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const internals = adapter as unknown as {
+      threadContextUsage: Map<string, { totalTokens: number; modelContextWindow: number }>;
+      isIdle(): boolean;
+    };
+    let releaseSessionEvent!: () => void;
+    const sessionEventGate = new Promise<void>((resolve) => {
+      releaseSessionEvent = resolve;
+    });
+    let sessionEventStarted = false;
+
+    const first = adapter.sendUserMessage("thread-preparing", {
+      text: "first",
+      files: [],
+      onEngineEvent: async (event) => {
+        if (event.type === "session") {
+          sessionEventStarted = true;
+          await sessionEventGate;
+        }
+      },
+    });
+    void first.catch(() => undefined);
+
+    try {
+      await waitFor(() => child.stdin.lines.length >= 1);
+      const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+      child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+      await waitFor(() => child.stdin.lines.length >= 2);
+      const resume = JSON.parse(child.stdin.lines[1] ?? "{}");
+      child.stdout.emitData(`{"id":${resume.id},"result":{"thread":{"id":"thread-preparing"}}}\n`);
+      await waitFor(() => sessionEventStarted);
+      expect(internals.isIdle()).toBe(false);
+      expect(child.stdin.lines.map((line) => JSON.parse(line).method).filter(Boolean)).toEqual([
+        "initialize",
+        "thread/resume",
+      ]);
+
+      internals.threadContextUsage.set("thread-preparing", {
+        totalTokens: 90,
+        modelContextWindow: 100,
+      });
+      const second = adapter.sendUserMessage("thread-preparing", {
+        text: "second",
+        files: [],
+      });
+      await expect(Promise.race([
+        second,
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("second turn did not reject promptly")), 100);
+        }),
+      ])).rejects.toThrow("already has an in-flight turn");
+      expect(child.stdin.lines.map((line) => JSON.parse(line).method).filter(Boolean)).toEqual([
+        "initialize",
+        "thread/resume",
+      ]);
+
+      releaseSessionEvent();
+      await waitFor(() => child.stdin.lines.length >= 3);
+      const firstTurnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+      expect(firstTurnStart.method).toBe("turn/start");
+      child.stdout.emitData(`{"id":${firstTurnStart.id},"result":{"turn":{"id":"turn-first"}}}\n`);
+      child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-preparing","turnId":"turn-first","delta":"first answer"}}\n');
+      child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-preparing","turn":{"id":"turn-first","items":[],"status":"completed","error":null}}}\n');
+      await expect(first).resolves.toMatchObject({ text: "first answer" });
+      expect(internals.isIdle()).toBe(true);
+    } finally {
+      releaseSessionEvent();
+      await adapter.destroy();
+    }
+  });
+
   it("recovers a thread whose writer leaked instead of failing every later turn", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

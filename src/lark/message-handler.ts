@@ -69,7 +69,7 @@ import {
   renderUnverifiedLarkDeliveryClaim,
   shouldRepairLarkDeliveryFollowup,
 } from "./delivery-followup.js";
-import { shouldRetryLarkStaleResponse } from "./stale-response-guard.js";
+import { isReplaySafeLarkToolName, shouldRetryLarkStaleResponse } from "./stale-response-guard.js";
 import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
 import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
 import {
@@ -1934,9 +1934,13 @@ async function runNormalizedLarkMessage(
       };
       const deliveryFollowupGuardActive = isLarkDeliveryFollowupRequest(commandText);
       let initialTurnSawToolActivity = false;
+      let initialTurnSawUnsafeToolActivity = false;
       const handleInitialEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
-        if (event.type === "tool_use" || event.type === "tool_result" || event.type === "tool_progress") {
+        if (event.type === "tool_use") {
           initialTurnSawToolActivity = true;
+          if (!isReplaySafeLarkToolName(event.toolName)) {
+            initialTurnSawUnsafeToolActivity = true;
+          }
         }
         if (deliveryFollowupGuardActive) {
           // A stale session can stream "already sent; scroll up" before the
@@ -2104,6 +2108,7 @@ async function runNormalizedLarkMessage(
           replyTo: normalized.messageId,
           responseText: result.text,
           sawToolActivity: initialTurnSawToolActivity,
+          sawUnsafeToolActivity: initialTurnSawUnsafeToolActivity,
         })) {
           const reset = await sessionStore.removeByConversationKeyRecovering(normalized.conversationKey);
           await appendLarkTimelineEvent(input.stateDir, normalized, {

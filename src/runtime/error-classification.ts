@@ -78,6 +78,13 @@ export function classifyFailure(error: unknown): FailureCategory {
     return "engine-thread-locked";
   }
 
+  // This is the adapter's own same-process reservation, not a stale writer
+  // lock held by another CLI. The active turn remains healthy and the caller
+  // can retry once it settles.
+  if (text.includes("already has an in-flight turn")) {
+    return "engine-busy";
+  }
+
   if (
     text.includes("not logged in") ||
     text.includes("unauthorized") ||

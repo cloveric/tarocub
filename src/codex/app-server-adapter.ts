@@ -590,6 +590,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
   // instead of crossing the model limit and leaking an unrelated old answer.
   private readonly threadContextUsage = new Map<string, ThreadContextUsage>();
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
+  // Covers the whole sendUserMessage lifecycle, including thread resume,
+  // preventive compaction, asynchronous session events, and final thread/read.
+  // pendingTurns alone starts too late and is removed before final settlement.
+  private readonly activeTurnEntries = new Set<string>();
   private completingTurns = 0;
   private readonly idleWaiters = new Set<() => void>();
   // Remembers the initializeKey whose pending config change we have already
@@ -651,35 +655,57 @@ export class CodexAppServerAdapter implements CodexAdapter {
     );
     const prompt = this.buildPrompt(input, instructions);
     const cwd = input.workspaceOverride ?? this.cwd;
-    const resolvedThreadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, cwd);
-    const threadId = await this.prepareThreadForTurn(resolvedThreadId, cwd);
-    // Announce the thread BEFORE the turn can fail. Every other adapter emits a
-    // mid-turn `session` event that Bridge.handleAuthorizedTurn binds on; the
-    // app-server adapter only reported its thread id through a SUCCESSFUL
-    // response, so a /stop or a timeout on the first turn of an unbound chat
-    // (new chat, after /reset, or after a `thread not found` → startThread)
-    // discarded the new thread id and the next message silently started over.
-    // Mirrors process-adapter.ts:140.
-    await this.emitSessionEvent(threadId, input.onEngineEvent);
-    const turn = await this.startTurn(
-      threadId,
-      prompt,
-      input.onProgress,
-      input.onEngineEvent,
-      // A config change may be deferred while the shared child is busy. Gate
-      // approvals with the mode that actually spawned the running child, not
-      // the newly-read config, so policy and sandbox never become half-applied.
-      this.currentApprovalMode,
-      input.onApprovalRequest,
-      input.abortSignal,
-      input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
-    );
-
-    return {
-      text: turn.text.trim() || `Session ${threadId} completed.`,
-      sessionId: threadId !== sessionId ? threadId : undefined,
-      usage: turn.usage,
+    const reservations = new Set<string>();
+    const reserve = (key: string): void => {
+      if (reservations.has(key)) {
+        return;
+      }
+      if (this.activeTurnEntries.has(key) || this.pendingTurns.has(key)) {
+        throw new Error(`Codex thread ${key} already has an in-flight turn`);
+      }
+      this.activeTurnEntries.add(key);
+      reservations.add(key);
     };
+    reserve(sessionId);
+    let threadId = sessionId;
+    try {
+      const resolvedThreadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, cwd);
+      reserve(resolvedThreadId);
+      threadId = await this.prepareThreadForTurn(resolvedThreadId, cwd);
+      reserve(threadId);
+      // Announce the thread BEFORE the turn can fail. Every other adapter emits a
+      // mid-turn `session` event that Bridge.handleAuthorizedTurn binds on; the
+      // app-server adapter only reported its thread id through a SUCCESSFUL
+      // response, so a /stop or a timeout on the first turn of an unbound chat
+      // (new chat, after /reset, or after a `thread not found` → startThread)
+      // discarded the new thread id and the next message silently started over.
+      // Mirrors process-adapter.ts:140.
+      await this.emitSessionEvent(threadId, input.onEngineEvent);
+      const turn = await this.startTurn(
+        threadId,
+        prompt,
+        input.onProgress,
+        input.onEngineEvent,
+        // A config change may be deferred while the shared child is busy. Gate
+        // approvals with the mode that actually spawned the running child, not
+        // the newly-read config, so policy and sandbox never become half-applied.
+        this.currentApprovalMode,
+        input.onApprovalRequest,
+        input.abortSignal,
+        input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
+      );
+
+      return {
+        text: turn.text.trim() || `Session ${threadId} completed.`,
+        sessionId: threadId !== sessionId ? threadId : undefined,
+        usage: turn.usage,
+      };
+    } finally {
+      for (const reservation of reservations) {
+        this.activeTurnEntries.delete(reservation);
+      }
+      this.notifyIdleWaitersIfIdle();
+    }
   }
 
   async getThreadGoal(sessionId: string, input: { workspaceOverride?: string } = {}): Promise<CodexThreadGoalResponse> {
@@ -2095,6 +2121,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private async prepareThreadForTurn(threadId: string, cwd: string): Promise<string> {
+    // A second surface can reach the same engine thread without sharing the
+    // bridge's logical conversation lock. Never compact underneath the live
+    // writer; startTurn will reject the duplicate before it can overwrite the
+    // first PendingTurn.
+    if (this.pendingTurns.has(threadId)) {
+      return threadId;
+    }
     // A self-running /goal owns this same thread outside the ordinary turn
     // queue. Compacting underneath it can terminate or misroute the pursuit;
     // leave its context lifecycle to Codex until the watcher settles.
@@ -2221,6 +2254,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
     abortSignal?: AbortSignal,
     timeoutMs: number | null = this.turnTimeoutMs,
   ): Promise<{ text: string; usage?: AdapterUsage }> {
+    if (this.pendingTurns.has(threadId)) {
+      throw new Error(`Codex thread ${threadId} already has an in-flight turn`);
+    }
     // Forward command approvals only in "normal" mode; in bypass/full-auto the user
     // opted out, so the turn runs with approvalPolicy "never" and Codex never asks
     // (mirrors the `approvalMode === "normal"` gate in the Claude/Antigravity/process
@@ -2692,6 +2728,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       }
     }
     return (
+      this.activeTurnEntries.size === 0 &&
       this.pendingTurns.size === 0 &&
       // A turn displaced from the thread key is still running.
       this.pendingTurnsByTurnId.size === 0 &&

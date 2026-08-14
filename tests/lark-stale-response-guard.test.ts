@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  isReplaySafeLarkToolName,
   isTruncatedPreviousLarkResponse,
   shouldRetryLarkStaleResponse,
 } from "../src/lark/stale-response-guard.js";
@@ -14,6 +15,13 @@ import {
 } from "../src/state/delivery-obligation-store.js";
 
 describe("Lark stale response guard", () => {
+  it("only classifies explicit read-only tools as safe to replay", () => {
+    expect(isReplaySafeLarkToolName("WebSearch")).toBe(true);
+    expect(isReplaySafeLarkToolName("Read")).toBe(true);
+    expect(isReplaySafeLarkToolName("Write")).toBe(false);
+    expect(isReplaySafeLarkToolName("mcp__unknown__lookup")).toBe(false);
+  });
+
   it("recognizes a prior answer's sentence-boundary truncation", () => {
     expect(isTruncatedPreviousLarkResponse(
       "可以，这版更像微信一点，但抓手还在。",

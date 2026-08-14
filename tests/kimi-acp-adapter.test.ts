@@ -1723,6 +1723,368 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("waits for an active task-origin review before prompting a new foreground turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-active-review-serialization-test-"));
+    const harness = createHarness();
+    const taskEvents: EngineStreamEvent[] = [];
+    const foregroundEvents: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 25,
+      hookTerminalGraceMs: 0,
+      hookRelayEnabled: true,
+    });
+    try {
+      const firstTurn = adapter.sendUserMessage("telegram-active-review", {
+        text: "run detached validation",
+        files: [],
+        onEngineEvent: (event) => {
+          taskEvents.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "task-active-review",
+        kind: "process",
+        description: "Validate output",
+        detached: true,
+      });
+      server.respondPrompt();
+      await expect(firstTurn).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-active-review",
+        origin_kind: "task",
+        origin_name: "task-active-review",
+        prompt: '<notification type="task.completed" source_id="task-active-review">done</notification>',
+      });
+
+      const foregroundTurn = adapter.sendUserMessage("kimi-session-1", {
+        text: "answer a new foreground question",
+        files: [],
+        onEngineEvent: (event) => {
+          foregroundEvents.push(event);
+        },
+      });
+      void foregroundTurn.catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(server.prompts).toHaveLength(1);
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Background validation passed." },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      expect(server.prompts).toHaveLength(1);
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => server.prompts.length === 2);
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground answer." },
+      });
+      server.respondPrompt();
+      await expect(foregroundTurn).resolves.toMatchObject({ text: "Foreground answer." });
+      await waitFor(() => taskEvents.some((event) => event.type === "task_notification"));
+      expect(taskEvents.some((event) => (
+        event.type === "task_notification"
+        && event.taskId === "task-active-review"
+        && event.text === "Background validation passed."
+      ))).toBe(true);
+      expect(foregroundEvents).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: "Background validation passed." }),
+      ]));
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases a queued foreground turn when a completed task review loses its Stop hook", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-lost-review-stop-test-"));
+    const wirePath = path.join(
+      root,
+      "sessions",
+      "wd-test",
+      "session_kimi-session-1",
+      "agents",
+      "main",
+      "wire.jsonl",
+    );
+    await mkdir(path.dirname(wirePath), { recursive: true });
+    const harness = createHarness();
+    const taskEvents: EngineStreamEvent[] = [];
+    const foregroundEvents: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 25,
+      hookTerminalGraceMs: 0,
+      hookRelayEnabled: true,
+    });
+    try {
+      const firstTurn = adapter.sendUserMessage("telegram-lost-review-stop", {
+        text: "run detached validation",
+        files: [],
+        onEngineEvent: (event) => {
+          taskEvents.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "task-lost-review-stop",
+        kind: "process",
+        description: "Validate output",
+        detached: true,
+      });
+      server.respondPrompt();
+      await expect(firstTurn).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-lost-review-stop",
+        origin_kind: "task",
+        origin_name: "task-lost-review-stop",
+        prompt: '<notification type="task.completed" source_id="task-lost-review-stop">done</notification>',
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Background validation passed without a Stop hook." },
+      });
+      await writeFile(wirePath, `${[
+        {
+          type: "turn.prompt",
+          input: [{
+            type: "text",
+            text: '<notification type="task.completed" source_id="task-lost-review-stop">done</notification>',
+          }],
+          origin: { kind: "task", taskId: "task-lost-review-stop", status: "completed" },
+          time: 1,
+        },
+        {
+          type: "context.append_loop_event",
+          event: {
+            type: "content.part",
+            turnId: "turn-lost-review-stop",
+            part: { type: "text", text: "Background validation passed without a Stop hook." },
+          },
+          time: 2,
+        },
+        {
+          type: "context.append_loop_event",
+          event: { type: "step.end", turnId: "turn-lost-review-stop", finishReason: "end_turn" },
+          time: 3,
+        },
+        { type: "turn.ended", turnId: "turn-lost-review-stop", time: 4 },
+      ].map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+
+      const foregroundTurn = adapter.sendUserMessage("kimi-session-1", {
+        text: "answer a new foreground question",
+        files: [],
+        onEngineEvent: (event) => {
+          foregroundEvents.push(event);
+        },
+      });
+      void foregroundTurn.catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(server.prompts).toHaveLength(1);
+
+      await waitFor(() => server.prompts.length === 2);
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground answer." },
+      });
+      server.respondPrompt();
+
+      await expect(foregroundTurn).resolves.toMatchObject({ text: "Foreground answer." });
+      await waitFor(() => taskEvents.some((event) => event.type === "task_notification"));
+      expect(taskEvents).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "task-lost-review-stop",
+        status: "completed",
+        text: "Background validation passed without a Stop hook.",
+      }));
+      expect(foregroundEvents).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: "Background validation passed without a Stop hook." }),
+      ]));
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for an accepted task-origin hook while its task ownership is still resolving", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-origin-race-test-"));
+    const harness = createHarness();
+    const taskEvents: EngineStreamEvent[] = [];
+    let resolveTaskOrigin!: (taskId: string | undefined) => void;
+    const taskOrigin = new Promise<string | undefined>((resolve) => {
+      resolveTaskOrigin = resolve;
+    });
+    const resolveTaskOriginFn = vi.fn(async () => await taskOrigin);
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookTerminalGraceMs: 0,
+      hookRelayEnabled: true,
+      resolveTaskOriginFn,
+    });
+
+    try {
+      const firstTurn = adapter.sendUserMessage("telegram-hook-origin-race", {
+        text: "run detached validation",
+        files: [],
+        onEngineEvent: (event) => {
+          taskEvents.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "task-slow-origin",
+        kind: "process",
+        description: "Validate output",
+        detached: true,
+      });
+      await waitFor(() => taskEvents.some((event) => event.type === "background_task_started"));
+      server.respondPrompt();
+      await expect(firstTurn).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-slow-origin",
+        origin_kind: "task",
+        prompt: "Review the completed detached task.",
+      });
+      await waitFor(() => resolveTaskOriginFn.mock.calls.length === 1);
+
+      const foregroundTurn = adapter.sendUserMessage("kimi-session-1", {
+        text: "answer a new foreground question",
+        files: [],
+      });
+      void foregroundTurn.catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(server.prompts).toHaveLength(1);
+
+      resolveTaskOrigin("task-slow-origin");
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => server.prompts.length === 2);
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground answer." },
+      });
+      server.respondPrompt();
+      await expect(foregroundTurn).resolves.toMatchObject({ text: "Foreground answer." });
+    } finally {
+      resolveTaskOrigin(undefined);
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reconfigure a worker while an accepted late task review is resolving ownership", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-reconfigure-race-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const taskEvents: EngineStreamEvent[] = [];
+    let resolveTaskOrigin!: (taskId: string | undefined) => void;
+    const taskOrigin = new Promise<string | undefined>((resolve) => {
+      resolveTaskOrigin = resolve;
+    });
+    const resolveTaskOriginFn = vi.fn(async () => await taskOrigin);
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      backgroundContinuationGraceMs: 1,
+      hookTerminalGraceMs: 0,
+      hookRelayEnabled: true,
+      resolveTaskOriginFn,
+    });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-hook-reconfigure-race", {
+        text: "run detached validation",
+        files: [],
+        onEngineEvent: (event) => {
+          taskEvents.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "task-late-reconfigure",
+        kind: "process",
+        description: "Validate output",
+        detached: true,
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-stop-late-reconfigure",
+        title: "TaskStop",
+        kind: "other",
+        status: "pending",
+        rawInput: { task_id: "task-late-reconfigure" },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-stop-late-reconfigure",
+        title: "TaskStop",
+        status: "completed",
+        rawOutput: "task_id: task-late-reconfigure\nstatus: killed\nreason: result already collected",
+      });
+      await waitFor(() => taskEvents.some((event) => (
+        event.type === "task_notification" && event.taskId === "task-late-reconfigure"
+      )));
+      server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-late-reconfigure",
+        origin_kind: "task",
+        prompt: "Review the completed detached task.",
+      });
+      await waitFor(() => resolveTaskOriginFn.mock.calls.length === 1);
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const foreground = adapter.sendUserMessage("kimi-session-1", {
+        text: "answer after the late review",
+        files: [],
+      });
+      void foreground.catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(harness.children).toHaveLength(1);
+      expect(harness.killedPids).toEqual([]);
+      expect(server.prompts).toHaveLength(1);
+
+      resolveTaskOrigin("task-late-reconfigure");
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      harness.children[1].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground answer." },
+      }, "kimi-session-1");
+      harness.children[1].server.respondPrompt();
+      await expect(foreground).resolves.toMatchObject({ text: expect.stringContaining("Foreground answer.") });
+      expect(harness.children).toHaveLength(2);
+      expect(harness.killedPids).toEqual([701]);
+    } finally {
+      resolveTaskOrigin(undefined);
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps one task's tombstone effective while another continuation is waiting", async () => {
     const { root, harness, adapter, events } = await createCrossTaskHookScenario();
     try {
@@ -2039,6 +2401,64 @@ describe("KimiAcpAdapter", () => {
       }));
     } finally {
       adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("terminalizes an expired raw background task instead of silently dropping its busy marker", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-raw-task-expiry-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      backgroundTaskMaxAgeMs: 25,
+      hookRelayEnabled: true,
+    });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-raw-expiry", {
+        text: "start detached work",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "task-never-terminal",
+        kind: "process",
+        description: "Detached task without a terminal hook",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "task-never-terminal"
+      )));
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "low" }), "utf8");
+      const second = adapter.sendUserMessage("kimi-session-1", {
+        text: "continue after task expiry",
+        files: [],
+      });
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      harness.children[1].server.respondPrompt();
+      await expect(second).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "task-never-terminal",
+        status: "failed",
+        suppressUserDelivery: true,
+      }));
+    } finally {
+      await adapter.destroy();
       await rm(root, { recursive: true, force: true });
     }
   });

@@ -106,6 +106,12 @@ describe("classifyFailure specificity", () => {
     expect(renderCategorizedErrorMessage("engine-busy", err.message, "en")).not.toContain("Restart the instance");
   });
 
+  it("classifies a locally occupied Codex thread as retryable engine-busy", () => {
+    const err = new Error("Codex thread thread-B already has an in-flight turn");
+    expect(classifyFailure(err)).toBe("engine-busy");
+    expect(getBusErrorSemantics("engine-busy")).toEqual({ code: "engine_busy", retryable: true });
+  });
+
   it("renders an accurate time-cap message pointing at /timeout, not the misleading 'restart' one", () => {
     const err = new Error("Codex app-server turn timed out after 60 minutes");
     const zh = renderLarkUserFacingError(err, "engine", "zh");

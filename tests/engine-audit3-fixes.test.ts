@@ -288,7 +288,7 @@ describe("audit3 fix 2: app-server turns are matched by turn id, not just thread
     adapter.destroy();
   });
 
-  it("settles two overlapping turns on one thread independently with their own text and usage", async () => {
+  it("rejects a second same-thread turn without disturbing the active turn", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
 
@@ -303,23 +303,13 @@ describe("audit3 fix 2: app-server turns are matched by turn id, not just thread
     );
 
     const second = adapter.sendUserMessage("thread-B", { text: "second", files: [] });
-    await waitFor(() => parsedLines(children[0]).filter((line) => line.method === "turn/start").length === 2, "second turn/start");
-    const secondStart = parsedLines(children[0]).filter((line) => line.method === "turn/start")[1]!;
-    children[0].stdout.emitData(`${JSON.stringify({ id: secondStart.id, result: { turn: { id: "turn-2" } } })}\n`);
-    await waitFor(
-      () => (adapter as unknown as { pendingTurnsByTurnId: Map<string, unknown> }).pendingTurnsByTurnId.has("turn-2"),
-      "second turn id",
-    );
+    void second.catch(() => undefined);
+    await expect(second).rejects.toThrow("Codex thread thread-B already has an in-flight turn");
+    expect(parsedLines(children[0]).filter((line) => line.method === "turn/start")).toHaveLength(1);
 
-    children[0].stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-B","turnId":"turn-2","delta":"SECOND"}}\n');
     children[0].stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-B","turnId":"turn-1","delta":"FIRST"}}\n');
-    children[0].stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-B","turn":{"id":"turn-2","items":[],"status":"completed","error":null,"usage":{"inputTokens":2,"outputTokens":2,"cachedTokens":0}}}}\n');
     children[0].stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-B","turn":{"id":"turn-1","items":[],"status":"completed","error":null,"usage":{"inputTokens":1,"outputTokens":1,"cachedTokens":0}}}}\n');
 
-    await expect(second).resolves.toMatchObject({
-      text: "SECOND",
-      usage: { inputTokens: 2, outputTokens: 2, cachedTokens: 0 },
-    });
     await expect(first).resolves.toMatchObject({
       text: "FIRST",
       usage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },

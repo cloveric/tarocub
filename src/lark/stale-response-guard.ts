@@ -8,6 +8,18 @@ import {
 const STALE_RESPONSE_MIN_CHARS = 10;
 const STALE_RESPONSE_MAX_CHARS = 160;
 const RECENT_DELIVERY_WINDOW_MS = 7 * 24 * 60 * 60_000;
+const REPLAY_SAFE_TOOL_NAMES = new Set([
+  "glob",
+  "grep",
+  "read",
+  "webfetch",
+  "websearch",
+  "web.search",
+]);
+
+export function isReplaySafeLarkToolName(toolName: string): boolean {
+  return REPLAY_SAFE_TOOL_NAMES.has(toolName.trim().toLocaleLowerCase());
+}
 
 function normalizeComparableResponse(text: string): string {
   return text
@@ -51,8 +63,14 @@ export async function shouldRetryLarkStaleResponse(input: {
   replyTo: string;
   responseText: string;
   sawToolActivity: boolean;
+  sawUnsafeToolActivity?: boolean;
 }): Promise<boolean> {
-  if (!deliveryLedgerEnabled() || !input.sawToolActivity || hasDeliveryDirective(input.responseText)) {
+  if (
+    !deliveryLedgerEnabled()
+    || !input.sawToolActivity
+    || input.sawUnsafeToolActivity
+    || hasDeliveryDirective(input.responseText)
+  ) {
     return false;
   }
 

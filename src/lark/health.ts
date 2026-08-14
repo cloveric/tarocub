@@ -39,9 +39,21 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
   let running = false;
   let consecutiveFailures = 0;
   const reconnectChannel = async (): Promise<boolean> => {
+    if (stopped) {
+      return false;
+    }
     try {
       await options.channel.disconnect().catch(() => undefined);
+      if (stopped) {
+        return false;
+      }
       await options.channel.connect();
+      if (stopped) {
+        // stop() can race an in-flight connect. Close the channel again so a
+        // retired service cannot come back online after its lifecycle ended.
+        await options.channel.disconnect().catch(() => undefined);
+        return false;
+      }
       await appendLarkHealthTimelineEvent(options, {
         outcome: "reconnected",
         detail: "Lark channel reconnected after health failures",
@@ -54,6 +66,9 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
       })).catch(() => undefined);
       return true;
     } catch (error) {
+      if (stopped) {
+        return false;
+      }
       await appendLarkHealthTimelineEvent(options, {
         outcome: "reconnect_failed",
         detail: redactLarkErrorDetail(error),
@@ -74,6 +89,9 @@ export function startLarkHealthMonitor(options: LarkHealthMonitorOptions): LarkH
     running = true;
     try {
       const ok = await probe().catch(() => false);
+      if (stopped) {
+        return;
+      }
       if (ok) {
         const recoveredFailures = consecutiveFailures;
         // A successful HTTP probe only proves the network is back. If a prior

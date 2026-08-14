@@ -366,6 +366,58 @@ describe("lark service", () => {
     }
   });
 
+  it("does not replay a mutating tool turn when its answer resembles an older delivered response", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stale-mutation-"));
+    const conversationKey = "lark:oc_chat";
+    const previousAnswer = "可以，这版更像微信一点，但抓手还在：第一，保留核心结论；第二，补充执行步骤；第三，明确下一步负责人。";
+    const currentAnswer = "可以，这版更像微信一点，但抓手还在。";
+    const obligationId = await recordDeliveryObligation(stateDir, {
+      channel: "lark",
+      chatId: "oc_chat",
+      conversationKey,
+      replyTo: "om_previous",
+      content: previousAnswer,
+    });
+    await markDeliveryDelivered(stateDir, obligationId!);
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+        await input.onEngineEvent?.({
+          type: "tool_use",
+          toolName: "Write",
+          toolUseId: "write-1",
+          toolInput: { file_path: "/tmp/result.txt", content: "changed" },
+        });
+        await input.onEngineEvent?.({
+          type: "tool_result",
+          toolName: "Write",
+          toolUseId: "write-1",
+          output: "written",
+        });
+        await input.onEngineEvent?.({ type: "result", text: currentAnswer });
+        return { text: currentAnswer };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_mutating_turn",
+          content: "修改配置并告诉我结果",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expectLarkFinalAnswer(channel, currentAnswer);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts a verified resend from the default instance workspace without a repair turn", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-followup-default-root-"));
     const workspace = path.join(stateDir, "workspace");
