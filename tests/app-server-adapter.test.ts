@@ -178,8 +178,8 @@ function createSpawnHarness() {
 }
 
 describe("CodexAppServerAdapter", () => {
-  it("defaults the hard turn timeout to one hour", () => {
-    expect(CODEX_APP_SERVER_TURN_TIMEOUT_MS).toBe(60 * 60_000);
+  it("allows active long-running turns up to six hours by default", () => {
+    expect(CODEX_APP_SERVER_TURN_TIMEOUT_MS).toBe(6 * 60 * 60_000);
   });
 
   it("defaults the inactivity diagnostic interval to thirty minutes", () => {
