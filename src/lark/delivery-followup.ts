@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { extractDeliveryTagMatches } from "../telegram/delivery-tags.js";
 import {
   extractTelegramToolTagMatches,
@@ -10,10 +12,26 @@ import {
   preflightLarkDeliveryPath,
   preflightLarkInlineFile,
   resolveLarkDeliveryRoots,
+  type LarkFileRejectReason,
   type LarkDeliveryPreflightInput,
+  type LarkSendPathKind,
 } from "./delivery-preflight.js";
 
 const DELIVERY_FOLLOWUP_MAX_CHARS = 160;
+
+export interface LarkDeliveryDirectiveIssue {
+  path: string;
+  kind?: LarkSendPathKind;
+  reason: Exclude<LarkFileRejectReason, "upload-failed"> | "invalid-directive";
+  realPath?: string;
+  workspaceRoot?: string;
+}
+
+export interface LarkDeliveryDirectivePreflight {
+  sawDirective: boolean;
+  artifactCount: number;
+  issues: LarkDeliveryDirectiveIssue[];
+}
 
 /**
  * A short user turn that checks or disputes a prior file/image delivery. Keep
@@ -69,20 +87,35 @@ export function larkDeliveryFollowupInstruction(text: string): string | undefine
   return "Delivery follow-up for THIS turn: verify platform delivery, not session memory. Never say prior files/images were sent and never tell the user to scroll up unless this response itself repeats every intended artifact using exact [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags after checking each path exists. If work is unfinished or files are missing, state the exact status instead.";
 }
 
-async function hasCurrentTurnDeliveryDirective(
+export async function preflightLarkResponseDeliveryDirectives(
   text: string,
   context?: string | LarkDeliveryPreflightInput,
-): Promise<boolean> {
+): Promise<LarkDeliveryDirectivePreflight> {
   const wholeFileBlock = extractWholeResponseFileBlock(text);
   if (wholeFileBlock) {
-    return preflightLarkInlineFile(wholeFileBlock).ok;
+    const inlinePreflight = preflightLarkInlineFile(wholeFileBlock);
+    return {
+      sawDirective: true,
+      artifactCount: 1,
+      issues: inlinePreflight.ok
+        ? []
+        : [{
+            path: wholeFileBlock.fileName,
+            kind: "file",
+            reason: inlinePreflight.reason,
+          }],
+    };
   }
 
   // Collect every artifact across BOTH legacy and structured syntax before
   // deciding. Returning after the first valid group let a good file conceal a
   // second missing file in another tag family.
-  const artifactPaths = extractDeliveryTagMatches(text).map((match) => match.path);
-  let sawDeliveryDirective = artifactPaths.length > 0;
+  const artifacts: Array<{ path: string; kind: LarkSendPathKind }> = extractDeliveryTagMatches(text).map((match) => ({
+    path: match.path,
+    kind: match.preferPhoto ? "image" as const : "file" as const,
+  }));
+  const issues: LarkDeliveryDirectiveIssue[] = [];
+  let sawDeliveryDirective = artifacts.length > 0;
 
   for (const match of extractTelegramToolTagMatches(text)) {
     try {
@@ -94,32 +127,61 @@ async function hasCurrentTurnDeliveryDirective(
       const normalized = normalizeLarkSendTool(name, payload);
       // An invalid send.* payload, or a message-only batch, delivers no artifact.
       if (!normalized.ok || normalized.artifacts.length === 0) {
-        return false;
+        issues.push({ path: name, reason: "invalid-directive" });
+        continue;
       }
-      artifactPaths.push(...normalized.artifacts.map((artifact) => artifact.path));
+      artifacts.push(...normalized.artifacts.map((artifact) => ({
+        path: artifact.path,
+        kind: artifact.kind,
+      })));
     } catch {
       // The real sender emits a parse error for malformed tool JSON. If it was
       // intended as a send tool, it cannot prove delivery even when another tag
       // in the same response is valid.
       if (/send\.(?:file|image|audio|video|batch)/u.test(match.payload)) {
-        return false;
+        sawDeliveryDirective = true;
+        issues.push({ path: "send.*", reason: "invalid-directive" });
       }
     }
   }
 
-  if (!sawDeliveryDirective || artifactPaths.length === 0) {
-    return false;
+  if (artifacts.length === 0) {
+    return {
+      sawDirective: sawDeliveryDirective,
+      artifactCount: 0,
+      issues,
+    };
   }
+
   const preflightInput: LarkDeliveryPreflightInput = typeof context === "string"
     ? { explicitAllowedRoots: [context] }
     : context ?? {};
   const roots = await resolveLarkDeliveryRoots(preflightInput);
-  for (const artifactPath of artifactPaths) {
-    if (!(await preflightLarkDeliveryPath(artifactPath, roots)).ok) {
-      return false;
+  for (const artifact of artifacts) {
+    const checked = await preflightLarkDeliveryPath(artifact.path, roots);
+    if (!checked.ok) {
+      issues.push({
+        path: artifact.path,
+        kind: artifact.kind,
+        reason: checked.reason,
+        ...(checked.realPath ? { realPath: checked.realPath } : {}),
+        ...(checked.workspaceRoot ? { workspaceRoot: checked.workspaceRoot } : {}),
+      });
     }
   }
-  return true;
+  return {
+    sawDirective: sawDeliveryDirective,
+    artifactCount: artifacts.length,
+    issues,
+  };
+}
+
+async function hasCurrentTurnDeliveryDirective(
+  text: string,
+  context?: string | LarkDeliveryPreflightInput,
+): Promise<boolean> {
+  const preflight = await preflightLarkResponseDeliveryDirectives(text, context);
+  return preflight.sawDirective && preflight.artifactCount > 0 && preflight.issues.length === 0;
 }
 
 function claimsHistoricalDelivery(text: string): boolean {
@@ -151,6 +213,48 @@ export async function shouldRepairLarkDeliveryFollowup(
 
 export function larkDeliveryFollowupRepairPrompt(): string {
   return "Delivery verification retry: your previous answer claimed that prior files/images were already sent, but this current response contained no executable delivery tags. Do not repeat that claim or tell the user to scroll up. Locate and verify the intended artifacts now, then respond with every exact [send-image:/absolute/path], [send-file:/absolute/path], or send.* tag in THIS response. If any artifact is unfinished or missing, state that exact status instead.";
+}
+
+export function larkDeliveryPreflightRepairPrompt(
+  preflight: LarkDeliveryDirectivePreflight,
+): string {
+  const issues = preflight.issues.slice(0, 20);
+  const workspaceRoot = issues.find((issue) => issue.workspaceRoot)?.workspaceRoot;
+  const rejected = issues
+    .map((issue) => `- ${JSON.stringify(issue.path)} (${issue.reason})`)
+    .join("\n");
+  return [
+    "Delivery preflight retry: your previous response referenced artifact paths that cannot be delivered.",
+    rejected ? `Rejected artifacts:\n${rejected}` : "No executable artifact directive was found.",
+    workspaceRoot ? `Allowed workspace: ${JSON.stringify(workspaceRoot)}` : undefined,
+    "Copy each non-secret existing artifact into the allowed workspace, verify each copied file exists and is non-empty, then return the corrected [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags in THIS response.",
+    "Do not merely explain the path restriction. Never copy credentials or secret files. If an artifact cannot be repaired safely, state that exact failure instead of claiming it was sent.",
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+export function renderLarkDeliveryPreflightFailure(
+  locale: "en" | "zh",
+  preflight: LarkDeliveryDirectivePreflight,
+  originalPreflight?: LarkDeliveryDirectivePreflight,
+): string {
+  const issue = preflight.issues[0] ?? originalPreflight?.issues[0];
+  if (!issue) {
+    return locale === "zh"
+      ? "交付失败：自动修复没有生成可执行的文件或图片发送指令。请重新生成后再试。"
+      : "Delivery failed: the automatic repair did not produce an executable file or image directive. Regenerate the artifact and try again.";
+  }
+  const fileName = path.basename(issue.path) || issue.path;
+  if (issue.reason === "outside-workspace") {
+    const workspace = issue.workspaceRoot
+      ? (locale === "zh" ? `允许发送目录：${issue.workspaceRoot}。` : `Allowed workspace: ${issue.workspaceRoot}.`)
+      : "";
+    return locale === "zh"
+      ? `交付失败：${fileName} 仍不在允许发送的目录内，自动修复没有成功。${workspace}`
+      : `Delivery failed: ${fileName} is still outside the allowed workspace and automatic repair did not succeed. ${workspace}`.trim();
+  }
+  return locale === "zh"
+    ? `交付失败：${fileName} 仍未通过发送前检查（${issue.reason}），自动修复没有成功。`
+    : `Delivery failed: ${fileName} still failed preflight (${issue.reason}) after automatic repair.`;
 }
 
 export function renderUnverifiedLarkDeliveryClaim(locale: "en" | "zh"): string {

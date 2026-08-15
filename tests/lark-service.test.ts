@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, truncate, utimes, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -9627,18 +9627,12 @@ describe("lark service", () => {
         }),
       });
 
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: expect.stringContaining("不在允许发送的目录内") },
-        { replyTo: "om_reject_file" },
-      );
-      // The rejection names the exact allowed directory (…/workspace) so the agent can
-      // self-correct (copy the file there + resend) instead of guessing a stale path.
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: expect.stringContaining(`${path.sep}workspace`) },
-        { replyTo: "om_reject_file" },
-      );
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).toContain("不在允许发送的目录内");
+      // The final truthful failure names the exact allowed directory after the
+      // automatic repair turn also returns a rejected path.
+      expect(rendered).toContain(`${path.sep}workspace`);
       expect(channel.send).not.toHaveBeenCalledWith(
         "oc_chat",
         { file: expect.anything() },
@@ -9655,6 +9649,71 @@ describe("lark service", () => {
           reason: "outside-workspace",
           kind: "file",
         }),
+      }));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "partial",
+        detail: "engine completed; artifact delivery preflight failed",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs an outside-workspace delivery path before it reaches the user", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-repair-"));
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-repair-outside-"));
+    const outsidePath = path.join(outsideDir, "wx-final.png");
+    const workspacePath = path.join(stateDir, "workspace", "wx-final.png");
+    await writeFile(outsidePath, "qr image bytes");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockResolvedValueOnce({
+          text: `请扫码完成验证。\n[send-image:${outsidePath}]`,
+          usage: { inputTokens: 10, outputTokens: 5 },
+        })
+        .mockImplementationOnce(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+          expect(input.text).toContain("Delivery preflight retry");
+          expect(input.text).toContain(outsidePath);
+          expect(input.text).toContain(path.join(stateDir, "workspace"));
+          await mkdir(path.dirname(workspacePath), { recursive: true });
+          await copyFile(outsidePath, workspacePath);
+          return {
+            text: `请扫码完成验证。\n[send-image:${workspacePath}]`,
+            usage: { inputTokens: 7, outputTokens: 3 },
+          };
+        }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_repair_outside_image",
+          content: "把登录二维码发给我",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(1);
+      const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).not.toContain("不在允许发送的目录内");
+      expect(rendered).not.toContain(outsidePath);
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event",
+        outcome: "retry",
+        detail: "delivery_preflight_rejected_path",
+        metadata: expect.objectContaining({ phase: "delivery-preflight-guard" }),
+      }));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "success",
       }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });

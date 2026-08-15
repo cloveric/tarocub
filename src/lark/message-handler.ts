@@ -66,6 +66,9 @@ import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import {
   isLarkDeliveryFollowupRequest,
   larkDeliveryFollowupRepairPrompt,
+  larkDeliveryPreflightRepairPrompt,
+  preflightLarkResponseDeliveryDirectives,
+  renderLarkDeliveryPreflightFailure,
   renderUnverifiedLarkDeliveryClaim,
   shouldRepairLarkDeliveryFollowup,
 } from "./delivery-followup.js";
@@ -1772,6 +1775,7 @@ async function runNormalizedLarkMessage(
     let completedEngineText: string | undefined;
     let runCardFinished = false;
     let obligationId: string | null = null;
+    let deliveryPreflightFailed = false;
     // True once the FULL answer is visible to the user (card, continuation
     // cards, or overflow doc) — a later post-engine failure (file upload,
     // bookkeeping) must then settle the obligation delivered, not failed,
@@ -2156,6 +2160,80 @@ async function runNormalizedLarkMessage(
             usage: mergeLarkTurnUsage(firstUsage, repaired.usage),
           };
         }
+        const initialDeliveryDirectivePreflight = await preflightLarkResponseDeliveryDirectives(
+          result.text,
+          deliveryPreflight,
+        );
+        const outsideWorkspaceIssues = initialDeliveryDirectivePreflight.issues.filter(
+          (issue) => issue.reason === "outside-workspace",
+        );
+        const allArtifactsRejectedOutsideWorkspace = outsideWorkspaceIssues.length > 0
+          && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.issues.length
+          && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.artifactCount;
+        if (allArtifactsRejectedOutsideWorkspace) {
+          for (const issue of outsideWorkspaceIssues) {
+            await appendLarkTimelineEvent(input.stateDir, normalized, {
+              type: "file.rejected",
+              outcome: "rejected",
+              detail: issue.reason,
+              metadata: {
+                path: issue.path,
+                ...(issue.realPath ? { realPath: issue.realPath } : {}),
+                reason: issue.reason,
+                ...(issue.kind ? { kind: issue.kind } : {}),
+                via: "preflight",
+              },
+            });
+          }
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event",
+            outcome: "retry",
+            detail: "delivery_preflight_rejected_path",
+            metadata: {
+              phase: "delivery-preflight-guard",
+              rejectedPaths: outsideWorkspaceIssues.length,
+            },
+          });
+          const firstUsage = result.usage;
+          const repaired = await input.bridge.handleAuthorizedMessage({
+            ...bridgeTurnInput,
+            text: larkDeliveryPreflightRepairPrompt(initialDeliveryDirectivePreflight),
+            replyContext: undefined,
+            onEngineEvent: handleEngineEvent,
+          });
+          const repairedDeliveryDirectivePreflight = await preflightLarkResponseDeliveryDirectives(
+            repaired.text,
+            deliveryPreflight,
+          );
+          const repairSucceeded = repairedDeliveryDirectivePreflight.sawDirective
+            && repairedDeliveryDirectivePreflight.artifactCount > 0
+            && repairedDeliveryDirectivePreflight.issues.length === 0;
+          result = {
+            ...repaired,
+            text: repairSucceeded
+              ? repaired.text
+              : renderLarkDeliveryPreflightFailure(
+                  locale,
+                  repairedDeliveryDirectivePreflight,
+                  initialDeliveryDirectivePreflight,
+                ),
+            usage: mergeLarkTurnUsage(firstUsage, repaired.usage),
+          };
+          if (!repairSucceeded) {
+            deliveryPreflightFailed = true;
+            await appendLarkTimelineEvent(input.stateDir, normalized, {
+              type: "engine.event.delivery_failed",
+              outcome: "error",
+              detail: "delivery_preflight_retry_rejected",
+              metadata: {
+                phase: "delivery-preflight-guard",
+                sawDirective: repairedDeliveryDirectivePreflight.sawDirective,
+                artifactCount: repairedDeliveryDirectivePreflight.artifactCount,
+                rejectedPaths: repairedDeliveryDirectivePreflight.issues.length,
+              },
+            });
+          }
+        }
         completedEngineText = result.text;
         if (deliveryLedgerEnabled()) {
           // Durable delivery obligation: the engine's answer now exists only in
@@ -2299,11 +2377,12 @@ async function runNormalizedLarkMessage(
         }
         if (workflowRecordId) {
           await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
-            record.status = "completed";
+            record.status = deliveryPreflightFailed ? "failed" : "completed";
           });
           await appendLarkTimelineEvent(input.stateDir, normalized, {
-            type: "workflow.completed",
-            detail: "workflow marked completed",
+            type: deliveryPreflightFailed ? "workflow.failed" : "workflow.completed",
+            outcome: deliveryPreflightFailed ? "error" : "success",
+            detail: deliveryPreflightFailed ? "workflow delivery preflight failed" : "workflow marked completed",
             metadata: {
               workflowRecordId,
             },
@@ -2311,7 +2390,8 @@ async function runNormalizedLarkMessage(
         }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "turn.completed",
-          outcome: "success",
+          outcome: deliveryPreflightFailed ? "partial" : "success",
+          ...(deliveryPreflightFailed ? { detail: "engine completed; artifact delivery preflight failed" } : {}),
           metadata: {
             responseChars: result.text.length,
             attachments: normalized.attachments.length,
