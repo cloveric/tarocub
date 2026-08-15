@@ -2221,7 +2221,10 @@ async function readLarkPendingTurnActivity(
       const taskIdentity = getLarkTimelineBackgroundTaskIdentity(event);
       if (detail === "background_task_started" && taskIdentity) {
         pendingBackgroundTasksByKey.set(taskIdentity.key, event);
-      } else if (detail === "task_notification" && taskIdentity) {
+      } else if (
+        (detail === "background_task_finished" || detail === "task_notification")
+        && taskIdentity
+      ) {
         settleLarkTimelineBackgroundTask(pendingBackgroundTasksByKey, taskIdentity);
       }
       continue;

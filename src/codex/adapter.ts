@@ -128,6 +128,17 @@ export type EngineStreamEvent =
       description?: string;
     }
   | {
+      /** Lifecycle-only terminal marker for a background task. It is persisted
+       * immediately and never rendered; the later task_notification remains the
+       * user-facing reviewed result. */
+      type: "background_task_finished";
+      taskId: string;
+      sessionId?: string;
+      status?: string;
+      summary?: string;
+      outputFile?: string;
+    }
+  | {
       type: "task_notification";
       text: string;
       sessionId?: string;

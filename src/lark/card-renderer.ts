@@ -163,6 +163,7 @@ export function applyLarkEngineEvent(
     case "result":
       return finalizeWithResult(state, event.text);
     case "background_task_started":
+    case "background_task_finished":
       // Bookkeeping-only event (timeline pairing for the restart busy guard);
       // nothing to render on the run card.
       return state;

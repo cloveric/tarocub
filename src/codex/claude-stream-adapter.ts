@@ -163,6 +163,7 @@ type ClaudeWorker = {
   pendingTurn: PendingTurn | null;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   backgroundTasks: Map<string, ClaudeBackgroundTask>;
+  finishedBackgroundTaskIds: Set<string>;
   /** Tasks whose terminal result was consumed through TaskOutput in a user turn.
    *  A late out-of-band task-notification must not deliver them a second time. */
   collectedBackgroundTaskIds: Set<string>;
@@ -874,6 +875,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       pendingTurn: null,
       onEngineEvent: undefined,
       backgroundTasks: new Map(),
+      finishedBackgroundTaskIds: new Set(),
       collectedBackgroundTaskIds: new Set(),
       taskOutputToolUseIds: new Map(),
       explicitBackgroundToolUseIds: new Set(),
@@ -1021,6 +1023,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         const onApprovalRequest = taskNotificationOwner?.onApprovalRequest
           ?? worker.pendingTurn?.onApprovalRequest;
         worker.collectedBackgroundTaskIds.delete(metadata.taskId);
+        worker.finishedBackgroundTaskIds.delete(metadata.taskId);
         worker.backgroundTasks.set(metadata.taskId, {
           ...metadata,
           ...(taskNotificationOwner?.turnId !== undefined
@@ -1068,6 +1071,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       ) {
         return;
       }
+      this.emitBackgroundTaskFinished(worker, metadata, task);
       worker.pendingTaskNotification = {
         ...task,
         ...metadata,
@@ -1086,6 +1090,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       const task = userTaskNotification.taskId
         ? worker.backgroundTasks.get(userTaskNotification.taskId)
         : undefined;
+      this.emitBackgroundTaskFinished(worker, userTaskNotification, task);
       worker.pendingTaskNotification = {
         ...task,
         ...userTaskNotification,
@@ -1435,6 +1440,30 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       suppressUserDelivery: true,
       ...(task.summary ? { summary: task.summary } : {}),
       ...(task.outputFile ? { outputFile: task.outputFile } : {}),
+    }, task.onEngineEvent);
+  }
+
+  private emitBackgroundTaskFinished(
+    worker: ClaudeWorker,
+    metadata: ClaudeTaskNotificationMetadata,
+    task: ClaudeBackgroundTask | undefined,
+  ): void {
+    const taskId = metadata.taskId ?? task?.taskId;
+    if (!taskId || !task || worker.finishedBackgroundTaskIds.has(taskId)) {
+      return;
+    }
+
+    worker.finishedBackgroundTaskIds.add(taskId);
+    const status = metadata.status ?? task.status;
+    const summary = metadata.summary ?? task.summary;
+    const outputFile = metadata.outputFile ?? task.outputFile;
+    this.emitEngineEvent(worker, {
+      type: "background_task_finished",
+      taskId,
+      sessionId: worker.currentSessionId ?? undefined,
+      ...(status ? { status } : {}),
+      ...(summary ? { summary } : {}),
+      ...(outputFile ? { outputFile } : {}),
     }, task.onEngineEvent);
   }
 
@@ -2017,6 +2046,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       }, task.onEngineEvent));
     }
     worker.backgroundTasks.clear();
+    worker.finishedBackgroundTaskIds.clear();
     worker.taskOutputToolUseIds.clear();
     worker.explicitBackgroundToolUseIds.clear();
     worker.pendingTaskNotification = null;

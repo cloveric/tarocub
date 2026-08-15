@@ -857,6 +857,53 @@ describe("runCli", () => {
     }
   });
 
+  it("settles restart protection from a bookkeeping-only background terminal event", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const runEnv = {
+      USERPROFILE: tempDir,
+      LARK_APP_ID: "cli_a",
+      LARK_APP_SECRET: "secret",
+      CCTB_LARK_INSTANCE: "alpha",
+      CCTB_LARK_STATE_DIR: stateDir,
+    };
+    const event = (detail: "background_task_started" | "background_task_finished") => `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      channel: "lark",
+      chatId: 123,
+      conversationKey: "lark:oc_chat",
+      userId: 456,
+      type: "engine.event",
+      detail,
+      metadata: {
+        larkMessageId: "om_1",
+        taskId: "task-9",
+        sessionId: "session-9",
+        ...(detail === "background_task_finished" ? { status: "completed" } : {}),
+      },
+    })}\n`;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), [
+        event("background_task_started"),
+        event("background_task_finished"),
+      ].join(""));
+
+      await expect(runCli(["lark", "service", "restart"], {
+        env: runEnv,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).resolves.toBe(true);
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("does not let a matching task id in another conversation settle restart protection", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

@@ -1216,6 +1216,63 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("emits a bookkeeping terminal event before a Claude task review finishes", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; taskId?: string; status?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "Run in background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "sleep 5", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-background","tool_use_id":"toolu-background","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await turn;
+
+      // Claude can expose the terminal notification as a synthetic user frame
+      // without ever producing the follow-up review result. The lifecycle must
+      // still settle immediately so an unrelated service restart is not blocked.
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: "<task-notification>\n<task-id>task-background</task-id>\n<tool-use-id>toolu-background</tool-use-id>\n<status>completed</status>\n<summary>Background command completed (exit code 0)</summary>\n</task-notification>",
+        },
+        origin: { kind: "task-notification" },
+        session_id: "session-123",
+      }) + "\n");
+
+      await waitFor(() => events.some((event) => event.type === "background_task_finished"));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "background_task_finished",
+        taskId: "task-background",
+        status: "completed",
+      }));
+      expect(events.some((event) => event.type === "task_notification")).toBe(false);
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
   it("waits for a Claude task review to finish before writing the queued foreground turn", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const firstEvents: Array<{ type?: string; taskId?: string; status?: string; text?: string }> = [];
