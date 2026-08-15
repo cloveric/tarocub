@@ -9495,6 +9495,37 @@ describe("lark service", () => {
     }
   });
 
+  it("does not reuse preceding prose as the first caption of an untitled image batch", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-prose-caption-"));
+    const workspace = path.join(stateDir, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const p1 = path.join(workspace, "p1.png");
+    const p2 = path.join(workspace, "p2.png");
+    await writeFile(p1, "p1 bytes");
+    await writeFile(p2, "p2 bytes");
+    const channel = fakeChannel();
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: `图刚才应该发出来了，我重发一次：\n\n[send-image:${p1}]\n[send-image:${p2}]\n\n两张按顺序交付。`,
+        stateDir,
+      });
+
+      const imageCard = (channel.send.mock.calls as unknown[][])
+        .map((call) => (call[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
+        .find((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
+      expect(imageCard?.body.elements).toEqual([
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "图片" } },
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "图片" } },
+      ]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("packs a large [send-image:] batch into a SINGLE card — no preset count cap", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-onecard-"));
     const workspace = path.join(stateDir, "workspace");

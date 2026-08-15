@@ -745,29 +745,27 @@ const LARK_IMAGE_CAPTION_MAX = 80;
  * The caption for an image is the title line that sits directly above its
  * `[send-image:…]` tag — Claude's natural shape for a captioned series
  * ("P1 标题\n[send-image:…]"), and what the agent instructions ask for. Returns
- * undefined when the preceding non-empty line is itself a delivery tag (the
- * image has no caption) or is too long to be a title (likely prose, not a label).
+ * undefined when a blank line separates the prose from the tag, the preceding
+ * line is itself a delivery tag (the image has no caption), or it is too long
+ * to be a title (likely prose, not a label).
  * `tagIndex` indexes into the same string passed here; the matcher's masking
  * preserves length + newlines, so indices stay aligned with the raw text.
  */
 export function captionForLarkImage(text: string, tagIndex: number): string | undefined {
   const before = text.slice(0, tagIndex);
   const lines = before.split(/\r?\n/);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!.trim();
-    if (!line) {
-      continue;
-    }
-    if (/\[send-(?:file|image):[^\]]+\]/.test(line)) {
-      return undefined;
-    }
-    if (line.length > LARK_IMAGE_CAPTION_MAX) {
-      return undefined;
-    }
-    // Drop a leading markdown heading marker so it renders at normal body size.
-    return line.replace(/^#{1,6}\s+/, "").trim() || undefined;
+  // A tag at the start of a line leaves one trailing empty segment. Remove only
+  // that segment; another empty line is a real paragraph boundary and must stop
+  // prose above it from being repeated as the image caption.
+  if ((lines.at(-1) ?? "").trim().length === 0) {
+    lines.pop();
   }
-  return undefined;
+  const line = lines.at(-1)?.trim() ?? "";
+  if (!line || /\[send-(?:file|image):[^\]]+\]/.test(line) || line.length > LARK_IMAGE_CAPTION_MAX) {
+    return undefined;
+  }
+  // Drop a leading markdown heading marker so it renders at normal body size.
+  return line.replace(/^#{1,6}\s+/, "").trim() || undefined;
 }
 
 /**
