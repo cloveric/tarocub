@@ -120,6 +120,8 @@ type KimiBackgroundTask = {
   description?: string;
   kind?: string;
   status?: string;
+  ownerAgentId?: string;
+  subagentId?: string;
   subagentName?: string;
   subagentResponse?: string;
   ownerTurnId?: number;
@@ -278,6 +280,7 @@ const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
 type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | null) => Promise<string>;
 type StartKimiHookRelay = typeof startKimiHookRelay;
 type ReadKimiBackgroundTaskOutput = typeof readKimiBackgroundTaskOutput;
+type ReadKimiBackgroundTaskOwnership = typeof readKimiBackgroundTaskOwnership;
 type ResolveKimiTaskOrigin = typeof resolveKimiTaskOriginFromWire;
 type ReadKimiTaskReviewText = typeof readKimiTaskReviewTextFromWire;
 
@@ -460,6 +463,7 @@ function parseKimiTaskOutputFields(output: string | undefined): Map<string, stri
 function parseKimiBackgroundTaskOutput(output: string | undefined): {
   taskId: string;
   description?: string;
+  subagentId?: string;
   subagentName?: string;
 } | null {
   const fields = parseKimiTaskOutputFields(output);
@@ -468,8 +472,9 @@ function parseKimiBackgroundTaskOutput(output: string | undefined): {
     return null;
   }
   const description = fields.get("description") || undefined;
+  const subagentId = fields.get("agent_id") || undefined;
   const subagentName = fields.get("actual_subagent_type") || undefined;
-  return { taskId, description, subagentName };
+  return { taskId, description, subagentId, subagentName };
 }
 
 function parseKimiStoppedTaskOutput(toolName: string, output: string | undefined): {
@@ -789,6 +794,90 @@ async function resolveKimiBackgroundTaskOutputPath(
       } catch {
         // The task may belong to a different agent directory.
       }
+    }
+  }
+  return undefined;
+}
+
+type KimiBackgroundTaskOwnership = {
+  ownerAgentId?: string;
+  subagentId?: string;
+};
+
+async function readKimiBackgroundTaskOwnership(
+  engineHomePath: string | undefined,
+  sessionId: string | undefined,
+  taskId: string,
+): Promise<KimiBackgroundTaskOwnership | undefined> {
+  if (
+    !engineHomePath
+    || !sessionId
+    || !isSafeKimiPathSegment(sessionId)
+    || !isSafeKimiPathSegment(taskId)
+  ) {
+    return undefined;
+  }
+
+  const sessionsRoot = path.join(engineHomePath, "sessions");
+  let realSessionsRoot: string;
+  let sessionParents: string[];
+  try {
+    realSessionsRoot = await realpath(sessionsRoot);
+    const entries = await readdir(sessionsRoot, { withFileTypes: true });
+    sessionParents = [sessionsRoot, ...entries
+      .filter((entry) => entry.isDirectory() && isSafeKimiPathSegment(entry.name))
+      .map((entry) => path.join(sessionsRoot, entry.name))];
+  } catch {
+    return undefined;
+  }
+
+  const sessionDirName = sessionId.startsWith("session_") ? sessionId : `session_${sessionId}`;
+  for (const parent of sessionParents) {
+    const agentsDir = path.join(parent, sessionDirName, "agents");
+    const agents = await readdir(agentsDir, { withFileTypes: true }).catch(() => null);
+    if (!agents) {
+      continue;
+    }
+    for (const agent of agents) {
+      if (!agent.isDirectory() || !isSafeKimiPathSegment(agent.name)) {
+        continue;
+      }
+      const tasksDir = path.join(agentsDir, agent.name, "tasks");
+      const metadataPath = path.join(tasksDir, `${taskId}.json`);
+      const taskDir = path.join(tasksDir, taskId);
+      let resolvedTaskPath: string | undefined;
+      for (const candidate of [metadataPath, taskDir]) {
+        try {
+          const resolved = await realpath(candidate);
+          const relative = path.relative(realSessionsRoot, resolved);
+          if (relative && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)) {
+            resolvedTaskPath = resolved;
+            break;
+          }
+        } catch {
+          // The task may belong to a different agent directory.
+        }
+      }
+      if (!resolvedTaskPath) {
+        continue;
+      }
+
+      let subagentId: string | undefined;
+      try {
+        const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as unknown;
+        if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+          const agentId = (metadata as { agentId?: unknown }).agentId;
+          if (typeof agentId === "string" && isSafeKimiPathSegment(agentId)) {
+            subagentId = agentId;
+          }
+        }
+      } catch {
+        // The task directory alone still proves which Kimi agent owns it.
+      }
+      return {
+        ownerAgentId: agent.name,
+        ...(subagentId ? { subagentId } : {}),
+      };
     }
   }
   return undefined;
@@ -1131,6 +1220,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private readonly hookRelayVersionProbeRequired: boolean;
   private readonly startHookRelayFn: StartKimiHookRelay;
   private readonly readBackgroundTaskOutputFn: ReadKimiBackgroundTaskOutput;
+  private readonly readBackgroundTaskOwnershipFn: ReadKimiBackgroundTaskOwnership;
   private readonly resolveTaskOriginFn: ResolveKimiTaskOrigin;
   private readonly readTaskReviewTextFn: ReadKimiTaskReviewText;
   private readonly workers = new Map<string, KimiWorker>();
@@ -1167,6 +1257,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       hookRelayEnabled?: boolean;
       startHookRelayFn?: StartKimiHookRelay;
       readBackgroundTaskOutputFn?: ReadKimiBackgroundTaskOutput;
+      readBackgroundTaskOwnershipFn?: ReadKimiBackgroundTaskOwnership;
       resolveTaskOriginFn?: ResolveKimiTaskOrigin;
       readTaskReviewTextFn?: ReadKimiTaskReviewText;
     },
@@ -1207,6 +1298,8 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.hookRelayVersionProbeRequired = options?.hookRelayEnabled === undefined;
     this.startHookRelayFn = options?.startHookRelayFn ?? startKimiHookRelay;
     this.readBackgroundTaskOutputFn = options?.readBackgroundTaskOutputFn ?? readKimiBackgroundTaskOutput;
+    this.readBackgroundTaskOwnershipFn = options?.readBackgroundTaskOwnershipFn
+      ?? readKimiBackgroundTaskOwnership;
     this.resolveTaskOriginFn = options?.resolveTaskOriginFn ?? resolveKimiTaskOriginFromWire;
     this.readTaskReviewTextFn = options?.readTaskReviewTextFn ?? readKimiTaskReviewTextFromWire;
 
@@ -2206,6 +2299,46 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
+  private async hydrateKimiTaskOwnership(task: KimiBackgroundTask): Promise<void> {
+    const ownership = await this.readBackgroundTaskOwnershipFn(
+      this.engineHomePath,
+      task.sessionId,
+      task.taskId,
+    ).catch(() => undefined);
+    task.ownerAgentId ??= ownership?.ownerAgentId;
+    task.subagentId ??= ownership?.subagentId;
+  }
+
+  private async adoptNestedKimiTaskWorkflow(worker: KimiWorker, task: KimiBackgroundTask): Promise<void> {
+    if (task.kind !== "process" && !task.taskId.startsWith("bash-")) {
+      return;
+    }
+    await this.hydrateKimiTaskOwnership(task);
+    if (!task.ownerAgentId || task.ownerAgentId === "main") {
+      return;
+    }
+
+    const parentCandidates = [...worker.backgroundTasks.values()].filter((candidate) => (
+      candidate !== task && candidate.kind === "agent"
+    ));
+    for (const candidate of parentCandidates) {
+      if (!candidate.subagentId) {
+        await this.hydrateKimiTaskOwnership(candidate);
+      }
+    }
+    const parent = parentCandidates.find((candidate) => candidate.subagentId === task.ownerAgentId);
+    if (!parent) {
+      return;
+    }
+
+    this.adoptKimiWorkflow(worker, task.workflowId, parent.workflowId);
+    task.workflowId = parent.workflowId;
+    task.ownerTurnId = parent.ownerTurnId;
+    task.onEngineEvent = parent.onEngineEvent ?? task.onEngineEvent;
+    task.onApprovalRequest = parent.onApprovalRequest ?? task.onApprovalRequest;
+    task.continuationTaskId = parent.continuationTaskId;
+  }
+
   private maybeEmitToolUse(worker: KimiWorker, state: KimiToolState): void {
     if (state.emittedUse) {
       return;
@@ -2304,6 +2437,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       this.adoptKimiWorkflow(worker, task.workflowId, continuation.workflowId);
     }
     task.description = metadata.description ?? task.description;
+    task.subagentId = metadata.subagentId ?? task.subagentId;
     task.subagentName = metadata.subagentName ?? task.subagentName;
     task.kind = metadata.subagentName ? "agent" : task.kind;
     task.status = "running";
@@ -2933,6 +3067,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       task.workflowId = continuation?.workflowId ?? task.workflowId;
       task.ownerTurnId ??= worker.pendingTurn?.turnId;
       worker.backgroundTasks.set(task.taskId, task);
+      await this.adoptNestedKimiTaskWorkflow(worker, task);
       this.emitBackgroundTaskStarted(worker, task);
       return;
     }
@@ -3028,6 +3163,8 @@ export class KimiAcpAdapter implements CodexAdapter {
     // rejecting duplicate or late lifecycle hooks.
     const status = taskStatusFromNotificationType(notification.notificationType);
     const sessionId = task.sessionId ?? worker.currentSessionId ?? undefined;
+    task.sessionId ??= sessionId;
+    await this.adoptNestedKimiTaskWorkflow(worker, task);
     const processOutput = task.kind === "process" || task.taskId.startsWith("bash-")
       ? await this.readBackgroundTaskOutputFn(this.engineHomePath, sessionId, task.taskId)
       : undefined;

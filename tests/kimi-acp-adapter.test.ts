@@ -757,6 +757,119 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("hides nested process stages until their parent agent completes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-nested-agent-task-test-"));
+    const tasksDir = path.join(
+      root,
+      "sessions",
+      "wd-test",
+      "session_kimi-session-1",
+      "agents",
+      "agent-15",
+      "tasks",
+    );
+    await mkdir(tasksDir, { recursive: true });
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const foreground = adapter.sendUserMessage("telegram-nested-agent", {
+        text: "launch a background agent",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-parent-agent",
+        title: "Agent",
+        status: "completed",
+        rawOutput: [
+          "task_id: agent-parent",
+          "status: running",
+          "agent_id: agent-15",
+          "actual_subagent_type: coder",
+          "automatic_notification: true",
+          "description: Build and validate the model",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "agent-parent"
+      )));
+      server.respondPrompt();
+      await expect(foreground).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      const runNestedStage = async (taskId: string, status: "failed" | "completed") => {
+        await writeFile(
+          path.join(tasksDir, `${taskId}.json`),
+          JSON.stringify({ taskId, kind: "process", status }),
+          "utf8",
+        );
+        await postKimiHook(harness, {
+          hook_event_name: "TaskStarted",
+          task_id: taskId,
+          kind: "process",
+          description: `Nested ${status} stage`,
+          status: "running",
+          detached: true,
+        });
+        await postKimiHook(harness, {
+          hook_event_name: "Notification",
+          notification_type: `task.${status}`,
+          source_kind: "background_task",
+          source_id: taskId,
+          body: `Nested stage ${status}.`,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await waitFor(() => events.some((event) => (
+          event.type === "task_notification" && event.taskId === taskId
+        )));
+      };
+
+      await runNestedStage("bash-first-attempt", "failed");
+      await runNestedStage("bash-final-validation", "completed");
+      expect(events.filter((event) => (
+        event.type === "task_notification"
+        && event.taskId !== undefined
+        && ["bash-first-attempt", "bash-final-validation"].includes(event.taskId)
+        && !event.suppressUserDelivery
+      ))).toHaveLength(0);
+
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "agent-parent",
+        body: "The model was rebuilt and fully validated.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "agent-parent"
+      )));
+
+      expect(events.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ))).toEqual([
+        expect.objectContaining({
+          type: "task_notification",
+          taskId: "agent-parent",
+          status: "completed",
+          text: "The model was rebuilt and fully validated.",
+        }),
+      ]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("recovers Kimi 0.34 task origins and delivers only the final workflow branch", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-workflow-origin-test-"));
     const wirePath = path.join(
