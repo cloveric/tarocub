@@ -1135,7 +1135,38 @@ function renderToolInput(tool: LarkToolEntry): string {
 
 export function cleanCardText(content: string): string {
   const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
-  return collapseBlankLines(downgradeMarkdownHeadings(stripped)).trim();
+  return collapseBlankLines(neutralizeMarkdownSetextHeadings(downgradeMarkdownHeadings(stripped))).trim();
+}
+
+function neutralizeMarkdownSetextHeadings(text: string): string {
+  const lines = text.split("\n");
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+
+  return lines.map((line) => {
+    const fenceMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (
+        fenceMatch
+        && fenceMatch[1][0] === fence.marker
+        && fenceMatch[1].length >= fence.length
+        && line.slice(fenceMatch[0].length).trim() === ""
+      ) {
+        fence = undefined;
+      }
+      return line;
+    }
+    if (fenceMatch) {
+      fence = {
+        marker: fenceMatch[1][0] as "`" | "~",
+        length: fenceMatch[1].length,
+      };
+      return line;
+    }
+
+    // A line of '=' characters turns the preceding line into a Setext H1 in
+    // Feishu. Escape the first marker while preserving divider-like output.
+    return line.replace(/^([ \t]{0,3}(?:>[ \t]?)*)(={3,})[ \t]*$/, "$1\\$2");
+  }).join("\n");
 }
 
 /**

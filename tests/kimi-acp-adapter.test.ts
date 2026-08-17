@@ -870,6 +870,102 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("hides detached process results owned by a foreground subagent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-foreground-subagent-task-test-"));
+    const tasksDir = path.join(
+      root,
+      "sessions",
+      "wd-test",
+      "session_kimi-session-1",
+      "agents",
+      "agent-24",
+      "tasks",
+    );
+    await mkdir(tasksDir, { recursive: true });
+    await writeFile(
+      path.join(tasksDir, "bash-validation.json"),
+      JSON.stringify({ taskId: "bash-validation", kind: "process", status: "running" }),
+      "utf8",
+    );
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const foreground = adapter.sendUserMessage("telegram-foreground-subagent", {
+        text: "delegate validation to a foreground subagent",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-validation",
+        kind: "process",
+        description: "Validate generated reports",
+        status: "running",
+        detached: true,
+      });
+
+      harness.children[0].server.respondPrompt();
+      await expect(foreground).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-validation",
+        body: "Overall: ALL PASS\n========================================",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-validation"
+      )));
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "bash-validation",
+        status: "completed",
+        suppressUserDelivery: true,
+      }));
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: 24,
+        origin_kind: "task",
+        prompt: [{
+          type: "text",
+          text: '<notification type="task.completed" source_id="bash-validation">done</notification>',
+        }],
+      });
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Reviewed validation output." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-validation"
+      )).length === 2);
+
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-validation"
+      ))).toEqual([
+        expect.objectContaining({ suppressUserDelivery: true }),
+        expect.objectContaining({
+          text: "Reviewed validation output.",
+          suppressUserDelivery: true,
+        }),
+      ]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("recovers Kimi 0.34 task origins and delivers only the final workflow branch", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-workflow-origin-test-"));
     const wirePath = path.join(

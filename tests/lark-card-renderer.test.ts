@@ -7,6 +7,7 @@ import {
   LARK_OVERFLOW_CARD_MAX_CHARS,
   type LarkRunState,
   applyLarkEngineEvent,
+  cleanCardText,
   exceedsCardAnswerBudget,
   initialLarkRunState,
   renderLarkApprovalCard,
@@ -546,6 +547,16 @@ describe("lark card renderer", () => {
     expect(body).not.toContain("## 已发布");
     expect(body).not.toContain("### 子标题");
     expect(body).toContain("正文内容");
+  });
+
+  it("neutralizes Setext heading underlines outside fenced code blocks", () => {
+    const divider = "=".repeat(40);
+    expect(cleanCardText(`Overall: ALL PASS\n${divider}`)).toBe(
+      `Overall: ALL PASS\n\\${divider}`,
+    );
+    expect(cleanCardText(`\`\`\`text\nOverall: ALL PASS\n${divider}\n\`\`\``)).toBe(
+      `\`\`\`text\nOverall: ALL PASS\n${divider}\n\`\`\``,
+    );
   });
 
   it("downgrades a heading inside a blockquote (> ##) without losing the callout, and keeps inner bold balanced", () => {

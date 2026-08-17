@@ -128,6 +128,7 @@ type KimiBackgroundTask = {
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   continuationTaskId?: string;
+  suppressUserDelivery?: boolean;
   startEmitted: boolean;
   lastSeenAt: number;
   pendingNotification?: KimiTaskNotification;
@@ -155,6 +156,7 @@ type KimiBackgroundContinuation = {
   pendingTerminal?: KimiHookTerminal;
   taskOriginReviewStarted?: boolean;
   lateAfterFallback?: boolean;
+  suppressUserDelivery?: boolean;
 };
 
 type KimiHookTurn = {
@@ -188,6 +190,7 @@ type KimiTerminalBackgroundTask = {
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   taskOriginReviewStarted: boolean;
+  suppressUserDelivery?: boolean;
 };
 
 type KimiDeferredSettingsNotice = {
@@ -2318,6 +2321,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       return;
     }
 
+    // Process tasks spawned inside a subagent are implementation stages. The
+    // owning agent's reviewed response is the user-facing result, regardless
+    // of whether that agent itself runs in the foreground or background.
+    task.suppressUserDelivery = true;
+
     const parentCandidates = [...worker.backgroundTasks.values()].filter((candidate) => (
       candidate !== task && candidate.kind === "agent"
     ));
@@ -2493,6 +2501,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       onEngineEvent: handler,
       onApprovalRequest: approvalHandler,
       taskOriginReviewStarted: continuation?.taskOriginReviewStarted === true,
+      suppressUserDelivery: continuation?.suppressUserDelivery ?? task?.suppressUserDelivery,
     });
     await this.emitEngineEvent(handler, {
       type: "task_notification",
@@ -2616,6 +2625,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         reviewTurnId: event.turnId,
         taskOriginReviewStarted: true,
         lateAfterFallback: true,
+        suppressUserDelivery: lateTerminal.terminal.suppressUserDelivery,
       };
       worker.backgroundContinuations.set(lateTerminal.id, continuation);
       worker.ignoredHookTurn = undefined;
@@ -2690,6 +2700,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     continuation.activeTurnId = event.turnId;
     continuation.reviewTurnId = event.turnId;
     continuation.taskOriginReviewStarted = true;
+    continuation.suppressUserDelivery ||= sourceTask.suppressUserDelivery;
     if (continuation.fallbackTimer) {
       clearTimeout(continuation.fallbackTimer);
       continuation.fallbackTimer = undefined;
@@ -2955,6 +2966,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     const deliveryHandler = continuation.onEngineEvent ?? sourceTask?.onEngineEvent ?? worker.onEngineEvent;
     const deliveryApprovalHandler = continuation.onApprovalRequest ?? sourceTask?.onApprovalRequest;
     const deliverySummary = continuation.summary ?? sourceTask?.description;
+    const suppressUserDelivery = continuation.suppressUserDelivery || sourceTask?.suppressUserDelivery;
     this.rememberTerminalBackgroundTask(worker, continuation.taskId, {
       workflowId: continuation.workflowId,
       sessionId: deliverySessionId,
@@ -2963,6 +2975,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       onEngineEvent: deliveryHandler,
       onApprovalRequest: deliveryApprovalHandler,
       taskOriginReviewStarted: continuation.taskOriginReviewStarted === true,
+      suppressUserDelivery,
     });
     const recoveredAssistantText = continuation.taskOriginReviewStarted
       && deliverySessionId
@@ -2995,7 +3008,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       taskId: continuation.taskId,
       status: finalStatus,
       ...(deliverySummary ? { summary: deliverySummary } : {}),
-      ...(intermediate ? { suppressUserDelivery: true } : {}),
+      ...(intermediate || suppressUserDelivery ? { suppressUserDelivery: true } : {}),
     });
   }
 
@@ -3199,6 +3212,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
         onApprovalRequest: task.onApprovalRequest,
         taskOriginReviewStarted: false,
+        suppressUserDelivery: task.suppressUserDelivery,
       });
       await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
         type: "task_notification",
@@ -3222,6 +3236,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       approvalAbortController: new AbortController(),
       assistantText: "",
       assistantBoundaryPending: false,
+      suppressUserDelivery: task.suppressUserDelivery,
     };
     this.adoptKimiWorkflow(worker, continuation.workflowId, task.workflowId);
     continuation.workflowId = task.workflowId;
@@ -3232,6 +3247,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     continuation.lastSeenAt = Date.now();
     continuation.onEngineEvent ??= task.onEngineEvent ?? worker.onEngineEvent;
     continuation.onApprovalRequest ??= task.onApprovalRequest;
+    continuation.suppressUserDelivery ||= task.suppressUserDelivery;
     worker.backgroundContinuations.set(task.taskId, continuation);
     worker.backgroundTasks.set(task.taskId, task);
     this.emitBackgroundTaskStarted(worker, task);
@@ -3255,6 +3271,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       onEngineEvent: context.onEngineEvent ?? existing?.onEngineEvent,
       onApprovalRequest: context.onApprovalRequest ?? existing?.onApprovalRequest,
       taskOriginReviewStarted: context.taskOriginReviewStarted || existing?.taskOriginReviewStarted === true,
+      suppressUserDelivery: context.suppressUserDelivery ?? existing?.suppressUserDelivery,
     });
   }
 
@@ -3576,6 +3593,7 @@ export class KimiAcpAdapter implements CodexAdapter {
             onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
             onApprovalRequest: task.onApprovalRequest,
             taskOriginReviewStarted: false,
+            suppressUserDelivery: task.suppressUserDelivery,
           });
           void this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
             type: "task_notification",
@@ -3633,6 +3651,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         onEngineEvent: continuation.onEngineEvent ?? task?.onEngineEvent ?? worker.onEngineEvent,
         onApprovalRequest: continuation.onApprovalRequest ?? task?.onApprovalRequest,
         taskOriginReviewStarted: continuation.taskOriginReviewStarted === true,
+        suppressUserDelivery: continuation.suppressUserDelivery ?? task?.suppressUserDelivery,
       });
       const hasLinkedReplacement = [...worker.backgroundTasks.values()].some((candidate) => (
         candidate.workflowId === continuation.workflowId
@@ -3646,7 +3665,9 @@ export class KimiAcpAdapter implements CodexAdapter {
         ...(continuation.summary || task?.description
           ? { summary: continuation.summary ?? task?.description }
           : {}),
-        ...(hasLinkedReplacement ? { suppressUserDelivery: true } : {}),
+        ...(hasLinkedReplacement || continuation.suppressUserDelivery || task?.suppressUserDelivery
+          ? { suppressUserDelivery: true }
+          : {}),
       }));
     }
     worker.backgroundContinuations.clear();
@@ -3662,6 +3683,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
         onApprovalRequest: task.onApprovalRequest,
         taskOriginReviewStarted: false,
+        suppressUserDelivery: task.suppressUserDelivery,
       });
       deliveries.push(this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
         type: "task_notification",
@@ -3670,6 +3692,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         taskId: task.taskId,
         status: "failed",
         ...(task.description ? { summary: task.description } : {}),
+        ...(task.suppressUserDelivery ? { suppressUserDelivery: true } : {}),
       }));
     }
     worker.backgroundTasks.clear();
