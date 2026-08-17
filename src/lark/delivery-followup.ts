@@ -196,7 +196,11 @@ function claimsHistoricalDelivery(text: string): boolean {
     return false;
   }
 
-  return /(?:已|已经|刚|刚刚|之前).{0,12}(?:发|发送|上传|交付)|(?:发|发送|上传|交付).{0,10}(?:了|过|上面|前面)|往上翻|上面.{0,10}(?:能看到|可以看到|有)|前面.{0,10}(?:能看到|可以看到|有)/u.test(normalized)
+  // Keep aspect markers in the same clause as the delivery verb. Crossing a
+  // full stop turned a future promise such as "通过后发你。好了我主动发" into
+  // a past claim, while "发过来" uses 过 as a direction complement, not past
+  // tense. `发(?!送)` prevents backtracking into the first character of 发送.
+  return /(?:已|已经|刚|刚刚|之前)[^，。；！？!?\n]{0,12}(?:发送|上传|交付|发(?!送))|(?:发送|上传|交付|发(?!送))(?!过[来去])[^，。；！？!?\n]{0,10}(?:了|过(?![来去])|上面|前面)|往上翻|上面.{0,10}(?:能看到|可以看到|有)|前面.{0,10}(?:能看到|可以看到|有)/u.test(normalized)
     || /\b(?:already|just|previously) (?:sent|uploaded|delivered)\b|\b(?:sent|uploaded|delivered) (?:it|them|the files?|the images?)?\s*(?:already|above|earlier)\b|\bscroll up\b/i.test(normalized);
 }
 

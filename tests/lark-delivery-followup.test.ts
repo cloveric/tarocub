@@ -343,6 +343,17 @@ describe("Lark delivery follow-up guard", () => {
     expect(await shouldRepairLarkDeliveryFollowup("文件呢", "文件不存在，无法发送。")).toBe(false);
   });
 
+  it("does not mistake future delivery promises for historical delivery claims", async () => {
+    expect(await shouldRepairLarkDeliveryFollowup(
+      "好了吗",
+      "还没好——返工agent跑到第3步了（共5步）：新页和脚本已经写完，正在LibreOffice重算+逐项核对验收，之后还有beta联动测试和结果汇总。它跑完我立刻让codex复审，通过后把文件发你。等着就行，好了我主动发。",
+    )).toBe(false);
+    expect(await shouldRepairLarkDeliveryFollowup(
+      "好了吗",
+      "现在如实汇报交付状态：成品还没好，这一刻没有可交付的文件。磁盘上的模型是返工进行中的中间版本。流程走完后，我会把最终版连同修订说明一起用 [send-file:] 发过来。",
+    )).toBe(false);
+  });
+
   it("does not repair an unrelated response even if it discusses historical delivery", async () => {
     expect(await shouldRepairLarkDeliveryFollowup(
       "审查交付模块",
