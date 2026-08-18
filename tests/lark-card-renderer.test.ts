@@ -375,6 +375,58 @@ describe("lark card renderer", () => {
     expect(body).toContain("Read");
   });
 
+  it("promotes a substantive assistant update when the terminal result is only a running placeholder", () => {
+    const substantive = [
+      "同意，而且比 A 强。理由是这句自带两个钩子：数字先把话说满，再用反差承诺接住读者。",
+      "主标题：不换开源模型，token 也能砍掉 90% 以上。",
+    ].join("\n\n");
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: substantive });
+    state = applyLarkEngineEvent(state, { type: "result", text: "在跑了。" });
+
+    const fullCard = renderLarkRunCard(state, "zh") as any;
+    const compactCard = renderLarkRunCardCompact(state, "zh") as any;
+    expect(fullCard.body.elements[1].content).toBe(substantive);
+    expect(compactCard.body.elements[1].content).toBe(substantive);
+    expect(JSON.stringify(fullCard.body)).not.toContain("在跑了");
+    expect(JSON.stringify(fullCard.body)).not.toContain("过程");
+    expect(fullCard.config.summary.content).toContain("同意，而且比 A 强");
+  });
+
+  it("keeps a legitimate short terminal answer instead of promoting earlier narration", () => {
+    const earlier = "我核对了配置和运行日志，两个来源给出的状态一致。";
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: earlier });
+    state = applyLarkEngineEvent(state, { type: "result", text: "是的。" });
+
+    const card = renderLarkRunCard(state, "zh") as any;
+    expect(card.body.elements[1].content).toBe("是的。");
+    expect(JSON.stringify(card.body)).toContain(earlier);
+    expect(card.config.summary.content).toBe("是的。");
+  });
+
+  it("does not promote short progress narration or tool output over a running placeholder", () => {
+    let shortProgress = initialLarkRunState("lark:oc_chat");
+    shortProgress = applyLarkEngineEvent(shortProgress, { type: "assistant_text", text: "我先检查一下。" });
+    shortProgress = applyLarkEngineEvent(shortProgress, { type: "result", text: "在跑了。" });
+    expect((renderLarkRunCard(shortProgress, "zh") as any).body.elements[1].content).toBe("在跑了。");
+
+    let toolOnly = initialLarkRunState("lark:oc_chat");
+    toolOnly = applyLarkEngineEvent(toolOnly, {
+      type: "tool_use",
+      toolName: "Bash",
+      toolUseId: "t1",
+      toolInput: { command: "npm test" },
+    });
+    toolOnly = applyLarkEngineEvent(toolOnly, {
+      type: "tool_result",
+      toolUseId: "t1",
+      output: "This tool output is detailed but must stay inside the process panel.",
+    });
+    toolOnly = applyLarkEngineEvent(toolOnly, { type: "result", text: "在跑了。" });
+    expect((renderLarkRunCard(toolOnly, "zh") as any).body.elements[1].content).toBe("在跑了。");
+  });
+
   it("labels an engine failure after streamed output as partial instead of fully failed", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, { type: "assistant_text", text: "已生成的正文内容。" });

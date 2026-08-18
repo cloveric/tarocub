@@ -11540,6 +11540,43 @@ describe("lark service", () => {
     }
   });
 
+  it("spills a promoted substantive update when the terminal result is only a running placeholder", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-card-promoted-long-"));
+    const channel = fakeChannel();
+    const createDocument = vi.fn(async () => ({ url: "https://feishu.cn/docx/SHOULDNOTHAPPEN" }));
+    const runtime = createLarkServiceRuntime({ createDocument });
+    const substantive = `PROMOTED_LONG ${"有信息量的完整判断。".repeat(800)} PROMOTED_END`;
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        await Promise.resolve(input.onEngineEvent?.({ type: "assistant_text", text: substantive }));
+        return { text: "在跑了。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_promoted_long", content: "给出完整判断" }),
+      });
+
+      expect(createDocument).not.toHaveBeenCalled();
+      const continuationCards = larkContinuationCardsSent(channel);
+      expect(continuationCards.length).toBeGreaterThanOrEqual(1);
+      expect(continuationCards.join("")).toContain("PROMOTED_END");
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("在跑了");
+
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      const finishEvent = timeline.find((event) => event.type === "engine.event.card_finish");
+      expect(finishEvent?.metadata).toMatchObject({ spillCards: expect.any(Number) });
+      expect(Number(finishEvent?.metadata?.answerChars)).toBeGreaterThan(5000);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders Lark conversation queue waits as stop-capable cards", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-card-"));
     const channel = fakeChannel();

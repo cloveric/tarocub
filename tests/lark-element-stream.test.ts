@@ -193,6 +193,35 @@ describe("run card element-stream fast path", () => {
     expect(updates).toContain("以上内容可能不完整");
   });
 
+  it("isolates promoted assistant text when a new attempt starts before the prior terminal event", async () => {
+    const { channel, cardUpdate } = managedChannel();
+    const controller = await createController(channel);
+    expect(controller).toBeDefined();
+
+    await controller!.apply({
+      type: "assistant_text",
+      text: "第一轮给出了很长但已被判定需要重试的内容，这一段不能冒充第二轮的最终回答。",
+    });
+    await flushTimers(20);
+    controller!.beginAnswerAttempt();
+    const currentAttemptAnswer = "第二轮已经完成复查，这是本轮应当交付给用户的完整结论，不能与第一轮内容串在一起。";
+    await controller!.apply({
+      type: "assistant_text",
+      text: currentAttemptAnswer,
+    });
+
+    expect(controller!.resolveFinalText("在跑了。")).toBe(currentAttemptAnswer);
+    await controller!.finish("在跑了。");
+
+    const lastCall = (cardUpdate.mock.calls as unknown[][]).at(-1)![0] as {
+      data: { card: { data: string } };
+    };
+    const card = JSON.parse(lastCall.data.card.data) as {
+      body: { elements: Array<{ content?: string }> };
+    };
+    expect(card.body.elements[1]?.content).toBe(currentAttemptAnswer);
+  });
+
   it("returns error (not partial) when the only text preceded the last tool call (narration→tool→crash)", async () => {
     // "partial" must mean part of the ANSWER arrived. Pre-tool narration ("我先
     // 查一下…") followed by a tool call and then a crash produced NO answer —

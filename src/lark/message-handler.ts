@@ -48,6 +48,7 @@ import {
   renderLarkRunCard,
   renderLarkRunCardCompact,
   renderLarkRunCardMinimal,
+  resolveLarkFinalAnswerText,
   splitLarkAnswerIntoCardChunks,
   trimToStreamSafeBoundary,
   type LarkRunState,
@@ -2068,6 +2069,7 @@ async function runNormalizedLarkMessage(
       }
 
       return await runAuthorizedLarkTurnWithReactions(input, normalized, async () => {
+        const resolveRunCardFinalText = (text: string): string => runCard?.resolveFinalText(text) ?? text;
         const bridgeTurnInput: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0] = {
           chatId: normalized.bridgeAccessChatId,
           userId: normalized.bridgeUserId,
@@ -2105,7 +2107,9 @@ async function runNormalizedLarkMessage(
             CCTB_LARK_ACTIVE_STATE_DIR: input.stateDir,
           },
         };
+        runCard?.beginAnswerAttempt();
         let result = await input.bridge.handleAuthorizedMessage(bridgeTurnInput);
+        result = { ...result, text: resolveRunCardFinalText(result.text) };
         if (await shouldRetryLarkStaleResponse({
           stateDir: input.stateDir,
           conversationKey: normalized.conversationKey,
@@ -2126,12 +2130,14 @@ async function runNormalizedLarkMessage(
             },
           });
           const firstUsage = result.usage;
+          runCard?.beginAnswerAttempt();
           const repaired = await input.bridge.handleAuthorizedMessage({
             ...bridgeTurnInput,
             onEngineEvent: handleEngineEvent,
           });
           result = {
             ...repaired,
+            text: resolveRunCardFinalText(repaired.text),
             usage: mergeLarkTurnUsage(firstUsage, repaired.usage),
           };
         }
@@ -2146,17 +2152,19 @@ async function runNormalizedLarkMessage(
             metadata: { phase: "delivery-followup-guard" },
           });
           const firstUsage = result.usage;
+          runCard?.beginAnswerAttempt();
           const repaired = await input.bridge.handleAuthorizedMessage({
             ...bridgeTurnInput,
             text: larkDeliveryFollowupRepairPrompt(),
             replyContext: undefined,
             onEngineEvent: handleEngineEvent,
           });
+          const repairedText = resolveRunCardFinalText(repaired.text);
           result = {
             ...repaired,
-            text: await shouldRepairLarkDeliveryFollowup(commandText, repaired.text, deliveryPreflight)
+            text: await shouldRepairLarkDeliveryFollowup(commandText, repairedText, deliveryPreflight)
               ? renderUnverifiedLarkDeliveryClaim(locale)
-              : repaired.text,
+              : repairedText,
             usage: mergeLarkTurnUsage(firstUsage, repaired.usage),
           };
         }
@@ -2195,14 +2203,16 @@ async function runNormalizedLarkMessage(
             },
           });
           const firstUsage = result.usage;
+          runCard?.beginAnswerAttempt();
           const repaired = await input.bridge.handleAuthorizedMessage({
             ...bridgeTurnInput,
             text: larkDeliveryPreflightRepairPrompt(initialDeliveryDirectivePreflight),
             replyContext: undefined,
             onEngineEvent: handleEngineEvent,
           });
+          const repairedText = resolveRunCardFinalText(repaired.text);
           const repairedDeliveryDirectivePreflight = await preflightLarkResponseDeliveryDirectives(
-            repaired.text,
+            repairedText,
             deliveryPreflight,
           );
           const repairSucceeded = repairedDeliveryDirectivePreflight.sawDirective
@@ -2211,7 +2221,7 @@ async function runNormalizedLarkMessage(
           result = {
             ...repaired,
             text: repairSucceeded
-              ? repaired.text
+              ? repairedText
               : renderLarkDeliveryPreflightFailure(
                   locale,
                   repairedDeliveryDirectivePreflight,
@@ -2558,6 +2568,10 @@ export interface LarkRunFinishResult {
 
 export interface LarkRunCardController {
   apply(event: EngineStreamEvent): Promise<void>;
+  /** Start a new engine attempt so repair-turn text cannot reuse an earlier attempt's narration. */
+  beginAnswerAttempt(): void;
+  /** Resolve a terminal result against user-visible assistant text from this attempt. */
+  resolveFinalText(text: string): string;
   /** Finalize with the answer; resolves to whether/how the answer was shown in a card. */
   finish(text: string): Promise<LarkRunFinishResult>;
   fail(text: string): Promise<"error" | "partial">;
@@ -2586,6 +2600,7 @@ export async function createLarkRunCardController(input: {
     return undefined;
   }
   let state: LarkRunState = initialLarkRunState(input.conversationKey, input.bridgeChatType);
+  let answerAttemptStartBlock = 0;
   if (input.goalObjective && input.goalObjective.trim()) {
     state = { ...state, goalObjective: input.goalObjective.trim() };
   }
@@ -2938,13 +2953,29 @@ export async function createLarkRunCardController(input: {
       // Coalesced, non-blocking: never await the live patch.
       scheduleUpdate();
     },
+    beginAnswerAttempt: () => {
+      const lastBlock = state.blocks[state.blocks.length - 1];
+      if (lastBlock?.kind === "text" && lastBlock.streaming) {
+        state = {
+          ...state,
+          blocks: [
+            ...state.blocks.slice(0, -1),
+            { ...lastBlock, streaming: false },
+          ],
+        };
+      }
+      answerAttemptStartBlock = state.blocks.length;
+    },
+    resolveFinalText: (text) => resolveLarkFinalAnswerText(state, text, answerAttemptStartBlock),
     finish: async (text): Promise<LarkRunFinishResult> => {
+      const finalText = resolveLarkFinalAnswerText(state, text, answerAttemptStartBlock);
+      state = { ...state, finalAnswerBlockStart: answerAttemptStartBlock };
       // Reuse the reducer so non-streaming engines (which emit no incremental
       // assistant_text) still get the final answer seeded into the block stream.
-      state = applyLarkEngineEvent(state, { type: "result", text });
+      state = applyLarkEngineEvent(state, { type: "result", text: finalText });
       cancelScheduledUpdate();
       // Returns whether/how the answer was shown in a card.
-      return await enqueuePatch(() => finalize(text));
+      return await enqueuePatch(() => finalize(finalText));
     },
     fail: async (text) => {
       // "partial" must mean "part of the ANSWER already arrived": only when the

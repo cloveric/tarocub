@@ -34,6 +34,8 @@ export interface LarkRunState {
   plan?: unknown;
   footer: "thinking" | "tool_running" | "streaming" | null;
   resultText: string;
+  /** First text/tool block eligible to replace a low-information terminal result. */
+  finalAnswerBlockStart?: number;
   errorText: string;
   idleTimeoutMinutes?: number;
   /**
@@ -589,15 +591,92 @@ export function trimToStreamSafeBoundary(text: string, forceFlushChars = 48): st
   return "";
 }
 
-/** The canonical final answer: the engine's result text, or the last non-empty text block. */
+const LOW_INFORMATION_TERMINAL_TEXTS = new Set([
+  "在跑了",
+  "已经在跑了",
+  "正在跑",
+  "还在跑",
+  "任务在跑了",
+  "任务正在跑",
+  "处理中",
+  "正在处理",
+  "还在处理",
+  "我在处理",
+  "我正在处理",
+  "正在执行",
+  "执行中",
+  "运行中",
+  "running",
+  "still running",
+  "it is running",
+  "it's running",
+  "in progress",
+  "working on it",
+]);
+const SUBSTANTIVE_FINAL_FALLBACK_MIN_CHARS = 24;
+
+function normalizedTerminalText(text: string): string {
+  return cleanCardText(text)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s。.!！?？…]+$/gu, "")
+    .replace(/\s+/gu, " ");
+}
+
+function isLowInformationTerminalText(text: string): boolean {
+  return LOW_INFORMATION_TERMINAL_TEXTS.has(normalizedTerminalText(text));
+}
+
+function lastSubstantiveAssistantText(state: LarkRunState): string {
+  const firstEligibleBlock = state.finalAnswerBlockStart ?? 0;
+  for (let index = state.blocks.length - 1; index >= firstEligibleBlock; index -= 1) {
+    const block = state.blocks[index];
+    if (block?.kind !== "text") {
+      continue;
+    }
+    const cleaned = cleanCardText(block.content).trim();
+    if (
+      Array.from(cleaned).length >= SUBSTANTIVE_FINAL_FALLBACK_MIN_CHARS
+      && !isLowInformationTerminalText(cleaned)
+    ) {
+      return block.content;
+    }
+  }
+  return "";
+}
+
+/**
+ * The canonical final answer. A few engines occasionally finish with a bare
+ * lifecycle placeholder after already streaming the useful answer; prefer that
+ * earlier user-visible assistant text, but never reasoning or tool output.
+ */
 function finalAnswerText(state: LarkRunState): string {
   if (state.resultText.trim()) {
+    if (isLowInformationTerminalText(state.resultText)) {
+      const fallback = lastSubstantiveAssistantText(state);
+      if (fallback) {
+        return fallback;
+      }
+    }
     return state.resultText;
   }
   const lastText = [...state.blocks].reverse().find(
     (block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0,
   );
   return lastText?.content ?? "";
+}
+
+/** Resolve a terminal result against assistant text emitted in the current attempt. */
+export function resolveLarkFinalAnswerText(
+  state: LarkRunState,
+  resultText: string,
+  blockStartIndex = 0,
+): string {
+  return finalAnswerText({
+    ...state,
+    resultText,
+    finalAnswerBlockStart: blockStartIndex,
+  });
 }
 
 /**
@@ -1769,7 +1848,6 @@ function cardSummary(state: LarkRunState, locale: Locale): string {
   if (state.status === "idle_timeout") {
     return locale === "en" ? "Auto-stopped" : "无响应已终止";
   }
-  const lastText = [...state.blocks].reverse().find((block): block is Extract<LarkRunBlock, { kind: "text" }> => block.kind === "text" && block.content.trim().length > 0);
-  const text = cleanCardText(lastText?.content ?? state.resultText);
+  const text = cleanCardText(finalAnswerText(state));
   return text.trim().slice(0, 80) || (locale === "en" ? "Done" : "已完成");
 }
