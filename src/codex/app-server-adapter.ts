@@ -590,6 +590,13 @@ export class CodexAppServerAdapter implements CodexAdapter {
   // instead of crossing the model limit and leaking an unrelated old answer.
   private readonly threadContextUsage = new Map<string, ThreadContextUsage>();
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
+  // Turn ids that belonged to compaction turns. A compaction can settle on
+  // thread/compacted while its own turn/completed (or item/*) is still in the
+  // server's write buffer; when that late line lands after the USER's turn/start
+  // was written but before its id-correlated response, the un-id'd pending turn
+  // would adopt the compaction's id and settle with the thread's PREVIOUS
+  // answer via the empty-text thread/read fallback. Never adoptable.
+  private readonly settledCompactionTurnIds = new Set<string>();
   // Covers the whole sendUserMessage lifecycle, including thread resume,
   // preventive compaction, asynchronous session events, and final thread/read.
   // pendingTurns alone starts too late and is removed before final settlement.
@@ -1229,8 +1236,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // notification only fills in when nothing else can (no watcher).
       const turn = parsed.params?.turn;
       if (pending && !pending.turnId && threadId && !this.goalWatchers.has(threadId)) {
-        if (typeof turn === "object" && turn !== null && typeof (turn as { id?: unknown }).id === "string") {
-          this.registerTurnId(pending, (turn as { id: string }).id);
+        const startedId = typeof turn === "object" && turn !== null && typeof (turn as { id?: unknown }).id === "string"
+          ? (turn as { id: string }).id
+          : undefined;
+        if (startedId && !this.settledCompactionTurnIds.has(startedId)) {
+          this.registerTurnId(pending, startedId);
         }
       } else if (threadId && !pending) {
         const compaction = this.pendingCompactions.get(threadId);
@@ -1242,6 +1252,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
           && typeof (turn as { id?: unknown }).id === "string"
         ) {
           compaction.turnId = (turn as { id: string }).id;
+          this.rememberCompactionTurnId(compaction.turnId);
         }
       }
       return;
@@ -1622,6 +1633,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
       // thread the id-correlated `turn/start` response is the only authority,
       // matching the same rule the `turn/started` handler already applies.
       if (this.pendingTurnsByTurnId.has(turnId)) {
+        return undefined;
+      }
+      if (this.settledCompactionTurnIds.has(turnId)) {
+        // A compaction turn's late notification must never settle a user turn.
         return undefined;
       }
       if (this.goalWatchers.has(threadId)) {
@@ -2213,6 +2228,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
     }
 
     this.pendingCompactions.delete(threadId);
+    if (pending.turnId) {
+      this.rememberCompactionTurnId(pending.turnId);
+    }
     clearTimeout(pending.timeout);
     if (error) {
       pending.reject(error);
@@ -2774,7 +2792,18 @@ export class CodexAppServerAdapter implements CodexAdapter {
     this.notifyIdleWaitersIfIdle();
   }
 
+  private rememberCompactionTurnId(turnId: string): void {
+    this.settledCompactionTurnIds.add(turnId);
+    if (this.settledCompactionTurnIds.size > 64) {
+      const oldest = this.settledCompactionTurnIds.values().next().value;
+      if (oldest !== undefined) {
+        this.settledCompactionTurnIds.delete(oldest);
+      }
+    }
+  }
+
   private resetChildState(): void {
+    this.settledCompactionTurnIds.clear();
     if (this.child !== null) {
       // Reject output from the retired child immediately, including the window
       // before a replacement child increments the generation during spawn.

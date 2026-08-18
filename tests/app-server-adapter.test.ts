@@ -231,6 +231,54 @@ describe("CodexAppServerAdapter", () => {
     await expect(second).resolves.toMatchObject({ text: "second answer" });
   });
 
+  it("does not let the compaction turn's late turn/completed settle the next user turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const first = adapter.sendUserMessage("telegram-compact-race", { text: "first", files: [] });
+    await waitFor(() => child.stdin.lines.length >= 1);
+    const initialize = JSON.parse(child.stdin.lines[0] ?? "{}");
+    child.stdout.emitData(`{"id":${initialize.id},"result":{"platformOs":"macos"}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 2);
+    const threadStart = JSON.parse(child.stdin.lines[1] ?? "{}");
+    child.stdout.emitData(`{"id":${threadStart.id},"result":{"thread":{"id":"thread-compact"}}}\n`);
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const firstTurnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    child.stdout.emitData(`{"id":${firstTurnStart.id},"result":{"turn":{"id":"turn-1"}}}\n`);
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-compact","turnId":"turn-1","delta":"first answer"}}\n');
+    child.stdout.emitData('{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-compact","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":999999,"inputTokens":999999,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"last":{"totalTokens":212435,"inputTokens":211344,"cachedInputTokens":209280,"cacheWriteInputTokens":0,"outputTokens":1091,"reasoningOutputTokens":392},"modelContextWindow":258400}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-compact","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+    await expect(first).resolves.toMatchObject({ text: "first answer" });
+
+    const second = adapter.sendUserMessage("thread-compact", { text: "second", files: [] });
+    await waitFor(() => child.stdin.lines.length >= 4);
+    const compactStart = JSON.parse(child.stdin.lines[3] ?? "{}");
+    child.stdout.emitData(`{"id":${compactStart.id},"result":{}}\n`);
+    child.stdout.emitData('{"method":"turn/started","params":{"threadId":"thread-compact","turn":{"id":"turn-compact","items":[],"status":"inProgress","error":null}}}\n');
+    child.stdout.emitData('{"method":"thread/compacted","params":{"threadId":"thread-compact","turnId":"turn-compact"}}\n');
+
+    await waitFor(() => child.stdin.lines.length >= 5);
+    const secondTurnStart = JSON.parse(child.stdin.lines[4] ?? "{}");
+    expect(secondTurnStart.method).toBe("turn/start");
+
+    // The compaction turn's own turn/completed can flush AFTER thread/compacted,
+    // landing while the user's turn/start response is still in flight (its turn
+    // id unregistered). Adopting that id settled the user's turn through the
+    // empty-text thread/read fallback with the thread's PREVIOUS answer.
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-compact","turn":{"id":"turn-compact","items":[],"status":"completed","error":null}}}\n');
+    const settledEarly = await Promise.race([
+      second.then(() => true),
+      new Promise((resolve) => setTimeout(() => resolve(false), 100)),
+    ]);
+    expect(settledEarly).toBe(false);
+    expect(child.stdin.lines.map((line) => JSON.parse(line).method ?? "")).not.toContain("thread/read");
+
+    child.stdout.emitData(`{"id":${secondTurnStart.id},"result":{"turn":{"id":"turn-2"}}}\n`);
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-compact","turnId":"turn-2","delta":"second answer"}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-compact","turn":{"id":"turn-2","items":[],"status":"completed","error":null}}}\n');
+    await expect(second).resolves.toMatchObject({ text: "second answer" });
+  });
+
   it("starts a fresh thread when preventive compaction is unavailable", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

@@ -173,6 +173,12 @@ type ClaudeWorker = {
   suppressNextTaskNotificationAssistant: boolean;
   taskNotificationTurnActive: boolean;
   taskNotificationWaiters: Set<ClaudeTaskNotificationWaiter>;
+  /** Task notifications that completed while ANOTHER task's review was active.
+   *  Installing them over pendingTaskNotification mid-review handed the active
+   *  review's terminal text to the interloper (wrong task id, wrong turn's
+   *  event handler) and left the real owner an undelivered zombie. They wait
+   *  here and install once the active review settles. */
+  queuedTaskNotifications: Array<{ entry: ClaudeBackgroundTask; reviewTurn: boolean }>;
   taskNotificationAssistantText: string;
   taskNotificationDeliveryText: string;
   lastActivityAt: number;
@@ -883,6 +889,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       suppressNextTaskNotificationAssistant: false,
       taskNotificationTurnActive: false,
       taskNotificationWaiters: new Set(),
+      queuedTaskNotifications: [],
       taskNotificationAssistantText: "",
       taskNotificationDeliveryText: "",
       lastActivityAt: Date.now(),
@@ -1072,13 +1079,18 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         return;
       }
       this.emitBackgroundTaskFinished(worker, metadata, task);
-      worker.pendingTaskNotification = {
+      const pendingEntry = {
         ...task,
         ...metadata,
         onEngineEvent: task?.onEngineEvent ?? worker.onEngineEvent,
         onApprovalRequest: task?.onApprovalRequest,
         lastSeenAt: eventSeenAt,
       };
+      if (this.foreignReviewActive(worker, metadata.taskId)) {
+        worker.queuedTaskNotifications.push({ entry: pendingEntry, reviewTurn: false });
+        return;
+      }
+      worker.pendingTaskNotification = pendingEntry;
       return;
     }
 
@@ -1091,13 +1103,18 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         ? worker.backgroundTasks.get(userTaskNotification.taskId)
         : undefined;
       this.emitBackgroundTaskFinished(worker, userTaskNotification, task);
-      worker.pendingTaskNotification = {
+      const reviewEntry = {
         ...task,
         ...userTaskNotification,
         onEngineEvent: task?.onEngineEvent ?? worker.onEngineEvent,
         onApprovalRequest: task?.onApprovalRequest,
         lastSeenAt: eventSeenAt,
       };
+      if (this.foreignReviewActive(worker, userTaskNotification.taskId)) {
+        worker.queuedTaskNotifications.push({ entry: reviewEntry, reviewTurn: true });
+        return;
+      }
+      worker.pendingTaskNotification = reviewEntry;
       worker.taskNotificationTurnActive = true;
       worker.taskNotificationAssistantText = "";
       worker.taskNotificationDeliveryText = "";
@@ -1567,6 +1584,39 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       && Date.now() - pending.lastSeenAt < this.taskNotificationStartGraceMs;
   }
 
+  /** True when a review turn is running for a DIFFERENT task than taskId. */
+  private foreignReviewActive(worker: ClaudeWorker, taskId: string | undefined): boolean {
+    return worker.taskNotificationTurnActive
+      && worker.pendingTaskNotification !== null
+      && worker.pendingTaskNotification.taskId !== undefined
+      && taskId !== undefined
+      && worker.pendingTaskNotification.taskId !== taskId;
+  }
+
+  /** Install the next queued cross-turn notification once the slot is free.
+   *  The finished banner already went out when the task completed; installing
+   *  only restores the attribution/review bookkeeping the clobber used to
+   *  destroy. */
+  private installNextQueuedTaskNotification(worker: ClaudeWorker): void {
+    if (worker.taskNotificationTurnActive || worker.queuedTaskNotifications.length === 0) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      worker.pendingTaskNotification !== null
+      && now - worker.pendingTaskNotification.lastSeenAt < this.taskNotificationStartGraceMs
+    ) {
+      return;
+    }
+    const next = worker.queuedTaskNotifications.shift()!;
+    worker.pendingTaskNotification = { ...next.entry, lastSeenAt: now };
+    if (next.reviewTurn) {
+      worker.taskNotificationTurnActive = true;
+      worker.taskNotificationAssistantText = "";
+      worker.taskNotificationDeliveryText = "";
+    }
+  }
+
   private waitForTaskNotificationTurn(
     worker: ClaudeWorker,
     abortSignal?: AbortSignal,
@@ -1610,7 +1660,29 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private resolveTaskNotificationWaiters(worker: ClaudeWorker): void {
+    this.installNextQueuedTaskNotification(worker);
     if (this.taskNotificationTurnBusy(worker)) {
+      // Still busy — either a review turn runs, or a (possibly just-installed or
+      // replaced) notification holds a fresh grace window. A waiter whose grace
+      // timer already fired has none left, and nothing else re-arms it: before
+      // this re-arm, a notification replaced during the window left queued
+      // foreground turns waiting forever (stdin never written) until /stop,
+      // worker death, or the 6h prune.
+      if (!worker.taskNotificationTurnActive && worker.pendingTaskNotification) {
+        const remainingMs = Math.max(
+          0,
+          this.taskNotificationStartGraceMs - (Date.now() - worker.pendingTaskNotification.lastSeenAt),
+        );
+        for (const waiter of worker.taskNotificationWaiters) {
+          if (!waiter.graceTimer) {
+            waiter.graceTimer = setTimeout(() => {
+              waiter.graceTimer = undefined;
+              this.resolveTaskNotificationWaiters(worker);
+            }, remainingMs + 1);
+            waiter.graceTimer.unref?.();
+          }
+        }
+      }
       return;
     }
     for (const waiter of worker.taskNotificationWaiters) {
@@ -2021,6 +2093,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
    * service restarts until the 6h stale cutoff (the ccfcc1 astock incident).
    */
   private async failBackgroundTasks(worker: ClaudeWorker): Promise<void> {
+    // Queued cross-turn notifications reference tasks terminalized right here;
+    // installing one later would resurrect a pending review on a dead worker.
+    worker.queuedTaskNotifications = [];
     if (worker.backgroundTasks.size === 0) {
       return;
     }

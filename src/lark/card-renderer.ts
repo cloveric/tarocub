@@ -627,6 +627,19 @@ function isLowInformationTerminalText(text: string): boolean {
   return LOW_INFORMATION_TERMINAL_TEXTS.has(normalizedTerminalText(text));
 }
 
+/**
+ * A terminal reply that carries a delivery directive is never low-information,
+ * whatever its prose says. normalizedTerminalText strips send tags before the
+ * set lookup, so "在跑了。[send-image:…]" classified as a placeholder and the
+ * promotion replaced the WHOLE result — the tag included — so the file was
+ * never delivered and no ledger row existed to redeliver it.
+ */
+function carriesDeliveryDirective(text: string): boolean {
+  return /\[send-(?:file|image):/u.test(text)
+    || /```file:[^\n`]+\n/u.test(text)
+    || (/\[tool:/u.test(text) && /send\.(?:file|image|audio|video|batch)/u.test(text));
+}
+
 function lastSubstantiveAssistantText(state: LarkRunState): string {
   const firstEligibleBlock = state.finalAnswerBlockStart ?? 0;
   for (let index = state.blocks.length - 1; index >= firstEligibleBlock; index -= 1) {
@@ -652,7 +665,7 @@ function lastSubstantiveAssistantText(state: LarkRunState): string {
  */
 function finalAnswerText(state: LarkRunState): string {
   if (state.resultText.trim()) {
-    if (isLowInformationTerminalText(state.resultText)) {
+    if (isLowInformationTerminalText(state.resultText) && !carriesDeliveryDirective(state.resultText)) {
       const fallback = lastSubstantiveAssistantText(state);
       if (fallback) {
         return fallback;

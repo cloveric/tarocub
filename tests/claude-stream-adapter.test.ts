@@ -1386,6 +1386,132 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("keeps a review's identity when another turn's task completes mid-review", async () => {
+    // Task P (turn 1) is under review when task T (turn 2) completes. The
+    // system frame for T used to REPLACE pendingTaskNotification, so P's
+    // review terminal — which carries no task_id on Claude ≥2.1.229 — was
+    // attributed to T: delivered under T's id through TURN 2's event handler,
+    // T later double-delivered, P never delivered and left a zombie that
+    // blocked settings changes for six hours.
+    const { children, spawnFn } = createSpawnHarness();
+    const firstEvents: Array<{ type?: string; taskId?: string; text?: string }> = [];
+    const secondEvents: Array<{ type?: string; taskId?: string; text?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Run P in background",
+        files: [],
+        onEngineEvent: (event) => {
+          firstEvents.push(event);
+        },
+      });
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "toolu-P", name: "Bash", input: { command: "sleep 5", run_in_background: true } }] },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-P","tool_use_id":"toolu-P","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started P.","session_id":"session-123"}\n');
+      await first;
+
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Run T in background",
+        files: [],
+        onEngineEvent: (event) => {
+          secondEvents.push(event);
+        },
+      });
+      await waitFor(() => children[0].stdin.lines.length === 2);
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "toolu-T", name: "Bash", input: { command: "sleep 5", run_in_background: true } }] },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-T","tool_use_id":"toolu-T","task_type":"local_bash","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started T.","session_id":"session-123"}\n');
+      await second;
+
+      // P's review turn starts.
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            "<task-notification>",
+            "<task-id>task-P</task-id>",
+            "<tool-use-id>toolu-P</tool-use-id>",
+            "<status>completed</status>",
+            "<summary>P generation done</summary>",
+            "</task-notification>",
+          ].join("\n"),
+        },
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Reviewing P output now." }] },
+        session_id: "session-123",
+      }) + "\n");
+
+      // T completes MID-REVIEW: its system frame must not steal the review.
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-T","tool_use_id":"toolu-T","status":"completed","summary":"T generation done","session_id":"session-123"}\n');
+
+      // P's review terminal, no task_id (Claude ≥2.1.229 shape).
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"P review verdict: P output verified.","session_id":"session-123"}\n');
+
+      await waitFor(() => firstEvents.some((event) => event.type === "task_notification"));
+      expect(firstEvents).toContainEqual(expect.objectContaining({
+        type: "task_notification",
+        taskId: "task-P",
+        text: "P review verdict: P output verified.",
+      }));
+      expect(secondEvents.filter((event) => event.type === "task_notification")).toHaveLength(0);
+
+      // T's own review then runs and lands on T.
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            "<task-notification>",
+            "<task-id>task-T</task-id>",
+            "<tool-use-id>toolu-T</tool-use-id>",
+            "<status>completed</status>",
+            "<summary>T generation done</summary>",
+            "</task-notification>",
+          ].join("\n"),
+        },
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"T review verdict: T output verified.","session_id":"session-123"}\n');
+
+      await waitFor(() => secondEvents.some((event) => event.type === "task_notification"));
+      const visibleForT = secondEvents.filter((event) => event.type === "task_notification");
+      expect(visibleForT).toHaveLength(1);
+      expect(visibleForT[0]).toEqual(expect.objectContaining({
+        taskId: "task-T",
+        text: "T review verdict: T output verified.",
+      }));
+      expect(firstEvents.filter((event) => event.type === "task_notification")).toHaveLength(1);
+
+      // Both ledgers cleared: a settings change reconfigures instead of deferring.
+      const third = adapter.sendUserMessage("session-123", {
+        text: "Use changed instructions",
+        files: [],
+        instructions: "changed instructions",
+      });
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Reconfigured.","session_id":"session-123"}\n');
+      await expect(third).resolves.toEqual({ text: "Reconfigured." });
+    } finally {
+      adapter.destroy();
+    }
+  });
+
   it("does not block a foreground turn on a task notification whose review never starts", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {

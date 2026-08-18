@@ -20,6 +20,7 @@ import {
   rollingTailContent,
   splitLarkAnswerIntoCardChunks,
   liveRunCardStreamElement,
+  resolveLarkFinalAnswerText,
 } from "../src/lark/card-renderer.js";
 
 function maxMarkdownElementLength(card: unknown): number {
@@ -403,6 +404,22 @@ describe("lark card renderer", () => {
     expect(card.body.elements[1].content).toBe("是的。");
     expect(JSON.stringify(card.body)).toContain(earlier);
     expect(card.config.summary.content).toBe("是的。");
+  });
+
+  it("never promotes away a terminal reply that carries a delivery directive", () => {
+    // normalizedTerminalText strips send tags before the low-information
+    // lookup, so "在跑了。[send-image:…]" classified as a bare placeholder and
+    // promotion replaced the WHOLE result — tag included. The file was never
+    // delivered and no ledger row existed to redeliver it.
+    const narration = "我先检查 systemd 单元状态，然后看看最近三天的重启记录，稍等。";
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: narration });
+    const withTag = "在跑了。\n[send-image:/tmp/pic.png]";
+    expect(resolveLarkFinalAnswerText(state, withTag)).toBe(withTag);
+    const fileTag = "[send-file:/tmp/report.pdf]\n处理中";
+    expect(resolveLarkFinalAnswerText(state, fileTag)).toBe(fileTag);
+    // Without a directive the placeholder still promotes.
+    expect(resolveLarkFinalAnswerText(state, "在跑了。")).toBe(narration);
   });
 
   it("does not promote short progress narration or tool output over a running placeholder", () => {
