@@ -723,6 +723,14 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const engineOptions = this.configPath ? await this.loadEngineOptions() : {};
     const prompt = this.buildPrompt(input);
     const effectiveWorkspace = input.workspaceOverride ?? this.workspacePath;
+    const existingWorker = this.workers.get(sessionId);
+    if (existingWorker) {
+      this.advanceTaskNotificationQueue(existingWorker);
+      while (this.taskNotificationTurnBusy(existingWorker)) {
+        await this.waitForTaskNotificationTurn(existingWorker, input.abortSignal);
+      }
+      this.advanceTaskNotificationQueue(existingWorker);
+    }
     const worker = await this.getOrCreateWorker(sessionId, agentInstructions, bridgeInstructions, approvalMode, effectiveWorkspace, engineOptions);
 
     const response = await this.sendTurn(worker, prompt, input);
@@ -788,7 +796,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       const pendingTaskId = existing.pendingTaskNotification?.taskId;
       const hasUntrackedTaskReview = this.taskNotificationTurnBusy(existing)
         && (!pendingTaskId || !existing.backgroundTasks.has(pendingTaskId));
-      const count = existing.backgroundTasks.size + (hasUntrackedTaskReview ? 1 : 0);
+      const runningTaskCount = [...existing.backgroundTasks.keys()]
+        .filter((taskId) => !existing.finishedBackgroundTaskIds.has(taskId))
+        .length;
+      const count = runningTaskCount + (hasUntrackedTaskReview ? 1 : 0);
       if (count > 0) {
         if (existing.workspacePath !== workspacePath) {
           throw new Error(
@@ -1057,9 +1068,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     if (parsed.type === "system" && parsed.subtype === "task_notification") {
       const metadata = toTaskNotificationMetadata(parsed);
-      if (this.settleNestedTaskNotification(worker, metadata)) {
-        return;
-      }
       if (metadata.taskId && worker.collectedBackgroundTaskIds.has(metadata.taskId)) {
         // Preserve the id until the associated origin=result arrives so that a
         // result without task_id can still be recognized and suppressed.
@@ -1096,9 +1104,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
     const userTaskNotification = toUserTaskNotificationMetadata(parsed);
     if (userTaskNotification) {
-      if (this.settleNestedTaskNotification(worker, userTaskNotification)) {
-        return;
-      }
       const task = userTaskNotification.taskId
         ? worker.backgroundTasks.get(userTaskNotification.taskId)
         : undefined;
@@ -1408,7 +1413,12 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.pendingTurn = null;
       this.markWorkerActivity(worker);
       this.clearPendingTurnTimeout(pending);
-      this.settleTasksConsumedByTurn(worker, pending.turnId);
+      if (worker.pendingTaskNotification) {
+        // A review cannot start until this foreground turn closes. Measure its
+        // bounded start window from here, not from the earlier terminal frame.
+        // This also covers an older task that finished during a newer turn.
+        worker.pendingTaskNotification.lastSeenAt = eventSeenAt;
+      }
       pending.resolve({
         text: text.trim() || "Claude completed the request.",
         sessionId: worker.currentSessionId ?? undefined,
@@ -1431,44 +1441,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.taskNotificationAssistantText = "";
       worker.taskNotificationDeliveryText = "";
       this.resolveTaskNotificationWaiters(worker);
-    }
-  }
-
-  /**
-   * A turn that ends with a NORMAL result consumed every completion the CLI
-   * injected into it: no synthetic review will follow for those tasks. Their
-   * ledger entries used to dangle until the 6h prune, and a service restart
-   * inside that window reported the already-consumed task as "stopped because
-   * the Claude engine process exited before completion" — a false alarm seen
-   * live right after a release restart. Terminal frames were observed
-   * (finishedBackgroundTaskIds); still-running tasks are untouched.
-   */
-  private settleTasksConsumedByTurn(worker: ClaudeWorker, turnId: number | undefined): void {
-    if (turnId === undefined) {
-      return;
-    }
-    for (const [taskId, task] of [...worker.backgroundTasks]) {
-      if (task.turnId !== turnId || !worker.finishedBackgroundTaskIds.has(taskId)) {
-        continue;
-      }
-      worker.backgroundTasks.delete(taskId);
-      worker.collectedBackgroundTaskIds.add(taskId);
-      if (task.toolUseId) {
-        worker.explicitBackgroundToolUseIds.delete(task.toolUseId);
-      }
-      if (worker.pendingTaskNotification?.taskId === taskId) {
-        worker.pendingTaskNotification = null;
-      }
-      this.emitEngineEvent(worker, {
-        type: "task_notification",
-        text: `${task.summary?.trim() || "Background task"}: ${task.status ?? "completed"}; result consumed in the active turn.`,
-        sessionId: worker.currentSessionId ?? undefined,
-        taskId,
-        status: task.status ?? "completed",
-        suppressUserDelivery: true,
-        ...(task.summary ? { summary: task.summary } : {}),
-        ...(task.outputFile ? { outputFile: task.outputFile } : {}),
-      }, task.onEngineEvent);
     }
   }
 
@@ -1513,6 +1485,15 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const status = metadata.status ?? task.status;
     const summary = metadata.summary ?? task.summary;
     const outputFile = metadata.outputFile ?? task.outputFile;
+    worker.backgroundTasks.set(taskId, {
+      ...task,
+      ...metadata,
+      taskId,
+      ...(status ? { status } : {}),
+      ...(summary ? { summary } : {}),
+      ...(outputFile ? { outputFile } : {}),
+      lastSeenAt: Date.now(),
+    });
     this.emitEngineEvent(worker, {
       type: "background_task_finished",
       taskId,
@@ -1521,45 +1502,6 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       ...(summary ? { summary } : {}),
       ...(outputFile ? { outputFile } : {}),
     }, task.onEngineEvent);
-  }
-
-  private settleNestedTaskNotification(
-    worker: ClaudeWorker,
-    metadata: ClaudeTaskNotificationMetadata,
-  ): boolean {
-    const parent = worker.taskNotificationTurnActive ? worker.pendingTaskNotification : null;
-    if (!parent?.taskId || !metadata.taskId || metadata.taskId === parent.taskId) {
-      return false;
-    }
-    if (worker.collectedBackgroundTaskIds.has(metadata.taskId)) {
-      return true;
-    }
-
-    const task = worker.backgroundTasks.get(metadata.taskId);
-    if (!task || parent.turnId === undefined || task.turnId !== parent.turnId) {
-      return false;
-    }
-
-    worker.backgroundTasks.delete(metadata.taskId);
-    worker.collectedBackgroundTaskIds.add(metadata.taskId);
-    const toolUseId = metadata.toolUseId ?? task.toolUseId;
-    if (toolUseId) {
-      worker.explicitBackgroundToolUseIds.delete(toolUseId);
-    }
-    const status = metadata.status ?? task.status ?? "completed";
-    const summary = metadata.summary ?? task.summary;
-    const outputFile = metadata.outputFile ?? task.outputFile;
-    this.emitEngineEvent(worker, {
-      type: "task_notification",
-      text: `${summary?.trim() || "Nested background task"}: ${status}; result folded into the parent task review.`,
-      sessionId: worker.currentSessionId ?? undefined,
-      taskId: metadata.taskId,
-      status,
-      suppressUserDelivery: true,
-      ...(summary ? { summary } : {}),
-      ...(outputFile ? { outputFile } : {}),
-    }, task.onEngineEvent);
-    return true;
   }
 
   private armBackgroundTaskTurnSettlement(
@@ -1621,6 +1563,43 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     const pending = worker.pendingTaskNotification;
     return pending !== null
       && Date.now() - pending.lastSeenAt < this.taskNotificationStartGraceMs;
+  }
+
+  private settleExpiredTaskNotification(worker: ClaudeWorker, now = Date.now()): void {
+    if (worker.taskNotificationTurnActive) {
+      return;
+    }
+    const pending = worker.pendingTaskNotification;
+    if (!pending || now - pending.lastSeenAt < this.taskNotificationStartGraceMs) {
+      return;
+    }
+
+    worker.pendingTaskNotification = null;
+    const taskId = pending.taskId;
+    const task = taskId ? worker.backgroundTasks.get(taskId) : undefined;
+    if (!taskId || !task || !worker.finishedBackgroundTaskIds.has(taskId)) {
+      return;
+    }
+
+    worker.backgroundTasks.delete(taskId);
+    worker.collectedBackgroundTaskIds.add(taskId);
+    const toolUseId = pending.toolUseId ?? task.toolUseId;
+    if (toolUseId) {
+      worker.explicitBackgroundToolUseIds.delete(toolUseId);
+    }
+    const status = pending.status ?? task.status ?? "completed";
+    const summary = pending.summary ?? task.summary;
+    const outputFile = pending.outputFile ?? task.outputFile;
+    this.emitEngineEvent(worker, {
+      type: "task_notification",
+      text: `${summary?.trim() || "Background task"}: ${status}; no separate review started within the bounded grace window.`,
+      sessionId: worker.currentSessionId ?? undefined,
+      taskId,
+      status,
+      suppressUserDelivery: true,
+      ...(summary ? { summary } : {}),
+      ...(outputFile ? { outputFile } : {}),
+    }, task.onEngineEvent);
   }
 
   /** True when a review turn is running for a DIFFERENT task than taskId. */
@@ -1699,7 +1678,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   }
 
   private resolveTaskNotificationWaiters(worker: ClaudeWorker): void {
-    this.installNextQueuedTaskNotification(worker);
+    this.advanceTaskNotificationQueue(worker);
     if (this.taskNotificationTurnBusy(worker)) {
       // Still busy — either a review turn runs, or a (possibly just-installed or
       // replaced) notification holds a fresh grace window. A waiter whose grace
@@ -1734,6 +1713,19 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       waiter.resolve();
     }
     worker.taskNotificationWaiters.clear();
+  }
+
+  private advanceTaskNotificationQueue(worker: ClaudeWorker): void {
+    // Drain already-expired system-only notifications before releasing a
+    // foreground waiter. With a zero grace (tests/operator override), more
+    // than one queued completion may be ready in the same stdout batch.
+    while (true) {
+      this.settleExpiredTaskNotification(worker);
+      this.installNextQueuedTaskNotification(worker);
+      if (this.taskNotificationTurnBusy(worker) || !worker.pendingTaskNotification) {
+        break;
+      }
+    }
   }
 
   private rejectTaskNotificationWaiters(worker: ClaudeWorker, error: Error): void {
@@ -1834,6 +1826,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
     while (this.taskNotificationTurnBusy(worker)) {
       await this.waitForTaskNotificationTurn(worker, input.abortSignal);
     }
+    this.advanceTaskNotificationQueue(worker);
     worker.onEngineEvent = input.onEngineEvent;
 
     if (worker.pendingTurn) {
@@ -2015,10 +2008,11 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         continue;
       }
       seen.add(worker);
+      this.advanceTaskNotificationQueue(worker);
       this.pruneExpiredBackgroundTasks(worker, now);
       if (
         worker.pendingTurn
-        || worker.backgroundTasks.size > 0
+        || [...worker.backgroundTasks.keys()].some((taskId) => !worker.finishedBackgroundTaskIds.has(taskId))
         || this.taskNotificationTurnBusy(worker)
         || worker.taskNotificationWaiters.size > 0
       ) {
@@ -2148,13 +2142,17 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       // interruption worth reporting.
       const silentMs = now - task.lastSeenAt;
       const suppressAfterMs = this.backgroundTaskSilentSuppressMs;
+      const terminalObserved = Boolean(task.taskId && worker.finishedBackgroundTaskIds.has(task.taskId));
+      const status = terminalObserved ? task.status ?? "completed" : "failed";
       deliveries.push(this.emitEngineEvent(worker, {
         type: "task_notification",
-        text: `${task.summary ?? "Background task"} stopped because the Claude engine process exited before completion.`,
+        text: terminalObserved
+          ? `${task.summary ?? "Background task"}: ${status}; completion was observed and no separate review remained when the worker closed.`
+          : `${task.summary ?? "Background task"} stopped because the Claude engine process exited before completion.`,
         sessionId: worker.currentSessionId ?? undefined,
         taskId: task.taskId,
-        status: "failed",
-        ...(silentMs >= suppressAfterMs ? { suppressUserDelivery: true } : {}),
+        status,
+        ...(terminalObserved || silentMs >= suppressAfterMs ? { suppressUserDelivery: true } : {}),
         ...(task.summary ? { summary: task.summary } : {}),
         ...(task.outputFile ? { outputFile: task.outputFile } : {}),
       }, task.onEngineEvent));

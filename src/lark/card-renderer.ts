@@ -2,7 +2,12 @@ import type { EngineStreamEvent } from "../codex/adapter.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import { stripDeliveryTags } from "../telegram/delivery-tags.js";
 import { stripCronAddTags } from "../telegram/cron-tags.js";
-import { stripTelegramToolTags } from "../telegram/tool-tags.js";
+import {
+  extractTelegramToolTagMatches,
+  parseTelegramToolTagPayload,
+  stripTelegramToolTags,
+} from "../telegram/tool-tags.js";
+import { isLarkSendToolName } from "./delivery-preflight.js";
 
 // ---------------------------------------------------------------------------
 // Run state — a single rich card is the canonical reply. Text and tool calls
@@ -635,9 +640,17 @@ function isLowInformationTerminalText(text: string): boolean {
  * never delivered and no ledger row existed to redeliver it.
  */
 function carriesDeliveryDirective(text: string): boolean {
-  return /\[send-(?:file|image):/u.test(text)
-    || /```file:[^\n`]+\n/u.test(text)
-    || (/\[tool:/u.test(text) && /send\.(?:file|image|audio|video|batch)/u.test(text));
+  if (/\[send-(?:file|image):/u.test(text) || /```file:[^\n`]+\n/u.test(text)) {
+    return true;
+  }
+
+  return extractTelegramToolTagMatches(text).some((match) => {
+    try {
+      return isLarkSendToolName(parseTelegramToolTagPayload(match.payload).name);
+    } catch {
+      return false;
+    }
+  });
 }
 
 function lastSubstantiveAssistantText(state: LarkRunState): string {

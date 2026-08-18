@@ -422,6 +422,32 @@ describe("lark card renderer", () => {
     expect(resolveLarkFinalAnswerText(state, "在跑了。")).toBe(narration);
   });
 
+  it("preserves inline and fenced send tool calls while still promoting non-send tools", () => {
+    const narration = "我已经核对完所有文件，下面把最终产物一次性发送给你。";
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: narration });
+
+    const sendTools = ["send.file", "send.image", "send.audio", "send.video", "send.batch"];
+    for (const name of sendTools) {
+      const payload = name === "send.batch"
+        ? { files: ["/tmp/report.pdf"] }
+        : { path: `/tmp/${name.slice("send.".length)}.bin` };
+      const call = JSON.stringify({ name, payload });
+      const inline = `在跑了。\n[tool:${call}]`;
+      const fenced = `在跑了。\n\`\`\`tool-call\n${call}\n\`\`\``;
+      expect(resolveLarkFinalAnswerText(state, inline)).toBe(inline);
+      expect(resolveLarkFinalAnswerText(state, fenced)).toBe(fenced);
+    }
+
+    const nonSend = [
+      "在跑了。",
+      "```tool-call",
+      JSON.stringify({ name: "web.search", payload: { query: "release notes" } }),
+      "```",
+    ].join("\n");
+    expect(resolveLarkFinalAnswerText(state, nonSend)).toBe(narration);
+  });
+
   it("does not promote short progress narration or tool output over a running placeholder", () => {
     let shortProgress = initialLarkRunState("lark:oc_chat");
     shortProgress = applyLarkEngineEvent(shortProgress, { type: "assistant_text", text: "我先检查一下。" });
