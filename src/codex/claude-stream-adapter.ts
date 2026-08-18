@@ -1408,6 +1408,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.pendingTurn = null;
       this.markWorkerActivity(worker);
       this.clearPendingTurnTimeout(pending);
+      this.settleTasksConsumedByTurn(worker, pending.turnId);
       pending.resolve({
         text: text.trim() || "Claude completed the request.",
         sessionId: worker.currentSessionId ?? undefined,
@@ -1430,6 +1431,44 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       worker.taskNotificationAssistantText = "";
       worker.taskNotificationDeliveryText = "";
       this.resolveTaskNotificationWaiters(worker);
+    }
+  }
+
+  /**
+   * A turn that ends with a NORMAL result consumed every completion the CLI
+   * injected into it: no synthetic review will follow for those tasks. Their
+   * ledger entries used to dangle until the 6h prune, and a service restart
+   * inside that window reported the already-consumed task as "stopped because
+   * the Claude engine process exited before completion" — a false alarm seen
+   * live right after a release restart. Terminal frames were observed
+   * (finishedBackgroundTaskIds); still-running tasks are untouched.
+   */
+  private settleTasksConsumedByTurn(worker: ClaudeWorker, turnId: number | undefined): void {
+    if (turnId === undefined) {
+      return;
+    }
+    for (const [taskId, task] of [...worker.backgroundTasks]) {
+      if (task.turnId !== turnId || !worker.finishedBackgroundTaskIds.has(taskId)) {
+        continue;
+      }
+      worker.backgroundTasks.delete(taskId);
+      worker.collectedBackgroundTaskIds.add(taskId);
+      if (task.toolUseId) {
+        worker.explicitBackgroundToolUseIds.delete(task.toolUseId);
+      }
+      if (worker.pendingTaskNotification?.taskId === taskId) {
+        worker.pendingTaskNotification = null;
+      }
+      this.emitEngineEvent(worker, {
+        type: "task_notification",
+        text: `${task.summary?.trim() || "Background task"}: ${task.status ?? "completed"}; result consumed in the active turn.`,
+        sessionId: worker.currentSessionId ?? undefined,
+        taskId,
+        status: task.status ?? "completed",
+        suppressUserDelivery: true,
+        ...(task.summary ? { summary: task.summary } : {}),
+        ...(task.outputFile ? { outputFile: task.outputFile } : {}),
+      }, task.onEngineEvent);
     }
   }
 

@@ -1386,6 +1386,74 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("settles a task whose terminal frame is consumed by its own still-running turn", async () => {
+    // The CLI injects a completion into the ACTIVE turn instead of spawning a
+    // review, so nothing later settles the ledger entry. It then dangled until
+    // the 6h prune — and a service restart inside that window reported the
+    // already-consumed task as "stopped because the Claude engine process
+    // exited before completion" (a false alarm seen live after a release).
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; taskId?: string; text?: string; suppressUserDelivery?: boolean }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const first = adapter.sendUserMessage("telegram-12345", {
+        text: "Run the gate in background and keep working",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", id: "toolu-gate", name: "Bash", input: { command: "npm test", run_in_background: true } }] },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-gate","tool_use_id":"toolu-gate","task_type":"local_bash","session_id":"session-123"}\n');
+
+      // Mid-turn: the task completes and the CLI hands the result to the
+      // still-running turn.
+      children[0].stdout.emitData('{"type":"system","subtype":"task_notification","task_id":"task-gate","tool_use_id":"toolu-gate","status":"completed","summary":"Full suite gate","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Gate is green; wrapping up." }] },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"All verified.","session_id":"session-123"}\n');
+      await expect(first).resolves.toMatchObject({ text: "All verified." });
+
+      // The ledger settled: the completion event is bookkeeping-only.
+      const taskEvents = events.filter((event) => event.type === "task_notification");
+      expect(taskEvents).toHaveLength(1);
+      expect(taskEvents[0]).toEqual(expect.objectContaining({
+        taskId: "task-gate",
+        suppressUserDelivery: true,
+      }));
+
+      // A settings change reconfigures immediately instead of deferring behind
+      // a phantom task.
+      const second = adapter.sendUserMessage("session-123", {
+        text: "Use changed instructions",
+        files: [],
+        instructions: "changed instructions",
+      });
+      await waitFor(() => children.length === 2 && children[1].stdin.lines.length === 1);
+      children[1].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[1].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Reconfigured.","session_id":"session-123"}\n');
+      await expect(second).resolves.toEqual({ text: "Reconfigured." });
+
+      // And worker teardown reports no false interruption for it.
+      adapter.destroy();
+      const deathNotices = events.filter((event) =>
+        event.type === "task_notification" && /exited before completion/.test(event.text ?? ""));
+      expect(deathNotices).toHaveLength(0);
+    } finally {
+      adapter.destroy();
+    }
+  });
+
   it("keeps a review's identity when another turn's task completes mid-review", async () => {
     // Task P (turn 1) is under review when task T (turn 2) completes. The
     // system frame for T used to REPLACE pendingTaskNotification, so P's
