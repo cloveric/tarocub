@@ -9,7 +9,7 @@ import type {
   EngineApprovalRequest,
   EngineStreamEvent,
 } from "../src/codex/adapter.js";
-import type { SessionConfigOption } from "@agentclientprotocol/sdk";
+import type { McpServer, SessionConfigOption } from "@agentclientprotocol/sdk";
 import {
   KimiAcpAdapter,
   type KimiChildProcess,
@@ -89,6 +89,8 @@ class FakeAcpServer {
   loadReplayText = "old replay that must be ignored";
   autoCompleteCancel = true;
   respondToSessionList = true;
+  rejectAcpStdioMcp = false;
+  sessionRequestErrorDetails: string | undefined;
   listedSessions: Array<{
     sessionId: string;
     cwd: string;
@@ -231,10 +233,16 @@ class FakeAcpServer {
       return;
     }
     if (message.method === "session/new") {
+      if (this.rejectSessionRequest(message)) {
+        return;
+      }
       this.respond(message, { sessionId: this.sessionId, configOptions: this.configOptions });
       return;
     }
     if (message.method === "session/load") {
+      if (this.rejectSessionRequest(message)) {
+        return;
+      }
       this.sendUpdate({
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: this.loadReplayText },
@@ -288,6 +296,28 @@ class FakeAcpServer {
       throw new Error(`Request ${request.method} had no id`);
     }
     this.send({ jsonrpc: "2.0", id: request.id, result });
+  }
+
+  private rejectSessionRequest(request: JsonRpcMessage): boolean {
+    const mcpServers = Array.isArray(request.params?.mcpServers)
+      ? request.params.mcpServers
+      : [];
+    const hasStdioServer = mcpServers.some((server) => (
+      typeof server === "object" && server !== null && !("type" in server)
+    ));
+    const details = this.sessionRequestErrorDetails
+      ?? (this.rejectAcpStdioMcp && hasStdioServer
+        ? "ACP stdio MCP server cctb_search does not declare a runtime identity"
+        : undefined);
+    if (!details || request.id === undefined) {
+      return false;
+    }
+    this.send({
+      jsonrpc: "2.0",
+      id: request.id,
+      error: { code: -32603, message: "Internal error", data: { details } },
+    });
+    return true;
   }
 
   private send(message: JsonRpcMessage): void {
@@ -3979,6 +4009,72 @@ describe("KimiAcpAdapter", () => {
     server.respondPrompt();
 
     await expect(turn).resolves.toEqual({ text: "fresh answer" });
+    adapter.destroy();
+  });
+
+  it("retries without ACP stdio MCPs when Kimi rejects their missing runtime identity", async () => {
+    const harness = createHarness((server) => {
+      server.rejectAcpStdioMcp = true;
+    });
+    const mcpServers: McpServer[] = [
+      {
+        name: "cctb_search",
+        command: "node",
+        args: ["search-server.js"],
+        env: [],
+      },
+      {
+        type: "http",
+        name: "remote_search",
+        url: "https://mcp.example.test",
+        headers: [],
+      },
+    ];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      mcpServers,
+    });
+
+    const resumed = adapter.sendUserMessage("durable-session", { text: "continue", files: [] });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const loadRequests = harness.children[0].server.requests("session/load");
+    expect(loadRequests).toHaveLength(2);
+    expect(loadRequests[0]?.params?.mcpServers).toEqual(mcpServers);
+    expect(loadRequests[1]?.params?.mcpServers).toEqual([mcpServers[1]]);
+    harness.children[0].server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "resumed" },
+    }, "durable-session");
+    harness.children[0].server.respondPrompt();
+    await expect(resumed).resolves.toEqual({ text: "resumed" });
+
+    const created = adapter.sendUserMessage("telegram-after-mcp-fallback", { text: "new", files: [] });
+    await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+    const newRequests = harness.children[1].server.requests("session/new");
+    expect(newRequests).toHaveLength(1);
+    expect(newRequests[0]?.params?.mcpServers).toEqual([mcpServers[1]]);
+    harness.children[1].server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "created" },
+    });
+    harness.children[1].server.respondPrompt();
+    await expect(created).resolves.toEqual({ text: "created", sessionId: "kimi-session-2" });
+    adapter.destroy();
+  });
+
+  it("surfaces structured ACP request details instead of only Internal error", async () => {
+    const harness = createHarness((server) => {
+      server.sessionRequestErrorDetails = "provider auth config is invalid";
+    });
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      mcpServers: [],
+    });
+
+    await expect(adapter.sendUserMessage("telegram-structured-error", {
+      text: "start",
+      files: [],
+    })).rejects.toThrow("Internal error: provider auth config is invalid");
     adapter.destroy();
   });
 

@@ -279,6 +279,9 @@ const HOOK_RELAY_DRAIN_TIMEOUT_MS = 5_000;
 const SESSION_UPDATE_HOOK_DRAIN_TIMEOUT_MS = 2_000;
 const PENDING_HOOK_TERMINAL_TTL_MS = 5_000;
 const KIMI_VERSION_PROBE_TIMEOUT_MS = 5_000;
+const MAX_ACP_ERROR_DETAILS_CHARS = 2_000;
+const KIMI_ACP_STDIO_RUNTIME_IDENTITY_ERROR =
+  /^ACP stdio MCP server .+ does not declare a runtime identity$/;
 
 type SyncWorkspaceInstructions = (workspacePath: string, instructions: string | null) => Promise<string>;
 type StartKimiHookRelay = typeof startKimiHookRelay;
@@ -306,6 +309,38 @@ function resolveDefaultKimiMcpServers(): McpServer[] {
     args: invocation.args,
     env: [],
   }];
+}
+
+function readAcpErrorDetails(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("data" in error)) {
+    return undefined;
+  }
+  const data = error.data;
+  if (typeof data !== "object" || data === null || !("details" in data) || typeof data.details !== "string") {
+    return undefined;
+  }
+  const details = data.details.trim();
+  return details ? details.slice(0, MAX_ACP_ERROR_DETAILS_CHARS) : undefined;
+}
+
+function normalizeKimiAcpError(error: unknown): Error {
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  const details = readAcpErrorDetails(error);
+  if (!details || normalized.message.includes(details)) {
+    return normalized;
+  }
+  const enriched = new Error(`${normalized.message}: ${details}`, { cause: normalized });
+  enriched.name = normalized.name;
+  return enriched;
+}
+
+function isAcpStdioMcpServer(server: McpServer): boolean {
+  return !("type" in server);
+}
+
+function isKimiAcpStdioRuntimeIdentityError(error: unknown): boolean {
+  const details = readAcpErrorDetails(error);
+  return details !== undefined && KIMI_ACP_STDIO_RUNTIME_IDENTITY_ERROR.test(details);
 }
 
 function isSlashCommand(text: string): boolean {
@@ -1232,6 +1267,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private hookRelayPromise: Promise<KimiHookRelayRuntime | null> | undefined;
   private hookRelayRuntime: KimiHookRelayRuntime | undefined;
   private hookRelayCompatibilityPromise: Promise<boolean> | undefined;
+  private omitAcpStdioMcpServers = false;
   private destroyPromise: Promise<void> | undefined;
   private nextTurnId = 1;
   private destroyed = false;
@@ -1354,11 +1390,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       if (input?.workspaceOverride && path.resolve(found.cwd) !== workspacePath) {
         throw new Error(`Kimi session workspace mismatch: expected ${found.cwd}`);
       }
-      await connection.loadSession({
+      await this.requestSessionWithMcpFallback((mcpServers) => connection.loadSession({
         sessionId,
         cwd: workspacePath,
-        mcpServers: [...this.mcpServers],
-      });
+        mcpServers,
+      }));
       return found;
     });
   }
@@ -1649,6 +1685,28 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
+  private async requestSessionWithMcpFallback<T>(
+    request: (mcpServers: McpServer[]) => Promise<T>,
+  ): Promise<T> {
+    const initialServers = this.omitAcpStdioMcpServers
+      ? this.mcpServers.filter((server) => !isAcpStdioMcpServer(server))
+      : [...this.mcpServers];
+    try {
+      return await request(initialServers);
+    } catch (error) {
+      if (!initialServers.some(isAcpStdioMcpServer) || !isKimiAcpStdioRuntimeIdentityError(error)) {
+        throw error;
+      }
+      // Kimi Code 0.37.2 contradicts the ACP schema: it rejects stdio entries
+      // without a type discriminator, while the SDK strips the unsupported
+      // `type: "stdio"` field. Retry only this exact upstream regression and
+      // keep remote MCP transports intact. A process restart probes again, so
+      // a future Kimi fix restores stdio MCPs automatically.
+      this.omitAcpStdioMcpServers = true;
+      return await request(this.mcpServers.filter((server) => !isAcpStdioMcpServer(server)));
+    }
+  }
+
   private async createWorker(
     sessionId: string,
     workspacePath: string,
@@ -1769,10 +1827,10 @@ export class KimiAcpAdapter implements CodexAdapter {
       let sessionResult: KimiSessionResult;
       if (isLogicalSessionId(sessionId)) {
         sessionResult = await withTimeout(
-          Promise.race([
-            connection.newSession({ cwd: workspacePath, mcpServers: [...this.mcpServers] }),
+          this.requestSessionWithMcpFallback((mcpServers) => Promise.race([
+            connection.newSession({ cwd: workspacePath, mcpServers }),
             worker.failurePromise,
-          ]),
+          ])),
           this.initializeTimeoutMs,
           `Kimi ACP session/new timed out after ${this.initializeTimeoutMs}ms`,
         );
@@ -1782,10 +1840,10 @@ export class KimiAcpAdapter implements CodexAdapter {
           throw new Error("This Kimi ACP version does not support session/load");
         }
         sessionResult = await withTimeout(
-          Promise.race([
-            connection.loadSession({ sessionId, cwd: workspacePath, mcpServers: [...this.mcpServers] }),
+          this.requestSessionWithMcpFallback((mcpServers) => Promise.race([
+            connection.loadSession({ sessionId, cwd: workspacePath, mcpServers }),
             worker.failurePromise,
-          ]),
+          ])),
           this.initializeTimeoutMs,
           `Kimi ACP session/load timed out after ${this.initializeTimeoutMs}ms`,
         );
@@ -1800,7 +1858,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     } catch (error) {
       this.killProcessTreeFn(child.pid);
       this.removeWorker(worker);
-      throw this.withDiagnostics(worker, error instanceof Error ? error : new Error(String(error)));
+      throw this.withDiagnostics(worker, normalizeKimiAcpError(error));
     }
   }
 
@@ -1860,7 +1918,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         `Kimi ACP control request timed out after ${this.initializeTimeoutMs}ms`,
       );
     } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = normalizeKimiAcpError(error);
       const stderr = stderrTail.trim();
       if (!stderr || normalized.message.includes(stderr)) {
         throw normalized;
@@ -3514,11 +3572,12 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   private withDiagnostics(worker: KimiWorker, error: Error): Error {
+    const normalized = normalizeKimiAcpError(error);
     const stderr = worker.stderrTail.trim();
-    if (!stderr || error.message.includes(stderr)) {
-      return error;
+    if (!stderr || normalized.message.includes(stderr)) {
+      return normalized;
     }
-    return new Error(`${error.message}\n\nKimi stderr:\n${stderr}`);
+    return new Error(`${normalized.message}\n\nKimi stderr:\n${stderr}`);
   }
 
   private async emitEngineEvent(
