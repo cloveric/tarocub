@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/github-banner.png" alt="TaroCub: local AI agents controlled from Telegram and Feishu/Lark" width="100%" />
+  <img src="./assets/github-banner.png" alt="TaroCub: Feishu/Lark-first control for local AI agents" width="100%" />
 </p>
 
 <p align="center">
@@ -11,13 +11,13 @@
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js >= 20">
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Kimi Code | Antigravity">
-  <img src="https://img.shields.io/badge/channels-Telegram%20%7C%20Feishu%2FLark-2563eb?style=flat-square" alt="Telegram | Feishu/Lark">
+  <img src="https://img.shields.io/badge/channels-Feishu%2FLark%20%7C%20Telegram-2563eb?style=flat-square" alt="Feishu/Lark | Telegram">
 </p>
 
 <h1 align="center">TaroCub</h1>
 
 <p align="center">
-  <strong>Run Codex, Claude Code, Kimi Code, and Antigravity locally. Control them from Feishu/Lark (recommended) or Telegram.</strong><br>
+  <strong>A Feishu/Lark-first gateway for Codex, Claude Code, Kimi Code, and Antigravity running on your own machine.</strong><br>
   TaroCub runs real CLI agents on your own machine, then gives them durable chat surfaces, files, sessions, tasks, cron, audit logs, and multi-agent workflows.<br>
   Resume local sessions anytime from your phone, whether you are at your desk, commuting, or walking the dog.
 </p>
@@ -33,14 +33,16 @@
 
 ## What This Is
 
-`TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, Kimi Code, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface across Telegram and Feishu/Lark.
+`TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, Kimi Code, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface in Feishu/Lark, with Telegram retained as an optional compatibility channel.
+
+> **Feishu/Lark is the primary platform.** The maintainer has not used Telegram as a day-to-day control surface for a long time. Telegram remains available for existing deployments, but new installations should start with Feishu/Lark.
 
 This project was formerly named `cc-telegram-bridge`. The canonical repository is now `cloveric/tarocub`; GitHub redirects the old URL, and existing state directories plus the `cctb` shorthand remain supported for compatibility.
 
 It is built for people who already use CLI agents heavily and want:
 
-- phone-first operation through Telegram and Feishu/Lark;
-- Feishu/Lark-native operation with cards, Docs comments, Sheets, and group workflows;
+- Feishu/Lark-native operation with cards, Docs comments, Sheets, Drive, and group/thread workflows;
+- optional phone-first Telegram operation for existing personal-bot deployments;
 - durable state for sessions, cron jobs, file delivery, usage, timelines, audit logs, and multi-agent routing.
 
 The intended setup flow is agent-assisted: clone the repo, open it in Codex, Claude Code, Kimi Code, or Antigravity, and ask the agent to configure the bridge for you. The CLI exists so your local agent can do the boring setup work instead of making you hand-edit every file.
@@ -55,22 +57,12 @@ Open this repository in Codex, Claude Code, Kimi Code, or Antigravity and say:
 
 ```text
 Read the README and configure TaroCub for me.
-Use this Telegram bot token: <paste token>
-Enable YOLO mode for my personal bot instance.
-```
-
-For Lark, say:
-
-```text
-Read the README and configure the Feishu/Lark bot for me.
 Run the Lark wizard, check permissions, install/bind lark-cli, and tell me what I need to scan or approve.
 ```
 
-That is the preferred path. Manual commands are still below for operators who want to see each step.
+That is the preferred path. Manual commands are still below for operators who want to see each step. If you explicitly need the legacy-compatible Telegram channel, ask the agent to configure it with a BotFather token instead.
 
-### Telegram
-
-Create a Telegram bot with [@BotFather](https://t.me/BotFather), then run:
+### Feishu / Lark (recommended)
 
 ```bash
 git clone https://github.com/cloveric/tarocub.git
@@ -78,42 +70,35 @@ cd tarocub
 npm install
 npm run build
 
-npm run dev -- telegram configure <telegram-bot-token>
-npm run dev -- telegram yolo unsafe
-npm run dev -- telegram service start
-```
-
-`telegram yolo unsafe` is the recommended default for a personal, trusted bot instance. It maps to `approvalMode: "bypass"`: Codex uses its bypass sandbox mode, Claude Code/Antigravity use their unsafe skip-permissions modes, and Kimi selects ACP `auto` mode. Treat it as equivalent to bypassing normal approval prompts and local sandbox controls. Use `telegram yolo off` only when you explicitly want approval prompts again; Kimi `full-auto` maps to ACP `yolo`, which auto-approves tools but can still ask a question.
-
-Send any message to the bot. It will reply with a pairing code:
-
-```bash
-npm run dev -- telegram access pair <pairing-code>
-```
-
-You can now talk to your local CLI agent from Telegram.
-
-### Feishu / Lark
-
-For the full Lark-native setup, let the aggregate setup command install/bind `lark-cli >= 1.0.41`, run the QR wizard, provision permissions, and check the app:
-
-```bash
-npm install
-npm run build
-
 node dist/src/index.js lark setup --detached --install-cli --identity bot-only
 node dist/src/index.js lark yolo unsafe
 ```
 
-`--detached` is recommended when you are configuring from Telegram/Lark/Codex: it keeps the QR registration polling alive in tmux, prints one durable registration link, writes progress to `~/.cctb/<lark-instance>/lark-setup.log`, and starts the Lark service when setup completes. Use `--no-start-service` only when you explicitly want to prepare the app without listening yet.
-
-New Telegram and Lark bot configs default to YOLO unsafe/bypass. The explicit `lark yolo unsafe` command is shown so readers understand this means bypassing normal approval prompts and local sandboxing for trusted personal bots.
+`--detached` keeps QR registration alive in tmux, prints one durable registration link, writes progress to `~/.cctb/<lark-instance>/lark-setup.log`, and starts the Lark service when setup completes. Use `--no-start-service` only when you explicitly want to prepare the app without listening yet.
 
 If `lark doctor` reports missing app scopes, open the permission page URL it prints, bulk-import the JSON it prints, publish the app version, then run:
 
 ```bash
 node dist/src/index.js lark provision
 node dist/src/index.js lark doctor
+```
+
+### Telegram (optional compatibility channel)
+
+Create a Telegram bot with [@BotFather](https://t.me/BotFather), then run:
+
+```bash
+npm run dev -- telegram configure <telegram-bot-token>
+npm run dev -- telegram yolo unsafe
+npm run dev -- telegram service start
+```
+
+`telegram yolo unsafe` maps to `approvalMode: "bypass"`: Codex uses its bypass sandbox mode, Claude Code/Antigravity use their unsafe skip-permissions modes, and Kimi selects ACP `auto` mode. Treat it as equivalent to bypassing normal approval prompts and local sandbox controls.
+
+Send any message to the bot. It will reply with a pairing code:
+
+```bash
+npm run dev -- telegram access pair <pairing-code>
 ```
 
 ## Surfaces
@@ -131,8 +116,8 @@ node dist/src/index.js lark doctor
 | **Real CLI engines, not a fake chat backend** | Codex, Claude Code, Kimi Code, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
 | **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, Kimi ACP sessions, and Antigravity conversations can be attached from chat and detached later. Bindings and resumed workspace roots are scoped to the private chat, group, or topic that created them, so another conversation cannot silently switch projects. |
 | **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
-| **Telegram as a mobile control plane** | Talk to agents from your phone, send files and screenshots, record voice messages, approve work, stop stuck turns, inspect status, and restart instances. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
+| **Optional Telegram control plane** | Existing deployments can still send files and screenshots, record voice messages, approve work, stop turns, inspect status, and operate multiple personal bots. |
 | **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer, and reports sanitized MCP startup failures instead of silently losing tools. |
 | **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources, plus recordings forwarded as ordinary files/documents, are downloaded and transcribed automatically before any Claude/Codex/Kimi/Antigravity adapter runs. Media documents are recognized from their declared name or downloaded path, so Telegram files without `file_name` still work. Short audio uses local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription, with chunked local fallback on cloud failure. If bridge transcription is unavailable, the original media file remains attached with an explicit fallback note instead of being silently treated as already transcribed. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
@@ -147,28 +132,29 @@ node dist/src/index.js lark doctor
 
 ## Feature Map
 
-| Feature | Telegram | Feishu/Lark | Local CLI |
+| Feature | Feishu/Lark | Telegram | Local CLI |
 |---|---:|---:|---:|
 | Codex / Claude Code / Kimi Code / Antigravity engines | Yes | Yes | Yes |
 | Session resume / detach | Yes | Yes | Yes |
 | Voice, audio, and video ASR | Yes | Yes | Inspect/debug |
-| File and image delivery | Yes | Yes | `telegram send` / `lark send` |
-| Stop and approvals | Inline buttons | Interactive cards | Service controls |
-| Mid-turn steering + `/q` queue escape | Planned | Yes (Codex engine) | Native in Codex CLI |
-| Plan Mode-style choices | Sequential buttons, including multi-select | Rich choice cards | Tool/debug path |
+| File and image delivery | Yes | Yes | `lark send` / `telegram send` |
+| Stop and approvals | Interactive cards | Inline buttons | Service controls |
+| Mid-turn steering + `/q` queue escape | Yes (Codex engine) | Planned | Native in Codex CLI |
+| Plan Mode-style choices | Rich choice cards | Sequential buttons, including multi-select | Tool/debug path |
 | Cron reminders and agent jobs | Yes | Yes | Manage/list/run |
 | Board durable tasks | Yes | Yes | Inspect/export |
 | Agent Bus fan/chain/verify | Yes | Yes | Configure peers |
-| Mini Bus topic/thread workflows | Telegram topics | Lark threads | Inspect state |
-| Docs comments and Sheets workflows | Not applicable | Yes, with `lark-cli` | Provision/auth/doctor |
-| VC meeting attendance (gated beta) | Not applicable | `/meeting` commands | Config + preflight |
+| Mini Bus topic/thread workflows | Lark threads | Telegram topics | Inspect state |
+| Docs comments and Sheets workflows | Yes, with `lark-cli` | Not applicable | Provision/auth/doctor |
+| VC meeting attendance (gated beta) | `/meeting` commands | Not applicable | Config + preflight |
 | Web config console | — | — | `cctb ui` (loopback + token) |
 | Timeline, audit, dashboard, usage | Yes | Yes | Primary ops surface |
 
 ### Kimi Code engine
 
-Select Kimi per instance with `telegram engine kimi --instance <name>` or
-`/engine kimi`. The service resolves `KIMI_EXECUTABLE` first and otherwise
+Select Kimi in either chat channel with `/engine kimi` (or use
+`telegram engine kimi --instance <name>` for a Telegram instance). The service
+resolves `KIMI_EXECUTABLE` first and otherwise
 falls back to `~/.kimi-code/bin/kimi`; Kimi Code must already be authenticated
 locally. TaroCub uses the persistent `kimi acp` protocol, not prompt-mode text
 scraping.
@@ -181,27 +167,35 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-Kimi Code 0.33's default `agent-core-v2` ACP path is supported and has been
-live-probed with K3/1M/max settings, native tools, injected Search MCP, native
-plugin MCP, session creation, and detached-task hooks. The 0.33 MCP startup,
-OAuth reauthorization, structured-result, and large-skill-tree fixes are
-consumed by Kimi itself; TaroCub does not need a second compatibility shim.
-`KIMI_CODE_LEGACY_FLAG=1` is therefore only a rollback escape hatch, not the
-recommended Bot configuration.
+The current compatibility baseline is **Kimi Code 0.37.2**. Its default
+`agent-core-v2` ACP path has been live-probed with native tools, session
+creation/resume, detached-task hooks, and ACP terminal delegation. TaroCub now
+implements the ACP terminal lifecycle used by Kimi for delegated Bash/process
+work (`create`, bounded UTF-8 output, wait, kill, and release), and cleans up
+unreleased terminals when a worker exits.
 
-Kimi's `/plugins` manager is not exposed by ACP 0.33 (`/plugins` returns
-`Unknown ACP command`). Optional official capabilities such as Kimi Computer
-Use and Kimi WebBridge must be installed or updated once in the local
-interactive Kimi TUI, then activated for the Bot with a fresh TaroCub session
-(`/reset`). Plugins are user-wide and may add browser/computer-control MCP
-servers, so TaroCub deliberately does not auto-install them.
+Kimi 0.37.2 also has a narrow upstream stdio-MCP identity regression: it can
+reject the schema-valid stdio entry after the ACP SDK removes a non-schema
+`type` discriminator. TaroCub retries only that exact error without injected
+stdio MCPs, keeps HTTP/SSE and native Kimi MCP/plugins intact, and probes again
+after every Kimi process restart so a future upstream fix restores stdio MCPs
+automatically. `KIMI_CODE_LEGACY_FLAG=1` remains a rollback escape hatch, not
+the recommended Bot configuration.
+
+Kimi's plugin manager is not part of the ACP surface used by TaroCub. Optional
+official capabilities such as Kimi Computer Use and Kimi WebBridge must be
+installed or updated once in the local interactive Kimi TUI, then activated
+for the Bot with a fresh TaroCub session (`/reset`). Plugins are user-wide and
+may add browser/computer-control MCP servers, so TaroCub deliberately does not
+auto-install them.
 
 With Kimi Code 0.32 or newer, TaroCub also installs an inert local hook plugin
 under `KIMI_CODE_HOME` and activates it only for bridge-owned ACP subprocesses.
 `TaskStarted`, background-task `Notification`, `SubagentStop`, `TurnStarted`,
 `Stop`, `StopFailure`, and `Interrupt` feed the existing run cards, worker
-retention, and restart guard. Kimi 0.33 handles a completed process in a
-synthetic task-origin turn where it may inspect bad output and retry. TaroCub
+retention, and restart guard. Kimi 0.33 introduced a completed-process review
+flow in a synthetic task-origin turn where it may inspect bad output and retry.
+TaroCub
 retains that autonomous ACP stream after the original user turn has ended,
 keeps intermediate process failures in the audit timeline without sending
 misleading failure cards, and delivers only Kimi's final reviewed conclusion.
@@ -232,9 +226,9 @@ using the existing worker. Workspace and approval-mode changes fail closed until
 the task finishes (or the operator explicitly uses `/reset`); after terminal or
 six-hour safety expiry, the next turn applies the pending configuration normally.
 
-Kimi ACP 0.33 still does not expose structured per-turn token/cost usage, mid-turn
-steering, a direct client-supplied system-prompt field, or a `/goal` command;
-TaroCub reports those gaps instead of simulating support. See
+The current Kimi ACP surface still does not expose structured per-turn token/cost
+usage, mid-turn steering, a direct client-supplied system-prompt field, or a
+`/goal` command; TaroCub reports those gaps instead of simulating support. See
 [Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence and the
 [Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for the four-engine
 release contract.
@@ -315,20 +309,6 @@ Lark-native controls:
 
 ## Operator Commands
 
-### Telegram
-
-```bash
-telegram service start --instance work
-telegram service restart --all
-telegram service status --all
-telegram engine codex --instance work
-telegram yolo unsafe --instance work
-telegram usage --instance work
-telegram timeline --instance work
-telegram dashboard --instance work
-telegram backup --instance work --out ./work.cctb.gz
-```
-
 ### Lark
 
 ```bash
@@ -344,6 +324,20 @@ lark send --chat oc_xxx --message "hello"
 ```
 
 When `lark service restart --all` is run from inside an active Lark turn, the current Lark instance is deferred and restarted last so the reply can finish before the bot stops its own process. Avoid hand-rolled shell loops that restart Lark instances from inside a Lark bot.
+
+### Telegram (optional compatibility channel)
+
+```bash
+telegram service start --instance work
+telegram service restart --all
+telegram service status --all
+telegram engine codex --instance work
+telegram yolo unsafe --instance work
+telegram usage --instance work
+telegram timeline --instance work
+telegram dashboard --instance work
+telegram backup --instance work --out ./work.cctb.gz
+```
 
 ### In-chat slash commands
 

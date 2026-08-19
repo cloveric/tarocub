@@ -20,22 +20,22 @@
   <rect width="1280" height="640" fill="#FFF7ED" fill-opacity="0.08"/>
 
   <g filter="url(#softShadow)">
-    <rect x="80" y="95" width="142" height="34" rx="17" fill="#E0F7FA" fill-opacity="0.86" stroke="#0891B2" stroke-opacity="0.26"/>
-    <text x="105" y="117" fill="#0E7490" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">TELEGRAM</text>
+    <rect x="80" y="95" width="158" height="34" rx="17" fill="#EDE9FE" fill-opacity="0.88" stroke="#8B5CF6" stroke-opacity="0.22"/>
+    <text x="103" y="117" fill="#6D28D9" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">FEISHU/LARK</text>
 
-    <rect x="236" y="95" width="158" height="34" rx="17" fill="#EDE9FE" fill-opacity="0.88" stroke="#8B5CF6" stroke-opacity="0.22"/>
-    <text x="259" y="117" fill="#6D28D9" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">FEISHU/LARK</text>
+    <rect x="252" y="95" width="140" height="34" rx="17" fill="#E0F7FA" fill-opacity="0.86" stroke="#0891B2" stroke-opacity="0.26"/>
+    <text x="273" y="117" fill="#0E7490" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.6">PRIMARY</text>
 
-    <rect x="408" y="95" width="132" height="34" rx="17" fill="#FEF3C7" fill-opacity="0.9" stroke="#F59E0B" stroke-opacity="0.26"/>
-    <text x="432" y="117" fill="#B45309" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">3 ENGINES</text>
+    <rect x="406" y="95" width="132" height="34" rx="17" fill="#FEF3C7" fill-opacity="0.9" stroke="#F59E0B" stroke-opacity="0.26"/>
+    <text x="430" y="117" fill="#B45309" font-family="'SF Mono', 'Cascadia Code', Menlo, monospace" font-size="12" font-weight="700" letter-spacing="1.8">4 ENGINES</text>
   </g>
 
   <text x="80" y="225" fill="#1F2937" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="72" font-weight="850" letter-spacing="-2.4">TaroCub</text>
-  <text x="80" y="285" fill="#334155" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="760" letter-spacing="-0.8">Local agents, anywhere.</text>
+  <text x="80" y="285" fill="#334155" font-family="'Inter', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="760" letter-spacing="-0.8">Local agents. Feishu/Lark-first.</text>
   <rect x="82" y="314" width="182" height="4" rx="2" fill="url(#accent)"/>
 
-  <text x="80" y="360" fill="#334155" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="20" font-weight="600">Codex, Claude Code, and Antigravity run on your machine.</text>
-  <text x="80" y="391" fill="#64748B" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="500">Telegram and Feishu/Lark keep them close.</text>
+  <text x="80" y="360" fill="#334155" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600">Codex, Claude Code, Kimi Code, and Antigravity run locally.</text>
+  <text x="80" y="391" fill="#64748B" font-family="'Inter', 'SF Pro Text', 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="500">Feishu/Lark is primary. Telegram remains optional.</text>
 
   <g>
     <rect x="80" y="438" width="138" height="31" rx="15.5" fill="#CCFBF1" fill-opacity="0.86" stroke="#14B8A6" stroke-opacity="0.3"/>

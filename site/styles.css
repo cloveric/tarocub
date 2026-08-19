@@ -16,6 +16,7 @@
 
 body {
   margin: 0;
+  overflow-x: hidden;
   color: var(--ink);
   background:
     radial-gradient(circle at top right, rgba(223, 75, 47, 0.18), transparent 28%),
@@ -110,6 +111,13 @@ body {
   gap: 20px;
 }
 
+.hero-copy,
+.hero-panel,
+.terminal-card,
+.chat-card {
+  min-width: 0;
+}
+
 .terminal-card,
 .chat-card,
 .detail-card {
@@ -150,6 +158,7 @@ body {
 .terminal-line {
   margin-bottom: 12px;
   font-size: 0.94rem;
+  overflow-wrap: anywhere;
 }
 
 .terminal-line.muted {
@@ -354,6 +363,23 @@ body {
 
   .hero h1 {
     max-width: none;
+    font-size: clamp(2.45rem, 12vw, 3rem);
+    line-height: 0.96;
+    overflow-wrap: anywhere;
+  }
+
+  .eyebrow {
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    overflow-wrap: anywhere;
+  }
+
+  .terminal-body {
+    padding: 18px;
+  }
+
+  .terminal-line {
+    font-size: 0.82rem;
   }
 
   .capability-list {

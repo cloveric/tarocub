@@ -1,7 +1,27 @@
 {
   "name": "tarocub",
-  "version": "0.1.265",
+  "version": "0.1.266",
+  "description": "Feishu/Lark-first local AI agent gateway for Codex, Claude Code, Kimi Code, and Antigravity.",
   "private": true,
+  "license": "MIT",
+  "homepage": "https://github.com/cloveric/tarocub#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cloveric/tarocub.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cloveric/tarocub/issues"
+  },
+  "keywords": [
+    "feishu",
+    "lark",
+    "codex",
+    "claude-code",
+    "kimi-code",
+    "ai-agents",
+    "multi-agent",
+    "typescript"
+  ],
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -27,6 +47,7 @@
     "axios": "1.18.1",
     "esbuild": "0.28.1",
     "form-data": "4.0.6",
+    "nanoid": "3.3.18",
     "postcss": "8.5.25",
     "protobufjs": "7.6.5",
     "vite": "$vite"

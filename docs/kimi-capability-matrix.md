@@ -1,19 +1,21 @@
 # Kimi Capability Matrix
 
-This matrix is the release contract for the initial Kimi Code engine. It
-compares Kimi with the existing Codex and Claude engines and labels every Kimi
-row as either aligned or an explicit gap. Initial protocol discovery used Kimi
-Code CLI 0.31.1; background-task hooks were re-probed with 0.32.0, and the full
-ACP/MCP/tool/hook path was re-probed on 0.33.0's default `agent-core-v2`.
-Remaining gaps must still be re-probed before removal.
+This matrix is the release contract for the Kimi Code engine. It compares Kimi
+with the existing Codex and Claude engines and labels every Kimi row as either
+aligned or an explicit gap. Initial protocol discovery used Kimi Code CLI
+0.31.1; background-task hooks were re-probed with 0.32.0; the full
+ACP/MCP/tool/hook path was re-probed on 0.33.0; and terminal delegation plus the
+stdio MCP compatibility boundary were re-probed on 0.37.2. Remaining gaps must
+still be re-probed before removal.
 
 | Capability | Codex | Claude Code | Kimi Code alignment |
 |---|---|---|---|
-| Runtime transport | Persistent app-server by default; process fallback | Persistent stream-json worker | **Aligned:** persistent `kimi acp` worker with JSON-RPC framing; Kimi 0.33's default `agent-core-v2` path is live-verified |
+| Runtime transport | Persistent app-server by default; process fallback | Persistent stream-json worker | **Aligned:** persistent `kimi acp` worker with JSON-RPC framing; Kimi 0.37.2's default `agent-core-v2` path is live-verified |
 | Local authentication | Codex home and native login | Claude config and native login | **Aligned:** native Kimi credentials and `KIMI_CODE_HOME`; TaroCub stores no provider token |
 | Text streaming | App-server/process events | Stream-json events | **Aligned:** ACP `agent_message_chunk` -> shared `assistant_text` events |
 | Thinking streaming | App-server reasoning events | Stream-json thinking events | **Aligned:** ACP `agent_thought_chunk` -> shared `thinking` events |
 | Tool lifecycle | Structured tool events | Structured tool events | **Aligned:** ACP `tool_call` and `tool_call_update` -> shared tool events |
+| Delegated terminal lifecycle | Runtime terminal/process tools | Runtime terminal/process tools | **Aligned on Kimi 0.37.2:** TaroCub serves ACP terminal create, bounded UTF-8 output, wait, kill, and release requests; worker teardown kills unreleased process trees |
 | Background tasks | Structured start/completion events | Structured start/completion events | **Aligned on Kimi 0.32+:** an authenticated loopback relay maps task and turn lifecycle hooks into shared events. On Kimi 0.33, TaroCub retains the synthetic task-origin ACP turn, associates automatic retries, records intermediate failures without user delivery, and emits one final reviewed result. Tool-result metadata remains the start fallback, detached Bash fallback notices include bounded real output, explicit successful workspace artifacts enter the shared delivery layer, lost reviews expire, terminal tombstones suppress late/duplicate events, and identity is scoped by conversation, session, and task ID across every Lark turn surface |
 | Background liveness | Runtime task state | Runtime task state | **Aligned without false progress:** active tasks retain their ACP worker and protect restarts until a terminal notification; accepted hooks drain before fallback decisions and worker shutdown, while `SessionHeartbeat` is intentionally ignored because process liveness is not task progress. Silence alone never kills a retained worker |
 | Stop/cancel | Runtime interrupt/abort | Worker abort | **Aligned:** ACP `session/cancel`, then process termination after the grace period |
@@ -43,7 +45,7 @@ Remaining gaps must still be re-probed before removal.
 | Turn timeout | Shared timeout and cancellation | Shared timeout and cancellation | **Aligned:** shared timeout abort reaches ACP cancellation and worker cleanup |
 | Audio/video input | Channel ASR -> text | Channel ASR -> text | **Aligned at bridge layer:** ACP advertises `audio: false`, so channels transcribe media to text first |
 | Local skills | Codex/user/project skills | Claude/user/project skills | **Aligned:** Kimi keeps its native `~/.agents/skills`, project `.kimi-code/skills`/`.agents/skills`, and plugin skills; TaroCub exposes `~/.codex/skills` through the bridge-owned workspace `.kimi-code/skills` path without replacing existing project skills; Kimi 0.33 also fixes macOS `spawn EBADF` failures from very large skill trees |
-| MCP servers | Native Codex MCP configuration | Native Claude MCP/plugins | **Aligned:** native Kimi user/project MCP/plugins remain active, and TaroCub injects its Brave/Tavily Search MCP through ACP for every new or loaded session; ACP 0.33 waits for first-start MCP readiness and preserves `structuredContent`/`_meta` for the model |
+| MCP servers | Native Codex MCP configuration | Native Claude MCP/plugins | **Aligned with a scoped 0.37.2 fallback:** native Kimi user/project MCP/plugins remain active, and TaroCub normally injects its Brave/Tavily Search MCP through ACP for every new or loaded session. If Kimi returns the exact stdio runtime-identity regression, only injected stdio MCPs are omitted for that adapter process; HTTP/SSE transports remain, and the next process re-probes automatically |
 | Optional native plugins | Native plugins/apps | Native plugins/MCP | **Available with local setup:** Kimi 0.33 offers official Computer Use and WebBridge capabilities, but ACP does not expose `/plugins`; install them in the local TUI and start a fresh Bot session. TaroCub does not auto-install user-wide high-privilege plugins |
 | Thought verbosity control | Runtime-dependent | Runtime-dependent | **Gap:** compatibility `verbosity` does not suppress Kimi thought events in ACP 0.31.1 |
 | Hot config during a turn | Runtime-dependent | Runtime-dependent | **Gap with safe deferral:** changes are rejected during an in-flight foreground turn. During retained background work, same-workspace model/thinking/instruction changes are deferred while turns continue on the existing worker; workspace or approval-mode changes fail closed. The next turn after terminal/safety expiry applies the pending configuration |

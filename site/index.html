@@ -6,12 +6,12 @@
     <title>TaroCub</title>
     <meta
       name="description"
-      content="Run Codex, Claude Code, and Antigravity locally, then control them from Telegram and Feishu/Lark."
+      content="A Feishu/Lark-first gateway for Codex, Claude Code, Kimi Code, and Antigravity running on your own machine."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Syne:wght@500;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&amp;family=Syne:wght@500;700;800&amp;display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
@@ -20,14 +20,15 @@
     <div class="page-shell">
       <header class="hero">
         <div class="hero-copy">
-          <div class="eyebrow">Codex + Claude Code + Antigravity</div>
-          <h1>TaroCub connects local AI agents to Telegram and Feishu/Lark.</h1>
+          <div class="eyebrow">Codex + Claude Code + Kimi Code + Antigravity</div>
+          <h1>Local AI agents. Feishu/Lark first.</h1>
           <p class="hero-text">
             Run real CLI agents on your own machine, then control durable sessions, files, tasks, cron,
-            approvals, and multi-agent workflows from your phone or team chat.
+            approvals, and multi-agent workflows from Feishu/Lark. Telegram remains an optional
+            compatibility channel for existing deployments.
           </p>
           <div class="hero-actions">
-            <a class="primary-action" href="../README.md">Read The Docs</a>
+            <a class="primary-action" href="https://github.com/cloveric/tarocub#readme">Read The Docs</a>
             <a class="secondary-action" href="https://github.com/cloveric/tarocub">View Repository</a>
           </div>
         </div>
@@ -37,20 +38,19 @@
               <span></span><span></span><span></span>
             </div>
             <div class="terminal-body">
-              <div class="terminal-line muted">$ npm run dev -- telegram service start --instance work</div>
-              <div class="terminal-line">Started instance "work".</div>
-              <div class="terminal-line muted">$ npm run dev -- telegram status --instance work</div>
-              <div class="terminal-line">Policy: allowlist</div>
-              <div class="terminal-line">Bot identity: workbot (@your_work_bot)</div>
-              <div class="terminal-line">Running: yes</div>
-              <div class="terminal-line accent">Thread routing: resume enabled</div>
+              <div class="terminal-line muted">$ node dist/src/index.js lark doctor</div>
+              <div class="terminal-line">Channel: Feishu/Lark</div>
+              <div class="terminal-line">Service: running</div>
+              <div class="terminal-line">lark-cli: ready</div>
+              <div class="terminal-line">Engines: Codex · Claude · Kimi · Antigravity</div>
+              <div class="terminal-line accent">Sessions, cards, files, and threads: ready</div>
             </div>
           </div>
           <div class="chat-card">
-            <div class="chat-bubble incoming">Pair this chat with code 2S93QL</div>
-            <div class="chat-bubble outgoing">2S93QL</div>
-            <div class="chat-bubble incoming">Working...</div>
-            <div class="chat-bubble incoming success">Refactored. Tests passed. Ready for the next task.</div>
+            <div class="chat-bubble outgoing">/engine kimi</div>
+            <div class="chat-bubble incoming">Kimi Code selected for this bot.</div>
+            <div class="chat-bubble outgoing">Resume the project session and run the audit.</div>
+            <div class="chat-bubble incoming success">Session resumed. Audit complete. Artifacts delivered.</div>
           </div>
         </div>
       </header>
@@ -58,49 +58,49 @@
       <main>
         <section class="feature-strip">
           <article>
-            <h2>One Bot, One Instance</h2>
-            <p>Every instance keeps its own token, access model, lock, inbox, logs, update watermark, and engine sessions.</p>
+            <h2>Feishu/Lark First</h2>
+            <p>Interactive cards, approvals, Docs comments, Sheets, Drive, groups, and threads are the primary product surface.</p>
           </article>
           <article>
-            <h2>Private-Chat Control</h2>
-            <p>Pairing and allowlist rules gate execution before Codex work or attachment downloads are allowed to happen.</p>
+            <h2>Four Native Engines</h2>
+            <p>Codex, Claude Code, Kimi Code, and Antigravity keep their own auth, sessions, tools, skills, MCPs, and local behavior.</p>
           </article>
           <article>
-            <h2>Resumable Coding Threads</h2>
-            <p>Resume Claude sessions, Codex threads, or Antigravity conversations instead of starting cold.</p>
+            <h2>Durable Operations</h2>
+            <p>Resume sessions, deliver artifacts, transcribe media, schedule work, inspect timelines, and coordinate multiple agents.</p>
           </article>
         </section>
 
         <section class="detail-grid">
           <div class="detail-card">
             <div class="detail-label">Operational Model</div>
-            <h3>Built for multiple bots without turning one process into a multiplexed mess.</h3>
+            <h3>Isolated bot instances, one shared operational model.</h3>
             <p>
-              This project chooses isolated instances over shared multi-tenant runtime state. If you need three bots, you
-              run three instances. That keeps locks, logs, pairing data, sessions, and failure domains explicit.
+              Each bot keeps its own credentials, workspace, locks, logs, access policy, and engine sessions. The shared
+              runtime still gives every engine the same delivery, scheduling, audit, and multi-agent semantics.
             </p>
           </div>
 
           <div class="detail-card">
             <div class="detail-label">Human Factors</div>
-            <h3>Looks like chat. Behaves like tooling.</h3>
+            <h3>Feishu is the work surface, not an afterthought.</h3>
             <p>
-              Telegram stays phone-first. Feishu/Lark adds cards, comments, Docs, Sheets, and group workflows.
-              The local side keeps service control, state, and reviewability where operators actually need it.
+              The maintainer has not used Telegram as a day-to-day control surface for a long time. TaroCub is now
+              designed and documented Feishu/Lark-first; Telegram remains available for compatibility, not as the default path.
             </p>
           </div>
 
           <div class="detail-card wide">
             <div class="detail-label">Included Capabilities</div>
             <div class="capability-list">
-              <div>Instance-scoped bot tokens</div>
-              <div>Service start / stop / status</div>
-              <div>Pairing and allowlist policy</div>
-              <div>Attachment download into inbox</div>
-              <div>Per-chat serialized execution</div>
-              <div>Update dedupe and retry-aware offset handling</div>
-              <div>Typed Telegram API boundary checks</div>
-              <div>Codex / Claude / Antigravity session resume</div>
+              <div>Feishu cards and approvals</div>
+              <div>Docs / Sheets / Drive workflows</div>
+              <div>Codex / Claude / Kimi / Antigravity</div>
+              <div>Session resume and compaction</div>
+              <div>Voice, audio, and video ASR</div>
+              <div>Files and artifact delivery</div>
+              <div>Cron, Board, Agent Bus, Mini Bus</div>
+              <div>Timeline, audit, doctor, dashboard</div>
             </div>
           </div>
         </section>
@@ -108,28 +108,28 @@
         <section class="timeline">
           <div class="timeline-header">
             <div class="eyebrow">Lifecycle</div>
-            <h2>From bot token to usable remote coding endpoint.</h2>
+            <h2>From local CLI to a durable Feishu/Lark agent.</h2>
           </div>
           <div class="timeline-steps">
             <article>
               <span>01</span>
-              <h3>Configure</h3>
-              <p>Write a bot token into an instance-scoped `.env` using the built-in CLI.</p>
+              <h3>Connect</h3>
+              <p>Run Lark setup, scan once, and let TaroCub provision the app and bind lark-cli.</p>
             </article>
             <article>
               <span>02</span>
-              <h3>Start</h3>
-              <p>Acquire an instance lock, load state, and begin Telegram polling.</p>
+              <h3>Verify</h3>
+              <p>Use doctor to check scopes, subscriptions, identity, credentials, and service health.</p>
             </article>
             <article>
               <span>03</span>
-              <h3>Pair</h3>
-              <p>Approve a private chat explicitly before any real engine work is allowed through.</p>
+              <h3>Choose</h3>
+              <p>Select Codex, Claude Code, Kimi Code, or Antigravity per bot without changing the chat workflow.</p>
             </article>
             <article>
               <span>04</span>
-              <h3>Resume</h3>
-              <p>Keep chat-to-session bindings so later instructions continue the same local agent conversation.</p>
+              <h3>Operate</h3>
+              <p>Resume sessions, run long tasks, deliver files, and inspect every result from the same Lark timeline.</p>
             </article>
           </div>
         </section>
@@ -141,7 +141,7 @@
           </div>
           <div class="footer-actions">
             <a class="primary-action" href="https://github.com/cloveric/tarocub">Open GitHub</a>
-            <a class="secondary-action" href="../README.md">Implementation Guide</a>
+            <a class="secondary-action" href="https://github.com/cloveric/tarocub#readme">Implementation Guide</a>
           </div>
         </section>
       </main>
