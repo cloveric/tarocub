@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { removeTempRoot } from "./helpers/temp-files.js";
 
 import { JsonStore } from "../src/state/json-store.js";
+import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
 import { SESSION_STATE_UNREADABLE_WARNING, SessionStore } from "../src/state/session-store.js";
 import type { SessionRecord, SessionState } from "../src/types.js";
 
@@ -271,15 +272,17 @@ describe("SessionStore", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const filePath = path.join(tempDir, "session.json");
     const store = new SessionStore(filePath);
+    const conversationKey = "lark:oc_fixture";
+    const larkChatId = stableLarkNumericId(conversationKey);
 
     try {
       await store.upsert(createRecord({
-        telegramChatId: 1959957305,
-        conversationKey: "lark:oc_fixture",
+        telegramChatId: larkChatId,
+        conversationKey,
         codexSessionId: "lark-thread",
       }));
 
-      await expect(store.removeByChatId(1959957305)).resolves.toBe(true);
+      await expect(store.removeByChatId(larkChatId)).resolves.toBe(true);
       await expect(store.load()).resolves.toMatchObject({ chats: [] });
     } finally {
       await removeTempRoot(tempDir);
