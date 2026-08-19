@@ -113,7 +113,7 @@ changing Kimi behavior.
 
 Before committing or pushing, verify that **none** of the following appear in code, docs, or examples:
 
-- **Bot tokens** — use placeholder `123456789:ABCdefGHIjklMNOpqrsTUVwxyz0123456789`
+- **Bot tokens** — use placeholder `<bot-token-from-BotFather>`
 - **API keys** — `ghp_*`, `sk-ant-*`, `ANTHROPIC_API_KEY`, etc.
 - **Pairing codes** — real 6-char codes like `38J63T`
 - **Chat IDs / User IDs** — real Telegram numeric IDs

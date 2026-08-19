@@ -1220,7 +1220,7 @@ All bots can talk to all bots. Simplest config, best for small teams (3-5 bots).
 1. Open Telegram and search for **[@BotFather](https://t.me/BotFather)**
 2. Send `/newbot`
 3. Follow the prompts — give your bot a name and username
-4. BotFather will reply with a **bot token** like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz0123456789`
+4. BotFather will reply with a **bot token**; this guide represents it as `<bot-token-from-BotFather>`
 5. Copy this token — you'll paste it in your terminal
 
 ### Step 2: Install & Configure (on your computer)

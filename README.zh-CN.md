@@ -1048,7 +1048,7 @@ coordinator 实例上的配置示例：
 1. 打开 Telegram，搜索 **[@BotFather](https://t.me/BotFather)**
 2. 发送 `/newbot`
 3. 按提示设置 bot 名称和用户名
-4. BotFather 会回复一个 **bot token**，类似 `123456789:ABCdefGHIjklMNOpqrsTUVwxyz0123456789`
+4. BotFather 会回复一个 **bot token**，本文用 `<bot-token-from-BotFather>` 表示
 5. 复制这个 token
 
 ### 第二步：安装和配置（电脑操作）
