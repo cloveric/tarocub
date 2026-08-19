@@ -55,6 +55,36 @@ async function settleWithin<T>(promise: Promise<T>, ms = 500): Promise<T> {
   }
 }
 
+async function requestClientResponse(
+  server: FakeAcpServer,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<JsonRpcMessage> {
+  const id = server.requestClient(method, params);
+  await waitFor(() => server.clientResponses.has(id));
+  return server.clientResponses.get(id)!;
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessRunning(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return !isProcessRunning(pid);
+}
+
 class FakeReadable extends EventEmitter {
   emitData(chunk: string | Uint8Array): void {
     this.emit("data", chunk);
@@ -188,6 +218,12 @@ class FakeAcpServer {
   requestPermission(params: Record<string, unknown>): number {
     const id = this.nextServerRequestId++;
     this.send({ jsonrpc: "2.0", id, method: "session/request_permission", params });
+    return id;
+  }
+
+  requestClient(method: string, params: Record<string, unknown>): number {
+    const id = this.nextServerRequestId++;
+    this.send({ jsonrpc: "2.0", id, method, params });
     return id;
   }
 
@@ -490,6 +526,197 @@ afterEach(() => {
 });
 
 describe("KimiAcpAdapter", () => {
+  it("advertises ACP terminal support and serves the terminal lifecycle", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    try {
+      const turn = adapter.sendUserMessage("telegram-terminal", {
+        text: "run a command",
+        files: [],
+      });
+      void turn.catch(() => undefined);
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      expect(server.requests("initialize")[0]?.params?.clientCapabilities).toEqual({
+        terminal: true,
+      });
+
+      const createId = server.requestClient("terminal/create", {
+        sessionId: "kimi-session-1",
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write('abc'); setTimeout(() => process.stdout.write(`你好${process.env.KIMI_TERMINAL_TEST}`), 5)",
+        ],
+        cwd: process.cwd(),
+        env: [{ name: "KIMI_TERMINAL_TEST", value: "xyz" }],
+        outputByteLimit: 8,
+      });
+      await waitFor(() => server.clientResponses.has(createId));
+      const createResponse = server.clientResponses.get(createId);
+      expect(createResponse?.error).toBeUndefined();
+      const terminalId = (createResponse?.result as { terminalId?: unknown } | undefined)?.terminalId;
+      expect(terminalId).toEqual(expect.any(String));
+
+      const waitId = server.requestClient("terminal/wait_for_exit", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      await waitFor(() => server.clientResponses.has(waitId));
+      expect(server.clientResponses.get(waitId)?.result).toEqual({ exitCode: 0 });
+
+      const outputId = server.requestClient("terminal/output", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      await waitFor(() => server.clientResponses.has(outputId));
+      expect(server.clientResponses.get(outputId)?.result).toEqual({
+        output: "好xyz",
+        truncated: true,
+        exitStatus: { exitCode: 0 },
+      });
+
+      const releaseId = server.requestClient("terminal/release", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      await waitFor(() => server.clientResponses.has(releaseId));
+      expect(server.clientResponses.get(releaseId)?.result).toEqual({});
+
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
+  it("kills an ACP terminal without releasing its final output", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    let terminalPid: number | undefined;
+    try {
+      const turn = adapter.sendUserMessage("telegram-terminal-kill", {
+        text: "run a long command",
+        files: [],
+      });
+      void turn.catch(() => undefined);
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      const createResponse = await requestClientResponse(server, "terminal/create", {
+        sessionId: "kimi-session-1",
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write(`PID:${process.pid}\\nREADY\\n`); setInterval(() => {}, 1_000)",
+        ],
+        cwd: process.cwd(),
+        outputByteLimit: 1_024,
+      });
+      const terminalId = (createResponse.result as { terminalId: string }).terminalId;
+
+      let outputResponse: JsonRpcMessage | undefined;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        outputResponse = await requestClientResponse(server, "terminal/output", {
+          sessionId: "kimi-session-1",
+          terminalId,
+        });
+        const output = (outputResponse.result as { output?: string } | undefined)?.output ?? "";
+        const pidMatch = /^PID:(\d+)/m.exec(output);
+        if (pidMatch) {
+          terminalPid = Number(pidMatch[1]);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(terminalPid).toEqual(expect.any(Number));
+
+      const killResponse = await requestClientResponse(server, "terminal/kill", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      expect(killResponse.result).toEqual({});
+      const waitResponse = await requestClientResponse(server, "terminal/wait_for_exit", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      const exitStatus = waitResponse.result as { exitCode?: number | null; signal?: string | null };
+      expect("exitCode" in exitStatus || "signal" in exitStatus).toBe(true);
+
+      outputResponse = await requestClientResponse(server, "terminal/output", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      expect(outputResponse.result).toEqual(expect.objectContaining({
+        output: expect.stringContaining("READY"),
+        exitStatus,
+      }));
+
+      const releaseResponse = await requestClientResponse(server, "terminal/release", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      expect(releaseResponse.result).toEqual({});
+
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+    } finally {
+      if (terminalPid && isProcessRunning(terminalPid)) {
+        process.kill(terminalPid, "SIGKILL");
+      }
+      await adapter.destroy();
+    }
+  });
+
+  it("kills unreleased ACP terminals when their worker is destroyed", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    let terminalPid: number | undefined;
+    try {
+      const turn = adapter.sendUserMessage("telegram-terminal-cleanup", {
+        text: "run another long command",
+        files: [],
+      });
+      void turn.catch(() => undefined);
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      const createResponse = await requestClientResponse(server, "terminal/create", {
+        sessionId: "kimi-session-1",
+        command: process.execPath,
+        args: [
+          "-e",
+          "process.stdout.write(String(process.pid)); setInterval(() => {}, 1_000)",
+        ],
+        cwd: process.cwd(),
+        outputByteLimit: 1_024,
+      });
+      const terminalId = (createResponse.result as { terminalId: string }).terminalId;
+
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const outputResponse = await requestClientResponse(server, "terminal/output", {
+          sessionId: "kimi-session-1",
+          terminalId,
+        });
+        const output = (outputResponse.result as { output?: string } | undefined)?.output ?? "";
+        if (/^\d+$/.test(output)) {
+          terminalPid = Number(output);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(terminalPid).toEqual(expect.any(Number));
+
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+      await adapter.destroy();
+      expect(await waitForProcessExit(terminalPid!)).toBe(true);
+    } finally {
+      if (terminalPid && isProcessRunning(terminalPid)) {
+        process.kill(terminalPid, "SIGKILL");
+      }
+      await adapter.destroy();
+    }
+  });
+
   it("relays Kimi hook background tasks into start and out-of-band completion events", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-test-"));
     const configPath = path.join(root, "config.json");

@@ -1,22 +1,33 @@
-import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import { open, readdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
+  type CreateTerminalRequest,
+  type CreateTerminalResponse,
   type InitializeResponse,
+  type KillTerminalRequest,
+  type KillTerminalResponse,
   type LoadSessionResponse,
   type McpServer,
   type NewSessionResponse,
   type PromptResponse,
+  type ReleaseTerminalRequest,
+  type ReleaseTerminalResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
   type SessionConfigOption,
   type Stream,
+  type TerminalOutputRequest,
+  type TerminalOutputResponse,
   type ToolCallContent,
+  type WaitForTerminalExitRequest,
+  type WaitForTerminalExitResponse,
 } from "@agentclientprotocol/sdk";
 
 import type {
@@ -197,6 +208,26 @@ type KimiDeferredSettingsNotice = {
   taskCount: number;
 };
 
+type KimiAcpTerminalExitStatus = {
+  exitCode?: number | null;
+  signal?: string | null;
+};
+
+type KimiAcpTerminal = {
+  terminalId: string;
+  sessionId: string;
+  child: ChildProcess;
+  outputChunks: Array<{ text: string; byteLength: number }>;
+  outputByteLength: number;
+  outputByteLimit: number;
+  truncated: boolean;
+  stdoutDecoder: StringDecoder;
+  stderrDecoder: StringDecoder;
+  exitStatus?: KimiAcpTerminalExitStatus;
+  exitPromise: Promise<KimiAcpTerminalExitStatus>;
+  resolveExit: (status: KimiAcpTerminalExitStatus) => void;
+};
+
 type KimiBackgroundContinuationWaiter = {
   resolve: () => void;
   reject: (error: Error) => void;
@@ -227,6 +258,7 @@ type KimiWorker = {
   backgroundContinuations: Map<string, KimiBackgroundContinuation>;
   backgroundContinuationWaiters: Set<KimiBackgroundContinuationWaiter>;
   terminalBackgroundTasks: Map<string, KimiTerminalBackgroundTask>;
+  terminals: Map<string, KimiAcpTerminal>;
   activeHookTurn?: KimiHookTurn;
   ignoredHookTurn?: IgnoredKimiHookTurn;
   pendingHookTerminal?: PendingKimiHookTerminal;
@@ -261,6 +293,8 @@ const DEFAULT_BACKGROUND_TASK_MAX_AGE_MS = 6 * 60 * 60_000;
 const DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS = 6 * 60 * 60_000;
 const MAX_BACKGROUND_TASK_OUTPUT_BYTES = 64 * 1024;
 const MAX_KIMI_WIRE_TAIL_BYTES = 256 * 1024;
+const DEFAULT_ACP_TERMINAL_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_ACP_TERMINAL_OUTPUT_BYTES = 64 * 1024 * 1024;
 const SUBAGENT_NOTIFICATION_GRACE_MS = 250;
 
 function renderDeferredSettingsNotice(
@@ -1742,6 +1776,11 @@ export class KimiAcpAdapter implements CodexAdapter {
     const connection = new ClientSideConnection(() => ({
       requestPermission: async (request) => await this.handlePermissionRequest(worker, request),
       sessionUpdate: (notification) => this.queueKimiSessionUpdate(worker, notification),
+      createTerminal: async (request) => this.createAcpTerminal(worker, request),
+      terminalOutput: async (request) => this.readAcpTerminal(worker, request),
+      waitForTerminalExit: async (request) => await this.waitForAcpTerminal(worker, request),
+      killTerminal: async (request) => this.killAcpTerminal(worker, request),
+      releaseTerminal: async (request) => this.releaseAcpTerminal(worker, request),
     }), stream);
     worker = {
       child,
@@ -1762,6 +1801,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       backgroundContinuations: new Map(),
       backgroundContinuationWaiters: new Set(),
       terminalBackgroundTasks: new Map(),
+      terminals: new Map(),
       ignoredHookTerminalStarts: [],
       lastActivityAt: Date.now(),
       removed: false,
@@ -1815,7 +1855,7 @@ export class KimiAcpAdapter implements CodexAdapter {
           connection.initialize({
             protocolVersion: PROTOCOL_VERSION,
             clientInfo: { name: "tarocub", version: "0.1.0" },
-            clientCapabilities: {},
+            clientCapabilities: { terminal: true },
           }),
           worker.failurePromise,
         ]),
@@ -1927,6 +1967,215 @@ export class KimiAcpAdapter implements CodexAdapter {
     } finally {
       this.killProcessTreeFn(child.pid);
     }
+  }
+
+  private createAcpTerminal(
+    worker: KimiWorker,
+    request: CreateTerminalRequest,
+  ): CreateTerminalResponse {
+    this.assertAcpTerminalSession(worker, request.sessionId);
+    const cwd = request.cwd ?? worker.workspacePath;
+    if (!path.isAbsolute(cwd)) {
+      throw new Error(`ACP terminal cwd must be absolute: ${cwd}`);
+    }
+    const outputByteLimit = Math.min(
+      MAX_ACP_TERMINAL_OUTPUT_BYTES,
+      Math.max(0, Math.floor(request.outputByteLimit ?? DEFAULT_ACP_TERMINAL_OUTPUT_BYTES)),
+    );
+    const env = { ...this.childEnv };
+    for (const variable of request.env ?? []) {
+      env[variable.name] = variable.value;
+    }
+
+    const child = spawn(request.command, request.args ?? [], {
+      cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    if (!child.stdout || !child.stderr) {
+      killProcessTree(child.pid);
+      throw new Error("ACP terminal subprocess did not expose output pipes");
+    }
+
+    let resolveExit!: (status: KimiAcpTerminalExitStatus) => void;
+    const exitPromise = new Promise<KimiAcpTerminalExitStatus>((resolve) => {
+      resolveExit = resolve;
+    });
+    const terminal: KimiAcpTerminal = {
+      terminalId: randomUUID(),
+      sessionId: request.sessionId,
+      child,
+      outputChunks: [],
+      outputByteLength: 0,
+      outputByteLimit,
+      truncated: false,
+      stdoutDecoder: new StringDecoder("utf8"),
+      stderrDecoder: new StringDecoder("utf8"),
+      exitPromise,
+      resolveExit,
+    };
+    worker.terminals.set(terminal.terminalId, terminal);
+
+    child.stdout.on("data", (chunk: Buffer | Uint8Array | string) => {
+      this.appendAcpTerminalOutput(
+        worker,
+        terminal,
+        terminal.stdoutDecoder.write(Buffer.from(chunk)),
+      );
+    });
+    child.stderr.on("data", (chunk: Buffer | Uint8Array | string) => {
+      this.appendAcpTerminalOutput(
+        worker,
+        terminal,
+        terminal.stderrDecoder.write(Buffer.from(chunk)),
+      );
+    });
+    child.once("error", (error) => {
+      const lastChunk = terminal.outputChunks.at(-1)?.text ?? "";
+      const separator = terminal.outputByteLength > 0 && !lastChunk.endsWith("\n") ? "\n" : "";
+      this.appendAcpTerminalOutput(worker, terminal, `${separator}${error.message}`);
+    });
+    child.once("close", (code, signal) => {
+      this.appendAcpTerminalOutput(worker, terminal, terminal.stdoutDecoder.end());
+      this.appendAcpTerminalOutput(worker, terminal, terminal.stderrDecoder.end());
+      if (terminal.exitStatus) {
+        return;
+      }
+      const exitStatus: KimiAcpTerminalExitStatus = {};
+      if (code !== null) {
+        exitStatus.exitCode = code;
+      }
+      if (signal) {
+        exitStatus.signal = signal;
+      }
+      terminal.exitStatus = exitStatus;
+      terminal.resolveExit(exitStatus);
+      if (!worker.removed) {
+        this.markActivity(worker);
+      }
+    });
+    this.markActivity(worker);
+    return { terminalId: terminal.terminalId };
+  }
+
+  private appendAcpTerminalOutput(
+    worker: KimiWorker,
+    terminal: KimiAcpTerminal,
+    text: string,
+  ): void {
+    if (!text) {
+      return;
+    }
+    const byteLength = Buffer.byteLength(text, "utf8");
+    terminal.outputChunks.push({ text, byteLength });
+    terminal.outputByteLength += byteLength;
+    if (terminal.outputByteLength > terminal.outputByteLimit) {
+      terminal.truncated = true;
+    }
+    while (terminal.outputByteLength > terminal.outputByteLimit) {
+      const first = terminal.outputChunks[0];
+      if (!first) {
+        terminal.outputByteLength = 0;
+        break;
+      }
+      const excess = terminal.outputByteLength - terminal.outputByteLimit;
+      if (first.byteLength <= excess) {
+        terminal.outputChunks.shift();
+        terminal.outputByteLength -= first.byteLength;
+        continue;
+      }
+      const bytes = Buffer.from(first.text, "utf8");
+      let start = excess;
+      while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) {
+        start += 1;
+      }
+      first.text = bytes.subarray(start).toString("utf8");
+      first.byteLength = bytes.length - start;
+      terminal.outputByteLength -= start;
+      break;
+    }
+    if (!worker.removed) {
+      this.markActivity(worker);
+    }
+  }
+
+  private assertAcpTerminalSession(worker: KimiWorker, sessionId: string): void {
+    if (!worker.currentSessionId || worker.currentSessionId !== sessionId) {
+      throw new Error(`ACP terminal request does not belong to active session ${worker.currentSessionId ?? "unknown"}`);
+    }
+  }
+
+  private getAcpTerminal(
+    worker: KimiWorker,
+    request: TerminalOutputRequest | WaitForTerminalExitRequest | KillTerminalRequest | ReleaseTerminalRequest,
+  ): KimiAcpTerminal {
+    this.assertAcpTerminalSession(worker, request.sessionId);
+    const terminal = worker.terminals.get(request.terminalId);
+    if (!terminal || terminal.sessionId !== request.sessionId) {
+      throw new Error(`Unknown ACP terminal ${request.terminalId}`);
+    }
+    return terminal;
+  }
+
+  private readAcpTerminal(
+    worker: KimiWorker,
+    request: TerminalOutputRequest,
+  ): TerminalOutputResponse {
+    const terminal = this.getAcpTerminal(worker, request);
+    this.markActivity(worker);
+    return {
+      output: terminal.outputChunks.map((chunk) => chunk.text).join(""),
+      truncated: terminal.truncated,
+      ...(terminal.exitStatus ? { exitStatus: terminal.exitStatus } : {}),
+    };
+  }
+
+  private async waitForAcpTerminal(
+    worker: KimiWorker,
+    request: WaitForTerminalExitRequest,
+  ): Promise<WaitForTerminalExitResponse> {
+    const terminal = this.getAcpTerminal(worker, request);
+    this.markActivity(worker);
+    const status = await terminal.exitPromise;
+    if (!worker.removed) {
+      this.markActivity(worker);
+    }
+    return status;
+  }
+
+  private killAcpTerminal(
+    worker: KimiWorker,
+    request: KillTerminalRequest,
+  ): KillTerminalResponse {
+    const terminal = this.getAcpTerminal(worker, request);
+    if (!terminal.exitStatus) {
+      killProcessTree(terminal.child.pid);
+    }
+    this.markActivity(worker);
+    return {};
+  }
+
+  private releaseAcpTerminal(
+    worker: KimiWorker,
+    request: ReleaseTerminalRequest,
+  ): ReleaseTerminalResponse {
+    const terminal = this.getAcpTerminal(worker, request);
+    if (!terminal.exitStatus) {
+      killProcessTree(terminal.child.pid);
+    }
+    worker.terminals.delete(terminal.terminalId);
+    this.markActivity(worker);
+    return {};
+  }
+
+  private releaseAllAcpTerminals(worker: KimiWorker): void {
+    for (const terminal of worker.terminals.values()) {
+      if (!terminal.exitStatus) {
+        killProcessTree(terminal.child.pid);
+      }
+    }
+    worker.terminals.clear();
   }
 
   private async applySessionConfigOptions(
@@ -3767,6 +4016,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     // terminal event before marking it removed so timeline restart guards do
     // not retain dead tasks until the six-hour stale cutoff.
     void this.failBackgroundTasks(worker);
+    this.releaseAllAcpTerminals(worker);
     worker.removed = true;
     this.rejectBackgroundContinuationWaiters(worker, new Error("Kimi ACP worker was removed"));
     for (const task of worker.backgroundTasks.values()) {
