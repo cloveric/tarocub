@@ -2270,6 +2270,116 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("keeps a task-origin review active across nested detached stages", async () => {
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    let finalReviewReady = false;
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      backgroundContinuationGraceMs: 60,
+      hookTerminalGraceMs: 0,
+      hookRelayEnabled: true,
+      readBackgroundTaskOutputFn: async (_engineHomePath, _sessionId, taskId) => (
+        taskId === "bash-child-stage" ? "🏁 Done\n🏁 Done" : "Initial task output"
+      ),
+      readTaskReviewTextFn: async () => finalReviewReady ? "Final verified result." : undefined,
+    });
+    try {
+      const foreground = adapter.sendUserMessage("telegram-nested-review", {
+        text: "generate assets in a detached task",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-parent-review",
+        kind: "process",
+        description: "Generate the asset set",
+        detached: true,
+      });
+      server.respondPrompt();
+      await expect(foreground).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-parent-review",
+        body: "Initial task output",
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-parent-review",
+        origin_kind: "task",
+        origin_name: "bash-parent-review",
+        prompt: '<notification type="task.completed" source_id="bash-parent-review">done</notification>',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Waiting for the remaining stage." },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-child-stage",
+        title: "Bash",
+        status: "completed",
+        rawOutput: [
+          "task_id: bash-child-stage",
+          "status: running",
+          "description: Generate the remaining pages",
+          "automatic_notification: true",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-child-stage"
+      )));
+      // TaskStarted can arrive late or be lost. The ACP tool output must be
+      // enough to keep this intermediate Stop from ending the parent review.
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-child-stage",
+        body: "🏁 Done\n🏁 Done",
+      });
+      // ACP can resume and emit its final Stop before the Hook notification's
+      // output-enrichment timer has flushed the child lifecycle event.
+      finalReviewReady = true;
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Final verified result." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await new Promise((resolve) => setTimeout(resolve, 650));
+
+      expect(events.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ))).toEqual([
+        expect.objectContaining({
+          type: "task_notification",
+          taskId: "bash-parent-review",
+          status: "completed",
+          text: "Final verified result.",
+        }),
+      ]);
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-child-stage"
+      ))).toEqual([
+        expect.objectContaining({ suppressUserDelivery: true }),
+      ]);
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
   it("releases a queued foreground turn when a completed task review loses its Stop hook", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-lost-review-stop-test-"));
     const wirePath = path.join(

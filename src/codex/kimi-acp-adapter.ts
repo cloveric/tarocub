@@ -139,6 +139,7 @@ type KimiBackgroundTask = {
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   continuationTaskId?: string;
+  internalContinuationStage?: boolean;
   suppressUserDelivery?: boolean;
   startEmitted: boolean;
   lastSeenAt: number;
@@ -2541,6 +2542,74 @@ export class KimiAcpAdapter implements CodexAdapter {
     return candidates.length === 1 ? candidates[0] : undefined;
   }
 
+  private nestedTasksForContinuation(worker: KimiWorker, continuationTaskId: string): KimiBackgroundTask[] {
+    return [...worker.backgroundTasks.values()].filter((task) => (
+      task.taskId !== continuationTaskId && task.continuationTaskId === continuationTaskId
+    ));
+  }
+
+  private hasInternalStageForContinuation(worker: KimiWorker, continuationTaskId: string): boolean {
+    const nestedTasks = this.nestedTasksForContinuation(worker, continuationTaskId);
+    return nestedTasks.length === 1 && nestedTasks[0]?.internalContinuationStage === true;
+  }
+
+  private attachNestedTaskToContinuation(
+    worker: KimiWorker,
+    task: KimiBackgroundTask,
+    continuation: KimiBackgroundContinuation,
+  ): void {
+    if (task.taskId === continuation.taskId) {
+      return;
+    }
+    const newlyAttached = task.continuationTaskId !== continuation.taskId;
+    task.continuationTaskId = continuation.taskId;
+    const nestedTasks = this.nestedTasksForContinuation(worker, continuation.taskId);
+    if (!nestedTasks.includes(task)) {
+      nestedTasks.push(task);
+    }
+    const isInternalStage = continuation.status === "completed" && nestedTasks.length === 1;
+    if (isInternalStage) {
+      task.internalContinuationStage = true;
+      task.suppressUserDelivery = true;
+    } else {
+      // Failed-task retries and fan-out branches replace the current review;
+      // they need their own later review and must not inherit internal-stage
+      // suppression from the first child observed.
+      for (const candidate of nestedTasks) {
+        if (!candidate.internalContinuationStage) {
+          continue;
+        }
+        candidate.internalContinuationStage = false;
+        if (!candidate.ownerAgentId || candidate.ownerAgentId === "main") {
+          candidate.suppressUserDelivery = undefined;
+        }
+      }
+    }
+    continuation.lastSeenAt = Date.now();
+
+    // Text emitted before a nested detached stage is an intermediate status,
+    // not the reviewed result that should eventually reach the user.
+    if (newlyAttached && isInternalStage) {
+      continuation.assistantText = "";
+      continuation.assistantBoundaryPending = false;
+    }
+
+    // A Stop hook can race the TaskStarted hook. Once a nested stage is known,
+    // cancel only a successful terminal candidate; failures remain terminal.
+    if (isInternalStage && continuation.pendingTerminal?.status === "completed") {
+      continuation.pendingTerminal = undefined;
+      if (continuation.terminalTimer) {
+        clearTimeout(continuation.terminalTimer);
+        continuation.terminalTimer = undefined;
+      }
+      const active = worker.activeHookTurn;
+      if (active?.originKind === "task" && active.continuationTaskId === continuation.taskId) {
+        continuation.activeTurnId = active.turnId;
+      }
+    }
+    this.armKimiContinuationFallback(worker, continuation);
+  }
+
   private backgroundContinuationTurnBusy(worker: KimiWorker): boolean {
     return worker.backgroundContinuations.size > 0;
   }
@@ -2744,7 +2813,6 @@ export class KimiAcpAdapter implements CodexAdapter {
       ownerTurnId: worker.pendingTurn?.turnId,
       onEngineEvent: continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
       onApprovalRequest: continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest,
-      continuationTaskId: continuation?.taskId,
       startEmitted: false,
       lastSeenAt: now,
     };
@@ -2759,9 +2827,11 @@ export class KimiAcpAdapter implements CodexAdapter {
     task.lastSeenAt = now;
     task.onEngineEvent ??= continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
     task.onApprovalRequest ??= continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest;
-    task.continuationTaskId ??= continuation?.taskId;
     task.workflowId = continuation?.workflowId ?? task.workflowId;
     task.ownerTurnId ??= worker.pendingTurn?.turnId;
+    if (continuation) {
+      this.attachNestedTaskToContinuation(worker, task, continuation);
+    }
     worker.backgroundTasks.set(task.taskId, task);
     this.emitBackgroundTaskStarted(worker, task);
   }
@@ -3098,6 +3168,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     const continuation = worker.backgroundContinuations.get(active.continuationTaskId);
     if (continuation) {
+      if (terminal.status === "completed" && this.hasInternalStageForContinuation(worker, continuation.taskId)) {
+        continuation.lastSeenAt = Date.now();
+        continuation.activeTurnId = active.turnId;
+        this.armKimiContinuationFallback(worker, continuation);
+        return;
+      }
       this.scheduleKimiContinuationFinish(worker, continuation, terminal);
     } else {
       worker.activeHookTurn = undefined;
@@ -3189,6 +3265,10 @@ export class KimiAcpAdapter implements CodexAdapter {
       const ownsActiveReview = activeHookTurn.originKind === "task"
         && activeHookTurn.continuationTaskId === continuation.taskId;
       if (!ownsActiveReview) {
+        this.armKimiContinuationFallback(worker, continuation);
+        return;
+      }
+      if (this.hasInternalStageForContinuation(worker, continuation.taskId)) {
         this.armKimiContinuationFallback(worker, continuation);
         return;
       }
@@ -3369,7 +3449,6 @@ export class KimiAcpAdapter implements CodexAdapter {
         ownerTurnId: worker.pendingTurn?.turnId,
         onEngineEvent: continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent,
         onApprovalRequest: continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest,
-        continuationTaskId: continuation?.taskId,
         startEmitted: false,
         lastSeenAt: now,
       };
@@ -3383,9 +3462,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       task.lastSeenAt = now;
       task.onEngineEvent ??= continuation?.onEngineEvent ?? worker.pendingTurn?.onEngineEvent ?? worker.onEngineEvent;
       task.onApprovalRequest ??= continuation?.onApprovalRequest ?? worker.pendingTurn?.onApprovalRequest;
-      task.continuationTaskId ??= continuation?.taskId;
       task.workflowId = continuation?.workflowId ?? task.workflowId;
       task.ownerTurnId ??= worker.pendingTurn?.turnId;
+      if (continuation) {
+        this.attachNestedTaskToContinuation(worker, task, continuation);
+      }
       worker.backgroundTasks.set(task.taskId, task);
       await this.adoptNestedKimiTaskWorkflow(worker, task);
       this.emitBackgroundTaskStarted(worker, task);
@@ -3502,6 +3583,34 @@ export class KimiAcpAdapter implements CodexAdapter {
       worker.backgroundTasks.get(task.taskId) !== task
       || this.isTerminalBackgroundTask(worker, task.taskId, Date.now())
     ) {
+      return;
+    }
+    const parentContinuation = task.continuationTaskId && task.continuationTaskId !== task.taskId
+      ? worker.backgroundContinuations.get(task.continuationTaskId)
+      : undefined;
+    if (parentContinuation && task.internalContinuationStage) {
+      worker.backgroundTasks.delete(task.taskId);
+      parentContinuation.lastSeenAt = Date.now();
+      this.armKimiContinuationFallback(worker, parentContinuation);
+      this.rememberTerminalBackgroundTask(worker, task.taskId, {
+        workflowId: task.workflowId,
+        sessionId,
+        status,
+        summary: task.description,
+        onEngineEvent: task.onEngineEvent ?? worker.onEngineEvent,
+        onApprovalRequest: task.onApprovalRequest,
+        taskOriginReviewStarted: true,
+        suppressUserDelivery: true,
+      });
+      await this.emitEngineEvent(task.onEngineEvent ?? worker.onEngineEvent, {
+        type: "task_notification",
+        text,
+        sessionId,
+        taskId: task.taskId,
+        status,
+        ...(task.description ? { summary: task.description } : {}),
+        suppressUserDelivery: true,
+      });
       return;
     }
     const settlesCurrentTurn = task.ownerTurnId !== undefined
