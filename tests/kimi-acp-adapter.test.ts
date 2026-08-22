@@ -843,6 +843,614 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("settles a background task completed by WaitFor without waiting for a suppressed hook notification", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-wait-for-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-wait-for", {
+        text: "build in the background and wait for it",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-waited",
+        kind: "process",
+        description: "Waited build",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-waited"
+      )));
+
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "tool-wait-for",
+        title: "WaitFor",
+        status: "pending",
+        rawInput: { timeout: 60, task_id: "bash-waited" },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-for",
+        title: "WaitFor",
+        status: "completed",
+        rawOutput: [
+          "wait_status: completed",
+          "task_id: bash-waited",
+          "waited_ms: 1200",
+          "timeout_ms: 60000",
+          "",
+          "[finished]",
+          "task_id: bash-waited",
+          "kind: process",
+          "status: completed",
+          "description: Waited build",
+          "output_path: /tmp/bash-waited.log",
+          "",
+          "[output]",
+          "build passed",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "tool_result" && event.toolUseId === "tool-wait-for"
+      )));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "The build passed." },
+      });
+      server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "The build passed." });
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const reconfigured = adapter.sendUserMessage("kimi-session-1", {
+        text: "use the new effort",
+        files: [],
+      });
+      void reconfigured.catch(() => undefined);
+      await waitFor(() => harness.children.reduce((count, child) => count + child.server.prompts.length, 0) === 2);
+
+      expect(harness.children).toHaveLength(2);
+      harness.children[1].server.respondPrompt();
+      await expect(reconfigured).resolves.toMatchObject({ text: "Kimi completed the request." });
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-waited"
+      ))).toEqual([
+        expect.objectContaining({
+          status: "completed",
+          suppressUserDelivery: true,
+        }),
+      ]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains a running task when WaitFor times out or the tool call fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-wait-for-timeout-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-wait-for-timeout", {
+        text: "start a background build",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-still-running",
+        kind: "process",
+        description: "Slow build",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-still-running"
+      )));
+
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-timeout",
+        title: "WaitFor",
+        status: "completed",
+        rawInput: { timeout: 1, task_id: "bash-still-running" },
+        rawOutput: [
+          "wait_status: timed_out",
+          "waited_ms: 1000",
+          "timeout_ms: 1000",
+          "",
+          "[still_running]",
+          "task_id: bash-still-running",
+          "kind: process",
+          "status: running",
+          "description: Slow build",
+        ].join("\n"),
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-failed",
+        title: "WaitFor",
+        status: "failed",
+        rawInput: { timeout: 1, task_id: "bash-still-running" },
+        // A failed transport may retain the last rendered payload. It must not
+        // become an authoritative lifecycle signal.
+        rawOutput: [
+          "waitStatus: completed",
+          "taskId: bash-still-running",
+          "",
+          "[finished]",
+          "taskId: bash-still-running",
+          "kind: process",
+          "status: completed",
+          "description: Slow build",
+        ].join("\n"),
+      });
+      await waitFor(() => events.filter((event) => event.type === "tool_result").length === 2);
+      server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const deferred = adapter.sendUserMessage("kimi-session-1", {
+        text: "keep monitoring the build",
+        files: [],
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 2);
+      expect(harness.children).toHaveLength(1);
+      harness.children[0].server.respondPrompt();
+      expect((await deferred).text).toContain("Kimi completed the request.");
+      expect(events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-still-running"
+      ))).toBe(false);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reconciles every WaitFor terminal section while retaining still-running tasks", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-wait-for-multi-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "high" }), "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-wait-for-multi", {
+        text: "run four background checks",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      for (const [taskId, description] of [
+        ["bash-main", "Main check"],
+        ["agent-extra", "Extra review"],
+        ["bash-timeout", "Timed check"],
+        ["bash-live", "Long check"],
+      ]) {
+        await postKimiHook(harness, {
+          hook_event_name: "TaskStarted",
+          task_id: taskId,
+          kind: taskId.startsWith("agent-") ? "agent" : "process",
+          description,
+          detached: true,
+        });
+      }
+      await waitFor(() => events.filter((event) => event.type === "background_task_started").length === 4);
+
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-multi",
+        title: "WaitFor",
+        status: "completed",
+        rawInput: { timeout: 60 },
+        rawOutput: [
+          "waitStatus: completed",
+          "taskId: bash-main",
+          "waitedMs: 1400",
+          "timeoutMs: 60000",
+          "",
+          "[finished]",
+          "taskId: bash-main",
+          "kind: process",
+          "status: completed",
+          "description: Main check",
+          "",
+          "[output]",
+          "main passed",
+          "",
+          "[completed_during_wait]",
+          "taskId: agent-extra",
+          "kind: agent",
+          "status: failed",
+          "description: Extra review",
+          "---",
+          "taskId: bash-timeout",
+          "kind: process",
+          "status: timed_out",
+          "description: Timed check",
+          "---",
+          "taskId: bash-main",
+          "kind: process",
+          "status: completed",
+          "description: Main check",
+          "",
+          "[still_running]",
+          "taskId: bash-live",
+          "kind: process",
+          "status: running",
+          "description: Long check",
+        ].join("\n"),
+      });
+      await waitFor(() => events.filter((event) => event.type === "task_notification").length === 3);
+      expect(events.filter((event) => event.type === "task_notification")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskId: "bash-main", status: "completed", suppressUserDelivery: true }),
+        expect.objectContaining({ taskId: "agent-extra", status: "failed", suppressUserDelivery: true }),
+        expect.objectContaining({ taskId: "bash-timeout", status: "timed_out", suppressUserDelivery: true }),
+      ]));
+      expect(events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-live"
+      ))).toBe(false);
+      server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await writeFile(configPath, JSON.stringify({ engine: "kimi", effort: "max" }), "utf8");
+      const deferred = adapter.sendUserMessage("kimi-session-1", {
+        text: "wait for the remaining check",
+        files: [],
+      });
+      await waitFor(() => server.prompts.length === 2);
+      expect(harness.children).toHaveLength(1);
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-live",
+        title: "WaitFor",
+        status: "completed",
+        rawInput: { timeout: 60, task_id: "bash-live" },
+        rawOutput: [
+          "waitStatus: completed",
+          "taskId: bash-live",
+          "",
+          "[finished]",
+          "taskId: bash-live",
+          "kind: process",
+          "status: lost",
+          "description: Long check",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification"
+        && event.taskId === "bash-live"
+        && event.status === "lost"
+      )));
+      server.respondPrompt();
+      expect((await deferred).text).toContain("Kimi completed the request.");
+
+      const reconfigured = adapter.sendUserMessage("kimi-session-1", {
+        text: "apply the deferred effort",
+        files: [],
+      });
+      void reconfigured.catch(() => undefined);
+      await waitFor(() => harness.children[1]?.server.prompts.length === 1);
+      harness.children[1].server.respondPrompt();
+      await expect(reconfigured).resolves.toMatchObject({ text: "Kimi completed the request." });
+      expect(harness.children).toHaveLength(2);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("absorbs late hooks after WaitFor delivers a terminal task", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-wait-for-late-hook-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-wait-for-late-hook", {
+        text: "collect the background result",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-wait-late",
+        kind: "process",
+        description: "Late hook build",
+        detached: true,
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-late",
+        title: "WaitFor",
+        status: "completed",
+        rawOutput: [
+          "waitStatus: completed",
+          "taskId: bash-wait-late",
+          "",
+          "[finished]",
+          "taskId: bash-wait-late",
+          "kind: process",
+          "status: completed",
+          "description: Late hook build",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-wait-late"
+      )));
+
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-wait-late",
+        kind: "process",
+        description: "Late hook build",
+        detached: true,
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-wait-late",
+        body: "Late duplicate notification.",
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "late-wait-review",
+        origin_kind: "task",
+        prompt: [
+          {
+            type: "text",
+            text: [
+              '<notification id="task:bash-wait-late:completed" type="task.completed"',
+              'source_kind="background_task" source_id="bash-wait-late">',
+              "Late duplicate notification.",
+              "</notification>",
+            ].join(" "),
+          },
+        ],
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Duplicate review must be ignored." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground result only." },
+      });
+      server.respondPrompt();
+
+      await expect(turn).resolves.toMatchObject({ text: "Foreground result only." });
+      expect(events.filter((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-wait-late"
+      ))).toHaveLength(1);
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-wait-late"
+      ))).toEqual([
+        expect.objectContaining({ status: "completed", suppressUserDelivery: true }),
+      ]);
+      expect(events).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: expect.stringContaining("Duplicate review") }),
+      ]));
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("upgrades an earlier hook tombstone when WaitFor later confirms delivery", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-wait-for-hook-first-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-wait-for-hook-first", {
+        text: "wait for a task whose notification races the tool result",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-hook-first",
+        kind: "process",
+        description: "Hook-first build",
+        detached: true,
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-hook-first",
+        body: "Hook-first build completed.",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-hook-first"
+      )));
+
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-hook-first",
+        title: "WaitFor",
+        status: "completed",
+        rawOutput: [
+          "wait_status: completed",
+          "task_id: bash-hook-first",
+          "",
+          "[finished]",
+          "task_id: bash-hook-first",
+          "kind: process",
+          "status: completed",
+          "description: Hook-first build",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "tool_result" && event.toolUseId === "tool-wait-hook-first"
+      )));
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "late-hook-first-review",
+        origin_kind: "task",
+        prompt: [
+          {
+            type: "text",
+            text: [
+              '<notification id="task:bash-hook-first:completed" type="task.completed"',
+              'source_kind="background_task" source_id="bash-hook-first">',
+              "Hook-first build completed.",
+              "</notification>",
+            ].join(" "),
+          },
+        ],
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Late duplicate review." },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Foreground completion." },
+      });
+      server.respondPrompt();
+
+      await expect(turn).resolves.toMatchObject({ text: "Foreground completion." });
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-hook-first"
+      ))).toHaveLength(1);
+      expect(events).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ text: "Late duplicate review." }),
+      ]));
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resurrect a task when WaitFor beats its TaskStarted hook", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-wait-for-start-race-test-"));
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-wait-for-start-race", {
+        text: "wait for the fast background task",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-wait-before-start",
+        title: "WaitFor",
+        status: "completed",
+        rawOutput: [
+          "waitStatus: completed",
+          "taskId: bash-finished-before-hook",
+          "",
+          "[finished]",
+          "taskId: bash-finished-before-hook",
+          "kind: process",
+          "status: completed",
+          "description: Fast build",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-finished-before-hook"
+      )));
+
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-finished-before-hook",
+        kind: "process",
+        description: "Fast build",
+        detached: true,
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-finished-before-hook",
+        body: "Fast build completed.",
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Fast build verified." },
+      });
+      server.respondPrompt();
+
+      await expect(turn).resolves.toMatchObject({ text: "Fast build verified." });
+      expect(events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-finished-before-hook"
+      ))).toBe(false);
+      expect(events.filter((event) => (
+        event.type === "task_notification" && event.taskId === "bash-finished-before-hook"
+      ))).toEqual([
+        expect.objectContaining({ status: "completed", suppressUserDelivery: true }),
+      ]);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("hides failed retry stages and delivers only the final task-origin result", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-hook-retry-test-"));
     const workspace = path.join(root, "workspace");

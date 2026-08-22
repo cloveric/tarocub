@@ -569,6 +569,94 @@ function parseKimiStoppedTaskOutput(toolName: string, output: string | undefined
   };
 }
 
+type KimiWaitForTerminalTask = {
+  taskId: string;
+  status: string;
+  description?: string;
+};
+
+const KIMI_WAIT_FOR_TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "killed",
+  "lost",
+  "timed_out",
+  "cancelled",
+  "canceled",
+  "stopped",
+]);
+
+function parseKimiWaitForFields(block: string): Map<string, string> {
+  const fields = new Map<string, string>();
+  for (const line of block.split(/\r?\n/)) {
+    const match = line.match(/^([A-Za-z][A-Za-z0-9_]*):\s*(.*)$/);
+    if (match?.[1] && match[2] !== undefined) {
+      fields.set(match[1].replace(/_/g, "").toLowerCase(), match[2].trim());
+    }
+  }
+  return fields;
+}
+
+function kimiWaitForSection(output: string, name: string): string | undefined {
+  const marker = `[${name}]`;
+  const markerIndex = output.indexOf(marker);
+  if (markerIndex < 0) {
+    return undefined;
+  }
+  const sectionStart = markerIndex + marker.length;
+  const following = output.slice(sectionStart);
+  const nextMarker = following.search(/\r?\n\[[a-z_]+\](?:\r?\n|$)/);
+  return (nextMarker < 0 ? following : following.slice(0, nextMarker)).trim();
+}
+
+function parseKimiWaitForTaskBlock(block: string): KimiWaitForTerminalTask | null {
+  const fields = parseKimiWaitForFields(block);
+  const taskId = fields.get("taskid");
+  const status = (fields.get("status") ?? "").toLowerCase();
+  if (!taskId || !KIMI_WAIT_FOR_TERMINAL_STATUSES.has(status)) {
+    return null;
+  }
+  const description = fields.get("description");
+  return {
+    taskId,
+    status,
+    ...(description ? { description } : {}),
+  };
+}
+
+function parseKimiWaitForOutput(
+  toolName: string,
+  output: string | undefined,
+): KimiWaitForTerminalTask[] | null {
+  if (toolName.replace(/[\s_-]+/g, "").toLowerCase() !== "waitfor" || !output) {
+    return null;
+  }
+  const firstSection = output.search(/\r?\n\[[a-z_]+\](?:\r?\n|$)/);
+  const header = parseKimiWaitForFields(firstSection < 0 ? output : output.slice(0, firstSection));
+  if (header.get("waitstatus") !== "completed") {
+    return [];
+  }
+
+  const tasks = new Map<string, KimiWaitForTerminalTask>();
+  const finished = kimiWaitForSection(output, "finished");
+  if (finished) {
+    const parsed = parseKimiWaitForTaskBlock(finished);
+    if (parsed) {
+      tasks.set(parsed.taskId, parsed);
+    }
+  }
+  const extras = kimiWaitForSection(output, "completed_during_wait");
+  if (extras) {
+    for (const block of extras.split(/\r?\n---\r?\n/)) {
+      const parsed = parseKimiWaitForTaskBlock(block);
+      if (parsed) {
+        tasks.set(parsed.taskId, parsed);
+      }
+    }
+  }
+  return [...tasks.values()];
+}
+
 function parseKimiTaskTurnPrompt(prompt: string | undefined): {
   taskId?: string;
   status?: string;
@@ -2757,7 +2845,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.maybeEmitToolUse(worker, state);
     state.emittedResult = true;
     const output = stringifyOutput(state.rawOutput) ?? state.latestContentText;
-    await this.captureBackgroundTaskToolOutput(worker, state.toolName, output);
+    await this.captureBackgroundTaskToolOutput(worker, state.toolName, output, isError);
     if (this.backgroundContinuationForUpdate(worker)) {
       return;
     }
@@ -2779,10 +2867,19 @@ export class KimiAcpAdapter implements CodexAdapter {
     worker: KimiWorker,
     toolName: string,
     output: string | undefined,
+    isError = false,
   ): Promise<void> {
-    // TaskStop is an authoritative terminal signal. Other tool output is only
-    // a start fallback and still relies on the hook relay for completion.
+    // TaskStop and a successful WaitFor are authoritative terminal signals.
+    // Other tool output is only a start fallback and still relies on the hook
+    // relay for completion.
     if (!worker.hookRelayActive) {
+      return;
+    }
+    const waitedTasks = isError ? null : parseKimiWaitForOutput(toolName, output);
+    if (waitedTasks) {
+      for (const waitedTask of waitedTasks) {
+        await this.settleWaitForBackgroundTask(worker, waitedTask);
+      }
       return;
     }
     const stopped = parseKimiStoppedTaskOutput(toolName, output);
@@ -2834,6 +2931,78 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     worker.backgroundTasks.set(task.taskId, task);
     this.emitBackgroundTaskStarted(worker, task);
+  }
+
+  private async settleWaitForBackgroundTask(
+    worker: KimiWorker,
+    waitedTask: KimiWaitForTerminalTask,
+  ): Promise<void> {
+    const now = Date.now();
+    const existingTerminal = this.getTerminalBackgroundTask(worker, waitedTask.taskId, now);
+    if (existingTerminal) {
+      this.rememberTerminalBackgroundTask(worker, waitedTask.taskId, {
+        workflowId: existingTerminal.workflowId,
+        sessionId: existingTerminal.sessionId,
+        status: waitedTask.status,
+        summary: waitedTask.description ?? existingTerminal.summary,
+        onEngineEvent: existingTerminal.onEngineEvent,
+        onApprovalRequest: existingTerminal.onApprovalRequest,
+        taskOriginReviewStarted: true,
+        suppressUserDelivery: true,
+      });
+      return;
+    }
+    const task = worker.backgroundTasks.get(waitedTask.taskId);
+    const continuation = worker.backgroundContinuations.get(waitedTask.taskId);
+    if (task?.notificationTimer) {
+      clearTimeout(task.notificationTimer);
+    }
+    if (continuation?.fallbackTimer) {
+      clearTimeout(continuation.fallbackTimer);
+    }
+    if (continuation?.terminalTimer) {
+      clearTimeout(continuation.terminalTimer);
+    }
+    continuation?.approvalAbortController.abort();
+    worker.backgroundTasks.delete(waitedTask.taskId);
+    worker.backgroundContinuations.delete(waitedTask.taskId);
+    const active = worker.activeHookTurn;
+    if (active?.originKind === "task" && active.continuationTaskId === waitedTask.taskId) {
+      this.markIgnoredKimiHookTurn(worker, active.turnId, now);
+      worker.activeHookTurn = undefined;
+    }
+    this.resolveBackgroundContinuationWaiters(worker);
+
+    const sessionId = continuation?.sessionId ?? task?.sessionId ?? worker.currentSessionId ?? undefined;
+    const summary = waitedTask.description ?? continuation?.summary ?? task?.description;
+    const handler = continuation?.onEngineEvent
+      ?? task?.onEngineEvent
+      ?? worker.pendingTurn?.onEngineEvent
+      ?? worker.onEngineEvent;
+    const approvalHandler = continuation?.onApprovalRequest
+      ?? task?.onApprovalRequest
+      ?? worker.pendingTurn?.onApprovalRequest;
+    this.rememberTerminalBackgroundTask(worker, waitedTask.taskId, {
+      workflowId: continuation?.workflowId ?? task?.workflowId ?? waitedTask.taskId,
+      sessionId,
+      status: waitedTask.status,
+      summary,
+      onEngineEvent: handler,
+      onApprovalRequest: approvalHandler,
+      // WaitFor already delivered the terminal result to the active model turn;
+      // a late synthetic task-origin turn would duplicate that delivery.
+      taskOriginReviewStarted: true,
+      suppressUserDelivery: true,
+    });
+    await this.emitEngineEvent(handler, {
+      type: "task_notification",
+      text: `${summary ?? "Kimi background task"}: ${waitedTask.status}; result collected by WaitFor in the active turn.`,
+      sessionId,
+      taskId: waitedTask.taskId,
+      status: waitedTask.status,
+      ...(summary ? { summary } : {}),
+      suppressUserDelivery: true,
+    });
   }
 
   private async settleStoppedBackgroundTask(
