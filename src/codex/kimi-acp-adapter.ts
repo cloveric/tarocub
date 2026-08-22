@@ -573,6 +573,7 @@ type KimiWaitForTerminalTask = {
   taskId: string;
   status: string;
   description?: string;
+  source: "finished" | "completed_during_wait";
 };
 
 const KIMI_WAIT_FOR_TERMINAL_STATUSES = new Set([
@@ -597,19 +598,34 @@ function parseKimiWaitForFields(block: string): Map<string, string> {
   return fields;
 }
 
-function kimiWaitForSection(output: string, name: string): string | undefined {
-  const marker = `[${name}]`;
-  const markerIndex = output.indexOf(marker);
-  if (markerIndex < 0) {
-    return undefined;
+type KimiWaitForSection = {
+  name: string;
+  start: number;
+  contentStart: number;
+};
+
+function kimiWaitForSections(output: string, from = 0): KimiWaitForSection[] {
+  const sections: KimiWaitForSection[] = [];
+  const markerPattern = /^\[([a-z_]+)\]\r?$/gm;
+  markerPattern.lastIndex = from;
+  for (let match = markerPattern.exec(output); match; match = markerPattern.exec(output)) {
+    let contentStart = match.index + match[0].length;
+    if (output[contentStart] === "\n") {
+      contentStart += 1;
+    }
+    sections.push({
+      name: match[1],
+      start: match.index,
+      contentStart,
+    });
   }
-  const sectionStart = markerIndex + marker.length;
-  const following = output.slice(sectionStart);
-  const nextMarker = following.search(/\r?\n\[[a-z_]+\](?:\r?\n|$)/);
-  return (nextMarker < 0 ? following : following.slice(0, nextMarker)).trim();
+  return sections;
 }
 
-function parseKimiWaitForTaskBlock(block: string): KimiWaitForTerminalTask | null {
+function parseKimiWaitForTaskBlock(
+  block: string,
+  source: KimiWaitForTerminalTask["source"],
+): KimiWaitForTerminalTask | null {
   const fields = parseKimiWaitForFields(block);
   const taskId = fields.get("taskid");
   const status = (fields.get("status") ?? "").toLowerCase();
@@ -621,7 +637,57 @@ function parseKimiWaitForTaskBlock(block: string): KimiWaitForTerminalTask | nul
     taskId,
     status,
     ...(description ? { description } : {}),
+    source,
   };
+}
+
+function sliceAfterKimiWaitForOutput(
+  output: string,
+  outputSection: KimiWaitForSection,
+  finishedFields: Map<string, string>,
+): string | undefined {
+  const rawPreviewBytes = finishedFields.get("outputpreviewbytes");
+  if (!rawPreviewBytes || !/^\d+$/.test(rawPreviewBytes)) {
+    return undefined;
+  }
+  const previewBytes = Number(rawPreviewBytes);
+  if (!Number.isSafeInteger(previewBytes)) {
+    return undefined;
+  }
+
+  let unconsumed = output.slice(outputSection.contentStart);
+  if (previewBytes === 0 && unconsumed.startsWith("[no output available]")) {
+    unconsumed = unconsumed.slice("[no output available]".length);
+  } else {
+    const bytes = Buffer.from(unconsumed, "utf8");
+    if (bytes.length < previewBytes) {
+      return undefined;
+    }
+    const preview = bytes.subarray(0, previewBytes).toString("utf8");
+    if (Buffer.byteLength(preview, "utf8") !== previewBytes) {
+      return undefined;
+    }
+    unconsumed = unconsumed.slice(preview.length);
+  }
+  if (unconsumed && !/^\r?\n/.test(unconsumed)) {
+    return undefined;
+  }
+  return unconsumed.replace(/^(?:\r?\n)+/, "");
+}
+
+function parseKimiWaitForExtraTasks(output: string): KimiWaitForTerminalTask[] {
+  const sections = kimiWaitForSections(output);
+  const extrasIndex = sections.findIndex((section) => section.name === "completed_during_wait");
+  if (extrasIndex < 0) {
+    return [];
+  }
+  const extras = sections[extrasIndex];
+  const next = sections[extrasIndex + 1];
+  const block = output.slice(extras.contentStart, next?.start ?? output.length).trim();
+  return block.split(/\r?\n---\r?\n/).flatMap((entry) => {
+    const parsed = parseKimiWaitForTaskBlock(entry, "completed_during_wait");
+    return parsed ? [parsed] : [];
+  });
 }
 
 function parseKimiWaitForOutput(
@@ -631,26 +697,40 @@ function parseKimiWaitForOutput(
   if (toolName.replace(/[\s_-]+/g, "").toLowerCase() !== "waitfor" || !output) {
     return null;
   }
-  const firstSection = output.search(/\r?\n\[[a-z_]+\](?:\r?\n|$)/);
-  const header = parseKimiWaitForFields(firstSection < 0 ? output : output.slice(0, firstSection));
-  if (header.get("waitstatus") !== "completed") {
+  const sections = kimiWaitForSections(output);
+  const firstSection = sections[0];
+  const header = parseKimiWaitForFields(output.slice(0, firstSection?.start ?? output.length));
+  if (header.get("waitstatus")?.toLowerCase() !== "completed") {
+    return [];
+  }
+  const headerTaskId = header.get("taskid");
+  if (!headerTaskId || firstSection?.name !== "finished") {
     return [];
   }
 
-  const tasks = new Map<string, KimiWaitForTerminalTask>();
-  const finished = kimiWaitForSection(output, "finished");
-  if (finished) {
-    const parsed = parseKimiWaitForTaskBlock(finished);
-    if (parsed) {
-      tasks.set(parsed.taskId, parsed);
-    }
+  const sectionAfterFinished = sections[1];
+  const finishedEnd = sectionAfterFinished?.start ?? output.length;
+  const finishedBlock = output.slice(firstSection.contentStart, finishedEnd).trim();
+  const finished = parseKimiWaitForTaskBlock(finishedBlock, "finished");
+  if (!finished || finished.taskId !== headerTaskId) {
+    return [];
   }
-  const extras = kimiWaitForSection(output, "completed_during_wait");
-  if (extras) {
-    for (const block of extras.split(/\r?\n---\r?\n/)) {
-      const parsed = parseKimiWaitForTaskBlock(block);
-      if (parsed) {
-        tasks.set(parsed.taskId, parsed);
+
+  const tasks = new Map<string, KimiWaitForTerminalTask>([[finished.taskId, finished]]);
+  let authenticatedTail: string | undefined;
+  if (sectionAfterFinished?.name === "output") {
+    authenticatedTail = sliceAfterKimiWaitForOutput(
+      output,
+      sectionAfterFinished,
+      parseKimiWaitForFields(finishedBlock),
+    );
+  } else if (sectionAfterFinished) {
+    authenticatedTail = output.slice(sectionAfterFinished.start);
+  }
+  if (authenticatedTail !== undefined) {
+    for (const extra of parseKimiWaitForExtraTasks(authenticatedTail)) {
+      if (!tasks.has(extra.taskId)) {
+        tasks.set(extra.taskId, extra);
       }
     }
   }
@@ -1826,6 +1906,13 @@ export class KimiAcpAdapter implements CodexAdapter {
       // keep remote MCP transports intact. A process restart probes again, so
       // a future Kimi fix restores stdio MCPs automatically.
       this.omitAcpStdioMcpServers = true;
+      const omittedNames = initialServers
+        .filter(isAcpStdioMcpServer)
+        .map((server) => server.name)
+        .join(", ");
+      console.warn(
+        `[kimi-acp] Kimi rejected stdio MCP runtime identities; disabling ACP stdio MCP servers for this adapter process${omittedNames ? ` (${omittedNames})` : ""}. Remote MCP servers remain enabled; restart to probe compatibility again.`,
+      );
       return await request(this.mcpServers.filter((server) => !isAcpStdioMcpServer(server)));
     }
   }
@@ -2083,7 +2170,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       windowsHide: true,
     });
     if (!child.stdout || !child.stderr) {
-      killProcessTree(child.pid);
+      this.killProcessTreeFn(child.pid);
       throw new Error("ACP terminal subprocess did not expose output pipes");
     }
 
@@ -2108,14 +2195,12 @@ export class KimiAcpAdapter implements CodexAdapter {
 
     child.stdout.on("data", (chunk: Buffer | Uint8Array | string) => {
       this.appendAcpTerminalOutput(
-        worker,
         terminal,
         terminal.stdoutDecoder.write(Buffer.from(chunk)),
       );
     });
     child.stderr.on("data", (chunk: Buffer | Uint8Array | string) => {
       this.appendAcpTerminalOutput(
-        worker,
         terminal,
         terminal.stderrDecoder.write(Buffer.from(chunk)),
       );
@@ -2123,11 +2208,11 @@ export class KimiAcpAdapter implements CodexAdapter {
     child.once("error", (error) => {
       const lastChunk = terminal.outputChunks.at(-1)?.text ?? "";
       const separator = terminal.outputByteLength > 0 && !lastChunk.endsWith("\n") ? "\n" : "";
-      this.appendAcpTerminalOutput(worker, terminal, `${separator}${error.message}`);
+      this.appendAcpTerminalOutput(terminal, `${separator}${error.message}`);
     });
     child.once("close", (code, signal) => {
-      this.appendAcpTerminalOutput(worker, terminal, terminal.stdoutDecoder.end());
-      this.appendAcpTerminalOutput(worker, terminal, terminal.stderrDecoder.end());
+      this.appendAcpTerminalOutput(terminal, terminal.stdoutDecoder.end());
+      this.appendAcpTerminalOutput(terminal, terminal.stderrDecoder.end());
       if (terminal.exitStatus) {
         return;
       }
@@ -2149,7 +2234,6 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   private appendAcpTerminalOutput(
-    worker: KimiWorker,
     terminal: KimiAcpTerminal,
     text: string,
   ): void {
@@ -2183,9 +2267,6 @@ export class KimiAcpAdapter implements CodexAdapter {
       first.byteLength = bytes.length - start;
       terminal.outputByteLength -= start;
       break;
-    }
-    if (!worker.removed) {
-      this.markActivity(worker);
     }
   }
 
@@ -2239,7 +2320,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   ): KillTerminalResponse {
     const terminal = this.getAcpTerminal(worker, request);
     if (!terminal.exitStatus) {
-      killProcessTree(terminal.child.pid);
+      this.killProcessTreeFn(terminal.child.pid);
     }
     this.markActivity(worker);
     return {};
@@ -2251,7 +2332,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   ): ReleaseTerminalResponse {
     const terminal = this.getAcpTerminal(worker, request);
     if (!terminal.exitStatus) {
-      killProcessTree(terminal.child.pid);
+      this.killProcessTreeFn(terminal.child.pid);
     }
     worker.terminals.delete(terminal.terminalId);
     this.markActivity(worker);
@@ -2261,7 +2342,7 @@ export class KimiAcpAdapter implements CodexAdapter {
   private releaseAllAcpTerminals(worker: KimiWorker): void {
     for (const terminal of worker.terminals.values()) {
       if (!terminal.exitStatus) {
-        killProcessTree(terminal.child.pid);
+        this.killProcessTreeFn(terminal.child.pid);
       }
     }
     worker.terminals.clear();
@@ -2655,6 +2736,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (!nestedTasks.includes(task)) {
       nestedTasks.push(task);
     }
+    const wasInternalStage = task.internalContinuationStage === true;
     const isInternalStage = continuation.status === "completed" && nestedTasks.length === 1;
     if (isInternalStage) {
       task.internalContinuationStage = true;
@@ -2677,7 +2759,7 @@ export class KimiAcpAdapter implements CodexAdapter {
 
     // Text emitted before a nested detached stage is an intermediate status,
     // not the reviewed result that should eventually reach the user.
-    if (newlyAttached && isInternalStage) {
+    if ((newlyAttached || !wasInternalStage) && isInternalStage) {
       continuation.assistantText = "";
       continuation.assistantBoundaryPending = false;
     }
@@ -2938,6 +3020,25 @@ export class KimiAcpAdapter implements CodexAdapter {
     waitedTask: KimiWaitForTerminalTask,
   ): Promise<void> {
     const now = Date.now();
+    const active = worker.activeHookTurn;
+    if (active?.originKind === "task" && active.continuationTaskId === waitedTask.taskId) {
+      const activeTask = worker.backgroundTasks.get(waitedTask.taskId);
+      const activeContinuation = worker.backgroundContinuations.get(waitedTask.taskId);
+      if (activeTask || activeContinuation) {
+        if (activeTask) {
+          activeTask.status = waitedTask.status;
+          activeTask.description ??= waitedTask.description;
+          activeTask.lastSeenAt = now;
+        }
+        if (activeContinuation) {
+          activeContinuation.status = waitedTask.status;
+          activeContinuation.summary ??= waitedTask.description;
+          activeContinuation.lastSeenAt = now;
+          this.armKimiContinuationFallback(worker, activeContinuation);
+        }
+        return;
+      }
+    }
     const existingTerminal = this.getTerminalBackgroundTask(worker, waitedTask.taskId, now);
     if (existingTerminal) {
       this.rememberTerminalBackgroundTask(worker, waitedTask.taskId, {
@@ -2954,6 +3055,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     const task = worker.backgroundTasks.get(waitedTask.taskId);
     const continuation = worker.backgroundContinuations.get(waitedTask.taskId);
+    if (waitedTask.source === "completed_during_wait" && !task && !continuation) {
+      return;
+    }
     if (task?.notificationTimer) {
       clearTimeout(task.notificationTimer);
     }
@@ -2966,7 +3070,6 @@ export class KimiAcpAdapter implements CodexAdapter {
     continuation?.approvalAbortController.abort();
     worker.backgroundTasks.delete(waitedTask.taskId);
     worker.backgroundContinuations.delete(waitedTask.taskId);
-    const active = worker.activeHookTurn;
     if (active?.originKind === "task" && active.continuationTaskId === waitedTask.taskId) {
       this.markIgnoredKimiHookTurn(worker, active.turnId, now);
       worker.activeHookTurn = undefined;
@@ -3690,6 +3793,14 @@ export class KimiAcpAdapter implements CodexAdapter {
     task.lastSeenAt = now;
     task.pendingNotification = event;
     worker.backgroundTasks.set(task.taskId, task);
+    const continuation = worker.backgroundContinuations.get(task.taskId);
+    if (continuation) {
+      continuation.status = task.status;
+      continuation.lastSeenAt = now;
+      for (const nestedTask of this.nestedTasksForContinuation(worker, continuation.taskId)) {
+        this.attachNestedTaskToContinuation(worker, nestedTask, continuation);
+      }
+    }
     if (task.subagentResponse) {
       await this.flushKimiTaskNotification(worker, task);
       return;
