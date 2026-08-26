@@ -46,6 +46,10 @@ function localAsrSegmentSeconds(maxSeconds: number): number {
   return Math.max(1, Math.floor(maxSeconds * 0.9));
 }
 
+function formatAsrThreshold(seconds: number): string {
+  return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
+}
+
 /**
  * Whether the cloud ASR route exists, resolved once. The instruction is rebuilt
  * on every turn and readCloudAsrConfig() stats the venv on each call — cheap,
@@ -71,6 +75,7 @@ export function localAsrAgentInstruction(): string | undefined {
   const httpUrl = (process.env.ASR_HTTP_URL ?? "").trim() || "http://127.0.0.1:8412/transcribe";
   const maxSeconds = localAsrMaxAudioSeconds();
   const segmentSeconds = localAsrSegmentSeconds(maxSeconds);
+  const cloudConfig = cloudAsrConfigured() ? readCloudAsrConfig(process.env) : null;
   // The length bound is not cosmetic. The ASR serializes inference behind one
   // global lock, and an over-long request wedged the model in an uninterruptible
   // MPS wait — the lock was never released, so EVERY instance's transcription
@@ -80,10 +85,20 @@ export function localAsrAgentInstruction(): string | undefined {
   // Without this, a user-sent recording that arrived as a FILE got transcribed
   // locally (slowly, chunked) even though the bridge had already routed it —
   // the "use it FIRST" rule read as an instruction to do so.
-  const cloudFirst = cloudAsrConfigured()
-    ? ` "[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}]" is final: use it; do NOT inspect/probe/split/re-transcribe its file unless asked. Transcribe only media marked unavailable.`
-    : "";
-  return `Use local STT first for media you fetch; do NOT use whisper/mlx_whisper/parakeet or claim no ASR.${cloudFirst} Run: curl -s -X POST ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'. Max ${maxSeconds}s per request; shared model. Never retry longer input as-is; split first: ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} part_%03d.wav. Transcribe parts; frames/OCR if ASR fails.`;
+  const localRoute = `local Qwen: curl -s ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'; Max ${maxSeconds}s per request (shared model). >${maxSeconds}s local: ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} part_%03d.wav; transcribe parts.`;
+  if (!cloudConfig) {
+    return `Use ${localRoute} do NOT use whisper/mlx_whisper/parakeet or claim no ASR. Never retry longer input as-is; frames/OCR if ASR fails.`;
+  }
+
+  const threshold = formatAsrThreshold(cloudConfig.thresholdSeconds);
+  const cloudCommand = [
+    '"$TINGWU_ASR_DIR/.venv/bin/python"',
+    '"$TINGWU_ASR_DIR/tingwu_transcribe.py"',
+    '--file "<absolute media path>"',
+    "--source-language auto --wait",
+    '--out-dir "<workspace job dir>"',
+  ].join(" ");
+  return `Fetched media: probe duration; >=${threshold}: Aliyun Tingwu first: ${cloudCommand}; use transcription.txt; do NOT read/copy its credentials. Shorter/cloud fails: ${localRoute} do NOT use whisper/mlx_whisper/parakeet or claim no ASR. Never retry longer input as-is. "[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}]" final; do NOT inspect/probe/split/re-transcribe unless asked; transcribe only media marked unavailable. Inbound: same route.`;
 }
 
 /**
@@ -102,9 +117,7 @@ export function cloudAsrAgentInstruction(): string | undefined {
   if (!config) {
     return undefined;
   }
-  const threshold = config.thresholdSeconds % 60 === 0
-    ? `${config.thresholdSeconds / 60} min`
-    : `${config.thresholdSeconds}s`;
+  const threshold = formatAsrThreshold(config.thresholdSeconds);
   return `Inbound audio/video is auto-transcribed before you see it (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never call it unsupported. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), never afterwards.`;
 }
 
@@ -124,7 +137,7 @@ export function larkAgentInstructions(requestText = ""): string {
     lines.push(asr);
   }
   const cloudAsr = cloudAsrAgentInstruction();
-  if (cloudAsr) {
+  if (cloudAsr && !asr) {
     lines.push(cloudAsr);
   }
   const deliveryFollowup = larkDeliveryFollowupInstruction(requestText);

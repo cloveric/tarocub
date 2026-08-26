@@ -52,12 +52,46 @@ describe("larkAgentInstructions", () => {
       expect(asr).toContain("[Bridge media transcription completed]");
       expect(asr).toContain("do NOT inspect/probe/split/re-transcribe");
       expect(asr).toContain("marked unavailable");
-      expect(asr).toMatch(/media you fetch/);
+      expect(asr).toContain("Fetched media");
     } finally {
       if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
       else process.env.ASR_HTTP_URL = previousUrl;
       if (previousDir === undefined) delete process.env.TINGWU_ASR_DIR;
       else process.env.TINGWU_ASR_DIR = previousDir;
+      resetCloudAsrConfiguredCacheForTests();
+    }
+  });
+
+  it("routes long media fetched by the agent through Tingwu before local ASR", () => {
+    const previousUrl = process.env.ASR_HTTP_URL;
+    const previousDir = process.env.TINGWU_ASR_DIR;
+    const previousThreshold = process.env.ASR_CLOUD_THRESHOLD_SECONDS;
+    process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
+    process.env.TINGWU_ASR_DIR = "/tmp/tingwu";
+    delete process.env.ASR_CLOUD_THRESHOLD_SECONDS;
+    resetCloudAsrConfiguredCacheForTests();
+    try {
+      const asr = localAsrAgentInstruction() ?? "";
+
+      expect(asr).toContain("Fetched media: probe duration");
+      expect(asr).toContain(">=15 min");
+      expect(asr).toContain("Aliyun Tingwu first");
+      expect(asr).toContain('$TINGWU_ASR_DIR/.venv/bin/python');
+      expect(asr).toContain('$TINGWU_ASR_DIR/tingwu_transcribe.py');
+      expect(asr).toContain('--file "<absolute media path>"');
+      expect(asr).toContain("--source-language auto --wait");
+      expect(asr).toContain('--out-dir "<workspace job dir>"');
+      expect(asr).toContain("cloud fails");
+      expect(asr).toContain("local Qwen");
+      expect(asr).toContain("do NOT read/copy its credentials");
+      expect(asr.indexOf("Aliyun Tingwu first")).toBeLessThan(asr.indexOf("local Qwen"));
+    } finally {
+      if (previousUrl === undefined) delete process.env.ASR_HTTP_URL;
+      else process.env.ASR_HTTP_URL = previousUrl;
+      if (previousDir === undefined) delete process.env.TINGWU_ASR_DIR;
+      else process.env.TINGWU_ASR_DIR = previousDir;
+      if (previousThreshold === undefined) delete process.env.ASR_CLOUD_THRESHOLD_SECONDS;
+      else process.env.ASR_CLOUD_THRESHOLD_SECONDS = previousThreshold;
       resetCloudAsrConfiguredCacheForTests();
     }
   });
