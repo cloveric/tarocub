@@ -117,15 +117,29 @@ class ThreadReadTimeoutError extends CodexAppServerRequestTimeoutError {
   }
 }
 
+class CodexActiveWriterConflictError extends Error {
+  constructor(
+    message: string,
+    readonly childGeneration: number,
+    readonly isOwnChild: boolean,
+  ) {
+    super(message);
+    this.name = "CodexActiveWriterConflictError";
+  }
+}
+
 function isThreadReadTimeoutError(error: unknown): error is ThreadReadTimeoutError {
   return error instanceof ThreadReadTimeoutError || (error instanceof Error && error.name === "ThreadReadTimeoutError");
 }
 
-/** True for the app-server's "thread <id> already has an active writer" error,
- *  which means a previous turn's writer leaked and the thread is unusable. */
+/** True when another process still owns Codex's cross-process thread writer lock. */
 function isActiveWriterConflict(error: Error): boolean {
   return /already has an active writer/i.test(error.message);
 }
+
+type AppServerDependencies = {
+  findThreadWriterLockHolder: typeof findThreadWriterLockHolder;
+};
 
 type PendingTurn = {
   chunks: string[];
@@ -545,6 +559,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
   readonly supportsTurnScopedEnv = false;
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnCodex: AppServerSpawnCodex;
+  private readonly findWriterLockHolder: typeof findThreadWriterLockHolder;
   private readonly instructionsPath: string | undefined;
   private readonly configPath: string | undefined;
   /**
@@ -611,6 +626,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
   private lastResponseDiagnostic: AppServerProtocolDiagnostic | null = null;
   private lastNotificationDiagnostic: AppServerProtocolDiagnostic | null = null;
   private lastTurnActivityDiagnostic: AppServerProtocolDiagnostic | null = null;
+  private deferredChildRecycle: { childGeneration: number; reason: string } | null = null;
 
   constructor(
     private readonly codexExecutable: string,
@@ -623,6 +639,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
     private readonly turnTimeoutMs: number = CODEX_APP_SERVER_TURN_TIMEOUT_MS,
     private readonly turnInactivityTimeoutMs: number | null = CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
     private readonly threadReadTimeoutMs: number = CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS,
+    dependencies: Partial<AppServerDependencies> = {},
   ) {
     const buildChildEnv = () => {
       const env = { ...process.env };
@@ -644,6 +661,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       typeof childEnvOrSpawn === "function"
         ? childEnvOrSpawn
         : spawnCodexArg ?? (spawn as unknown as AppServerSpawnCodex);
+    this.findWriterLockHolder = dependencies.findThreadWriterLockHolder ?? findThreadWriterLockHolder;
     this.instructionsPath = instructionsPath;
     this.configPath = configPath;
   }
@@ -662,56 +680,87 @@ export class CodexAppServerAdapter implements CodexAdapter {
     );
     const prompt = this.buildPrompt(input, instructions);
     const cwd = input.workspaceOverride ?? this.cwd;
-    const reservations = new Set<string>();
-    const reserve = (key: string): void => {
-      if (reservations.has(key)) {
-        return;
-      }
-      if (this.activeTurnEntries.has(key) || this.pendingTurns.has(key)) {
-        throw new Error(`Codex thread ${key} already has an in-flight turn`);
-      }
-      this.activeTurnEntries.add(key);
-      reservations.add(key);
-    };
-    reserve(sessionId);
-    let threadId = sessionId;
-    try {
-      const resolvedThreadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, cwd);
-      reserve(resolvedThreadId);
-      threadId = await this.prepareThreadForTurn(resolvedThreadId, cwd);
-      reserve(threadId);
-      // Announce the thread BEFORE the turn can fail. Every other adapter emits a
-      // mid-turn `session` event that Bridge.handleAuthorizedTurn binds on; the
-      // app-server adapter only reported its thread id through a SUCCESSFUL
-      // response, so a /stop or a timeout on the first turn of an unbound chat
-      // (new chat, after /reset, or after a `thread not found` → startThread)
-      // discarded the new thread id and the next message silently started over.
-      // Mirrors process-adapter.ts:140.
-      await this.emitSessionEvent(threadId, input.onEngineEvent);
-      const turn = await this.startTurn(
-        threadId,
-        prompt,
-        input.onProgress,
-        input.onEngineEvent,
-        // A config change may be deferred while the shared child is busy. Gate
-        // approvals with the mode that actually spawned the running child, not
-        // the newly-read config, so policy and sandbox never become half-applied.
-        this.currentApprovalMode,
-        input.onApprovalRequest,
-        input.abortSignal,
-        input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
-      );
+    let writerRecoveryAttempted = false;
 
-      return {
-        text: turn.text.trim() || `Session ${threadId} completed.`,
-        sessionId: threadId !== sessionId ? threadId : undefined,
-        usage: turn.usage,
+    while (true) {
+      const reservations = new Set<string>();
+      const releaseReservations = (): void => {
+        for (const reservation of reservations) {
+          this.activeTurnEntries.delete(reservation);
+        }
+        reservations.clear();
+        this.notifyIdleWaitersIfIdle();
       };
-    } finally {
-      for (const reservation of reservations) {
-        this.activeTurnEntries.delete(reservation);
+      const reserve = (key: string): void => {
+        if (reservations.has(key)) {
+          return;
+        }
+        if (this.activeTurnEntries.has(key) || this.pendingTurns.has(key)) {
+          throw new Error(`Codex thread ${key} already has an in-flight turn`);
+        }
+        this.activeTurnEntries.add(key);
+        reservations.add(key);
+      };
+      reserve(sessionId);
+      let threadId = sessionId;
+      try {
+        const resolvedThreadId = await this.resolveThreadForMessageWithRetry(sessionId, runtimeOptions, cwd);
+        reserve(resolvedThreadId);
+        threadId = await this.prepareThreadForTurn(resolvedThreadId, cwd);
+        reserve(threadId);
+        // Announce the thread BEFORE the turn can fail. Every other adapter emits a
+        // mid-turn `session` event that Bridge.handleAuthorizedTurn binds on; the
+        // app-server adapter only reported its thread id through a SUCCESSFUL
+        // response, so a /stop or a timeout on the first turn of an unbound chat
+        // (new chat, after /reset, or after a `thread not found` → startThread)
+        // discarded the new thread id and the next message silently started over.
+        // Mirrors process-adapter.ts:140.
+        await this.emitSessionEvent(threadId, input.onEngineEvent);
+        const turn = await this.startTurn(
+          threadId,
+          prompt,
+          input.onProgress,
+          input.onEngineEvent,
+          // A config change may be deferred while the shared child is busy. Gate
+          // approvals with the mode that actually spawned the running child, not
+          // the newly-read config, so policy and sandbox never become half-applied.
+          this.currentApprovalMode,
+          input.onApprovalRequest,
+          input.abortSignal,
+          input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
+        );
+
+        return {
+          text: turn.text.trim() || `Session ${threadId} completed.`,
+          sessionId: threadId !== sessionId ? threadId : undefined,
+          usage: turn.usage,
+        };
+      } catch (error) {
+        if (
+          !writerRecoveryAttempted
+          && error instanceof CodexActiveWriterConflictError
+          && error.isOwnChild
+        ) {
+          writerRecoveryAttempted = true;
+          releaseReservations();
+          if (error.childGeneration !== this.childGeneration) {
+            await this.ensureInitialized(runtimeOptions);
+            continue;
+          }
+          if (this.isIdle()) {
+            this.destroy(error.childGeneration, "Recycling Codex app-server after its own writer lock leaked");
+            await this.ensureInitialized(runtimeOptions);
+            continue;
+          }
+          this.deferChildRecycle(
+            error.childGeneration,
+            "Recycling Codex app-server after its own writer lock leaked",
+          );
+        }
+        throw error;
+      } finally {
+        releaseReservations();
       }
-      this.notifyIdleWaitersIfIdle();
     }
   }
 
@@ -1277,7 +1326,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return;
     }
 
-    if (parsed.method === "item/reasoning/delta") {
+    if (
+      parsed.method === "item/reasoning/delta"
+      || parsed.method === "item/reasoning/summaryTextDelta"
+      || parsed.method === "item/reasoning/textDelta"
+    ) {
       const threadId = this.readString(parsed.params?.threadId);
       const delta = this.readString(parsed.params?.delta);
       if (threadId && delta) {
@@ -2086,19 +2139,29 @@ export class CodexAppServerAdapter implements CodexAdapter {
       return threadId;
     }
 
-    const result = (await this.request(
-      "thread/resume",
-      {
-        threadId,
-        approvalPolicy: "never",
-        excludeTurns: true,
-      },
-      {
-        timeoutMs: this.threadReadTimeoutMs,
-        timeoutMessage: `Codex app-server thread/resume timed out after ${Math.max(1, Math.round(this.threadReadTimeoutMs / 1000))} seconds`,
-        destroyOnTimeout: true,
-      },
-    )) as { thread?: { id?: string } };
+    const requestGeneration = this.childGeneration;
+    let result: { thread?: { id?: string } };
+    try {
+      result = (await this.request(
+        "thread/resume",
+        {
+          threadId,
+          approvalPolicy: "never",
+          excludeTurns: true,
+        },
+        {
+          timeoutMs: this.threadReadTimeoutMs,
+          timeoutMessage: `Codex app-server thread/resume timed out after ${Math.max(1, Math.round(this.threadReadTimeoutMs / 1000))} seconds`,
+          destroyOnTimeout: true,
+        },
+      )) as { thread?: { id?: string } };
+    } catch (error) {
+      const threadResumeError = error instanceof Error ? error : new Error(String(error));
+      if (isActiveWriterConflict(threadResumeError)) {
+        throw await this.describeActiveWriterConflict(threadId, threadResumeError, requestGeneration);
+      }
+      throw threadResumeError;
+    }
     const resumedThreadId = result.thread?.id;
 
     if (!resumedThreadId) {
@@ -2377,6 +2440,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
         }
         abortSignal.addEventListener("abort", onAbort, { once: true });
       }
+      const turnStartGeneration = this.childGeneration;
       this.request("turn/start", {
         threadId,
         approvalPolicy: resolveTurnApprovalPolicy(gatedApprovalRequest),
@@ -2418,24 +2482,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
         this.notifyIdleWaitersIfIdle();
         const turnStartError = error instanceof Error ? error : new Error(String(error));
         if (isActiveWriterConflict(turnStartError)) {
-          // Another writer owns this thread server-side, so EVERY later turn on
-          // it fails identically. Two very different causes look the same here:
-          // a turn this bridge leaked (interrupt + retry fixes it) or an
-          // EXTERNAL app holding the lock — the ChatGPT desktop app keeps the
-          // writer lock of every thread it has open, and no bridge restart can
-          // clear that. Name the holder so the operator is not left guessing.
           this.loadedThreads.delete(threadId);
-          this.interruptLeakedThreadWriter(threadId);
-          void findThreadWriterLockHolder({
-            codexHome: resolveCodexHome(this.engineHomePath),
-            threadId,
-            ...(this.child?.pid !== undefined ? { ownPid: this.child.pid } : {}),
-          })
-            .catch(() => null)
-            .then((holder) => {
-              const diagnosis = renderThreadWriterLockDiagnosis(holder);
+          void this.describeActiveWriterConflict(threadId, turnStartError, turnStartGeneration)
+            .then((diagnosedError) => {
               this.drainUnidentifiedTurnLines(pendingTurn, turnStartError.message);
-              pendingTurn.reject(new Error(`${turnStartError.message}\n\n${diagnosis}`));
+              pendingTurn.reject(diagnosedError);
             });
           return;
         }
@@ -2523,21 +2574,25 @@ export class CodexAppServerAdapter implements CodexAdapter {
    * the caller marks `abortedBeforeTurnId` and the `turn/start` response
    * handler sends the deferred interrupt once the id lands.
    */
-  /**
-   * Best-effort recovery from "thread ... already has an active writer": ask the
-   * app-server to interrupt whatever turn still owns the thread. The leaked
-   * turn's id is not knowable locally (its owner is gone), so address the
-   * thread itself — the app-server ignores an unknown/absent turn id, making
-   * this a no-op when the diagnosis was wrong.
-   */
-  private interruptLeakedThreadWriter(threadId: string): void {
-    if (!this.child?.stdin) {
-      return;
+  private async describeActiveWriterConflict(
+    threadId: string,
+    error: Error,
+    childGeneration: number,
+  ): Promise<CodexActiveWriterConflictError> {
+    if (error instanceof CodexActiveWriterConflictError) {
+      return error;
     }
-    void this.request("turn/interrupt", { threadId }, {
-      idleBlocking: false,
-      timeoutMs: CODEX_APP_SERVER_TURN_INTERRUPT_TIMEOUT_MS,
-    }).catch(() => {});
+    const ownPid = childGeneration === this.childGeneration ? this.child?.pid : undefined;
+    const holder = await this.findWriterLockHolder({
+      codexHome: resolveCodexHome(this.engineHomePath),
+      threadId,
+      ...(ownPid !== undefined ? { ownPid } : {}),
+    }).catch(() => null);
+    return new CodexActiveWriterConflictError(
+      `${error.message}\n\n${renderThreadWriterLockDiagnosis(holder)}`,
+      childGeneration,
+      holder?.isOwnChild === true,
+    );
   }
 
   private interruptTurn(threadId: string, turnId: string | undefined): void {
@@ -2776,7 +2831,20 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private notifyIdleWaitersIfIdle(): void {
-    if (!this.isIdle() || this.idleWaiters.size === 0) {
+    if (!this.isIdle()) {
+      return;
+    }
+
+    const deferredRecycle = this.deferredChildRecycle;
+    if (deferredRecycle) {
+      this.deferredChildRecycle = null;
+      if (deferredRecycle.childGeneration === this.childGeneration) {
+        this.destroy(deferredRecycle.childGeneration, deferredRecycle.reason);
+        return;
+      }
+    }
+
+    if (this.idleWaiters.size === 0) {
       return;
     }
 
@@ -2785,6 +2853,14 @@ export class CodexAppServerAdapter implements CodexAdapter {
     for (const waiter of waiters) {
       waiter();
     }
+  }
+
+  private deferChildRecycle(childGeneration: number, reason: string): void {
+    if (childGeneration !== this.childGeneration) {
+      return;
+    }
+    this.deferredChildRecycle = { childGeneration, reason };
+    this.notifyIdleWaitersIfIdle();
   }
 
   private finishCompletingTurn(): void {
@@ -2804,6 +2880,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
 
   private resetChildState(): void {
     this.settledCompactionTurnIds.clear();
+    this.deferredChildRecycle = null;
     if (this.child !== null) {
       // Reject output from the retired child immediately, including the window
       // before a replacement child increments the generation during spawn.

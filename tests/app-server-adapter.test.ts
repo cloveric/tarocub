@@ -177,6 +177,30 @@ function createSpawnHarness() {
   return { child, calls, spawnFn };
 }
 
+function createAdapterWithWriterLockProbe(
+  spawnFn: ReturnType<typeof createSpawnHarness>["spawnFn"] | (() => FakeChildProcess),
+  findThreadWriterLockHolder: () => Promise<{
+    pid: number;
+    command?: string;
+    isOwnChild: boolean;
+    appLabel?: string;
+  } | null>,
+): CodexAppServerAdapter {
+  return new CodexAppServerAdapter(
+    "codex",
+    process.cwd(),
+    spawnFn,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    CODEX_APP_SERVER_TURN_TIMEOUT_MS,
+    CODEX_APP_SERVER_INACTIVITY_TIMEOUT_MS,
+    CODEX_APP_SERVER_THREAD_READ_TIMEOUT_MS,
+    { findThreadWriterLockHolder },
+  );
+}
+
 describe("CodexAppServerAdapter", () => {
   it("allows active long-running turns up to six hours by default", () => {
     expect(CODEX_APP_SERVER_TURN_TIMEOUT_MS).toBe(6 * 60 * 60_000);
@@ -2032,9 +2056,14 @@ describe("CodexAppServerAdapter", () => {
     }
   });
 
-  it("recovers a thread whose writer leaked instead of failing every later turn", async () => {
+  it("does not send an invalid turn/interrupt when another process owns the writer", async () => {
     const { child, spawnFn } = createSpawnHarness();
-    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const adapter = createAdapterWithWriterLockProbe(spawnFn, async () => ({
+      pid: 4242,
+      command: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+      isOwnChild: false,
+      appLabel: "ChatGPT desktop app",
+    }));
 
     const promise = adapter.sendUserMessage("telegram-12345", {
       text: "Hello",
@@ -2049,13 +2078,149 @@ describe("CodexAppServerAdapter", () => {
     const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
 
     child.stdout.emitData(`{"id":${turnStart.id},"error":{"code":-32603,"message":"thread thread-123 already has an active writer"}}\n`);
-    await expect(promise).rejects.toThrow("already has an active writer");
+    await expect(promise).rejects.toThrow("ChatGPT desktop app");
 
-    // Self-heal: interrupt the thread so the NEXT turn is not dead on arrival.
-    await waitFor(() => child.stdin.lines.some((line) => {
-      const parsed = JSON.parse(line || "{}") as { method?: string; params?: { threadId?: string } };
-      return parsed.method === "turn/interrupt" && parsed.params?.threadId === "thread-123";
+    expect(child.stdin.lines.map((line) => JSON.parse(line).method).filter(Boolean)).toEqual([
+      "initialize",
+      "thread/start",
+      "turn/start",
+    ]);
+    expect(child.killCalls).toBe(0);
+  });
+
+  it("restarts an idle app-server and retries once when its own child leaked the writer", async () => {
+    const childA = new FakeChildProcess();
+    const childB = new FakeChildProcess();
+    const children = [childA, childB];
+    const spawnFn = () => {
+      const child = children.shift();
+      if (!child) {
+        throw new Error("no more fake children");
+      }
+      return child;
+    };
+    const adapter = createAdapterWithWriterLockProbe(spawnFn, async () => ({
+      pid: 31337,
+      command: "codex app-server",
+      isOwnChild: true,
+      appLabel: "this bot app-server",
     }));
+
+    const promise = adapter.sendUserMessage("thread-owned-writer", {
+      text: "recover me",
+      files: [],
+    });
+    void promise.catch(() => undefined);
+
+    await waitFor(() => childA.stdin.lines.length >= 1);
+    const initializeA = JSON.parse(childA.stdin.lines[0] ?? "{}");
+    childA.stdout.emitData(`{"id":${initializeA.id},"result":{"platformOs":"macos"}}\n`);
+    await waitFor(() => childA.stdin.lines.length >= 2);
+    const resumeA = JSON.parse(childA.stdin.lines[1] ?? "{}");
+    expect(resumeA.method).toBe("thread/resume");
+    childA.stdout.emitData(`{"id":${resumeA.id},"error":{"code":-32600,"message":"thread thread-owned-writer already has an active writer"}}\n`);
+
+    await waitFor(() => childA.killCalls === 1 && childB.stdin.lines.length >= 1);
+    expect(childA.stdin.lines.map((line) => JSON.parse(line).method).filter(Boolean)).toEqual([
+      "initialize",
+      "thread/resume",
+    ]);
+
+    const initializeB = JSON.parse(childB.stdin.lines[0] ?? "{}");
+    childB.stdout.emitData(`{"id":${initializeB.id},"result":{"platformOs":"macos"}}\n`);
+    await waitFor(() => childB.stdin.lines.length >= 2);
+    const resumeB = JSON.parse(childB.stdin.lines[1] ?? "{}");
+    expect(resumeB.method).toBe("thread/resume");
+    childB.stdout.emitData(`{"id":${resumeB.id},"result":{"thread":{"id":"thread-owned-writer"}}}\n`);
+    await waitFor(() => childB.stdin.lines.length >= 3);
+    const turnStart = JSON.parse(childB.stdin.lines[2] ?? "{}");
+    expect(turnStart.method).toBe("turn/start");
+    childB.stdout.emitData(`{"id":${turnStart.id},"result":{"turn":{"id":"turn-recovered"}}}\n`);
+    childB.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-owned-writer","turnId":"turn-recovered","delta":"recovered"}}\n');
+    childB.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-owned-writer","turn":{"id":"turn-recovered","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(promise).resolves.toEqual({ text: "recovered" });
+  });
+
+  it("defers recycling its own writer leak until other turns have completed", async () => {
+    const childA = new FakeChildProcess();
+    const childB = new FakeChildProcess();
+    const children = [childA, childB];
+    const spawnFn = () => {
+      const child = children.shift();
+      if (!child) {
+        throw new Error("no more fake children");
+      }
+      return child;
+    };
+    const adapter = createAdapterWithWriterLockProbe(spawnFn, async () => ({
+      pid: 31337,
+      command: "codex app-server",
+      isOwnChild: true,
+      appLabel: "this bot app-server",
+    }));
+
+    const liveTurn = adapter.sendUserMessage("telegram-live", {
+      text: "keep running",
+      files: [],
+    });
+    await waitFor(() => childA.stdin.lines.length >= 1);
+    childA.stdout.emitData('{"id":1,"result":{"platformOs":"macos"}}\n');
+    await waitFor(() => childA.stdin.lines.length >= 2);
+    childA.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-live"}}}\n');
+    await waitFor(() => childA.stdin.lines.length >= 3);
+    const liveTurnStart = JSON.parse(childA.stdin.lines[2] ?? "{}");
+    childA.stdout.emitData(`{"id":${liveTurnStart.id},"result":{"turn":{"id":"turn-live"}}}\n`);
+
+    const conflictedTurn = adapter.sendUserMessage("thread-own-lock-busy", {
+      text: "conflict",
+      files: [],
+    });
+    await waitFor(() => childA.stdin.lines.length >= 4);
+    const resume = JSON.parse(childA.stdin.lines[3] ?? "{}");
+    expect(resume.method).toBe("thread/resume");
+    childA.stdout.emitData(`{"id":${resume.id},"error":{"code":-32600,"message":"thread thread-own-lock-busy already has an active writer"}}\n`);
+
+    await expect(conflictedTurn).rejects.toThrow("本 bot 自己的引擎进程");
+    expect(childA.killCalls).toBe(0);
+
+    childA.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-live","turnId":"turn-live","delta":"live answer"}}\n');
+    childA.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-live","turn":{"id":"turn-live","items":[],"status":"completed","error":null}}}\n');
+    await expect(liveTurn).resolves.toMatchObject({ text: "live answer" });
+    await waitFor(() => childA.killCalls === 1);
+    expect(childB.stdin.lines).toHaveLength(0);
+  });
+
+  it("emits current Codex reasoning summary and raw-text deltas as thinking", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+    const engineEvents: Array<{ type: string; text?: string }> = [];
+
+    const promise = adapter.sendUserMessage("telegram-reasoning", {
+      text: "think",
+      files: [],
+      onEngineEvent: (event) => {
+        engineEvents.push(event);
+      },
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"macos"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-reasoning"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+    const turnStart = JSON.parse(child.stdin.lines[2] ?? "{}");
+    child.stdout.emitData(`{"id":${turnStart.id},"result":{"turn":{"id":"turn-reasoning"}}}\n`);
+    child.stdout.emitData('{"method":"item/reasoning/summaryTextDelta","params":{"threadId":"thread-reasoning","turnId":"turn-reasoning","itemId":"reasoning-1","summaryIndex":0,"delta":"Readable summary"}}\n');
+    child.stdout.emitData('{"method":"item/reasoning/textDelta","params":{"threadId":"thread-reasoning","turnId":"turn-reasoning","itemId":"reasoning-2","contentIndex":0,"delta":"Raw reasoning"}}\n');
+    child.stdout.emitData('{"method":"item/agentMessage/delta","params":{"threadId":"thread-reasoning","turnId":"turn-reasoning","delta":"answer"}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-reasoning","turn":{"id":"turn-reasoning","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(promise).resolves.toMatchObject({ text: "answer" });
+    expect(engineEvents.filter((event) => event.type === "thinking")).toEqual([
+      { type: "thinking", text: "Readable summary", sessionId: "thread-reasoning" },
+      { type: "thinking", text: "Raw reasoning", sessionId: "thread-reasoning" },
+    ]);
   });
 
   it("rejects when thread/read shows the completed turn actually failed", async () => {
