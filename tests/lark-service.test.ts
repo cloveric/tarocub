@@ -11613,6 +11613,64 @@ describe("lark service", () => {
     }
   });
 
+  it("transitions a queued media card as soon as transcription starts", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-media-started-"));
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async (key: string) => Buffer.from(`media:${key}`)),
+    });
+    const runtime = createLarkServiceRuntime();
+    runtime.chatQueue = {
+      enqueue: async <T,>(_conversationKey: string | number, job: () => Promise<T>, options?: {
+        onWait?: (event: { chatId: string | number; waitedMs: number; reason: "conversation_queue" }) => void | Promise<void>;
+      }): Promise<T> => {
+        await options?.onWait?.({ chatId: "lark:oc_chat", waitedMs: 10_000, reason: "conversation_queue" });
+        return await job();
+      },
+      clearPending: vi.fn(),
+      isBusy: vi.fn(),
+    } as unknown as typeof runtime.chatQueue;
+    let resolveTranscript!: (value: string) => void;
+    runtime.transcribeMedia = vi.fn(async () => await new Promise<string>((resolve) => {
+      resolveTranscript = resolve;
+    }));
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "done" })),
+    };
+
+    const turn = handleLarkMessage({
+      channel,
+      bridge,
+      runtime,
+      stateDir,
+      message: fakeLarkMessage({
+        messageId: "om_queue_media_started",
+        content: "整理这段录音",
+        resources: [{ type: "file", fileKey: "rec_key", fileName: "会议录音.m4a" }],
+      }),
+    });
+
+    try {
+      await vi.waitFor(() => expect(runtime.transcribeMedia).toHaveBeenCalledTimes(1));
+
+      // The task already owns the conversation queue while ASR is running. Its
+      // old queue card must stop saying that another task is still ahead of it,
+      // and the button must now stop this active task rather than cancel a
+      // no-longer-pending queue entry.
+      expect(channel.updateCard).toHaveBeenCalledWith("sent_1", expect.any(Object));
+      const latestUpdate = channel.updateCard.mock.calls.at(-1) as unknown[] | undefined;
+      const startedCard = JSON.stringify(latestUpdate?.[1]);
+      expect(startedCard).toContain("已结束排队");
+      expect(startedCard).toContain("正在转写");
+      expect(startedCard).not.toContain("正在排队");
+      expect(startedCard).not.toContain("taskId");
+      expect(startedCard).toContain('"cctb_lark":"stop"');
+    } finally {
+      resolveTranscript?.("transcript ready");
+      await turn;
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reuses the queued card as the run card instead of leaving it stale", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-queue-reuse-"));
     const channel = fakeChannel();

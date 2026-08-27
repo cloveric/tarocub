@@ -910,6 +910,50 @@ async function settleLingeringLarkQueueCard(
   }).catch(() => undefined);
 }
 
+async function transitionQueuedLarkCardToStarted(
+  channel: LarkChannelLike,
+  runtime: LarkServiceRuntime,
+  normalized: LarkNormalizedBridgeMessage,
+  locale: "zh" | "en",
+): Promise<void> {
+  const queuedRef = runtime.queueCards.get(normalized.messageId);
+  if (!queuedRef) {
+    return;
+  }
+
+  const hasMedia = normalized.attachments.some((attachment) =>
+    attachment.kind === "audio"
+    || attachment.kind === "video"
+    || (attachment.kind === "file" && hasTranscribableMediaExtension(attachment.fileName ?? "")));
+  const hasAttachments = normalized.attachments.length > 0;
+  const progressText = locale === "en"
+    ? hasMedia
+      ? "Queue finished. Downloading and transcribing the media now; the model will continue automatically when it is ready."
+      : hasAttachments
+        ? "Queue finished. Reading the attachments now; processing will continue automatically when they are ready."
+        : "Queue finished. This task has started processing."
+    : hasMedia
+      ? "已结束排队，正在转写音视频（包含下载准备）；完成后会自动交给模型继续处理。"
+      : hasAttachments
+        ? "已结束排队，正在读取附件；完成后会自动继续处理。"
+        : "已结束排队，当前任务已经开始处理。";
+  const state: LarkRunState = {
+    ...initialLarkRunState(normalized.conversationKey, normalized.bridgeChatType),
+    blocks: [{ kind: "text", content: progressText, streaming: false }],
+    footer: null,
+  };
+  if (await updateLarkQueueCardInPlace(channel, queuedRef, renderLarkRunCard(state, locale))) {
+    return;
+  }
+
+  // If the in-place transition failed, remove the misleading live queue card.
+  // The regular run-card path will create a fresh card after preparation.
+  runtime.queueCards.delete(normalized.messageId);
+  if (channel.recallMessage) {
+    await channel.recallMessage(queuedRef.messageId).catch(() => undefined);
+  }
+}
+
 function shouldBatchLarkMessage(
   runtime: LarkServiceRuntime,
   normalized: LarkNormalizedBridgeMessage,
@@ -1530,6 +1574,7 @@ async function runNormalizedLarkMessage(
     }
 
     const runController = activateRun();
+    await transitionQueuedLarkCardToStarted(input.channel, input.runtime, normalized, locale);
 
     if (await handleLarkCrewWorkflow({
       ...input,
