@@ -2858,6 +2858,29 @@ export class KimiAcpAdapter implements CodexAdapter {
     task.subagentId ??= ownership?.subagentId;
   }
 
+  private async promoteNestedMainTaskReview(
+    task: KimiBackgroundTask,
+    continuation?: KimiBackgroundContinuation,
+  ): Promise<void> {
+    if (!task.internalContinuationStage) {
+      return;
+    }
+    await this.hydrateKimiTaskOwnership(task);
+    if (task.ownerAgentId && task.ownerAgentId !== "main") {
+      return;
+    }
+
+    // A nested process becomes the workflow successor when Kimi gives it its
+    // own task-origin review. It must no longer inherit the parent's internal
+    // delivery suppression.
+    task.internalContinuationStage = false;
+    task.continuationTaskId = undefined;
+    task.suppressUserDelivery = undefined;
+    if (continuation) {
+      continuation.suppressUserDelivery = undefined;
+    }
+  }
+
   private async adoptNestedKimiTaskWorkflow(worker: KimiWorker, task: KimiBackgroundTask): Promise<void> {
     if (task.kind !== "process" && !task.taskId.startsWith("bash-")) {
       return;
@@ -3324,6 +3347,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     sourceTask.onEngineEvent ??= worker.onEngineEvent;
     worker.backgroundTasks.set(taskId, sourceTask);
     this.emitBackgroundTaskStarted(worker, sourceTask);
+    await this.promoteNestedMainTaskReview(sourceTask, existingContinuation);
 
     const continuation = existingContinuation ?? worker.backgroundContinuations.get(taskId) ?? {
       taskId,

@@ -3414,6 +3414,111 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("promotes a nested main-process task review to the user-facing workflow result", async () => {
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      backgroundContinuationGraceMs: 1_000,
+      hookTerminalGraceMs: 0,
+      hookRelayEnabled: true,
+      readBackgroundTaskOutputFn: async (_engineHomePath, _sessionId, taskId) => (
+        taskId === "bash-final-stage" ? "Final stage completed." : "Initial stage completed."
+      ),
+    });
+    try {
+      const foreground = adapter.sendUserMessage("telegram-promoted-review", {
+        text: "generate an image set in detached stages",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        task_id: "bash-initial-stage",
+        kind: "process",
+        description: "Generate the first image batch",
+        detached: true,
+      });
+      server.respondPrompt();
+      await expect(foreground).resolves.toMatchObject({ text: "Kimi completed the request." });
+
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-initial-stage",
+        origin_kind: "task",
+        origin_name: "bash-initial-stage",
+        prompt: '<notification type="task.completed" source_id="bash-initial-stage">done</notification>',
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-initial-stage",
+        body: "Initial stage completed.",
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-final-stage",
+        title: "Bash",
+        status: "completed",
+        rawOutput: [
+          "task_id: bash-final-stage",
+          "status: running",
+          "description: Generate the final image batch",
+          "automatic_notification: true",
+        ].join("\n"),
+      });
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-final-stage"
+      )));
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+
+      // Kimi starts a new task-origin turn for the nested process. That turn is
+      // now the workflow successor, not an internal result that may be hidden.
+      await postKimiHook(harness, {
+        hook_event_name: "TurnStarted",
+        turn_id: "turn-final-stage",
+        origin_kind: "task",
+        origin_name: "bash-final-stage",
+        prompt: '<notification type="task.completed" source_id="bash-final-stage">done</notification>',
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "Notification",
+        notification_type: "task.completed",
+        source_kind: "background_task",
+        source_id: "bash-final-stage",
+        body: "Final stage completed.",
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "Verified image set.\n[send-image:/tmp/final-image.png]",
+        },
+      });
+      await postKimiHook(harness, { hook_event_name: "Stop", stop_hook_active: false });
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-final-stage"
+      )));
+
+      expect(events.filter((event) => (
+        event.type === "task_notification" && !event.suppressUserDelivery
+      ))).toEqual([
+        expect.objectContaining({
+          taskId: "bash-final-stage",
+          status: "completed",
+          text: "Verified image set.\n[send-image:/tmp/final-image.png]",
+        }),
+      ]);
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
   it("releases a queued foreground turn when a completed task review loses its Stop hook", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-lost-review-stop-test-"));
     const wirePath = path.join(
