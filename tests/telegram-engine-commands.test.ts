@@ -57,6 +57,7 @@ describe("handleLocalEngineTelegramCommand", () => {
           "/engine claude",
           "/engine codex",
           "/engine kimi",
+          "/engine deepseek",
           "/engine antigravity",
           "Restart this instance after switching to apply the change.",
         ].join("\n"),
@@ -257,7 +258,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /engine [claude|codex|kimi|antigravity]");
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Usage: /engine [claude|codex|kimi|deepseek|antigravity]");
     } finally {
       await removeTempRoot(root);
     }
@@ -294,7 +295,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(handled).toBe(true);
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "/context is only supported with the Claude engine. The current engine does not expose local context.",
+        "/context is only supported with the Claude or DeepSeek engine. The current engine does not expose local context.",
       );
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({
@@ -343,7 +344,7 @@ describe("handleLocalEngineTelegramCommand", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "/compact is only supported with the Claude and Kimi engines. The current engine does not run local context compaction; use /reset to clear this conversation.",
+        "/compact is only supported with the Claude, Kimi, and DeepSeek engines. The current engine does not run local context compaction; use /reset to clear this conversation.",
       );
       const audit = parseAuditEvents(await readFile(path.join(root, "audit.log.jsonl"), "utf8"));
       expect(audit).toContainEqual(expect.objectContaining({
@@ -385,6 +386,81 @@ describe("handleLocalEngineTelegramCommand", () => {
         files: [],
       }));
       expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Context compacted.\n\nCompaction completed");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("forwards /compact to a DeepSeek Harness session", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: "DeepSeek compaction completed" }),
+    };
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek" },
+        normalized: createNormalizedMessage("/compact"),
+        context: { api: api as never, instanceName: "default", updateId: 80 },
+        bridge,
+        sessionStore: { removeByChatId: vi.fn(), clearAll: vi.fn() },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        text: "/compact",
+        files: [],
+      }));
+      expect(api.sendMessage).toHaveBeenNthCalledWith(
+        2,
+        123,
+        "Context compacted.\n\nDeepSeek compaction completed",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("renders DeepSeek Harness context pressure without sending a model prompt", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-engine-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(),
+      getContextUsage: vi.fn().mockResolvedValue({
+        pressureTokens: 12_000,
+        projectedTokens: 13_107,
+        contextWindow: 131_072,
+      }),
+    };
+
+    try {
+      const handled = await handleLocalEngineTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek", resume: { workspacePath: "/tmp/work" } },
+        normalized: createNormalizedMessage("/context"),
+        context: { api: api as never, instanceName: "default", updateId: 81 },
+        bridge,
+        sessionStore: { removeByChatId: vi.fn(), clearAll: vi.fn() },
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(bridge.getContextUsage).toHaveBeenCalledWith(expect.objectContaining({
+        chatId: 123,
+        workspaceOverride: "/tmp/work",
+      }));
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Context: ~13,107 / 131,072 tokens (10.0%)\nLast provider sample: 12,000 tokens",
+      );
     } finally {
       await removeTempRoot(root);
     }

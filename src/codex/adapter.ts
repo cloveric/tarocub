@@ -16,6 +16,14 @@ export interface AdapterUsage {
   costUsd?: number;
 }
 
+export interface EngineContextUsage {
+  /** Provider-reported prompt size for the most recent request. */
+  pressureTokens?: number;
+  /** Estimated prompt size for the next request after surface changes. */
+  projectedTokens?: number;
+  contextWindow?: number;
+}
+
 export interface CodexAdapterResponse {
   text: string;
   sessionId?: string;
@@ -39,7 +47,7 @@ export interface CodexThreadGoalResponse {
 }
 
 export interface EngineApprovalRequest {
-  engine: "claude" | "codex" | "antigravity" | "kimi";
+  engine: "claude" | "codex" | "antigravity" | "kimi" | "deepseek";
   toolName: string;
   toolInput: unknown;
   cwd?: string;
@@ -173,8 +181,8 @@ export interface CodexAdapter {
   createSession(chatId: number): Promise<CodexSessionHandle>;
   sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse>;
   // Inject additional user input into this session's currently running turn
-  // (Codex app-server turn/steer). True only when the engine accepted the
-  // steer; false means no active/addressable turn — the caller must fall back
+  // (Codex app-server turn/steer or DeepSeek Harness session steer). True only
+  // when the engine accepted the steer; false means no active/addressable turn — the caller must fall back
   // to delivering the input as a normal queued message so it is never lost.
   steerActiveTurn?(sessionId: string, input: { text: string }): Promise<boolean>;
   validateExternalSession?(
@@ -182,6 +190,10 @@ export interface CodexAdapter {
     input?: { workspaceOverride?: string },
   ): Promise<ExternalSessionInfo | void>;
   listExternalSessions?(input?: { cwd?: string; limit?: number }): Promise<ExternalSessionInfo[]>;
+  getContextUsage?(
+    sessionId: string,
+    input?: { workspaceOverride?: string },
+  ): Promise<EngineContextUsage | null>;
   getThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<CodexThreadGoalResponse>;
   setThreadGoal?(sessionId: string, input: {
     objective: string;
@@ -195,6 +207,7 @@ export interface CodexAdapter {
     tokenBudget?: number | null;
     workspaceOverride?: string;
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
     abortSignal?: AbortSignal;
   }): Promise<CodexThreadGoalResponse>;
   clearThreadGoal?(sessionId: string, input?: { workspaceOverride?: string }): Promise<{ cleared: boolean; sessionId?: string }>;

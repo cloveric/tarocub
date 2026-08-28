@@ -64,7 +64,7 @@ async function main(): Promise<void> {
       // sanctioned channel; an existing process.env value still wins.
       applyLarkBridgeRuntimeEnv(larkEnv);
       // Pass per-instance lark.env extras (e.g. MCP API tokens like IFIND_TOKEN) into
-      // process.env so the spawned engine (claude/codex/kimi) inherits them. Names only.
+      // process.env so the spawned engine (claude/codex/kimi/deepseek/antigravity) inherits them. Names only.
       const passthroughKeys = await applyLarkEnvPassthrough(larkEnv);
       if (passthroughKeys.length > 0) {
         console.error(`[lark] lark.env passthrough → engine env: ${passthroughKeys.join(", ")}`);
@@ -117,6 +117,8 @@ async function main(): Promise<void> {
         CODEX_TELEGRAM_STATE_DIR: process.env.CODEX_TELEGRAM_STATE_DIR,
         CODEX_EXECUTABLE: process.env.CODEX_EXECUTABLE,
         CLAUDE_EXECUTABLE: process.env.CLAUDE_EXECUTABLE,
+        DSH_EXECUTABLE: process.env.DSH_EXECUTABLE,
+        DSH_HOME: process.env.DSH_HOME,
         KIMI_EXECUTABLE: process.env.KIMI_EXECUTABLE,
         KIMI_CODE_HOME: process.env.KIMI_CODE_HOME,
         ANTIGRAVITY_EXECUTABLE: process.env.ANTIGRAVITY_EXECUTABLE,

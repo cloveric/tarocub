@@ -258,6 +258,8 @@ describe("message rendering", () => {
     expect(help).toContain("/mini [status|here|order|parallel|verifier|role|crew|ask|fan|chain|verify]");
     expect(help).toContain("/goal <goal> - set a goal");
     expect(help).toContain("default is unbounded unless --budget is provided");
+    expect(help).toContain("/engine [claude|codex|kimi|deepseek|antigravity]");
+    expect(help).toContain("DeepSeek Harness");
     expect(help).toContain("/reset");
     expect(help).toContain("/help");
   });
@@ -317,6 +319,16 @@ describe("message rendering", () => {
         waitingTasks: 0,
       }),
     ).toContain("Current conversation: fdfc8ab1-7936-4599-98b0-d8ba2593c250");
+  });
+
+  it("renders the current DeepSeek Harness session in Telegram status", () => {
+    expect(renderTelegramStatusMessage({
+      engine: "deepseek",
+      sessionBound: true,
+      threadId: "deepseek-session-123",
+      blockingTasks: 0,
+      waitingTasks: 0,
+    })).toContain("Current DeepSeek Harness session: deepseek-session-123");
   });
 
   it("distinguishes unmetered engine turns from zero-token usage", () => {

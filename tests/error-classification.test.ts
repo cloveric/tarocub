@@ -38,6 +38,11 @@ describe("classifyFailure auth detection", () => {
 });
 
 describe("classifyFailure specificity", () => {
+  it("classifies named DeepSeek Harness backend failures as engine-cli", () => {
+    expect(classifyFailure(new Error("DeepSeek Harness stream error: connection reset"))).toBe("engine-cli");
+    expect(classifyFailure(new Error("dsh crashed while handling the turn"))).toBe("engine-cli");
+  });
+
   it("does not treat generic app-server mentions as engine-cli failures", () => {
     expect(classifyFailure(new Error("status page mentions app-server maintenance"))).toBe("unknown");
   });

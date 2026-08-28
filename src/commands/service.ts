@@ -42,7 +42,7 @@ import { inspectInstanceAgentInstructions } from "./access.js";
 export interface ServiceCommandEnv
   extends Pick<
     EnvSource,
-    "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
+    "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR" | "DSH_HOME"
   > {}
 
 export interface ServiceCommandDeps {
@@ -485,7 +485,7 @@ async function defaultReadProcessEnvironment(pid: number): Promise<Record<string
   const commandLine = result.stdout.trim();
   const environment: Record<string, string> = {};
 
-  for (const key of ["CODEX_HOME", "CLAUDE_CONFIG_DIR"]) {
+  for (const key of ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "DSH_HOME"]) {
     const pattern = new RegExp(`(?:^|\\s)${key}=([^\\s]+)`);
     const match = commandLine.match(pattern);
     if (match?.[1]) {
@@ -1201,17 +1201,16 @@ export async function runServiceDoctor(
         ? `Bot identity resolved as ${status.botIdentity.firstName}${status.botIdentity.username ? ` (@${status.botIdentity.username})` : ""}.`
         : "Bot identity not available."),
   });
-  const sharedEnvKey = status.engine === "claude"
+  const sharedEnvKey: "CLAUDE_CONFIG_DIR" | "CODEX_HOME" | "DSH_HOME" | null = status.engine === "claude"
     ? "CLAUDE_CONFIG_DIR"
     : status.engine === "codex"
       ? "CODEX_HOME"
-      : null;
-  const shellSharedEnvValue =
-    sharedEnvKey === "CLAUDE_CONFIG_DIR"
-      ? env.CLAUDE_CONFIG_DIR?.trim() || null
-      : sharedEnvKey === "CODEX_HOME"
-        ? env.CODEX_HOME?.trim() || null
+      : status.engine === "deepseek"
+        ? "DSH_HOME"
         : null;
+  const shellSharedEnvValue = sharedEnvKey === null
+    ? null
+    : env[sharedEnvKey]?.trim() || null;
   let environmentCheck = {
     ok: true,
     detail: "Shared engine env matches the current shell.",

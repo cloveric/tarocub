@@ -270,7 +270,9 @@ describe("lark mid-turn steering", () => {
         stateDir,
         message: fakeLarkMessage({ messageId: "om_steer_kimi", content: "/steer status" }),
       });
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("Kimi ACP 不支持任务中途注入");
+      const sent = JSON.stringify(channel.send.mock.calls);
+      expect(sent).toContain("Kimi ACP 不支持任务中途注入");
+      expect(sent).toContain("Codex 或 DeepSeek");
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
       await cleanupTempRoot(stateDir);

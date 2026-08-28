@@ -15,6 +15,8 @@ export interface LarkRuntimeEnv {
   CODEX_TELEGRAM_STATE_DIR?: string;
   CODEX_EXECUTABLE?: string;
   CLAUDE_EXECUTABLE?: string;
+  DSH_EXECUTABLE?: string;
+  DSH_HOME?: string;
   KIMI_EXECUTABLE?: string;
   KIMI_CODE_HOME?: string;
   ANTIGRAVITY_EXECUTABLE?: string;

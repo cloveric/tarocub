@@ -188,6 +188,72 @@ describe("handleLocalSessionTelegramCommand", () => {
     }
   });
 
+  it("scans and attaches a listed DeepSeek Harness session by number", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const canonicalRoot = await realpath(root);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+    const scanRecentDeepSeekSessions = vi.fn().mockResolvedValue([{
+      sessionId: "deepseek-session-1",
+      dirName: "deepseek-session-1",
+      workspacePath: root,
+      modifiedAt: new Date("2026-08-28T00:00:00.000Z"),
+      displayName: "Harness Project",
+    }]);
+    const validateCodexThread = vi.fn().mockResolvedValue({
+      sessionId: "deepseek-session-1",
+      cwd: root,
+      title: "Harness Project",
+    });
+
+    try {
+      const common = {
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek" },
+        context: { api: api as never, instanceName: "default", updateId: 82 },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        scanRecentDeepSeekSessions,
+        validateCodexThread,
+      } as const;
+
+      await expect(handleLocalSessionTelegramCommand({
+        ...common,
+        normalized: createNormalizedMessage("/resume"),
+      })).resolves.toBe(true);
+      await expect(handleLocalSessionTelegramCommand({
+        ...common,
+        normalized: createNormalizedMessage("/resume 1"),
+      })).resolves.toBe(true);
+
+      expect(scanRecentDeepSeekSessions).toHaveBeenCalledOnce();
+      expect(validateCodexThread).toHaveBeenCalledWith("deepseek-session-1");
+      expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("DeepSeek Harness sessions:"));
+      expect(sessionStore.upsert).toHaveBeenCalledWith(expect.objectContaining({
+        telegramChatId: 123,
+        codexSessionId: "deepseek-session-1",
+        resume: {
+          sessionId: "deepseek-session-1",
+          dirName: "deepseek-session-1",
+          workspacePath: canonicalRoot,
+        },
+      }));
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringContaining("Attached DeepSeek Harness session: deepseek-session-1"),
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("expires cached /resume scans after 10 minutes", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-19T10:00:00.000Z"));
@@ -372,6 +438,58 @@ describe("handleLocalSessionTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         `Attached Kimi session: kimi-new\nWorkspace: ${canonicalRoot}\n\nSend a message to continue. Use /detach when done.`,
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("attaches a validated DeepSeek Harness session with /resume session <session-id>", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const canonicalRoot = await realpath(root);
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({
+        record: { codexSessionId: "deepseek-old" },
+        warning: undefined,
+      }),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+    const validateCodexThread = vi.fn().mockResolvedValue({ sessionId: "deepseek-new", cwd: root });
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek" },
+        normalized: createNormalizedMessage("/resume session deepseek-new"),
+        context: { api: api as never, instanceName: "default", updateId: 803 },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        validateCodexThread,
+      });
+
+      expect(handled).toBe(true);
+      expect(validateCodexThread).toHaveBeenCalledWith("deepseek-new");
+      expect(sessionStore.upsert).toHaveBeenCalledWith(expect.objectContaining({
+        telegramChatId: 123,
+        codexSessionId: "deepseek-new",
+        resume: {
+          sessionId: "deepseek-new",
+          dirName: "deepseek-new",
+          workspacePath: canonicalRoot,
+        },
+        suspendedPrevious: {
+          sessionId: "deepseek-old",
+          resume: null,
+        },
+      }));
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        `Attached DeepSeek Harness session: deepseek-new\nWorkspace: ${canonicalRoot}\n\nSend a message to continue. Use /detach when done.`,
       );
     } finally {
       await removeTempRoot(root);
@@ -1113,6 +1231,39 @@ describe("handleLocalSessionTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
         "Detached from the current Kimi session. Next message will start a fresh session.",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("detaches the current DeepSeek Harness session when one is bound", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+      removeByChatId: vi.fn().mockResolvedValue(true),
+      upsert: vi.fn(),
+    };
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek" },
+        normalized: createNormalizedMessage("/detach"),
+        context: { api: api as never, instanceName: "default", updateId: 812 },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.removeByChatId).toHaveBeenCalledWith(123);
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Detached from the current DeepSeek Harness session. Next message will start a fresh session.",
       );
     } finally {
       await removeTempRoot(root);

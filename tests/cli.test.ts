@@ -4805,6 +4805,19 @@ describe("runCli", () => {
       });
       expect(showMessages).toContain(expectedNote);
 
+      await runCli(["lark", "engine", "deepseek"], {
+        env,
+        logger: { log: () => undefined },
+      });
+      const deepseekMessages: string[] = [];
+      await runCli(["lark", "budget", "show"], {
+        env,
+        logger: { log: (message) => deepseekMessages.push(message) },
+      });
+      expect(deepseekMessages).toContain(
+        "Note: DeepSeek Harness reports token usage but not dollar cost, so the budget cap cannot track or constrain DeepSeek turns.",
+      );
+
       // On the Claude engine the cap is real, so the note must not appear.
       await runCli(["lark", "engine", "claude"], {
         env,
@@ -5359,6 +5372,27 @@ describe("runCli", () => {
         engine: "antigravity",
         approvalMode: "bypass",
       });
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("sets DeepSeek Harness as an instance engine via CLI", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+
+    try {
+      const handled = await runCli(["telegram", "engine", "deepseek", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toBe('Instance "alpha": engine set to "deepseek". Restart the service to apply.');
+
+      const configPath = path.join(tempDir, ".cctb", "alpha", "config.json");
+      const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+      expect(config).toMatchObject({ engine: "deepseek" });
     } finally {
       await removeTempRoot(tempDir);
     }

@@ -65,11 +65,14 @@ type AskUserQuestionCardQuestion = {
 };
 
 function isAskUserQuestionRequest(request: EngineApprovalRequest): boolean {
-  return (request.engine === "claude" || request.engine === "kimi")
+  return (request.engine === "claude" || request.engine === "kimi" || request.engine === "deepseek")
     && request.toolName === "AskUserQuestion";
 }
 
 function renderApprovalEngineLabel(engine: EngineApprovalRequest["engine"] | undefined): string {
+  if (engine === "deepseek") {
+    return "DeepSeek Harness";
+  }
   if (engine === "kimi") {
     return "Kimi";
   }
@@ -377,8 +380,8 @@ function renderLarkAskUserQuestionCard(input: {
           : { initial_option: selected[0] })
         : {}),
     });
-    // Kimi ACP permissions can only return one of the advertised optionIds.
-    // Claude supports a free-text "Other" answer, so preserve that UX there.
+    // Kimi ACP only returns advertised option IDs. Claude and DeepSeek
+    // Harness both support a free-text custom answer, so preserve that UX.
     if (input.engine !== "kimi") {
       const otherValue = stringValue(input.selections?.[askFormOtherFieldName(index)]) ?? "";
       formElements.push({
@@ -1065,10 +1068,16 @@ export async function handleLarkCardAction(input: {
       );
       return true;
     }
-    const kind = cfg.engine === "antigravity" ? "antigravity" : cfg.engine === "kimi" ? "kimi" : "claude";
+    const kind = cfg.engine === "antigravity"
+      ? "antigravity"
+      : cfg.engine === "kimi"
+        ? "kimi"
+        : cfg.engine === "deepseek"
+          ? "deepseek"
+          : "claude";
     const sessions = kind === "antigravity"
       ? await scanRecentAntigravityConversations(24)
-      : kind === "kimi" && input.bridge?.listExternalSessions
+      : (kind === "kimi" || kind === "deepseek") && input.bridge?.listExternalSessions
         ? (await input.bridge.listExternalSessions({ limit: 20 })).map((session) => {
             const modifiedAt = new Date(session.updatedAt ?? 0);
             return {
@@ -1105,7 +1114,7 @@ export async function handleLarkCardAction(input: {
     value.cctb_lark === "resume" &&
     typeof value.conversationKey === "string" &&
     typeof value.sessionId === "string" &&
-    (value.engine === "claude" || value.engine === "antigravity" || value.engine === "kimi")
+    (value.engine === "claude" || value.engine === "antigravity" || value.engine === "kimi" || value.engine === "deepseek")
   ) {
     if (!input.stateDir) {
       return false;
@@ -1130,20 +1139,21 @@ export async function handleLarkCardAction(input: {
       return true;
     }
     let resumeValue = value;
-    if (value.engine === "kimi") {
-      const validateKimiSession = input.bridge?.validateCodexThread?.bind(input.bridge);
-      if (!validateKimiSession) {
+    if (value.engine === "kimi" || value.engine === "deepseek") {
+      const engineName = value.engine === "deepseek" ? "DeepSeek Harness" : "Kimi";
+      const validateHarnessSession = input.bridge?.validateCodexThread?.bind(input.bridge);
+      if (!validateHarnessSession) {
         await input.channel.send(
           input.event.chatId,
-          { text: locale === "en" ? "This Kimi runtime cannot validate session IDs." : "当前 Kimi runtime 无法验证 session id。" },
+          { text: locale === "en" ? `This ${engineName} runtime cannot validate session IDs.` : `当前 ${engineName} runtime 无法验证 session id。` },
           larkReplyOptions(input.event.messageId, replyInThread),
         );
         return true;
       }
       try {
-        const validated = await validateKimiSession(value.sessionId);
+        const validated = await validateHarnessSession(value.sessionId);
         if (!validated?.cwd) {
-          throw new Error("Kimi session workspace is unavailable");
+          throw new Error(`${engineName} session workspace is unavailable`);
         }
         resumeValue = {
           ...value,
@@ -1154,7 +1164,7 @@ export async function handleLarkCardAction(input: {
       } catch {
         await input.channel.send(
           input.event.chatId,
-          { text: locale === "en" ? `Could not load Kimi session: ${value.sessionId}` : `无法加载 Kimi session：${value.sessionId}` },
+          { text: locale === "en" ? `Could not load ${engineName} session: ${value.sessionId}` : `无法加载 ${engineName} session：${value.sessionId}` },
           larkReplyOptions(input.event.messageId, replyInThread),
         );
         return true;
@@ -2392,7 +2402,13 @@ async function applyLarkResumeCardAction(
   locale: Locale,
 ): Promise<string> {
   const conversationKey = String(value.conversationKey);
-  const engine = value.engine === "antigravity" ? "antigravity" : value.engine === "kimi" ? "kimi" : "claude";
+  const engine = value.engine === "antigravity"
+    ? "antigravity"
+    : value.engine === "kimi"
+      ? "kimi"
+      : value.engine === "deepseek"
+        ? "deepseek"
+        : "claude";
   const sessionId = String(value.sessionId);
   const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
   const cfg = await loadInstanceConfig(stateDir);
@@ -2400,7 +2416,7 @@ async function applyLarkResumeCardAction(
     return renderLarkResumeEngineChanged(locale);
   }
   let workspacePath: string | null = null;
-  if (engine === "claude" || engine === "kimi") {
+  if (engine === "claude" || engine === "kimi" || engine === "deepseek") {
     const candidate = typeof value.workspacePath === "string" && value.workspacePath.trim()
       ? value.workspacePath
       : null;
@@ -2424,7 +2440,7 @@ async function applyLarkResumeCardAction(
 
   const existing = await sessionStore.findByConversationKeySafe(conversationKey);
   const currentResume = resolveConversationResume(existing.record, cfg.resume);
-  const nextResume: ResumeState | null = (engine === "claude" || engine === "kimi") && workspacePath
+  const nextResume: ResumeState | null = (engine === "claude" || engine === "kimi" || engine === "deepseek") && workspacePath
     ? {
       sessionId,
       dirName: typeof value.dirName === "string" ? value.dirName : sessionId,
@@ -2444,7 +2460,7 @@ async function applyLarkResumeCardAction(
     }),
   });
 
-  if ((engine === "claude" || engine === "kimi") && workspacePath) {
+  if ((engine === "claude" || engine === "kimi" || engine === "deepseek") && workspacePath) {
     await updateInstanceConfig(stateDir, (config) => {
       delete config.resume;
     });
@@ -2453,6 +2469,11 @@ async function applyLarkResumeCardAction(
       return locale === "en"
         ? `Attached Kimi session: ${sessionId}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`
         : `已绑定 Kimi session：${sessionId}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`;
+    }
+    if (engine === "deepseek") {
+      return locale === "en"
+        ? `Attached DeepSeek Harness session: ${sessionId}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`
+        : `已绑定 DeepSeek Harness session：${sessionId}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`;
     }
     return locale === "en"
       ? `Resumed session: ${displayName}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`

@@ -3,6 +3,7 @@ import type {
   CodexThreadGoal,
   EngineApprovalDecision,
   EngineApprovalRequest,
+  EngineContextUsage,
   EngineStreamEvent,
   ExternalSessionInfo,
 } from "../codex/adapter.js";
@@ -198,6 +199,27 @@ export class Bridge {
       throw new Error("external session listing unsupported");
     }
     return await this.adapter.listExternalSessions(input);
+  }
+
+  async getContextUsage(input: {
+    chatId: number;
+    messageThreadId?: number;
+    conversationKey?: string;
+    workspaceOverride?: string;
+  }): Promise<EngineContextUsage | null> {
+    if (!this.adapter.getContextUsage) {
+      throw new Error("Context usage is not available for this runtime");
+    }
+    const scope = this.conversationScope(input);
+    const session = this.sessionManager.getExistingSession
+      ? await this.sessionManager.getExistingSession(scope)
+      : await this.sessionManager.getOrCreateSession(scope);
+    if (!session) {
+      return null;
+    }
+    return await this.adapter.getContextUsage(session.sessionId, {
+      workspaceOverride: input.workspaceOverride,
+    });
   }
 
   async checkAccess(input: BridgeAccessInput): Promise<BridgeAccessDecision> {
@@ -527,8 +549,8 @@ export class Bridge {
 
   /**
    * Inject a follow-up message into the chat's currently running engine turn
-   * (Codex app-server turn/steer). Returns false when the runtime does not
-   * support steering, the chat has no bound session, or no turn is active —
+   * (Codex app-server turn/steer or DeepSeek Harness session steer). Returns
+   * false when the runtime does not support steering, the chat has no bound session, or no turn is active —
    * the caller then delivers the message through the normal turn queue.
    * Session resolution mirrors handleAuthorizedMessage so the steer targets
    * exactly the session a queued message would have used.
@@ -615,6 +637,7 @@ export class Bridge {
     tokenBudget?: number | null;
     workspaceOverride?: string;
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
     abortSignal?: AbortSignal;
   }): Promise<{ goal: CodexThreadGoal | null }> {
     if (!this.adapter.watchThreadGoal) {
@@ -627,6 +650,7 @@ export class Bridge {
       tokenBudget: input.tokenBudget,
       workspaceOverride: input.workspaceOverride,
       onEngineEvent: input.onEngineEvent,
+      onApprovalRequest: input.onApprovalRequest,
       abortSignal: input.abortSignal,
     });
     if (response.sessionId && response.sessionId !== session.sessionId) {

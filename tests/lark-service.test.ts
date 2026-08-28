@@ -7,11 +7,13 @@ import AdmZip from "adm-zip";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EngineApprovalRequest, EngineStreamEvent } from "../src/codex/adapter.js";
+import { DeepSeekHarnessAdapter } from "../src/codex/deepseek-harness-adapter.js";
 import {
   buildLarkCronExecutor,
   createLarkChatWithCli,
   createLarkDocumentWithCli,
   createLarkServiceRuntime,
+  createDefaultLarkBridge,
   handleLarkCardAction,
   handleLarkComment,
   handleLarkMessage,
@@ -48,6 +50,32 @@ function createZipBuffer(files: Record<string, string>): Buffer {
 }
 
 describe("lark service", () => {
+  it("forwards the configured DeepSeek executable and shared home through the default Lark bridge", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-deepseek-env-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek" }) + "\n", "utf8");
+
+      const { bridge } = await createDefaultLarkBridge({
+        HOME: root,
+        TAROCUB_INSTANCE: "alpha",
+        CODEX_TELEGRAM_STATE_DIR: stateDir,
+        DSH_EXECUTABLE: "/opt/dsh-lark",
+        DSH_HOME: path.join(root, "shared-dsh-home"),
+      });
+
+      const adapter = (bridge as any).adapter;
+      expect(adapter).toBeInstanceOf(DeepSeekHarnessAdapter);
+      const gateway = adapter.gateway;
+      expect(gateway.executable).toBe("/opt/dsh-lark");
+      expect(gateway.options.sharedHome).toBe(path.join(root, "shared-dsh-home"));
+      await adapter.destroy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not add reactions to ignored Lark group messages", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-reaction-ignored-"));
     const channel = fakeChannel({
@@ -3002,6 +3030,8 @@ describe("lark service", () => {
         { markdown: expect.stringContaining("`im:message.group_msg`") },
         { replyTo: "om_help", replyInThread: false },
       );
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("claude|codex|kimi|deepseek|antigravity");
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("DeepSeek Harness");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -4472,6 +4502,42 @@ describe("lark service", () => {
     }
   });
 
+  it("shows the bound DeepSeek Harness session in Lark status", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-deepseek-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      locale: "en",
+      engine: "deepseek",
+    }) + "\n");
+    await new SessionStore(path.join(stateDir, "session.json")).upsert({
+      telegramChatId: stableLarkNumericId("lark:oc_chat"),
+      conversationKey: "lark:oc_chat",
+      codexSessionId: "deepseek-status-session",
+      status: "idle",
+      updatedAt: new Date("2026-08-28T00:00:00.000Z").toISOString(),
+    });
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_status_deepseek", content: "/status" }),
+      });
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("Engine: deepseek");
+      expect(rendered).toContain("Current DeepSeek Harness session: deepseek-status-session");
+      expect(rendered).toContain("reports token usage but not dollar cost");
+      expect(rendered).not.toContain("configured budget cap");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("explains Claude CLI defaults in the Lark status card", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-status-claude-default-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en", engine: "claude" }) + "\n");
@@ -4946,6 +5012,35 @@ describe("lark service", () => {
     }
   });
 
+  it("discloses missing DeepSeek dollar telemetry in Lark even without a budget", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-usage-deepseek-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek", locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_usage_deepseek", content: "/usage" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("reports token usage but not dollar cost") },
+        { replyTo: "om_usage_deepseek", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("sets Lark model and effort commands in the shared instance config", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");
@@ -5005,6 +5100,31 @@ describe("lark service", () => {
       expect(rendered).toContain("`/model claude-opus-5[1m]`");
       expect(rendered).toContain("Latest Opus alias: `/model opus[1m]`");
       expect(rendered).not.toContain("claude-opus-5 [1m]");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("explains DeepSeek Harness provider/model IDs on bare Lark /model", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-model-deepseek-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek", locale: "en" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_model_deepseek", content: "/model" }),
+      });
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("DeepSeek Harness");
+      expect(rendered).toContain("provider/model");
+      expect(rendered).not.toContain("Antigravity model switching");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -5247,7 +5367,7 @@ describe("lark service", () => {
     }
   });
 
-  it("notes /timeout is Codex/Antigravity-only on a Claude instance (Claude has no single-turn cap)", async () => {
+  it("describes Claude /timeout as controlling its inactivity watchdog without claiming a hard cap", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-timeout-claude-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude", locale: "zh" }) + "\n");
     const channel = fakeChannel();
@@ -5261,9 +5381,34 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_to_claude", content: "/timeout off" }),
       });
       const md = (channel.send.mock.calls as unknown[][]).map((c) => ((c[1] ?? {}) as { markdown?: string }).markdown ?? "").join("\n");
-      // The flag is still persisted, but the message is honest about Claude having no cap.
-      expect(md).toContain("Claude 引擎");
-      expect(md).toContain("Codex/Antigravity");
+      expect(md).toContain("Claude");
+      expect(md).toContain("静默看门狗");
+      expect(md).not.toContain("Codex/Antigravity");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("describes DeepSeek /timeout as controlling both its hard cap and inactivity watchdog", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-timeout-deepseek-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek", locale: "zh" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_to_deepseek", content: "/timeout off" }),
+      });
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("DeepSeek Harness");
+      expect(rendered).toContain("硬上限");
+      expect(rendered).toContain("静默看门狗");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -5373,6 +5518,8 @@ describe("lark service", () => {
       expect(rendered).toContain('"form_action_type":"submit"');
       expect(rendered).toContain('"cctb_lark":"config"');
       expect(rendered).toContain('"action":"engine"');
+      expect(rendered).toContain('"value":"deepseek"');
+      expect(rendered).toContain("DeepSeek Harness");
       expect(rendered).toContain('"action":"yolo"');
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -5543,6 +5690,38 @@ describe("lark service", () => {
         "oc_chat",
         { markdown: expect.stringContaining("引擎已设为 antigravity") },
         { replyTo: "om_engine", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("switches the Lark engine to DeepSeek Harness through the shared instance config", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-engine-deepseek-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "codex", model: "gpt-5.4" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_engine_deepseek", content: "/engine deepseek" }),
+      });
+
+      const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.engine).toBe("deepseek");
+      expect(config.model).toBeUndefined();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("引擎已设为 deepseek") },
+        { replyTo: "om_engine_deepseek", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -5929,6 +6108,67 @@ describe("lark service", () => {
         "oc_chat",
         { markdown: expect.stringContaining("已恢复 session：demo") },
         { replyTo: "om_resume_pick", replyInThread: false },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("scans and resumes a DeepSeek Harness session from Lark without running the engine", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-resume-deepseek-"));
+    const canonicalStateDir = await realpath(stateDir);
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek" }) + "\n");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      listExternalSessions: vi.fn(async () => [{
+        sessionId: "deepseek-session-1",
+        cwd: stateDir,
+        title: "Harness Project",
+        updatedAt: "2026-08-28T06:00:00.000Z",
+      }]),
+      validateCodexThread: vi.fn(async () => ({
+        sessionId: "deepseek-session-1",
+        cwd: stateDir,
+        title: "Harness Project",
+      })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_resume_deepseek_scan", content: "/resume" }),
+      });
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_resume_deepseek_pick", content: "/resume 1" }),
+      });
+
+      const record = await sessionStore.findByConversationKey("lark:oc_chat");
+      expect(bridge.listExternalSessions).toHaveBeenCalledWith({ limit: 20 });
+      expect(bridge.validateCodexThread).toHaveBeenCalledWith("deepseek-session-1");
+      expect(record?.codexSessionId).toBe("deepseek-session-1");
+      expect(record?.resume).toEqual({
+        sessionId: "deepseek-session-1",
+        dirName: "deepseek-session-1",
+        workspacePath: canonicalStateDir,
+      });
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("恢复 DeepSeek Harness session");
+      expect(rendered).toContain("deepseek-session-1");
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { markdown: expect.stringContaining("已绑定 DeepSeek Harness session") },
+        { replyTo: "om_resume_deepseek_pick", replyInThread: false },
       );
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -6954,6 +7194,52 @@ describe("lark service", () => {
     }
   });
 
+  it("passes an interactive approval handler into a live DeepSeek /goal watcher", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-deepseek-goal-approval-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek" }) + "\n");
+    const channel = fakeChannel();
+    let watchInput: Record<string, unknown> | undefined;
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      watchThreadGoal: async (input: Record<string, unknown>) => {
+        watchInput = input;
+        return {
+          goal: {
+            threadId: "deepseek-thread",
+            objective: String(input.objective),
+            status: "complete" as const,
+            tokenBudget: null,
+            tokensUsed: 1,
+            timeUsedSeconds: 1,
+            createdAt: 0,
+            updatedAt: 0,
+          },
+        };
+      },
+      clearThreadGoal: vi.fn(async () => ({ cleared: true })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge: bridge as never,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_deepseek_goal", content: "/goal use a protected tool" }),
+      });
+      await vi.waitFor(() => expect(watchInput).toBeDefined());
+      expect(watchInput).toEqual(expect.objectContaining({
+        objective: "use a protected tool",
+        onApprovalRequest: expect.any(Function),
+        abortSignal: expect.any(AbortSignal),
+      }));
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("preempts an existing active run when a Codex /goal claims the conversation (no orphan)", async () => {
     // The watcher runs detached (outside the chat queue); overwriting activeRuns
     // without aborting the prior run would orphan it (untracked → /stop can't reach
@@ -7513,7 +7799,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("/context is only supported with the Claude engine.") },
+        { markdown: expect.stringContaining("/context is only supported with the Claude or DeepSeek engine.") },
         { replyTo: "om_context_en", replyInThread: false },
       );
     } finally {
@@ -7542,7 +7828,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("/compact 仅支持 Claude 与 Kimi 引擎") },
+        { markdown: expect.stringContaining("/compact 仅支持 Claude、Kimi 与 DeepSeek 引擎") },
         { replyTo: "om_compact_wrong_engine", replyInThread: false },
       );
     } finally {
@@ -13505,6 +13791,64 @@ describe("lark service", () => {
     }
   });
 
+  it("validates a DeepSeek resume card through Harness and ignores a forged workspace path", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-deepseek-resume-card-action-"));
+    const canonicalStateDir = await realpath(stateDir);
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek" }) + "\n");
+    const sessionStore = new SessionStore(path.join(stateDir, "session.json"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      validateCodexThread: vi.fn(async () => ({
+        sessionId: "deepseek-session-card",
+        cwd: stateDir,
+        title: "Harness card session",
+      })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      const handled = await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "card_resume_deepseek",
+          operator: { openId: "ou_user", name: "User" },
+          action: {
+            value: {
+              cctb_lark: "resume",
+              engine: "deepseek",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              sessionId: "deepseek-session-card",
+              workspacePath: "/tmp/forged-deepseek-workspace",
+            },
+          },
+        },
+      });
+
+      const record = await sessionStore.findByConversationKey("lark:oc_chat");
+      expect(handled).toBe(true);
+      expect(bridge.validateCodexThread).toHaveBeenCalledWith("deepseek-session-card");
+      expect(record?.resume).toEqual({
+        sessionId: "deepseek-session-card",
+        dirName: "deepseek-session-card",
+        workspacePath: canonicalStateDir,
+      });
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: expect.stringContaining("已绑定 DeepSeek Harness session") },
+        { replyTo: "card_resume_deepseek" },
+      );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a stale Kimi resume card after the instance engine changes", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-stale-kimi-resume-card-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "claude" }) + "\n");
@@ -13870,6 +14214,51 @@ describe("lark service", () => {
     await expect(pending).resolves.toMatchObject({
       behavior: "allow",
       updatedInput: { answers: { "Which do you choose?": "blue" } },
+    });
+  });
+
+  it("preserves DeepSeek Harness custom AskUserQuestion answers", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_deepseek",
+      locale: "en",
+      request: {
+        engine: "deepseek",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{
+            question: "Which do you choose?",
+            header: "Choice",
+            multiSelect: false,
+            options: [{ label: "safe" }, { label: "fast" }],
+          }],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalled());
+    const payload = JSON.stringify((channel.send.mock.calls[0] as unknown[])?.[1]);
+    expect(payload).toContain("DeepSeek Harness is asking a question");
+    expect(payload).toContain('"name":"q0"');
+    expect(payload).toContain("q0_other");
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat",
+        messageId: "om_card",
+        operator: { openId: "ou_user" },
+        action: {
+          value: { cctb_lark: "ask_user_question", action: "form_submit", requestId },
+          form_value: { q0: "", q0_other: "balanced" },
+        },
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      behavior: "allow",
+      updatedInput: { answers: { "Which do you choose?": "balanced" } },
     });
   });
 

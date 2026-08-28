@@ -15,7 +15,7 @@ import { withFileMutex } from "../state/file-mutex.js";
 import { isExtendedCodexEffort, knownCodexModelSupportsEffort } from "../codex/model-capabilities.js";
 
 export type { EffortLevel };
-export type InstanceEngine = "codex" | "claude" | "antigravity" | "kimi";
+export type InstanceEngine = "codex" | "claude" | "antigravity" | "kimi" | "deepseek";
 
 export const CLAUDE_MODEL_CHOICES = [
   "claude-opus-5[1m]",
@@ -182,6 +182,12 @@ function applyKimiEngineDefaults(config: Record<string, unknown>, previousEngine
   }
 }
 
+function applyDeepSeekEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
+  if (previousEngine !== "deepseek") {
+    delete config.effort;
+  }
+}
+
 function parseResumeState(raw: unknown): ResumeState | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as Record<string, unknown>;
@@ -300,7 +306,7 @@ export function applyEngineSelection(
   engine: InstanceEngine,
 ): { clearedModel: boolean; enabledFullAuto: boolean } {
   const previousEngine =
-    config.engine === "claude" || config.engine === "codex" || config.engine === "antigravity" || config.engine === "kimi"
+    config.engine === "claude" || config.engine === "codex" || config.engine === "antigravity" || config.engine === "kimi" || config.engine === "deepseek"
       ? config.engine
       : undefined;
   const hadModelOverride = typeof config.model === "string" && config.model.trim().length > 0;
@@ -322,6 +328,9 @@ export function applyEngineSelection(
   }
   if (engine === "kimi") {
     applyKimiEngineDefaults(config, previousEngine);
+  }
+  if (engine === "deepseek") {
+    applyDeepSeekEngineDefaults(config, previousEngine);
   }
   if (normalizeApprovalMode(config.approvalMode) === undefined) {
     config.approvalMode = DEFAULT_APPROVAL_MODE;
@@ -403,7 +412,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
 
   const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
   return {
-    engine: config.engine === "claude" || config.engine === "antigravity" || config.engine === "kimi" ? config.engine : "codex",
+    engine: config.engine === "claude" || config.engine === "antigravity" || config.engine === "kimi" || config.engine === "deepseek" ? config.engine : "codex",
     locale: config.locale === "zh" ? "zh" : "en",
     verbosity: config.verbosity === 0 ? 0 : config.verbosity === 2 ? 2 : 1,
     budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,

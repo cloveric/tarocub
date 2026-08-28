@@ -30,6 +30,8 @@ export interface AppConfig {
   sessionStatePath: string;
   runtimeLogPath: string;
   codexExecutable: string;
+  deepseekExecutable: string;
+  deepseekHome: string;
   kimiExecutable: string;
   antigravityExecutable: string;
 }

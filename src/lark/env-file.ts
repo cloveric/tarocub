@@ -7,6 +7,7 @@ import { resolveDefaultLarkStateDir, resolveLarkInstanceName, type LarkRuntimeEn
 export const LARK_ENV_FILE_NAME = "lark.env";
 
 export const LARK_BRIDGE_RUNTIME_ENV_KEYS = [
+  "DSH_EXECUTABLE",
   "KIMI_EXECUTABLE",
   "TINGWU_ASR_DIR",
   "ASR_CLOUD_THRESHOLD_SECONDS",
@@ -106,6 +107,7 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
     CCTB_LARK_STATE_DIR: env.CCTB_LARK_STATE_DIR ?? parsed.CCTB_LARK_STATE_DIR,
     CCTB_LARK_INSTANCE: larkInstance,
     LARK_REQUIRE_MENTION_IN_GROUP: env.LARK_REQUIRE_MENTION_IN_GROUP ?? parsed.LARK_REQUIRE_MENTION_IN_GROUP,
+    DSH_EXECUTABLE: env.DSH_EXECUTABLE ?? parsed.DSH_EXECUTABLE,
     KIMI_EXECUTABLE: env.KIMI_EXECUTABLE ?? parsed.KIMI_EXECUTABLE,
     TINGWU_ASR_DIR: env.TINGWU_ASR_DIR ?? parsed.TINGWU_ASR_DIR,
     ASR_CLOUD_THRESHOLD_SECONDS: env.ASR_CLOUD_THRESHOLD_SECONDS ?? parsed.ASR_CLOUD_THRESHOLD_SECONDS,
@@ -122,7 +124,7 @@ export async function loadLarkRuntimeEnv(env: LarkRuntimeEnv): Promise<LarkRunti
 /**
  * Pass non-whitelisted keys (engine credentials/config such as MCP API tokens like
  * `IFIND_TOKEN`) through into the process environment so the spawned engine
- * (claude/codex/kimi) — which inherits `{ ...process.env }` — can see them. Two layers are
+ * (claude/codex/kimi/deepseek/antigravity) — which inherits `{ ...process.env }` — can see them. Two layers are
  * read, in precedence order: an existing value in `target` (process.env) always wins,
  * then the instance's own lark.env, then the shared `~/.cctb/shared.env` fills any gaps
  * — so a freshly-created instance inherits shared tokens by default, while still being
@@ -348,7 +350,7 @@ function parseLarkEnvExtras(content: string, dropped?: string[]): Record<string,
 
 function isSupportedLarkEnvKey(key: string): key is keyof Pick<
   LarkRuntimeEnv,
-  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "KIMI_EXECUTABLE" | "TINGWU_ASR_DIR" | "ASR_CLOUD_THRESHOLD_SECONDS" | "ASR_CLOUD_TASK_TIMEOUT_SECONDS" | "ASR_CLOUD_JOB_RETENTION_DAYS" | "ASR_MAX_AUDIO_SECONDS" | "LARK_INBOUND_FILE_RETENTION_DAYS"
+  "LARK_APP_ID" | "LARK_APP_SECRET" | "LARK_DOMAIN" | "CCTB_LARK_STATE_DIR" | "CCTB_LARK_INSTANCE" | "LARK_REQUIRE_MENTION_IN_GROUP" | "CCTB_LARK_DEBUG" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "DSH_EXECUTABLE" | "KIMI_EXECUTABLE" | "TINGWU_ASR_DIR" | "ASR_CLOUD_THRESHOLD_SECONDS" | "ASR_CLOUD_TASK_TIMEOUT_SECONDS" | "ASR_CLOUD_JOB_RETENTION_DAYS" | "ASR_MAX_AUDIO_SECONDS" | "LARK_INBOUND_FILE_RETENTION_DAYS"
 > {
   return key === "LARK_APP_ID" ||
     key === "LARK_APP_SECRET" ||
@@ -359,9 +361,10 @@ function isSupportedLarkEnvKey(key: string): key is keyof Pick<
     key === "CCTB_LARK_DEBUG" ||
     key === "TAROCUB_INSTANCE" ||
     key === "CODEX_TELEGRAM_INSTANCE" ||
-    // Explicitly whitelisted executable setting. The extras path admits only
-    // named Kimi API-key variables; all endpoint/home/header/plugin controls
-    // stay reserved so they cannot reconfigure the bridge process.
+    // Explicitly whitelisted executable settings. The extras path admits only
+    // named Kimi API-key variables; DeepSeek and Kimi endpoint/home/header/plugin
+    // controls stay reserved so they cannot reconfigure the bridge process.
+    key === "DSH_EXECUTABLE" ||
     key === "KIMI_EXECUTABLE" ||
     // Long-audio cloud ASR: whitelisted so lark.env stays the operator-facing
     // config surface, while TINGWU_/ASR_ remain reserved on the EXTRAS path (an
@@ -387,6 +390,9 @@ const RESERVED_BRIDGE_ENV_PREFIXES = [
   "LARK_",
   "CODEX_",
   "CLAUDE_",
+  // Harness home, endpoints, and future DSH controls affect the private host
+  // that the bridge starts. Only DSH_EXECUTABLE is admitted by the whitelist.
+  "DSH_",
   // Kimi exposes endpoint, OAuth-host, custom-header, plugin-marketplace,
   // updater, host-check, and model-provider controls under this namespace.
   // Keep the namespace closed by default and allow only the credential keys

@@ -1,7 +1,7 @@
 import type { FailureCategory } from "../runtime/error-classification.js";
 
 export type Locale = "en" | "zh";
-export type EngineName = "codex" | "claude" | "antigravity" | "kimi";
+export type EngineName = "codex" | "claude" | "antigravity" | "kimi" | "deepseek";
 
 function utf16Length(text: string): number {
   return text.length;
@@ -235,7 +235,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     return [
       "Telegram 命令：",
       "/status - 显示引擎、会话和文件任务状态",
-      "/engine [claude|codex|kimi|antigravity] - 切换引擎（切换后需重启实例）",
+      "/engine [claude|codex|kimi|deepseek|antigravity] - 切换引擎（切换后需重启实例）",
       "/effort [low|medium|high|xhigh|max|ultra|off] - 设置推理强度（Codex 5.6：Sol/Terra 支持 ultra，Luna 最高 max）",
       "/fast [on|off|status] - 开关 Codex Fast Mode（更快但消耗更多 credits）",
       "/goal <目标> - 设置默认无上限 goal；用 --budget 50k 加 token 预算，另支持 status/clear",
@@ -251,12 +251,12 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
       "直接发送文件进行分析。支持语音/音视频：短音频走本地 Qwen ASR，长音频在已配置时走通义听悟。",
       "压缩包在摘要后会暂停；回复\"继续分析\"或点击 Continue Analysis 按钮继续。裸 /continue 恢复最近一个等待中的压缩包。",
       "/continue - 恢复最近等待的压缩包",
-      "/resume - Claude/Kimi/Antigravity 扫描并按编号选择；Codex 用 /resume thread <id>；Kimi 也可用 /resume session <id>",
+      "/resume - Claude/Kimi/DeepSeek Harness/Antigravity 扫描并按编号选择；Codex 用 /resume thread <id>；Kimi/DeepSeek 也可用 /resume session <id>",
       "/detach - 优先恢复到 /resume 前的对话；否则断开当前外部 session/thread/conversation",
       "/stop - 立即停止当前任务",
-      "/context - 显示 Claude 上下文用量（仅 Claude；用来决定何时 /compact）",
+      "/context - 显示 Claude 或 DeepSeek Harness 上下文用量（用来决定何时 /compact）",
       "/usage - 显示本实例累计 token 和费用",
-      "/compact - 压缩 Claude/Kimi 会话上下文（其他引擎请用 /reset）",
+      "/compact - 压缩 Claude/Kimi/DeepSeek Harness 会话上下文（其他引擎请用 /reset）",
       "/ultrareview - 代码审查（仅 Claude Opus 4.7+，常配合 /resume 到本地项目使用）",
       "/reset - 清除当前聊天的会话",
       "/help - 显示此帮助",
@@ -265,7 +265,7 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
   return [
     "Telegram commands:",
     "/status - show engine, session, and file task state",
-    "/engine [claude|codex|kimi|antigravity] - switch engine (restart required after changing)",
+    "/engine [claude|codex|kimi|deepseek|antigravity] - switch engine (restart required after changing)",
     "/effort [low|medium|high|xhigh|max|ultra|off] - set reasoning effort (Codex 5.6: Sol/Terra support ultra; Luna tops out at max)",
     "/fast [on|off|status] - toggle Codex Fast Mode (faster, higher credit use)",
     "/goal <goal> - set a goal; default is unbounded unless --budget is provided, plus status/clear",
@@ -281,12 +281,12 @@ export function renderTelegramHelpMessage(locale: Locale = "en"): string {
     "Send files directly to analyze them. Voice/audio/video is supported: short media uses local Qwen ASR; long media uses Aliyun Tingwu when configured.",
     "Archives pause after summary; reply \"继续分析\" or press Continue Analysis to continue this archive. Bare /continue resumes the latest waiting archive.",
     "/continue - resume the latest waiting archive",
-    "/resume - scan/pick Claude, Kimi, or Antigravity sessions; Codex uses /resume thread <id>; Kimi also accepts /resume session <id>",
+    "/resume - scan/pick Claude, Kimi, DeepSeek Harness, or Antigravity sessions; Codex uses /resume thread <id>; Kimi/DeepSeek also accept /resume session <id>",
     "/detach - restore the pre-/resume conversation when available; otherwise detach the current external session/thread/conversation",
     "/stop - immediately stop the current task",
-    "/context - show Claude context fill level (Claude only; helps decide when to /compact)",
+    "/context - show Claude or DeepSeek Harness context fill level (helps decide when to /compact)",
     "/usage - show cumulative token & cost usage for this instance",
-    "/compact - compact Claude/Kimi session context (use /reset for other engines)",
+    "/compact - compact Claude/Kimi/DeepSeek Harness session context (use /reset for other engines)",
     "/ultrareview - dedicated code review (Claude Opus 4.7+ only; usually paired with /resume into a local project)",
     "/reset - clear the current chat session",
     "/help - show this help",
@@ -316,6 +316,7 @@ export function renderTelegramStatusMessage(input: {
       ...(input.engine === "codex" && input.threadId ? [`当前 thread：${input.threadId}`] : []),
       ...(input.engine === "antigravity" && input.threadId ? [`当前 conversation：${input.threadId}`] : []),
       ...(input.engine === "kimi" && input.threadId ? [`当前 Kimi session：${input.threadId}`] : []),
+      ...(input.engine === "deepseek" && input.threadId ? [`当前 DeepSeek Harness session：${input.threadId}`] : []),
       input.taskStateWarning
         ? `阻塞文件任务：未知（${input.taskStateWarning}）`
         : `阻塞文件任务：${blockingTasks}`,
@@ -333,6 +334,7 @@ export function renderTelegramStatusMessage(input: {
     ...(input.engine === "codex" && input.threadId ? [`Current thread: ${input.threadId}`] : []),
     ...(input.engine === "antigravity" && input.threadId ? [`Current conversation: ${input.threadId}`] : []),
     ...(input.engine === "kimi" && input.threadId ? [`Current Kimi session: ${input.threadId}`] : []),
+    ...(input.engine === "deepseek" && input.threadId ? [`Current DeepSeek Harness session: ${input.threadId}`] : []),
     input.taskStateWarning
       ? `Blocking file tasks: unknown (${input.taskStateWarning})`
       : `Blocking file tasks: ${blockingTasks}`,
@@ -425,7 +427,7 @@ function extractDiagnosticHttpTarget(detail: string): string | undefined {
   }
 }
 
-function renderEngineName(engine: EngineName | undefined): "Codex" | "Claude" | "Kimi" | "Antigravity" | undefined {
+function renderEngineName(engine: EngineName | undefined): "Codex" | "Claude" | "Kimi" | "DeepSeek" | "Antigravity" | undefined {
   if (engine === "codex") {
     return "Codex";
   }
@@ -435,13 +437,16 @@ function renderEngineName(engine: EngineName | undefined): "Codex" | "Claude" | 
   if (engine === "kimi") {
     return "Kimi";
   }
+  if (engine === "deepseek") {
+    return "DeepSeek";
+  }
   if (engine === "antigravity") {
     return "Antigravity";
   }
   return undefined;
 }
 
-function inferEngineName(detail: string, target: string | undefined, engine?: EngineName): "Codex" | "Claude" | "Kimi" | "Antigravity" | "Engine" {
+function inferEngineName(detail: string, target: string | undefined, engine?: EngineName): "Codex" | "Claude" | "Kimi" | "DeepSeek" | "Antigravity" | "Engine" {
   const explicitEngineName = renderEngineName(engine);
   if (explicitEngineName) {
     return explicitEngineName;
@@ -456,6 +461,9 @@ function inferEngineName(detail: string, target: string | undefined, engine?: En
   }
   if (normalized.includes("kimi")) {
     return "Kimi";
+  }
+  if (normalized.includes("deepseek") || normalized.includes("dsh")) {
+    return "DeepSeek";
   }
   if (normalized.includes("antigravity") || normalized.includes("agy")) {
     return "Antigravity";

@@ -234,6 +234,8 @@ describe("Lark env files", () => {
         "LARK_DOC_CREATE_AS=someone",
         "TAROCUB_MAX_CONCURRENT_TURNS=999",
         "ANTIGRAVITY_EXECUTABLE=/bad",
+        "DSH_HOME=/tmp/evil-dsh-home",
+        "DSH_API_URL=http://attacker/deepseek",
         "ASR_HTTP_URL=http://bad",
         "TELEGRAM_BOT_USERNAME=x",
         "",
@@ -265,7 +267,8 @@ describe("Lark env files", () => {
         "KIMI_BASE_URL", "KIMI_MODEL_BASE_URL", "KIMI_CODE_CUSTOM_HEADERS",
         "KIMI_CODE_PLUGIN_MARKETPLACE_URL", "KIMI_FUTURE_CONTROL",
         "CCTB_LARK_ACTIVE_INSTANCE", "CODEX_THREAD_ID", "LARK_DOC_CREATE_AS",
-        "TAROCUB_MAX_CONCURRENT_TURNS", "ANTIGRAVITY_EXECUTABLE", "ASR_HTTP_URL", "TELEGRAM_BOT_USERNAME",
+        "TAROCUB_MAX_CONCURRENT_TURNS", "ANTIGRAVITY_EXECUTABLE", "DSH_HOME", "DSH_API_URL",
+        "ASR_HTTP_URL", "TELEGRAM_BOT_USERNAME",
       ]) {
         expect(target[blocked], `${blocked} must not pass through`).toBeUndefined();
         expect(applied).not.toContain(blocked);
@@ -496,7 +499,7 @@ describe("Lark env files", () => {
 });
 
 describe("bridge runtime config keys (whitelisted, not extras)", () => {
-  it("reads and preserves the whitelisted Kimi executable without exposing it as a credential extra", async () => {
+  it("reads and preserves whitelisted Kimi and DeepSeek executables without exposing them as extras", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-env-"));
     const stateDir = path.join(home, ".cctb", "kimiinst");
     await mkdir(stateDir, { recursive: true });
@@ -505,6 +508,7 @@ describe("bridge runtime config keys (whitelisted, not extras)", () => {
       "LARK_APP_ID=cli_x",
       "LARK_APP_SECRET=sek",
       "KIMI_EXECUTABLE=/opt/kimi",
+      "DSH_EXECUTABLE=/opt/dsh",
       "KIMI_API_KEY=credential",
       "",
     ].join("\n"), "utf8");
@@ -513,14 +517,17 @@ describe("bridge runtime config keys (whitelisted, not extras)", () => {
       const selector = { HOME: home, CCTB_LARK_INSTANCE: "kimiinst" };
       const loaded = await loadLarkRuntimeEnv(selector);
       expect(loaded.KIMI_EXECUTABLE).toBe("/opt/kimi");
+      expect(loaded.DSH_EXECUTABLE).toBe("/opt/dsh");
       const target: NodeJS.ProcessEnv = {};
       await expect(applyLarkEnvPassthrough(selector, target)).resolves.toEqual(["KIMI_API_KEY"]);
       expect(target.KIMI_EXECUTABLE).toBeUndefined();
+      expect(target.DSH_EXECUTABLE).toBeUndefined();
       expect(target.KIMI_API_KEY).toBe("credential");
 
       await writeLarkEnvFile(selector, { appId: "cli_x", appSecret: "sek" });
       const rewritten = await readFile(envPath, "utf8");
       expect(rewritten).toContain('KIMI_EXECUTABLE="/opt/kimi"');
+      expect(rewritten).toContain('DSH_EXECUTABLE="/opt/dsh"');
       expect(rewritten).toContain('KIMI_API_KEY="credential"');
     } finally {
       await rm(home, { recursive: true, force: true });

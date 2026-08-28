@@ -10,14 +10,14 @@
   <a href="https://github.com/cloveric/tarocub/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cloveric/tarocub?style=flat-square&color=818cf8" alt="License"></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js >= 20">
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
-  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Kimi Code | Antigravity">
+  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20DeepSeek%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Kimi Code | DeepSeek Harness | Antigravity">
   <img src="https://img.shields.io/badge/channels-Feishu%2FLark%20%7C%20Telegram-2563eb?style=flat-square" alt="Feishu/Lark | Telegram">
 </p>
 
 <h1 align="center">TaroCub</h1>
 
 <p align="center">
-  <strong>A Feishu/Lark-first gateway for Codex, Claude Code, Kimi Code, and Antigravity running on your own machine.</strong><br>
+  <strong>A Feishu/Lark-first gateway for Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity running on your own machine.</strong><br>
   TaroCub runs real CLI agents on your own machine, then gives them durable chat surfaces, files, sessions, tasks, cron, audit logs, and multi-agent workflows.<br>
   Resume local sessions anytime from your phone, whether you are at your desk, commuting, or walking the dog.
 </p>
@@ -33,7 +33,7 @@
 
 ## What This Is
 
-`TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, Kimi Code, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface in Feishu/Lark, with Telegram retained as an optional compatibility channel.
+`TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface in Feishu/Lark, with Telegram retained as an optional compatibility channel.
 
 > **Feishu/Lark is the primary platform.** The maintainer has not used Telegram as a day-to-day control surface for a long time. Telegram remains available for existing deployments, but new installations should start with Feishu/Lark.
 
@@ -45,7 +45,7 @@ It is built for people who already use CLI agents heavily and want:
 - optional phone-first Telegram operation for existing personal-bot deployments;
 - durable state for sessions, cron jobs, file delivery, usage, timelines, audit logs, and multi-agent routing.
 
-The intended setup flow is agent-assisted: clone the repo, open it in Codex, Claude Code, Kimi Code, or Antigravity, and ask the agent to configure the bridge for you. The CLI exists so your local agent can do the boring setup work instead of making you hand-edit every file.
+The intended setup flow is agent-assisted: clone the repo, open it in Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity, and ask the agent to configure the bridge for you. The CLI exists so your local agent can do the boring setup work instead of making you hand-edit every file.
 
 The old long README is preserved as [Full Reference](./docs/full-reference.md). This landing page is intentionally short.
 
@@ -53,7 +53,7 @@ The old long README is preserved as [Full Reference](./docs/full-reference.md). 
 
 ### Recommended: ask your local agent to configure it
 
-Open this repository in Codex, Claude Code, Kimi Code, or Antigravity and say:
+Open this repository in Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity and say:
 
 ```text
 Read the README and configure TaroCub for me.
@@ -93,7 +93,7 @@ npm run dev -- telegram yolo unsafe
 npm run dev -- telegram service start
 ```
 
-`telegram yolo unsafe` maps to `approvalMode: "bypass"`: Codex uses its bypass sandbox mode, Claude Code/Antigravity use their unsafe skip-permissions modes, and Kimi selects ACP `auto` mode. Treat it as equivalent to bypassing normal approval prompts and local sandbox controls.
+`telegram yolo unsafe` maps to `approvalMode: "bypass"`: Codex uses its bypass sandbox mode, Claude Code/Antigravity use their unsafe skip-permissions modes, Kimi selects ACP `auto`, and DeepSeek selects Harness `danger-full-access`. Treat it as equivalent to bypassing normal approval prompts and local sandbox controls.
 
 Send any message to the bot. It will reply with a pairing code:
 
@@ -113,13 +113,13 @@ npm run dev -- telegram access pair <pairing-code>
 
 | Highlight | Why it matters |
 |---|---|
-| **Real CLI engines, not a fake chat backend** | Codex, Claude Code, Kimi Code, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
-| **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, Kimi ACP sessions, and Antigravity conversations can be attached from chat and detached later. Bindings and resumed workspace roots are scoped to the private chat, group, or topic that created them, so another conversation cannot silently switch projects. |
-| **Mid-turn steering** | While a Codex turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it (`turn/steer`) so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
+| **Real CLI engines, not a fake chat backend** | Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
+| **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, Kimi ACP sessions, DeepSeek Harness sessions, and Antigravity conversations can be attached from chat and detached later. Bindings and resumed workspace roots are scoped to the private chat, group, or topic that created them, so another conversation cannot silently switch projects. |
+| **Mid-turn steering** | While a Codex or DeepSeek turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
 | **Optional Telegram control plane** | Existing deployments can still send files and screenshots, record voice messages, approve work, stop turns, inspect status, and operate multiple personal bots. |
-| **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer, and reports sanitized MCP startup failures instead of silently losing tools. |
-| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources, plus recordings forwarded as ordinary files/documents, are downloaded and transcribed automatically before any Claude/Codex/Kimi/Antigravity adapter runs. Media documents are recognized from their declared name or downloaded path, so Telegram files without `file_name` still work. Short audio uses local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription, with chunked local fallback on cloud failure. If bridge transcription is unavailable, the original media file remains attached with an explicit fallback note instead of being silently treated as already transcribed. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
+| **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer. Kimi preserves ACP task/review lifecycles, while DeepSeek replays ordered Harness history/projections and preserves native Goal/background-job ownership across reconnects. |
+| **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources, plus recordings forwarded as ordinary files/documents, are downloaded and transcribed automatically before any Claude/Codex/Kimi/DeepSeek/Antigravity adapter runs. Media documents are recognized from their declared name or downloaded path, so Telegram files without `file_name` still work. Short audio uses local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription, with chunked local fallback on cloud failure. If bridge transcription is unavailable, the original media file remains attached with an explicit fallback note instead of being silently treated as already transcribed. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
 | **Agent Bus** | Multiple bot instances can call each other as local workers for delegation, fan-out, chain, verifier, and coordinator-led crew workflows. |
@@ -134,12 +134,12 @@ npm run dev -- telegram access pair <pairing-code>
 
 | Feature | Feishu/Lark | Telegram | Local CLI |
 |---|---:|---:|---:|
-| Codex / Claude Code / Kimi Code / Antigravity engines | Yes | Yes | Yes |
+| Codex / Claude Code / Kimi Code / DeepSeek Harness / Antigravity engines | Yes | Yes | Yes |
 | Session resume / detach | Yes | Yes | Yes |
 | Voice, audio, and video ASR | Yes | Yes | Inspect/debug |
 | File and image delivery | Yes | Yes | `lark send` / `telegram send` |
 | Stop and approvals | Interactive cards | Inline buttons | Service controls |
-| Mid-turn steering + `/q` queue escape | Yes (Codex engine) | Planned | Native in Codex CLI |
+| Mid-turn steering + `/q` queue escape | Yes (Codex and DeepSeek) | Planned | Native in the corresponding CLI |
 | Plan Mode-style choices | Rich choice cards | Sequential buttons, including multi-select | Tool/debug path |
 | Cron reminders and agent jobs | Yes | Yes | Manage/list/run |
 | Board durable tasks | Yes | Yes | Inspect/export |
@@ -230,14 +230,43 @@ The current Kimi ACP surface still does not expose structured per-turn token/cos
 usage, mid-turn steering, a direct client-supplied system-prompt field, or a
 `/goal` command; TaroCub reports those gaps instead of simulating support. See
 [Kimi Engine Notes](./docs/kimi-engine-notes.md) for protocol evidence and the
-[Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for the four-engine
-release contract.
+[Kimi Capability Matrix](./docs/kimi-capability-matrix.md) for Kimi's
+cross-engine release contract.
 
 Telegram renders structured `AskUserQuestion` requests in one editable inline
 flow: multiple questions advance sequentially, while multi-select questions use
 toggle buttons plus an explicit Submit action. Kimi's current ACP permission
 protocol still advertises only one single-choice question at a time; the richer
 flow applies when an engine such as Claude supplies it.
+
+### DeepSeek Harness engine
+
+Select DeepSeek in either channel with `/engine deepseek` (or use
+`telegram engine deepseek --instance <name>`). Install and authenticate `dsh`
+first; TaroCub resolves `DSH_EXECUTABLE` and otherwise uses `dsh` from `PATH`.
+The verified compatibility baseline is **DeepSeek Harness 0.1.1-rc.2**.
+
+TaroCub owns a private loopback-only `dsh web --no-open --host 127.0.0.1
+--port 0` process per bot instance and uses Harness's official HTTP RPC plus
+event WebSockets. Credentials and profiles are linked from the configured
+`DSH_HOME`, while mutable settings and bridge instructions remain isolated in
+the instance state directory. A crashed host is restarted and active sessions
+recover from ordered history/projection watermarks; incomplete or malformed
+recovery fails closed rather than silently skipping events.
+
+The adapter supports streamed text/reasoning/tools, correlated tool results,
+per-tool and session approvals, structured `AskUserQuestion`, `/stop`, Lark
+mid-turn steering, `/compact`, `/context`, model/effort selection, native
+durable Goals (including token budgets), background-job review, session
+scan/resume/detach, files, and image payloads. Image transport is implemented,
+but actual vision support is determined by the selected Harness model; the
+tested default `deepseek-v4-flash` rejected image input with
+`MODEL_DOES_NOT_SUPPORT_IMAGES`.
+
+Harness reports structured token usage but not per-turn USD cost, so dollar
+budgets cannot constrain DeepSeek turns. `/ultrareview` remains a Claude-only
+workflow. See [DeepSeek Harness Engine](./docs/deepseek-harness-engine.md) for
+the verified capability and limitation matrix.
 
 ## Lark Setup
 
@@ -350,9 +379,9 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | `/status` | Current engine, session binding, runtime state |
 | `/stop` | Stop the running task (queued tasks cancel from their queue card) |
 | `/reset` | Reset the chat/session binding |
-| `/resume [n]` · `/resume thread <id>` · `/resume session <id>` · `/resume conversation <id>` | Resume Claude sessions / bind a Codex thread / a Kimi ACP session / an Antigravity conversation |
+| `/resume [n]` · `/resume thread <id>` · `/resume session <id>` · `/resume conversation <id>` | Resume Claude/Kimi/DeepSeek sessions / bind a Codex thread / an Antigravity conversation |
 | `/detach` | Detach the resumed session/thread/conversation |
-| `/goal <objective>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | Conversation goal (autonomous pursuit on Codex) |
+| `/goal <objective>` · `/goal --budget <n> …` · `/goal status` · `/goal clear` | Conversation goal (structured native pursuit on Codex and DeepSeek; native CLI goal on Claude/Antigravity) |
 | `/btw <question>` | Isolated side question on a fresh temporary session; it neither changes nor inherits the current session |
 | `/q <message>` (alias `/queue`) | **Lark** — force a queued turn (skip mid-turn steering) |
 | `/steer [on\|off\|<seconds>\|unlimited\|default\|status]` | **Lark** — mid-turn steering eligibility window (default 30s; past it messages queue; accepts `5m` minutes, `0`=unlimited) |
@@ -364,13 +393,13 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 | Command | What it does |
 |---|---|
 | `/config` | **Lark** — interactive settings card (recommended) |
-| `/engine [claude\|codex\|kimi\|antigravity]` | Inspect/switch backend engine |
-| `/model [name\|off]` | Inspect/set engine model. Claude has named choices; Kimi accepts provider-advertised model IDs and validates them through ACP on the next turn |
+| `/engine [claude\|codex\|kimi\|deepseek\|antigravity]` | Inspect/switch backend engine |
+| `/model [name\|off]` | Inspect/set engine model. Claude has named choices; Kimi and DeepSeek accept provider/model IDs advertised by their native protocols |
 | `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Reasoning effort (model-dependent) |
 | `/fast [on\|off\|status]` | Codex Fast Mode |
 | `/yolo [on\|off\|unsafe\|status]` | **Lark** — approval mode (Telegram sets it from the CLI: `telegram yolo …`) |
 | `/stream [on\|off]` | **Lark** — typewriter streaming for answer cards |
-| `/timeout [on\|off]` | Single-turn 60-min cap (`off` = lift for long tasks) |
+| `/timeout [on\|off]` | Toggle the current engine's hard-cap/inactivity safeguards; `/timeout status` explains the exact engine policy |
 | `/usage` | Cumulative usage for this instance |
 | `/account` | **Lark** — bound Feishu app |
 
@@ -401,8 +430,8 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 
 | Command | What it does |
 |---|---|
-| `/context` | Claude context details |
-| `/compact` | Compact Claude or Kimi session context |
+| `/context` | Claude or DeepSeek context details |
+| `/compact` | Compact Claude, Kimi, or DeepSeek session context |
 | `/ultrareview` | Deep code review (Claude only) |
 | `/approve [session\|turn\|always]` · `/approve <request-id>` | Text fallback when approval buttons are unavailable |
 | `/deny` · `/deny <request-id>` | Deny a pending tool call (there is no `/deny session` form) |
@@ -413,7 +442,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 
 ## Long-audio Cloud ASR
 
-Short audio is transcribed by the local Qwen ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to chunked local transcription. Recordings sent as ordinary Telegram documents or Lark files enter the same router based on their declared filename or downloaded path. This routing runs at the channel layer, before engine selection, so Claude, Codex, Kimi, and Antigravity receive the same transcript behavior. A promoted media file whose transcription fails or returns empty is still passed to the engine with an explicit bridge fallback note. `/stop` aborts the bridge-side local HTTP wait or terminates CLI/chunking/cloud work, and never starts a fallback after cancellation. The local HTTP server may still finish an already-running model kernel before it notices that its client disconnected.
+Short audio is transcribed by the local Qwen ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to chunked local transcription. Recordings sent as ordinary Telegram documents or Lark files enter the same router based on their declared filename or downloaded path. This routing runs at the channel layer, before engine selection, so Claude, Codex, Kimi, DeepSeek, and Antigravity receive the same transcript behavior. A promoted media file whose transcription fails or returns empty is still passed to the engine with an explicit bridge fallback note. `/stop` aborts the bridge-side local HTTP wait or terminates CLI/chunking/cloud work, and never starts a fallback after cancellation. The local HTTP server may still finish an already-running model kernel before it notices that its client disconnected.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -424,7 +453,7 @@ Short audio is transcribed by the local Qwen ASR. Audio/video at or above the th
 
 **Where to set them.** On Lark, put them in `~/.cctb/<instance>/lark.env` — they are read through the *whitelisted config channel* (`loadLarkRuntimeEnv`, the same one that carries `LARK_APP_ID`), and a service start preserves them when it regenerates the file. They can also be exported in the service process environment, which wins over the file.
 
-Note the distinction inside `lark.env`: these four ride the **whitelist**, not the *extras passthrough*. The passthrough (which forwards engine credentials such as `IFIND_TOKEN` into the engine child) refuses every reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `KIMI_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — precisely because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*), so an engine-written extra can never redirect it. The only `KIMI_` extras admitted are the explicit credential allowlist: `KIMI_API_KEY`, `KIMI_MODEL_API_KEY`, `KIMI_REGISTRY_API_KEY`, `KIMI_WEB_FETCH_API_KEY`, and `KIMI_WEB_SEARCH_API_KEY`; endpoint, OAuth-host, custom-header, home, marketplace, and future unknown controls remain blocked. A refused extra is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`.
+Note the distinction inside `lark.env`: these four ride the **whitelist**, not the *extras passthrough*. The passthrough (which forwards engine credentials such as `IFIND_TOKEN` into the engine child) refuses every reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `DSH_`, `KIMI_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — precisely because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*), so an engine-written extra can never redirect it. `DSH_EXECUTABLE` is an explicit bridge-config whitelist key; `DSH_HOME`, endpoints, and future Harness controls remain blocked from extras. The only `KIMI_` extras admitted are the explicit credential allowlist: `KIMI_API_KEY`, `KIMI_MODEL_API_KEY`, `KIMI_REGISTRY_API_KEY`, `KIMI_WEB_FETCH_API_KEY`, and `KIMI_WEB_SEARCH_API_KEY`; endpoint, OAuth-host, custom-header, home, marketplace, and future unknown controls remain blocked. A refused extra is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`.
 
 **Secrets stay outside any engine workspace.** The Tingwu script loads its own Aliyun credentials from its `.env.local`; the bridge never reads, copies, or logs them. Keep that directory **outside** every engine workspace — the convention on this machine is `~/.tarocub-secrets/tingwu_asr` — so an agent working in `~/.cctb/<instance>/workspace` cannot read, commit, or exfiltrate the credentials.
 

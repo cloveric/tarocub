@@ -9,6 +9,7 @@ import type {
   CodexThreadGoal,
   EngineApprovalDecision,
   EngineApprovalRequest,
+  EngineContextUsage,
   EngineStreamEvent,
 } from "../codex/adapter.js";
 import type { BridgeAccessDecision } from "../runtime/bridge.js";
@@ -164,6 +165,12 @@ export interface LarkBridgeLike {
     title?: string;
     updatedAt?: string;
   }>>;
+  getContextUsage?(input: {
+    chatId: number;
+    messageThreadId?: number;
+    conversationKey?: string;
+    workspaceOverride?: string;
+  }): Promise<EngineContextUsage | null>;
   steerActiveTurn?(input: {
     chatId: number;
     messageThreadId?: number;
@@ -195,6 +202,7 @@ export interface LarkBridgeLike {
     tokenBudget?: number | null;
     workspaceOverride?: string;
     onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+    onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
     abortSignal?: AbortSignal;
   }): Promise<{ goal: CodexThreadGoal | null }>;
   clearThreadGoal?(input: {

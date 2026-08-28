@@ -10,31 +10,29 @@ TaroCub is a local-first bridge that connects Telegram and Feishu/Lark chats to 
 
 Each running instance is a small service process with:
 
-- one Telegram bot token
+- one Feishu/Lark app binding or optional Telegram bot token
 - one instance state directory
-- one configured engine (`codex`, `claude`, or `antigravity`)
+- one configured engine (`codex`, `claude`, `kimi`, `deepseek`, or `antigravity`)
 - one access policy
 - one local session map
 - optional participation in a local Agent Bus mesh
 
-The bridge does not reimplement the model API. It delegates execution to native CLIs and adapts their behavior into Telegram-friendly request, session, and file-delivery flows.
+The bridge does not reimplement the model API. It delegates execution to native CLIs and adapts their behavior into channel-neutral request, session, and file-delivery flows, with Feishu/Lark as the primary surface and Telegram as an optional compatibility channel.
 
 ## System Model
 
 At a high level, one instance looks like this:
 
 ```text
-Telegram Update
-  -> src/index.ts
-  -> src/service.ts polling + lifecycle
-  -> src/telegram/update-normalizer.ts
-  -> src/telegram/delivery.ts
+Lark event or Telegram update
+  -> src/lark/service.ts or src/index.ts
+  -> channel normalization / delivery
   -> src/runtime/bridge.ts
   -> src/runtime/session-manager.ts
   -> src/codex/* adapter
-  -> Codex / Claude / Antigravity CLI
+  -> Codex / Claude / Kimi / DeepSeek Harness / Antigravity CLI
   -> result + files
-  -> Telegram reply + state updates
+  -> channel reply + state updates
 ```
 
 If bus is enabled, another local path exists:
@@ -119,12 +117,19 @@ Current adapters:
 - `CodexAppServerAdapter`
 - `ProcessClaudeAdapter`
 - `ClaudeStreamAdapter` for streaming-oriented Claude behavior
+- `KimiAcpAdapter` for persistent Kimi ACP sessions and detached-task hooks
+- `DeepSeekHarnessAdapter` over a private, supervised `dsh web` host
+- `ProcessAntigravityAdapter`
 
-The adapter interface is intentionally narrow:
+The base adapter interface stays channel-neutral while exposing optional native
+capabilities:
 
 - send a message
 - return text, session identity, and optional usage
 - expose bridge instruction mode differences
+- stop/steer active work where the engine supports it
+- validate and list resumable external sessions
+- read context pressure and structured Goals where available
 
 This is a good boundary. It keeps Telegram and state logic from directly depending on provider-specific CLI quirks.
 
@@ -178,7 +183,7 @@ Today, instance isolation means:
 - separate bridge/session state
 - separate workspace and inbox
 
-It does **not** fully mean separate engine-global state anymore. Claude and Codex auth/config homes may be shared with the user's main CLI, by design, to avoid auth-refresh races.
+It does **not** fully mean separate engine-global state anymore. Claude and Codex auth/config homes may be shared with the user's main CLI, by design, to avoid auth-refresh races. DeepSeek uses a private per-instance writable `DSH_HOME`, but links the authenticated shared credentials/profiles while copying mutable settings; Kimi similarly retains its native user-level auth/plugins.
 
 That trade-off should remain explicit whenever we discuss "isolation".
 

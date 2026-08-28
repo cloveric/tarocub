@@ -55,6 +55,7 @@ const pendingApprovals = new Map<string, PendingApproval>();
 function renderEngineRequestName(engine: EngineApprovalRequest["engine"]): string {
   if (engine === "codex") return "Codex";
   if (engine === "kimi") return "Kimi Code";
+  if (engine === "deepseek") return "DeepSeek Harness";
   if (engine === "antigravity") return "Antigravity";
   return "Claude Code";
 }
@@ -62,6 +63,7 @@ function renderEngineRequestName(engine: EngineApprovalRequest["engine"]): strin
 function renderEngineResumeName(engine: EngineApprovalRequest["engine"]): string {
   if (engine === "codex") return "Codex";
   if (engine === "kimi") return "Kimi";
+  if (engine === "deepseek") return "DeepSeek Harness";
   if (engine === "antigravity") return "Antigravity";
   return "Claude";
 }

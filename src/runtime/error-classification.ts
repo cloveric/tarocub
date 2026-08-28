@@ -40,7 +40,7 @@ function normalizeErrorText(error: unknown): string {
   return String(error);
 }
 
-const NAMED_ENGINE_RE = /(?:^|[^a-z0-9_./-])(?:codex|claude|kimi|antigravity|agy)(?=$|[^a-z0-9_./-])/;
+const NAMED_ENGINE_RE = /(?:^|[^a-z0-9_./-])(?:codex|claude|kimi|deepseek|dsh|antigravity|agy)(?=$|[^a-z0-9_./-])/;
 const ENGINE_RUNTIME_RE =
   /\b(?:runtime|process|spawn|adapter|binary|cli|app-server|startup|start|starting|transport|stream|session|turn|exited|exit code)\b/;
 const ENGINE_FAILURE_RE = /\b(?:failed|failure|error|crash|crashed|timeout|timed out|disconnected)\b/;

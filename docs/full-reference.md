@@ -13,12 +13,12 @@
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square&logo=node.js&logoColor=white" alt="Windows | macOS | Linux">
-  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude | Kimi | Antigravity">
+  <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20DeepSeek%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude | Kimi | DeepSeek | Antigravity">
   <img src="https://img.shields.io/badge/tests-Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest">
 </p>
 
 <h3 align="center">
-  TaroCub runs Codex, Claude Code, Kimi Code, and Antigravity locally, then lets you control them from Telegram and Feishu/Lark.<br>
+  TaroCub runs Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity locally, then lets you control them from Feishu/Lark and optional Telegram.<br>
   Resume desktop sessions from your phone, move files both ways, run scheduled work, and expose the same bridge through team chat.
 </h3>
 
@@ -28,11 +28,11 @@
 
 ## Start Here
 
-**TaroCub is not another hosted agent UI.** It runs the real Codex, Claude Code, Kimi Code, and Antigravity CLIs on your machine, then gives them durable Telegram and Feishu/Lark surfaces: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
+**TaroCub is not another hosted agent UI.** It runs the real Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity CLIs on your machine, then gives them durable Feishu/Lark and optional Telegram surfaces: access control, file delivery, voice transcription, scheduled tasks, session resume, multi-bot routing, and auditable long-running work.
 
 This project was formerly named `cc-telegram-bridge`. The canonical repository is now `cloveric/tarocub`; GitHub redirects the old URL, and existing state directories plus the `cctb` shorthand remain supported for compatibility.
 
-The easiest setup path is to clone this repo, open it in Codex, Claude Code, Kimi Code, or Antigravity, and tell the agent: *"read the README and configure a Telegram bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
+The easiest setup path is to clone this repo, open it in Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity, and tell the agent: *"read the README and configure a Feishu/Lark bot for me"*. The bridge is designed to be installed and operated by the same CLI agents it exposes.
 
 ```bash
 npm install
@@ -50,8 +50,8 @@ Then send a message to the bot, run the pairing command it gives you, and contin
 
 | Capability | What it means in practice |
 |---|---|
-| **Remote control for real CLIs** | Put Codex, Claude Code, Kimi Code, or Antigravity on Telegram without wrapping them in a fake chat backend. |
-| **Session continuity** | Resume local Claude or Kimi sessions, attach Codex threads, and bind Antigravity conversations from your phone, then continue on desktop later. |
+| **Remote control for real CLIs** | Put Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity on Feishu/Lark or Telegram without wrapping them in a fake chat backend. |
+| **Session continuity** | Resume local Claude, Kimi, or DeepSeek sessions, attach Codex threads, and bind Antigravity conversations from your phone, then continue on desktop later. |
 | **Multimodal Telegram I/O** | Send files, images, generated artifacts, voice messages, and audio documents through one bridge protocol. |
 | **Durable operations** | Keep cron jobs, audit logs, timeline logs, usage tracking, access checks, and service restart tooling outside model memory. |
 | **Source-traceable research** | Use the optional Brave/Tavily MCP for `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
@@ -176,7 +176,7 @@ Fenced `tool-call` blocks can also use the same bridge-managed choice renderer f
 {"name":"request_user_input","payload":{"questions":[{"header":"Direction","id":"direction","question":"What next?","options":[{"label":"Continue","description":"Keep the current plan and proceed."},{"label":"Rewrite","description":"Change direction before coding."}]}]}}
 ```
 
-Use `lark.choice` or `request_user_input` for ordinary “pick one option” workflows, including Plan Mode-style choices where Codex/Claude asks the user to pick a direction before continuing. Long option text belongs in `label`/`description`; the bridge renders each option as a readable section and keeps the actual button short (`Choose` / `选择`) so Feishu mobile clients do not truncate the decision text. Use raw `lark.card` only when you need a custom Card 2.0 layout.
+Use `lark.choice` or `request_user_input` for ordinary “pick one option” workflows, including Plan Mode-style choices where an engine asks the user to pick a direction before continuing. Long option text belongs in `label`/`description`; the bridge renders each option as a readable section and keeps the actual button short (`Choose` / `选择`) so Feishu mobile clients do not truncate the decision text. Use raw `lark.card` only when you need a custom Card 2.0 layout.
 
 For raw `lark.card` payloads, bridge decorates ordinary button elements with Card 2.0 `behaviors: [{type:"callback", value: ...}]` routing metadata when a conversation is available. If you already provide callback metadata, that explicit payload is preserved.
 
@@ -252,7 +252,7 @@ default and requires a Feishu capability the app may not have.**
 
 | This project is | This project is not |
 |---|---|
-| A local bridge that exposes existing Codex, Claude Code, Kimi Code, and Antigravity installations through Telegram and optionally Feishu/Lark. | A hosted SaaS agent platform or a replacement for Codex/Claude Code/Kimi Code/Antigravity. |
+| A local bridge that exposes existing Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity installations through Feishu/Lark and optional Telegram. | A hosted SaaS agent platform or a replacement for those native CLIs. |
 | A control plane for sessions, files, approvals, scheduled tasks, and multi-agent routing. | A model provider, inference server, or standalone LLM runtime. |
 | A practical ops layer for people who already use CLI agents heavily. | A generic chatbot framework for every messaging platform. |
 | A place to keep delivery receipts, audit trails, and task state out of fragile prompts. | A promise that models will always finish tasks correctly without review. |
@@ -261,7 +261,7 @@ default and requires a Feishu capability the app may not have.**
 
 | Workflow | Entry point |
 |---|---|
-| **Personal mobile copilot** — talk to your local Codex/Claude/Kimi/Antigravity while away from the computer. | [Quick Start](#quick-start), [Session Resume](#session-resume-codex-threads-kimi-sessions-and-antigravity-conversations) |
+| **Personal mobile copilot** — talk to your local Codex/Claude/Kimi/DeepSeek/Antigravity while away from the computer. | [Quick Start](#quick-start), [Session Resume](#session-resume-codex-threads-kimi-sessions-deepseek-sessions-and-antigravity-conversations) |
 | **Research assistant** — search, extract exact URLs, preserve source logs, and return files to Telegram. | [Search MCP](#live-web-search-mcp-brave--tavily), [File Delivery](#file-delivery-from-agent-tasks) |
 | **Topic-based mini crew** — use Telegram forum topics as planner/writer/reviewer peers in one group. | [Mini Bus](#mini-bus-topic-to-topic-workflows), [Telegram Groups And Topics](#telegram-groups-and-topics) |
 | **Durable project board** — keep tasks, dependencies, runs, WIP limits, and review gates outside model context. | [Board](#board-durable-kanban-tasks) |
@@ -303,10 +303,10 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 ## Why This Bridge
 
-- **Native CLI first.** The bridge runs the real Codex, Claude Code, Kimi Code, and Antigravity CLIs, so local auth, project files, approvals, and engine-specific behavior remain the same as on your desktop.
-- **Resume desktop work from anywhere.** Pick up an existing local Codex, Claude Code, or Kimi Code session from Telegram, send files or instructions while away, then continue the same project back on the desktop. Antigravity conversations are auto-bound after a successful turn and can also be attached with `/resume conversation <id>`.
+- **Native CLI first.** The bridge runs the real Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity CLIs, so local auth, project files, approvals, and engine-specific behavior remain the same as on your desktop.
+- **Resume desktop work from anywhere.** Pick up an existing local Codex, Claude Code, Kimi Code, or DeepSeek Harness session from chat, send files or instructions while away, then continue the same project back on the desktop. Antigravity conversations can also be attached with `/resume conversation <id>`.
 - **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation. Topic peers can also be composed into a Mini Bus for same-group fan-out, chain, verify, or crew workflows, while `/board` keeps durable Kanban task state outside model memory.
-- **Multi-engine without separate playbooks.** Each bot can choose Codex, Claude, Kimi, or Antigravity while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
+- **Multi-engine without separate playbooks.** Each bot can choose Codex, Claude, Kimi, DeepSeek, or Antigravity while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
 - **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
 - **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
 - **Receipts over claims.** File delivery and scheduled-task creation produce structured accepted/rejected receipts, so "done" only counts when the bridge actually delivered or scheduled something.
@@ -314,9 +314,9 @@ Use `--force` only for instances with a custom transport block you intentionally
 
 ---
 
-## Multi Engine: Codex + Claude Code + Kimi Code + Antigravity
+## Multi Engine: Codex + Claude Code + Kimi Code + DeepSeek Harness + Antigravity
 
-Each bot instance can run **OpenAI Codex**, **Claude Code**, **Kimi Code**, or **Antigravity CLI** as its backend. Switch engines per-instance with one command:
+Each bot instance can run **OpenAI Codex**, **Claude Code**, **Kimi Code**, **DeepSeek Harness**, or **Antigravity CLI** as its backend. Switch engines per-instance with one command:
 
 ```powershell
 # Set an instance to use Claude Code
@@ -328,6 +328,9 @@ npm run dev -- telegram engine codex --instance helper-bot
 # Set another to use Kimi Code
 npm run dev -- telegram engine kimi --instance kimi-bot
 
+# Set another to use DeepSeek Harness
+npm run dev -- telegram engine deepseek --instance deepseek-bot
+
 # Set another to use Antigravity
 npm run dev -- telegram engine antigravity --instance agy-bot
 
@@ -337,21 +340,29 @@ npm run dev -- telegram engine --instance review-bot
 
 Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in the explicit `bypass` mode, because `agy --print` is non-interactive in Telegram. Antigravity model selection is still owned by the native interactive CLI. `agy --print` does not run the interactive `/model` parser, so Telegram `/model` is handled locally with an explanation instead of being forwarded as a chat prompt. Set the model in local interactive `agy` until the CLI exposes a non-interactive model API.
 
-| Feature | Codex Engine | Claude Engine | Kimi Engine | Antigravity Engine |
-|---|---|---|---|---|
-| CLI command | Persistent `codex app-server` by default (`codex exec --json` remains the optional process runtime) | Persistent `claude -p --input-format stream-json --output-format stream-json` worker | Persistent `kimi acp` | `agy --print` |
-| Session resume | `codex exec resume --json <id>` | `claude -p -r <session-id>` | `/resume` lists native ACP sessions; `/resume session <id>` validates with `session/load` and resumes in the original real-path workspace | Auto-binds the first logged conversation; `/resume` scans recent agy logs; `/resume conversation <id>` uses `agy --conversation` |
-| Project instructions | `agent.md` (prepended to prompt) | `agent.md` appended to Claude's system prompt + `CLAUDE.md` auto-loaded from workspace | Bot-owned workspaces use a native `.kimi-code/agents/agent.md` main-agent override while preserving `${base_prompt}` and `${plugin_sections}`; external workspaces are not modified and use a text-turn fallback | `agent.md` (prepended to prompt) |
-| Streaming / early delivery | App-server events feed timeline and early file delivery; final `turn/completed.items` is authoritative before the `thread/read` fallback | Claude stream events feed timeline and early file delivery; `--forward-subagent-text` routes child text to its parent tool panel, and sanitized `mcp_server_errors` remain visible | ACP session updates feed the timeline, tool state, questions, and early delivery | stdout chunks feed timeline and early file delivery when `agy --print` streams output |
-| Background tasks | Structured runtime task events | Structured runtime task events | Kimi 0.32+ observer hooks retain the ACP worker and protect restarts; Kimi 0.33 task-origin review streams and automatic retries are aggregated into one final user result, while intermediate failures stay timeline-only; accepted Hook events drain before fallback/shutdown, and `SessionHeartbeat` is never treated as progress | Process-local only |
-| Telegram approval when YOLO is off | Pre-approve the turn, then run that turn with `--full-auto` | Inline approval buttons for Claude permission prompts | ACP permission requests become native channel buttons; ACP question options remain distinct from approvals | Pre-approve the turn, then run that turn with `--dangerously-skip-permissions` |
-| YOLO mode | `--full-auto` / `--dangerously-bypass-approvals-and-sandbox` | `--permission-mode bypassPermissions` / `--dangerously-skip-permissions` | `full-auto` maps to ACP `yolo`; unsafe/bypass maps to ACP `auto` | `--dangerously-skip-permissions` |
-| `/goal` | Bridge-native goal API; defaults to no token budget unless `--budget` is provided | Passes through to Claude Code's native `/goal`; `--budget` becomes a native goal hint | Still not exposed by Kimi ACP 0.33.0; rejected explicitly instead of being sent as ordinary text | Passes through to Antigravity's native `/goal`; `--budget` becomes a native goal hint |
-| `/model` | Bridge config passed to Codex startup | Bridge config passed to Claude startup | Applied through ACP-advertised configuration values on the next turn | Not available from Telegram in `agy --print`; use local interactive `agy /model` |
-| `/compact` | Not needed (each exec is stateless) | Compresses session context to reduce token usage | Forwarded as Kimi's native slash command | Not supported by the bridge yet |
-| Skills / plugins / MCP | Uses the configured Codex home; isolated homes link `skills/` to the shared Codex skills dir | Uses shared Claude config plus workspace `CLAUDE.md`, skills, plugins, and native MCP | Keeps Kimi's native `~/.agents/skills`, project skills, plugins, and MCP; bot workspaces also expose `~/.codex/skills`, and TaroCub injects Search MCP on ACP new/load. Kimi 0.33 optional Computer Use/WebBridge plugins require local TUI installation because ACP does not expose `/plugins` | Uses Antigravity's native CLI/plugin config; do not import other engines' native plugins unless explicitly chosen |
-| Working directory | Instance `workspace/`, or the validated resumed thread workspace | Instance `workspace/` | Instance `workspace/`, or the authoritative real-path `cwd` returned by ACP for a resumed session | Instance `workspace/` |
-| Idle workers | App-server stays warm and is reaped by service lifecycle | Stream workers are reaped after 2 hours idle; sessions remain resumable | Persistent ACP workers are reaped after 2 hours idle unless they retain a background task; sessions remain resumable | Process exits after each turn |
+| Feature | Codex | Claude | Kimi | DeepSeek | Antigravity |
+|---|---|---|---|---|---|
+| Protocol | Persistent app-server or process runtime | Persistent stream-json worker | Persistent `kimi acp` | Private supervised `dsh web` with official HTTP RPC and WebSockets | `agy --print` |
+| Session resume | Explicit validated thread binding | `/resume` scan/pick | Native ACP scan and `/resume session <id>` | Native Harness scan and `/resume session <id>` with authoritative cwd validation | Logged conversation scan and explicit conversation binding |
+| Project instructions | `agent.md` prompt injection | System prompt + workspace `CLAUDE.md` | Native `.kimi-code/agents/agent.md` in bot workspaces | Private per-instance `DSH_HOME/AGENTS.md` | `agent.md` prompt injection |
+| Streaming / tools | Native events and authoritative completion items | Native stream events | ACP text/reasoning/tools/approvals | Native text/reasoning/tools/results/usage | stdout chunks |
+| Background tasks | Structured lifecycle | Structured lifecycle | Observer Hooks plus review/retry aggregation | `session/jobs` plus review grace and exactly-once final result | Process-local only |
+| Approvals / questions | App-server sandbox or turn pre-approval | Per-tool approvals and structured questions | ACP per-tool approval; current question surface is single-choice | Once/session approvals; multiple, multi-select, and free-text questions | Turn pre-approval |
+| YOLO | Full-auto or bypass | Bypass permission mode | ACP `yolo` / `auto` | Harness workspace sandbox or `danger-full-access` | Unsafe skip-permissions |
+| `/goal` | Structured Goal API | Native command | Explicitly unsupported by current ACP | Native durable Goal, persisted optional token budget, restart re-arm | Native command |
+| `/steer` | Native mid-turn injection | Not exposed | Not exposed by ACP | Native `session.steer` | Not exposed |
+| `/model` / effort | Bridge/runtime config | Bridge config | ACP session options | Harness session model APIs validate provider/model/effort | Local interactive CLI only |
+| `/compact` / `/context` | Stateless / runtime context | Native / native | Native compact / no structured context | Harness command / `contextPressure` projection | Not supported |
+| Skills / plugins / MCP | Native Codex home | Native Claude config | Native Kimi plus bridge Search MCP | Native Harness profile/plugin/MCP ownership; no fake injection | Native Antigravity config |
+| Usage | Tokens; cost depends on runtime | Tokens + USD | No structured per-turn usage | Tokens, no per-turn USD | No structured cost |
+| Working directory | Instance or validated thread workspace | Instance or resumed project | Native session cwd | Native session cwd; conflicting workspace claims fail closed | Instance workspace |
+| Process lifecycle | Warm app-server | 2h idle reap | 2h idle reap unless background work remains | Per-instance host; crash restart and ordered recovery | Exits each turn |
+
+DeepSeek is verified against **Harness 0.1.1-rc.2**. Image payload transport is
+implemented, but model support is provider-dependent; the tested default
+`deepseek-v4-flash` rejects images. Harness does not report per-turn USD cost,
+and Claude's `/ultrareview` remains Claude-only. See
+[DeepSeek Harness Engine](./deepseek-harness-engine.md).
 
 Claude and Kimi never rebuild a worker merely because retained background work
 has been quiet for 15 minutes: neither runtime provides a trustworthy task
@@ -373,7 +384,7 @@ native skills/plugins, MCP configuration, and `config.toml` remain in place.
 
 ## Live Web Search MCP: Brave + Tavily
 
-The bridge ships an optional local MCP server that gives all four engines source-traceable web research tools. Codex, Claude Code, and Antigravity use their native MCP/plugin configuration; TaroCub injects the server into Kimi ACP `session/new` and `session/load` while preserving Kimi's native MCP and plugins:
+The bridge ships an optional local MCP server with source-traceable web research tools. Codex, Claude Code, and Antigravity use their native MCP/plugin configuration; TaroCub injects the server into Kimi ACP `session/new` and `session/load` while preserving Kimi's native MCP and plugins. DeepSeek keeps native Harness profile/plugin/MCP ownership, so the bridge does not claim Search MCP is present unless it is configured there:
 
 - `web_search` routes live search through Brave and/or Tavily.
 - `web_extract` uses Tavily Extract to read known URLs cleanly.
@@ -558,7 +569,7 @@ Current delivery rules:
 - The bridge no longer keeps manifest, pending-contract, or count-based state to infer future delivery intent across ordinary chat turns.
 - Text-only tasks such as image analysis, image descriptions, or inline reports are not treated as file-delivery failures.
 
-This works for Codex, Claude, Kimi, Antigravity, process, stream, and ACP runtimes because the canonical path only requires the agent to emit text. File delivery is explicit: generate the file, emit the tool tag or call the send command, and rely on the resulting receipt.
+This works for Codex, Claude, Kimi, DeepSeek, Antigravity, process, stream, ACP, and Harness runtimes because the canonical path only requires the agent to emit text. File delivery is explicit: generate the file, emit the tool tag or call the send command, and rely on the resulting receipt.
 
 When upgrading from v4.5.0 or earlier, refresh generated instance instructions with:
 
@@ -612,13 +623,13 @@ Cron behavior is designed for Telegram delivery, not session-local reminders:
 - Jobs created before this default was introduced keep their stored mode; use `/cron mode <job-id> new_per_run` to upgrade an older recurring task without deleting it.
 - Per-chat job caps prevent accidental recursive job creation from growing without bound.
 
-For human operators, the CLI remains available for inspection and debugging, but generated instructions tell agents to use the `[tool:{...}]` layer so Claude/Codex/Kimi/Antigravity process, stream, and ACP runtimes behave consistently.
+For human operators, the CLI remains available for inspection and debugging, but generated instructions tell agents to use the `[tool:{...}]` layer so Claude/Codex/Kimi/DeepSeek/Antigravity process, stream, ACP, and Harness runtimes behave consistently.
 
 ---
 
 ## YOLO Mode
 
-For hands-free personal bot use, `telegram yolo unsafe` is recommended. It keeps Codex/Claude/Kimi/Antigravity moving without asking on each turn by setting `approvalMode: "bypass"`: Codex bypasses approvals and sandboxing, Claude/Antigravity use unsafe skip-permission flags, and Kimi maps bypass to ACP `auto`. If you keep YOLO off, the bridge uses channel approval buttons where the engine supports a headless path: Claude and Kimi can approve individual tool requests, Codex app-server mode maps YOLO settings to its sandbox mode, and Antigravity process mode gets a turn-level pre-approval. Use unsafe/bypass only on fully trusted local environments.
+For hands-free personal bot use, `telegram yolo unsafe` is available. It keeps Codex/Claude/Kimi/DeepSeek/Antigravity moving without asking on each turn by setting `approvalMode: "bypass"`: Codex bypasses approvals and sandboxing, Claude/Antigravity use unsafe skip-permission flags, Kimi maps bypass to ACP `auto`, and DeepSeek selects Harness `danger-full-access`. If you keep YOLO off, the bridge uses channel approval buttons where the engine supports a headless path: Claude, Kimi, and DeepSeek can approve individual tool requests, Codex app-server mode maps YOLO settings to its sandbox mode, and Antigravity process mode gets a turn-level pre-approval. Use unsafe/bypass only on fully trusted local environments.
 
 Claude approval buttons use a short-lived localhost MCP bridge with a random URL token. This protects against blind local port scans, but the token is still visible to same-user local processes that can inspect process command lines. Treat YOLO-off approval as a single-user workstation convenience, not a multi-user isolation boundary.
 
@@ -629,11 +640,11 @@ npm run dev -- telegram yolo off --instance work      # Normal flow
 npm run dev -- telegram yolo --instance work          # Check status
 ```
 
-| Mode | Codex | Claude | Kimi | Antigravity | Use case |
-|---|---|---|---|---|---|
-| `off` | Telegram pre-turn approval or app-server sandbox | Telegram tool approval | ACP tool approval | Telegram pre-turn approval | Default, safest |
-| `on` | `--full-auto` | `--permission-mode bypassPermissions` | ACP `yolo` | `--dangerously-skip-permissions` | Mobile use |
-| `unsafe` | `--dangerously-bypass-*` | `--dangerously-skip-permissions` | ACP `auto` | `--dangerously-skip-permissions` | Trusted env only |
+| Mode | Codex | Claude | Kimi | DeepSeek | Antigravity | Use case |
+|---|---|---|---|---|---|---|
+| `off` | Telegram pre-turn approval or app-server sandbox | Telegram tool approval | ACP tool approval | Harness once/session approval | Telegram pre-turn approval | Default, safest |
+| `on` | `--full-auto` | `--permission-mode bypassPermissions` | ACP `yolo` | Harness `full-auto` in workspace sandbox | `--dangerously-skip-permissions` | Mobile use |
+| `unsafe` | `--dangerously-bypass-*` | `--dangerously-skip-permissions` | ACP `auto` | Harness `danger-full-access` | `--dangerously-skip-permissions` | Trusted env only |
 
 ---
 
@@ -657,7 +668,7 @@ Estimated cost: $0.3521
 Last updated: 2026-04-09T10:00:00Z
 ```
 
-Claude reports exact USD cost. Codex reports tokens without an exact bridge-side price. Kimi ACP 0.33.0 still does not expose structured turn token/cost telemetry, so Kimi usage and budget accounting cannot be treated as complete until the protocol adds it.
+Claude reports exact USD cost. Codex and DeepSeek report tokens without an exact bridge-side price. Kimi ACP 0.33.0 still does not expose structured turn token/cost telemetry, so Kimi usage and budget accounting cannot be treated as complete until the protocol adds it.
 
 ---
 
@@ -671,7 +682,7 @@ npm run dev -- telegram dashboard --instance work
 npm run dev -- telegram service status --instance work
 ```
 
-`telegram verbosity` is kept as a compatibility config knob, but the current Codex/Claude/Kimi/Antigravity runtimes use typing actions plus timeline/audit events rather than live-editing partial model output into Telegram.
+`telegram verbosity` is kept as a compatibility config knob, but the current Codex/Claude/Kimi/DeepSeek/Antigravity runtimes use typing actions plus timeline/audit events rather than live-editing partial model output into Telegram.
 
 ---
 
@@ -699,9 +710,9 @@ Send voice/audio/video in Telegram, or audio/video resources through Lark. Recor
 2. The bridge downloads the media and probes its duration
 3. Short media uses local Qwen ASR (HTTP first, CLI fallback); long media uses Tingwu when configured, with safe chunked local fallback on cloud failure
 4. The transcript is appended to the user's text message
-5. Claude, Codex, Kimi, or Antigravity processes it as a normal text request
+5. Claude, Codex, Kimi, DeepSeek, or Antigravity processes it as a normal text request
 
-The route is selected before the engine adapter runs, so it is identical across all four engines. `/stop` propagates through duration probing, ffmpeg chunking, local HTTP/CLI transcription, and the Tingwu child process. An operator cancellation is never treated as a cloud failure and never starts a local fallback. The bridge aborts its local HTTP request promptly; the standalone ASR server may still finish an already-running model kernel before observing the disconnected client.
+The route is selected before the engine adapter runs, so it is identical across all five engines. `/stop` propagates through duration probing, ffmpeg chunking, local HTTP/CLI transcription, and the Tingwu child process. An operator cancellation is never treated as a cloud failure and never starts a local fallback. The bridge aborts its local HTTP request promptly; the standalone ASR server may still finish an already-running model kernel before observing the disconnected client.
 
 **Setup with Qwen3-ASR (example):**
 
@@ -749,9 +760,9 @@ To use a different ASR engine, modify the shared `createDefaultTranscribeVoice()
 
 ---
 
-## Session Resume, Codex Threads, Kimi Sessions, and Antigravity Conversations
+## Session Resume, Codex Threads, Kimi Sessions, DeepSeek Sessions, and Antigravity Conversations
 
-Started a task locally with Claude Code or Kimi Code? Continue it on Telegram without re-explaining context. Codex threads and Antigravity conversations can also be attached and continued from Telegram.
+Started a task locally with Claude Code, Kimi Code, or DeepSeek Harness? Continue it from chat without re-explaining context. Codex threads and Antigravity conversations can also be attached explicitly.
 
 ### Claude local session resume
 
@@ -826,6 +837,30 @@ If you already know the session ID, attach it explicitly:
 Before changing the chat binding, the bridge starts a short-lived ACP control connection, loads the session, and uses the authoritative `cwd` returned by Kimi. The directory is resolved through `realpath` and must still exist. Invalid IDs, unavailable validation, and missing workspaces fail closed without altering the current session or config. `/detach` restores the pre-resume conversation when available.
 
 For bot-owned workspaces, generated bridge instructions live in Kimi's native `.kimi-code/agents/agent.md` main-agent override and preserve `${base_prompt}` plus `${plugin_sections}`. External resumed projects are never modified; ordinary text turns use a prompt fallback because ACP has no direct arbitrary system-prompt field. Raw slash commands such as `/compact` are not prefixed.
+
+### DeepSeek Harness session resume
+
+DeepSeek Harness exposes native session lists, history, and projections. Plain
+`/resume` lists recent sessions; `/resume <number>` selects one, and a known ID
+can be attached explicitly:
+
+```text
+/resume session <deepseek-session-id>
+```
+
+Before changing the chat binding, the bridge reads Harness's authoritative cwd,
+resolves the real path, and verifies that the directory still exists. A session
+already observed in the current process cannot later overwrite its workspace
+identity. Missing sessions, conflicting cwd claims, incomplete history pagination,
+non-advancing cursors, and projection snapshots without an `asOfSeq` watermark all
+fail closed instead of pretending recovery succeeded. Later text, tools, approvals,
+questions, Goals, and background jobs continue on that native session; `/detach`
+restores the pre-resume conversation when one exists.
+
+Each bot owns a private loopback `dsh web` host and private mutable settings while
+reusing the authenticated Harness credentials/profile. Process or WebSocket loss
+is recovered in sequence order before a new turn may start. See
+[DeepSeek Harness Engine](./deepseek-harness-engine.md) for the protocol and limits.
 
 ### Antigravity conversation attach
 
@@ -1207,12 +1242,12 @@ All bots can talk to all bots. Simplest config, best for small teams (3-5 bots).
 
 ## Quick Start
 
-> **TL;DR** — You only need to do two things on your phone: get a bot token from BotFather and send the pairing code. Everything else happens on your computer via Codex, Claude Code, Kimi Code, or Antigravity CLI.
+> **TL;DR** — This compatibility walkthrough uses Telegram. Everything on the computer can be handled through Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity CLI; new deployments should prefer the Feishu/Lark setup in the main README.
 
 ### Prerequisites
 
 - **Node.js** >= 20
-- **OpenAI Codex CLI**, **Claude Code CLI**, **Kimi Code CLI**, and/or **Antigravity CLI** installed and authenticated
+- **OpenAI Codex CLI**, **Claude Code CLI**, **Kimi Code CLI**, **DeepSeek Harness**, and/or **Antigravity CLI** installed and authenticated
 - A **Telegram account** (phone)
 
 ### Step 1: Create a Telegram Bot (on your phone)
@@ -1225,7 +1260,7 @@ All bots can talk to all bots. Simplest config, best for small teams (3-5 bots).
 
 ### Step 2: Install & Configure (on your computer)
 
-Open your terminal with Codex, Claude Code, Kimi Code, or Antigravity, and tell it:
+Open your terminal with Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity, and tell it:
 
 > *"Clone https://github.com/cloveric/tarocub and set up a Telegram bot with this token: `<paste your token>`"*
 
@@ -1243,6 +1278,7 @@ npm run dev -- telegram configure <your-bot-token>
 # Optional: switch engines (default is Codex)
 npm run dev -- telegram engine claude
 npm run dev -- telegram engine kimi
+npm run dev -- telegram engine deepseek
 npm run dev -- telegram engine antigravity
 
 # Recommended: enable unsafe/bypass for trusted Telegram operation
@@ -1262,7 +1298,7 @@ npm run dev -- telegram service start
 npm run dev -- telegram access pair 38J63T
 ```
 
-**Done!** You can now chat with Codex, Claude, Kimi, or Antigravity from Telegram. Send text, voice messages, or files — the bot handles everything.
+**Done!** You can now chat with Codex, Claude, Kimi, DeepSeek, or Antigravity from Telegram. Send text, voice messages, or files — the bot handles everything.
 
 ### Multiple Bots
 
@@ -1317,7 +1353,7 @@ npm run dev -- telegram service start --instance agy-bot
 ```
 Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     → Load config.json (engine) → Load agent.md → Session Lookup
-    → Codex Exec, Claude stream, Kimi ACP, or agy --print (new or resume)
+    → Codex app-server, Claude stream-json, Kimi ACP, DeepSeek Harness, or agy --print (new or resume)
     → Typing action + timeline events → Final Render → Deliver → Audit
 ```
 
@@ -1328,8 +1364,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
 <table>
   <tr>
     <td width="50%">
-      <h3>Four Native Engines</h3>
-      <p>Switch between Codex, Claude Code, Kimi Code, and Antigravity per instance. Mix engines across bots while managing all of them from one CLI.</p>
+      <h3>Five Native Engines</h3>
+      <p>Switch between Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity per instance. Mix engines across bots while managing all of them from one CLI.</p>
     </td>
     <td width="50%">
       <h3>Per-Bot Personality</h3>
@@ -1353,13 +1389,13 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td>
       <h3>Per-Bot Isolation</h3>
-      <p>Every instance has its own personality, workspace, sessions, access rules, inbox, audit trail, and workspace-keyed auto-memory. Each engine's own config dir (<code>~/.claude/</code> / <code>~/.codex/</code> / <code>~/.kimi-code/</code> / Antigravity's CLI config) remains shared with your main CLI so OAuth refresh tokens do not race across instances. Native settings, plugins, MCP state, and full-auto effects therefore still belong to your real local account.</p>
+      <p>Every instance has its own personality, workspace, sessions, access rules, inbox, audit trail, and workspace-keyed auto-memory. Claude, Codex, Kimi, and Antigravity keep their native account config; DeepSeek gets a private writable <code>DSH_HOME</code> linked to the authenticated shared credentials/profile so bot settings cannot overwrite the desktop Harness settings.</p>
     </td>
   </tr>
   <tr>
     <td>
       <h3>Session Resume</h3>
-      <p><code>/resume</code> scans Claude Code, Kimi ACP, or Antigravity sessions according to the current engine; explicit Codex thread, Kimi session, and Antigravity conversation IDs can also be attached safely.</p>
+      <p><code>/resume</code> scans Claude Code, Kimi ACP, DeepSeek Harness, or Antigravity sessions according to the current engine; explicit Codex thread, Kimi/DeepSeek session, and Antigravity conversation IDs can also be attached safely.</p>
     </td>
     <td>
       <h3>Runtime Visibility</h3>
@@ -1465,7 +1501,7 @@ See `docs/state-model.md` for the on-disk contracts.
 | `telegram service logs` | Tail stdout/stderr logs |
 | `telegram service doctor` | Health check across all subsystems, including timeline, crew state, shared engine env, and stale launchd leftovers |
 | `lark service restart --all` | Restart every configured Lark instance; when run inside an active Lark turn, defer the current instance until after the reply |
-| `telegram engine [codex\|claude\|antigravity]` | Switch AI engine per instance |
+| `telegram engine [codex\|claude\|kimi\|deepseek\|antigravity]` | Switch AI engine per instance |
 | `telegram yolo [on\|off\|unsafe]` | Toggle auto-approval mode |
 | `telegram usage` | Show token usage and estimated cost |
 | `telegram verbosity [0\|1\|2]` | Store the legacy verbosity setting; current process runtimes use typing actions plus timeline/audit events |
@@ -1497,22 +1533,22 @@ For Lark fleets, use `lark service restart --all` instead of hand-written restar
 Telegram users can also use:
 
 - `/status`
-- `/engine [claude|codex|kimi|antigravity]` — switch engine for the current instance (the bridge resets stale bindings automatically)
+- `/engine [claude|codex|kimi|deepseek|antigravity]` — switch engine for the current instance (the bridge resets stale bindings automatically)
 - `/effort [low|medium|high|xhigh|max|ultra|off]` — set reasoning effort level; Kimi applies only ACP-advertised thinking values, and other engines still enforce their own model-specific limits
-- `/model [name|off]` — switch model for Codex/Claude/Kimi; Kimi validates ACP-advertised provider values on the next turn, while Antigravity explains the `agy --print` limitation
+- `/model [name|off]` — switch model for Codex/Claude/Kimi/DeepSeek; Kimi and DeepSeek validate native provider/model values, while Antigravity explains the `agy --print` limitation
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
-- `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex stores the budget structurally, while Claude Code and Antigravity receive explicit budgets as native goal guidance. Kimi ACP 0.33.0 still does not expose goals, so the bridge rejects this command explicitly.
+- `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex and DeepSeek store structured Goals (DeepSeek token budgets persist across bridge restarts), while Claude Code and Antigravity use native goal commands. Current Kimi ACP does not expose goals, so the bridge rejects this command explicitly.
 - `/btw <question>` — ask an isolated side question on a fresh temporary session; it neither changes nor inherits the current session (uniform across all engines because Kimi ACP 0.33 has no session-fork primitive)
 - `/ask <instance> <prompt>` — delegate to a specific peer bot
 - `/fan <prompt>` — query current bot plus configured parallel bots
 - `/chain <prompt>` — run the configured sequential bot chain
 - `/verify <prompt>` — execute locally, then auto-review with the verifier bot
-- `/resume` — scan/pick Claude, Kimi, or Antigravity sessions according to the current engine; Codex uses `/resume thread <thread-id>`, and Kimi also accepts `/resume session <session-id>`
-- `/detach` — detach from a resumed Claude/Kimi session, current Codex thread, or current Antigravity conversation; restore the pre-resume conversation when one exists
+- `/resume` — scan/pick Claude, Kimi, DeepSeek, or Antigravity sessions according to the current engine; Codex uses `/resume thread <thread-id>`, and Kimi/DeepSeek also accept `/resume session <session-id>`
+- `/detach` — detach from a resumed Claude/Kimi/DeepSeek session, current Codex thread, or current Antigravity conversation; restore the pre-resume conversation when one exists
 - `/stop` — immediately stop the current running task
 - `/continue` — resume the latest waiting archive summary
-- `/compact` (Claude/Kimi — native context compression; Codex falls back to reset)
-- `/context` (Claude only) — show current context fill level; use it to decide when to `/compact`
+- `/compact` (Claude/Kimi/DeepSeek — native context compression; Codex falls back to reset)
+- `/context` (Claude/DeepSeek) — show current context fill level; use it to decide when to `/compact`
 - `/ultrareview` (Claude Opus 4.7+ only) — dedicated code-review pass, typically paired with `/resume` into a local project
 - `/reset`
 - `/help`

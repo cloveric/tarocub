@@ -73,7 +73,7 @@ const RESUME_SCAN_TTL_MS = 10 * 60 * 1000;
 const ANTIGRAVITY_CONVERSATION_ID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-type PendingResumeScanKind = "claude" | "antigravity" | "kimi";
+type PendingResumeScanKind = "claude" | "antigravity" | "kimi" | "deepseek";
 
 const pendingResumeScans = new Map<string, {
   kind: PendingResumeScanKind;
@@ -217,10 +217,11 @@ export async function handleLocalSessionTelegramCommand(input: {
   scanRecentSessions?: (hours: number) => Promise<ScannedSession[]>;
   scanRecentAntigravitySessions?: (hours: number) => Promise<ScannedSession[]>;
   scanRecentKimiSessions?: () => Promise<ScannedSession[]>;
+  scanRecentDeepSeekSessions?: () => Promise<ScannedSession[]>;
   formatSessionListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
   formatAntigravityConversationListMessage?: (sessions: ScannedSession[], locale: Locale) => string;
   sendResumeScanResult?: (input: {
-    kind: "claude" | "antigravity" | "kimi";
+    kind: "claude" | "antigravity" | "kimi" | "deepseek";
     sessions: ScannedSession[];
     visibleSessions: ScannedSession[];
     locale: Locale;
@@ -239,6 +240,7 @@ export async function handleLocalSessionTelegramCommand(input: {
     scanRecentSessions = scanRecentClaudeSessions,
     scanRecentAntigravitySessions = scanRecentAntigravityConversations,
     scanRecentKimiSessions,
+    scanRecentDeepSeekSessions,
     formatSessionListMessage = formatSessionList,
     formatAntigravityConversationListMessage = formatAntigravityConversationList,
     sendResumeScanResult,
@@ -285,36 +287,40 @@ export async function handleLocalSessionTelegramCommand(input: {
 
   const resumeCmd = parseResumeCommand(normalized.text);
   if (resumeCmd) {
-    if (cfg.engine === "kimi") {
+    if (cfg.engine === "kimi" || cfg.engine === "deepseek") {
+      const isDeepSeek = cfg.engine === "deepseek";
+      const scanKind: "kimi" | "deepseek" = isDeepSeek ? "deepseek" : "kimi";
+      const engineName = isDeepSeek ? "DeepSeek Harness" : "Kimi";
+      const scanRecentHarnessSessions = isDeepSeek ? scanRecentDeepSeekSessions : scanRecentKimiSessions;
       if (resumeCmd.kind === "scan") {
-        if (!scanRecentKimiSessions) {
+        if (!scanRecentHarnessSessions) {
           const msg = locale === "zh"
-            ? "当前 Kimi runtime 未提供 session 列表。"
-            : "This Kimi runtime does not provide session listing.";
+            ? `当前 ${engineName} runtime 未提供 session 列表。`
+            : `This ${engineName} runtime does not provide session listing.`;
           await context.api.sendMessage(normalized.chatId, msg);
           await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
             startedAt,
             command: "resume",
             responseText: msg,
-            metadata: { engine: "kimi", rejected: "listing-unavailable" },
+            metadata: { engine: cfg.engine, rejected: "listing-unavailable" },
           });
           return true;
         }
-        const sessions = (await scanRecentKimiSessions()).slice(0, MAX_FORMATTED_ANTIGRAVITY_CONVERSATIONS);
+        const sessions = (await scanRecentHarnessSessions()).slice(0, MAX_FORMATTED_ANTIGRAVITY_CONVERSATIONS);
         if (sessions.length > 0) {
-          pendingResumeScans.set(conversationKey, { kind: "kimi", scannedAt: Date.now(), sessions });
+          pendingResumeScans.set(conversationKey, { kind: scanKind, scannedAt: Date.now(), sessions });
         } else {
           pendingResumeScans.delete(conversationKey);
         }
         const msg = sessions.length > 0
           ? [
-              locale === "zh" ? "Kimi sessions：" : "Kimi sessions:",
+              locale === "zh" ? `${engineName} sessions：` : `${engineName} sessions:`,
               ...sessions.map((session, index) => `${index + 1}. [${session.displayName}] ${session.sessionId}`),
               locale === "zh" ? "\n回复 /resume <编号> 继续。" : "\nReply /resume <number> to continue.",
             ].join("\n")
-          : (locale === "zh" ? "没有找到 Kimi session。" : "No Kimi sessions found.");
+          : (locale === "zh" ? `没有找到 ${engineName} session。` : `No ${engineName} sessions found.`);
         if (sendResumeScanResult) {
-          await sendResumeScanResult({ kind: "kimi", sessions, visibleSessions: sessions, locale });
+          await sendResumeScanResult({ kind: scanKind, sessions, visibleSessions: sessions, locale });
         } else {
           await context.api.sendMessage(normalized.chatId, msg);
         }
@@ -322,7 +328,7 @@ export async function handleLocalSessionTelegramCommand(input: {
           startedAt,
           command: "resume",
           responseText: msg,
-          metadata: { engine: "kimi", scanned: sessions.length },
+          metadata: { engine: cfg.engine, scanned: sessions.length },
         });
         return true;
       }
@@ -330,17 +336,17 @@ export async function handleLocalSessionTelegramCommand(input: {
       let sessionId: string | null = null;
       let selectedSession: ScannedSession | undefined;
       if (resumeCmd.kind === "pick") {
-        const cached = getPendingResumeScan(conversationKey, "kimi");
+        const cached = getPendingResumeScan(conversationKey, scanKind);
         if (!cached || resumeCmd.pick < 1 || resumeCmd.pick > cached.length) {
           const msg = locale === "zh"
-            ? "无效选择，请先发 /resume 扫描 Kimi session。"
-            : "Invalid selection. Send /resume first to scan Kimi sessions.";
+            ? `无效选择，请先发 /resume 扫描 ${engineName} session。`
+            : `Invalid selection. Send /resume first to scan ${engineName} sessions.`;
           await context.api.sendMessage(normalized.chatId, msg);
           await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
             startedAt,
             command: "resume",
             responseText: msg,
-            metadata: { engine: "kimi", rejected: "invalid-pick" },
+            metadata: { engine: cfg.engine, rejected: "invalid-pick" },
           });
           return true;
         }
@@ -358,7 +364,7 @@ export async function handleLocalSessionTelegramCommand(input: {
           startedAt,
           command: "resume",
           responseText: msg,
-          metadata: { engine: "kimi", rejected: "invalid-kimi-arg" },
+          metadata: { engine: cfg.engine, rejected: "invalid-session-arg" },
         });
         return true;
       }
@@ -372,26 +378,26 @@ export async function handleLocalSessionTelegramCommand(input: {
         validatedSession = await validateCodexThread(sessionId);
         const candidate = validatedSession?.cwd ?? selectedSession?.workspacePath;
         if (!candidate) {
-          throw new Error("Kimi session workspace is unavailable");
+          throw new Error(`${engineName} session workspace is unavailable`);
         }
         workspacePath = await realpath(candidate);
         const workspaceInfo = await stat(workspacePath);
         if (!workspaceInfo.isDirectory()) {
-          throw new Error("Kimi session workspace is not a directory");
+          throw new Error(`${engineName} session workspace is not a directory`);
         }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         const unsupported = /validation unsupported|listing unsupported/i.test(detail);
         const msg = unsupported
-          ? (locale === "zh" ? "当前 Kimi runtime 无法验证 session id。" : "This Kimi runtime cannot validate session IDs.")
-          : (locale === "zh" ? `无法加载 Kimi session：${sessionId}` : `Could not load Kimi session: ${sessionId}`);
+          ? (locale === "zh" ? `当前 ${engineName} runtime 无法验证 session id。` : `This ${engineName} runtime cannot validate session IDs.`)
+          : (locale === "zh" ? `无法加载 ${engineName} session：${sessionId}` : `Could not load ${engineName} session: ${sessionId}`);
         await context.api.sendMessage(normalized.chatId, msg);
         await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
           startedAt,
           command: "resume",
           responseText: msg,
           metadata: {
-            engine: "kimi",
+            engine: cfg.engine,
             rejected: unsupported ? "session-validation-unavailable" : "session-load-failed",
           },
         });
@@ -419,14 +425,14 @@ export async function handleLocalSessionTelegramCommand(input: {
       await updateInstanceConfig((c) => { delete c.resume; });
 
       const msg = locale === "zh"
-        ? `已绑定 Kimi session：${sessionId}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`
-        : `Attached Kimi session: ${sessionId}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`;
+        ? `已绑定 ${engineName} session：${sessionId}\n工作区：${workspacePath}\n\n发送消息继续对话，完成后发 /detach 断开。`
+        : `Attached ${engineName} session: ${sessionId}\nWorkspace: ${workspacePath}\n\nSend a message to continue. Use /detach when done.`;
       await context.api.sendMessage(normalized.chatId, msg);
       await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
         startedAt,
         command: "resume",
         responseText: msg,
-        metadata: { engine: "kimi", sessionId },
+        metadata: { engine: cfg.engine, sessionId },
       });
       return true;
     }
@@ -755,6 +761,10 @@ export async function handleLocalSessionTelegramCommand(input: {
             ? (locale === "zh"
               ? "已断开当前 Kimi session，并恢复到 /resume 之前的对话。"
               : "Detached from the current Kimi session and restored the previous conversation.")
+            : cfg.engine === "deepseek"
+              ? (locale === "zh"
+                ? "已断开当前 DeepSeek Harness session，并恢复到 /resume 之前的对话。"
+                : "Detached from the current DeepSeek Harness session and restored the previous conversation.")
             : (locale === "zh"
               ? "已断开恢复的 session，并恢复到 /resume 之前的对话。"
               : "Detached from resumed session and restored the previous conversation.");
@@ -776,7 +786,7 @@ export async function handleLocalSessionTelegramCommand(input: {
         ? "已断开恢复的 session，回到 bot 默认工作区。"
         : "Detached from resumed session. Back to default workspace.";
       await context.api.sendMessage(normalized.chatId, detachMessage);
-    } else if (cfg.engine === "codex" || cfg.engine === "antigravity" || cfg.engine === "kimi") {
+    } else if (cfg.engine === "codex" || cfg.engine === "antigravity" || cfg.engine === "kimi" || cfg.engine === "deepseek") {
       const removed = await removeSessionForConversation(sessionStore, normalized);
       if (cfg.engine === "codex") {
         detachMessage = removed
@@ -794,7 +804,7 @@ export async function handleLocalSessionTelegramCommand(input: {
           : (locale === "zh"
             ? "当前没有绑定的 Antigravity conversation。"
             : "No active Antigravity conversation.");
-      } else {
+      } else if (cfg.engine === "kimi") {
         detachMessage = removed
           ? (locale === "zh"
             ? "已断开当前 Kimi session。下一条消息会新建 session。"
@@ -802,6 +812,14 @@ export async function handleLocalSessionTelegramCommand(input: {
           : (locale === "zh"
             ? "当前没有绑定的 Kimi session。"
             : "No active Kimi session.");
+      } else {
+        detachMessage = removed
+          ? (locale === "zh"
+            ? "已断开当前 DeepSeek Harness session。下一条消息会新建 session。"
+            : "Detached from the current DeepSeek Harness session. Next message will start a fresh session.")
+          : (locale === "zh"
+            ? "当前没有绑定的 DeepSeek Harness session。"
+            : "No active DeepSeek Harness session.");
       }
       await context.api.sendMessage(normalized.chatId, detachMessage);
     } else {

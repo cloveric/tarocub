@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { normalizeInstanceName } from "./instance.js";
@@ -19,6 +20,8 @@ export interface EnvSource {
   CCTB_LARK_ACTIVE_STATE_DIR?: string;
   CODEX_EXECUTABLE?: string;
   CLAUDE_EXECUTABLE?: string;
+  DSH_EXECUTABLE?: string;
+  DSH_HOME?: string;
   KIMI_EXECUTABLE?: string;
   KIMI_CODE_HOME?: string;
   ANTIGRAVITY_EXECUTABLE?: string;
@@ -117,6 +120,35 @@ function resolveDefaultKimiExecutable(env: EnvSource): string {
   return "kimi";
 }
 
+function resolveDefaultDeepSeekExecutable(env: EnvSource): string {
+  if (env.DSH_EXECUTABLE) {
+    return normalizeExecutablePath(env.DSH_EXECUTABLE);
+  }
+
+  if (isWindows) {
+    const appData = env.APPDATA
+      ?? (env.USERPROFILE ? path.join(env.USERPROFILE, "AppData", "Roaming") : undefined);
+    if (appData) {
+      const windowsDshCmd = path.join(appData, "npm", "dsh.cmd");
+      if (existsSync(windowsDshCmd)) {
+        return windowsDshCmd;
+      }
+    }
+  }
+  return "dsh";
+}
+
+function resolveDeepSeekHome(env: EnvSource): string {
+  if (env.DSH_HOME?.trim()) {
+    return normalizeExecutablePath(env.DSH_HOME);
+  }
+  const homeDir = resolveHomeDir(env) ?? os.homedir();
+  if (!homeDir) {
+    throw new Error(process.platform === "win32" ? "USERPROFILE or HOME is required" : "HOME or USERPROFILE is required");
+  }
+  return path.join(homeDir, ".dsh");
+}
+
 export function joinStatePath(base: string, segment: string): string {
   return path.join(base, segment);
 }
@@ -171,6 +203,8 @@ function resolveBaseConfig(env: EnvSource, telegramBotToken: string): AppConfig 
     sessionStatePath: joinStatePath(stateDir, "session.json"),
     runtimeLogPath: joinStatePath(stateDir, "runtime.log"),
     codexExecutable: resolveDefaultCodexExecutable(env),
+    deepseekExecutable: resolveDefaultDeepSeekExecutable(env),
+    deepseekHome: resolveDeepSeekHome(env),
     kimiExecutable: resolveDefaultKimiExecutable(env),
     antigravityExecutable: resolveDefaultAntigravityExecutable(env),
   };

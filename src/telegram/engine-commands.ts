@@ -1,4 +1,5 @@
 import { classifyFailure } from "../runtime/error-classification.js";
+import type { EngineContextUsage } from "../codex/adapter.js";
 import { chunkTelegramMessage, type Locale } from "./message-renderer.js";
 import {
   appendCommandSuccessAuditEventBestEffort,
@@ -8,9 +9,9 @@ import { applyEngineSelection } from "./instance-config.js";
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 import type { InstanceEngine } from "./instance-config.js";
 
-const ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "kimi", "antigravity"];
-const ENGINE_USAGE_EN = "Usage: /engine [claude|codex|kimi|antigravity]";
-const ENGINE_USAGE_ZH = "用法: /engine [claude|codex|kimi|antigravity]";
+const ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "kimi", "deepseek", "antigravity"];
+const ENGINE_USAGE_EN = "Usage: /engine [claude|codex|kimi|deepseek|antigravity]";
+const ENGINE_USAGE_ZH = "用法: /engine [claude|codex|kimi|deepseek|antigravity]";
 
 function isCompactCommand(text: string): boolean {
   return /^\/compact(?:@\w+)?(?:\s|$)/i.test(text.trim());
@@ -22,6 +23,29 @@ function isUltrareviewCommand(text: string): boolean {
 
 function isContextCommand(text: string): boolean {
   return /^\/context(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
+function renderContextUsage(usage: EngineContextUsage | null, locale: Locale): string {
+  const used = usage?.projectedTokens ?? usage?.pressureTokens;
+  const window = usage?.contextWindow;
+  if (used === undefined || window === undefined || window <= 0) {
+    return locale === "zh"
+      ? "当前还没有可用的上下文统计。先发送一条消息，让 DeepSeek Harness 获得 provider 用量样本后再试。"
+      : "Context usage is not available yet. Send a message first so DeepSeek Harness can collect a provider usage sample, then try again.";
+  }
+  const format = (value: number) => Math.round(value).toLocaleString("en-US");
+  const percent = Math.min(100, Math.max(0, used / window * 100)).toFixed(1);
+  const sample = usage?.pressureTokens;
+  if (locale === "zh") {
+    return [
+      `上下文：约 ${format(used)} / ${format(window)} token（${percent}%）`,
+      ...(sample === undefined ? [] : [`最近一次 provider 样本：${format(sample)} token`]),
+    ].join("\n");
+  }
+  return [
+    `Context: ~${format(used)} / ${format(window)} tokens (${percent}%)`,
+    ...(sample === undefined ? [] : [`Last provider sample: ${format(sample)} tokens`]),
+  ].join("\n");
 }
 
 function parseEngineCommand(text: string): { engine: string; invalid: boolean } | null {
@@ -117,6 +141,12 @@ export interface EngineCommandBridge {
     workspaceOverride?: string;
     abortSignal?: AbortSignal;
   }): Promise<{ text: string }>;
+  getContextUsage?(input: {
+    chatId: number;
+    messageThreadId?: number;
+    conversationKey?: string;
+    workspaceOverride?: string;
+  }): Promise<EngineContextUsage | null>;
 }
 
 export interface EngineCommandContext extends TelegramTurnContext {
@@ -211,10 +241,10 @@ export async function handleLocalEngineTelegramCommand(input: {
   }
 
   if (isCompactCommand(normalized.text)) {
-    if (cfg.engine !== "claude" && cfg.engine !== "kimi") {
+    if (cfg.engine !== "claude" && cfg.engine !== "kimi" && cfg.engine !== "deepseek") {
       const msg = locale === "zh"
-        ? "/compact 仅支持 Claude 与 Kimi 引擎。当前引擎不会执行本地上下文压缩；如需清空当前会话，请使用 /reset。"
-        : "/compact is only supported with the Claude and Kimi engines. The current engine does not run local context compaction; use /reset to clear this conversation.";
+        ? "/compact 仅支持 Claude、Kimi 与 DeepSeek 引擎。当前引擎不会执行本地上下文压缩；如需清空当前会话，请使用 /reset。"
+        : "/compact is only supported with the Claude, Kimi, and DeepSeek engines. The current engine does not run local context compaction; use /reset to clear this conversation.";
       await context.api.sendMessage(normalized.chatId, msg);
       await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
         startedAt,
@@ -326,10 +356,27 @@ export async function handleLocalEngineTelegramCommand(input: {
   }
 
   if (isContextCommand(normalized.text)) {
+    if (cfg.engine === "deepseek") {
+      const usage = await bridge.getContextUsage?.({
+        chatId: normalized.chatId,
+        messageThreadId: normalized.messageThreadId,
+        conversationKey: normalized.conversationKey,
+        workspaceOverride: cfg.resume?.workspacePath,
+      }) ?? null;
+      const msg = renderContextUsage(usage, locale);
+      await context.api.sendMessage(normalized.chatId, msg);
+      await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
+        startedAt,
+        command: "context",
+        responseText: msg,
+      });
+      return true;
+    }
+
     if (cfg.engine !== "claude") {
       const msg = locale === "zh"
-        ? "/context 仅支持 Claude 引擎。当前引擎不暴露本地上下文查询。"
-        : "/context is only supported with the Claude engine. The current engine does not expose local context.";
+        ? "/context 仅支持 Claude 或 DeepSeek 引擎。当前引擎不暴露本地上下文查询。"
+        : "/context is only supported with the Claude or DeepSeek engine. The current engine does not expose local context.";
       await context.api.sendMessage(normalized.chatId, msg);
       await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
         startedAt,

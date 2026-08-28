@@ -1049,8 +1049,8 @@ const LARK_STEER_ACK_EMOJI = "OK";
 
 /**
  * Inject a follow-up message into the conversation's currently running engine
- * turn instead of queueing it behind the turn (Codex app-server turn/steer;
- * engines without steer support simply return false here). Only a plain text
+ * turn instead of queueing it behind the turn (Codex app-server turn/steer or
+ * DeepSeek Harness session steer; engines without steer support simply return false here). Only a plain text
  * message steers: slash commands keep their command semantics, attachments
  * need the staging pipeline, an explicit preempt policy keeps its
  * replace-the-turn behavior, an existing queued backlog keeps FIFO order, and

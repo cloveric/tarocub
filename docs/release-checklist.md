@@ -82,7 +82,7 @@ If the change touched any of these, do an explicit sanity check:
 - file delivery
 - scheduled tasks / cron tag parsing and deprecated helper permissions
 - archive restore / backup
-- shared Claude/Codex config homes
+- shared or linked Claude/Codex/Kimi/DeepSeek config homes
 
 Questions:
 

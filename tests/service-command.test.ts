@@ -710,6 +710,47 @@ describe("telegram service commands", () => {
     }
   });
 
+  it("reports DeepSeek Harness home mismatches in service doctor", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const stateDir = path.join(tempDir, ".cctb", "alpha");
+    const lockPath = resolveInstanceLockPath(stateDir);
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: 12345,
+          token: "token",
+          acquiredAt: new Date().toISOString(),
+        }),
+        "utf8",
+      );
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek" }), "utf8");
+
+      const handled = await runCli(["telegram", "service", "doctor", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir, DSH_HOME: "/shell/dsh" },
+        logger: { log: (message) => messages.push(message) },
+        serviceDeps: {
+          cwd: REPO_ROOT,
+          isProcessAlive: (pid) => pid === 12345,
+          isExpectedServiceProcess: (pid) => pid === 12345,
+          readProcessEnvironment: async () => ({ DSH_HOME: "/service/dsh" }),
+        },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain("Healthy: no");
+      expect(messages[0]).toContain("- fail environment:");
+      expect(messages[0]).toContain(
+        "current shell exports DSH_HOME=/shell/dsh, but the running service uses DSH_HOME=/service/dsh",
+      );
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("reports legacy launchd plists in service doctor", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];

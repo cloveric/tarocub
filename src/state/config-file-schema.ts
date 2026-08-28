@@ -37,7 +37,7 @@ export const MeetingConfigFileSchema = z.object({
 }).passthrough();
 
 export const ConfigFileSchema = z.object({
-  engine: z.enum(["codex", "claude", "antigravity", "kimi"]).optional(),
+  engine: z.enum(["codex", "claude", "antigravity", "kimi", "deepseek"]).optional(),
   approvalMode: z.enum(["normal", "full-auto", "bypass"]).optional(),
   codexRuntime: z.enum(["app-server", "process"]).optional(),
   locale: z.enum(["en", "zh"]).optional(),

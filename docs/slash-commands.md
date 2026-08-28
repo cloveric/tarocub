@@ -18,15 +18,15 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 
 | Command | What It Does | Channels |
 |---|---|---|
-| `/engine [claude\|codex\|antigravity]` | Inspect or switch the backend engine. | Telegram, Lark |
-| `/model [name\|off]` | Inspect or set the engine model. Claude choices: `claude-opus-5[1m]` (Opus 5 with 1M context — the default), `fable`, `opus`, `sonnet`, `haiku`. | Telegram, Lark |
+| `/engine [claude\|codex\|kimi\|deepseek\|antigravity]` | Inspect or switch the backend engine. | Telegram, Lark |
+| `/model [name\|off]` | Inspect or set the engine model. Claude has named aliases; Kimi and DeepSeek validate provider/model IDs through their native protocols. | Telegram, Lark |
 | `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Inspect or set reasoning effort where supported. Codex GPT-5.6 Sol/Terra support `ultra`; Luna supports up to `max`. | Telegram, Lark |
 | `/fast [on\|off\|status]` | Toggle Codex Fast Mode. Bare `/fast` shows status. | Telegram, Lark |
 | `/yolo [on\|off\|unsafe\|status]` | Inspect or switch approval mode. There is no in-chat `/yolo` on Telegram — set it from the CLI (`telegram yolo [on\|off\|unsafe]`). | Lark |
 | `/config` | Open the interactive settings card. | Lark |
 | `/stream [on\|off]` | Toggle element-level typewriter streaming for answer cards (off = whole-card refresh). | Lark |
-| `/timeout [on\|off]` | Single-turn 60-min time cap; `off` lifts it for long tasks (Codex/Antigravity only). Lark also accepts `status\|unlimited\|default`. | Telegram, Lark |
-| `/steer [on\|off\|<seconds>\|unlimited\|default\|status]` | Mid-turn steering eligibility window (default 30s). Accepts seconds (`60`, `60s`) or minutes (`5m`/`5分钟`); `unlimited`/`0` lifts the window, `default` restores 30s. Within the window a plain-text follow-up injects into the running Codex turn (OK reaction); past it (or `off`) messages queue as their own turn. | Lark |
+| `/timeout [on\|off]` | Toggle the current engine's hard-cap/inactivity safeguards. Lark also accepts `status\|unlimited\|default`; status explains the exact engine policy (DeepSeek: 6h hard cap plus 30m inactivity watchdog by default). | Telegram, Lark |
+| `/steer [on\|off\|<seconds>\|unlimited\|default\|status]` | Mid-turn steering eligibility window (default 30s). Accepts seconds (`60`, `60s`) or minutes (`5m`/`5分钟`); `unlimited`/`0` lifts the window, `default` restores 30s. Within the window a plain-text follow-up injects into the running Codex or DeepSeek turn (OK reaction); past it (or `off`) messages queue as their own turn. | Lark |
 | `/account` | Show the Feishu app this instance is bound to. | Lark |
 
 ## Goals And Sessions
@@ -37,24 +37,25 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/goal --budget <n> <objective>` | Set a goal with an explicit token budget. | Telegram, Lark |
 | `/goal status` | Show the current goal and usage. | Telegram, Lark |
 | `/goal clear` | Clear the active goal. | Telegram, Lark |
-| `/resume` | Scan and resume local Claude sessions; Antigravity scans recent conversations. | Telegram, Lark |
+| `/resume` | Scan and resume Claude, Kimi ACP, or DeepSeek Harness sessions; Antigravity scans recent conversations. | Telegram, Lark |
 | `/resume thread <thread-id>` | Bind a Codex thread explicitly. | Telegram, Lark |
+| `/resume session <session-id>` | Bind a Kimi ACP or DeepSeek Harness session after native workspace validation. | Telegram, Lark |
 | `/resume conversation <conversation-id>` | Bind an Antigravity conversation explicitly. | Telegram, Lark |
-| `/detach` | Detach the current resumed Claude session, Codex thread, or Antigravity conversation. | Telegram, Lark |
+| `/detach` | Detach the current resumed Claude/Kimi/DeepSeek session, Codex thread, or Antigravity conversation. | Telegram, Lark |
 | `/reset` | Reset the current chat/session binding. | Telegram, Lark |
 | `/stop` | Stop the current running task (cancel a queued task from its queue card). | Telegram, Lark |
-| `/q <message>` (alias `/queue <message>`) | Force the message to run as its own queued turn. Without it, plain text sent while a Codex turn is running is steered into that turn (within the `/steer` eligibility window, default 30s). | Lark |
+| `/q <message>` (alias `/queue <message>`) | Force the message to run as its own queued turn. Without it, plain text sent while a Codex or DeepSeek turn is running is steered into that turn (within the `/steer` eligibility window, default 30s). | Lark |
 | `/bg` | List engine/background processes for this instance; `/bg kill <pid>` stops a process tree; `/bg killall` cleans orphans. | Lark |
 | `/continue` | Continue the latest waiting archive analysis. | Telegram, Lark |
 | `/ws list\|save\|use\|remove` | Manage saved Lark workspace directories; `/ws use` resets the current Lark session binding to avoid stale context. | Lark |
 
-## Claude-Specific Utilities
+## Context Utilities
 
 | Command | What It Does | Channels |
 |---|---|---|
-| `/context` | Show Claude context details where available. | Telegram, Lark |
-| `/compact` | Trigger Claude context compaction workflow. | Telegram, Lark |
-| `/ultrareview` | Run the dedicated deep review path for supported Claude models. | Telegram, Lark |
+| `/context` | Show Claude or DeepSeek context details where available. | Telegram, Lark |
+| `/compact` | Trigger native session compaction for Claude, Kimi, or DeepSeek. | Telegram, Lark |
+| `/ultrareview` | Run the dedicated deep review path for supported Claude models (Claude only). | Telegram, Lark |
 
 ## Scheduled And Durable Work
 

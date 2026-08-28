@@ -20,7 +20,7 @@ import { LarkKnownChatStore } from "./known-chats.js";
 import { readRawLarkConfig } from "./locale.js";
 import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 
-const LARK_CONFIG_ENGINES: InstanceEngine[] = ["codex", "claude", "kimi", "antigravity"];
+const LARK_CONFIG_ENGINES: InstanceEngine[] = ["codex", "claude", "kimi", "deepseek", "antigravity"];
 
 export type LarkConfigActionName = "engine" | "fast" | "yolo" | "locale" | "group" | "refresh" | "submit";
 
@@ -98,6 +98,7 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
       button(optionLabel(labels.codex, cfg.engine === "codex", labels), "engine", "codex", input, cfg.engine === "codex" ? "primary" : "default"),
       button(optionLabel(labels.claude, cfg.engine === "claude", labels), "engine", "claude", input, cfg.engine === "claude" ? "primary" : "default"),
       button(optionLabel(labels.kimi, cfg.engine === "kimi", labels), "engine", "kimi", input, cfg.engine === "kimi" ? "primary" : "default"),
+      button(optionLabel(labels.deepseek, cfg.engine === "deepseek", labels), "engine", "deepseek", input, cfg.engine === "deepseek" ? "primary" : "default"),
       button(optionLabel(labels.antigravity, cfg.engine === "antigravity", labels), "engine", "antigravity", input, cfg.engine === "antigravity" ? "primary" : "default"),
     ]),
     section(labels.speedSection, [
@@ -466,6 +467,7 @@ function configFormSection(
       ["codex", "Codex"],
       ["claude", "Claude"],
       ["kimi", "Kimi"],
+      ["deepseek", "DeepSeek Harness"],
       ["antigravity", "Antigravity"],
     ]),
     selectStatic("fast", cfg.codexServiceTier === "fast" ? "on" : "off", [
@@ -639,6 +641,7 @@ function larkConfigLabels(locale: Locale): {
   codex: string;
   claude: string;
   kimi: string;
+  deepseek: string;
   antigravity: string;
   speedSection: string;
   fastOn: string;
@@ -686,6 +689,7 @@ function larkConfigLabels(locale: Locale): {
       codex: "Codex",
       claude: "Claude",
       kimi: "Kimi",
+      deepseek: "DeepSeek Harness",
       antigravity: "Antigravity",
       speedSection: "Speed",
       fastOn: "Fast On",
@@ -733,6 +737,7 @@ function larkConfigLabels(locale: Locale): {
     codex: "Codex",
     claude: "Claude",
     kimi: "Kimi",
+    deepseek: "DeepSeek Harness",
     antigravity: "Antigravity",
     speedSection: "速度",
     fastOn: "Fast 开",

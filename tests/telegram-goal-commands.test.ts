@@ -48,6 +48,39 @@ describe("handleGoalTelegramCommand", () => {
     expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Goal usage: not recorded yet"));
   });
 
+  it("sets a DeepSeek Harness goal through the structured goal API", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 11 });
+    const setThreadGoal = vi.fn().mockResolvedValue({
+      goal: {
+        threadId: "deepseek-session",
+        objective: "ship the release",
+        status: "active",
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    const handled = await handleGoalTelegramCommand({
+      locale: "en",
+      cfg: { engine: "deepseek" },
+      normalized: createNormalizedMessage("/goal ship the release"),
+      context: {
+        api: { sendMessage } as never,
+        bridge: { setThreadGoal },
+      },
+    });
+
+    expect(handled).toBe(true);
+    expect(setThreadGoal).toHaveBeenCalledWith(expect.objectContaining({
+      objective: "ship the release",
+      tokenBudget: null,
+    }));
+    expect(sendMessage).toHaveBeenCalledWith(123, expect.stringContaining("Goal set."));
+  });
+
   it("sets an explicitly unbounded Codex thread goal from Telegram", async () => {
     const sendMessage = vi.fn();
     const setThreadGoal = vi.fn().mockResolvedValue({

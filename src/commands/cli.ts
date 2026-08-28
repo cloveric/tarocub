@@ -168,7 +168,7 @@ export interface LarkSendCommandDeps {
 export interface CliOptions {
   env?: Pick<
     EnvSource,
-    "HOME" | "USERPROFILE" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR"
+    "HOME" | "USERPROFILE" | "TAROCUB_INSTANCE" | "CODEX_TELEGRAM_INSTANCE" | "CODEX_TELEGRAM_STATE_DIR" | "TELEGRAM_BOT_TOKEN" | "CODEX_HOME" | "CLAUDE_CONFIG_DIR" | "DSH_HOME"
   > & {
     CCTB_SEND_URL?: string;
     CCTB_SEND_TOKEN?: string;
@@ -4306,13 +4306,13 @@ async function runEngineCommand(
   }
 
   const engine = args[0];
-  if (engine !== "codex" && engine !== "claude" && engine !== "kimi" && engine !== "antigravity") {
-    throw new Error("Usage: telegram engine <codex|claude|kimi|antigravity> [--instance <name>]");
+  if (engine !== "codex" && engine !== "claude" && engine !== "kimi" && engine !== "deepseek" && engine !== "antigravity") {
+    throw new Error("Usage: telegram engine <codex|claude|kimi|deepseek|antigravity> [--instance <name>]");
   }
 
   const config = await readInstanceConfig(configPath);
   const previousEngine =
-    config.engine === "claude" || config.engine === "codex" || config.engine === "kimi" || config.engine === "antigravity"
+    config.engine === "claude" || config.engine === "codex" || config.engine === "kimi" || config.engine === "deepseek" || config.engine === "antigravity"
       ? config.engine
       : "codex";
   let resetSessionBindings = false;
@@ -4446,7 +4446,7 @@ Commands:
   instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run]
                                               Manage per-instance agent.md
   yolo [on|off|unsafe] [--instance <name>]    Toggle YOLO auto-approval mode
-  engine [codex|claude|kimi|antigravity] [--instance <name>]
+  engine [codex|claude|kimi|deepseek|antigravity] [--instance <name>]
                                               Switch AI engine per instance
   usage [--instance <name>]                   Show token usage and cost
   verbosity [0|1|2] [--instance <name>]       Set progress output level
@@ -4653,10 +4653,20 @@ async function runInstanceCommand(
   throw new Error("Usage: telegram instance <list|rename|delete> ...");
 }
 
-// Codex/Antigravity never report dollar cost (and the repo carries no token
-// pricing), so a budget on those engines can never trip. Say so instead of
-// letting the operator believe they are protected.
-function renderNonClaudeBudgetNote(locale: unknown): string {
+// Non-Claude engines do not report dollar cost (Kimi omits structured usage
+// altogether), so a dollar budget on them can never trip. Keep the warning
+// engine-specific instead of implying that DeepSeek omits token telemetry too.
+function renderNonClaudeBudgetNote(engine: unknown, locale: unknown): string {
+  if (engine === "kimi") {
+    return locale === "zh"
+      ? "注意：Kimi ACP 当前不上报结构化的单轮 token 或费用，预算上限无法追踪或约束 Kimi turn。"
+      : "Note: Kimi ACP does not report structured per-turn tokens or cost, so the budget cap cannot track or constrain Kimi turns.";
+  }
+  if (engine === "deepseek") {
+    return locale === "zh"
+      ? "注意：DeepSeek Harness 会上报 token 用量，但不上报美元费用，预算上限无法追踪或约束 DeepSeek turn。"
+      : "Note: DeepSeek Harness reports token usage but not dollar cost, so the budget cap cannot track or constrain DeepSeek turns.";
+  }
   return locale === "zh"
     ? "注意：Codex/Antigravity 引擎不上报美元成本，预算上限目前只对 Claude 生效。"
     : "Note: Codex/Antigravity engines do not report dollar costs; the budget cap currently only takes effect on the Claude engine.";
@@ -4685,7 +4695,7 @@ async function runBudgetCommand(
       const remaining = Math.max(0, budget - used);
       logger.log(`Instance "${instanceName}": $${used.toFixed(4)} / $${budget.toFixed(2)} (${pct}%). Remaining: $${remaining.toFixed(4)}`);
       if (nonClaudeEngine) {
-        logger.log(renderNonClaudeBudgetNote(config.locale));
+        logger.log(renderNonClaudeBudgetNote(config.engine, config.locale));
       }
     }
     return true;
@@ -4701,7 +4711,7 @@ async function runBudgetCommand(
     });
     logger.log(`Instance "${instanceName}": budget set to $${amount.toFixed(2)}. Bot will block new requests when the budget is exhausted.`);
     if (nonClaudeEngine) {
-      logger.log(renderNonClaudeBudgetNote(config.locale));
+      logger.log(renderNonClaudeBudgetNote(config.engine, config.locale));
     }
     return true;
   }

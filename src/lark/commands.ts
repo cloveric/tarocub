@@ -19,6 +19,7 @@ import {
 } from "../codex/model-capabilities.js";
 import { CronScheduler } from "../runtime/cron-scheduler.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
+import { renderRuntimeTimeoutMessage } from "../runtime/runtime-timeout-message.js";
 import { resolveConversationResume } from "../runtime/conversation-resume.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
@@ -77,7 +78,7 @@ import type { LarkBridgeLike, LarkChannelLike } from "./types.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
 const VALID_LARK_EFFORT_LEVELS: EffortLevel[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
-const LARK_ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "kimi", "antigravity"];
+const LARK_ENGINE_CHOICES: InstanceEngine[] = ["claude", "codex", "kimi", "deepseek", "antigravity"];
 
 type RequestLarkApproval = (input: {
   channel: LarkChannelLike;
@@ -85,6 +86,7 @@ type RequestLarkApproval = (input: {
   chatId: string;
   conversationKey?: string;
   bridgeChatType?: "private" | "group";
+  requesterUserId?: number;
   replyTo?: string;
   replyInThread?: boolean;
   locale?: Locale;
@@ -260,11 +262,12 @@ export async function handleLarkSimpleCommand(
   if (isUsageCommand(commandText)) {
     const usage = await new UsageStore(input.stateDir).load();
     let usageMessage = renderUsageMessage(usage, commandLocale);
-    // Codex/Antigravity never report dollar cost, so a configured budgetUsd can
-    // never trip. When one is set, say so honestly instead of silently implying
-    // the cap protects this instance (Telegram /usage carries the same note).
+    // Every non-Claude engine has a telemetry limitation. Kimi omits structured
+    // usage entirely; DeepSeek reports tokens but no dollars; Codex/Antigravity
+    // cannot enforce dollar budgets. Surface relevant gaps instead of implying
+    // that the usage card or configured budget is complete.
     const usageCfg = await loadInstanceConfig(input.stateDir);
-    if (usageCfg.engine === "kimi") {
+    if (usageCfg.engine === "kimi" || usageCfg.engine === "deepseek") {
       usageMessage = [
         usageMessage,
         renderLarkEngineUsageNote(usageCfg.engine, commandLocale, usageCfg.budgetUsd !== undefined),
@@ -519,6 +522,18 @@ async function handleLarkSessionCommand(
           };
         })
       : undefined,
+    scanRecentDeepSeekSessions: input.bridge.listExternalSessions
+      ? async () => (await input.bridge.listExternalSessions!({ limit: 20 })).map((session) => {
+          const modifiedAt = new Date(session.updatedAt ?? 0);
+          return {
+            sessionId: session.sessionId,
+            dirName: session.sessionId,
+            workspacePath: session.cwd,
+            modifiedAt: Number.isNaN(modifiedAt.getTime()) ? new Date(0) : modifiedAt,
+            displayName: session.title || session.sessionId,
+          };
+        })
+      : undefined,
     sendResumeScanResult: async ({ kind, visibleSessions }) => {
       await sendLarkCardWithFallback({
         channel: input.channel,
@@ -540,7 +555,7 @@ async function handleLarkSessionCommand(
 }
 
 function renderLarkResumeFallback(
-  kind: "claude" | "antigravity" | "kimi",
+  kind: "claude" | "antigravity" | "kimi" | "deepseek",
   sessions: ScannedSession[],
   locale: Locale,
 ): string {
@@ -1011,16 +1026,16 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "",
       "**Session**",
       "- `/status` current conversation · `/stop` stop the current task (cancel a queued task from its queue card) · `/reset` reset the session",
-      "- `/resume [n]` pick a Claude/Kimi/Antigravity session · Codex `/resume thread <id>` · Kimi also supports `/resume session <id>` · `/detach` unbind",
+      "- `/resume [n]` pick a Claude/Kimi/DeepSeek Harness/Antigravity session · Codex `/resume thread <id>` · Kimi/DeepSeek also support `/resume session <id>` · `/detach` unbind",
       "- `/goal […]` set a conversation goal · `/btw <q>` ask aside without touching the session · `/continue` resume a waiting archive analysis",
-      "- `/q <message>` force a queued turn — while a Codex turn is running, plain text steers INTO it; `/q` runs it afterwards instead",
+      "- `/q <message>` force a queued turn — while a Codex/DeepSeek turn is running, plain text steers INTO it; `/q` runs it afterwards instead",
       "- `/bg` list this instance's engine/background processes · `/bg kill <pid>` · `/bg killall` sweep orphans",
       "",
       "**Settings**",
       "- `/config` interactive panel (recommended) · `/usage` usage · `/account` bound Feishu app",
-      "- `/model` · `/effort` · `/engine [claude|codex|kimi|antigravity]` · `/fast` Codex Fast Mode · `/yolo` approval mode",
+      "- `/model` · `/effort` · `/engine [claude|codex|kimi|deepseek|antigravity]` · `/fast` Codex Fast Mode · `/yolo` approval mode",
       "- `/stream [on|off]` typewriter streaming on run cards (off = full-card refresh)",
-      "- `/timeout [on|off]` single-turn 60-min time cap (off = lift it for long tasks)",
+      "- `/timeout [on|off]` engine runtime safeguards (hard cap and/or inactivity watchdog; off disables both)",
       "- `/steer [on|off|<seconds>|unlimited]` mid-turn steering window (default 30s; later messages queue)",
       "",
       "**Workspace & groups**",
@@ -1032,7 +1047,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
       "**Advanced & collaboration**",
       "- `/board …` durable kanban · `/mini …` link group threads as peers · `/ask <instance> <prompt>` delegate to another bot",
       "- `/fan` · `/chain` · `/verify` Agent Bus parallel / sequential / verification flows",
-      "- `/context` Claude context · `/compact` Claude/Kimi compaction · `/ultrareview` Claude deep review",
+      "- `/context` Claude/DeepSeek context · `/compact` Claude/Kimi/DeepSeek compaction · `/ultrareview` Claude deep review",
       "- `/approve [session]` · `/deny` handle approvals by text when card buttons are unavailable",
       "",
       "Full list: see the Slash Command Index in the README. Group messages need an `@` by default; `/group all` enables non-`@` replies (the app also needs `im:message` + `im:message.group_msg`). If non-`@` group messages still don't arrive, run `node dist/src/index.js lark doctor`.",
@@ -1046,16 +1061,16 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "",
     "**会话**",
     "- `/status` 当前会话 · `/stop` 停当前任务（排队任务在各自排队卡片上取消）· `/reset` 重置会话",
-    "- `/resume [编号]` 选 Claude/Kimi/Antigravity 会话 · Codex `/resume thread <id>` · Kimi 也支持 `/resume session <id>` · `/detach` 解绑",
+    "- `/resume [编号]` 选 Claude/Kimi/DeepSeek Harness/Antigravity 会话 · Codex `/resume thread <id>` · Kimi/DeepSeek 也支持 `/resume session <id>` · `/detach` 解绑",
     "- `/goal […]` 设会话目标 · `/btw <问题>` 旁问不影响会话 · `/continue` 继续等待中的压缩包分析",
-    "- `/q <消息>` 强制排队 — Codex 任务运行中纯文本会注入当前任务，`/q` 则排在后面单独执行",
+    "- `/q <消息>` 强制排队 — Codex/DeepSeek 任务运行中纯文本会注入当前任务，`/q` 则排在后面单独执行",
     "- `/bg` 列出本实例引擎/后台进程 · `/bg kill <pid>` 停指定进程树 · `/bg killall` 清理孤儿后台进程",
     "",
     "**设置**",
     "- `/config` 交互配置面板（推荐）· `/usage` 用量 · `/account` 当前绑定的飞书应用",
-    "- `/model` · `/effort` · `/engine [claude|codex|kimi|antigravity]` · `/fast` Codex 快速模式 · `/yolo` 审批模式",
+    "- `/model` · `/effort` · `/engine [claude|codex|kimi|deepseek|antigravity]` · `/fast` Codex 快速模式 · `/yolo` 审批模式",
     "- `/stream [on|off]` 回答卡片打字机流式开关（off = 整卡刷新）",
-    "- `/timeout [on|off]` 单轮 60 分钟时间上限（off = 长任务放开上限）",
+    "- `/timeout [on|off]` 引擎运行时保护（硬上限和/或静默看门狗；off 会全部关闭）",
     "- `/steer [on|off|<秒数>|unlimited]` 任务中途引导的资格窗口（默认 30 秒，超窗排队）",
     "",
     "**工作区与群**",
@@ -1067,7 +1082,7 @@ function renderLarkHelpMessage(locale: Locale = "zh"): string {
     "**进阶与协作**",
     "- `/board …` 持久任务板 · `/mini …` 把群 thread 注册成 peer 互联 · `/ask <实例> <提示>` 委托给别的 bot",
     "- `/fan` · `/chain` · `/verify` Agent Bus 并行 / 串联 / 验证",
-    "- `/context` Claude 上下文 · `/compact` Claude/Kimi 压缩 · `/ultrareview` Claude 深度审查",
+    "- `/context` Claude/DeepSeek 上下文 · `/compact` Claude/Kimi/DeepSeek 压缩 · `/ultrareview` Claude 深度审查",
     "- `/approve [session]` · `/deny` 卡片按钮不可用时用文字处理审批",
     "",
     "完整命令表见 README 的 Slash Command Index。群里普通消息默认要@；`/group all` 开非@（应用还需有 `im:message` + `im:message.group_msg`）。若开了非@群消息仍收不到，运行 `node dist/src/index.js lark doctor`。",
@@ -1714,9 +1729,10 @@ async function renderLarkStatusMessage(
       `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
       `Approval mode: ${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
       `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
-      // Honest caveat: only Claude reports dollar cost, so on other engines the
-      // configured cap is currently decorative — say so wherever it's shown.
-      ...(cfg.engine === "kimi"
+      // Kimi omits usage entirely and DeepSeek omits dollar cost. Show those
+      // telemetry limits even without a budget so status never implies complete
+      // accounting; other non-Claude engines need the warning only when a cap exists.
+      ...(cfg.engine === "kimi" || cfg.engine === "deepseek"
         ? [renderLarkEngineUsageNote(cfg.engine, locale, cfg.budgetUsd !== undefined)]
         : cfg.budgetUsd !== undefined && cfg.engine !== "claude"
           ? [renderLarkEngineUsageNote(cfg.engine, locale, true)]
@@ -1735,6 +1751,7 @@ async function renderLarkStatusMessage(
       ...(cfg.engine === "codex" && currentSession ? [`Current thread: ${currentSession.codexSessionId}`] : []),
       ...(cfg.engine === "antigravity" && currentSession ? [`Current conversation: ${currentSession.codexSessionId}`] : []),
       ...(cfg.engine === "kimi" && currentSession ? [`Current Kimi session: ${currentSession.codexSessionId}`] : []),
+      ...(cfg.engine === "deepseek" && currentSession ? [`Current DeepSeek Harness session: ${currentSession.codexSessionId}`] : []),
       ...workflowLines,
       `Active run: ${activeRun ? "yes" : "no"}`,
       `Pending approvals: ${runtime.pendingApprovals.size}`,
@@ -1750,7 +1767,7 @@ async function renderLarkStatusMessage(
     `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
     `审批模式：${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
     `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,
-    ...(cfg.engine === "kimi"
+    ...(cfg.engine === "kimi" || cfg.engine === "deepseek"
       ? [renderLarkEngineUsageNote(cfg.engine, locale, cfg.budgetUsd !== undefined)]
       : cfg.budgetUsd !== undefined && cfg.engine !== "claude"
         ? [renderLarkEngineUsageNote(cfg.engine, locale, true)]
@@ -1769,6 +1786,7 @@ async function renderLarkStatusMessage(
     ...(cfg.engine === "codex" && currentSession ? [`当前 thread：${currentSession.codexSessionId}`] : []),
     ...(cfg.engine === "antigravity" && currentSession ? [`当前 conversation：${currentSession.codexSessionId}`] : []),
     ...(cfg.engine === "kimi" && currentSession ? [`当前 Kimi session：${currentSession.codexSessionId}`] : []),
+    ...(cfg.engine === "deepseek" && currentSession ? [`当前 DeepSeek Harness session：${currentSession.codexSessionId}`] : []),
     ...workflowLines,
     `当前运行：${activeRun ? "是" : "否"}`,
     `待处理审批：${runtime.pendingApprovals.size}`,
@@ -1777,7 +1795,7 @@ async function renderLarkStatusMessage(
 
 /**
  * One-line caveat shown next to a configured budget on non-Claude engines:
- * Codex/Antigravity never report dollar cost, so the budgetUsd cap can never
+ * Non-Claude engines do not currently report dollar cost, so budgetUsd can never
  * trip there — pretending otherwise would be a false safety net.
  */
 function renderLarkEngineUsageNote(engine: InstanceConfig["engine"], locale: Locale, budgetConfigured: boolean): string {
@@ -1785,6 +1803,11 @@ function renderLarkEngineUsageNote(engine: InstanceConfig["engine"], locale: Loc
     return locale === "en"
       ? `Note: Kimi ACP does not currently report structured per-turn tokens or cost; Kimi turns are excluded from these totals${budgetConfigured ? " and the configured budget cap cannot track them" : ""}.`
       : `注意：Kimi ACP 当前不上报结构化的单轮 token 或费用；这些累计数据不包含 Kimi turn${budgetConfigured ? "，已配置的预算上限也无法追踪它们" : ""}。`;
+  }
+  if (engine === "deepseek") {
+    return locale === "en"
+      ? `Note: DeepSeek Harness reports token usage but not dollar cost${budgetConfigured ? "; the configured budget cap cannot track or constrain DeepSeek turns" : ""}.`
+      : `注意：DeepSeek Harness 会上报 token 用量，但不上报美元费用${budgetConfigured ? "；已配置的预算上限无法追踪或约束 DeepSeek turn" : ""}。`;
   }
   return locale === "en"
     ? "Note: Codex/Antigravity engines do not report dollar cost; the budget cap currently only takes effect on Claude."
@@ -1950,6 +1973,21 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
           "用 /model <id> 设置当前 Kimi provider 配置实际提供的模型。",
           "/model off",
           "下一轮开始时会通过 ACP 校验该模型 ID。",
+        ].join("\n");
+  }
+  if (cfg.engine === "deepseek") {
+    return locale === "en"
+      ? [
+          `Current model: ${current}`,
+          "Use /model <provider/model> or /model <model-id> with a model advertised by DeepSeek Harness.",
+          "/model off",
+          "DeepSeek Harness validates the selection through its session model API.",
+        ].join("\n")
+      : [
+          `当前模型: ${current}`,
+          "用 /model <provider/model> 或 /model <model-id> 选择 DeepSeek Harness 提供的模型。",
+          "/model off",
+          "DeepSeek Harness 会通过 session model API 校验该选择。",
         ].join("\n");
   }
   if (locale === "en") {
@@ -2132,43 +2170,21 @@ async function handleLarkStreamCommand(stateDir: string, cfg: InstanceConfig, ac
   return locale === "en" ? "Usage: /stream [on|off|status]" : "用法: /stream [on|off|status]";
 }
 
-// /timeout toggles the single-turn runtime time cap (60 min). The cap auto-stops
-// a turn that runs too long; lifting it lets a genuinely long task (full test
-// suites, big migrations) run to completion, at the cost of no auto-recovery if
-// a turn truly hangs. Instance-level, persisted; applies from the next turn.
-// "on" = cap enforced (default, safe); "off" = cap lifted (long tasks allowed).
 async function handleLarkTimeoutCommand(stateDir: string, cfg: InstanceConfig, action: string, locale: Locale): Promise<string> {
-  // The single-turn cap only exists on Codex/Antigravity; the Claude adapter has
-  // no turn timeout (it runs indefinitely). On Claude, say so honestly instead of
-  // claiming a cap was lifted — the flag is still persisted so it applies if the
-  // instance later switches to Codex.
-  const claudeNote = cfg.engine === "claude"
-    ? (locale === "en"
-      ? " (Note: this instance runs Claude, which has no single-turn cap; this toggle only affects Codex/Antigravity.)"
-      : "（注意：当前是 Claude 引擎，本就无单轮超时，此开关只对 Codex/Antigravity 生效。）")
-    : "";
   if (action === "off" || action === "disable" || action === "long" || action === "unlimited") {
     await updateInstanceConfig(stateDir, (config) => {
       config.disableRuntimeTimeout = true;
     });
-    return (locale === "en"
-      ? "Single-turn time cap lifted — long tasks can run without the 60-min limit. Note: a truly hung turn won't auto-recover. Takes effect from the next turn."
-      : "已放开单轮时间上限——长任务不再受 60 分钟限制。注意：真卡死的回合不会自动恢复。下一轮生效。") + claudeNote;
+    return renderRuntimeTimeoutMessage(cfg.engine, false, "off", locale);
   }
   if (action === "on" || action === "enable" || action === "default") {
     await updateInstanceConfig(stateDir, (config) => {
       delete config.disableRuntimeTimeout;
     });
-    return (locale === "en"
-      ? "Single-turn time cap re-enabled (60 min, default). Takes effect from the next turn."
-      : "已恢复单轮时间上限（60 分钟，默认）。下一轮生效。") + claudeNote;
+    return renderRuntimeTimeoutMessage(cfg.engine, true, "on", locale);
   }
   if (action === "status") {
-    const lifted = cfg.disableRuntimeTimeout === true;
-    if (locale === "en") {
-      return `Single-turn time cap: ${lifted ? "lifted (no limit — /timeout on to restore)" : "60 min (default — /timeout off to lift for long tasks)"}` + claudeNote;
-    }
-    return `单轮时间上限：${lifted ? "已放开（无限制，/timeout on 恢复）" : "60 分钟（默认，长任务用 /timeout off 放开）"}` + claudeNote;
+    return renderRuntimeTimeoutMessage(cfg.engine, cfg.disableRuntimeTimeout !== true, "status", locale);
   }
   return locale === "en" ? "Usage: /timeout [on|off|status]" : "用法: /timeout [on|off|status]";
 }
@@ -2181,17 +2197,17 @@ async function handleLarkTimeoutCommand(stateDir: string, cfg: InstanceConfig, a
  */
 async function handleLarkSteerCommand(stateDir: string, cfg: InstanceConfig, action: string, locale: Locale): Promise<string> {
   const en = locale === "en";
-  // Steering is implemented only by the Codex app-server adapter; on Claude the
-  // setting persists but mid-turn messages always queue regardless. Say so
-  // honestly instead of implying the toggle changes anything here.
+  // Codex app-server and DeepSeek Harness can steer active turns. The setting
+  // still persists on engines without injection support, so explain that their
+  // messages continue to queue instead of implying this toggle changes them.
   const engineNote = cfg.engine === "claude"
     ? (en
-      ? " (Note: this instance runs Claude, which doesn't support mid-turn steering — messages during a turn always queue; this setting only takes effect if the instance switches to Codex.)"
-      : "（注意：当前是 Claude 引擎，不支持任务中途注入——进行中收到的消息本就一律排队；此设置仅在切换到 Codex 引擎后生效。）")
+      ? " (Note: this instance runs Claude, which doesn't support mid-turn steering — messages during a turn always queue; this setting only takes effect if the instance switches to Codex or DeepSeek.)"
+      : "（注意：当前是 Claude 引擎，不支持任务中途注入——进行中收到的消息本就一律排队；此设置仅在切换到 Codex 或 DeepSeek 引擎后生效。）")
     : cfg.engine === "kimi"
       ? (en
-        ? " (Note: Kimi ACP does not support mid-turn prompt injection — messages received during a turn queue as separate turns; this setting only takes effect after switching to Codex.)"
-        : "（注意：Kimi ACP 不支持任务中途注入——进行中收到的消息会排队成为独立 turn；此设置仅在切换到 Codex 后生效。）")
+        ? " (Note: Kimi ACP does not support mid-turn prompt injection — messages received during a turn queue as separate turns; this setting only takes effect after switching to Codex or DeepSeek.)"
+        : "（注意：Kimi ACP 不支持任务中途注入——进行中收到的消息会排队成为独立 turn；此设置仅在切换到 Codex 或 DeepSeek 后生效。）")
       : "";
   const describe = (enabled: boolean, windowSeconds: number): string => {
     if (!enabled) {
@@ -2289,7 +2305,7 @@ async function handleLarkEngineCommand(
     ].join("\n");
   }
   if (invalid || !LARK_ENGINE_CHOICES.includes(engine as InstanceEngine)) {
-    return locale === "en" ? "Usage: /engine [claude|codex|kimi|antigravity]" : "用法: /engine [claude|codex|kimi|antigravity]";
+    return locale === "en" ? "Usage: /engine [claude|codex|kimi|deepseek|antigravity]" : "用法: /engine [claude|codex|kimi|deepseek|antigravity]";
   }
 
   const selectedEngine = engine as InstanceEngine;
@@ -2449,8 +2465,8 @@ async function handleLarkGoalCommand(
 
   if (cfg.engine === "kimi") {
     await sendLarkCommandMarkdown(input, normalized, "/goal", locale === "en"
-      ? "Kimi ACP does not currently provide /goal (the live CLI returns Unknown ACP command), so the bridge will not disguise an ordinary prompt as a goal. Send the task normally or switch to Codex/Claude."
-      : "Kimi ACP 当前未提供 /goal 命令（真机返回 Unknown ACP command），bridge 不会把普通聊天伪装成 goal。请直接发送任务，或切换到 Codex/Claude。");
+      ? "Kimi ACP does not currently provide /goal (the live CLI returns Unknown ACP command), so the bridge will not disguise an ordinary prompt as a goal. Send the task normally or switch to Codex, Claude, or DeepSeek."
+      : "Kimi ACP 当前未提供 /goal 命令（真机返回 Unknown ACP command），bridge 不会把普通聊天伪装成 goal。请直接发送任务，或切换到 Codex、Claude 或 DeepSeek。");
     return true;
   }
 
@@ -2513,8 +2529,8 @@ async function handleLarkGoalCommand(
     return true;
   }
 
-  // Live path: set the goal AND watch Codex's autonomous pursuit of it, streaming the
-  // progress into a run card (Codex self-drives once the goal is set). The watch runs
+  // Live path: set the goal AND watch the structured runtime's autonomous pursuit,
+  // streaming progress into a run card. Codex and DeepSeek self-drive once the goal is set. The watch runs
   // detached so the command returns immediately while the card updates in the
   // background. Falls back to plain set-and-confirm when watch/CardKit is unavailable.
   if (input.bridge.watchThreadGoal && input.createRunCard) {
@@ -2564,16 +2580,29 @@ async function handleLarkGoalCommand(
             objective: action.objective,
             tokenBudget: action.tokenBudget,
             onEngineEvent: (event) => { void runCard.apply(event); },
+            onApprovalRequest: async (request) => await input.requestApproval({
+              channel: input.channel,
+              runtime: input.runtime,
+              chatId: normalized.chatId,
+              conversationKey: normalized.conversationKey,
+              bridgeChatType: normalized.bridgeChatType,
+              requesterUserId: normalized.bridgeUserId,
+              replyTo: normalized.messageId,
+              replyInThread: Boolean(normalized.threadId),
+              locale,
+              request,
+              abortSignal: request.abortSignal ?? abort.signal,
+            }),
             abortSignal: abort.signal,
           });
           if (abort.signal.aborted) {
-            // Stopped: clear the goal so Codex halts its autonomous pursuit (aborting the
-            // watcher alone only stops us listening), then flip the card to "已中断".
+            // Stopped: clear the goal so the engine halts its autonomous pursuit
+            // (aborting the watcher alone only stops us listening), then flip the card to "已中断".
             try { await clearThreadGoal?.({ ...goalInput }); } catch { /* best-effort */ }
             await runCard.interrupt();
           } else {
             // Completed (watchThreadGoal only resolves at a terminal status). Clear the
-            // goal from the Codex thread too — previously only the abort path cleared it,
+            // goal from the engine session too — previously only the abort path cleared it,
             // so a finished goal stayed SET in the thread and was silently resumed by, or
             // bled into, later ordinary messages in the same thread.
             try { await clearThreadGoal?.({ ...goalInput }); } catch { /* best-effort */ }

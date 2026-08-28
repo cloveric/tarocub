@@ -188,18 +188,18 @@ export async function handleGoalTelegramCommand(input: {
     await input.context.api.sendMessage(
       normalized.chatId,
       locale === "zh"
-        ? "Kimi ACP 当前未提供 /goal 命令（真机返回 Unknown ACP command），bridge 不会把普通聊天伪装成 goal。请直接发送任务，或切换到 Codex/Claude。"
-        : "Kimi ACP does not currently provide /goal (the live CLI returns Unknown ACP command), so the bridge will not disguise an ordinary prompt as a goal. Send the task normally or switch to Codex/Claude.",
+        ? "Kimi ACP 当前未提供 /goal 命令（真机返回 Unknown ACP command），bridge 不会把普通聊天伪装成 goal。请直接发送任务，或切换到 Codex、Claude 或 DeepSeek。"
+        : "Kimi ACP does not currently provide /goal (the live CLI returns Unknown ACP command), so the bridge will not disguise an ordinary prompt as a goal. Send the task normally or switch to Codex, Claude, or DeepSeek.",
     );
     return true;
   }
 
-  if (input.cfg.engine !== "codex") {
+  if (input.cfg.engine !== "codex" && input.cfg.engine !== "deepseek") {
     await input.context.api.sendMessage(
       normalized.chatId,
       locale === "zh"
-        ? "当前引擎暂不支持 /goal。请切换到 Codex 或 Claude。"
-        : "The current engine does not support /goal yet. Switch to Codex or Claude.",
+        ? "当前引擎暂不支持 /goal。请切换到 Codex、Claude 或 DeepSeek。"
+        : "The current engine does not support /goal yet. Switch to Codex, Claude, or DeepSeek.",
     );
     return true;
   }

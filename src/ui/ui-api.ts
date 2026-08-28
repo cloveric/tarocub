@@ -32,7 +32,7 @@ export interface UiApiDeps {
 const EDITABLE_FIELDS = ["engine", "model", "effort", "locale", "verbosity", "budgetUsd"] as const;
 type EditableField = (typeof EDITABLE_FIELDS)[number];
 
-const VALID_ENGINES = new Set(["codex", "claude", "antigravity", "kimi"]);
+const VALID_ENGINES = new Set(["codex", "claude", "antigravity", "kimi", "deepseek"]);
 
 function ok(json: unknown): UiApiResult {
   return { status: 200, json };

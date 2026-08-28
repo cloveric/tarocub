@@ -24,6 +24,60 @@ function createTurnState(): WorkflowAwareTurnState {
 }
 
 describe("dispatchAuthorizedTelegramMessage", () => {
+  it("exposes the current DeepSeek Harness session through the status resolver", async () => {
+    const normalized = createNormalizedMessage("/status");
+    let status: Record<string, unknown> | undefined;
+    const handleSimpleLocalTelegramCommand = vi.fn(async (input: {
+      resolveStatus?: (chatId: number) => Promise<Record<string, unknown>>;
+    }) => {
+      status = await input.resolveStatus?.(123);
+      return true;
+    });
+
+    await dispatchAuthorizedTelegramMessage({
+      stateDir: "/tmp/state",
+      startedAt: Date.now(),
+      locale: "en",
+      cfg: { engine: "deepseek" },
+      normalized,
+      context: {
+        api: { sendMessage: vi.fn(), sendVoice: vi.fn(), getFile: vi.fn(), downloadFile: vi.fn() },
+        bridge: {},
+        inboxDir: "/tmp/inbox",
+      } as never,
+      workflowStore: {
+        inspect: vi.fn().mockResolvedValue({ state: { records: [] }, warning: undefined }),
+      } as never,
+      deps: {
+        sessionStore: {
+          findByConversationKeySafe: vi.fn().mockResolvedValue({
+            record: { codexSessionId: "deepseek-session-123" },
+            warning: undefined,
+          }),
+        } as never,
+        turnState: createTurnState(),
+        updateInstanceConfig: vi.fn(),
+        deliverTelegramResponse: vi.fn(),
+        sendTelegramOutFile: vi.fn(),
+        updateWorkflowBestEffort: vi.fn(),
+      },
+      handlers: {
+        handleLocalSessionTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleLocalEngineTelegramCommand: vi.fn().mockResolvedValue(false),
+        handleSimpleLocalTelegramCommand: handleSimpleLocalTelegramCommand as never,
+        handleDelegationTelegramCommand: vi.fn(),
+        prepareTelegramMessageInput: vi.fn(),
+        executeWorkflowAwareTelegramTurn: vi.fn(),
+      },
+    });
+
+    expect(status).toMatchObject({
+      engine: "deepseek",
+      sessionBound: true,
+      threadId: "deepseek-session-123",
+    });
+  });
+
   it("short-circuits after the first handled command", async () => {
     const normalized = createNormalizedMessage("/reset");
     const handleLocalSessionTelegramCommand = vi.fn().mockResolvedValue(true);

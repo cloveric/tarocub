@@ -226,6 +226,29 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("describes the DeepSeek timeout toggle as both hard-cap and inactivity-watchdog control", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    try {
+      await expect(handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek", disableRuntimeTimeout: false },
+        normalized: createNormalizedMessage("/timeout off"),
+        context: { api: api as never, instanceName: "default", updateId: 780 },
+        updateInstanceConfig: vi.fn().mockResolvedValue(undefined),
+      })).resolves.toBe(true);
+
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        expect.stringMatching(/DeepSeek Harness.*hard cap.*inactivity watchdog/i),
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("rejects Codex /effort max until an explicit compatible model is selected", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {
@@ -774,6 +797,30 @@ describe("handleSimpleLocalTelegramCommand", () => {
       expect(api.sendMessage).toHaveBeenCalledWith(123, expect.stringContaining(
         "Kimi validates the exact model ID through ACP when the next turn starts.",
       ));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("explains DeepSeek Harness provider/model IDs on bare /model", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    try {
+      await expect(handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek", model: "deepseek-official/deepseek-v4-flash" },
+        normalized: createNormalizedMessage("/model"),
+        context: { api: api as never, instanceName: "default", updateId: 81 },
+        updateInstanceConfig: vi.fn(),
+      })).resolves.toBe(true);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, [
+        "Current model: deepseek-official/deepseek-v4-flash",
+        "Use /model <provider/model> or /model <model-id> with a model advertised by DeepSeek Harness.",
+        "/model off",
+        "DeepSeek Harness validates the selection through its session model API on the next turn.",
+      ].join("\n"));
     } finally {
       await removeTempRoot(root);
     }

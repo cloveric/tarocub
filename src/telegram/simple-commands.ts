@@ -8,6 +8,7 @@ import {
 } from "../codex/model-capabilities.js";
 import { EFFORT_LEVELS, type EffortLevel } from "../state/config-file-schema.js";
 import { UsageStore } from "../state/usage-store.js";
+import { renderRuntimeTimeoutMessage } from "../runtime/runtime-timeout-message.js";
 import {
   renderTelegramHelpMessage,
   renderTelegramStatusMessage,
@@ -162,6 +163,22 @@ export async function handleSimpleLocalTelegramCommand(input: {
           ].join("\n");
     }
 
+    if (cfg.engine === "deepseek") {
+      return locale === "zh"
+        ? [
+            `当前模型: ${current}`,
+            "用 /model <provider/model> 或 /model <model-id> 选择 DeepSeek Harness 提供的模型。",
+            "/model off",
+            "下一轮开始时，DeepSeek Harness 会通过 session model API 校验该选择。",
+          ].join("\n")
+        : [
+            `Current model: ${current}`,
+            "Use /model <provider/model> or /model <model-id> with a model advertised by DeepSeek Harness.",
+            "/model off",
+            "DeepSeek Harness validates the selection through its session model API on the next turn.",
+          ].join("\n");
+    }
+
     return locale === "zh"
       ? [
           `当前模型: ${current}`,
@@ -190,7 +207,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
     const usageStore = new UsageStore(stateDir);
     const usage = await usageStore.load();
     let usageMessage = renderUsageMessage(usage, locale);
-    // Codex/Antigravity never report dollar cost, so a configured budget can
+    // Non-Claude engines do not currently report dollar cost, so a configured budget can
     // never trip. When one is set, say so instead of silently implying the cap
     // protects this instance.
     const instanceConfig = await loadInstanceConfig(stateDir);
@@ -201,6 +218,13 @@ export async function handleSimpleLocalTelegramCommand(input: {
         locale === "zh"
           ? `注意：Kimi ACP 当前不上报结构化的单轮 token 或费用；这些累计数据不包含 Kimi turn${instanceConfig.budgetUsd !== undefined ? "，已配置的预算上限也无法追踪它们" : ""}。`
           : `Note: Kimi ACP does not currently report structured per-turn tokens or cost; Kimi turns are excluded from these totals${instanceConfig.budgetUsd !== undefined ? " and the configured budget cap cannot track them" : ""}.`,
+      ].join("\n");
+    } else if (engine === "deepseek") {
+      usageMessage = [
+        usageMessage,
+        locale === "zh"
+          ? `注意：DeepSeek Harness 会上报 token 用量，但不上报美元费用${instanceConfig.budgetUsd !== undefined ? "；已配置的预算上限无法追踪或约束 DeepSeek turn" : ""}。`
+          : `Note: DeepSeek Harness reports token usage but not dollar cost${instanceConfig.budgetUsd !== undefined ? "; the configured budget cap cannot track or constrain DeepSeek turns" : ""}.`,
       ].join("\n");
     } else if (instanceConfig.budgetUsd !== undefined && engine !== "claude") {
       usageMessage = [
@@ -255,17 +279,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
         config.disableRuntimeTimeout = !timeoutEnabled;
       });
     }
-    const timeoutMessage = locale === "zh"
-      ? timeoutCmd.action === "status"
-        ? `单轮 60 分钟上限当前${timeoutEnabled ? "已启用" : "已关闭"}。用 /timeout on 或 /timeout off 调整。`
-        : timeoutEnabled
-          ? "已启用单轮 60 分钟上限。"
-          : "已关闭单轮 60 分钟上限；长任务仍受无响应看门狗保护。"
-      : timeoutCmd.action === "status"
-        ? `The 60-minute per-turn cap is currently ${timeoutEnabled ? "enabled" : "disabled"}. Use /timeout on or /timeout off.`
-        : timeoutEnabled
-          ? "Enabled the 60-minute per-turn cap."
-          : "Disabled the 60-minute per-turn cap; the inactivity watchdog still protects stalled tasks.";
+    const timeoutMessage = renderRuntimeTimeoutMessage(cfg.engine, timeoutEnabled, timeoutCmd.action, locale);
     await context.api.sendMessage(normalized.chatId, timeoutMessage);
     await appendCommandSuccessAuditEventBestEffort(stateDir, context, normalized, {
       startedAt,

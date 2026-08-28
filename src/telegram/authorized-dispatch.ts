@@ -301,6 +301,18 @@ export async function dispatchAuthorizedTelegramMessage(input: {
           };
         })
       : undefined,
+    scanRecentDeepSeekSessions: context.bridge.listExternalSessions
+      ? async () => (await context.bridge.listExternalSessions!({ limit: 20 })).map((session) => {
+          const modifiedAt = new Date(session.updatedAt ?? 0);
+          return {
+            sessionId: session.sessionId,
+            dirName: session.sessionId,
+            workspacePath: session.cwd,
+            modifiedAt: Number.isNaN(modifiedAt.getTime()) ? new Date(0) : modifiedAt,
+            displayName: session.title || session.sessionId,
+          };
+        })
+      : undefined,
   })) {
     return;
   }
@@ -337,7 +349,7 @@ export async function dispatchAuthorizedTelegramMessage(input: {
       return {
         engine: cfg.engine,
         sessionBound: sessionResult.warning ? null : sessionResult.record !== null,
-        threadId: sessionResult.warning || (cfg.engine !== "codex" && cfg.engine !== "antigravity" && cfg.engine !== "kimi")
+        threadId: sessionResult.warning || (cfg.engine !== "codex" && cfg.engine !== "antigravity" && cfg.engine !== "kimi" && cfg.engine !== "deepseek")
           ? null
           : sessionResult.record?.codexSessionId ?? null,
         blockingTasks,

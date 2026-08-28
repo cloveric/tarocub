@@ -212,14 +212,14 @@ When adding a new state file, define up front:
 - what recovery behavior is allowed
 - whether the file is credential-bearing or privacy-sensitive
 
-## 5. Shared Engine-Home Boundary
+## 5. Shared Or Linked Engine-Home Boundary
 
 The bot no longer has a fully isolated engine-global home.
 
 ### Trusted
 
-- the operator's own Claude/Codex CLI environment
-- the real `CLAUDE_CONFIG_DIR` / `CODEX_HOME` selected by the parent process
+- the operator's own Claude/Codex/Kimi/DeepSeek CLI environment
+- the real `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `KIMI_CODE_HOME`, or `DSH_HOME` selected by the parent process
 
 ### Untrusted
 
@@ -228,7 +228,8 @@ The bot no longer has a fully isolated engine-global home.
 
 ### Current enforcement
 
-- [src/service.ts](../src/service.ts:563) intentionally inherits the real Claude/Codex config home instead of forcing a per-instance engine home
+- [src/service.ts](../src/service.ts) intentionally inherits the real Claude/Codex config home instead of forcing a per-instance engine home
+- Kimi retains its native user-level home; DeepSeek receives a private writable home but links authenticated credentials/profiles from the selected shared `DSH_HOME` and copies mutable settings
 - workspace paths remain per-instance, so normal conversation history stays split by workspace in practice
 - legacy Claude project files are migrated into the shared config home so upgrades do not silently drop prior history
 

@@ -48,6 +48,8 @@ describe("resolveConfig", () => {
       TELEGRAM_BOT_TOKEN: "abc123",
       CODEX_TELEGRAM_STATE_DIR: "C:/custom/state",
       CODEX_EXECUTABLE: "codex.exe",
+      DSH_EXECUTABLE: '"C:\\Tools\\dsh.exe"',
+      DSH_HOME: "C:\\Users\\hangw\\.dsh-custom",
       KIMI_EXECUTABLE: '"C:\\Tools\\kimi.exe"',
       ANTIGRAVITY_EXECUTABLE: '"C:\\Tools\\agy.exe"',
     });
@@ -59,6 +61,8 @@ describe("resolveConfig", () => {
     expect(path.posix.normalize(config.sessionStatePath.replace(/\\/g, "/"))).toBe("C:/custom/state/session.json");
     expect(path.posix.normalize(config.runtimeLogPath.replace(/\\/g, "/"))).toBe("C:/custom/state/runtime.log");
     expect(config.codexExecutable).toBe("codex.exe");
+    expect(config.deepseekExecutable).toBe("C:\\Tools\\dsh.exe");
+    expect(config.deepseekHome).toBe("C:\\Users\\hangw\\.dsh-custom");
     expect(config.kimiExecutable).toBe("C:\\Tools\\kimi.exe");
     expect(config.antigravityExecutable).toBe("C:\\Tools\\agy.exe");
   });
@@ -111,6 +115,8 @@ describe("resolveConfig", () => {
     const config = resolveConfig(env);
 
     expect(config.codexExecutable).toBe("codex");
+    expect(config.deepseekExecutable).toBe("dsh");
+    expect(config.deepseekHome).toBe(path.join(process.platform === "win32" ? "C:\\Users\\missing-user" : "/nonexistent", ".dsh"));
     expect(config.kimiExecutable).toBe("kimi");
   });
 

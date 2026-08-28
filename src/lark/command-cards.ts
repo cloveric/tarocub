@@ -57,7 +57,7 @@ export function renderLarkStatusCard(input: {
 }
 
 export function renderLarkResumeScanCard(input: {
-  kind: "claude" | "antigravity" | "kimi";
+  kind: "claude" | "antigravity" | "kimi" | "deepseek";
   sessions: ScannedSession[];
   locale: Locale;
   conversationKey: string;
@@ -146,7 +146,7 @@ function statusLabels(locale: Locale): { title: string; config: string; resume: 
     : { title: "飞书会话状态", config: "打开配置", resume: "恢复会话" };
 }
 
-function resumeLabels(locale: Locale, kind: "claude" | "antigravity" | "kimi"): {
+function resumeLabels(locale: Locale, kind: "claude" | "antigravity" | "kimi" | "deepseek"): {
   title: string;
   hint: string;
   empty: string;
@@ -157,12 +157,16 @@ function resumeLabels(locale: Locale, kind: "claude" | "antigravity" | "kimi"): 
     return {
       title: kind === "antigravity"
         ? "Recent Antigravity conversations"
+        : kind === "deepseek"
+          ? "Resume DeepSeek Harness sessions"
         : kind === "kimi"
           ? "Resume Kimi sessions"
           : "Resume local sessions",
       hint: "Pick one session below. The current conversation will bind to that history.",
       empty: kind === "antigravity"
         ? "No Antigravity conversations found in the last 24 hours."
+        : kind === "deepseek"
+          ? "No DeepSeek Harness sessions found."
         : kind === "kimi"
           ? "No Kimi sessions found."
           : "No local sessions found in the last hour.",
@@ -173,12 +177,16 @@ function resumeLabels(locale: Locale, kind: "claude" | "antigravity" | "kimi"): 
   return {
     title: kind === "antigravity"
       ? "最近的 Antigravity conversation"
+      : kind === "deepseek"
+        ? "恢复 DeepSeek Harness session"
       : kind === "kimi"
         ? "恢复 Kimi session"
         : "恢复历史会话",
     hint: "选择一个历史会话，当前飞书会话会绑定到这段上下文。",
     empty: kind === "antigravity"
       ? "最近 24 小时内没有找到 Antigravity conversation。"
+      : kind === "deepseek"
+        ? "没有找到 DeepSeek Harness session。"
       : kind === "kimi"
         ? "没有找到 Kimi session。"
         : "最近 1 小时内没有找到本地 session。",

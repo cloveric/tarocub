@@ -11,6 +11,8 @@ import { ClaudeStreamAdapter } from "./codex/claude-stream-adapter.js";
 import { KimiAcpAdapter } from "./codex/kimi-acp-adapter.js";
 import { ProcessAntigravityAdapter } from "./codex/antigravity-adapter.js";
 import { CodexAppServerAdapter } from "./codex/app-server-adapter.js";
+import { DeepSeekHarnessAdapter, type DeepSeekHarnessModelSelection } from "./codex/deepseek-harness-adapter.js";
+import { DeepSeekHarnessHost } from "./codex/deepseek-harness-host.js";
 import type { CodexAdapter } from "./codex/adapter.js";
 import { AccessStore } from "./state/access-store.js";
 import { appendAuditEvent } from "./state/audit-log.js";
@@ -293,6 +295,8 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_TELEGRAM_STATE_DIR?: string;
     CODEX_EXECUTABLE?: string;
     CLAUDE_EXECUTABLE?: string;
+    DSH_EXECUTABLE?: string;
+    DSH_HOME?: string;
     KIMI_EXECUTABLE?: string;
     KIMI_CODE_HOME?: string;
     ANTIGRAVITY_EXECUTABLE?: string;
@@ -312,6 +316,8 @@ export async function resolveServiceEnvForInstance(env: EnvSource, instanceName:
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
     CLAUDE_EXECUTABLE: env.CLAUDE_EXECUTABLE,
+    DSH_EXECUTABLE: env.DSH_EXECUTABLE,
+    DSH_HOME: env.DSH_HOME,
     KIMI_EXECUTABLE: env.KIMI_EXECUTABLE,
     KIMI_CODE_HOME: env.KIMI_CODE_HOME,
     ANTIGRAVITY_EXECUTABLE: env.ANTIGRAVITY_EXECUTABLE,
@@ -562,7 +568,7 @@ async function seedIsolatedClaudeConfig(
   ]);
 }
 
-export type EngineType = "codex" | "claude" | "antigravity" | "kimi";
+export type EngineType = "codex" | "claude" | "antigravity" | "kimi" | "deepseek";
 type CodexRuntime = "app-server" | "process";
 
 export async function readInstanceRuntimeConfig(configPath: string): Promise<{
@@ -571,7 +577,7 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
   codexRuntime: CodexRuntime | undefined;
 }> {
   const parsed = await readValidatedConfigFile(configPath);
-  const engine = parsed.engine === "claude" || parsed.engine === "antigravity" || parsed.engine === "kimi"
+  const engine = parsed.engine === "claude" || parsed.engine === "antigravity" || parsed.engine === "kimi" || parsed.engine === "deepseek"
     ? parsed.engine
     : "codex";
   const approvalMode = resolveApprovalMode(parsed.approvalMode);
@@ -597,7 +603,7 @@ export function resolveEngineRuntime(
   engine: EngineType,
   _approvalMode: ApprovalMode,
   codexRuntime?: CodexRuntime,
-): "app-server" | "process" | "stream" | "acp" {
+): "app-server" | "process" | "stream" | "acp" | "web" {
   if (engine === "claude") {
     return "stream";
   }
@@ -606,6 +612,9 @@ export function resolveEngineRuntime(
   }
   if (engine === "kimi") {
     return "acp";
+  }
+  if (engine === "deepseek") {
+    return "web";
   }
 
   return codexRuntime ?? "app-server";
@@ -763,6 +772,7 @@ function buildAdapterChildEnv(env: EnvSource): NodeJS.ProcessEnv {
     ["CODEX_HOME", "CODEX_HOME"],
     ["CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR"],
     ["KIMI_CODE_HOME", "KIMI_CODE_HOME"],
+    ["DSH_HOME", "DSH_HOME"],
     ["TAROCUB_INSTANCE", "TAROCUB_INSTANCE"],
     ["CODEX_TELEGRAM_INSTANCE", "CODEX_TELEGRAM_INSTANCE"],
     ["ANTIGRAVITY_EXECUTABLE", "ANTIGRAVITY_EXECUTABLE"],
@@ -858,6 +868,28 @@ async function createAdapter(
     });
   }
 
+  if (engine === "deepseek") {
+    await mkdir(workspacePath, { recursive: true });
+    const instanceConfig = await loadInstanceConfig(config.stateDir);
+    const host = new DeepSeekHarnessHost({
+      executable: config.deepseekExecutable,
+      sharedHome: config.deepseekHome,
+      stateDir: config.stateDir,
+      workspacePath,
+      ...(existsSync(instructionsPath) ? { instructionsPath } : {}),
+      childEnv,
+      onDiagnostic: (message) => console.error(message),
+    });
+    return new DeepSeekHarnessAdapter({
+      gateway: host,
+      workspacePath,
+      configPath,
+      goalStatePath: path.join(config.stateDir, "deepseek-goals.json"),
+      permissionPreset: deepSeekPermissionPreset(approvalMode),
+      model: deepSeekModelSelection(instanceConfig.model, instanceConfig.effort),
+    });
+  }
+
   // Same rationale and trade-offs as the Claude branch above: bots inherit
   // CODEX_HOME (or its absence) from the parent env, so they end up on the
   // same config dir as the user's main Codex CLI — avoiding the OAuth
@@ -877,6 +909,38 @@ async function createAdapter(
 
   await mkdir(workspacePath, { recursive: true });
   return new ProcessCodexAdapter(config.codexExecutable, childEnv, undefined, instructionsPath, configPath, undefined, workspacePath);
+}
+
+function deepSeekPermissionPreset(approvalMode: ApprovalMode): "workspace-write" | "full-auto" | "danger-full-access" {
+  if (approvalMode === "bypass") {
+    return "danger-full-access";
+  }
+  if (approvalMode === "full-auto") {
+    return "full-auto";
+  }
+  return "workspace-write";
+}
+
+function deepSeekModelSelection(
+  configuredModel: string | undefined,
+  reasoningEffort: string | undefined,
+): DeepSeekHarnessModelSelection | undefined {
+  const model = configuredModel?.trim();
+  if (!model && !reasoningEffort) {
+    return undefined;
+  }
+  if (!model) {
+    return { reasoningEffort };
+  }
+  const separator = model.indexOf("/");
+  if (separator > 0 && separator < model.length - 1) {
+    return {
+      provider: model.slice(0, separator),
+      model: model.slice(separator + 1),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    };
+  }
+  return { model, ...(reasoningEffort ? { reasoningEffort } : {}) };
 }
 
 async function createBridgeDependenciesForConfig(
@@ -943,15 +1007,15 @@ export async function createServiceDependenciesForInstance(
 
 const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "reset", description: "Reset conversation session" },
-  { command: "compact", description: "Compress session context (Claude only)" },
+  { command: "compact", description: "Compact Claude, Kimi, or DeepSeek session context" },
   { command: "ultrareview", description: "Run a dedicated code review (Claude Opus 4.7+ only)" },
   { command: "status", description: "Show current session status" },
-  { command: "context", description: "Show Claude context fill level (Claude only)" },
+  { command: "context", description: "Show Claude or DeepSeek context fill level" },
   { command: "usage", description: "Show cumulative token & cost usage for this instance" },
   { command: "effort", description: "Set effort level (low/medium/high/xhigh/max/ultra/off)" },
   { command: "fast", description: "Toggle Codex Fast Mode (on/off/status)" },
   { command: "goal", description: "Set an engine goal" },
-  { command: "model", description: "Set model (GPT-5.6 Sol/Terra/Luna, Claude aliases, or off)" },
+  { command: "model", description: "Set the active engine model or restore its default" },
   { command: "group", description: "Manage Telegram group access (status/allow/deny/on/off)" },
   { command: "btw", description: "Ask a side question without affecting session" },
   { command: "continue", description: "Continue a paused task" },
@@ -961,8 +1025,8 @@ const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "fan", description: "Query multiple bots in parallel" },
   { command: "chain", description: "Run a configured sequential bot chain" },
   { command: "verify", description: "Execute then auto-verify with reviewer" },
-  { command: "resume", description: "Resume Claude session, Codex thread, or Antigravity conversation" },
-  { command: "detach", description: "Detach resumed session, Codex thread, or Antigravity conversation" },
+  { command: "resume", description: "Resume Claude/Kimi/DeepSeek session, Codex thread, or Antigravity conversation" },
+  { command: "detach", description: "Detach the resumed engine session or conversation" },
   { command: "stop", description: "Stop the current running task" },
   { command: "cron", description: "List or manage scheduled tasks (e.g. /cron add 0 9 * * * morning summary)" },
   { command: "help", description: "Show available commands" },

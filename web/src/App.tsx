@@ -63,11 +63,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return json as T;
 }
 
-const ENGINES = ["codex", "claude", "kimi", "antigravity"] as const;
+const ENGINES = ["codex", "claude", "kimi", "deepseek", "antigravity"] as const;
 const ENGINE_LABELS: Record<string, string> = {
   codex: "Codex",
   claude: "Claude Code",
   kimi: "Kimi Code",
+  deepseek: "DeepSeek Harness",
   antigravity: "Antigravity",
 };
 // The config schema (z.enum(EFFORT_LEVELS)) only accepts these; blank = unset.

@@ -1010,7 +1010,7 @@ async function removeGeneratedTelegramTransportFromLarkAgent(
   }
 }
 
-async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir: string; bridge: LarkBridgeLike }> {
+export async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir: string; bridge: LarkBridgeLike }> {
   const { config, bridge } = await createBridgeDependencies({
     HOME: env.HOME,
     APPDATA: env.APPDATA,
@@ -1022,6 +1022,8 @@ async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ stateDir:
     CODEX_TELEGRAM_STATE_DIR: env.CODEX_TELEGRAM_STATE_DIR,
     CODEX_EXECUTABLE: env.CODEX_EXECUTABLE,
     CLAUDE_EXECUTABLE: env.CLAUDE_EXECUTABLE,
+    DSH_EXECUTABLE: env.DSH_EXECUTABLE,
+    DSH_HOME: env.DSH_HOME,
     KIMI_EXECUTABLE: env.KIMI_EXECUTABLE,
     KIMI_CODE_HOME: env.KIMI_CODE_HOME,
     ANTIGRAVITY_EXECUTABLE: env.ANTIGRAVITY_EXECUTABLE,

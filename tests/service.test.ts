@@ -43,6 +43,7 @@ import { CodexAppServerAdapter } from "../src/codex/app-server-adapter.js";
 import { ProcessCodexAdapter } from "../src/codex/process-adapter.js";
 import { ProcessAntigravityAdapter } from "../src/codex/antigravity-adapter.js";
 import { KimiAcpAdapter } from "../src/codex/kimi-acp-adapter.js";
+import { DeepSeekHarnessAdapter } from "../src/codex/deepseek-harness-adapter.js";
 import { parseAuditEvents } from "../src/state/audit-log.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import * as auditLog from "../src/state/audit-log.js";
@@ -221,6 +222,10 @@ describe("createServiceDependenciesForInstance", () => {
     expect(resolveEngineRuntime("kimi", "normal")).toBe("acp");
   });
 
+  it("reports DeepSeek Harness runtime as web", () => {
+    expect(resolveEngineRuntime("deepseek", "normal")).toBe("web");
+  });
+
   it("honors the Codex runtime override", () => {
     expect(resolveEngineRuntime("codex", "normal", "process")).toBe("process");
   });
@@ -230,7 +235,7 @@ describe("createServiceDependenciesForInstance", () => {
     const configPath = path.join(root, "config.json");
 
     try {
-      for (const engine of ["codex", "claude", "kimi", "antigravity"] as const) {
+      for (const engine of ["codex", "claude", "kimi", "deepseek", "antigravity"] as const) {
         await writeFile(configPath, JSON.stringify({ engine }) + "\n", "utf8");
 
         await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
@@ -706,6 +711,33 @@ describe("createServiceDependenciesForInstance", () => {
         "utf8",
       )).toBe("project skill\n");
       adapter.destroy();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("uses the DeepSeek Harness adapter and forwards its explicit executable and shared home", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, ".env"), 'TELEGRAM_BOT_TOKEN="secret-token"\n', "utf8");
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "deepseek" }) + "\n", "utf8");
+
+      const result = await createServiceDependenciesForInstance({
+        USERPROFILE: root,
+        DSH_EXECUTABLE: "/opt/dsh",
+        DSH_HOME: path.join(root, "shared-dsh-home"),
+      }, "alpha");
+
+      const adapter = (result.bridge as any).adapter;
+      expect(adapter).toBeInstanceOf(DeepSeekHarnessAdapter);
+      const gateway = adapter.gateway;
+      expect(gateway.executable).toBe("/opt/dsh");
+      expect(gateway.options.sharedHome).toBe(path.join(root, "shared-dsh-home"));
+      expect(gateway.options.childEnv.DSH_HOME).toBe(path.join(root, "shared-dsh-home"));
+      expect(gateway.options.childEnv.TELEGRAM_BOT_TOKEN).toBeUndefined();
+      await adapter.destroy();
     } finally {
       await removeTempRoot(root);
     }
@@ -6665,6 +6697,7 @@ describe("polling helpers", () => {
           "/engine claude",
           "/engine codex",
           "/engine kimi",
+          "/engine deepseek",
           "/engine antigravity",
           "Restart this instance after switching to apply the change.",
         ].join("\n"),

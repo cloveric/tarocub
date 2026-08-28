@@ -29,6 +29,7 @@ For deeper system context, then read:
 - `docs/lark-permissions.md` — granting a Feishu scope to a Lark bot. 个人版 apps: `申请开通` is INSTANT, there is NO version-publish step — don't hunt a `发布` button.
 - `docs/kimi-engine-notes.md` — verified Kimi CLI/ACP behavior, implementation consequences, and known gaps.
 - `docs/kimi-capability-matrix.md` — Kimi vs Codex vs Claude release contract, including explicit protocol gaps.
+- `docs/deepseek-harness-engine.md` — DeepSeek Harness host architecture, verified capability matrix, recovery invariants, and limits.
 
 ## Main Entrypoints
 
@@ -197,6 +198,15 @@ See `docs/state-model.md` before changing on-disk semantics.
   task-origin review turns can be retained; `SessionHeartbeat` is deliberately ignored.
 - `src/codex/kimi-workspace.ts`
   Atomic managed-block synchronization for Kimi workspace instructions.
+- `src/codex/deepseek-harness-protocol.ts`
+  Official Harness HTTP RPC and dual-WebSocket downlink client, schema validation,
+  handler-error containment, reconnect generations, and request timeouts.
+- `src/codex/deepseek-harness-host.ts`
+  Private per-instance `dsh web` lifecycle, isolated `DSH_HOME`, permissions,
+  crash diagnostics, backoff, and safe process shutdown.
+- `src/codex/deepseek-harness-adapter.ts`
+  DeepSeek session/stream/tool mapping, approvals/questions, compact/context,
+  steering, native Goals, background jobs, and ordered reconnect recovery.
 
 If a bug smells like auth, stale session, engine CLI output shape, or provider-specific formatting, inspect these modules before patching Telegram code.
 
@@ -227,6 +237,10 @@ Run focused tests for the area you touched before wider validation.
   `tests/telegram-message-turn.test.ts`
   `tests/telegram-turn-error.test.ts`
   `tests/telegram-response-delivery.test.ts`
+- DeepSeek Harness protocol/host/adapter:
+  `tests/deepseek-harness-protocol.test.ts`
+  `tests/deepseek-harness-host.test.ts`
+  `tests/deepseek-harness-adapter.test.ts`
   `tests/telegram-turn-bookkeeping.test.ts`
 - Lark event and turn path:
   `tests/lark-service.test.ts`

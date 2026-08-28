@@ -19,6 +19,24 @@ afterEach(() => {
 });
 
 describe("loadInstanceConfig", () => {
+  it("loads DeepSeek without silently changing its engine or dynamic model defaults", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({ engine: "deepseek", model: "deepseek-official/deepseek-v4-flash", effort: "high" }) + "\n",
+        "utf8",
+      );
+      await expect(loadInstanceConfig(root)).resolves.toMatchObject({
+        engine: "deepseek",
+        model: "deepseek-official/deepseek-v4-flash",
+        effort: "high",
+      });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("loads Kimi and drops effort levels that its ACP protocol does not advertise", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -390,6 +408,21 @@ describe("updateInstanceConfig", () => {
 });
 
 describe("applyEngineSelection", () => {
+  it("lets a fresh DeepSeek selection follow Harness model and effort defaults", () => {
+    const config: Record<string, unknown> = {
+      engine: "claude",
+      model: "opus[1m]",
+      effort: "xhigh",
+    };
+
+    const result = applyEngineSelection(config, "deepseek");
+
+    expect(result).toEqual({ clearedModel: true, enabledFullAuto: false });
+    expect(config).toMatchObject({ engine: "deepseek" });
+    expect(config.model).toBeUndefined();
+    expect(config.effort).toBeUndefined();
+  });
+
   it("pins Kimi to its verified high effort default and clears another engine's model", () => {
     const config: Record<string, unknown> = {
       engine: "claude",

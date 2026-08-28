@@ -69,6 +69,22 @@ describe("UI config API", () => {
     }
   });
 
+  it("accepts DeepSeek Harness as a UI engine", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
+    try {
+      await makeInstance(home, "ccfdd1", { engine: "codex", model: "old" });
+      const post = await handleUiApiRequest("POST", "/api/instances/ccfdd1/config", {
+        engine: "deepseek",
+      }, { HOME: home });
+
+      expect(post.status).toBe(200);
+      const saved = JSON.parse(await readFile(path.join(home, ".cctb", "ccfdd1", "config.json"), "utf8"));
+      expect(saved.engine).toBe("deepseek");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a path-traversal instance name", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
     try {
