@@ -148,6 +148,7 @@ type SessionTurnOwner = "foreground" | "goal";
 type SessionTurnClaim = {
   owner: SessionTurnOwner;
   claimId: string;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
 };
 
 type SessionTurnRouting = {
@@ -871,8 +872,16 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
       return undefined;
     }
     return hasForeground
-      ? { owner: "foreground", claimId: pending!.claimId }
-      : { owner: "goal", claimId: watcher!.claimId };
+      ? {
+          owner: "foreground",
+          claimId: pending!.claimId,
+          onEngineEvent: pending!.input.onEngineEvent,
+        }
+      : {
+          owner: "goal",
+          claimId: watcher!.claimId,
+          onEngineEvent: watcher!.onEngineEvent,
+        };
   }
 
   private currentClaimForOwner(
@@ -882,12 +891,12 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     if (owner === "foreground") {
       const pending = this.pendingTurns.get(sessionId);
       return pending && !pending.settled
-        ? { owner, claimId: pending.claimId }
+        ? { owner, claimId: pending.claimId, onEngineEvent: pending.input.onEngineEvent }
         : undefined;
     }
     const watcher = this.goalWatchers.get(sessionId);
     return watcher && !watcher.settled
-      ? { owner, claimId: watcher.claimId }
+      ? { owner, claimId: watcher.claimId, onEngineEvent: watcher.onEngineEvent }
       : undefined;
   }
 
@@ -1291,31 +1300,32 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     owner: SessionTurnClaim,
     job: Job,
   ): Promise<void> {
+    const event: EngineStreamEvent = {
+      type: "background_task_finished",
+      taskId: job.id,
+      status: job.status,
+      summary: job.detail,
+      sessionId,
+    };
     if (owner.owner === "foreground") {
       const pending = this.pendingForClaim(sessionId, owner);
-      if (!pending) {
-        return;
+      if (pending) {
+        pending.liveJobs.delete(job.id);
+        this.noteTurnActivity(pending);
+        await this.emit(pending, event);
+      } else if (owner.onEngineEvent) {
+        // Lifecycle bookkeeping must outlive a cancelled foreground turn. The
+        // event is not rendered, but the service restart guard needs it to pair
+        // off the earlier background_task_started marker.
+        await owner.onEngineEvent(event);
       }
-      pending.liveJobs.delete(job.id);
-      this.noteTurnActivity(pending);
-      await this.emit(pending, {
-        type: "background_task_finished",
-        taskId: job.id,
-        status: job.status,
-        summary: job.detail,
-        sessionId,
-      });
       return;
     }
     const watcher = this.watcherForClaim(sessionId, owner);
     if (watcher) {
-      await this.emitGoal(watcher, {
-        type: "background_task_finished",
-        taskId: job.id,
-        status: job.status,
-        summary: job.detail,
-        sessionId,
-      });
+      await this.emitGoal(watcher, event);
+    } else if (owner.onEngineEvent) {
+      await owner.onEngineEvent(event);
     }
   }
 

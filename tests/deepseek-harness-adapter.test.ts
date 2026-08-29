@@ -934,6 +934,59 @@ describe("DeepSeekHarnessAdapter", () => {
     ]));
   });
 
+  it("emits lifecycle completion when a background job outlives an aborted foreground turn", async () => {
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(2);
+    const controller = new AbortController();
+    const events: EngineStreamEvent[] = [];
+    const turn = adapter.sendUserMessage(sessionId, {
+      text: "Run in background",
+      files: [],
+      abortSignal: controller.signal,
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+    await waitForCall(gateway, "session.prompt", 1);
+
+    await gateway.emitSessionEvent(sessionId, "turn/start", { turn: 1 }, 1);
+    await gateway.emitMux({
+      type: "session/jobs",
+      sessionId,
+      jobs: [{
+        id: "bash-after-abort",
+        kind: "bash",
+        label: "finish after foreground abort",
+        status: "running",
+        startedAt: Date.now(),
+      }],
+    });
+    controller.abort();
+    await expect(turn).rejects.toThrow("DeepSeek Harness turn was aborted");
+
+    await gateway.emitMux({
+      type: "session/jobs",
+      sessionId,
+      jobs: [{
+        id: "bash-after-abort",
+        kind: "bash",
+        label: "finish after foreground abort",
+        status: "completed",
+        detail: "exit code: 0",
+        startedAt: Date.now() - 1_000,
+        finishedAt: Date.now(),
+      }],
+    });
+
+    expect(events).toContainEqual({
+      type: "background_task_finished",
+      taskId: "bash-after-abort",
+      status: "completed",
+      summary: "exit code: 0",
+      sessionId,
+    });
+  });
+
   it("emits one final result when a completed job snapshot arrives during card delivery", async () => {
     const { adapter, gateway } = createAdapter(undefined, { backgroundReviewGraceMs: 5 });
     const { sessionId } = await adapter.createSession(18);
