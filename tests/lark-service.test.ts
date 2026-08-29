@@ -10312,7 +10312,7 @@ describe("lark service", () => {
     }
   });
 
-  it("renders send.batch images given as {path, caption} objects as title+image cards", async () => {
+  it("renders send.batch images given as {path, caption} objects in ONE grouped card", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-caption-"));
     const outputDir = path.join(stateDir, "workspace", "out");
     await mkdir(outputDir, { recursive: true });
@@ -10343,17 +10343,20 @@ describe("lark service", () => {
         message: fakeLarkMessage({ messageId: "om_batch_caption", content: "出图" }),
       });
 
-      // Each captioned batch image is uploaded and sent as its own title+image card.
+      // A structured batch follows the same one-card contract as adjacent
+      // [send-image:] tags: every title stays paired with its image in order.
       expect(imageCreateMock(channel)).toHaveBeenCalledTimes(2);
       const cardCalls = (channel.send.mock.calls as unknown[][])
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
-        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
-      const pairs = cardCalls.map((card) => ({
-        caption: card.body.elements.find((e) => e.tag === "markdown")?.content as string | undefined,
-        imgKey: card.body.elements.find((e) => e.tag === "img")?.img_key as string | undefined,
-      }));
-      expect(pairs).toContainEqual({ caption: "P1 · 封面", imgKey: "img_key_fake" });
-      expect(pairs).toContainEqual({ caption: "P2 · 内页", imgKey: "img_key_fake" });
+        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } =>
+          Boolean(card?.body?.elements?.some((element) => element.tag === "img")));
+      expect(cardCalls).toHaveLength(1);
+      expect(cardCalls[0]!.body.elements).toEqual([
+        { tag: "markdown", content: "P1 · 封面" },
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "P1 · 封面" } },
+        { tag: "markdown", content: "P2 · 内页" },
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "P2 · 内页" } },
+      ]);
       // Not bare image messages.
       expect((channel.send.mock.calls as unknown[][]).some((c) =>
         c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);

@@ -469,7 +469,19 @@ async function executeLarkToolTag(input: {
       return false;
     }
     let ok = true;
-    for (const artifact of normalized.artifacts) {
+    let artifacts = normalized.artifacts;
+    if (input.name === "send.batch") {
+      const images = artifacts.filter((artifact) => artifact.kind === "image");
+      if (images.length > 1) {
+        ok = await sendLarkImageArtifactBatch(
+          input,
+          images,
+          larkReplyOptions(input.replyTo, input.replyInThread),
+        ) && ok;
+        artifacts = artifacts.filter((artifact) => artifact.kind !== "image");
+      }
+    }
+    for (const artifact of artifacts) {
       ok = await sendLarkPath({
         ...input,
         filePath: artifact.path,
@@ -856,6 +868,9 @@ type LarkImageDeliveryInput = {
   replyTo?: string;
   replyInThread?: boolean;
   stateDir: string;
+  requestOutputDir?: string;
+  workspaceOverride?: string;
+  allowAnyAbsolutePath?: boolean;
   conversationKey?: string;
   bridgeChatId?: number;
   bridgeUserId?: number;
@@ -864,8 +879,67 @@ type LarkImageDeliveryInput = {
   locale: Locale;
 };
 
+async function sendLarkImageArtifactBatch(
+  input: LarkImageDeliveryInput,
+  artifacts: ReadonlyArray<{ path: string; caption?: string }>,
+  replyOptions: LarkSendOptions | undefined,
+): Promise<boolean> {
+  const deliveryRoots = await resolveLarkDeliveryRoots(input);
+  const pendingImages: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }> = [];
+  let ok = true;
+
+  for (const artifact of artifacts) {
+    const pathPreflight = await preflightLarkDeliveryPath(artifact.path, deliveryRoots);
+    if (!pathPreflight.ok) {
+      ok = false;
+      await appendLarkFileRejectedTimeline(input, {
+        path: artifact.path,
+        ...(pathPreflight.realPath ? { realPath: pathPreflight.realPath } : {}),
+        reason: pathPreflight.reason,
+        ...(pathPreflight.detail ? { detail: pathPreflight.detail } : {}),
+        kind: "image",
+      });
+      await input.channel.send(input.chatId, {
+        text: renderLarkFileDeliveryError(pathPreflight.reason, input.locale, {
+          workspaceRoot: pathPreflight.workspaceRoot,
+          fileName: path.basename(artifact.path),
+          fileBytes: pathPreflight.fileBytes,
+        }),
+      }, replyOptions);
+      continue;
+    }
+
+    try {
+      pendingImages.push({
+        ...(artifact.caption ? { caption: artifact.caption } : {}),
+        body: await readFile(pathPreflight.realPath),
+        real: pathPreflight.realPath,
+        originalPath: artifact.path,
+      });
+    } catch (error) {
+      ok = false;
+      const reason = larkFileRejectReasonFromError(error);
+      await appendLarkFileRejectedTimeline(input, {
+        path: artifact.path,
+        realPath: pathPreflight.realPath,
+        reason,
+        detail: errorDetail(error),
+        kind: "image",
+      });
+      await input.channel.send(input.chatId, {
+        text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(pathPreflight.realPath) }),
+      }, replyOptions);
+    }
+  }
+
+  if (pendingImages.length === 0) {
+    return false;
+  }
+  return await deliverLarkPendingImages(input, pendingImages, replyOptions) && ok;
+}
+
 /**
- * Delivers a batch of `[send-image:…]` images as a SINGLE card (each image keeps its
+ * Delivers a batch of images as a SINGLE card (each image keeps its
  * own caption above it) so a titled series — e.g. a 小红书 P1/P2/… deck — arrives as
  * one grouped deliverable rather than one card per image. There is no preset image
  * count: the whole batch goes in one card. The only real ceiling is the Feishu message
@@ -879,7 +953,7 @@ async function deliverLarkPendingImages(
   input: LarkImageDeliveryInput,
   images: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }>,
   replyOptions: LarkSendOptions | undefined,
-): Promise<void> {
+): Promise<boolean> {
   const uploaded: LarkUploadedImage[] = [];
   const failedUploads: typeof images = [];
   for (const img of images) {
@@ -891,11 +965,17 @@ async function deliverLarkPendingImages(
     }
   }
 
-  await sendLarkImageCardOrSplit(input, uploaded, replyOptions);
+  let ok = await sendLarkImageCardOrSplit(input, uploaded, replyOptions);
 
   for (const img of failedUploads) {
-    await sendLarkImageWithFileFallback({ ...input, body: img.body, realPath: img.real, originalPath: img.originalPath });
+    ok = await sendLarkImageWithFileFallback({
+      ...input,
+      body: img.body,
+      realPath: img.real,
+      originalPath: img.originalPath,
+    }) && ok;
   }
+  return ok;
 }
 
 /**
@@ -908,9 +988,9 @@ async function sendLarkImageCardOrSplit(
   input: LarkImageDeliveryInput,
   items: LarkUploadedImage[],
   replyOptions: LarkSendOptions | undefined,
-): Promise<void> {
+): Promise<boolean> {
   if (items.length === 0) {
-    return;
+    return true;
   }
   try {
     await input.channel.send(input.chatId, { card: buildLarkImageCard(items) }, replyOptions);
@@ -921,15 +1001,21 @@ async function sendLarkImageCardOrSplit(
         kind: "image",
       });
     }
+    return true;
   } catch {
     if (items.length === 1) {
       const only = items[0]!;
-      await sendLarkImageWithFileFallback({ ...input, body: only.body, realPath: only.real, originalPath: only.originalPath });
-      return;
+      return await sendLarkImageWithFileFallback({
+        ...input,
+        body: only.body,
+        realPath: only.real,
+        originalPath: only.originalPath,
+      });
     }
     const mid = Math.floor(items.length / 2);
-    await sendLarkImageCardOrSplit(input, items.slice(0, mid), replyOptions);
-    await sendLarkImageCardOrSplit(input, items.slice(mid), replyOptions);
+    const firstHalfOk = await sendLarkImageCardOrSplit(input, items.slice(0, mid), replyOptions);
+    const secondHalfOk = await sendLarkImageCardOrSplit(input, items.slice(mid), replyOptions);
+    return firstHalfOk && secondHalfOk;
   }
 }
 
