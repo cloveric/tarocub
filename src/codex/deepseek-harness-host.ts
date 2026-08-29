@@ -405,7 +405,10 @@ export interface PreparedDeepSeekHarnessHome {
   searchMcpOwner: DeepSeekHarnessSearchMcpOwner;
 }
 
-const SEARCH_PLUGIN_NAME = "tarocub-deepseek-harness-plugin";
+const SEARCH_PLUGIN_NAMES = [
+  "deepseek-harness-web-search-plugin",
+  "tarocub-deepseek-harness-plugin",
+] as const;
 const SEARCH_MCP_PROTOCOL = 1;
 
 const PERMISSION_PATCH = `
@@ -500,12 +503,26 @@ async function detectSearchMcpOwner(
   sharedHome: string,
   onDiagnostic?: (message: string) => void,
 ): Promise<DeepSeekHarnessSearchMcpOwner> {
+  for (const packageName of SEARCH_PLUGIN_NAMES) {
+    const owner = await detectInstalledSearchMcpPlugin(sharedHome, packageName, onDiagnostic);
+    if (owner !== "absent") {
+      return owner;
+    }
+  }
+  return "bridge";
+}
+
+async function detectInstalledSearchMcpPlugin(
+  sharedHome: string,
+  packageName: string,
+  onDiagnostic?: (message: string) => void,
+): Promise<DeepSeekHarnessSearchMcpOwner | "absent"> {
   const packageRoot = path.join(
     sharedHome,
     "profiles",
     "web",
     "node_modules",
-    SEARCH_PLUGIN_NAME,
+    packageName,
   );
   const manifestPath = path.join(packageRoot, "package.json");
   let manifest: unknown;
@@ -513,7 +530,7 @@ async function detectSearchMcpOwner(
     manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "bridge";
+      return "absent";
     }
     onDiagnostic?.(
       `DeepSeek Harness Search MCP plugin manifest is unreadable; using bridge fallback: ${formatDiagnosticError(error)}`,

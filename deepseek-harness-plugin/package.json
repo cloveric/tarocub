@@ -1,6 +1,6 @@
 {
-  "name": "tarocub-deepseek-harness-plugin",
-  "version": "0.2.3",
+  "name": "deepseek-harness-web-search-plugin",
+  "version": "0.3.0",
   "description": "Native DeepSeek Harness plugin for source-traceable Brave and Tavily web search, with optional TaroCub integration.",
   "license": "MIT",
   "private": true,
@@ -33,13 +33,13 @@
     "CONTRIBUTING.md",
     "LICENSE"
   ],
-  "homepage": "https://github.com/cloveric/tarocub-deepseek-harness-plugin#readme",
+  "homepage": "https://github.com/cloveric/deepseek-harness-web-search-plugin#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cloveric/tarocub-deepseek-harness-plugin.git"
+    "url": "git+https://github.com/cloveric/deepseek-harness-web-search-plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/cloveric/tarocub-deepseek-harness-plugin/issues"
+    "url": "https://github.com/cloveric/deepseek-harness-web-search-plugin/issues"
   },
   "keywords": [
     "dsh-plugin",

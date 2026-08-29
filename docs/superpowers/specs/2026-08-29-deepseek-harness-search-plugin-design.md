@@ -9,7 +9,7 @@ bot behavior.
 The finished system has two public GitHub projects:
 
 1. `cloveric/tarocub`, the Feishu/Lark-first agent gateway.
-2. `cloveric/tarocub-deepseek-harness-plugin`, the standalone DeepSeek Harness
+2. `cloveric/deepseek-harness-web-search-plugin`, the standalone DeepSeek Harness
    plugin and Search MCP distribution.
 
 Both repositories must be discoverable through the GitHub `dsh-plugin` topic.
@@ -44,7 +44,7 @@ so there is one maintained implementation rather than two hand-copied forks.
 The standalone repository name is:
 
 ```text
-cloveric/tarocub-deepseek-harness-plugin
+cloveric/deepseek-harness-web-search-plugin
 ```
 
 The initial publication versions are:
@@ -54,6 +54,9 @@ The initial publication versions are:
 
 The plugin version moves from the old bridge-coupled version number to its own
 semantic version because adding a standalone Search MCP is a material feature.
+The later `v0.3.0` rebrand changes the package name to
+`deepseek-harness-web-search-plugin` so its purpose is clear without TaroCub
+context; the former package name remains a runtime compatibility alias only.
 
 The initial public distribution is GitHub plus GitHub Releases. npm publication
 is explicitly out of scope until it is separately requested and the package
@@ -62,7 +65,7 @@ ownership/name are confirmed.
 The recommended installation command is:
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
 The existing installation source remains valid for compatibility:
@@ -76,8 +79,10 @@ documentation uses the standalone repository.
 
 ## Plugin Package
 
-The package keeps the name `tarocub-deepseek-harness-plugin` so existing profile
-state and update/remove commands remain understandable.
+The package name is `deepseek-harness-web-search-plugin`. Documentation,
+installation, update, and removal commands use that name. TaroCub continues to
+recognize `tarocub-deepseek-harness-plugin` during migration so an existing
+managed bot does not lose Search MCP ownership before the profile is upgraded.
 
 The package contains:
 
@@ -178,9 +183,11 @@ TaroCub currently appends a private `mcp-cctb-search` client to every managed
 DeepSeek Host. That behavior becomes conditional.
 
 Before writing the private Cordis patch, TaroCub checks the installed `web`
-profile package:
+profile package, preferring the new name and then the legacy compatibility
+name:
 
-1. the package `tarocub-deepseek-harness-plugin` exists;
+1. either `deepseek-harness-web-search-plugin` or the legacy
+   `tarocub-deepseek-harness-plugin` package exists;
 2. its manifest contains `tarocub.searchMcp: true`;
 3. its declared Search MCP entrypoint exists inside the package;
 4. its package-local `dsh.bundle.patch` exists and registers the declared

@@ -46,32 +46,33 @@ node dist/src/index.js lark yolo unsafe
 
 > **权限提示：** `lark yolo unsafe` 会绕过常规审批与部分沙箱限制，只适合你本人控制的可信机器和可信工作区。需要逐次审批时使用 `lark yolo off`。
 
-### 作为 DeepSeek Harness 原生插件安装
+### 安装 DeepSeek Harness 网页搜索增强插件
 
 把独立的原生插件装进普通 Harness 和 TaroCub 私有 Host 共用的 `web`
 profile：
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
-插件会加入带来源链的 Brave/Tavily Search MCP、受限的 TaroCub 上下文和
-`/tarocub`；它**不会**仅凭安装就创建飞书应用或启动 bridge。旧的
-`github:cloveric/tarocub#path:deepseek-harness-plugin` 来源继续兼容。
-检查、升级和卸载命令如下：
+插件会加入带来源链的 Brave/Tavily 实时搜索和 URL 正文抽取；
+TaroCub 集成和 `/tarocub` 指引都是可选的。安装插件**不会**创建飞书应用或启动 bridge。
+TaroCub 子目录中的唯一维护源仍可安装。检查、升级和卸载命令如下：
 
 ```bash
-dsh --profile web --dump-config | grep -A2 -B1 tarocub
-dsh plugin --profile web update tarocub-deepseek-harness-plugin
-dsh plugin --profile web remove tarocub-deepseek-harness-plugin
+dsh --profile web --dump-config | grep -A18 -B2 mcp-cctb-search
+dsh plugin --profile web update deepseek-harness-web-search-plugin
+dsh plugin --profile web remove deepseek-harness-web-search-plugin
 ```
+
+TaroCub 仍会识别以旧包名 `tarocub-deepseek-harness-plugin` 安装的版本，便于不中断 Bot 地完成迁移。
 
 ## 它能给你什么
 
 | 能力 | 实际意义 |
 |---|---|
 | **真实 CLI 的远程控制** | 把 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity 接到飞书/Lark，不把它们改造成一个假的聊天后端。 |
-| **DeepSeek Harness 原生插件** | 安装 `github:cloveric/tarocub-deepseek-harness-plugin`；自包含 runtime 提供 Search MCP 和 `/tarocub`，插件安装与飞书服务部署仍是两件事。 |
+| **DeepSeek Harness 网页搜索插件** | 安装 `github:cloveric/deepseek-harness-web-search-plugin`；自包含 runtime 提供 Brave/Tavily 实时搜索和 URL 抽取，TaroCub 集成保持可选。 |
 | **DeepSeek 搜索 MCP** | 普通 Harness 由插件提供；TaroCub 管理的 DeepSeek Bot 在插件有效时复用它，否则保留私有 fallback，始终只启用一个 `mcp-cctb-search` client。 |
 | **引擎无关的飞书入站层** | 长语音通义听悟路由和群/话题会话边界都在进入引擎前完成，因此 DeepSeek 与 Codex、Claude、Kimi 共用 15 分钟阈值及 chat/thread 隔离规则。 |
 | **会话连续性** | 在手机上续接 Claude 本地 session、绑定 Codex thread、Kimi ACP / DeepSeek Harness session 或 Antigravity conversation，回到电脑后还能继续同一件事。 |
@@ -305,7 +306,7 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-Kimi 无需手工注册 TaroCub Search MCP。DeepSeek 推荐执行 `dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin`；即使没有插件，TaroCub 管理的 DeepSeek Host 仍会使用经验证的私有 fallback，但普通 Harness 不会因此自动获得工具。Antigravity 如需原生 MCP/plugin，请使用自己的配置方式。bridge 可以跨引擎复用 skill 文档和工具规则，但各引擎原生插件系统仍然独立。
+Kimi 无需手工注册 TaroCub Search MCP。DeepSeek 推荐执行 `dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin`；即使没有插件，TaroCub 管理的 DeepSeek Host 仍会使用经验证的私有 fallback，但普通 Harness 不会因此自动获得工具。Antigravity 如需原生 MCP/plugin，请使用自己的配置方式。bridge 可以跨引擎复用 skill 文档和工具规则，但各引擎原生插件系统仍然独立。
 
 配置后重启相关 bot 实例，让新进程继承环境与原生 MCP/plugin 配置；Kimi 会自动获得 TaroCub Search MCP。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
 
@@ -713,11 +714,11 @@ Kimi 的实例/Lark 指令写入 bot 自有工作区的 `.kimi-code/agents/agent
 安装独立的 Harness 原生 bundle：
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
 TaroCub 的私有 Host 会链接用户已认证的共享 `web` profile，因此普通
-Harness Web 与 Bot session 都能获得 Search MCP 和 `/tarocub`。只有 capability
+Harness Web 与 Bot session 都能获得 Search MCP，并可选使用 `/tarocub` 指引。只有 capability
 marker、bundle 入口及实际注册 MCP client 的 Harness patch 均有效时，插件才会
 接管 Search MCP；任何一项缺失或损坏，Bot Host 都会使用私有 fallback。两条事件
 WebSocket 必须在 15 秒内全部连通，半连接不会无限卡住启动。插件激活与飞书应用

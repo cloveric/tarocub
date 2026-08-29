@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
 describe("DeepSeek Harness plugin bundle", () => {
-  it("publishes a native dsh bundle manifest that activates the TaroCub plugin", async () => {
+  it("publishes a native dsh bundle manifest that activates the web search plugin", async () => {
     const rootPackageJson = JSON.parse(
       await readFile(path.join(repoRoot, "package.json"), "utf8"),
     ) as Record<string, any>;
@@ -20,7 +20,7 @@ describe("DeepSeek Harness plugin bundle", () => {
     const patchPath = packageJson.dsh?.bundle?.patch;
 
     expect(rootPackageJson.dsh).toBeUndefined();
-    expect(packageJson.name).toBe("tarocub-deepseek-harness-plugin");
+    expect(packageJson.name).toBe("deepseek-harness-web-search-plugin");
     expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
     expect(packageLock.version).toBe(packageJson.version);
     expect(packageLock.packages?.[""]?.version).toBe(packageJson.version);
@@ -43,14 +43,14 @@ describe("DeepSeek Harness plugin bundle", () => {
     expect(patchPath).toBe("./cordis.patch.yml");
     const patch = await readFile(path.join(repoRoot, "deepseek-harness-plugin", patchPath), "utf8");
     expect(patch).toMatch(/^- insert:/m);
-    expect(patch).toMatch(/^\s+- id: tarocub$/m);
+    expect(patch).toMatch(/^\s+- id: deepseek-harness-web-search$/m);
     expect(patch).toMatch(new RegExp(`^\\s+name: ${packageJson.name}$`, "m"));
     expect(patch).toMatch(/^\s+- id: mcp-cctb-search$/m);
     expect(patch).toContain("name: '@deepseek-ai/dsh-mcp-client'");
     expect(patch).toContain("serverName: cctb_search");
     expect(patch).toContain("command: !!js process.execPath");
     expect(patch).toContain(
-      "new URL('./node_modules/tarocub-deepseek-harness-plugin/dist/search-mcp.js', baseUrl)",
+      "new URL('./node_modules/deepseek-harness-web-search-plugin/dist/search-mcp.js', baseUrl)",
     );
     expect(patch).toContain(
       "disabled: !!js process.env.TAROCUB_SEARCH_MCP_OWNER === 'bridge'",
@@ -58,7 +58,7 @@ describe("DeepSeek Harness plugin bundle", () => {
     expect(patch).toContain("failOnStartupError: false");
   });
 
-  it("registers bounded companion guidance and a truthful /tarocub command", async () => {
+  it("registers bounded search guidance and a truthful optional /tarocub command", async () => {
     const plugin = await import(pathToFileURL(
       path.join(repoRoot, "deepseek-harness-plugin", "index.js"),
     ).href) as {
@@ -80,11 +80,11 @@ describe("DeepSeek Harness plugin bundle", () => {
       effect,
     });
 
-    expect(plugin.name).toBe("tarocub");
+    expect(plugin.name).toBe("deepseek-harness-web-search");
     expect(plugin.inject).toEqual(["systemPrompt", "commands"]);
     expect(section).toHaveBeenCalledWith(expect.objectContaining({
-      name: "integration:tarocub",
-      text: expect.stringMatching(/separate local Feishu\/Lark-first bridge/i),
+      name: "integration:web-search",
+      text: expect.stringMatching(/exact URL.*web_extract.*web_search.*optional.*Feishu\/Lark-first/is),
     }));
     expect(effect).toHaveBeenCalledTimes(1);
     const command = registeredCommand as {
@@ -113,7 +113,8 @@ describe("DeepSeek Harness plugin bundle", () => {
     ]);
 
     for (const readme of [english, chinese]) {
-      expect(readme).toContain("github:cloveric/tarocub-deepseek-harness-plugin");
+      expect(readme).toContain("github:cloveric/deepseek-harness-web-search-plugin");
+      expect(readme).toContain("DeepSeek Harness Web Search");
       expect(readme).toContain("web_search");
       expect(readme).toContain("web_extract");
       expect(readme).toContain("provider_status");

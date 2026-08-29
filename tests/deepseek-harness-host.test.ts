@@ -21,29 +21,32 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 
 const roots: string[] = [];
 
-const SEARCH_PLUGIN_NAME = "tarocub-deepseek-harness-plugin";
+const SEARCH_PLUGIN_NAME = "deepseek-harness-web-search-plugin";
+const LEGACY_SEARCH_PLUGIN_NAME = "tarocub-deepseek-harness-plugin";
 
 async function installSearchPlugin(
   sharedHome: string,
   manifest: Record<string, unknown>,
   options: {
+    packageName?: string;
     createEntrypoint?: boolean;
     createPatch?: boolean;
     patchContents?: string;
   } = {},
 ): Promise<void> {
+  const packageName = options.packageName ?? SEARCH_PLUGIN_NAME;
   const packageRoot = path.join(
     sharedHome,
     "profiles",
     "web",
     "node_modules",
-    SEARCH_PLUGIN_NAME,
+    packageName,
   );
   await mkdir(path.join(packageRoot, "dist"), { recursive: true });
   await writeFile(
     path.join(packageRoot, "package.json"),
     `${JSON.stringify({
-      name: SEARCH_PLUGIN_NAME,
+      name: packageName,
       dsh: { bundle: { patch: "./cordis.patch.yml" } },
       ...manifest,
     }, null, 2)}\n`,
@@ -257,6 +260,32 @@ describe("prepareDeepSeekHarnessHome", () => {
 
     expect(prepared.searchMcpOwner).toBe("plugin");
     expect(patch).not.toContain("id: mcp-cctb-search");
+  });
+
+  it("keeps recognizing the legacy package name after the public rebrand", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-renamed-plugin-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.3",
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    }, { packageName: LEGACY_SEARCH_PLUGIN_NAME });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+    });
+
+    expect(prepared.searchMcpOwner).toBe("plugin");
   });
 
   it("falls back with a diagnostic when a plugin claims Search MCP but lacks its entrypoint", async () => {

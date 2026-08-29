@@ -84,25 +84,29 @@ node dist/src/index.js lark provision
 node dist/src/index.js lark doctor
 ```
 
-### DeepSeek Harness plugin (native bundle)
+### DeepSeek Harness web search plugin (native bundle)
 
 Install the standalone native plugin into the `web` profile used by ordinary
 Harness and by TaroCub's private Harness hosts:
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
-The plugin adds source-traceable Brave/Tavily Search MCP tools, bounded TaroCub
-context, and `/tarocub`. It does **not** create a Feishu/Lark app or start the
-bridge. The legacy `github:cloveric/tarocub#path:deepseek-harness-plugin`
-source remains compatible. Check, update, or remove it with:
+The plugin adds source-traceable Brave/Tavily live search and URL extraction.
+TaroCub integration and `/tarocub` guidance are optional. Installing it does
+**not** create a Feishu/Lark app or start the bridge. The canonical TaroCub
+subdirectory source remains compatible. Check, update, or remove it with:
 
 ```bash
-dsh --profile web --dump-config | grep -A2 -B1 tarocub
-dsh plugin --profile web update tarocub-deepseek-harness-plugin
-dsh plugin --profile web remove tarocub-deepseek-harness-plugin
+dsh --profile web --dump-config | grep -A18 -B2 mcp-cctb-search
+dsh plugin --profile web update deepseek-harness-web-search-plugin
+dsh plugin --profile web remove deepseek-harness-web-search-plugin
 ```
+
+TaroCub still recognizes installations made under the former
+`tarocub-deepseek-harness-plugin` package name so they can be migrated without
+breaking managed bots.
 
 ### Telegram (optional compatibility channel)
 
@@ -135,7 +139,7 @@ npm run dev -- telegram access pair <pairing-code>
 | Highlight | Why it matters |
 |---|---|
 | **Real CLI engines, not a fake chat backend** | Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
-| **Native DeepSeek Harness plugin** | Install `github:cloveric/tarocub-deepseek-harness-plugin`; its self-contained runtime adds Search MCP plus `/tarocub`, while plugin installation and Feishu/Lark service deployment remain separate. |
+| **DeepSeek Harness web search plugin** | Install `github:cloveric/deepseek-harness-web-search-plugin`; its self-contained runtime adds Brave/Tavily live search and URL extraction, while TaroCub integration remains optional. |
 | **DeepSeek Search MCP** | Plain Harness gets Search MCP from the plugin. Managed DeepSeek bots use that registration when valid and otherwise retain TaroCub's private fallback, so exactly one `mcp-cctb-search` client is active while native Harness search remains available. |
 | **Engine-neutral Lark intake** | Long-media Tingwu routing and group/topic session boundaries are resolved before dispatch, so DeepSeek follows the same 15-minute ASR threshold and chat/thread isolation rules as Codex, Claude, and Kimi. |
 | **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, Kimi ACP sessions, DeepSeek Harness sessions, and Antigravity conversations can be attached from chat and detached later. Bindings and resumed workspace roots are scoped to the private chat, group, or topic that created them, so another conversation cannot silently switch projects. |
@@ -273,12 +277,12 @@ The verified compatibility baseline is **DeepSeek Harness 0.1.1-rc.2**.
 Install the standalone native Harness bundle:
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
 The shared `web` profile is linked into each private bot home, so the plugin is
 available in both ordinary Harness Web and TaroCub-backed sessions. It provides
-Search MCP plus `/tarocub`. TaroCub validates the plugin marker, bundled
+Search MCP directly, with optional `/tarocub` guidance. TaroCub validates the plugin marker, bundled
 entrypoint, and the Harness patch that registers the MCP client; if any part is
 absent or damaged, the private Host safely retains its built-in Search MCP
 fallback instead of registering two clients. Plugin activation remains separate

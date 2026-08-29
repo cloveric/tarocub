@@ -4,7 +4,7 @@
 
 **Goal:** Publish TaroCub's Search MCP as a native, standalone DeepSeek Harness plugin while preserving TaroCub's existing fallback and preventing duplicate MCP clients.
 
-**Architecture:** `deepseek-harness-plugin/` remains the canonical source inside TaroCub and is subtree-published to `cloveric/tarocub-deepseek-harness-plugin`. The plugin registers its own stdio Search MCP for plain Harness. TaroCub detects a valid installed plugin marker and selects either plugin ownership or its existing private-patch fallback before starting a managed DeepSeek Host.
+**Architecture:** `deepseek-harness-plugin/` remains the canonical source inside TaroCub and is subtree-published to `cloveric/deepseek-harness-web-search-plugin`. The plugin registers its own stdio Search MCP for plain Harness. TaroCub detects a valid installed plugin marker and selects either plugin ownership or its existing private-patch fallback before starting a managed DeepSeek Host.
 
 **Tech Stack:** TypeScript, Node.js ESM, Cordis/DeepSeek Harness bundle patches, MCP stdio, Vitest, esbuild, GitHub Actions, Git subtree, GitHub CLI.
 
@@ -118,7 +118,7 @@
 - Remote GitHub state only.
 
 1. Push TaroCub `main` and create release `v0.1.279` with concise bilingual-facing release notes.
-2. Create public repository `cloveric/tarocub-deepseek-harness-plugin` if absent, set description/homepage, and subtree-push canonical plugin source.
+2. Create public repository `cloveric/deepseek-harness-web-search-plugin` if absent, set description/homepage, and subtree-push canonical plugin source.
 3. Tag and publish plugin release `v0.2.0`; do not publish to npm.
 4. Set both repositories' topics to include `dsh-plugin`, `deepseek-harness`, `deepseek`, `mcp`, and `web-search` while respecting GitHub's topic count limit.
 5. Re-open both Releases and repository metadata through GitHub to verify publication rather than relying on command exit status.

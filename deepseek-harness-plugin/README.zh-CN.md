@@ -1,13 +1,15 @@
-# TaroCub DeepSeek Harness 搜索插件
+# DeepSeek Harness 网页搜索增强插件
 
-[![CI](https://github.com/cloveric/tarocub-deepseek-harness-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/cloveric/tarocub-deepseek-harness-plugin/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/cloveric/tarocub-deepseek-harness-plugin)](https://github.com/cloveric/tarocub-deepseek-harness-plugin/releases)
+英文名称：**DeepSeek Harness Web Search Plugin**
+
+[![CI](https://github.com/cloveric/deepseek-harness-web-search-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/cloveric/deepseek-harness-web-search-plugin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/cloveric/deepseek-harness-web-search-plugin)](https://github.com/cloveric/deepseek-harness-web-search-plugin/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0f766e.svg)](./LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-%E5%8E%9F%E7%94%9F%E6%8F%92%E4%BB%B6-f97316.svg)](https://github.com/topics/dsh-plugin)
 
-**把带来源链的 Brave + Tavily 实时网页研究，作为 DeepSeek Harness 原生插件直接安装。**
+**把带来源链的 Brave + Tavily 实时网页搜索和 URL 正文抽取，作为 DeepSeek Harness 原生插件直接安装。**
 
-[English](./README.md) · [TaroCub](https://github.com/cloveric/tarocub) · [安全说明](./SECURITY.md) · [Releases](https://github.com/cloveric/tarocub-deepseek-harness-plugin/releases)
+[English](./README.md) · [TaroCub](https://github.com/cloveric/tarocub) · [安全说明](./SECURITY.md) · [Releases](https://github.com/cloveric/deepseek-harness-web-search-plugin/releases)
 
 这个插件向 Harness 的 `web` profile 安装一个原生 bundle，提供：
 
@@ -15,7 +17,7 @@
 - `web_extract`：Tavily 精确 URL 正文抽取；
 - `provider_status`：不暴露密钥、不请求供应商的本地配置检查；
 - `health_check`：显式执行 auth、quota、rate limit、timeout 实际探活；
-- `/tarocub`：准确的 TaroCub 配置和验收说明。
+- 可选的 `/tarocub`：与 TaroCub 网关联用时的配置和验收说明。
 
 它可以独立用于 DeepSeek Harness，不要求安装 TaroCub。
 
@@ -38,8 +40,8 @@
 
 ```text
 DeepSeek Harness web profile
-└── tarocub-deepseek-harness-plugin
-    ├── tarocub                 有边界的指引 + /tarocub
+└── deepseek-harness-web-search-plugin
+    ├── deepseek-harness-web-search  有边界的搜索指引
     └── mcp-cctb-search         @deepseek-ai/dsh-mcp-client
         └── node dist/search-mcp.js
             ├── Brave Search API
@@ -57,7 +59,7 @@ DeepSeek Harness web profile
 - 至少一个 Brave 或 Tavily key，才能使用对应供应商工具。
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
 安装后重启 Harness。安装成功不等于供应商密钥已配置，也不会创建飞书/Lark应用或启动 TaroCub。
@@ -98,8 +100,8 @@ mcp__cctb_search__health_check
 ## 更新与卸载
 
 ```bash
-dsh plugin --profile web update tarocub-deepseek-harness-plugin
-dsh plugin --profile web remove tarocub-deepseek-harness-plugin
+dsh plugin --profile web update deepseek-harness-web-search-plugin
+dsh plugin --profile web remove deepseek-harness-web-search-plugin
 ```
 
 操作后重启 Harness，并重新执行 `dsh --profile web --dump-config`。
@@ -108,30 +110,31 @@ dsh plugin --profile web remove tarocub-deepseek-harness-plugin
 
 [TaroCub](https://github.com/cloveric/tarocub) 是另一个独立的、以飞书/Lark 为主平台的本地 agent 网关。它管理的 DeepSeek Host 会链接同一个 `web` profile。
 
-- 安装 `v0.2.0+` 后，TaroCub 会校验 capability marker、bundle 入口和 Harness patch 中的实际注册，再让插件接管 `mcp-cctb-search`。
+- 安装当前插件后，TaroCub 会校验 capability marker、bundle 入口和 Harness patch 中的实际注册，再让插件接管 `mcp-cctb-search`。
+- 迁移期间，TaroCub 仍会识别已安装的 `tarocub-deepseek-harness-plugin`。
 - 没装插件、仍是旧 companion-only 插件、或入口/patch 损坏时，TaroCub 继续使用自己的私有 Search MCP 兜底。
 - TaroCub 只在私有 Host 中设置 `TAROCUB_SEARCH_MCP_OWNER=plugin` 或 `bridge`，保证恰好只有一个 client 生效。
 - 普通 Harness 不设置这个内部变量，因此插件默认启用。
 
 正常使用 Harness 时不要手工设置 `TAROCUB_SEARCH_MCP_OWNER`。安装插件与部署 TaroCub 飞书服务是两件独立的事。
 
-### 从 TaroCub 子目录来源迁移
+### 从旧包名迁移
 
-旧来源继续兼容：
+项目已从 `tarocub-deepseek-harness-plugin` 更名，让用途明确表达为网页搜索增强。现有安装继续可被 TaroCub 识别，但不要在同一 profile 同时安装新旧两个包名。迁移一次后，后续升级统一使用新名称：
+
+```bash
+dsh plugin --profile web remove tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
+dsh --profile web --dump-config | grep -c "id: mcp-cctb-search"
+```
+
+迁移后重启 Harness，最后计数必须是 `1`。
+
+唯一维护源仍可从 TaroCub 的插件子目录安装：
 
 ```bash
 dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
 ```
-
-新安装推荐独立仓库。迁移时先卸载旧 package，再安装独立来源、重启 Harness，并检查只出现一个 client：
-
-```bash
-dsh plugin --profile web remove tarocub-deepseek-harness-plugin
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
-dsh --profile web --dump-config | grep -c "id: mcp-cctb-search"
-```
-
-最后计数必须是 `1`。
 
 ## 故障排查
 

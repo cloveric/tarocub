@@ -16,6 +16,6 @@ Treat Harness profiles, process environments, and Codex configuration as local t
 
 ## Reporting A Vulnerability
 
-Use GitHub's private security-advisory flow for `cloveric/tarocub-deepseek-harness-plugin`. Do not open a public issue containing API keys, private paths, chat identifiers, logs with credentials, or exploit details.
+Use GitHub's private security-advisory flow for `cloveric/deepseek-harness-web-search-plugin`. Do not open a public issue containing API keys, private paths, chat identifiers, logs with credentials, or exploit details.
 
 Include the plugin version, DeepSeek Harness version, operating system, minimal reproduction, expected behavior, and redacted observed behavior. Do not test against third-party accounts or provider credentials you do not own.

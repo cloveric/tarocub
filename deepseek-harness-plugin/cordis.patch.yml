@@ -1,6 +1,6 @@
 - insert:
-    - id: tarocub
-      name: tarocub-deepseek-harness-plugin
+    - id: deepseek-harness-web-search
+      name: deepseek-harness-web-search-plugin
     - id: mcp-cctb-search
       name: '@deepseek-ai/dsh-mcp-client'
       disabled: !!js process.env.TAROCUB_SEARCH_MCP_OWNER === 'bridge'
@@ -9,7 +9,7 @@
         transport: stdio
         command: !!js process.execPath
         args:
-          - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('./node_modules/tarocub-deepseek-harness-plugin/dist/search-mcp.js', baseUrl))"
+          - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('./node_modules/deepseek-harness-web-search-plugin/dist/search-mcp.js', baseUrl))"
         cwd: !!js process.env.DSH_CWD || process.cwd()
         env:
           BRAVE_API_KEY: !!js process.env.BRAVE_API_KEY || ''

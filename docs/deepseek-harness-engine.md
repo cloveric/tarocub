@@ -4,28 +4,33 @@ This document is the release contract for TaroCub's `deepseek` engine. It
 describes behavior verified against **DeepSeek Harness 0.1.1-rc.2**, not a
 prompt-level approximation of another engine.
 
-## Native Harness Plugin
+## Native Web Search Plugin
 
 The package in `deepseek-harness-plugin/` is the canonical source for a genuine
 Harness bundle and self-contained Search MCP runtime. Install its standalone
 repository into the profile used by ordinary Harness and TaroCub:
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
-The bundle registers a bounded system-prompt section, `/tarocub`, and one
-`mcp-cctb-search` client backed by its committed JavaScript bundle. It receives
+The bundle registers bounded web-search guidance and one `mcp-cctb-search`
+client backed by its committed JavaScript bundle. Optional `/tarocub` guidance
+describes companion integration without making TaroCub a prerequisite. It receives
 provider keys only through the child environment and does not create a
 Feishu/Lark app or claim that the separate TaroCub service is configured. The
 legacy `github:cloveric/tarocub#path:deepseek-harness-plugin` source remains
 compatible.
 
 ```bash
-dsh --profile web --dump-config | grep -A2 -B1 tarocub
-dsh plugin --profile web update tarocub-deepseek-harness-plugin
-dsh plugin --profile web remove tarocub-deepseek-harness-plugin
+dsh --profile web --dump-config | grep -A18 -B2 mcp-cctb-search
+dsh plugin --profile web update deepseek-harness-web-search-plugin
+dsh plugin --profile web remove deepseek-harness-web-search-plugin
 ```
+
+TaroCub also recognizes the former `tarocub-deepseek-harness-plugin` package
+name during migration, but new installations and maintenance commands use the
+web-search name.
 
 ## Runtime Architecture
 

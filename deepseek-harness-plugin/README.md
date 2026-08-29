@@ -1,13 +1,13 @@
-# TaroCub Search MCP for DeepSeek Harness
+# DeepSeek Harness Web Search Plugin
 
-[![CI](https://github.com/cloveric/tarocub-deepseek-harness-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/cloveric/tarocub-deepseek-harness-plugin/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/cloveric/tarocub-deepseek-harness-plugin)](https://github.com/cloveric/tarocub-deepseek-harness-plugin/releases)
+[![CI](https://github.com/cloveric/deepseek-harness-web-search-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/cloveric/deepseek-harness-web-search-plugin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/cloveric/deepseek-harness-web-search-plugin)](https://github.com/cloveric/deepseek-harness-web-search-plugin/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-0f766e.svg)](./LICENSE)
 [![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-native%20plugin-f97316.svg)](https://github.com/topics/dsh-plugin)
 
-**Source-traceable Brave and Tavily web research, packaged as a native DeepSeek Harness plugin.**
+**Source-traceable Brave + Tavily live web search and URL extraction, packaged as a native DeepSeek Harness plugin.**
 
-[简体中文](./README.zh-CN.md) · [TaroCub](https://github.com/cloveric/tarocub) · [Security](./SECURITY.md) · [Releases](https://github.com/cloveric/tarocub-deepseek-harness-plugin/releases)
+[简体中文](./README.zh-CN.md) · [TaroCub](https://github.com/cloveric/tarocub) · [Security](./SECURITY.md) · [Releases](https://github.com/cloveric/deepseek-harness-web-search-plugin/releases)
 
 This plugin installs one native Harness bundle into the `web` profile. It adds:
 
@@ -15,7 +15,7 @@ This plugin installs one native Harness bundle into the `web` profile. It adds:
 - `web_extract` for clean Tavily URL extraction;
 - `provider_status` for local, secret-safe configuration checks;
 - `health_check` for explicit live auth/quota/rate-limit/timeout probes;
-- `/tarocub` for accurate companion setup and verification guidance.
+- optional `/tarocub` guidance when the plugin is used with the TaroCub gateway.
 
 It works in plain DeepSeek Harness. TaroCub is optional.
 
@@ -38,8 +38,8 @@ When one provider fails, results include `fallbacks` and `notice`. Extracted con
 
 ```text
 DeepSeek Harness web profile
-└── tarocub-deepseek-harness-plugin
-    ├── tarocub                 bounded guidance + /tarocub
+└── deepseek-harness-web-search-plugin
+    ├── deepseek-harness-web-search  bounded search guidance
     └── mcp-cctb-search         @deepseek-ai/dsh-mcp-client
         └── node dist/search-mcp.js
             ├── Brave Search API
@@ -57,7 +57,7 @@ Prerequisites:
 - at least one Brave or Tavily key for provider-backed tools.
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
 ```
 
 Restart Harness after installation. Installing the plugin does not configure provider credentials, create a Feishu/Lark app, or start TaroCub.
@@ -98,8 +98,8 @@ mcp__cctb_search__health_check
 ## Update Or Remove
 
 ```bash
-dsh plugin --profile web update tarocub-deepseek-harness-plugin
-dsh plugin --profile web remove tarocub-deepseek-harness-plugin
+dsh plugin --profile web update deepseek-harness-web-search-plugin
+dsh plugin --profile web remove deepseek-harness-web-search-plugin
 ```
 
 Restart Harness after either operation and re-run `dsh --profile web --dump-config`.
@@ -108,30 +108,31 @@ Restart Harness after either operation and re-run `dsh --profile web --dump-conf
 
 [TaroCub](https://github.com/cloveric/tarocub) is a separate Feishu/Lark-first local agent gateway. Its managed DeepSeek Hosts link the same `web` profile.
 
-- With plugin `v0.2.0+`, TaroCub validates the package capability marker, bundled entrypoint, and Harness patch registration before letting the plugin own `mcp-cctb-search`.
+- With the current plugin, TaroCub validates the package capability marker, bundled entrypoint, and Harness patch registration before letting the plugin own `mcp-cctb-search`.
+- Existing `tarocub-deepseek-harness-plugin` installations remain recognized by TaroCub during migration.
 - With no plugin, an older companion-only plugin, or a damaged entrypoint/patch, TaroCub retains its private Search MCP fallback.
 - TaroCub sets `TAROCUB_SEARCH_MCP_OWNER=plugin` or `bridge` for its private Host so exactly one client is active.
 - Plain Harness does not set this internal ownership flag, so the plugin is enabled by default.
 
 Do not set `TAROCUB_SEARCH_MCP_OWNER` manually in normal Harness use. Plugin installation and TaroCub service deployment are separate operations.
 
-### Migration From The TaroCub Subdirectory
+### Migration From The Former Package Name
 
-The original source remains compatible:
+The project was renamed from `tarocub-deepseek-harness-plugin` to make its web-search purpose explicit. Existing installations continue to work with TaroCub, but do not install both package names in one profile. Migrate once, then use the new name for future updates:
+
+```bash
+dsh plugin --profile web remove tarocub-deepseek-harness-plugin
+dsh plugin --profile web add github:cloveric/deepseek-harness-web-search-plugin
+dsh --profile web --dump-config | grep -c "id: mcp-cctb-search"
+```
+
+Restart Harness after migration. The final count must be `1`.
+
+The canonical source also remains installable from TaroCub's plugin subdirectory:
 
 ```bash
 dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
 ```
-
-New installations should use the standalone repository. To migrate, remove the package, add the standalone source, restart Harness, and verify the one-client invariant:
-
-```bash
-dsh plugin --profile web remove tarocub-deepseek-harness-plugin
-dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
-dsh --profile web --dump-config | grep -c "id: mcp-cctb-search"
-```
-
-The final count must be `1`.
 
 ## Troubleshooting
 
