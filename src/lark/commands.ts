@@ -900,8 +900,8 @@ function renderLarkNewGroupWelcome(
         ? "Each topic is an isolated session. Send `/status` inside a topic to inspect that session."
         : "This conversation-form group shares one session, including ordinary replies/threads. Send `/status` to inspect it.",
       authorized
-        ? "The group is authorized; individual user access still applies. Messages require @bot by default. Use `/group all` to accept ordinary messages."
-        : "Automatic group authorization failed. An authorized user must send `/group allow` here before normal use.",
+        ? "The group is authorized; individual user access still applies. Messages require @bot by default. To accept ordinary messages, grant app scopes `im:message` + `im:message.group_msg`, then mention @bot and send `/group all`; a bare command may not be delivered."
+        : "Automatic group authorization failed. An authorized user must mention @bot and send `/group allow` here because a bare command may not be delivered.",
     ].join("\n");
   }
   return [
@@ -911,8 +911,8 @@ function renderLarkNewGroupWelcome(
       ? "每个话题都是独立 session；在话题内发送 `/status` 可查看该会话。"
       : "普通对话群全群共享一个 session，普通 reply/thread 也会延续该会话；发送 `/status` 可查看。",
     authorized
-      ? "新群已授权，但仍只允许已授权用户使用。默认需要 @bot；发送 `/group all` 可改为监听普通消息。"
-      : "新群自动授权失败；请由已授权用户在本群发送 `/group allow` 后再使用。",
+      ? "新群已授权，但仍只允许已授权用户使用。默认需要 @bot。若要监听普通消息，请先开通应用权限 `im:message` + `im:message.group_msg`，再 @bot 发送 `/group all`；裸命令可能不会投递给 Bot。"
+      : "新群自动授权失败；请由已授权用户先 @bot 发送 `/group allow`，裸命令可能不会投递给 Bot。",
   ].join("\n");
 }
 
@@ -943,8 +943,8 @@ function renderLarkNewGroupCreated(input: {
   if (input.authorizationWarning) {
     lines.push("");
     lines.push(input.locale === "en"
-      ? `Created, but automatic group authorization failed: ${input.authorizationWarning}. Send /group allow inside the new group.`
-      : `已创建，但自动授权新群失败：${input.authorizationWarning}。请在新群内发送 /group allow。`);
+      ? `Created, but automatic group authorization failed: ${input.authorizationWarning}. Mention @bot and send /group allow inside the new group.`
+      : `已创建，但自动授权新群失败：${input.authorizationWarning}。请在新群内先 @bot 发送 /group allow。`);
   }
   if (input.welcomeWarning) {
     lines.push("");

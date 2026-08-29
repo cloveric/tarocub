@@ -14,6 +14,7 @@ import { inspectLarkAppProvisioning } from "../src/lark/provisioning.js";
 import { handleLarkGroupCommandBeforeAccess } from "../src/lark/commands.js";
 import { applyLarkConfigCardAction } from "../src/lark/config-card.js";
 import {
+  BASE_MESSAGE_SCOPE,
   GROUP_MSG_SCOPE,
   checkGroupMsgScope,
   renderGroupMsgScopeWarning,
@@ -36,13 +37,18 @@ describe("checkGroupMsgScope", () => {
     expect(mockInspect).not.toHaveBeenCalled();
   });
 
-  it("returns 'ok' when im:message.group_msg is granted", async () => {
-    mockInspect.mockResolvedValueOnce(grantedResult(["im:message", GROUP_MSG_SCOPE]));
+  it("returns 'ok' when both ordinary-group-message scopes are granted", async () => {
+    mockInspect.mockResolvedValueOnce(grantedResult([BASE_MESSAGE_SCOPE, GROUP_MSG_SCOPE]));
     expect(await checkGroupMsgScope({ appId: "cli_x", appSecret: "sek" })).toBe("ok");
   });
 
   it("returns 'missing' when the group-message scope is not granted", async () => {
-    mockInspect.mockResolvedValueOnce(grantedResult(["im:message", "im:chat"]));
+    mockInspect.mockResolvedValueOnce(grantedResult([BASE_MESSAGE_SCOPE, "im:chat"]));
+    expect(await checkGroupMsgScope({ appId: "cli_x", appSecret: "sek" })).toBe("missing");
+  });
+
+  it("returns 'missing' when the base message scope is not granted", async () => {
+    mockInspect.mockResolvedValueOnce(grantedResult([GROUP_MSG_SCOPE, "im:chat"]));
     expect(await checkGroupMsgScope({ appId: "cli_x", appSecret: "sek" })).toBe("missing");
   });
 
@@ -74,6 +80,7 @@ describe("checkGroupMsgScope", () => {
 describe("renderGroupMsgScopeWarning", () => {
   it("names the scope, the restart + doctor steps, and the console link (zh)", () => {
     const w = renderGroupMsgScopeWarning("zh", "cli_x", "feishu");
+    expect(w).toContain(BASE_MESSAGE_SCOPE);
     expect(w).toContain(GROUP_MSG_SCOPE);
     expect(w).toContain("lark service restart --all");
     expect(w).toContain("lark doctor");
@@ -88,6 +95,7 @@ describe("renderGroupMsgScopeWarning", () => {
 
   it("localizes to English", () => {
     const w = renderGroupMsgScopeWarning("en", "cli_x", "feishu", "ccfcc1");
+    expect(w).toContain(BASE_MESSAGE_SCOPE);
     expect(w).toContain(GROUP_MSG_SCOPE);
     expect(w).toContain("lark service restart --instance ccfcc1");
     expect(w).toContain("Console:");

@@ -14,11 +14,16 @@ describe("DeepSeek Harness plugin bundle", () => {
     const packageJson = JSON.parse(
       await readFile(path.join(repoRoot, "deepseek-harness-plugin", "package.json"), "utf8"),
     ) as Record<string, any>;
+    const packageLock = JSON.parse(
+      await readFile(path.join(repoRoot, "deepseek-harness-plugin", "package-lock.json"), "utf8"),
+    ) as Record<string, any>;
     const patchPath = packageJson.dsh?.bundle?.patch;
 
     expect(rootPackageJson.dsh).toBeUndefined();
     expect(packageJson.name).toBe("tarocub-deepseek-harness-plugin");
-    expect(packageJson.version).toBe("0.2.2");
+    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+    expect(packageLock.version).toBe(packageJson.version);
+    expect(packageLock.packages?.[""]?.version).toBe(packageJson.version);
     expect(packageJson.dependencies).toBeUndefined();
     expect(packageJson.main).toBe("./index.js");
     expect(packageJson.private).toBe(true);

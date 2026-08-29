@@ -3483,15 +3483,18 @@ describe("lark service", () => {
         "oc_new_chat",
         { markdown: expect.stringContaining("这个群已经接入 TaroCub") },
       );
+      const rendered = JSON.stringify(channel.send.mock.calls);
+      expect(rendered).toContain("再 @bot 发送 `/group all`");
+      expect(rendered).toContain("im:message.group_msg");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: expect.stringContaining("已创建飞书群：产品需求讨论") },
         { replyTo: "om_new_chat", replyInThread: false },
       );
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("oc_new_chat");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("https://example.feishu.cn/chat/oc_new_chat");
-      expect(JSON.stringify(channel.send.mock.calls)).toContain("全群共享一个 session");
-      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("普通 reply/thread 形成独立 session");
+      expect(rendered).toContain("oc_new_chat");
+      expect(rendered).toContain("https://example.feishu.cn/chat/oc_new_chat");
+      expect(rendered).toContain("全群共享一个 session");
+      expect(rendered).not.toContain("普通 reply/thread 形成独立 session");
       const cfg = await loadInstanceConfig(stateDir);
       expect(cfg.groupMode.enabled).toBe(true);
       expect(cfg.groupMode.allowedChatIds).toContain(stableLarkNumericId("lark:oc_new_chat"));
