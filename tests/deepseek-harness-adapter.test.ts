@@ -712,6 +712,55 @@ describe("DeepSeekHarnessAdapter", () => {
     ]);
   });
 
+  it("keeps finalized reasoning out of the reply without replaying streamed thinking", async () => {
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(2);
+    const events: EngineStreamEvent[] = [];
+    const turn = adapter.sendUserMessage(sessionId, {
+      text: "Verify a rumor",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+    await waitForCall(gateway, "session.prompt", 1);
+
+    await gateway.emitSessionEvent(sessionId, "turn/start", { turn: 1 }, 1);
+    await gateway.emitSessionEvent(sessionId, "assistant/chunk", {
+      turn: 1,
+      step: 1,
+      chunk: { type: "reasoning-delta", index: 0, text: "private analysis" },
+    }, 2);
+    await gateway.emitSessionEvent(sessionId, "assistant/message", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "assistant-mixed-content",
+        role: "assistant",
+        source: { kind: "model", provider: "deepseek-official", model: "deepseek-v4-flash" },
+        content: [
+          { type: "reasoning", text: "private analysis" },
+          { type: "text", text: "Verified public answer" },
+        ],
+      },
+    }, 3);
+    await gateway.emitSessionEvent(sessionId, "turn/end", {
+      turn: 1,
+      reason: completedReason(),
+    }, 4);
+
+    await expect(turn).resolves.toMatchObject({ text: "Verified public answer", sessionId });
+    expect(events.filter((event) => event.type === "thinking")).toEqual([
+      { type: "thinking", text: "private analysis", sessionId },
+    ]);
+    expect(events.filter((event) => event.type === "assistant_text")).toEqual([
+      { type: "assistant_text", text: "Verified public answer", sessionId },
+    ]);
+    expect(events.filter((event) => event.type === "result")).toEqual([
+      { type: "result", text: "Verified public answer", sessionId },
+    ]);
+  });
+
   it("keeps the user turn open through background completion and the automatic review turn", async () => {
     const { adapter, gateway } = createAdapter();
     const { sessionId } = await adapter.createSession(2);
@@ -1806,10 +1855,17 @@ describe("DeepSeekHarnessAdapter", () => {
       content: [{ type: "text", text: "goal round" }],
       source: { kind: "goal", goalId: "goal-live", revision: 1, round: 1 },
     }, 2);
-    gateway.emitSessionEvent(sessionId, "assistant/chunk", {
+    gateway.emitSessionEvent(sessionId, "assistant/message", {
       turn: 1,
       step: 1,
-      chunk: { type: "text-delta", index: 0, text: "goal-only output" },
+      message: {
+        id: "goal-assistant-message",
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "goal-private-thinking" },
+          { type: "text", text: "goal-only output" },
+        ],
+      },
     }, 3);
     gateway.emitSessionEvent(sessionId, "turn/end", { turn: 1, reason: completedReason() }, 4);
 
@@ -1833,6 +1889,9 @@ describe("DeepSeekHarnessAdapter", () => {
     ]);
     expect(goalEvents.filter((event) => event.type === "assistant_text").map((event) => event.text)).toEqual([
       "goal-only output",
+    ]);
+    expect(goalEvents.filter((event) => event.type === "thinking").map((event) => event.text)).toEqual([
+      "goal-private-thinking",
     ]);
 
     goalProjection = {

@@ -123,6 +123,7 @@ type PendingTurn = {
   turnsEnded: Set<number>;
   activeTurns: Set<number>;
   chunkedSteps: Set<string>;
+  reasoningChunkedSteps: Set<string>;
   usageByStep: Map<string, Usage>;
   toolCalls: Map<string, ToolCall>;
   outstandingToolCalls: Set<string>;
@@ -178,6 +179,7 @@ type GoalWatcher = {
   abortListener?: () => void;
   pollTimer?: ReturnType<typeof setTimeout>;
   chunkedSteps: Set<string>;
+  reasoningChunkedSteps: Set<string>;
   toolCalls: Map<string, ToolCall>;
 };
 
@@ -979,6 +981,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
       case "reasoning-delta": {
         const text = stringValue(chunk.text) ?? "";
         if (text) {
+          pending.reasoningChunkedSteps.add(key);
           await this.emit(pending, { type: "thinking", text, sessionId: pending.sessionId });
         }
         return;
@@ -1006,11 +1009,22 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     if (usage) {
       pending.usageByStep.set(key, usage);
     }
+    const message = asRecord(data.message);
+    const content = message?.content;
+    if (!pending.reasoningChunkedSteps.has(key)) {
+      const reasoning = assistantContentText(content, "reasoning");
+      if (reasoning) {
+        await this.emit(pending, {
+          type: "thinking",
+          text: reasoning,
+          sessionId: pending.sessionId,
+        });
+      }
+    }
     if (pending.chunkedSteps.has(key)) {
       return;
     }
-    const message = asRecord(data.message);
-    const text = textFromContent(message?.content);
+    const text = assistantContentText(content, "text");
     if (!text) {
       return;
     }
@@ -1071,6 +1085,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
       } else if (chunk.type === "reasoning-delta") {
         const text = stringValue(chunk.text) ?? "";
         if (text) {
+          watcher.reasoningChunkedSteps.add(key);
           await this.emitGoal(watcher, {
             type: "thinking",
             text,
@@ -1083,10 +1098,25 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     if (type === "assistant/message") {
       const turn = numberValue(data.turn);
       const step = numberValue(data.step);
-      if (turn === undefined || step === undefined || watcher.chunkedSteps.has(`${turn}:${step}`)) {
+      if (turn === undefined || step === undefined) {
         return;
       }
-      const text = textFromContent(asRecord(data.message)?.content);
+      const key = `${turn}:${step}`;
+      const content = asRecord(data.message)?.content;
+      if (!watcher.reasoningChunkedSteps.has(key)) {
+        const reasoning = assistantContentText(content, "reasoning");
+        if (reasoning) {
+          await this.emitGoal(watcher, {
+            type: "thinking",
+            text: reasoning,
+            sessionId: watcher.sessionId,
+          });
+        }
+      }
+      if (watcher.chunkedSteps.has(key)) {
+        return;
+      }
+      const text = assistantContentText(content, "text");
       if (text) {
         await this.emitGoal(watcher, {
           type: "assistant_text",
@@ -1580,6 +1610,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
       turnsEnded: new Set(),
       activeTurns: new Set(),
       chunkedSteps: new Set(),
+      reasoningChunkedSteps: new Set(),
       usageByStep: new Map(),
       toolCalls: new Map(),
       outstandingToolCalls: new Set(),
@@ -1820,6 +1851,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
       abortController: new AbortController(),
       abortSignal: input.abortSignal,
       chunkedSteps: new Set(),
+      reasoningChunkedSteps: new Set(),
       toolCalls: new Map(),
     };
   }
@@ -2997,6 +3029,18 @@ function textFromContent(value: unknown): string {
     }
   }
   return texts.join("\n");
+}
+
+function assistantContentText(value: unknown, type: "text" | "reasoning"): string {
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value
+    .map((item) => asRecord(item))
+    .filter((block): block is Record<string, unknown> => block?.type === type)
+    .map((block) => stringValue(block.text) ?? "")
+    .filter(Boolean)
+    .join("\n");
 }
 
 function imageMediaType(filePath: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" | null {

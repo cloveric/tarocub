@@ -60,7 +60,7 @@ incomplete or malformed.
 |---|---|
 | Session create | Durable standard Harness session with a preallocated ID and verified workspace |
 | Session resume | Native `session.list` scan and `/resume session <id>`; authoritative cwd is resolved and validated before binding |
-| Streaming | Text deltas, reasoning, tool calls/results, usage, and terminal result events |
+| Streaming | Text deltas, reasoning, tool calls/results, usage, and terminal result events; reasoning is progress-only and never enters the final assistant reply |
 | Files | Non-image paths are attached as Harness file content |
 | Images | Encoded as Harness image content; acceptance still depends on the selected provider/model |
 | Tool approvals | Deny/allow-once plus bridge-managed session grants; broken UI and abort paths fail closed |
@@ -124,6 +124,9 @@ The adapter enforces these invariants with regression tests:
     normalized before TaroCub appends its permission layer.
 12. Closing a Host while its protocol is still connecting rejects startup;
     shutdown can never publish or report a usable replacement afterward.
+13. Finalized assistant messages project `reasoning` blocks only as thinking
+    events and `text` blocks only as assistant output, including autonomous Goal
+    turns and reconnect history replay.
 
 The focused release gate is:
 

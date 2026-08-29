@@ -1,6 +1,6 @@
 {
   "name": "tarocub-deepseek-harness-plugin",
-  "version": "0.1.277",
+  "version": "0.1.278",
   "description": "Native DeepSeek Harness companion plugin for the TaroCub Feishu/Lark bridge.",
   "private": true,
   "license": "MIT",
