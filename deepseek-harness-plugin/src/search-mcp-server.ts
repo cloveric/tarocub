@@ -180,8 +180,12 @@ function searchCredentialsFromCodexConfig(raw: string): Partial<Record<SearchCre
 }
 
 export async function applyCodexSearchCredentialFallback(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
-  const needsBrave = env.BRAVE_API_KEY === undefined && env.BRAVE_SEARCH_API_KEY === undefined;
-  const needsTavily = env.TAVILY_API_KEY === undefined;
+  // dsh-mcp-client mounts missing keys as empty strings, which must not block fallback.
+  const braveVal = (env.BRAVE_API_KEY ?? "").trim();
+  const braveSearchVal = (env.BRAVE_SEARCH_API_KEY ?? "").trim();
+  const tavilyVal = (env.TAVILY_API_KEY ?? "").trim();
+  const needsBrave = !braveVal && !braveSearchVal;
+  const needsTavily = !tavilyVal;
   if (!needsBrave && !needsTavily) {
     return [];
   }

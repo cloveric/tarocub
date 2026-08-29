@@ -61,6 +61,19 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function childProcessEnvWithoutSearchCredentials(
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  return childProcessTestEnv({
+    ...process.env,
+    CODEX_HOME: path.join(os.tmpdir(), `search-mcp-empty-codex-home-${process.pid}`),
+    BRAVE_API_KEY: "",
+    BRAVE_SEARCH_API_KEY: "",
+    TAVILY_API_KEY: "",
+    ...overrides,
+  });
+}
+
 describe("search MCP server", () => {
   it("reuses configured Codex Search MCP credentials when direct env values are absent", async () => {
     const codexHome = await mkdtemp(path.join(os.tmpdir(), "search-mcp-codex-home-"));
@@ -83,13 +96,26 @@ describe("search MCP server", () => {
       expect(env.BRAVE_API_KEY).toBe("brave-from-codex");
       expect(env.TAVILY_API_KEY).toBe("tavily-from-codex");
 
-      const explicitEnv: NodeJS.ProcessEnv = {
+      const mountedEnv: NodeJS.ProcessEnv = {
         CODEX_HOME: codexHome,
         BRAVE_API_KEY: "",
+        BRAVE_SEARCH_API_KEY: " ",
+        TAVILY_API_KEY: "",
+      };
+      await expect(applyCodexSearchCredentialFallback(mountedEnv)).resolves.toEqual([
+        "BRAVE_API_KEY",
+        "TAVILY_API_KEY",
+      ]);
+      expect(mountedEnv.BRAVE_API_KEY).toBe("brave-from-codex");
+      expect(mountedEnv.TAVILY_API_KEY).toBe("tavily-from-codex");
+
+      const explicitEnv: NodeJS.ProcessEnv = {
+        CODEX_HOME: codexHome,
+        BRAVE_API_KEY: "explicit-brave",
         TAVILY_API_KEY: "explicit-tavily",
       };
       await expect(applyCodexSearchCredentialFallback(explicitEnv)).resolves.toEqual([]);
-      expect(explicitEnv.BRAVE_API_KEY).toBe("");
+      expect(explicitEnv.BRAVE_API_KEY).toBe("explicit-brave");
       expect(explicitEnv.TAVILY_API_KEY).toBe("explicit-tavily");
     } finally {
       await rm(codexHome, { recursive: true, force: true });
@@ -100,11 +126,7 @@ describe("search MCP server", () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: childProcessTestEnv({
-        ...process.env,
-        BRAVE_API_KEY: "",
-        TAVILY_API_KEY: "",
-      }),
+      env: childProcessEnvWithoutSearchCredentials(),
     });
 
     try {
@@ -144,11 +166,7 @@ describe("search MCP server", () => {
     await symlink(invocation.args[0]!, linkedEntrypoint);
     const child = spawn(process.execPath, [linkedEntrypoint], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: childProcessTestEnv({
-        ...process.env,
-        BRAVE_API_KEY: "",
-        TAVILY_API_KEY: "",
-      }),
+      env: childProcessEnvWithoutSearchCredentials(),
     });
 
     try {
@@ -169,11 +187,7 @@ describe("search MCP server", () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: childProcessTestEnv({
-        ...process.env,
-        BRAVE_API_KEY: "",
-        TAVILY_API_KEY: "",
-      }),
+      env: childProcessEnvWithoutSearchCredentials(),
     });
 
     try {
@@ -193,11 +207,7 @@ describe("search MCP server", () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: childProcessTestEnv({
-        ...process.env,
-        BRAVE_API_KEY: "",
-        TAVILY_API_KEY: "",
-      }),
+      env: childProcessEnvWithoutSearchCredentials(),
     });
     let stdout = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -222,11 +232,7 @@ describe("search MCP server", () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: childProcessTestEnv({
-        ...process.env,
-        BRAVE_API_KEY: "",
-        TAVILY_API_KEY: "",
-      }),
+      env: childProcessEnvWithoutSearchCredentials(),
     });
 
     try {
@@ -272,10 +278,7 @@ describe("search MCP server", () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: childProcessTestEnv({
-        ...process.env,
-        TAVILY_API_KEY: "",
-      }),
+      env: childProcessEnvWithoutSearchCredentials(),
     });
 
     try {

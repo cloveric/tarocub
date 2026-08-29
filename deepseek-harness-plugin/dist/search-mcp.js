@@ -19116,8 +19116,11 @@ function searchCredentialsFromCodexConfig(raw) {
   return credentials;
 }
 async function applyCodexSearchCredentialFallback(env = process.env) {
-  const needsBrave = env.BRAVE_API_KEY === void 0 && env.BRAVE_SEARCH_API_KEY === void 0;
-  const needsTavily = env.TAVILY_API_KEY === void 0;
+  const braveVal = (env.BRAVE_API_KEY ?? "").trim();
+  const braveSearchVal = (env.BRAVE_SEARCH_API_KEY ?? "").trim();
+  const tavilyVal = (env.TAVILY_API_KEY ?? "").trim();
+  const needsBrave = !braveVal && !braveSearchVal;
+  const needsTavily = !tavilyVal;
   if (!needsBrave && !needsTavily) {
     return [];
   }
