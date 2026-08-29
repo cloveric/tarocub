@@ -108,8 +108,8 @@ Restart Harness after either operation and re-run `dsh --profile web --dump-conf
 
 [TaroCub](https://github.com/cloveric/tarocub) is a separate Feishu/Lark-first local agent gateway. Its managed DeepSeek Hosts link the same `web` profile.
 
-- With plugin `v0.2.0+`, TaroCub validates the package capability marker and bundled entrypoint, then lets the plugin own `mcp-cctb-search`.
-- With no plugin, an older companion-only plugin, or a damaged entrypoint, TaroCub retains its private Search MCP fallback.
+- With plugin `v0.2.0+`, TaroCub validates the package capability marker, bundled entrypoint, and Harness patch registration before letting the plugin own `mcp-cctb-search`.
+- With no plugin, an older companion-only plugin, or a damaged entrypoint/patch, TaroCub retains its private Search MCP fallback.
 - TaroCub sets `TAROCUB_SEARCH_MCP_OWNER=plugin` or `bridge` for its private Host so exactly one client is active.
 - Plain Harness does not set this internal ownership flag, so the plugin is enabled by default.
 
@@ -141,12 +141,12 @@ The final count must be `1`.
 | `provider_status` says not configured | Export a supported key in the environment that launches `dsh`, not only in an unrelated shell. |
 | Search returns auth/quota/rate-limit errors | Call `health_check` explicitly and inspect its redacted status. |
 | Two `mcp-cctb-search` entries appear | Remove manual duplicate profile patches; a normal plugin or TaroCub-managed Host registers only one owner. |
-| TaroCub reports a damaged plugin entrypoint | Update/reinstall the plugin; TaroCub safely uses its bridge fallback meanwhile. |
+| TaroCub reports a damaged plugin entrypoint or patch | Update/reinstall the plugin; TaroCub safely uses its bridge fallback meanwhile. |
 | A provider fallback was used | Preserve the returned `notice` in the user-facing answer. |
 
 ## Scope And Security
 
-This project is an MCP and DeepSeek Harness plugin. It does not proxy model traffic, manage a Feishu/Lark tenant, persist provider credentials, or replace Harness-native plugins/search. See [SECURITY.md](./SECURITY.md) for the credential boundary and reporting process.
+This project is an MCP and DeepSeek Harness plugin. It does not proxy model traffic, manage a Feishu/Lark tenant, persist provider credentials, or replace Harness-native plugins/search. Extract accepts only HTTP(S) URLs; all text returned through the MCP boundary is checked for configured provider credentials and common authorization formats. See [SECURITY.md](./SECURITY.md) for the credential boundary and reporting process.
 
 ## Development
 

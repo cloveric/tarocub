@@ -18881,12 +18881,19 @@ function extractErrorDetail(error61) {
   }
   return String(error61);
 }
-function domainFromUrl(url2) {
+function isHttpUrl(value) {
   try {
-    return new URL(url2).hostname;
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
   } catch {
+    return false;
+  }
+}
+function domainFromUrl(url2) {
+  if (!isHttpUrl(url2)) {
     return void 0;
   }
+  return new URL(url2).hostname;
 }
 function truncateSearchText(text, maxChars = DEFAULT_RAW_CONTENT_CHAR_LIMIT) {
   const boundedMaxChars = Math.max(MIN_TRUNCATION_LIMIT, Math.trunc(maxChars));
@@ -18941,7 +18948,7 @@ function createBraveSearchProvider(input2) {
         provider: "brave",
         query: request.query,
         results: (payload.web?.results ?? []).filter(
-          (result) => typeof result.title === "string" && result.title.trim().length > 0 && typeof result.url === "string" && result.url.trim().length > 0
+          (result) => typeof result.title === "string" && result.title.trim().length > 0 && typeof result.url === "string" && isHttpUrl(result.url.trim())
         ).map((result, index) => ({
           title: result.title.trim(),
           url: result.url.trim(),
@@ -18989,7 +18996,7 @@ function createTavilySearchProvider(input2) {
         query: payload.query ?? request.query,
         answer: typeof payload.answer === "string" && payload.answer.trim() ? payload.answer.trim() : void 0,
         results: (payload.results ?? []).filter(
-          (result) => typeof result.title === "string" && result.title.trim().length > 0 && typeof result.url === "string" && result.url.trim().length > 0
+          (result) => typeof result.title === "string" && result.title.trim().length > 0 && typeof result.url === "string" && isHttpUrl(result.url.trim())
         ).map((result, index) => ({
           title: result.title.trim(),
           url: result.url.trim(),
@@ -19034,9 +19041,12 @@ var SearchToolInputSchema = external_exports.object({
   mode: external_exports.enum(["quick", "deep", "verify"]).optional(),
   maxResults: external_exports.number().int().min(1).max(10).optional()
 }).passthrough();
+var HttpUrlSchema = external_exports.string().trim().url().refine(isHttpUrl, {
+  message: "Only HTTP(S) URLs are supported"
+});
 var ExtractToolInputSchema = external_exports.object({
-  url: external_exports.string().url().optional(),
-  urls: external_exports.array(external_exports.string().url()).min(1).max(10).optional(),
+  url: HttpUrlSchema.optional(),
+  urls: external_exports.array(HttpUrlSchema).min(1).max(10).optional(),
   depth: external_exports.enum(["basic", "advanced"]).optional(),
   format: external_exports.enum(["markdown", "text"]).optional(),
   maxChars: external_exports.number().int().min(1).max(6e4).optional()
@@ -19156,27 +19166,31 @@ function sendError(id, code, message) {
     id,
     error: {
       code,
-      message
+      message: redactSearchMcpText(truncateTextToExactBudget(message, 4e3))
     }
   }) + "\n");
 }
 function jsonContent(payload, isError = false) {
+  const serialized = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
   return {
     content: [
       {
         type: "text",
-        text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)
+        text: redactSearchMcpText(serialized)
       }
     ],
     ...isError ? { isError: true } : {}
   };
 }
 var NATIVE_SEARCH_FALLBACK_HINT = "If the runtime has a native web search tool, use it as a fallback and explicitly tell the user that Brave/Tavily Search MCP failed.";
-function renderToolError(error61) {
+function renderSearchToolError(error61) {
   const message = error61 instanceof Error ? error61.message : String(error61);
-  return jsonContent(`${message}
+  return jsonContent(
+    `${truncateTextToExactBudget(message, 4e3)}
 
-${NATIVE_SEARCH_FALLBACK_HINT}`, true);
+${NATIVE_SEARCH_FALLBACK_HINT}`,
+    true
+  );
 }
 function createRouterFromEnv() {
   const braveApiKey = process.env.BRAVE_API_KEY?.trim() || process.env.BRAVE_SEARCH_API_KEY?.trim() || "";
@@ -19205,11 +19219,21 @@ function classifyHealthError(error61) {
   }
   return "error";
 }
-function healthErrorDetail(error61) {
-  const message = error61 instanceof Error ? error61.message : String(error61);
-  return message.replace(/(Authorization:\s*Bearer\s+)[^\s,;]+/gi, "$1[redacted]").replace(/(\bBearer\s+)[^\s,;]+/gi, "$1[redacted]").replace(/(X-Subscription-Token:?\s*)[^\s,;]+/gi, "$1[redacted]").replace(/((?:BRAVE|BRAVE_SEARCH|TAVILY)_API_KEY=)[^\s,;]+/gi, "$1[redacted]");
+function redactSearchMcpText(input2, env = process.env) {
+  let redacted = input2.replace(/(Authorization:\s*Bearer\s+)[^\s,;]+/gi, "$1[redacted]").replace(/(\bBearer\s+)[^\s,;]+/gi, "$1[redacted]").replace(/(X-Subscription-Token:?\s*)[^\s,;]+/gi, "$1[redacted]").replace(/((?:BRAVE|BRAVE_SEARCH|TAVILY)_API_KEY\s*[:=]\s*["']?)[^\s,;"'}\]]+/gi, "$1[redacted]").replace(/(api[_-]?key=)[^&\s]+/gi, "$1[redacted]");
+  for (const key of SEARCH_CREDENTIAL_KEYS) {
+    const value = env[key]?.trim();
+    if (value && value.length >= 8) {
+      redacted = redacted.replaceAll(value, "[redacted]");
+    }
+  }
+  return redacted;
 }
-async function checkConfiguredProvider(providerName, provider, query) {
+function healthErrorDetail(error61, env) {
+  const message = error61 instanceof Error ? error61.message : String(error61);
+  return redactSearchMcpText(message, env);
+}
+async function checkConfiguredProvider(providerName, provider, query, env) {
   try {
     await provider.search({
       query,
@@ -19228,7 +19252,7 @@ async function checkConfiguredProvider(providerName, provider, query) {
       checked: true,
       healthy: false,
       status: classifyHealthError(error61),
-      detail: `${providerName}: ${healthErrorDetail(error61)}`
+      detail: `${providerName}: ${healthErrorDetail(error61, env)}`
     };
   }
 }
@@ -19249,7 +19273,7 @@ async function runSearchProviderHealthCheck(input2 = {}) {
         fetchImpl: input2.fetchImpl,
         fetchTimeoutMs: input2.fetchTimeoutMs ?? 1e4
       });
-      checks.push(checkConfiguredProvider("brave", provider, query).then((result) => {
+      checks.push(checkConfiguredProvider("brave", provider, query, env).then((result) => {
         providers.brave = result;
       }));
     } else {
@@ -19268,7 +19292,7 @@ async function runSearchProviderHealthCheck(input2 = {}) {
         fetchImpl: input2.fetchImpl,
         fetchTimeoutMs: input2.fetchTimeoutMs ?? 1e4
       });
-      checks.push(checkConfiguredProvider("tavily", provider, query).then((result) => {
+      checks.push(checkConfiguredProvider("tavily", provider, query, env).then((result) => {
         providers.tavily = result;
       }));
     } else {
@@ -19333,9 +19357,14 @@ function addSearchFallbackNotice(result) {
   if (result.fallbacks.length === 0) {
     return result;
   }
+  const fallbacks = result.fallbacks.map((entry) => ({
+    ...entry,
+    error: redactSearchMcpText(truncateTextToExactBudget(entry.error, 2e3))
+  }));
   return {
     ...result,
-    notice: `Search provider fallback used: ${result.fallbacks.map((entry) => `${entry.provider}: ${entry.error}`).join("; ")}. Disclose this if the answer relies on fallback results.`
+    fallbacks,
+    notice: `Search provider fallback used: ${fallbacks.map((entry) => `${entry.provider}: ${entry.error}`).join("; ")}. Disclose this if the answer relies on fallback results.`
   };
 }
 function addSearchSourceLog(result) {
@@ -19356,7 +19385,7 @@ function addSearchSourceLog(result) {
   };
 }
 function addExtractSourceMetadata(payload, extractedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-  const results = payload.results?.map((entry) => {
+  const results = payload.results?.filter((entry) => !entry.url || isHttpUrl(entry.url)).map((entry) => {
     const rawContent = entry.raw_content ?? "";
     return {
       ...entry,
@@ -19411,7 +19440,7 @@ async function callWebSearch(args) {
     });
     return jsonContent(addSearchSourceLog(addSearchFallbackNotice(result)));
   } catch (error61) {
-    return renderToolError(error61);
+    return renderSearchToolError(error61);
   }
 }
 async function callWebExtract(args) {
@@ -19429,7 +19458,7 @@ async function callWebExtract(args) {
     });
     return jsonContent(addExtractSourceMetadata(truncateExtractResult(result, parsed.data.maxChars ?? 2e4)));
   } catch (error61) {
-    return renderToolError(error61);
+    return renderSearchToolError(error61);
   }
 }
 async function callProviderStatus() {
@@ -19446,7 +19475,7 @@ async function callHealthCheck(args) {
       query: parsed.data.query
     }));
   } catch (error61) {
-    return renderToolError(error61);
+    return renderSearchToolError(error61);
   }
 }
 async function handleRequest(message) {
@@ -19651,6 +19680,8 @@ export {
   addSearchSourceLog,
   applyCodexSearchCredentialFallback,
   getProviderStatusFromEnv,
+  redactSearchMcpText,
+  renderSearchToolError,
   resolveSearchMcpServerInvocation,
   runSearchMcpServer,
   runSearchProviderHealthCheck,

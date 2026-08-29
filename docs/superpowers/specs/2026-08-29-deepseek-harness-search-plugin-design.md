@@ -182,7 +182,9 @@ profile package:
 
 1. the package `tarocub-deepseek-harness-plugin` exists;
 2. its manifest contains `tarocub.searchMcp: true`;
-3. its declared Search MCP entrypoint exists.
+3. its declared Search MCP entrypoint exists inside the package;
+4. its package-local `dsh.bundle.patch` exists and registers the declared
+   entrypoint as `mcp-cctb-search` through `@deepseek-ai/dsh-mcp-client`.
 
 When all checks pass, TaroCub starts the Host with
 `TAROCUB_SEARCH_MCP_OWNER=plugin`; the plugin client is enabled and TaroCub does
@@ -194,7 +196,7 @@ enabled by default.
 
 This decision is local and read-only. TaroCub must not silently install,
 upgrade, or download a plugin during bot startup. A malformed plugin that
-claims the capability but lacks its entrypoint produces a diagnostic, selects
+claims the capability but lacks its entrypoint or registration patch produces a diagnostic, selects
 `bridge` ownership, and uses the built-in fallback rather than silently
 removing search or registering two clients.
 

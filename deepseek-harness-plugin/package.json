@@ -1,6 +1,6 @@
 {
   "name": "tarocub-deepseek-harness-plugin",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Native DeepSeek Harness plugin for source-traceable Brave and Tavily web search, with optional TaroCub integration.",
   "license": "MIT",
   "private": true,

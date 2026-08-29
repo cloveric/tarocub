@@ -384,10 +384,10 @@ native skills/plugins, MCP configuration, and `config.toml` remain in place.
 
 ## Live Web Search MCP: Brave + Tavily
 
-The bridge ships an optional local MCP server with source-traceable web research tools. Codex, Claude Code, and Antigravity use their native MCP/plugin configuration; TaroCub injects the server into Kimi ACP `session/new` and `session/load` while preserving Kimi's native MCP and plugins. DeepSeek uses the standalone `github:cloveric/tarocub-deepseek-harness-plugin`: plain Harness gets Search MCP directly from that plugin, while managed TaroCub Hosts validate the marker/entrypoint and use either plugin ownership or the private bridge fallback, never both:
+The bridge ships an optional local MCP server with source-traceable web research tools. Codex, Claude Code, and Antigravity use their native MCP/plugin configuration; TaroCub injects the server into Kimi ACP `session/new` and `session/load` while preserving Kimi's native MCP and plugins. DeepSeek uses the standalone `github:cloveric/tarocub-deepseek-harness-plugin`: plain Harness gets Search MCP directly from that plugin, while managed TaroCub Hosts validate the marker, package-local entrypoint, and Harness patch registration and use either plugin ownership or the private bridge fallback, never both:
 
 - `web_search` routes live search through Brave and/or Tavily.
-- `web_extract` uses Tavily Extract to read known URLs cleanly.
+- `web_extract` uses Tavily Extract to read known HTTP(S) URLs cleanly; other schemes are rejected before a provider call.
 - `provider_status` reports whether Brave/Tavily keys are configured without exposing the keys.
 - `health_check` optionally performs live Brave/Tavily probes when you explicitly want to diagnose auth, quota, rate limit, or timeout issues; pass `query` if you want a non-default probe term.
 - When a user provides exact URL(s), agents should read those URL(s) directly before using search for discovery or surrounding context.
@@ -422,7 +422,7 @@ For Antigravity, use Antigravity's own native MCP/plugin configuration when need
 
 Kimi does not need a manual TaroCub Search MCP registration. The bridge injects it into each ACP session and, when direct search environment variables are absent, reads only the known Brave/Tavily keys from Codex MCP environment sections in `CODEX_HOME/config.toml`; explicit process environment values always win and credentials are never copied into Kimi config or logs.
 
-DeepSeek installs the native bundle with `dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin`. TaroCub does not silently install or update it at Host startup. If a `v0.2.0+` marker and committed MCP entrypoint are present, the plugin owns `mcp-cctb-search`; otherwise TaroCub's managed Host retains its compatibility client. Ordinary Harness has no TaroCub fallback.
+DeepSeek installs the native bundle with `dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin`. TaroCub does not silently install or update it at Host startup. If the capability marker, committed MCP entrypoint, and package-local patch registration are all valid, the plugin owns `mcp-cctb-search`; otherwise TaroCub's managed Host retains its compatibility client. Ordinary Harness has no TaroCub fallback.
 
 Then restart affected bot instances so their native MCP/plugin configuration is reloaded; Kimi receives the injected Search MCP when its next ACP worker starts. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./search-mcp.md).
 

@@ -278,8 +278,9 @@ dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
 
 The shared `web` profile is linked into each private bot home, so the plugin is
 available in both ordinary Harness Web and TaroCub-backed sessions. It provides
-Search MCP plus `/tarocub`. TaroCub validates the plugin marker and entrypoint;
-if absent or damaged, the private Host safely retains its built-in Search MCP
+Search MCP plus `/tarocub`. TaroCub validates the plugin marker, bundled
+entrypoint, and the Harness patch that registers the MCP client; if any part is
+absent or damaged, the private Host safely retains its built-in Search MCP
 fallback instead of registering two clients. Plugin activation remains separate
 from installing, configuring, or starting the Feishu/Lark bridge.
 
@@ -287,7 +288,9 @@ TaroCub owns a private loopback-only `dsh web --no-open --host 127.0.0.1
 --port 0` process per bot instance and uses Harness's official HTTP RPC plus
 event WebSockets. Credentials and profiles are linked from the configured
 `DSH_HOME`, while mutable settings and bridge instructions remain isolated in
-the instance state directory. A crashed host is restarted and active sessions
+the instance state directory. Both event downlinks must open within 15 seconds,
+so a half-open WebSocket upgrade cannot block startup forever. A crashed host
+is restarted and active sessions
 recover from ordered history/projection watermarks; incomplete or malformed
 recovery fails closed rather than silently skipping events.
 

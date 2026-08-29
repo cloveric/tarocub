@@ -44,14 +44,17 @@ TaroCub instance
 `~/.dsh`). TaroCub creates `<stateDir>/dsh-home` with mode `0700`, links the
 shared credentials and profiles, copies mutable `settings.yaml`, and installs
 the bridge `AGENTS.md` plus permission presets. Before Search MCP registration,
-it validates the installed plugin marker and declared entrypoint. A valid plugin
-owns the client; otherwise the Host appends its instance-local bridge fallback
+it validates the installed plugin marker, declared entrypoint, and the bounded
+package-local Harness patch that registers `mcp-cctb-search` through
+`@deepseek-ai/dsh-mcp-client`. A valid plugin owns the client; otherwise the
+Host appends its instance-local bridge fallback
 and emits a diagnostic for a damaged claim. A bot can therefore reuse
 authentication and native profiles without
 letting model selection or bridge instructions overwrite desktop settings.
 
-The host binds only to loopback and uses an ephemeral port. TaroCub drains its
-stdio, detects process/socket failure, reconnects with backoff, replays only
+The host binds only to loopback and uses an ephemeral port. Both event
+downlinks have a 15-second connection deadline. TaroCub drains its stdio,
+detects process/socket failure, reconnects with backoff, replays only
 unseen ordered history, merges projections by `asOfSeq`, re-arms active Goals
 after a process restart, and fails active work closed when recovery is
 incomplete or malformed.

@@ -86,6 +86,35 @@ describe("search providers", () => {
     expect(tavilyResult.results[0]?.accessedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("drops provider results that are not HTTP or HTTPS URLs", async () => {
+    const brave = createBraveSearchProvider({
+      apiKey: "brave-key",
+      fetchImpl: async () => new Response(JSON.stringify({
+        web: {
+          results: [
+            { title: "Unsafe", url: "javascript:alert(1)" },
+            { title: "Safe", url: "https://example.test/brave" },
+          ],
+        },
+      })),
+    });
+    const tavily = createTavilySearchProvider({
+      apiKey: "tavily-key",
+      fetchImpl: async () => new Response(JSON.stringify({
+        results: [
+          { title: "Unsafe", url: "file:///tmp/private" },
+          { title: "Safe", url: "http://example.test/tavily" },
+        ],
+      })),
+    });
+
+    const braveResult = await brave.search({ query: "urls", mode: "quick", maxResults: 10 });
+    const tavilyResult = await tavily.search({ query: "urls", mode: "deep", maxResults: 10 });
+
+    expect(braveResult.results.map((result) => result.url)).toEqual(["https://example.test/brave"]);
+    expect(tavilyResult.results.map((result) => result.url)).toEqual(["http://example.test/tavily"]);
+  });
+
   it("passes timeout signals to Brave, Tavily search, and Tavily extract fetches", async () => {
     const braveFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       web: { results: [] },

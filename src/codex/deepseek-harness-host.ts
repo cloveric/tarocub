@@ -551,7 +551,73 @@ async function detectSearchMcpOwner(
     return "bridge";
   }
 
+  const bundle = isRecord(manifest.dsh) && isRecord(manifest.dsh.bundle)
+    ? manifest.dsh.bundle
+    : undefined;
+  const patchReference = bundle?.patch;
+  if (typeof patchReference !== "string" || !patchReference.trim()) {
+    onDiagnostic?.(
+      "DeepSeek Harness Search MCP plugin patch is missing from dsh.bundle; using bridge fallback.",
+    );
+    return "bridge";
+  }
+
+  const resolvedPatch = path.resolve(packageRoot, patchReference);
+  if (resolvedPatch === packageRoot || !resolvedPatch.startsWith(`${packageRoot}${path.sep}`)) {
+    onDiagnostic?.(
+      "DeepSeek Harness Search MCP plugin patch escapes its package; using bridge fallback.",
+    );
+    return "bridge";
+  }
+
+  let pluginPatch: string;
+  try {
+    const stat = await lstat(resolvedPatch);
+    if (!stat.isFile()) {
+      throw new Error("patch is not a file");
+    }
+    pluginPatch = await readFile(resolvedPatch, "utf8");
+  } catch (error) {
+    onDiagnostic?.(
+      `DeepSeek Harness Search MCP plugin patch is missing; using bridge fallback: ${formatDiagnosticError(error)}`,
+    );
+    return "bridge";
+  }
+
+  if (!searchMcpPatchRegistersEntrypoint(pluginPatch, entrypoint)) {
+    onDiagnostic?.(
+      "DeepSeek Harness Search MCP plugin patch does not register the declared MCP client; using bridge fallback.",
+    );
+    return "bridge";
+  }
+
   return "plugin";
+}
+
+function searchMcpPatchRegistersEntrypoint(patch: string, entrypoint: string): boolean {
+  const normalizedPatch = patch.replaceAll("\\", "/");
+  const normalizedEntrypoint = entrypoint.replaceAll("\\", "/").replace(/^\.\//, "");
+  const lines = normalizedPatch.split(/\r?\n/);
+  const start = lines.findIndex((line) => (
+    /^\s*-\s+id:\s*["']?mcp-cctb-search["']?\s*$/.test(line)
+  ));
+  if (start < 0) {
+    return false;
+  }
+  const componentIndent = /^\s*/.exec(lines[start]!)?.[0].length ?? 0;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const sequenceItem = /^(\s*)-\s+\S/.exec(lines[index]!);
+    if (sequenceItem && sequenceItem[1]!.length <= componentIndent) {
+      end = index;
+      break;
+    }
+  }
+  const component = lines.slice(start, end).join("\n");
+  return /^\s+name:\s*["']?@deepseek-ai\/dsh-mcp-client["']?\s*$/m.test(component)
+    && /^\s+config:\s*$/m.test(component)
+    && /^\s+serverName:\s*["']?cctb_search["']?\s*$/m.test(component)
+    && component.includes(normalizedEntrypoint);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

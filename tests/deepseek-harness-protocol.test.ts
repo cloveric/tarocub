@@ -426,6 +426,24 @@ describe("DeepSeekHarnessProtocolClient", () => {
     expect(outcome).toBe("rejected");
   });
 
+  it("times out when one downlink never completes its websocket upgrade", async () => {
+    const server = new ProtocolServer();
+    server.heldUpgradePaths.add("/api/events.host");
+    servers.push(server);
+    const baseUrl = await server.listen();
+    const client = new DeepSeekHarnessProtocolClient(baseUrl, {
+      connectTimeoutMs: 25,
+    });
+
+    const connecting = client.connect({
+      onMuxFrame: () => {},
+      onHostFrame: () => {},
+    });
+
+    await expect(connecting).rejects.toThrow(/downlinks.*25ms/i);
+    await client.close();
+  });
+
   it("drops and retries a reconnected downlink when adapter recovery rejects", async () => {
     const server = new ProtocolServer();
     servers.push(server);

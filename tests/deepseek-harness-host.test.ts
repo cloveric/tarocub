@@ -26,7 +26,11 @@ const SEARCH_PLUGIN_NAME = "tarocub-deepseek-harness-plugin";
 async function installSearchPlugin(
   sharedHome: string,
   manifest: Record<string, unknown>,
-  options: { createEntrypoint?: boolean } = {},
+  options: {
+    createEntrypoint?: boolean;
+    createPatch?: boolean;
+    patchContents?: string;
+  } = {},
 ): Promise<void> {
   const packageRoot = path.join(
     sharedHome,
@@ -38,11 +42,31 @@ async function installSearchPlugin(
   await mkdir(path.join(packageRoot, "dist"), { recursive: true });
   await writeFile(
     path.join(packageRoot, "package.json"),
-    `${JSON.stringify({ name: SEARCH_PLUGIN_NAME, ...manifest }, null, 2)}\n`,
+    `${JSON.stringify({
+      name: SEARCH_PLUGIN_NAME,
+      dsh: { bundle: { patch: "./cordis.patch.yml" } },
+      ...manifest,
+    }, null, 2)}\n`,
     "utf8",
   );
   if (options.createEntrypoint !== false) {
     await writeFile(path.join(packageRoot, "dist", "search-mcp.js"), "export {};\n", "utf8");
+  }
+  if (options.createPatch !== false) {
+    await writeFile(
+      path.join(packageRoot, "cordis.patch.yml"),
+      options.patchContents ?? [
+        "- insert:",
+        "    - id: mcp-cctb-search",
+        "      name: '@deepseek-ai/dsh-mcp-client'",
+        "      config:",
+        "        serverName: cctb_search",
+        "        args:",
+        "          - ./dist/search-mcp.js",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
   }
 }
 
@@ -265,6 +289,139 @@ describe("prepareDeepSeekHarnessHome", () => {
     expect(patch).toContain("id: mcp-cctb-search-bridge");
     expect(patch).not.toMatch(/^\s+- id: mcp-cctb-search$/m);
     expect(diagnostics).toContainEqual(expect.stringMatching(/entrypoint.*missing/i));
+  });
+
+  it("falls back when a Search MCP plugin manifest points to a missing Harness patch", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-missing-plugin-patch-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    const diagnostics: string[] = [];
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.1",
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    }, { createPatch: false });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+    const patch = await readFile(prepared.patchPath, "utf8");
+
+    expect(prepared.searchMcpOwner).toBe("bridge");
+    expect(patch).toContain("id: mcp-cctb-search-bridge");
+    expect(diagnostics).toContainEqual(expect.stringMatching(/patch.*missing/i));
+  });
+
+  it("falls back when the plugin patch does not register the declared Search MCP", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-invalid-plugin-patch-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    const diagnostics: string[] = [];
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.1",
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    }, {
+      patchContents: "- insert:\n    - id: unrelated-plugin\n      name: unrelated\n",
+    });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+    const patch = await readFile(prepared.patchPath, "utf8");
+
+    expect(prepared.searchMcpOwner).toBe("bridge");
+    expect(patch).toContain("id: mcp-cctb-search-bridge");
+    expect(diagnostics).toContainEqual(expect.stringMatching(/does not register/i));
+  });
+
+  it("does not accept Search MCP tokens scattered across unrelated patch components", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-scattered-plugin-patch-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.1",
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    }, {
+      patchContents: [
+        "- insert:",
+        "    - id: mcp-cctb-search",
+        "      name: unrelated-client",
+        "    - id: unrelated-component",
+        "      name: '@deepseek-ai/dsh-mcp-client'",
+        "      config:",
+        "        serverName: cctb_search",
+        "        args:",
+        "          - ./dist/search-mcp.js",
+        "",
+      ].join("\n"),
+    });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+    });
+
+    expect(prepared.searchMcpOwner).toBe("bridge");
+  });
+
+  it("rejects a plugin patch path that escapes the installed package", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-escaping-plugin-patch-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    const diagnostics: string[] = [];
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.1",
+      dsh: { bundle: { patch: "../cordis.patch.yml" } },
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+
+    expect(prepared.searchMcpOwner).toBe("bridge");
+    expect(diagnostics).toContainEqual(expect.stringMatching(/patch.*escapes/i));
   });
 });
 

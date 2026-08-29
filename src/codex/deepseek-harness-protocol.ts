@@ -60,6 +60,7 @@ export interface DeepSeekHarnessReconnectInfo {
 export interface DeepSeekHarnessProtocolOptions {
   fetch?: typeof fetch;
   requestTimeoutMs?: number;
+  connectTimeoutMs?: number;
   reconnectInitialDelayMs?: number;
   reconnectMaxDelayMs?: number;
   onMalformedFrame?: (error: unknown, raw: string) => void;
@@ -72,6 +73,7 @@ interface DownlinkGeneration {
   host: WebSocket;
   open: Set<"mux" | "host">;
   settled: boolean;
+  connectTimer?: ReturnType<typeof setTimeout>;
   cancelConnection?: (error: Error) => void;
 }
 
@@ -91,6 +93,7 @@ export class DeepSeekHarnessProtocolClient {
   private readonly baseUrl: URL;
   private readonly fetchImpl: typeof fetch;
   private readonly requestTimeoutMs: number;
+  private readonly connectTimeoutMs: number;
   private readonly reconnectInitialDelayMs: number;
   private readonly reconnectMaxDelayMs: number;
   private readonly onMalformedFrame?: (error: unknown, raw: string) => void;
@@ -106,6 +109,7 @@ export class DeepSeekHarnessProtocolClient {
     this.baseUrl = new URL(baseUrl);
     this.fetchImpl = options.fetch ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
+    this.connectTimeoutMs = Math.max(1, Math.trunc(options.connectTimeoutMs ?? 15_000));
     this.reconnectInitialDelayMs = options.reconnectInitialDelayMs ?? 250;
     this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? 5_000;
     this.reconnectDelayMs = this.reconnectInitialDelayMs;
@@ -229,11 +233,18 @@ export class DeepSeekHarnessProtocolClient {
     }
 
     await new Promise<void>((resolve, reject) => {
+      const clearConnectTimer = () => {
+        if (generation.connectTimer) {
+          clearTimeout(generation.connectTimer);
+          generation.connectTimer = undefined;
+        }
+      };
       generation.cancelConnection = (error) => {
         if (generation.settled) {
           return;
         }
         generation.settled = true;
+        clearConnectTimer();
         reject(error);
       };
       const opened = (kind: "mux" | "host") => {
@@ -243,6 +254,7 @@ export class DeepSeekHarnessProtocolClient {
         generation.open.add(kind);
         if (generation.open.size === 2) {
           generation.settled = true;
+          clearConnectTimer();
           this.reconnectDelayMs = this.reconnectInitialDelayMs;
           if (isReconnect) {
             // Recovery is application work layered on top of the sockets. If it
@@ -270,6 +282,12 @@ export class DeepSeekHarnessProtocolClient {
         generation.cancelConnection?.(error);
         this.handleGenerationLoss(id, error);
       };
+      generation.connectTimer = setTimeout(() => {
+        failed(new Error(
+          `DeepSeek Harness downlinks did not both open within ${this.connectTimeoutMs}ms`,
+        ));
+      }, this.connectTimeoutMs);
+      generation.connectTimer.unref?.();
       this.bindSocket(generation, "mux", opened, failed);
       this.bindSocket(generation, "host", opened, failed);
     });
@@ -325,6 +343,11 @@ export class DeepSeekHarnessProtocolClient {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.openGeneration(true).catch((error) => {
+        // Connection failures are normally handled by handleGenerationLoss,
+        // which has already reported the failure and scheduled the next try.
+        if (this.closing || this.reconnectTimer) {
+          return;
+        }
         void Promise.resolve()
           .then(() => this.handlers?.onDisconnect?.(error instanceof Error ? error : new Error(String(error))))
           .catch((handlerError) => this.reportHandlerError(handlerError));

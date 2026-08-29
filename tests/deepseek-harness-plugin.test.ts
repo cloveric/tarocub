@@ -18,7 +18,7 @@ describe("DeepSeek Harness plugin bundle", () => {
 
     expect(rootPackageJson.dsh).toBeUndefined();
     expect(packageJson.name).toBe("tarocub-deepseek-harness-plugin");
-    expect(packageJson.version).toBe("0.2.1");
+    expect(packageJson.version).toBe("0.2.2");
     expect(packageJson.dependencies).toBeUndefined();
     expect(packageJson.main).toBe("./index.js");
     expect(packageJson.private).toBe(true);

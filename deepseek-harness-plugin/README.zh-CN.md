@@ -108,8 +108,8 @@ dsh plugin --profile web remove tarocub-deepseek-harness-plugin
 
 [TaroCub](https://github.com/cloveric/tarocub) 是另一个独立的、以飞书/Lark 为主平台的本地 agent 网关。它管理的 DeepSeek Host 会链接同一个 `web` profile。
 
-- 安装 `v0.2.0+` 后，TaroCub 会校验 capability marker 和 bundle 入口，再让插件接管 `mcp-cctb-search`。
-- 没装插件、仍是旧 companion-only 插件、或入口损坏时，TaroCub 继续使用自己的私有 Search MCP 兜底。
+- 安装 `v0.2.0+` 后，TaroCub 会校验 capability marker、bundle 入口和 Harness patch 中的实际注册，再让插件接管 `mcp-cctb-search`。
+- 没装插件、仍是旧 companion-only 插件、或入口/patch 损坏时，TaroCub 继续使用自己的私有 Search MCP 兜底。
 - TaroCub 只在私有 Host 中设置 `TAROCUB_SEARCH_MCP_OWNER=plugin` 或 `bridge`，保证恰好只有一个 client 生效。
 - 普通 Harness 不设置这个内部变量，因此插件默认启用。
 
@@ -141,12 +141,12 @@ dsh --profile web --dump-config | grep -c "id: mcp-cctb-search"
 | `provider_status` 显示未配置 | key 必须存在于真正启动 `dsh` 的环境，而不是另一个无关 shell。 |
 | 搜索返回鉴权、额度或限流错误 | 显式调用 `health_check`，查看脱敏后的状态。 |
 | 出现两个 `mcp-cctb-search` | 删除手工添加的重复 patch；正常插件或 TaroCub Host 只会保留一个 owner。 |
-| TaroCub 报入口损坏 | 更新或重装插件；修复前 TaroCub 会安全使用 bridge fallback。 |
+| TaroCub 报入口或 patch 损坏 | 更新或重装插件；修复前 TaroCub 会安全使用 bridge fallback。 |
 | 发生供应商 fallback | 用户答案中应保留返回的 `notice`。 |
 
 ## 边界与安全
 
-这是 Search MCP 和 DeepSeek Harness 插件，不代理模型流量、不管理飞书/Lark租户、不持久化供应商密钥，也不替代 Harness 原生插件或搜索。密钥边界和漏洞报告方式见 [SECURITY.md](./SECURITY.md)。
+这是 Search MCP 和 DeepSeek Harness 插件，不代理模型流量、不管理飞书/Lark 租户、不持久化供应商密钥，也不替代 Harness 原生插件或搜索。正文抽取只接受 HTTP(S) URL；MCP 返回的所有文本都会检查已配置密钥及常见鉴权格式并脱敏。密钥边界和漏洞报告方式见 [SECURITY.md](./SECURITY.md)。
 
 ## 开发
 

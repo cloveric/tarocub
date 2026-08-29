@@ -1,9 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   addExtractSourceMetadata,
@@ -11,6 +11,7 @@ import {
   addSearchSourceLog,
   applyCodexSearchCredentialFallback,
   getProviderStatusFromEnv,
+  renderSearchToolError,
   runSearchProviderHealthCheck,
   resolveSearchMcpServerInvocation,
   truncateExtractResult,
@@ -42,6 +43,23 @@ async function readOneJsonLine(stdout: NodeJS.ReadableStream): Promise<Record<st
     });
   });
 }
+
+async function waitForChildExit(
+  child: ChildProcess,
+  timeoutMs = 1_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out waiting for MCP process exit")), timeoutMs);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("search MCP server", () => {
   it("reuses configured Codex Search MCP credentials when direct env values are absent", async () => {
@@ -147,6 +165,27 @@ describe("search MCP server", () => {
     }
   });
 
+  it("exits cleanly when its stdio client closes stdin", async () => {
+    const invocation = resolveSearchMcpServerInvocation();
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: childProcessTestEnv({
+        ...process.env,
+        BRAVE_API_KEY: "",
+        TAVILY_API_KEY: "",
+      }),
+    });
+
+    try {
+      child.stdin.end();
+      await expect(waitForChildExit(child)).resolves.toEqual({ code: 0, signal: null });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+      }
+    }
+  });
+
   it("returns an actionable error when no search provider is configured", async () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {
@@ -197,6 +236,40 @@ describe("search MCP server", () => {
     }
   });
 
+  it("rejects non-HTTP URLs before invoking the extract provider", async () => {
+    const invocation = resolveSearchMcpServerInvocation();
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: childProcessTestEnv({
+        ...process.env,
+        TAVILY_API_KEY: "",
+      }),
+    });
+
+    try {
+      const response = readOneJsonLine(child.stdout);
+      child.stdin.write(JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "web_extract",
+          arguments: { url: "file:///Users/example/private.txt" },
+        },
+      }) + "\n");
+
+      const payload = await response as {
+        result?: { content?: Array<{ text?: string }>; isError?: boolean };
+      };
+      expect(payload.result?.isError).toBe(true);
+      expect(payload.result?.content?.[0]?.text).toMatch(/Invalid web_extract input/i);
+      expect(payload.result?.content?.[0]?.text).toMatch(/HTTP\(S\)/i);
+      expect(payload.result?.content?.[0]?.text).not.toContain("requires TAVILY_API_KEY");
+    } finally {
+      child.kill();
+    }
+  });
+
   it("adds a visible notice when a provider fallback is used", () => {
     const result = addSearchFallbackNotice({
       provider: "tavily",
@@ -218,6 +291,36 @@ describe("search MCP server", () => {
 
     expect(result.notice).toContain("Search provider fallback used");
     expect(result.notice).toContain("brave: rate limited");
+  });
+
+  it("redacts configured credentials from fallback diagnostics", () => {
+    vi.stubEnv("BRAVE_API_KEY", "brave-fallback-secret");
+    const result = addSearchFallbackNotice({
+      provider: "tavily",
+      query: "fallback test",
+      results: [],
+      fallbacks: [{
+        provider: "brave",
+        error: "upstream echoed brave-fallback-secret",
+      }],
+    });
+
+    expect(JSON.stringify(result)).toContain("[redacted]");
+    expect(JSON.stringify(result)).not.toContain("brave-fallback-secret");
+  });
+
+  it("redacts provider credentials from ordinary tool errors", () => {
+    vi.stubEnv("BRAVE_API_KEY", "brave-ordinary-secret");
+    vi.stubEnv("TAVILY_API_KEY", "tavily-ordinary-secret");
+
+    const rendered = renderSearchToolError(new Error(
+      "provider echoed brave-ordinary-secret and Authorization: Bearer tavily-ordinary-secret",
+    ));
+    const serialized = JSON.stringify(rendered);
+
+    expect(serialized).toContain("[redacted]");
+    expect(serialized).not.toContain("brave-ordinary-secret");
+    expect(serialized).not.toContain("tavily-ordinary-secret");
   });
 
   it("adds a source log to search responses", () => {
@@ -275,12 +378,17 @@ describe("search MCP server", () => {
     const result = addExtractSourceMetadata({
       results: [
         {
+          url: "file:///tmp/private",
+          raw_content: "must not become a citation",
+        },
+        {
           url: "https://docs.example.com/page",
           raw_content: "hello world",
         },
       ],
     }, "2026-05-09T10:00:00.000Z");
 
+    expect(result.results).toHaveLength(1);
     expect(result.results?.[0]).toMatchObject({
       url: "https://docs.example.com/page",
       domain: "docs.example.com",
@@ -395,7 +503,7 @@ describe("search MCP server", () => {
 
   it("redacts leaked provider secrets from live health check errors", async () => {
     const fetchImpl = async () => {
-      throw new Error("network failed Authorization: Bearer tavily-secret X-Subscription-Token: brave-secret BRAVE_API_KEY=brave-env TAVILY_API_KEY=tavily-env");
+      throw new Error("network failed tavily-secret Authorization: Bearer tavily-secret X-Subscription-Token: brave-secret BRAVE_API_KEY=brave-env TAVILY_API_KEY=tavily-env");
     };
 
     const status = await runSearchProviderHealthCheck({

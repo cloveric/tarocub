@@ -717,8 +717,10 @@ dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
 ```
 
 TaroCub 的私有 Host 会链接用户已认证的共享 `web` profile，因此普通
-Harness Web 与 Bot session 都能获得 Search MCP 和 `/tarocub`。插件有效时
-由它接管 Search MCP；否则 Bot Host 使用私有 fallback。插件激活与飞书应用
+Harness Web 与 Bot session 都能获得 Search MCP 和 `/tarocub`。只有 capability
+marker、bundle 入口及实际注册 MCP client 的 Harness patch 均有效时，插件才会
+接管 Search MCP；任何一项缺失或损坏，Bot Host 都会使用私有 fallback。两条事件
+WebSocket 必须在 15 秒内全部连通，半连接不会无限卡住启动。插件激活与飞书应用
 创建、bridge 配置、服务启动是三件独立的事，必须分别验证。
 
 DeepSeek Harness 提供原生 session 列表、历史与投影。直接发 `/resume` 可以列出最近 session，再用 `/resume <编号>` 选择；已知 ID 时也可以显式绑定：

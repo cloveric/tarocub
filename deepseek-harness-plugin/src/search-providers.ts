@@ -64,12 +64,20 @@ function extractErrorDetail(error: unknown): string {
   return String(error);
 }
 
-function domainFromUrl(url: string): string | undefined {
+export function isHttpUrl(value: string): boolean {
   try {
-    return new URL(url).hostname;
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
   } catch {
+    return false;
+  }
+}
+
+function domainFromUrl(url: string): string | undefined {
+  if (!isHttpUrl(url)) {
     return undefined;
   }
+  return new URL(url).hostname;
 }
 
 export function truncateSearchText(text: string, maxChars = DEFAULT_RAW_CONTENT_CHAR_LIMIT): string {
@@ -141,7 +149,7 @@ export function createBraveSearchProvider(input: {
             typeof result.title === "string" &&
             result.title.trim().length > 0 &&
             typeof result.url === "string" &&
-            result.url.trim().length > 0,
+            isHttpUrl(result.url.trim()),
           )
           .map((result, index) => ({
             title: result.title.trim(),
@@ -202,7 +210,7 @@ export function createTavilySearchProvider(input: {
             typeof result.title === "string" &&
             result.title.trim().length > 0 &&
             typeof result.url === "string" &&
-            result.url.trim().length > 0,
+            isHttpUrl(result.url.trim()),
           )
           .map((result, index) => ({
             title: result.title.trim(),

@@ -7,7 +7,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 
 import { createSearchRouter, type SearchMode } from "./search-router.js";
-import { createBraveSearchProvider, createTavilySearchProvider, extractWithTavily } from "./search-providers.js";
+import {
+  createBraveSearchProvider,
+  createTavilySearchProvider,
+  extractWithTavily,
+  isHttpUrl,
+} from "./search-providers.js";
 import type { SearchRouterResult } from "./search-router.js";
 
 type FetchLike = typeof fetch;
@@ -34,9 +39,13 @@ const SearchToolInputSchema = z.object({
   maxResults: z.number().int().min(1).max(10).optional(),
 }).passthrough();
 
+const HttpUrlSchema = z.string().trim().url().refine(isHttpUrl, {
+  message: "Only HTTP(S) URLs are supported",
+});
+
 const ExtractToolInputSchema = z.object({
-  url: z.string().url().optional(),
-  urls: z.array(z.string().url()).min(1).max(10).optional(),
+  url: HttpUrlSchema.optional(),
+  urls: z.array(HttpUrlSchema).min(1).max(10).optional(),
   depth: z.enum(["basic", "advanced"]).optional(),
   format: z.enum(["markdown", "text"]).optional(),
   maxChars: z.number().int().min(1).max(60_000).optional(),
@@ -230,17 +239,18 @@ function sendError(id: string | number | undefined, code: number, message: strin
     id,
     error: {
       code,
-      message,
+      message: redactSearchMcpText(truncateTextToExactBudget(message, 4_000)),
     },
   }) + "\n");
 }
 
 function jsonContent(payload: unknown, isError = false): Record<string, unknown> {
+  const serialized = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
   return {
     content: [
       {
         type: "text",
-        text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
+        text: redactSearchMcpText(serialized),
       },
     ],
     ...(isError ? { isError: true } : {}),
@@ -249,9 +259,12 @@ function jsonContent(payload: unknown, isError = false): Record<string, unknown>
 
 const NATIVE_SEARCH_FALLBACK_HINT = "If the runtime has a native web search tool, use it as a fallback and explicitly tell the user that Brave/Tavily Search MCP failed.";
 
-function renderToolError(error: unknown): Record<string, unknown> {
+export function renderSearchToolError(error: unknown): Record<string, unknown> {
   const message = error instanceof Error ? error.message : String(error);
-  return jsonContent(`${message}\n\n${NATIVE_SEARCH_FALLBACK_HINT}`, true);
+  return jsonContent(
+    `${truncateTextToExactBudget(message, 4_000)}\n\n${NATIVE_SEARCH_FALLBACK_HINT}`,
+    true,
+  );
 }
 
 function createRouterFromEnv() {
@@ -284,19 +297,36 @@ function classifyHealthError(error: unknown): LiveProviderHealth["status"] {
   return "error";
 }
 
-function healthErrorDetail(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message
+export function redactSearchMcpText(
+  input: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  let redacted = input
     .replace(/(Authorization:\s*Bearer\s+)[^\s,;]+/gi, "$1[redacted]")
     .replace(/(\bBearer\s+)[^\s,;]+/gi, "$1[redacted]")
     .replace(/(X-Subscription-Token:?\s*)[^\s,;]+/gi, "$1[redacted]")
-    .replace(/((?:BRAVE|BRAVE_SEARCH|TAVILY)_API_KEY=)[^\s,;]+/gi, "$1[redacted]");
+    .replace(/((?:BRAVE|BRAVE_SEARCH|TAVILY)_API_KEY\s*[:=]\s*["']?)[^\s,;"'}\]]+/gi, "$1[redacted]")
+    .replace(/(api[_-]?key=)[^&\s]+/gi, "$1[redacted]");
+
+  for (const key of SEARCH_CREDENTIAL_KEYS) {
+    const value = env[key]?.trim();
+    if (value && value.length >= 8) {
+      redacted = redacted.replaceAll(value, "[redacted]");
+    }
+  }
+  return redacted;
+}
+
+function healthErrorDetail(error: unknown, env: NodeJS.ProcessEnv): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return redactSearchMcpText(message, env);
 }
 
 async function checkConfiguredProvider(
   providerName: "brave" | "tavily",
   provider: ReturnType<typeof createBraveSearchProvider> | ReturnType<typeof createTavilySearchProvider>,
   query: string,
+  env: NodeJS.ProcessEnv,
 ): Promise<LiveProviderHealth> {
   try {
     await provider.search({
@@ -316,7 +346,7 @@ async function checkConfiguredProvider(
       checked: true,
       healthy: false,
       status: classifyHealthError(error),
-      detail: `${providerName}: ${healthErrorDetail(error)}`,
+      detail: `${providerName}: ${healthErrorDetail(error, env)}`,
     };
   }
 }
@@ -346,7 +376,7 @@ export async function runSearchProviderHealthCheck(input: {
         fetchImpl: input.fetchImpl,
         fetchTimeoutMs: input.fetchTimeoutMs ?? 10_000,
       });
-      checks.push(checkConfiguredProvider("brave", provider, query).then((result) => {
+      checks.push(checkConfiguredProvider("brave", provider, query, env).then((result) => {
         providers.brave = result;
       }));
     } else {
@@ -366,7 +396,7 @@ export async function runSearchProviderHealthCheck(input: {
         fetchImpl: input.fetchImpl,
         fetchTimeoutMs: input.fetchTimeoutMs ?? 10_000,
       });
-      checks.push(checkConfiguredProvider("tavily", provider, query).then((result) => {
+      checks.push(checkConfiguredProvider("tavily", provider, query, env).then((result) => {
         providers.tavily = result;
       }));
     } else {
@@ -439,9 +469,14 @@ export function addSearchFallbackNotice(result: SearchRouterResult): SearchRoute
     return result;
   }
 
+  const fallbacks = result.fallbacks.map((entry) => ({
+    ...entry,
+    error: redactSearchMcpText(truncateTextToExactBudget(entry.error, 2_000)),
+  }));
   return {
     ...result,
-    notice: `Search provider fallback used: ${result.fallbacks.map((entry) => `${entry.provider}: ${entry.error}`).join("; ")}. Disclose this if the answer relies on fallback results.`,
+    fallbacks,
+    notice: `Search provider fallback used: ${fallbacks.map((entry) => `${entry.provider}: ${entry.error}`).join("; ")}. Disclose this if the answer relies on fallback results.`,
   };
 }
 
@@ -467,17 +502,19 @@ export function addExtractSourceMetadata(
   payload: TavilyExtractPayload,
   extractedAt = new Date().toISOString(),
 ): EnrichedExtractPayload {
-  const results = payload.results?.map((entry): EnrichedExtractEntry => {
-    const rawContent = entry.raw_content ?? "";
-    return {
-      ...entry,
-      domain: entry.url ? domainFromUrl(entry.url) : undefined,
-      provider: "tavily",
-      status: "success",
-      extractedAt,
-      contentHash: contentHash(rawContent),
-    };
-  });
+  const results = payload.results
+    ?.filter((entry) => !entry.url || isHttpUrl(entry.url))
+    .map((entry): EnrichedExtractEntry => {
+      const rawContent = entry.raw_content ?? "";
+      return {
+        ...entry,
+        domain: entry.url ? domainFromUrl(entry.url) : undefined,
+        provider: "tavily",
+        status: "success",
+        extractedAt,
+        contentHash: contentHash(rawContent),
+      };
+    });
 
   return {
     ...payload,
@@ -526,7 +563,7 @@ async function callWebSearch(args: Record<string, unknown>): Promise<Record<stri
     });
     return jsonContent(addSearchSourceLog(addSearchFallbackNotice(result)));
   } catch (error) {
-    return renderToolError(error);
+    return renderSearchToolError(error);
   }
 }
 
@@ -546,7 +583,7 @@ async function callWebExtract(args: Record<string, unknown>): Promise<Record<str
     });
     return jsonContent(addExtractSourceMetadata(truncateExtractResult(result, parsed.data.maxChars ?? 20_000)));
   } catch (error) {
-    return renderToolError(error);
+    return renderSearchToolError(error);
   }
 }
 
@@ -566,7 +603,7 @@ async function callHealthCheck(args: Record<string, unknown>): Promise<Record<st
       query: parsed.data.query,
     }));
   } catch (error) {
-    return renderToolError(error);
+    return renderSearchToolError(error);
   }
 }
 
