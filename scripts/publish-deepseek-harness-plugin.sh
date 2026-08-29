@@ -28,6 +28,7 @@ fi
 MODE="$1"
 BRANCH="${2:-main}"
 
+npm --prefix "$ROOT/$PREFIX" ci
 npm --prefix "$ROOT/$PREFIX" run verify
 SPLIT_COMMIT="$(git -C "$ROOT" subtree split --prefix="$PREFIX")"
 

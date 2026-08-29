@@ -18,7 +18,7 @@ describe("DeepSeek Harness plugin bundle", () => {
 
     expect(rootPackageJson.dsh).toBeUndefined();
     expect(packageJson.name).toBe("tarocub-deepseek-harness-plugin");
-    expect(packageJson.version).toBe("0.2.0");
+    expect(packageJson.version).toBe("0.2.1");
     expect(packageJson.dependencies).toBeUndefined();
     expect(packageJson.main).toBe("./index.js");
     expect(packageJson.private).toBe(true);
@@ -135,5 +135,17 @@ describe("DeepSeek Harness plugin bundle", () => {
     );
 
     expect(bundle).not.toMatch(/[ \t]+$/m);
+  });
+
+  it("installs the plugin lockfile before verification and subtree publication", async () => {
+    const script = await readFile(
+      path.join(repoRoot, "scripts", "publish-deepseek-harness-plugin.sh"),
+      "utf8",
+    );
+    const installIndex = script.indexOf('npm --prefix "$ROOT/$PREFIX" ci');
+    const verifyIndex = script.indexOf('npm --prefix "$ROOT/$PREFIX" run verify');
+
+    expect(installIndex).toBeGreaterThan(-1);
+    expect(verifyIndex).toBeGreaterThan(installIndex);
   });
 });
