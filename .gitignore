@@ -1,5 +1,7 @@
 node_modules/
 dist/
+!deepseek-harness-plugin/dist/
+!deepseek-harness-plugin/dist/search-mcp.js
 .DS_Store
 .env
 .env.local

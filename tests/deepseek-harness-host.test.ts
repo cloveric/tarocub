@@ -21,6 +21,31 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 
 const roots: string[] = [];
 
+const SEARCH_PLUGIN_NAME = "tarocub-deepseek-harness-plugin";
+
+async function installSearchPlugin(
+  sharedHome: string,
+  manifest: Record<string, unknown>,
+  options: { createEntrypoint?: boolean } = {},
+): Promise<void> {
+  const packageRoot = path.join(
+    sharedHome,
+    "profiles",
+    "web",
+    "node_modules",
+    SEARCH_PLUGIN_NAME,
+  );
+  await mkdir(path.join(packageRoot, "dist"), { recursive: true });
+  await writeFile(
+    path.join(packageRoot, "package.json"),
+    `${JSON.stringify({ name: SEARCH_PLUGIN_NAME, ...manifest }, null, 2)}\n`,
+    "utf8",
+  );
+  if (options.createEntrypoint !== false) {
+    await writeFile(path.join(packageRoot, "dist", "search-mcp.js"), "export {};\n", "utf8");
+  }
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => removeTempRoot(root)));
 });
@@ -148,7 +173,7 @@ describe("prepareDeepSeekHarnessHome", () => {
     });
     const patch = await readFile(prepared.patchPath, "utf8");
 
-    expect(patch).toMatch(/^- insert:\s+?- id: mcp-cctb-search/m);
+    expect(patch).toMatch(/^- insert:\s+?- id: mcp-cctb-search-bridge/m);
     expect(patch).toContain("name: '@deepseek-ai/dsh-mcp-client'");
     expect(patch).toContain("serverName: cctb_search");
     expect(patch).toContain('command: "/Applications/Taro Cub/node"');
@@ -157,6 +182,89 @@ describe("prepareDeepSeekHarnessHome", () => {
     expect(patch).toContain("BRAVE_API_KEY: !!js process.env.BRAVE_API_KEY || ''");
     expect(patch).toContain("TAVILY_API_KEY: !!js process.env.TAVILY_API_KEY || ''");
     expect(patch).not.toContain("never-copy-me");
+    expect(prepared.searchMcpOwner).toBe("bridge");
+  });
+
+  it("keeps bridge ownership for a legacy companion-only plugin", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-legacy-plugin-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, { version: "0.1.278" });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+    });
+    const patch = await readFile(prepared.patchPath, "utf8");
+
+    expect(prepared.searchMcpOwner).toBe("bridge");
+    expect(patch).toContain("id: mcp-cctb-search-bridge");
+    expect(patch).not.toMatch(/^\s+- id: mcp-cctb-search$/m);
+  });
+
+  it("uses a valid plugin Search MCP without appending a duplicate private client", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-current-plugin-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.0",
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+    });
+    const patch = await readFile(prepared.patchPath, "utf8");
+
+    expect(prepared.searchMcpOwner).toBe("plugin");
+    expect(patch).not.toContain("id: mcp-cctb-search");
+  });
+
+  it("falls back with a diagnostic when a plugin claims Search MCP but lacks its entrypoint", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-broken-plugin-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    const diagnostics: string[] = [];
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.0",
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    }, { createEntrypoint: false });
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: { command: "node", args: ["search.js"], cwd: root },
+      onDiagnostic: (message) => diagnostics.push(message),
+    });
+    const patch = await readFile(prepared.patchPath, "utf8");
+
+    expect(prepared.searchMcpOwner).toBe("bridge");
+    expect(patch).toContain("id: mcp-cctb-search-bridge");
+    expect(patch).not.toMatch(/^\s+- id: mcp-cctb-search$/m);
+    expect(diagnostics).toContainEqual(expect.stringMatching(/entrypoint.*missing/i));
   });
 });
 
@@ -250,9 +358,17 @@ describe("DeepSeekHarnessHost", () => {
     roots.push(root);
     const sharedHome = path.join(root, "shared");
     const stateDir = path.join(root, "instance");
-    await mkdir(path.join(sharedHome, "profiles"), { recursive: true });
+    await mkdir(path.join(sharedHome, "profiles", "web"), { recursive: true });
     await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
     await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await installSearchPlugin(sharedHome, {
+      version: "0.2.0",
+      tarocub: {
+        searchMcp: true,
+        searchMcpProtocol: 1,
+        searchMcpEntrypoint: "./dist/search-mcp.js",
+      },
+    });
     const child = new FakeChild();
     const spawnCalls: Parameters<SpawnDeepSeekHarness>[] = [];
     const spawnDsh: SpawnDeepSeekHarness = (...args) => {
@@ -300,6 +416,7 @@ describe("DeepSeekHarnessHost", () => {
         HOME: "/Users/test",
         DSH_HOME: path.join(stateDir, "dsh-home"),
         DSH_PERMISSION_MODE: "workspace-write",
+        TAROCUB_SEARCH_MCP_OWNER: "plugin",
       },
     });
     expect(protocolFactory).toHaveBeenCalledWith("http://127.0.0.1:43123");

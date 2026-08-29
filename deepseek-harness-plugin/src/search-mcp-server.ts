@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -704,6 +704,14 @@ export function resolveSearchMcpServerInvocation(): SearchMcpServerInvocation {
     };
   }
 
+  const bundledPath = fileURLToPath(new URL("../dist/search-mcp.js", import.meta.url));
+  if (existsSync(bundledPath)) {
+    return {
+      command: process.execPath,
+      args: [bundledPath],
+    };
+  }
+
   const tsPath = fileURLToPath(new URL("./search-mcp-server.ts", import.meta.url));
   const localTsx = path.resolve(process.cwd(), "node_modules/.bin/tsx");
   if (existsSync(tsPath) && existsSync(localTsx)) {
@@ -713,7 +721,7 @@ export function resolveSearchMcpServerInvocation(): SearchMcpServerInvocation {
     };
   }
 
-  throw new Error(`Search MCP server entrypoint not found: ${jsPath}`);
+  throw new Error(`Search MCP server entrypoint not found: ${jsPath} or ${bundledPath}`);
 }
 
 export async function runSearchMcpServer(): Promise<void> {
@@ -750,6 +758,21 @@ export async function runSearchMcpServer(): Promise<void> {
   await new Promise<void>(() => {});
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+async function isDirectExecution(): Promise<boolean> {
+  if (!process.argv[1]) {
+    return false;
+  }
+  try {
+    const [modulePath, executablePath] = await Promise.all([
+      realpath(fileURLToPath(import.meta.url)),
+      realpath(process.argv[1]),
+    ]);
+    return modulePath === executablePath;
+  } catch {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  }
+}
+
+if (await isDirectExecution()) {
   void runSearchMcpServer();
 }

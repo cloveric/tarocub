@@ -353,7 +353,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | `/steer` | Native mid-turn injection | Not exposed | Not exposed by ACP | Native `session.steer` | Not exposed |
 | `/model` / effort | Bridge/runtime config | Bridge config | ACP session options | Harness session model APIs validate provider/model/effort | Local interactive CLI only |
 | `/compact` / `/context` | Stateless / runtime context | Native / native | Native compact / no structured context | Harness command / `contextPressure` projection | Not supported |
-| Skills / plugins / MCP | Native Codex home | Native Claude config | Native Kimi plus bridge Search MCP | Native Harness profile/plugin/MCP ownership; no fake injection | Native Antigravity config |
+| Skills / plugins / MCP | Native Codex home | Native Claude config | Native Kimi plus bridge Search MCP | Native Harness profile/plugin; validated Search plugin or bridge fallback, exactly one client | Native Antigravity config |
 | Usage | Tokens; cost depends on runtime | Tokens + USD | No structured per-turn usage | Tokens, no per-turn USD | No structured cost |
 | Working directory | Instance or validated thread workspace | Instance or resumed project | Native session cwd | Native session cwd; conflicting workspace claims fail closed | Instance workspace |
 | Process lifecycle | Warm app-server | 2h idle reap | 2h idle reap unless background work remains | Per-instance host; crash restart and ordered recovery | Exits each turn |
@@ -384,7 +384,7 @@ native skills/plugins, MCP configuration, and `config.toml` remain in place.
 
 ## Live Web Search MCP: Brave + Tavily
 
-The bridge ships an optional local MCP server with source-traceable web research tools. Codex, Claude Code, and Antigravity use their native MCP/plugin configuration; TaroCub injects the server into Kimi ACP `session/new` and `session/load` while preserving Kimi's native MCP and plugins. DeepSeek keeps native Harness profile/plugin/MCP ownership, so the bridge does not claim Search MCP is present unless it is configured there:
+The bridge ships an optional local MCP server with source-traceable web research tools. Codex, Claude Code, and Antigravity use their native MCP/plugin configuration; TaroCub injects the server into Kimi ACP `session/new` and `session/load` while preserving Kimi's native MCP and plugins. DeepSeek uses the standalone `github:cloveric/tarocub-deepseek-harness-plugin`: plain Harness gets Search MCP directly from that plugin, while managed TaroCub Hosts validate the marker/entrypoint and use either plugin ownership or the private bridge fallback, never both:
 
 - `web_search` routes live search through Brave and/or Tavily.
 - `web_extract` uses Tavily Extract to read known URLs cleanly.
@@ -421,6 +421,8 @@ claude mcp add web-search \
 For Antigravity, use Antigravity's own native MCP/plugin configuration when needed. Do not import Claude or Codex native plugins as part of the default bridge setup. The bridge can reuse the same skill documents and tool guidance across engines, but each instance `agent.md` and each engine's native plugin system remain separate.
 
 Kimi does not need a manual TaroCub Search MCP registration. The bridge injects it into each ACP session and, when direct search environment variables are absent, reads only the known Brave/Tavily keys from Codex MCP environment sections in `CODEX_HOME/config.toml`; explicit process environment values always win and credentials are never copied into Kimi config or logs.
+
+DeepSeek installs the native bundle with `dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin`. TaroCub does not silently install or update it at Host startup. If a `v0.2.0+` marker and committed MCP entrypoint are present, the plugin owns `mcp-cctb-search`; otherwise TaroCub's managed Host retains its compatibility client. Ordinary Harness has no TaroCub fallback.
 
 Then restart affected bot instances so their native MCP/plugin configuration is reloaded; Kimi receives the injected Search MCP when its next ACP worker starts. In unattended Codex process use, prefer YOLO/full-auto/bypass instances for MCP-heavy turns; plain non-interactive `codex exec` in read-only approval mode can cancel MCP calls instead of running them. More detail: [`docs/search-mcp.md`](./search-mcp.md).
 

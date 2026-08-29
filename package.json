@@ -1,6 +1,6 @@
 {
   "name": "tarocub",
-  "version": "0.1.278",
+  "version": "0.1.279",
   "description": "Feishu/Lark-first local AI agent gateway for Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity.",
   "private": true,
   "license": "MIT",
@@ -32,7 +32,9 @@
     "start": "node dist/src/index.js",
     "smoke:claude-auth": "bash scripts/smoke-claude-auth.sh",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:deepseek-plugin": "npm --prefix deepseek-harness-plugin run verify",
+    "publish:deepseek-plugin": "bash scripts/publish-deepseek-harness-plugin.sh"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.23.0",

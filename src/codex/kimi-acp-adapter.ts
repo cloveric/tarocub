@@ -57,7 +57,7 @@ import { killProcessTree } from "./process-tree.js";
 import { syncKimiWorkspaceInstructions } from "./kimi-workspace.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { DEFAULT_KIMI_EFFORT, readValidatedConfigFile } from "../telegram/instance-config.js";
-import { resolveSearchMcpServerInvocation } from "../search/search-mcp-server.js";
+import { resolveSearchMcpServerInvocation } from "../../deepseek-harness-plugin/src/search-mcp-server.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];

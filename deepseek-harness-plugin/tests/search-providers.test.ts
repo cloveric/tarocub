@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createBraveSearchProvider, createTavilySearchProvider, extractWithTavily, truncateSearchText } from "../src/search/search-providers.js";
+import { createBraveSearchProvider, createTavilySearchProvider, extractWithTavily, truncateSearchText } from "../src/search-providers.js";
 
 describe("search providers", () => {
   it("truncates long raw content with an omission marker", () => {

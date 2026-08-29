@@ -11,6 +11,11 @@
     "resolveJsonModule": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "deepseek-harness-plugin/src/**/*.ts",
+    "deepseek-harness-plugin/tests/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", "web"]
 }

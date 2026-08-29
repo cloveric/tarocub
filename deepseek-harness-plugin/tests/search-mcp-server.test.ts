@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,12 +14,13 @@ import {
   runSearchProviderHealthCheck,
   resolveSearchMcpServerInvocation,
   truncateExtractResult,
-} from "../src/search/search-mcp-server.js";
+} from "../src/search-mcp-server.js";
 import { childProcessTestEnv } from "./helpers/temp-files.js";
 
 async function readOneJsonLine(stdout: NodeJS.ReadableStream): Promise<Record<string, unknown>> {
   return await new Promise((resolve, reject) => {
     let buffer = "";
+    const timer = setTimeout(() => reject(new Error("timed out waiting for MCP response")), 2_000);
     stdout.setEncoding("utf8");
     stdout.on("data", (chunk) => {
       buffer += chunk;
@@ -28,12 +29,17 @@ async function readOneJsonLine(stdout: NodeJS.ReadableStream): Promise<Record<st
         return;
       }
       try {
+        clearTimeout(timer);
         resolve(JSON.parse(line) as Record<string, unknown>);
       } catch (error) {
+        clearTimeout(timer);
         reject(error);
       }
     });
-    stdout.once("error", reject);
+    stdout.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
   });
 }
 
@@ -110,6 +116,34 @@ describe("search MCP server", () => {
       });
     } finally {
       child.kill();
+    }
+  });
+
+  it("starts when the bundled entrypoint is launched through a package-manager symlink", async () => {
+    const invocation = resolveSearchMcpServerInvocation();
+    const root = await mkdtemp(path.join(os.tmpdir(), "search-mcp-symlink-"));
+    const linkedEntrypoint = path.join(root, "search-mcp.js");
+    await symlink(invocation.args[0]!, linkedEntrypoint);
+    const child = spawn(process.execPath, [linkedEntrypoint], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: childProcessTestEnv({
+        ...process.env,
+        BRAVE_API_KEY: "",
+        TAVILY_API_KEY: "",
+      }),
+    });
+
+    try {
+      const response = readOneJsonLine(child.stdout);
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })}\n`);
+      await expect(response).resolves.toMatchObject({
+        result: {
+          tools: expect.arrayContaining([expect.objectContaining({ name: "provider_status" })]),
+        },
+      });
+    } finally {
+      child.kill();
+      await rm(root, { recursive: true, force: true });
     }
   });
 

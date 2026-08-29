@@ -6,20 +6,20 @@ prompt-level approximation of another engine.
 
 ## Native Harness Plugin
 
-The zero-dependency package in `deepseek-harness-plugin/` is a genuine Harness
-bundle, not only an application that launches Harness. Install that subpackage
-into the profile used by TaroCub:
+The package in `deepseek-harness-plugin/` is the canonical source for a genuine
+Harness bundle and self-contained Search MCP runtime. Install its standalone
+repository into the profile used by ordinary Harness and TaroCub:
 
 ```bash
-dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
+dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
 ```
 
-The bundle manifest activates `deepseek-harness-plugin/index.js`. That plugin
-registers a bounded system-prompt section and `/tarocub` operator help. It does
-not read credentials, start subprocesses, create a Feishu/Lark app, or claim
-that the separate TaroCub service is configured. The private bot homes link the
-shared profiles directory, so a plugin installed in `web` is available to
-ordinary Harness Web and to TaroCub's private Hosts.
+The bundle registers a bounded system-prompt section, `/tarocub`, and one
+`mcp-cctb-search` client backed by its committed JavaScript bundle. It receives
+provider keys only through the child environment and does not create a
+Feishu/Lark app or claim that the separate TaroCub service is configured. The
+legacy `github:cloveric/tarocub#path:deepseek-harness-plugin` source remains
+compatible.
 
 ```bash
 dsh --profile web --dump-config | grep -A2 -B1 tarocub
@@ -42,9 +42,11 @@ TaroCub instance
 `DSH_EXECUTABLE` overrides the executable; otherwise TaroCub uses `dsh` from
 `PATH`. `DSH_HOME` points at the user's authenticated Harness home (default
 `~/.dsh`). TaroCub creates `<stateDir>/dsh-home` with mode `0700`, links the
-shared credentials and profiles, copies mutable `settings.yaml`, installs the
-bridge `AGENTS.md`, and appends its permission presets plus an instance-local
-TaroCub Search MCP client to the private patch. A bot can therefore reuse
+shared credentials and profiles, copies mutable `settings.yaml`, and installs
+the bridge `AGENTS.md` plus permission presets. Before Search MCP registration,
+it validates the installed plugin marker and declared entrypoint. A valid plugin
+owns the client; otherwise the Host appends its instance-local bridge fallback
+and emits a diagnostic for a damaged claim. A bot can therefore reuse
 authentication and native profiles without
 letting model selection or bridge instructions overwrite desktop settings.
 
@@ -91,8 +93,9 @@ incomplete or malformed.
 - TaroCub does not emulate Claude's `/ultrareview`. Ordinary review prompts,
   Agent Bus `/verify`, and native DeepSeek Goals remain available.
 - Native Harness profiles, plugins, and MCP configuration remain Harness-owned.
-  TaroCub isolates mutable bot settings and adds only its private Search MCP
-  client; it does not pretend that an unavailable native plugin is present.
+  TaroCub uses the installed Search plugin when valid and otherwise its private
+  compatibility client. `TAROCUB_SEARCH_MCP_OWNER` guarantees one active owner;
+  TaroCub never downloads or upgrades the plugin during bot startup.
 
 ## Safety Invariants
 

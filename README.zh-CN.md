@@ -48,15 +48,16 @@ node dist/src/index.js lark yolo unsafe
 
 ### 作为 DeepSeek Harness 原生插件安装
 
-TaroCub 现在也是 Harness 可直接识别的 bundle。把它装进 TaroCub 私有
-Host 使用的 `web` profile：
+把独立的原生插件装进普通 Harness 和 TaroCub 私有 Host 共用的 `web`
+profile：
 
 ```bash
-dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
+dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
 ```
 
-插件会加入受限的 TaroCub 上下文和 `/tarocub` 帮助命令；它**不会**仅凭
-安装就创建飞书应用或启动 bridge，完整 Bot 仍需按上面的 TaroCub 流程配置。
+插件会加入带来源链的 Brave/Tavily Search MCP、受限的 TaroCub 上下文和
+`/tarocub`；它**不会**仅凭安装就创建飞书应用或启动 bridge。旧的
+`github:cloveric/tarocub#path:deepseek-harness-plugin` 来源继续兼容。
 检查、升级和卸载命令如下：
 
 ```bash
@@ -70,8 +71,8 @@ dsh plugin --profile web remove tarocub-deepseek-harness-plugin
 | 能力 | 实际意义 |
 |---|---|
 | **真实 CLI 的远程控制** | 把 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity 接到飞书/Lark，不把它们改造成一个假的聊天后端。 |
-| **DeepSeek Harness 原生插件** | 可用 `dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"` 安装零依赖 companion；bundle 提供 `/tarocub` 指引并由私有 Harness Host 继承，但不会把“插件已装”冒充成“飞书 Bot 已配置运行”。 |
-| **DeepSeek 搜索 MCP** | 每个 DeepSeek Bot 都会获得 `mcp__cctb_search__web_search` 与 `mcp__cctb_search__web_extract`，保留来源日志和 fallback 提示，同时仍可使用 Harness 原生搜索兜底。 |
+| **DeepSeek Harness 原生插件** | 安装 `github:cloveric/tarocub-deepseek-harness-plugin`；自包含 runtime 提供 Search MCP 和 `/tarocub`，插件安装与飞书服务部署仍是两件事。 |
+| **DeepSeek 搜索 MCP** | 普通 Harness 由插件提供；TaroCub 管理的 DeepSeek Bot 在插件有效时复用它，否则保留私有 fallback，始终只启用一个 `mcp-cctb-search` client。 |
 | **引擎无关的飞书入站层** | 长语音通义听悟路由和群/话题会话边界都在进入引擎前完成，因此 DeepSeek 与 Codex、Claude、Kimi 共用 15 分钟阈值及 chat/thread 隔离规则。 |
 | **会话连续性** | 在手机上续接 Claude 本地 session、绑定 Codex thread、Kimi ACP / DeepSeek Harness session 或 Antigravity conversation，回到电脑后还能继续同一件事。 |
 | **飞书/Lark 原生工作面** | 交互卡片、审批、Docs 评论、Sheets/Docs/Drive、群聊与 thread 工作流都走同一套 bridge runtime。 |
@@ -270,7 +271,7 @@ Kimi 的实测事件、取消、提问、恢复和 gap 证据见 [`docs/kimi-eng
 
 ## 实时网页搜索 MCP：Brave + Tavily
 
-bridge 内置一个可选的本地 MCP server。Codex、Claude Code 和 Antigravity 可按各自原生方式注册；Kimi 实例会由 TaroCub 在 ACP 新建/恢复 session 时自动注入，同时保留 Kimi 自己的 MCP/plugin。DeepSeek 继续使用其 Harness profile 中的原生 MCP/plugin；TaroCub 不会谎称自动注入了一个 Harness 未配置的 Search MCP：
+bridge 内置一个可选的本地 MCP server。Codex、Claude Code 和 Antigravity 可按各自原生方式注册；Kimi 实例会由 TaroCub 在 ACP 新建/恢复 session 时自动注入，同时保留 Kimi 自己的 MCP/plugin。DeepSeek 推荐安装独立 Harness 插件；TaroCub 管理的 Host 会校验插件能力和入口，有效时由插件接管，缺失、旧版或损坏时使用 bridge 私有 fallback，避免重复 client：
 
 - `web_search`：通过 Brave 和/或 Tavily 做实时搜索。
 - `web_extract`：用 Tavily Extract 清理并抽取指定 URL 正文。
@@ -304,7 +305,7 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-Kimi 无需为 TaroCub Search MCP 手工注册；DeepSeek 使用 Harness profile 中原生配置的 MCP/plugin，bridge 不会在未注册时伪装成已注入；Antigravity 侧如需原生 MCP/plugin，请使用 Antigravity 自己的配置方式。默认 bridge 配置不应该跨引擎导入原生插件。bridge 可以跨引擎复用 skill 文档和工具使用规则，但每个实例的 `agent.md` 与各引擎原生插件系统仍然各自独立。
+Kimi 无需手工注册 TaroCub Search MCP。DeepSeek 推荐执行 `dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin`；即使没有插件，TaroCub 管理的 DeepSeek Host 仍会使用经验证的私有 fallback，但普通 Harness 不会因此自动获得工具。Antigravity 如需原生 MCP/plugin，请使用自己的配置方式。bridge 可以跨引擎复用 skill 文档和工具规则，但各引擎原生插件系统仍然独立。
 
 配置后重启相关 bot 实例，让新进程继承环境与原生 MCP/plugin 配置；Kimi 会自动获得 TaroCub Search MCP。Codex process 模式如果大量使用 MCP，建议使用 YOLO/full-auto/bypass 实例；普通非交互 `codex exec` 的 read-only approval 模式可能会取消 MCP tool call。更多细节见 [`docs/search-mcp.md`](./docs/search-mcp.md)。
 
@@ -709,14 +710,15 @@ Kimi 的实例/Lark 指令写入 bot 自有工作区的 `.kimi-code/agents/agent
 
 ### DeepSeek Harness session 绑定
 
-TaroCub 同时是可安装的 Harness 原生 bundle：
+安装独立的 Harness 原生 bundle：
 
 ```bash
-dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
+dsh plugin --profile web add github:cloveric/tarocub-deepseek-harness-plugin
 ```
 
 TaroCub 的私有 Host 会链接用户已认证的共享 `web` profile，因此普通
-Harness Web 与 Bot session 都能获得 `/tarocub` 指引。插件激活与飞书应用
+Harness Web 与 Bot session 都能获得 Search MCP 和 `/tarocub`。插件有效时
+由它接管 Search MCP；否则 Bot Host 使用私有 fallback。插件激活与飞书应用
 创建、bridge 配置、服务启动是三件独立的事，必须分别验证。
 
 DeepSeek Harness 提供原生 session 列表、历史与投影。直接发 `/resume` 可以列出最近 session，再用 `/resume <编号>` 选择；已知 ID 时也可以显式绑定：

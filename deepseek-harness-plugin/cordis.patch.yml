@@ -1,3 +1,21 @@
 - insert:
     - id: tarocub
       name: tarocub-deepseek-harness-plugin
+    - id: mcp-cctb-search
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js process.env.TAROCUB_SEARCH_MCP_OWNER === 'bridge'
+      config:
+        serverName: cctb_search
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('./node_modules/tarocub-deepseek-harness-plugin/dist/search-mcp.js', baseUrl))"
+        cwd: !!js process.env.DSH_CWD || process.cwd()
+        env:
+          BRAVE_API_KEY: !!js process.env.BRAVE_API_KEY || ''
+          BRAVE_SEARCH_API_KEY: !!js process.env.BRAVE_SEARCH_API_KEY || ''
+          TAVILY_API_KEY: !!js process.env.TAVILY_API_KEY || ''
+          CODEX_HOME: !!js process.env.CODEX_HOME || ''
+          HOME: !!js process.env.HOME || ''
+          USERPROFILE: !!js process.env.USERPROFILE || ''
+        failOnStartupError: false

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createSearchRouter, type SearchProvider } from "../src/search/search-router.js";
+import { createSearchRouter, type SearchProvider } from "../src/search-router.js";
 
 function provider(name: "brave" | "tavily", implementation: SearchProvider["search"]): SearchProvider {
   return {

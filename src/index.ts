@@ -27,7 +27,7 @@ import { loadInstanceConfig } from "./telegram/instance-config.js";
 import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-executor.js";
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
 import { upgradeInstanceAgentInstructions } from "./commands/access.js";
-import { runSearchMcpServer } from "./search/search-mcp-server.js";
+import { runSearchMcpServer } from "../deepseek-harness-plugin/src/search-mcp-server.js";
 import { applyLarkBridgeRuntimeEnv, applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir } from "./lark/env-file.js";
 import { runLarkService } from "./lark/service.js";
 

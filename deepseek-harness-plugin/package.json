@@ -1,34 +1,64 @@
 {
   "name": "tarocub-deepseek-harness-plugin",
-  "version": "0.1.278",
-  "description": "Native DeepSeek Harness companion plugin for the TaroCub Feishu/Lark bridge.",
-  "private": true,
+  "version": "0.2.0",
+  "description": "Native DeepSeek Harness plugin for source-traceable Brave and Tavily web search, with optional TaroCub integration.",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "main": "./index.js",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "check:dist": "node ./scripts/build.mjs --check",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify": "npm run typecheck && npm test && npm run check:dist && npm pack --dry-run"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
   },
+  "tarocub": {
+    "searchMcp": true,
+    "searchMcpProtocol": 1,
+    "searchMcpEntrypoint": "./dist/search-mcp.js"
+  },
   "files": [
     "index.js",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "dist/search-mcp.js",
+    "README.md",
+    "README.zh-CN.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "LICENSE"
   ],
-  "homepage": "https://github.com/cloveric/tarocub#readme",
+  "homepage": "https://github.com/cloveric/tarocub-deepseek-harness-plugin#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cloveric/tarocub.git",
-    "directory": "deepseek-harness-plugin"
+    "url": "git+https://github.com/cloveric/tarocub-deepseek-harness-plugin.git"
   },
   "bugs": {
-    "url": "https://github.com/cloveric/tarocub/issues"
+    "url": "https://github.com/cloveric/tarocub-deepseek-harness-plugin/issues"
   },
   "keywords": [
+    "dsh-plugin",
+    "deepseek",
     "deepseek-harness",
     "deepseek-harness-plugin",
+    "mcp",
+    "web-search",
+    "brave-search",
+    "tavily",
     "feishu",
     "lark",
     "tarocub"
-  ]
+  ],
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "esbuild": "0.28.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
+    "zod": "^4.1.5"
+  }
 }

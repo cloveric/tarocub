@@ -219,6 +219,7 @@ export class DeepSeekHarnessHost {
       stateDir: this.options.stateDir,
       instructionsPath: this.options.instructionsPath,
       searchMcp: this.options.searchMcp,
+      onDiagnostic: this.options.onDiagnostic,
     });
     if (this.closing || generation !== this.generation) {
       throw new Error("DeepSeek Harness host closed during startup");
@@ -230,6 +231,7 @@ export class DeepSeekHarnessHost {
         ...(this.options.childEnv ?? process.env),
         DSH_HOME: prepared.home,
         DSH_PERMISSION_MODE: "workspace-write",
+        TAROCUB_SEARCH_MCP_OWNER: prepared.searchMcpOwner,
       },
       stdio: ["ignore", "pipe", "pipe"],
       ...(process.platform === "win32" && /\.(?:cmd|bat)$/i.test(this.executable)
@@ -380,12 +382,19 @@ export interface PrepareDeepSeekHarnessHomeOptions {
   stateDir: string;
   instructionsPath?: string;
   searchMcp?: DeepSeekHarnessSearchMcp;
+  onDiagnostic?: (message: string) => void;
 }
+
+export type DeepSeekHarnessSearchMcpOwner = "bridge" | "plugin";
 
 export interface PreparedDeepSeekHarnessHome {
   home: string;
   patchPath: string;
+  searchMcpOwner: DeepSeekHarnessSearchMcpOwner;
 }
+
+const SEARCH_PLUGIN_NAME = "tarocub-deepseek-harness-plugin";
+const SEARCH_MCP_PROTOCOL = 1;
 
 const PERMISSION_PATCH = `
 # TaroCub keeps full-auto sandboxed while bypass remains explicitly unconfined.
@@ -413,7 +422,7 @@ function renderSearchMcpPatch(searchMcp: DeepSeekHarnessSearchMcp): string {
   return `
 # TaroCub exposes its source-traceable search server as native Harness tools.
 - insert:
-    - id: mcp-cctb-search
+    - id: mcp-cctb-search-bridge
       name: '@deepseek-ai/dsh-mcp-client'
       config:
         serverName: cctb_search
@@ -436,6 +445,7 @@ export async function prepareDeepSeekHarnessHome(
   options: PrepareDeepSeekHarnessHomeOptions,
 ): Promise<PreparedDeepSeekHarnessHome> {
   const sharedHome = path.resolve(options.sharedHome);
+  const searchMcpOwner = await detectSearchMcpOwner(sharedHome, options.onDiagnostic);
   const home = path.resolve(options.stateDir, "dsh-home");
   if (home === sharedHome || home.startsWith(`${sharedHome}${path.sep}`)) {
     throw new Error("DeepSeek Harness private home must not be inside the shared DSH_HOME");
@@ -464,12 +474,88 @@ export async function prepareDeepSeekHarnessHome(
   const prefix = isEmptyPatchDocument(sharedPatch) ? "" : sharedPatch.trimEnd();
   const localPatches = [
     PERMISSION_PATCH.trimStart(),
-    ...(options.searchMcp ? [renderSearchMcpPatch(options.searchMcp).trimStart()] : []),
+    ...(options.searchMcp && searchMcpOwner === "bridge"
+      ? [renderSearchMcpPatch(options.searchMcp).trimStart()]
+      : []),
   ];
   const patch = `${prefix ? `${prefix}\n` : ""}${localPatches.join("\n")}`;
   await writeFileAtomically(patchPath, patch, 0o600);
 
-  return { home, patchPath };
+  return { home, patchPath, searchMcpOwner };
+}
+
+async function detectSearchMcpOwner(
+  sharedHome: string,
+  onDiagnostic?: (message: string) => void,
+): Promise<DeepSeekHarnessSearchMcpOwner> {
+  const packageRoot = path.join(
+    sharedHome,
+    "profiles",
+    "web",
+    "node_modules",
+    SEARCH_PLUGIN_NAME,
+  );
+  const manifestPath = path.join(packageRoot, "package.json");
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "bridge";
+    }
+    onDiagnostic?.(
+      `DeepSeek Harness Search MCP plugin manifest is unreadable; using bridge fallback: ${formatDiagnosticError(error)}`,
+    );
+    return "bridge";
+  }
+
+  if (!isRecord(manifest) || !isRecord(manifest.tarocub) || manifest.tarocub.searchMcp !== true) {
+    return "bridge";
+  }
+
+  const protocol = manifest.tarocub.searchMcpProtocol;
+  const entrypoint = manifest.tarocub.searchMcpEntrypoint;
+  if (protocol !== SEARCH_MCP_PROTOCOL) {
+    onDiagnostic?.(
+      `DeepSeek Harness Search MCP plugin protocol ${String(protocol)} is unsupported; using bridge fallback.`,
+    );
+    return "bridge";
+  }
+  if (typeof entrypoint !== "string" || !entrypoint.trim()) {
+    onDiagnostic?.(
+      "DeepSeek Harness Search MCP plugin entrypoint is missing; using bridge fallback.",
+    );
+    return "bridge";
+  }
+
+  const resolvedEntrypoint = path.resolve(packageRoot, entrypoint);
+  if (
+    resolvedEntrypoint === packageRoot
+    || !resolvedEntrypoint.startsWith(`${packageRoot}${path.sep}`)
+  ) {
+    onDiagnostic?.(
+      "DeepSeek Harness Search MCP plugin entrypoint escapes its package; using bridge fallback.",
+    );
+    return "bridge";
+  }
+
+  try {
+    const stat = await lstat(resolvedEntrypoint);
+    if (!stat.isFile()) {
+      throw new Error("entrypoint is not a file");
+    }
+  } catch (error) {
+    onDiagnostic?.(
+      `DeepSeek Harness Search MCP plugin entrypoint is missing; using bridge fallback: ${formatDiagnosticError(error)}`,
+    );
+    return "bridge";
+  }
+
+  return "plugin";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isEmptyPatchDocument(contents: string): boolean {

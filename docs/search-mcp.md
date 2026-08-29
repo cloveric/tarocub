@@ -113,11 +113,11 @@ keys are never copied into Kimi config. Explicit `BRAVE_API_KEY` /
 server can reuse those same keys from an existing local Codex
 `[mcp_servers.<name>.env]` configuration without logging them.
 
-## Telegram Bot Runtime
+## Bot Runtime
 
-After registering native MCP servers, restart the affected bot instances so new Codex/Claude/DeepSeek/Antigravity turns inherit the tool configuration. Kimi receives TaroCub Search MCP automatically when its next ACP worker starts; no Kimi-side registration is required.
+After registering native MCP servers, restart affected bot instances so new Codex/Claude/Antigravity turns inherit the tool configuration. Kimi receives TaroCub Search MCP automatically when its next ACP worker starts; no Kimi-side registration is required.
 
-Codex-backed instances use the Codex MCP registration. Claude-backed instances use the Claude Code MCP registration. Kimi-backed instances receive TaroCub Search MCP through ACP and retain native Kimi MCP/plugins. DeepSeek-backed instances use the native MCP/plugins in their Harness profile; TaroCub does not fake successful Search MCP injection when that profile has not registered it. Antigravity-backed instances use whatever native tool/MCP configuration the Antigravity CLI exposes to `agy --print`.
+Codex-backed instances use Codex MCP registration. Claude-backed instances use Claude Code MCP registration. Kimi-backed instances receive TaroCub Search MCP through ACP and retain native Kimi MCP/plugins. DeepSeek should install `github:cloveric/tarocub-deepseek-harness-plugin` in its `web` profile. Managed DeepSeek Hosts validate that plugin's capability marker and entrypoint: a valid plugin owns the client; an absent, legacy, or damaged plugin selects TaroCub's private bridge fallback. `TAROCUB_SEARCH_MCP_OWNER` disables one side so exactly one client is active. Plain Harness has no bridge fallback and therefore needs the plugin or an equivalent native profile configuration. Antigravity-backed instances use whatever native tool/MCP configuration `agy --print` exposes.
 
 Keep the native plugin systems separate. Do not import Claude or Codex native plugins into Antigravity as part of the default bridge setup. Shared bridge skills should live as reusable skill files/docs or engine-neutral MCP/tool guidance. Instance `agent.md` files may reference or absorb those skills, but the `agent.md` files themselves remain per-instance, not shared state.
 
