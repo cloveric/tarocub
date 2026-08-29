@@ -11,6 +11,7 @@ const HELP_TEXT = [
   "TaroCub companion plugin is active in this Harness profile.",
   "The Feishu/Lark bridge is a separate local service; plugin installation alone does not configure or start it.",
   "Repository and setup: https://github.com/cloveric/tarocub",
+  "Install source: github:cloveric/tarocub#path:deepseek-harness-plugin",
   "After building TaroCub, verify instances with: node dist/src/index.js lark service status --all",
 ].join("\n");
 

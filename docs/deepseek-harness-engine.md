@@ -6,11 +6,12 @@ prompt-level approximation of another engine.
 
 ## Native Harness Plugin
 
-The repository root is a genuine Harness bundle, not only an application that
-launches Harness. Install it into the profile used by TaroCub:
+The zero-dependency package in `deepseek-harness-plugin/` is a genuine Harness
+bundle, not only an application that launches Harness. Install that subpackage
+into the profile used by TaroCub:
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub
+dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
 ```
 
 The bundle manifest activates `deepseek-harness-plugin/index.js`. That plugin
@@ -22,8 +23,8 @@ ordinary Harness Web and to TaroCub's private Hosts.
 
 ```bash
 dsh --profile web --dump-config | grep -A2 -B1 tarocub
-dsh plugin --profile web update tarocub
-dsh plugin --profile web remove tarocub
+dsh plugin --profile web update tarocub-deepseek-harness-plugin
+dsh plugin --profile web remove tarocub-deepseek-harness-plugin
 ```
 
 ## Runtime Architecture
@@ -42,8 +43,9 @@ TaroCub instance
 `PATH`. `DSH_HOME` points at the user's authenticated Harness home (default
 `~/.dsh`). TaroCub creates `<stateDir>/dsh-home` with mode `0700`, links the
 shared credentials and profiles, copies mutable `settings.yaml`, installs the
-bridge `AGENTS.md`, and appends only its permission presets to the private
-patch. A bot can therefore reuse authentication and native profiles without
+bridge `AGENTS.md`, and appends its permission presets plus an instance-local
+TaroCub Search MCP client to the private patch. A bot can therefore reuse
+authentication and native profiles without
 letting model selection or bridge instructions overwrite desktop settings.
 
 The host binds only to loopback and uses an ephemeral port. TaroCub drains its
@@ -67,6 +69,9 @@ incomplete or malformed.
 | Mid-turn steering | Native `session.steer` from Lark during the configured `/steer` window |
 | Compaction | `/compact` is executed through Harness `commands/execute`, never exposed as an ordinary model prompt |
 | Context | `/context` reads the durable `contextPressure` projection |
+| Web research | Native Harness search remains available; TaroCub also injects source-traceable `mcp__cctb_search__web_search` and `mcp__cctb_search__web_extract` tools when their providers are configured |
+| Long media | Lark transcribes inbound media before engine dispatch: 15 minutes or longer uses Aliyun Tingwu first, while shorter media and cloud failures use local Qwen ASR |
+| Group sessions | Ordinary Lark groups share one chat session; topic/thread groups isolate sessions by thread while access control remains anchored to the parent group |
 | Model / effort | Harness session model APIs validate provider/model and reasoning effort on each turn |
 | Goals | Native durable Goal create/read/watch/clear/resume; optional token budget is persisted across bridge restarts |
 | Background jobs | Structured lifecycle, ownership routing, final review grace, and exactly-once terminal result delivery |
@@ -86,8 +91,8 @@ incomplete or malformed.
 - TaroCub does not emulate Claude's `/ultrareview`. Ordinary review prompts,
   Agent Bus `/verify`, and native DeepSeek Goals remain available.
 - Native Harness profiles, plugins, and MCP configuration remain Harness-owned.
-  TaroCub isolates mutable bot settings but does not pretend that an unavailable
-  native plugin is present.
+  TaroCub isolates mutable bot settings and adds only its private Search MCP
+  client; it does not pretend that an unavailable native plugin is present.
 
 ## Safety Invariants
 

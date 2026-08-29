@@ -737,6 +737,10 @@ describe("createServiceDependenciesForInstance", () => {
       expect(gateway.options.sharedHome).toBe(path.join(root, "shared-dsh-home"));
       expect(gateway.options.childEnv.DSH_HOME).toBe(path.join(root, "shared-dsh-home"));
       expect(gateway.options.childEnv.TELEGRAM_BOT_TOKEN).toBeUndefined();
+      expect(gateway.options.searchMcp.command).toBeTruthy();
+      expect(gateway.options.searchMcp.args).toHaveLength(1);
+      expect(gateway.options.searchMcp.args[0]).toMatch(/search-mcp-server\.(?:js|ts)$/);
+      expect(gateway.options.searchMcp.cwd).toBe(path.join(stateDir, "workspace"));
       await adapter.destroy();
     } finally {
       await removeTempRoot(root);

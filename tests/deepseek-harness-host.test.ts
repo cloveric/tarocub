@@ -127,6 +127,37 @@ describe("prepareDeepSeekHarnessHome", () => {
     expect(patch).toMatch(/^- id: permission/m);
     expect(patch).toMatch(/full-auto:\s+?sandbox: workspace-write\s+?approval: never/s);
   });
+
+  it("adds the TaroCub Search MCP without writing provider secrets into the private patch", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-search-mcp-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+
+    const prepared = await prepareDeepSeekHarnessHome({
+      sharedHome,
+      stateDir,
+      searchMcp: {
+        command: "/Applications/Taro Cub/node",
+        args: ["/Applications/Taro Cub/search-mcp-server.js"],
+        cwd: "/Users/example/workspace",
+      },
+    });
+    const patch = await readFile(prepared.patchPath, "utf8");
+
+    expect(patch).toMatch(/^- insert:\s+?- id: mcp-cctb-search/m);
+    expect(patch).toContain("name: '@deepseek-ai/dsh-mcp-client'");
+    expect(patch).toContain("serverName: cctb_search");
+    expect(patch).toContain('command: "/Applications/Taro Cub/node"');
+    expect(patch).toContain('args: ["/Applications/Taro Cub/search-mcp-server.js"]');
+    expect(patch).toContain('cwd: "/Users/example/workspace"');
+    expect(patch).toContain("BRAVE_API_KEY: !!js process.env.BRAVE_API_KEY || ''");
+    expect(patch).toContain("TAVILY_API_KEY: !!js process.env.TAVILY_API_KEY || ''");
+    expect(patch).not.toContain("never-copy-me");
+  });
 });
 
 class FakeReadable extends EventEmitter {

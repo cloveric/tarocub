@@ -1,0 +1,34 @@
+{
+  "name": "tarocub-deepseek-harness-plugin",
+  "version": "0.1.277",
+  "description": "Native DeepSeek Harness companion plugin for the TaroCub Feishu/Lark bridge.",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "homepage": "https://github.com/cloveric/tarocub#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cloveric/tarocub.git",
+    "directory": "deepseek-harness-plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/cloveric/tarocub/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "deepseek-harness-plugin",
+    "feishu",
+    "lark",
+    "tarocub"
+  ]
+}

@@ -90,7 +90,7 @@ TaroCub is also a native DeepSeek Harness companion plugin. Install the bundle
 into the `web` profile used by TaroCub's private Harness hosts:
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub
+dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
 ```
 
 The plugin adds bounded TaroCub context plus a `/tarocub` help command. It does
@@ -99,8 +99,8 @@ normal TaroCub setup above for that. Check, update, or remove it with:
 
 ```bash
 dsh --profile web --dump-config | grep -A2 -B1 tarocub
-dsh plugin --profile web update tarocub
-dsh plugin --profile web remove tarocub
+dsh plugin --profile web update tarocub-deepseek-harness-plugin
+dsh plugin --profile web remove tarocub-deepseek-harness-plugin
 ```
 
 ### Telegram (optional compatibility channel)
@@ -134,7 +134,9 @@ npm run dev -- telegram access pair <pairing-code>
 | Highlight | Why it matters |
 |---|---|
 | **Real CLI engines, not a fake chat backend** | Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
-| **Native DeepSeek Harness plugin** | Install TaroCub with `dsh plugin --profile web add github:cloveric/tarocub`; the bundle adds `/tarocub` guidance and is inherited by TaroCub's private Harness hosts without pretending the separate Feishu/Lark service is already configured. |
+| **Native DeepSeek Harness plugin** | Install the zero-dependency companion with `dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"`; it adds `/tarocub` guidance and is inherited by TaroCub's private Harness hosts without pretending the separate Feishu/Lark service is already configured. |
+| **DeepSeek Search MCP** | Each DeepSeek bot gets TaroCub's source-traceable Search MCP as `mcp__cctb_search__web_search` and `mcp__cctb_search__web_extract`, while native Harness search remains available as fallback. |
+| **Engine-neutral Lark intake** | Long-media Tingwu routing and group/topic session boundaries are resolved before dispatch, so DeepSeek follows the same 15-minute ASR threshold and chat/thread isolation rules as Codex, Claude, and Kimi. |
 | **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, Kimi ACP sessions, DeepSeek Harness sessions, and Antigravity conversations can be attached from chat and detached later. Bindings and resumed workspace roots are scoped to the private chat, group, or topic that created them, so another conversation cannot silently switch projects. |
 | **Mid-turn steering** | While a Codex or DeepSeek turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
@@ -270,7 +272,7 @@ The verified compatibility baseline is **DeepSeek Harness 0.1.1-rc.2**.
 This repository is itself an installable Harness bundle:
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub
+dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
 ```
 
 The shared `web` profile is linked into each private bot home, so the plugin is

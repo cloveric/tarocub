@@ -13,6 +13,7 @@ import { ProcessAntigravityAdapter } from "./codex/antigravity-adapter.js";
 import { CodexAppServerAdapter } from "./codex/app-server-adapter.js";
 import { DeepSeekHarnessAdapter, type DeepSeekHarnessModelSelection } from "./codex/deepseek-harness-adapter.js";
 import { DeepSeekHarnessHost } from "./codex/deepseek-harness-host.js";
+import { resolveSearchMcpServerInvocation } from "./search/search-mcp-server.js";
 import type { CodexAdapter } from "./codex/adapter.js";
 import { AccessStore } from "./state/access-store.js";
 import { appendAuditEvent } from "./state/audit-log.js";
@@ -871,11 +872,16 @@ async function createAdapter(
   if (engine === "deepseek") {
     await mkdir(workspacePath, { recursive: true });
     const instanceConfig = await loadInstanceConfig(config.stateDir);
+    const searchMcpInvocation = resolveSearchMcpServerInvocation();
     const host = new DeepSeekHarnessHost({
       executable: config.deepseekExecutable,
       sharedHome: config.deepseekHome,
       stateDir: config.stateDir,
       workspacePath,
+      searchMcp: {
+        ...searchMcpInvocation,
+        cwd: workspacePath,
+      },
       ...(existsSync(instructionsPath) ? { instructionsPath } : {}),
       childEnv,
       onDiagnostic: (message) => console.error(message),

@@ -277,6 +277,8 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("read them directly with `web_extract`");
     expect(instructions).toContain("fall back to Scrapling");
     expect(instructions).toContain("`web_search` for discovery/current facts");
+    expect(instructions).toContain("`mcp__cctb_search__web_extract`");
+    expect(instructions).toContain("`mcp__cctb_search__web_search`");
   });
 
   it("prefers bridge-managed choice cards and treats lark-cli as required for full Lark-native functionality", () => {

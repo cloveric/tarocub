@@ -8,14 +8,21 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 
 describe("DeepSeek Harness plugin bundle", () => {
   it("publishes a native dsh bundle manifest that activates the TaroCub plugin", async () => {
-    const packageJson = JSON.parse(
+    const rootPackageJson = JSON.parse(
       await readFile(path.join(repoRoot, "package.json"), "utf8"),
+    ) as Record<string, any>;
+    const packageJson = JSON.parse(
+      await readFile(path.join(repoRoot, "deepseek-harness-plugin", "package.json"), "utf8"),
     ) as Record<string, any>;
     const patchPath = packageJson.dsh?.bundle?.patch;
 
-    expect(packageJson.main).toBe("./deepseek-harness-plugin/index.js");
-    expect(patchPath).toBe("./deepseek-harness-plugin/cordis.patch.yml");
-    const patch = await readFile(path.join(repoRoot, patchPath), "utf8");
+    expect(rootPackageJson.dsh).toBeUndefined();
+    expect(packageJson.name).toBe("tarocub-deepseek-harness-plugin");
+    expect(packageJson.version).toBe(rootPackageJson.version);
+    expect(packageJson.dependencies).toBeUndefined();
+    expect(packageJson.main).toBe("./index.js");
+    expect(patchPath).toBe("./cordis.patch.yml");
+    const patch = await readFile(path.join(repoRoot, "deepseek-harness-plugin", patchPath), "utf8");
     expect(patch).toMatch(/^- insert:/m);
     expect(patch).toMatch(/^\s+- id: tarocub$/m);
     expect(patch).toMatch(/^\s+name: tarocub$/m);

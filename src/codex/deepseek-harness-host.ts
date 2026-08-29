@@ -77,6 +77,7 @@ export interface DeepSeekHarnessHostOptions {
   sharedHome: string;
   stateDir: string;
   workspacePath: string;
+  searchMcp?: DeepSeekHarnessSearchMcp;
   instructionsPath?: string;
   childEnv?: NodeJS.ProcessEnv;
   spawnDsh?: SpawnDeepSeekHarness;
@@ -85,6 +86,12 @@ export interface DeepSeekHarnessHostOptions {
   shutdownTimeoutMs?: number;
   restartDelayMs?: number;
   onDiagnostic?: (message: string) => void;
+}
+
+export interface DeepSeekHarnessSearchMcp {
+  command: string;
+  args: string[];
+  cwd: string;
 }
 
 const WEB_ARGS = ["web", "--no-open", "--host", "127.0.0.1", "--port", "0"];
@@ -211,6 +218,7 @@ export class DeepSeekHarnessHost {
       sharedHome: this.options.sharedHome,
       stateDir: this.options.stateDir,
       instructionsPath: this.options.instructionsPath,
+      searchMcp: this.options.searchMcp,
     });
     if (this.closing || generation !== this.generation) {
       throw new Error("DeepSeek Harness host closed during startup");
@@ -371,6 +379,7 @@ export interface PrepareDeepSeekHarnessHomeOptions {
   sharedHome: string;
   stateDir: string;
   instructionsPath?: string;
+  searchMcp?: DeepSeekHarnessSearchMcp;
 }
 
 export interface PreparedDeepSeekHarnessHome {
@@ -396,6 +405,32 @@ const PERMISSION_PATCH = `
         sandbox: danger-full-access
         approval: never
 `;
+
+function renderSearchMcpPatch(searchMcp: DeepSeekHarnessSearchMcp): string {
+  const command = JSON.stringify(searchMcp.command);
+  const args = JSON.stringify(searchMcp.args);
+  const cwd = JSON.stringify(path.resolve(searchMcp.cwd));
+  return `
+# TaroCub exposes its source-traceable search server as native Harness tools.
+- insert:
+    - id: mcp-cctb-search
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: cctb_search
+        transport: stdio
+        command: ${command}
+        args: ${args}
+        cwd: ${cwd}
+        env:
+          BRAVE_API_KEY: !!js process.env.BRAVE_API_KEY || ''
+          BRAVE_SEARCH_API_KEY: !!js process.env.BRAVE_SEARCH_API_KEY || ''
+          TAVILY_API_KEY: !!js process.env.TAVILY_API_KEY || ''
+          CODEX_HOME: !!js process.env.CODEX_HOME || ''
+          HOME: !!js process.env.HOME || ''
+          USERPROFILE: !!js process.env.USERPROFILE || ''
+        failOnStartupError: false
+`;
+}
 
 export async function prepareDeepSeekHarnessHome(
   options: PrepareDeepSeekHarnessHomeOptions,
@@ -427,7 +462,11 @@ export async function prepareDeepSeekHarnessHome(
   const sharedPatch = await readOptionalFile(sharedPatchPath);
   const patchPath = path.join(home, "cordis.patch.yml");
   const prefix = isEmptyPatchDocument(sharedPatch) ? "" : sharedPatch.trimEnd();
-  const patch = `${prefix ? `${prefix}\n` : ""}${PERMISSION_PATCH.trimStart()}`;
+  const localPatches = [
+    PERMISSION_PATCH.trimStart(),
+    ...(options.searchMcp ? [renderSearchMcpPatch(options.searchMcp).trimStart()] : []),
+  ];
+  const patch = `${prefix ? `${prefix}\n` : ""}${localPatches.join("\n")}`;
   await writeFileAtomically(patchPath, patch, 0o600);
 
   return { home, patchPath };

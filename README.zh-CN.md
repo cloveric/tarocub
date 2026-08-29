@@ -52,7 +52,7 @@ TaroCub 现在也是 Harness 可直接识别的 bundle。把它装进 TaroCub �
 Host 使用的 `web` profile：
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub
+dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
 ```
 
 插件会加入受限的 TaroCub 上下文和 `/tarocub` 帮助命令；它**不会**仅凭
@@ -61,8 +61,8 @@ dsh plugin --profile web add github:cloveric/tarocub
 
 ```bash
 dsh --profile web --dump-config | grep -A2 -B1 tarocub
-dsh plugin --profile web update tarocub
-dsh plugin --profile web remove tarocub
+dsh plugin --profile web update tarocub-deepseek-harness-plugin
+dsh plugin --profile web remove tarocub-deepseek-harness-plugin
 ```
 
 ## 它能给你什么
@@ -70,7 +70,9 @@ dsh plugin --profile web remove tarocub
 | 能力 | 实际意义 |
 |---|---|
 | **真实 CLI 的远程控制** | 把 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity 接到飞书/Lark，不把它们改造成一个假的聊天后端。 |
-| **DeepSeek Harness 原生插件** | 可用 `dsh plugin --profile web add github:cloveric/tarocub` 安装；bundle 提供 `/tarocub` 指引并由私有 Harness Host 继承，但不会把“插件已装”冒充成“飞书 Bot 已配置运行”。 |
+| **DeepSeek Harness 原生插件** | 可用 `dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"` 安装零依赖 companion；bundle 提供 `/tarocub` 指引并由私有 Harness Host 继承，但不会把“插件已装”冒充成“飞书 Bot 已配置运行”。 |
+| **DeepSeek 搜索 MCP** | 每个 DeepSeek Bot 都会获得 `mcp__cctb_search__web_search` 与 `mcp__cctb_search__web_extract`，保留来源日志和 fallback 提示，同时仍可使用 Harness 原生搜索兜底。 |
+| **引擎无关的飞书入站层** | 长语音通义听悟路由和群/话题会话边界都在进入引擎前完成，因此 DeepSeek 与 Codex、Claude、Kimi 共用 15 分钟阈值及 chat/thread 隔离规则。 |
 | **会话连续性** | 在手机上续接 Claude 本地 session、绑定 Codex thread、Kimi ACP / DeepSeek Harness session 或 Antigravity conversation，回到电脑后还能继续同一件事。 |
 | **飞书/Lark 原生工作面** | 交互卡片、审批、Docs 评论、Sheets/Docs/Drive、群聊与 thread 工作流都走同一套 bridge runtime。 |
 | **可选 Telegram 兼容通道** | 已有个人 bot 仍可继续使用文字、文件、图片、语音、审批、cron 和多 bot 运维。 |
@@ -710,7 +712,7 @@ Kimi 的实例/Lark 指令写入 bot 自有工作区的 `.kimi-code/agents/agent
 TaroCub 同时是可安装的 Harness 原生 bundle：
 
 ```bash
-dsh plugin --profile web add github:cloveric/tarocub
+dsh plugin --profile web add "github:cloveric/tarocub#path:deepseek-harness-plugin"
 ```
 
 TaroCub 的私有 Host 会链接用户已认证的共享 `web` profile，因此普通

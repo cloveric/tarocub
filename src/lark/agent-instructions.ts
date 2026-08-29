@@ -130,7 +130,7 @@ export function larkAgentInstructions(requestText = ""): string {
     "File/image send is workspace-sandboxed: an outside path is refused (a path restriction, not a failure) — copy it into your workspace first, then send that path.",
     "Titled images (小红书 P1/P2): give each image its own title. send.batch images entry an object {path, caption}, or put title on the line directly above [send-image:/path]. A titled batch is packed into ONE card, each image under its own title.",
     "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` ISO timezone. Recurring/window = exactly ONE standard 5-field `cron` (no seconds/year), e.g. `*/15 13-14 * * *` (fires separately each time); do NOT add one-shot `in`/`at` for the current minute or end boundary. Manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
-    "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; if blocked (anti-bot/Cloudflare) or the page is dynamic, fall back to Scrapling (`scrapling extract`); use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
+    "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; if blocked (anti-bot/Cloudflare) or the page is dynamic, fall back to Scrapling (`scrapling extract`); use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback. In DeepSeek Harness, these TaroCub Search MCP tools are exposed as `mcp__cctb_search__web_extract` and `mcp__cctb_search__web_search`.",
   ];
   const asr = localAsrAgentInstruction();
   if (asr) {
