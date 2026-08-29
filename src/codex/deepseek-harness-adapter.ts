@@ -291,6 +291,9 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
         };
       }
       const content = await this.buildPromptContent(input);
+      if (input.abortSignal?.aborted) {
+        throw abortError();
+      }
       const pending = this.createPendingTurn(sessionId, input, workspace);
       this.pendingTurns.set(sessionId, pending);
       this.armTurnTimeouts(pending);

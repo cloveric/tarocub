@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -19,6 +20,8 @@ class ProtocolServer {
   readonly requests: RecordedRequest[] = [];
   readonly websocketServer = new WebSocketServer({ noServer: true });
   readonly sockets = new Map<string, WebSocket>();
+  readonly heldUpgradeSockets = new Set<Duplex>();
+  readonly heldUpgradePaths = new Set<string>();
   readonly connectionCounts = new Map<string, number>();
   readonly server = createServer((request, response) => {
     void this.handleHttp(request, response);
@@ -34,6 +37,11 @@ class ProtocolServer {
       const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
       if (pathname !== "/api/events.mux" && pathname !== "/api/events.host") {
         socket.destroy();
+        return;
+      }
+      if (this.heldUpgradePaths.has(pathname)) {
+        this.heldUpgradeSockets.add(socket);
+        socket.once("close", () => this.heldUpgradeSockets.delete(socket));
         return;
       }
       this.websocketServer.handleUpgrade(request, socket, head, (websocket) => {
@@ -72,6 +80,9 @@ class ProtocolServer {
   }
 
   async close(): Promise<void> {
+    for (const socket of this.heldUpgradeSockets) {
+      socket.destroy();
+    }
     for (const socket of this.sockets.values()) {
       socket.terminate();
     }
@@ -354,6 +365,65 @@ describe("DeepSeekHarnessProtocolClient", () => {
     expect(onReconnect).toHaveBeenCalledWith({ reason: "transport" });
 
     await client.close();
+  });
+
+  it("ignores frames emitted by a superseded downlink generation", async () => {
+    const server = new ProtocolServer();
+    servers.push(server);
+    const baseUrl = await server.listen();
+    const delivered: string[] = [];
+    const client = new DeepSeekHarnessProtocolClient(baseUrl, {
+      reconnectInitialDelayMs: 1,
+      reconnectMaxDelayMs: 1,
+    });
+
+    await client.connect({
+      onMuxFrame: (frame) => {
+        delivered.push(frame.rpcId);
+      },
+      onHostFrame: () => {},
+    });
+    await server.waitForSockets();
+    const firstMux = (client as unknown as {
+      generation?: { mux: WebSocket };
+    }).generation!.mux;
+    server.sockets.get("/api/events.host")!.terminate();
+    await server.waitForConnectionCount("/api/events.mux", 2);
+    await server.waitForConnectionCount("/api/events.host", 2);
+
+    firstMux.emit("message", Buffer.from(JSON.stringify({
+      type: "server-request",
+      rpcId: "stale-mux-frame",
+      method: "session/event",
+      payload: { type: "session/event", sessionId: "session-1" },
+    }), "utf8"), false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(delivered).toEqual([]);
+    await client.close();
+  });
+
+  it("rejects an in-flight connection when closed before both downlinks open", async () => {
+    const server = new ProtocolServer();
+    server.heldUpgradePaths.add("/api/events.host");
+    servers.push(server);
+    const baseUrl = await server.listen();
+    const client = new DeepSeekHarnessProtocolClient(baseUrl);
+
+    const connecting = client.connect({
+      onMuxFrame: () => {},
+      onHostFrame: () => {},
+    });
+    const connectionOutcome = connecting.then(() => "resolved", () => "rejected");
+    await vi.waitFor(() => expect(server.sockets.has("/api/events.mux")).toBe(true));
+
+    await client.close();
+    const outcome = await Promise.race([
+      connectionOutcome,
+      new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 50)),
+    ]);
+
+    expect(outcome).toBe("rejected");
   });
 
   it("drops and retries a reconnected downlink when adapter recovery rejects", async () => {

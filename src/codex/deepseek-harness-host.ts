@@ -213,7 +213,7 @@ export class DeepSeekHarnessHost {
       instructionsPath: this.options.instructionsPath,
     });
     if (this.closing || generation !== this.generation) {
-      return;
+      throw new Error("DeepSeek Harness host closed during startup");
     }
 
     const child = this.spawnDsh(this.executable, [...WEB_ARGS], {
@@ -275,15 +275,12 @@ export class DeepSeekHarnessHost {
         this.options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
       );
       if (this.closing || generation !== this.generation) {
-        await stopChild(child, this.options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS);
-        return;
+        throw new Error("DeepSeek Harness host closed during startup");
       }
       protocol = this.protocolFactory(baseUrl);
       await protocol.connect(this.handlers!);
       if (this.closing || generation !== this.generation) {
-        await protocol.close().catch(() => {});
-        await stopChild(child, this.options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS);
-        return;
+        throw new Error("DeepSeek Harness host closed during startup");
       }
       this.protocol = protocol;
       published = true;
@@ -429,11 +426,18 @@ export async function prepareDeepSeekHarnessHome(
   const sharedPatchPath = path.join(sharedHome, "cordis.patch.yml");
   const sharedPatch = await readOptionalFile(sharedPatchPath);
   const patchPath = path.join(home, "cordis.patch.yml");
-  const prefix = sharedPatch.trimEnd();
+  const prefix = isEmptyPatchDocument(sharedPatch) ? "" : sharedPatch.trimEnd();
   const patch = `${prefix ? `${prefix}\n` : ""}${PERMISSION_PATCH.trimStart()}`;
   await writeFileAtomically(patchPath, patch, 0o600);
 
   return { home, patchPath };
+}
+
+function isEmptyPatchDocument(contents: string): boolean {
+  const meaningfulLines = contents
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:#.*)?$/.test(line));
+  return meaningfulLines.length === 1 && /^\s*\[\]\s*(?:#.*)?$/.test(meaningfulLines[0]!);
 }
 
 async function copyRequiredFile(source: string, target: string): Promise<void> {

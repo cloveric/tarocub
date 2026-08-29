@@ -4,6 +4,28 @@ This document is the release contract for TaroCub's `deepseek` engine. It
 describes behavior verified against **DeepSeek Harness 0.1.1-rc.2**, not a
 prompt-level approximation of another engine.
 
+## Native Harness Plugin
+
+The repository root is a genuine Harness bundle, not only an application that
+launches Harness. Install it into the profile used by TaroCub:
+
+```bash
+dsh plugin --profile web add github:cloveric/tarocub
+```
+
+The bundle manifest activates `deepseek-harness-plugin/index.js`. That plugin
+registers a bounded system-prompt section and `/tarocub` operator help. It does
+not read credentials, start subprocesses, create a Feishu/Lark app, or claim
+that the separate TaroCub service is configured. The private bot homes link the
+shared profiles directory, so a plugin installed in `web` is available to
+ordinary Harness Web and to TaroCub's private Hosts.
+
+```bash
+dsh --profile web --dump-config | grep -A2 -B1 tarocub
+dsh plugin --profile web update tarocub
+dsh plugin --profile web remove tarocub
+```
+
 ## Runtime Architecture
 
 Each TaroCub instance owns one private Harness host:
@@ -88,6 +110,15 @@ The adapter enforces these invariants with regression tests:
 8. Turn, approval, question, and background-job routing is bound to a unique
    task claim. A cancelled turn's late terminal frame or job update cannot
    cancel, approve for, or settle a replacement turn in the same session.
+9. Closing the protocol client while either downlink is still connecting
+   rejects the pending connection instead of leaving startup blocked forever.
+10. Frames from a superseded WebSocket generation are discarded before they
+    can enter the adapter's event queues.
+11. An abort received during session creation/configuration is checked again
+    before a prompt is submitted, and an empty `[]` shared Cordis patch is
+    normalized before TaroCub appends its permission layer.
+12. Closing a Host while its protocol is still connecting rejects startup;
+    shutdown can never publish or report a usable replacement afterward.
 
 The focused release gate is:
 
@@ -96,7 +127,8 @@ npm run build
 npx vitest run \
   tests/deepseek-harness-protocol.test.ts \
   tests/deepseek-harness-host.test.ts \
-  tests/deepseek-harness-adapter.test.ts
+  tests/deepseek-harness-adapter.test.ts \
+  tests/deepseek-harness-plugin.test.ts
 ```
 
 The full repository test suite and a real local Harness probe are still

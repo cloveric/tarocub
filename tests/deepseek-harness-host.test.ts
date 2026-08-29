@@ -109,6 +109,24 @@ describe("prepareDeepSeekHarnessHome", () => {
     expect(patch).toMatch(/workspace-write:\s+?sandbox: workspace-write\s+?approval: ask/s);
     expect(patch).not.toContain("never-copy-me");
   });
+
+  it("replaces an empty-array shared patch with a valid permission patch sequence", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-empty-patch-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, "cordis.patch.yml"), "# no shared patches\n[]\n", "utf8");
+
+    const prepared = await prepareDeepSeekHarnessHome({ sharedHome, stateDir });
+    const patch = await readFile(prepared.patchPath, "utf8");
+
+    expect(patch).not.toMatch(/^\s*\[\]\s*$/m);
+    expect(patch).toMatch(/^- id: permission/m);
+    expect(patch).toMatch(/full-auto:\s+?sandbox: workspace-write\s+?approval: never/s);
+  });
 });
 
 class FakeReadable extends EventEmitter {
@@ -160,6 +178,24 @@ class FakeProtocol {
 
   emitMux(frame: DeepSeekHarnessServerRequest): void {
     void this.handlers?.onMuxFrame(frame);
+  }
+}
+
+class BlockingProtocol extends FakeProtocol {
+  connectStarted = false;
+  private releaseConnect!: () => void;
+  private readonly connectBarrier = new Promise<void>((resolve) => {
+    this.releaseConnect = resolve;
+  });
+
+  override async connect(handlers: DeepSeekHarnessProtocolHandlers): Promise<void> {
+    this.handlers = handlers;
+    this.connectStarted = true;
+    await this.connectBarrier;
+  }
+
+  release(): void {
+    this.releaseConnect();
   }
 }
 
@@ -282,6 +318,41 @@ describe("DeepSeekHarnessHost", () => {
 
     await expect(connecting).rejects.toThrow(/exited before startup.*configuration failed/i);
     await host.close();
+  });
+
+  it("rejects startup when the host closes during protocol connection", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-close-during-connect-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    const child = new FakeChild();
+    const protocol = new BlockingProtocol();
+    let spawned = false;
+    const host = new DeepSeekHarnessHost({
+      executable: "dsh",
+      sharedHome,
+      stateDir,
+      workspacePath: "/workspace",
+      spawnDsh: () => {
+        spawned = true;
+        return child;
+      },
+      protocolFactory: () => protocol,
+      startupTimeoutMs: 1_000,
+    });
+
+    const connecting = host.connect({ onMuxFrame: () => {}, onHostFrame: () => {} });
+    void connecting.catch(() => {});
+    await vi.waitFor(() => expect(spawned).toBe(true));
+    child.stdout.emitData("dsh web: http://127.0.0.1:43124\n");
+    await vi.waitFor(() => expect(protocol.connectStarted).toBe(true));
+    await host.close();
+    protocol.release();
+
+    await expect(connecting).rejects.toThrow("closed during startup");
   });
 
   it("restarts after a running dsh process crashes and only then reports reconnect", async () => {

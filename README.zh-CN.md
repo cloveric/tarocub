@@ -12,6 +12,7 @@
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js">
   <img src="https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-0078D4?style=flat-square&logo=node.js&logoColor=white" alt="Windows | macOS | Linux">
   <img src="https://img.shields.io/badge/%E5%BC%95%E6%93%8E-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20DeepSeek%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude | Kimi | DeepSeek Harness | Antigravity">
+  <img src="https://img.shields.io/badge/DeepSeek%20Harness-%E5%8E%9F%E7%94%9F%E6%8F%92%E4%BB%B6-0f766e?style=flat-square" alt="DeepSeek Harness 原生插件">
   <img src="https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest">
 </p>
 
@@ -45,11 +46,31 @@ node dist/src/index.js lark yolo unsafe
 
 > **权限提示：** `lark yolo unsafe` 会绕过常规审批与部分沙箱限制，只适合你本人控制的可信机器和可信工作区。需要逐次审批时使用 `lark yolo off`。
 
+### 作为 DeepSeek Harness 原生插件安装
+
+TaroCub 现在也是 Harness 可直接识别的 bundle。把它装进 TaroCub 私有
+Host 使用的 `web` profile：
+
+```bash
+dsh plugin --profile web add github:cloveric/tarocub
+```
+
+插件会加入受限的 TaroCub 上下文和 `/tarocub` 帮助命令；它**不会**仅凭
+安装就创建飞书应用或启动 bridge，完整 Bot 仍需按上面的 TaroCub 流程配置。
+检查、升级和卸载命令如下：
+
+```bash
+dsh --profile web --dump-config | grep -A2 -B1 tarocub
+dsh plugin --profile web update tarocub
+dsh plugin --profile web remove tarocub
+```
+
 ## 它能给你什么
 
 | 能力 | 实际意义 |
 |---|---|
 | **真实 CLI 的远程控制** | 把 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity 接到飞书/Lark，不把它们改造成一个假的聊天后端。 |
+| **DeepSeek Harness 原生插件** | 可用 `dsh plugin --profile web add github:cloveric/tarocub` 安装；bundle 提供 `/tarocub` 指引并由私有 Harness Host 继承，但不会把“插件已装”冒充成“飞书 Bot 已配置运行”。 |
 | **会话连续性** | 在手机上续接 Claude 本地 session、绑定 Codex thread、Kimi ACP / DeepSeek Harness session 或 Antigravity conversation，回到电脑后还能继续同一件事。 |
 | **飞书/Lark 原生工作面** | 交互卡片、审批、Docs 评论、Sheets/Docs/Drive、群聊与 thread 工作流都走同一套 bridge runtime。 |
 | **可选 Telegram 兼容通道** | 已有个人 bot 仍可继续使用文字、文件、图片、语音、审批、cron 和多 bot 运维。 |
@@ -685,6 +706,16 @@ bridge 会用短生命周期 ACP 连接先执行真实 `session/list` 和 `sessi
 Kimi 的实例/Lark 指令写入 bot 自有工作区的 `.kimi-code/agents/agent.md` 主代理 override，并保留 Kimi 内置 `${base_prompt}` 和 `${plugin_sections}`。本机 `~/.agents/skills`、Kimi plugin skills 与原生 MCP 继续由 Kimi 发现；TaroCub 还把 `~/.codex/skills` 暴露到 bot 自有工作区，并在 `session/new`/`session/load` 注入 Search MCP。对于外部恢复工作区，bridge 不修改对方项目文件，只对普通文本 turn 使用 prompt fallback；这是 ACP 没有直接 system-prompt 请求字段时的安全边界。
 
 ### DeepSeek Harness session 绑定
+
+TaroCub 同时是可安装的 Harness 原生 bundle：
+
+```bash
+dsh plugin --profile web add github:cloveric/tarocub
+```
+
+TaroCub 的私有 Host 会链接用户已认证的共享 `web` profile，因此普通
+Harness Web 与 Bot session 都能获得 `/tarocub` 指引。插件激活与飞书应用
+创建、bridge 配置、服务启动是三件独立的事，必须分别验证。
 
 DeepSeek Harness 提供原生 session 列表、历史与投影。直接发 `/resume` 可以列出最近 session，再用 `/resume <编号>` 选择；已知 ID 时也可以显式绑定：
 

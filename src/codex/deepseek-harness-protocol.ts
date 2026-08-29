@@ -72,6 +72,7 @@ interface DownlinkGeneration {
   host: WebSocket;
   open: Set<"mux" | "host">;
   settled: boolean;
+  cancelConnection?: (error: Error) => void;
 }
 
 export class DeepSeekHarnessRpcError extends Error {
@@ -180,10 +181,11 @@ export class DeepSeekHarnessProtocolClient {
       this.reconnectTimer = undefined;
     }
     const generation = this.generation;
-    this.generation = undefined;
     if (!generation) {
       return;
     }
+    generation.cancelConnection?.(new Error("DeepSeek Harness protocol client closed"));
+    this.generation = undefined;
     await Promise.all([
       closeSocket(generation.mux),
       closeSocket(generation.host),
@@ -227,6 +229,13 @@ export class DeepSeekHarnessProtocolClient {
     }
 
     await new Promise<void>((resolve, reject) => {
+      generation.cancelConnection = (error) => {
+        if (generation.settled) {
+          return;
+        }
+        generation.settled = true;
+        reject(error);
+      };
       const opened = (kind: "mux" | "host") => {
         if (this.generation?.id !== id || generation.settled) {
           return;
@@ -258,10 +267,7 @@ export class DeepSeekHarnessProtocolClient {
         if (this.generation?.id !== id) {
           return;
         }
-        if (!generation.settled) {
-          generation.settled = true;
-          reject(error);
-        }
+        generation.cancelConnection?.(error);
         this.handleGenerationLoss(id, error);
       };
       this.bindSocket(generation, "mux", opened, failed);
@@ -278,6 +284,9 @@ export class DeepSeekHarnessProtocolClient {
     const socket = kind === "mux" ? generation.mux : generation.host;
     socket.once("open", () => opened(kind));
     socket.on("message", (data) => {
+      if (this.closing || this.generation?.id !== generation.id) {
+        return;
+      }
       const raw = rawDataToString(data);
       try {
         const frame = serverRequestSchema.parse(JSON.parse(raw)) as DeepSeekHarnessServerRequest;

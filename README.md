@@ -11,6 +11,7 @@
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js >= 20">
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20DeepSeek%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Kimi Code | DeepSeek Harness | Antigravity">
+  <img src="https://img.shields.io/badge/DeepSeek%20Harness-native%20plugin-0f766e?style=flat-square" alt="Native DeepSeek Harness plugin">
   <img src="https://img.shields.io/badge/channels-Feishu%2FLark%20%7C%20Telegram-2563eb?style=flat-square" alt="Feishu/Lark | Telegram">
 </p>
 
@@ -83,6 +84,25 @@ node dist/src/index.js lark provision
 node dist/src/index.js lark doctor
 ```
 
+### DeepSeek Harness plugin (native bundle)
+
+TaroCub is also a native DeepSeek Harness companion plugin. Install the bundle
+into the `web` profile used by TaroCub's private Harness hosts:
+
+```bash
+dsh plugin --profile web add github:cloveric/tarocub
+```
+
+The plugin adds bounded TaroCub context plus a `/tarocub` help command. It does
+**not** create a Feishu/Lark app or start the bridge by itself; complete the
+normal TaroCub setup above for that. Check, update, or remove it with:
+
+```bash
+dsh --profile web --dump-config | grep -A2 -B1 tarocub
+dsh plugin --profile web update tarocub
+dsh plugin --profile web remove tarocub
+```
+
 ### Telegram (optional compatibility channel)
 
 Create a Telegram bot with [@BotFather](https://t.me/BotFather), then run:
@@ -114,6 +134,7 @@ npm run dev -- telegram access pair <pairing-code>
 | Highlight | Why it matters |
 |---|---|
 | **Real CLI engines, not a fake chat backend** | Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity run as their native local CLIs, so your real auth, local files, project instructions, MCP/plugins, and engine behavior stay intact. |
+| **Native DeepSeek Harness plugin** | Install TaroCub with `dsh plugin --profile web add github:cloveric/tarocub`; the bundle adds `/tarocub` guidance and is inherited by TaroCub's private Harness hosts without pretending the separate Feishu/Lark service is already configured. |
 | **Session Resume** | Continue existing work instead of starting over: Claude local sessions, Codex threads, Kimi ACP sessions, DeepSeek Harness sessions, and Antigravity conversations can be attached from chat and detached later. Bindings and resumed workspace roots are scoped to the private chat, group, or topic that created them, so another conversation cannot silently switch projects. |
 | **Mid-turn steering** | While a Codex or DeepSeek turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
@@ -245,6 +266,17 @@ Select DeepSeek in either channel with `/engine deepseek` (or use
 `telegram engine deepseek --instance <name>`). Install and authenticate `dsh`
 first; TaroCub resolves `DSH_EXECUTABLE` and otherwise uses `dsh` from `PATH`.
 The verified compatibility baseline is **DeepSeek Harness 0.1.1-rc.2**.
+
+This repository is itself an installable Harness bundle:
+
+```bash
+dsh plugin --profile web add github:cloveric/tarocub
+```
+
+The shared `web` profile is linked into each private bot home, so the plugin is
+available in both ordinary Harness Web and TaroCub-backed sessions. `/tarocub`
+reports setup/verification guidance. Plugin activation remains separate from
+installing, configuring, or starting the Feishu/Lark bridge.
 
 TaroCub owns a private loopback-only `dsh web --no-open --host 127.0.0.1
 --port 0` process per bot instance and uses Harness's official HTTP RPC plus

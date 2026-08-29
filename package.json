@@ -1,6 +1,6 @@
 {
   "name": "tarocub",
-  "version": "0.1.275",
+  "version": "0.1.276",
   "description": "Feishu/Lark-first local AI agent gateway for Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity.",
   "private": true,
   "license": "MIT",
@@ -12,6 +12,12 @@
   "bugs": {
     "url": "https://github.com/cloveric/tarocub/issues"
   },
+  "main": "./deepseek-harness-plugin/index.js",
+  "dsh": {
+    "bundle": {
+      "patch": "./deepseek-harness-plugin/cordis.patch.yml"
+    }
+  },
   "keywords": [
     "feishu",
     "lark",
@@ -19,6 +25,7 @@
     "claude-code",
     "kimi-code",
     "deepseek-harness",
+    "deepseek-harness-plugin",
     "ai-agents",
     "multi-agent",
     "typescript"

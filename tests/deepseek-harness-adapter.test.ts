@@ -1188,6 +1188,31 @@ describe("DeepSeekHarnessAdapter", () => {
     await expect(second).resolves.toMatchObject({ text: "Recovered" });
   });
 
+  it("honors an abort that arrives while the Harness session is being created", async () => {
+    const { adapter, gateway } = createAdapter();
+    let resolveCreate!: (value: { sessionId: string; agentPreset: string }) => void;
+    gateway.responses.set("session.create", () => new Promise((resolve) => {
+      resolveCreate = resolve;
+    }));
+    gateway.responses.set("session.prompt", {
+      command: { kind: "success", text: "should not run" },
+    });
+    const controller = new AbortController();
+    const sessionId = "session-aborted-during-create";
+
+    const turn = adapter.sendUserMessage(sessionId, {
+      text: "Do not start this turn",
+      files: [],
+      abortSignal: controller.signal,
+    });
+    await waitForCall(gateway, "session.create", 1);
+    controller.abort();
+    resolveCreate({ sessionId, agentPreset: "standard" });
+
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" });
+    expect(gateway.calls.filter((call) => call.method === "session.prompt")).toHaveLength(0);
+  });
+
   it("does not let a late aborted turn end cancel the replacement foreground turn", async () => {
     const { adapter, gateway } = createAdapter();
     const { sessionId } = await adapter.createSession(5);
