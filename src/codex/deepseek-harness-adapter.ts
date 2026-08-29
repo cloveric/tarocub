@@ -117,6 +117,7 @@ type PendingTurn = {
   reject: (error: unknown) => void;
   promise: Promise<CodexAdapterResponse>;
   text: string;
+  finalText?: string;
   lastSeq: number;
   emittedSession: boolean;
   turnsStarted: number;
@@ -1021,11 +1022,17 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
         });
       }
     }
-    if (pending.chunkedSteps.has(key)) {
-      return;
-    }
     const text = assistantContentText(content, "text");
     if (!text) {
+      return;
+    }
+    // Harness emits user-visible narration as ordinary text alongside a tool
+    // call. Keep that text in progress events, but only a complete message with
+    // no tool call is eligible to become the canonical final reply.
+    if (!assistantContentHasType(content, "tool-call")) {
+      pending.finalText = text;
+    }
+    if (pending.chunkedSteps.has(key)) {
       return;
     }
     pending.text = pending.text ? `${pending.text}\n${text}` : text;
@@ -1674,7 +1681,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
       return;
     }
     pending.settling = true;
-    const text = forcedText ?? pending.text;
+    const text = forcedText ?? pending.finalText ?? pending.text;
     const usage = aggregateUsage(pending.usageByStep.values());
     const response: CodexAdapterResponse = {
       text,
@@ -3041,6 +3048,10 @@ function assistantContentText(value: unknown, type: "text" | "reasoning"): strin
     .map((block) => stringValue(block.text) ?? "")
     .filter(Boolean)
     .join("\n");
+}
+
+function assistantContentHasType(value: unknown, type: string): boolean {
+  return Array.isArray(value) && value.some((item) => asRecord(item)?.type === type);
 }
 
 function imageMediaType(filePath: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" | null {

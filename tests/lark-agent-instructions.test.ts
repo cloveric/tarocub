@@ -15,7 +15,7 @@ describe("larkAgentInstructions", () => {
     // actually has a local ASR backend / a configured Tingwu dir (e.g. the dev
     // box running the suite); CI has neither, so both stay absent there.
     expect(instructions.length).toBeLessThan(3000);
-    expect(instructions.split("\n").length).toBeLessThanOrEqual(10);
+    expect(instructions.split("\n").length).toBeLessThanOrEqual(14);
   });
 
   it("tells the agent to use the local ASR (not whisper) for its own transcription when one is configured", () => {
@@ -240,6 +240,14 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("images entry an object {path, caption}");
     expect(instructions).toContain("title on the line directly above");
     expect(instructions).toContain("packed into ONE card, each image under its own title");
+  });
+
+  it("gives agents one executable send.batch syntax instead of an ambiguous pseudo-tag", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("```tool-call");
+    expect(instructions).toContain('{"name":"send.batch","payload":{"images":[{"path":"/workspace/p1.png","caption":"P1"}]}}');
+    expect(instructions).toContain("Never emit `[send.batch=...]`");
   });
 
   it("tells agents to answer ordinary Lark requests directly instead of emitting placeholder cards", () => {

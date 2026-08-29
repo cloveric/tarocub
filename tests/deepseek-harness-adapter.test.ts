@@ -681,7 +681,7 @@ describe("DeepSeekHarnessAdapter", () => {
     }, 8);
 
     await expect(turn).resolves.toEqual({
-      text: "Found it.",
+      text: "it.",
       sessionId,
       usage: { inputTokens: 100, outputTokens: 20, cachedTokens: 34 },
     });
@@ -704,7 +704,7 @@ describe("DeepSeekHarnessAdapter", () => {
         isError: false,
         sessionId,
       },
-      { type: "result", text: "Found it.", sessionId },
+      { type: "result", text: "it.", sessionId },
     ]));
     expect(events.filter((event) => event.type === "assistant_text").map((event) => event.text)).toEqual([
       "Found ",
@@ -758,6 +758,97 @@ describe("DeepSeekHarnessAdapter", () => {
     ]);
     expect(events.filter((event) => event.type === "result")).toEqual([
       { type: "result", text: "Verified public answer", sessionId },
+    ]);
+  });
+
+  it("keeps tool-step narration in progress events but out of the final reply", async () => {
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(2);
+    const events: EngineStreamEvent[] = [];
+    const turn = adapter.sendUserMessage(sessionId, {
+      text: "Generate and deliver images",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event);
+      },
+    });
+    await waitForCall(gateway, "session.prompt", 1);
+
+    const progressText = "I will validate the generated images first.";
+    const finalText = [
+      "The images are ready.",
+      "```tool-call",
+      '{"name":"send.batch","payload":{"images":[{"path":"/workspace/p1.png","caption":"P1 cover"}]}}',
+      "```",
+    ].join("\n");
+
+    await gateway.emitSessionEvent(sessionId, "turn/start", { turn: 1 }, 1);
+    await gateway.emitSessionEvent(sessionId, "assistant/chunk", {
+      turn: 1,
+      step: 1,
+      chunk: { type: "text-delta", index: 0, text: progressText },
+    }, 2);
+    await gateway.emitSessionEvent(sessionId, "assistant/message", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "assistant-tool-step",
+        role: "assistant",
+        source: { kind: "model", provider: "deepseek-official", model: "deepseek-v4-flash" },
+        content: [
+          { type: "text", text: progressText },
+          { type: "tool-call", toolCallId: "call-1", name: "read_image", arguments: "{}" },
+        ],
+      },
+    }, 3);
+    await gateway.emitSessionEvent(sessionId, "tool/call", {
+      turn: 1,
+      step: 1,
+      callId: "call-1",
+      name: "read_image",
+      arguments: "{}",
+    }, 4);
+    await gateway.emitSessionEvent(sessionId, "tool/result", {
+      turn: 1,
+      step: 1,
+      message: {
+        id: "tool-message-1",
+        role: "user",
+        source: { kind: "tool", callId: "call-1" },
+        content: [{
+          type: "tool-result",
+          toolCallId: "call-1",
+          content: [{ type: "text", text: "valid" }],
+        }],
+      },
+    }, 5);
+    await gateway.emitSessionEvent(sessionId, "assistant/chunk", {
+      turn: 1,
+      step: 2,
+      chunk: { type: "text-delta", index: 0, text: finalText },
+    }, 6);
+    await gateway.emitSessionEvent(sessionId, "assistant/message", {
+      turn: 1,
+      step: 2,
+      message: {
+        id: "assistant-final",
+        role: "assistant",
+        source: { kind: "model", provider: "deepseek-official", model: "deepseek-v4-flash" },
+        content: [{ type: "text", text: finalText }],
+      },
+    }, 7);
+    await gateway.emitSessionEvent(sessionId, "turn/end", {
+      turn: 1,
+      reason: completedReason(),
+    }, 8);
+
+    await expect(turn).resolves.toMatchObject({ text: finalText, sessionId });
+    expect(events.filter((event) => event.type === "assistant_text")).toEqual([
+      { type: "assistant_text", text: progressText, delta: true, sessionId },
+      { type: "assistant_text", text: finalText, delta: true, sessionId },
+    ]);
+    expect(events.filter((event) => event.type === "result")).toEqual([
+      { type: "result", text: finalText, sessionId },
     ]);
   });
 
