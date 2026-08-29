@@ -19643,16 +19643,24 @@ async function runSearchMcpServer() {
       if (!trimmed) {
         continue;
       }
-      let message;
+      let parsed;
       try {
-        message = JSON.parse(trimmed);
+        parsed = JSON.parse(trimmed);
       } catch {
         continue;
       }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        continue;
+      }
+      const message = parsed;
+      const requestId = message.id;
       void handleRequest(message).catch((error61) => {
-        sendError(message.id, -32603, error61 instanceof Error ? error61.message : "Internal error");
+        sendError(requestId, -32603, error61 instanceof Error ? error61.message : "Internal error");
       });
     }
+  });
+  process.stdin.on("error", (error61) => {
+    console.error(`Search MCP stdin error: ${error61 instanceof Error ? error61.message : String(error61)}`);
   });
   await new Promise(() => {
   });

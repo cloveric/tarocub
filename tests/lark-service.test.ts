@@ -5166,6 +5166,39 @@ describe("lark service", () => {
     }
   });
 
+  it("rejects DeepSeek Harness effort levels DSH cannot run without changing config", async () => {
+    // xhigh/medium/ultra used to persist and then fail every turn before any
+    // prompt (DSH rejects the effort at session.selectModel).
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+      engine: "deepseek",
+      model: "deepseek-v4-flash",
+      effort: "high",
+    }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_effort_deepseek_xhigh", content: "/effort xhigh" }),
+      });
+
+      const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.effort).toBe("high");
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("DeepSeek Harness effort 仅支持 low、high、max 或 off");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects Lark ultra effort for GPT-5.6 Luna without changing config", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-config-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({

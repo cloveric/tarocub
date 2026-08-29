@@ -28,6 +28,9 @@ export const DEFAULT_CLAUDE_MODEL = CLAUDE_MODEL_CHOICES[0];
 export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
 export const DEFAULT_CODEX_EFFORT: EffortLevel = "xhigh";
 export const KIMI_EFFORT_LEVELS = ["low", "high", "max"] as const satisfies readonly EffortLevel[];
+// DeepSeek Harness reasoning efforts are off/low/high/max; `off` is expressed by
+// clearing the effort (the bridge schema has no "off"), so only these persist.
+export const DEEPSEEK_EFFORT_LEVELS = ["low", "high", "max"] as const satisfies readonly EffortLevel[];
 export const DEFAULT_KIMI_EFFORT: EffortLevel = "high";
 
 export function normalizeModelCommandInput(engine: InstanceEngine | undefined, model: string): string {
@@ -108,13 +111,17 @@ function sanitizeConfigCompatibility(config: ConfigFile, configPath: string): Co
   const invalidClaudeEffort = engine === "claude" && effort === "ultra";
   const invalidKimiEffort = engine === "kimi" && effort !== undefined &&
     !KIMI_EFFORT_LEVELS.includes(effort as (typeof KIMI_EFFORT_LEVELS)[number]);
-  if (!invalidCodexEffort && !invalidClaudeEffort && !invalidKimiEffort) {
+  const invalidDeepSeekEffort = engine === "deepseek" && effort !== undefined &&
+    !DEEPSEEK_EFFORT_LEVELS.includes(effort as (typeof DEEPSEEK_EFFORT_LEVELS)[number]);
+  if (!invalidCodexEffort && !invalidClaudeEffort && !invalidKimiEffort && !invalidDeepSeekEffort) {
     return config;
   }
 
   const sanitized = { ...config };
   delete sanitized.effort;
-  const reason = invalidKimiEffort
+  const reason = invalidDeepSeekEffort
+    ? "DeepSeek Harness supports only low, high, and max"
+    : invalidKimiEffort
     ? "Kimi ACP supports only low, high, and max"
     : invalidClaudeEffort
       ? "Claude supports up to max"

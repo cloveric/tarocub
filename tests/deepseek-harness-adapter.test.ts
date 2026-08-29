@@ -388,6 +388,50 @@ describe("DeepSeekHarnessAdapter", () => {
     expect(gateway.closed).toBe(true);
   });
 
+  it("appends the DSH-only search tool names inside the private bridge instructions", async () => {
+    // The MCP tool names are DeepSeek-Harness-specific, so they ride in the
+    // adapter's own preamble instead of the shared every-turn Lark prompt
+    // (which has a hard character budget and serves every engine).
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(12347);
+    const turn = adapter.sendUserMessage(sessionId, {
+      text: "Find the latest release notes",
+      files: [],
+      instructions: "Reply in Chinese.",
+    });
+    await waitForCall(gateway, "session.prompt", 1);
+    const prompt = gateway.calls.find((call) => call.method === "session.prompt")?.payload as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    const text = prompt.content[0]?.text ?? "";
+    expect(text).toContain("<private_bridge_instructions>");
+    expect(text).toContain("Reply in Chinese.");
+    expect(text).toContain("`mcp__cctb_search__web_extract`");
+    expect(text).toContain("`mcp__cctb_search__web_search`");
+    // The note is part of the private block, not the user message.
+    expect(text.indexOf("mcp__cctb_search__web_extract")).toBeLessThan(text.indexOf("<user_message>"));
+
+    gateway.emitSessionEvent(sessionId, "turn/start", { turn: 1 }, 1);
+    gateway.emitSessionEvent(sessionId, "turn/end", { turn: 1, reason: completedReason() }, 2);
+    await turn;
+    await adapter.destroy();
+  });
+
+  it("omits the DSH search note when no bridge instructions are supplied", async () => {
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(12348);
+    const turn = adapter.sendUserMessage(sessionId, { text: "Hello", files: [] });
+    await waitForCall(gateway, "session.prompt", 1);
+    const prompt = gateway.calls.find((call) => call.method === "session.prompt")?.payload as {
+      content: Array<{ type: string; text?: string }>;
+    };
+    expect(prompt.content[0]?.text ?? "").not.toContain("mcp__cctb_search__");
+    gateway.emitSessionEvent(sessionId, "turn/start", { turn: 1 }, 1);
+    gateway.emitSessionEvent(sessionId, "turn/end", { turn: 1, reason: completedReason() }, 2);
+    await turn;
+    await adapter.destroy();
+  });
+
   it("encodes image attachments as Harness image content and keeps non-images as paths", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-images-"));
     const imagePath = path.join(root, "sample.png");
@@ -2833,6 +2877,87 @@ describe("DeepSeekHarnessAdapter", () => {
     await gateway.emitSessionEvent(sessionId, "turn/end", { turn: 1, reason: completedReason() }, 6);
 
     await expect(turn).resolves.toMatchObject({ text: "buffered-1buffered-2live" });
+  });
+
+  it("fails a turn the dead host can never finish instead of holding it for the 6h cap", async () => {
+    // A tool call was outstanding when dsh died. Replayed history carries no
+    // turn/end for it, and outstandingToolCalls kept the inactivity watchdog
+    // disarmed — so the user waited out the hard cap while the session's
+    // writer slot stayed held. Now the turn fails right after recovery and a
+    // fresh turn is admitted.
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(21);
+    gateway.responses.set("session.history", { events: [], hasMore: false, projections: { asOfSeq: 0, values: {} } });
+    const turn = adapter.sendUserMessage(sessionId, { text: "run the long job", files: [] });
+    await waitForCall(gateway, "session.prompt", 1);
+    gateway.emitSessionEvent(sessionId, "turn/start", { turn: 1 }, 1);
+    gateway.emitSessionEvent(sessionId, "tool/call", { turn: 1, step: 1, callId: "call-1", name: "bash", arguments: {} }, 2);
+
+    await gateway.handlers?.onDisconnect?.(new Error("dsh exited"));
+    await gateway.handlers?.onReconnect?.({ reason: "host-restart" });
+
+    await expect(turn).rejects.toThrow(/restarted while this turn was running/);
+    // Writer slot released: the next turn is admitted and prompted.
+    const next = adapter.sendUserMessage(sessionId, { text: "again", files: [] });
+    await waitForCall(gateway, "session.prompt", 2);
+    gateway.emitSessionEvent(sessionId, "turn/start", { turn: 2 }, 3);
+    gateway.emitSessionEvent(sessionId, "turn/end", { turn: 2, reason: completedReason() }, 4);
+    await expect(next).resolves.toMatchObject({ sessionId });
+    await adapter.destroy();
+  });
+
+  it("recovers from a corrupt goal-state file once it is repaired instead of failing until restart", async () => {
+    // ensureGoalStateLoaded cached the REJECTED load promise, so every later
+    // projection frame re-threw "Invalid DeepSeek goal state JSON" until the
+    // process restarted — repairing the file did nothing.
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-goal-state-"));
+    const goalStatePath = path.join(root, "deepseek-goals.json");
+    await writeFile(goalStatePath, "{corrupt", "utf8");
+    try {
+      const { adapter } = createAdapter(undefined, { goalStatePath });
+      const internals = adapter as unknown as { ensureGoalStateLoaded(): Promise<void> };
+      await expect(internals.ensureGoalStateLoaded()).rejects.toThrow();
+      // Still broken while the file is broken (not a one-off).
+      await expect(internals.ensureGoalStateLoaded()).rejects.toThrow();
+      await writeFile(goalStatePath, JSON.stringify({ version: 1, sessions: {} }) + "\n", "utf8");
+      await expect(internals.ensureGoalStateLoaded()).resolves.toBeUndefined();
+      await adapter.destroy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("terminalizes live background jobs before wiping ledgers when the Harness removes a session", async () => {
+    // A background_task_started with no matching finished event left the
+    // timeline pairing open, and the restart busy-guard then refused to
+    // restart the instance for six hours.
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(23);
+    const events: Array<{ type?: string; taskId?: string; status?: string }> = [];
+    const turn = adapter.sendUserMessage(sessionId, {
+      text: "start a job",
+      files: [],
+      onEngineEvent: (event) => {
+        events.push(event as { type?: string; taskId?: string; status?: string });
+      },
+    });
+    await waitForCall(gateway, "session.prompt", 1);
+    gateway.emitSessionEvent(sessionId, "turn/start", { turn: 1 }, 1);
+    gateway.emitMux({
+      type: "session/jobs",
+      sessionId,
+      jobs: [{ id: "bash-1", kind: "bash", label: "sleep 100", status: "running", startedAt: Date.now() }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(events.some((event) => event.type === "background_task_started" && event.taskId === "bash-1")).toBe(true);
+
+    await gateway.emitHost({ type: "host/session-removed", sessionId });
+
+    await expect(turn).rejects.toThrow(/was removed/);
+    const finished = events.find((event) => event.type === "background_task_finished" && event.taskId === "bash-1");
+    expect(finished).toBeDefined();
+    expect(finished?.status).toBe("failed");
+    await adapter.destroy();
   });
 
   it("re-arms a watched active goal after the Harness process restarts", async () => {

@@ -780,16 +780,27 @@ export async function runSearchMcpServer(): Promise<void> {
       if (!trimmed) {
         continue;
       }
-      let message: JsonRpcRequest;
+      let parsed: unknown;
       try {
-        message = JSON.parse(trimmed) as JsonRpcRequest;
+        parsed = JSON.parse(trimmed);
       } catch {
         continue;
       }
+      // `null`, arrays and primitives parse fine but are not requests; the
+      // catch below used to dereference `message.id` on them and crash.
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        continue;
+      }
+      const message = parsed as JsonRpcRequest;
+      const requestId = message.id;
       void handleRequest(message).catch((error) => {
-        sendError(message.id, -32603, error instanceof Error ? error.message : "Internal error");
+        sendError(requestId, -32603, error instanceof Error ? error.message : "Internal error");
       });
     }
+  });
+
+  process.stdin.on("error", (error: unknown) => {
+    console.error(`Search MCP stdin error: ${error instanceof Error ? error.message : String(error)}`);
   });
 
   await new Promise<void>(() => {});

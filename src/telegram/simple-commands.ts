@@ -21,6 +21,7 @@ import {
 } from "./turn-bookkeeping.js";
 import {
   CLAUDE_MODEL_CHOICES,
+  DEEPSEEK_EFFORT_LEVELS,
   KIMI_EFFORT_LEVELS,
   loadInstanceConfig,
   normalizeModelCommandInput,
@@ -317,6 +318,16 @@ export async function handleSimpleLocalTelegramCommand(input: {
       effortMessage = locale === "zh"
         ? "Kimi effort 仅支持 low、high、max 或 off。"
         : "Kimi effort supports only low, high, max, or off.";
+      await context.api.sendMessage(normalized.chatId, effortMessage);
+    } else if (
+      cfg.engine === "deepseek" &&
+      !DEEPSEEK_EFFORT_LEVELS.includes(effortCmd.level as (typeof DEEPSEEK_EFFORT_LEVELS)[number]) &&
+      effortCmd.level !== "off" && effortCmd.level !== "default"
+    ) {
+      auditValue = "unsupported-deepseek-effort";
+      effortMessage = locale === "zh"
+        ? "DeepSeek Harness effort 仅支持 low、high、max 或 off。"
+        : "DeepSeek Harness effort supports only low, high, max, or off.";
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel) && cfg.engine === "codex") {
       const effort = effortCmd.level as EffortLevel;

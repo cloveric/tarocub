@@ -709,6 +709,59 @@ describe("DeepSeekHarnessHost", () => {
     await host.close();
   });
 
+  it("backs off exponentially when the replacement dsh keeps failing to start", async () => {
+    // A permanently failing spawn used to retry every restartDelayMs forever.
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-backoff-"));
+    roots.push(root);
+    const sharedHome = path.join(root, "shared");
+    const stateDir = path.join(root, "instance");
+    await mkdir(path.join(sharedHome, "profiles"), { recursive: true });
+    await writeFile(path.join(sharedHome, "settings.yaml"), "{}\n", "utf8");
+    await writeFile(path.join(sharedHome, ".credentials.yaml"), "{}\n", "utf8");
+    const children: FakeChild[] = [];
+    const diagnostics: string[] = [];
+    const host = new DeepSeekHarnessHost({
+      executable: "dsh",
+      sharedHome,
+      stateDir,
+      workspacePath: "/workspace",
+      spawnDsh: () => {
+        const child = new FakeChild();
+        children.push(child);
+        // Every replacement dies immediately.
+        if (children.length > 1) {
+          setTimeout(() => child.emit("close", 1, null), 0);
+        }
+        return child;
+      },
+      protocolFactory: () => new FakeProtocol(),
+      startupTimeoutMs: 1_000,
+      restartDelayMs: 10,
+      onDiagnostic: (message) => {
+        diagnostics.push(message);
+      },
+    });
+
+    const connecting = host.connect({
+      onMuxFrame: () => {},
+      onHostFrame: () => {},
+      onDisconnect: () => {},
+      onReconnect: () => {},
+    });
+    await vi.waitFor(() => expect(children.length).toBe(1));
+    children[0]!.stdout.emitData("dsh web: http://127.0.0.1:43123\n");
+    await connecting;
+
+    children[0]!.emit("close", 1, null);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Fixed 10ms retries would have produced dozens of spawns in 400ms; with
+    // 10/20/40/80/160ms backoff only a handful fit.
+    expect(children.length).toBeGreaterThanOrEqual(3);
+    expect(children.length).toBeLessThanOrEqual(8);
+    expect(diagnostics.some((line) => /attempt \d+, next in \d+ms/.test(line))).toBe(true);
+    await host.close();
+  });
+
   it("treats a runtime child-process error as a restartable host failure", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-runtime-error-"));
     roots.push(root);

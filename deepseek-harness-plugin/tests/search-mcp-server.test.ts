@@ -186,6 +186,38 @@ describe("search MCP server", () => {
     }
   });
 
+  it("ignores null, array and primitive JSON-RPC lines without crashing", async () => {
+    // `JSON.parse("null")` succeeded and the request handler's catch then
+    // dereferenced `message.id` on null: unhandled rejection, exit 1. The DSH
+    // MCP client restarts a dead server, but a bad line must never kill it.
+    const invocation = resolveSearchMcpServerInvocation();
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: childProcessTestEnv({
+        ...process.env,
+        BRAVE_API_KEY: "",
+        TAVILY_API_KEY: "",
+      }),
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+
+    try {
+      child.stdin.write('null\n[]\n"x"\n42\ntrue\n');
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/list" })}\n`);
+      child.stdin.end();
+      await expect(waitForChildExit(child)).resolves.toEqual({ code: 0, signal: null });
+      expect(stdout).toContain('"id":7');
+      expect(stdout).toContain('"tools"');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill();
+      }
+    }
+  });
+
   it("returns an actionable error when no search provider is configured", async () => {
     const invocation = resolveSearchMcpServerInvocation();
     const child = spawn(invocation.command, invocation.args, {

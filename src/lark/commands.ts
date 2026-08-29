@@ -33,6 +33,7 @@ import { handleLocalEngineTelegramCommand } from "../telegram/engine-commands.js
 import {
   applyEngineSelection,
   CLAUDE_MODEL_CHOICES,
+  DEEPSEEK_EFFORT_LEVELS,
   KIMI_EFFORT_LEVELS,
   loadInstanceConfig,
   normalizeModelCommandInput,
@@ -2081,6 +2082,13 @@ async function handleLarkEffortCommand(
     return locale === "en"
       ? "Kimi effort supports only low, high, max, or off."
       : "Kimi effort 仅支持 low、high、max 或 off。";
+  }
+  if (cfg.engine === "deepseek" && !DEEPSEEK_EFFORT_LEVELS.includes(level as (typeof DEEPSEEK_EFFORT_LEVELS)[number])) {
+    // Anything else is persisted fine but rejected by DSH on every turn
+    // (UNSUPPORTED_REASONING_EFFORT) before a prompt is ever sent.
+    return locale === "en"
+      ? "DeepSeek Harness effort supports only low, high, max, or off."
+      : "DeepSeek Harness effort 仅支持 low、high、max 或 off。";
   }
   if (!VALID_LARK_EFFORT_LEVELS.includes(level as EffortLevel)) {
     return locale === "en"

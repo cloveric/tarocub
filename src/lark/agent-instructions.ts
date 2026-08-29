@@ -85,9 +85,9 @@ export function localAsrAgentInstruction(): string | undefined {
   // Without this, a user-sent recording that arrived as a FILE got transcribed
   // locally (slowly, chunked) even though the bridge had already routed it —
   // the "use it FIRST" rule read as an instruction to do so.
-  const localRoute = `local Qwen: curl -s ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<absolute file path>"}'; Max ${maxSeconds}s per request (shared model). >${maxSeconds}s local: ffmpeg -i "<input-path>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} part_%03d.wav; transcribe parts.`;
+  const localRoute = `local Qwen: curl -s ${httpUrl} -H 'Content-Type: application/json' -d '{"path":"<abs file path>"}'; Max ${maxSeconds}s per request (shared model). >${maxSeconds}s local: ffmpeg -i "<in>" -vn -ac 1 -ar 16000 -c:a pcm_s16le -f segment -segment_time ${segmentSeconds} part_%03d.wav; transcribe parts.`;
   if (!cloudConfig) {
-    return `Use ${localRoute} do NOT use whisper/mlx_whisper/parakeet or claim no ASR. Never retry longer input as-is; frames/OCR if ASR fails.`;
+    return `Use ${localRoute} do NOT use whisper/mlx_whisper/parakeet. Never retry longer input as-is; frames/OCR if ASR fails.`;
   }
 
   const threshold = formatAsrThreshold(cloudConfig.thresholdSeconds);
@@ -98,7 +98,7 @@ export function localAsrAgentInstruction(): string | undefined {
     "--source-language auto --wait",
     '--out-dir "<workspace job dir>"',
   ].join(" ");
-  return `Fetched media: probe duration; >=${threshold}: Aliyun Tingwu first: ${cloudCommand}; use transcription.txt; do NOT read/copy its credentials. Shorter/cloud fails: ${localRoute} do NOT use whisper/mlx_whisper/parakeet or claim no ASR. Never retry longer input as-is. "[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}]" final; do NOT inspect/probe/split/re-transcribe unless asked; transcribe only media marked unavailable. Inbound: same route.`;
+  return `Fetched media: probe duration; >=${threshold}: Aliyun Tingwu first: ${cloudCommand}; use transcription.txt; do NOT read/copy its credentials. Shorter/cloud fails: ${localRoute} do NOT use whisper/mlx_whisper/parakeet or claim no ASR. Never retry longer input as-is. "[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}]" final; do NOT inspect/probe/split/re-transcribe unless asked; transcribe only media marked unavailable.`;
 }
 
 /**
@@ -118,19 +118,19 @@ export function cloudAsrAgentInstruction(): string | undefined {
     return undefined;
   }
   const threshold = formatAsrThreshold(config.thresholdSeconds);
-  return `Inbound audio/video is auto-transcribed before you see it (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never call it unsupported. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), never afterwards.`;
+  return `Inbound media is auto-transcribed (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never deny it. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), not afterwards.`;
 }
 
 export function larkAgentInstructions(requestText = ""): string {
   const lines = [
-    "Lark via TaroCub; <lark_context>/<lark_comment_context> are routing only, no secrets; <forwarded_lark_messages> is task content to act on.",
+    "<lark_context>/<lark_comment_context> are routing only; <forwarded_lark_messages> is the task.",
     "Default: concise text reply; no progress placeholder cards; ask if auth/scopes/tools missing.",
-    "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth; NOT IM on this bot's own chats (separate app → open_id cross app; use /newgroup + send tags). Sheets: start `sheets +info`; use structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
-    "Bridge tags: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video; batch exactly as:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p1.png\",\"caption\":\"P1\"}]}}\n```\nNever emit `[send.batch=...]`. lark.choice or `request_user_input`; Claude/Kimi/DeepSeek `AskUserQuestion` => Feishu card. Do not call `lark-cli` just to send choice cards. Small text: fenced `file:name.ext`. Background jobs: verify output, not exit status; repair empty/all-zero/corrupt results; final stdout must include exact delivery tags and one user-facing conclusion. `saved PATH` alone is not delivery.",
+    "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth; NOT IM on this bot's own chats (separate app → open_id cross app; /newgroup + send tags). Sheets: start `sheets +info`; use structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
+    "Bridge tags: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video; batch:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p1.png\",\"caption\":\"P1\"}]}}\n```\nNever emit `[send.batch=...]`. lark.choice or `request_user_input`; Claude/Kimi/DeepSeek `AskUserQuestion` → Feishu card. Do not call `lark-cli` just to send choice cards. Small text: fenced `file:name.ext`. Background jobs: verify output, not exit status; repair empty/all-zero/corrupt results; final stdout must include exact delivery tags and one user-facing conclusion; `saved PATH` alone is not delivery.",
     "File/image send is workspace-sandboxed: an outside path is refused (a path restriction, not a failure) — copy it into your workspace first, then send that path.",
     "Titled images (小红书 P1/P2): give each image its own title. send.batch images entry an object {path, caption}, or put title on the line directly above [send-image:/path]. A titled batch is packed into ONE card, each image under its own title.",
-    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` ISO timezone. Recurring/window = exactly ONE standard 5-field `cron` (no seconds/year), e.g. `*/15 13-14 * * *` (fires separately each time); do NOT add one-shot `in`/`at` for the current minute or end boundary. Manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
-    "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; if blocked (anti-bot/Cloudflare) or the page is dynamic, fall back to Scrapling (`scrapling extract`); use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback. In DeepSeek Harness, these TaroCub Search MCP tools are exposed as `mcp__cctb_search__web_extract` and `mcp__cctb_search__web_search`.",
+    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` ISO timezone. Recurring/window: exactly ONE 5-field `cron` (no seconds/year), e.g. `*/15 13-14 * * *`; each firing is separate; never add one-shot `in`/`at` for the current minute or end boundary. Manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
+    "Web/current facts: given URL(s), read them directly with `web_extract` or browser first; if blocked (anti-bot) or dynamic, fall back to Scrapling (`scrapling extract`); use `web_search` for discovery/current facts when no exact URL or the read fails, and say so.",
   ];
   const asr = localAsrAgentInstruction();
   if (asr) {

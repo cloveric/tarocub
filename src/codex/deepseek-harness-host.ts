@@ -98,6 +98,7 @@ const WEB_ARGS = ["web", "--no-open", "--host", "127.0.0.1", "--port", "0"];
 const DEFAULT_STARTUP_TIMEOUT_MS = 15_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 2_000;
 const DEFAULT_RESTART_DELAY_MS = 500;
+const MAX_RESTART_DELAY_MS = 30_000;
 const MAX_DIAGNOSTIC_CHARS = 4_096;
 
 export function createDeepSeekHarnessProtocolOptions(
@@ -127,6 +128,7 @@ export class DeepSeekHarnessHost {
   private protocol: DeepSeekHarnessProtocol | undefined;
   private readyPromise: Promise<void> | undefined;
   private restartTimer: ReturnType<typeof setTimeout> | undefined;
+  private restartAttempts = 0;
   private generation = 0;
   private restartRequired = false;
   private closing = false;
@@ -357,15 +359,25 @@ export class DeepSeekHarnessHost {
     if (this.closing || !this.handlers || this.restartTimer) {
       return;
     }
+    // Exponential backoff, capped: a permanently failing spawn (missing binary,
+    // revoked credentials) used to retry every 500ms forever, logging twice a
+    // second and spawning a process per attempt.
+    const baseDelay = this.options.restartDelayMs ?? DEFAULT_RESTART_DELAY_MS;
+    const delay = Math.min(baseDelay * 2 ** Math.min(this.restartAttempts, 10), MAX_RESTART_DELAY_MS);
+    this.restartAttempts += 1;
     this.restartTimer = setTimeout(() => {
       this.restartTimer = undefined;
-      void this.ensureReady(true).catch((error) => {
-        this.options.onDiagnostic?.(
-          `DeepSeek Harness restart failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        this.scheduleRestart();
-      });
-    }, this.options.restartDelayMs ?? DEFAULT_RESTART_DELAY_MS);
+      void this.ensureReady(true)
+        .then(() => {
+          this.restartAttempts = 0;
+        })
+        .catch((error) => {
+          this.options.onDiagnostic?.(
+            `DeepSeek Harness restart failed (attempt ${this.restartAttempts}, next in ${Math.min(baseDelay * 2 ** Math.min(this.restartAttempts, 10), MAX_RESTART_DELAY_MS)}ms): ${error instanceof Error ? error.message : String(error)}`,
+          );
+          this.scheduleRestart();
+        });
+    }, delay);
     this.restartTimer.unref?.();
   }
 

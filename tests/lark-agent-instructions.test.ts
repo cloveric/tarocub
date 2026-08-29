@@ -9,13 +9,24 @@ import {
 
 describe("larkAgentInstructions", () => {
   it("keeps the injected Lark system prompt compact enough for every-turn use", () => {
-    const instructions = larkAgentInstructions();
-
-    // Bound covers the two optional ASR lines, appended only where the machine
-    // actually has a local ASR backend / a configured Tingwu dir (e.g. the dev
-    // box running the suite); CI has neither, so both stay absent there.
-    expect(instructions.length).toBeLessThan(3000);
-    expect(instructions.split("\n").length).toBeLessThanOrEqual(14);
+    // Pin the WORST case explicitly: every fleet instance has a local ASR
+    // backend AND a Tingwu dir configured, which appends both optional ASR
+    // lines. Measuring whatever the developer's shell happens to have let this
+    // pass on a box without Tingwu while production prompts were over budget.
+    const previousUrl = process.env.ASR_HTTP_URL;
+    const previousDir = process.env.TINGWU_ASR_DIR;
+    process.env.ASR_HTTP_URL = "http://127.0.0.1:8412/transcribe";
+    process.env.TINGWU_ASR_DIR = "/opt/tingwu";
+    resetCloudAsrConfiguredCacheForTests();
+    try {
+      const instructions = larkAgentInstructions();
+      expect(instructions.length).toBeLessThan(3000);
+      expect(instructions.split("\n").length).toBeLessThanOrEqual(14);
+    } finally {
+      if (previousUrl === undefined) delete process.env.ASR_HTTP_URL; else process.env.ASR_HTTP_URL = previousUrl;
+      if (previousDir === undefined) delete process.env.TINGWU_ASR_DIR; else process.env.TINGWU_ASR_DIR = previousDir;
+      resetCloudAsrConfiguredCacheForTests();
+    }
   });
 
   it("tells the agent to use the local ASR (not whisper) for its own transcription when one is configured", () => {
@@ -285,8 +296,9 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("read them directly with `web_extract`");
     expect(instructions).toContain("fall back to Scrapling");
     expect(instructions).toContain("`web_search` for discovery/current facts");
-    expect(instructions).toContain("`mcp__cctb_search__web_extract`");
-    expect(instructions).toContain("`mcp__cctb_search__web_search`");
+    // DeepSeek-only MCP tool names live in the DeepSeek Harness adapter's own
+    // instruction preamble, not in this every-turn shared prompt (budget).
+    expect(instructions).not.toContain("mcp__cctb_search__");
   });
 
   it("prefers bridge-managed choice cards and treats lark-cli as required for full Lark-native functionality", () => {

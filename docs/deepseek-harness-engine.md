@@ -147,3 +147,13 @@ npx vitest run \
 
 The full repository test suite and a real local Harness probe are still
 required before release.
+
+## Effort levels
+
+DeepSeek Harness accepts `low`, `high`, and `max` (its `off` = thinking disabled
+is expressed by clearing the effort with `/effort off`). `medium`, `xhigh`, and
+`ultra` are rejected by both `/effort` handlers and dropped on config load —
+DSH would otherwise reject `session.selectModel` with
+`UNSUPPORTED_REASONING_EFFORT` before every prompt and no turn could run.
+Model/effort alignment runs when the instance config or the transport changes
+(fingerprinted per session), not on every turn.

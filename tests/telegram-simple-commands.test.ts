@@ -180,6 +180,44 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
+  it("rejects DeepSeek Harness effort values outside off/low/high/max", async () => {
+    // Anything else persisted fine and then failed EVERY turn: the adapter sends
+    // session.selectModel with the effort before each prompt and DSH rejects it
+    // (UNSUPPORTED_REASONING_EFFORT), so no prompt was ever sent until the
+    // operator changed the config again.
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const updateInstanceConfig = vi.fn();
+    try {
+      for (const level of ["xhigh", "medium", "ultra"]) {
+        await expect(handleSimpleLocalTelegramCommand({
+          stateDir: root,
+          startedAt: Date.now() - 10,
+          locale: "en",
+          cfg: { engine: "deepseek", effort: "high" },
+          normalized: createNormalizedMessage(`/effort ${level}`),
+          context: { api: api as never, instanceName: "default", updateId: 79 },
+          updateInstanceConfig,
+        })).resolves.toBe(true);
+      }
+      expect(updateInstanceConfig).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "DeepSeek Harness effort supports only low, high, max, or off.");
+      // The supported levels still persist.
+      await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "deepseek", effort: "high" },
+        normalized: createNormalizedMessage("/effort max"),
+        context: { api: api as never, instanceName: "default", updateId: 80 },
+        updateInstanceConfig,
+      });
+      expect(updateInstanceConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("rejects Kimi effort values outside the live ACP range", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };

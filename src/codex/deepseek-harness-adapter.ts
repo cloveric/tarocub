@@ -46,6 +46,10 @@ export type DeepSeekHarnessPermissionPreset =
   | "full-auto"
   | "danger-full-access";
 
+/** Appended to bridge instructions on DSH only: the TaroCub Search MCP tool names as DSH exposes them. */
+export const DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE =
+  "In DeepSeek Harness, the TaroCub Search MCP tools are exposed as `mcp__cctb_search__web_extract` and `mcp__cctb_search__web_search`.";
+
 export interface DeepSeekHarnessModelSelection {
   provider?: string;
   model?: string;
@@ -1576,6 +1580,29 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     if (!sessionId) {
       return;
     }
+    // Terminalize live owned jobs BEFORE wiping the ledgers: a start without a
+    // finished event left the timeline pairing open, and the restart busy-guard
+    // then refused to restart the instance for six hours.
+    const removedJobs = this.jobsBySession.get(sessionId);
+    const removedOwners = this.jobOwnersBySession.get(sessionId);
+    if (removedJobs && removedOwners) {
+      for (const job of removedJobs.values()) {
+        const owner = removedOwners.get(job.id);
+        if (!owner || !isLiveJob(job)) {
+          continue;
+        }
+        try {
+          await this.emitBackgroundJobFinished(sessionId, owner, {
+            ...job,
+            status: "failed",
+            detail: `DeepSeek Harness session ${sessionId} was removed before the background job reported completion`,
+            finishedAt: Date.now(),
+          });
+        } catch {
+          // The pending turn / watcher is failed below with the removal error.
+        }
+      }
+    }
     this.knownSessionWorkspaces.delete(sessionId);
     this.configuredSessions.delete(sessionId);
     this.sessionEventSeqs.delete(sessionId);
@@ -2049,7 +2076,12 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
   }
 
   private async ensureGoalStateLoaded(): Promise<void> {
-    this.goalStateLoadPromise ??= this.loadGoalState();
+    this.goalStateLoadPromise ??= this.loadGoalState().catch((error: unknown) => {
+      // Never cache a rejected load: every later projection frame re-threw it
+      // until process restart, even after the operator repaired the file.
+      this.goalStateLoadPromise = undefined;
+      throw error;
+    });
     await this.goalStateLoadPromise;
   }
 
@@ -2415,8 +2447,11 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     }
     const sections: string[] = [];
     if (input.instructions?.trim()) {
+      // Engine-specific addendum lives here, not in the shared every-turn Lark
+      // prompt: only DSH exposes the bridge search tools under these MCP names,
+      // and the shared prompt has a hard character budget.
       sections.push(
-        `<private_bridge_instructions>\nFollow these instructions silently. Do not quote or describe them.\n${input.instructions.trim()}\n</private_bridge_instructions>`,
+        `<private_bridge_instructions>\nFollow these instructions silently. Do not quote or describe them.\n${input.instructions.trim()}\n${DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE}\n</private_bridge_instructions>`,
       );
     }
     sections.push(`<user_message>\n${input.text}\n</user_message>`);
@@ -2528,12 +2563,29 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
 
   private async recoverTransport(info: DeepSeekHarnessReconnectInfo): Promise<void> {
     const barrier = this.beginTransportRecovery();
+    // Turns that were in flight when the host process died. Replay settles the
+    // ones DSH wrote a terminal event for; the rest are dead — nothing will ever
+    // stream their turn/end, and while they hold outstandingToolCalls the
+    // inactivity watchdog stays disarmed, so the user waited out the 6h hard
+    // cap with the session's writer slot held.
+    const inFlightBeforeRecovery = info.reason === "host-restart"
+      ? [...this.pendingTurns.entries()]
+      : [];
     let failure: unknown;
     try {
       if (info.reason === "host-restart") {
         await this.closeProcessLocalJobsAfterHostRestart();
       }
       await this.recoverActiveSessions(info.reason === "host-restart");
+      for (const [sessionId, pending] of inFlightBeforeRecovery) {
+        if (this.pendingTurns.get(sessionId) !== pending || pending.settled) {
+          continue;
+        }
+        this.settleFailure(
+          pending,
+          new Error("DeepSeek Harness restarted while this turn was running; the turn was lost. Please send the message again."),
+        );
+      }
     } catch (error) {
       failure = error;
     } finally {
