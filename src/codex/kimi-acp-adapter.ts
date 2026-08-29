@@ -1636,6 +1636,9 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
+    if (this.destroyed) {
+      throw new Error("Adapter destroyed");
+    }
     const workspacePath = path.resolve(input.workspaceOverride ?? this.workspacePath);
     const agentInstructions = await this.loadInstructions();
     const instructions = combineInstructions(agentInstructions, input.instructions ?? null);
@@ -1647,6 +1650,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       runtimeOptions,
       preparedInstructions.settingsKey,
     );
+    if (this.destroyed) {
+      throw new Error("Adapter destroyed");
+    }
     if (worker.pendingTurn) {
       throw new Error("Kimi session already has an in-flight turn");
     }
@@ -1924,6 +1930,9 @@ export class KimiAcpAdapter implements CodexAdapter {
     settingsKey: string,
   ): Promise<KimiWorker> {
     const childEnv = await this.resolveWorkerChildEnv();
+    if (this.destroyed) {
+      throw new Error("Adapter destroyed");
+    }
     const invocation = buildCommandInvocation(this.kimiExecutable, ["acp"]);
     const child = this.spawnKimi(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -4471,8 +4480,15 @@ export class KimiAcpAdapter implements CodexAdapter {
     if (this.idleSweepTimer) {
       clearInterval(this.idleSweepTimer);
     }
-    const hookRelayRuntime = this.hookRelayRuntime;
+    const hookRelayPromise = this.hookRelayPromise;
+    let hookRelayRuntime = this.hookRelayRuntime;
     this.hookRelayRuntime = undefined;
+    if (!hookRelayRuntime && hookRelayPromise) {
+      // Startup installs the relay plugin before publishing the runtime. Wait
+      // for that work so destroy cannot return while files are still changing
+      // or let createWorker continue after shutdown.
+      hookRelayRuntime = await hookRelayPromise.catch(() => null) ?? undefined;
+    }
     if (hookRelayRuntime) {
       await hookRelayRuntime.close().catch(() => undefined);
     }

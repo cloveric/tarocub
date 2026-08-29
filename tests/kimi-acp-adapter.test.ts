@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm as fsRm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -37,6 +37,17 @@ async function waitFor(condition: () => boolean): Promise<void> {
     }
   }
   throw new Error("Condition was not met in time");
+}
+
+async function rm(
+  targetPath: string,
+  options: { recursive: true; force: true },
+): Promise<void> {
+  await fsRm(targetPath, {
+    ...options,
+    maxRetries: 5,
+    retryDelay: 20,
+  });
 }
 
 async function settleWithin<T>(promise: Promise<T>, ms = 500): Promise<T> {
@@ -4461,6 +4472,12 @@ describe("KimiAcpAdapter", () => {
       await waitFor(() => closeStarted);
       expect(harness.killedPids).toEqual([]);
 
+      await expect(settleWithin(adapter.sendUserMessage("kimi-session-1", {
+        text: "must not start during shutdown",
+        files: [],
+      }))).rejects.toThrow("Adapter destroyed");
+      expect(harness.children[0].server.prompts).toHaveLength(1);
+
       releaseRelay?.();
       await destroyPromise;
       expect(harness.killedPids).toEqual([701]);
@@ -4468,6 +4485,83 @@ describe("KimiAcpAdapter", () => {
       releaseRelay?.();
       await adapter.destroy();
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("waits for hook relay startup and never creates a worker after destroy", async () => {
+    const harness = createHarness();
+    let startupEntered = false;
+    let closeCalls = 0;
+    let releaseStartup: ((runtime: {
+      env: NodeJS.ProcessEnv;
+      drainAcceptedEvents: () => Promise<void>;
+      close: () => Promise<void>;
+    }) => void) | undefined;
+    const startup = new Promise<{
+      env: NodeJS.ProcessEnv;
+      drainAcceptedEvents: () => Promise<void>;
+      close: () => Promise<void>;
+    }>((resolve) => {
+      releaseStartup = resolve;
+    });
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: "/tmp/kimi-hook-startup-destroy-test",
+      hookRelayEnabled: true,
+      startHookRelayFn: async () => {
+        startupEntered = true;
+        return await startup;
+      },
+    });
+    const turn = adapter.sendUserMessage("telegram-startup-destroy", {
+      text: "do not start after shutdown",
+      files: [],
+    });
+    let turnSettled = false;
+    void turn.then(
+      () => {
+        turnSettled = true;
+      },
+      () => {
+        turnSettled = true;
+      },
+    );
+
+    try {
+      await waitFor(() => startupEntered);
+      const destroyPromise = adapter.destroy();
+      let destroySettled = false;
+      void destroyPromise.then(() => {
+        destroySettled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(destroySettled).toBe(false);
+
+      releaseStartup?.({
+        env: {},
+        drainAcceptedEvents: async () => undefined,
+        close: async () => {
+          closeCalls += 1;
+        },
+      });
+      await destroyPromise;
+      await expect(turn).rejects.toThrow("Adapter destroyed");
+      expect(closeCalls).toBe(1);
+      expect(harness.children).toHaveLength(0);
+    } finally {
+      releaseStartup?.({
+        env: {},
+        drainAcceptedEvents: async () => undefined,
+        close: async () => {
+          closeCalls += 1;
+        },
+      });
+      await waitFor(() => turnSettled || harness.children[0]?.server.prompts.length === 1);
+      if (!turnSettled) {
+        harness.children[0].server.respondPrompt();
+      }
+      await turn.catch(() => undefined);
+      await adapter.destroy();
     }
   });
 

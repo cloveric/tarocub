@@ -1,6 +1,6 @@
 {
   "name": "tarocub",
-  "version": "0.1.274",
+  "version": "0.1.275",
   "description": "Feishu/Lark-first local AI agent gateway for Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity.",
   "private": true,
   "license": "MIT",
