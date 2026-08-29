@@ -25,7 +25,7 @@ describe("DeepSeek Harness plugin bundle", () => {
     const patch = await readFile(path.join(repoRoot, "deepseek-harness-plugin", patchPath), "utf8");
     expect(patch).toMatch(/^- insert:/m);
     expect(patch).toMatch(/^\s+- id: tarocub$/m);
-    expect(patch).toMatch(/^\s+name: tarocub$/m);
+    expect(patch).toMatch(new RegExp(`^\\s+name: ${packageJson.name}$`, "m"));
   });
 
   it("registers bounded companion guidance and a truthful /tarocub command", async () => {
