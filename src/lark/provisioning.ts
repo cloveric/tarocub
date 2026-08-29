@@ -188,7 +188,7 @@ export function formatLarkProvisioningResult(
     // group that has missing scopes with its own bulk-import JSON, all under a
     // stable "Optional — " prefix so doctor renders them as info (never blocking).
     const optional: string[] = [
-      "advanced features below are opt-in (none are auto-granted by the QR registration). Import a group's scopes in the console to enable it (personal-edition apps grant instantly on 申请开通 — no publish step; enterprise apps must publish a version):",
+      "advanced features below are opt-in (`lark wizard` pre-fills only the /group all pair; the rest are not auto-granted). Add a group with `lark scopes add <scope> ...` (one QR scan) or import it in the console to enable it (personal-edition apps grant instantly on 申请开通 — no publish step; enterprise apps must publish a version):",
     ];
     for (const group of LARK_OPTIONAL_SCOPE_GROUPS) {
       const missing = group.scopes.filter((scope) => result.missingOptionalScopes.includes(scope));

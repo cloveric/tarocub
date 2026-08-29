@@ -70,7 +70,7 @@ import { LarkGroupModeStore } from "../lark/group-mode-store.js";
 import { createLarkServiceRuntime, LARK_PENDING_TURN_LOOKBACK_MS, readLarkTimelineLogTail, readRotatedLogFile, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
-import { runLarkWizard } from "../lark/wizard.js";
+import { DEFAULT_LARK_REGISTRATION_TENANT_SCOPES, runLarkScopeAddWizard, runLarkWizard } from "../lark/wizard.js";
 import { runUiConsoleCommand } from "./ui-command.js";
 import { loadCodexUserDefaults } from "../codex/user-defaults.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
@@ -3223,6 +3223,25 @@ async function runLarkCommand(
     return true;
   }
 
+  if (subcommand === "scopes") {
+    // `lark scopes add [scope ...]` — QR update flow for an existing app; with
+    // no scopes it adds the /group all pair. Same instance routing as `wizard`.
+    if (args[0] !== "add" || hasHelpFlag(args)) {
+      logger.log("Usage: lark scopes add [<scope> ...]   (default: im:message im:message.group_msg)");
+      if (args[0] === "add") {
+        return true;
+      }
+      throw new Error("Usage: lark scopes add [<scope> ...]");
+    }
+    const requested = args.slice(1);
+    await runLarkScopeAddWizard(
+      larkEnv,
+      requested.length > 0 ? requested : [...DEFAULT_LARK_REGISTRATION_TENANT_SCOPES],
+      logger,
+    );
+    return true;
+  }
+
   if (subcommand === "wizard") {
     if (args.length !== 0) {
       throw new Error("Usage: lark wizard");
@@ -3249,7 +3268,7 @@ async function runLarkCommand(
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 
-  throw new Error("Usage: lark <setup|status|doctor|provision|permissions|wizard|run|service|send|secrets|cli|auth|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
+  throw new Error("Usage: lark <setup|status|doctor|provision|permissions|scopes|wizard|run|service|send|secrets|cli|auth|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
 }
 
 async function runLarkSetupCommand(
@@ -4462,6 +4481,7 @@ Commands:
                                               Inspect, configure, or run the Feishu/Lark channel
   lark setup [--detached] [--install-cli]     Run the QR wizard, CLI bind, provision, auth check, doctor, and service start
   lark permissions [--missing]                Print copyable Feishu/Lark permission JSON
+  lark scopes add [<scope> ...]               Add scopes to the existing app via one QR scan (default: the /group all pair)
   lark service <start|stop|restart|status|logs|doctor> [--force]
                                               Manage the Feishu/Lark service lifecycle
   lark send --chat <oc_xxx> [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin]

@@ -1,10 +1,10 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { runLarkWizard } from "../src/lark/wizard.js";
+import { runLarkScopeAddWizard, runLarkWizard } from "../src/lark/wizard.js";
 import { removeTempRoot } from "./helpers/temp-files.js";
 
 describe("runLarkWizard", () => {
@@ -62,7 +62,11 @@ describe("runLarkWizard", () => {
       expect(registerAppImpl).toHaveBeenCalledWith(expect.objectContaining({
         domain: "accounts.feishu.cn",
         source: "tarocub",
+        // The /group all pair rides into the confirm page of the same scan, so
+        // a new bot is born with it instead of needing a console visit later.
+        addons: { scopes: { tenant: ["im:message", "im:message.group_msg"] } },
       }));
+      expect(registerAppImpl.mock.calls[0]?.[0]).not.toHaveProperty("appId");
       expect(provisionApp).toHaveBeenCalledWith(expect.objectContaining({
         appId: "cli_personal",
         appSecret: "secret-personal",
@@ -168,6 +172,105 @@ describe("runLarkWizard", () => {
       expect(output).toContain("node dist/src/index.js lark cli bind --identity bot-only");
       expect(output).toContain("After binding, switch to user-default");
       expect(output).not.toContain("secret-personal");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+  it("adds scopes to the existing app through the QR update flow without touching saved credentials", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-scopes-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    await mkdir(stateDir, { recursive: true });
+    const envPath = path.join(stateDir, "lark.env");
+    await writeFile(envPath, 'LARK_APP_ID="cli_existing"\nLARK_APP_SECRET="secret-existing"\nLARK_DOMAIN="feishu"\n', "utf8");
+    const messages: string[] = [];
+    const provisionApp = vi.fn(async () => ({
+      grantedScopes: ["im:message", "im:message.group_msg"],
+      missingScopes: [],
+      unauthorizedScopes: [],
+      missingOptionalScopes: [],
+      subscribedCallbacks: ["card.action.trigger"],
+      missingCallbacks: [],
+      subscribedEvents: ["im.message.receive_v1"],
+      missingEvents: [],
+      missingOptionalEvents: [],
+      canPatchSubscriptions: true,
+      subscriptionPatchScopeOptions: [],
+      applied: true,
+      patchedSubscriptions: false,
+    }));
+    const registerAppImpl = vi.fn(async (options: {
+      appId?: string;
+      addons?: { scopes?: { tenant?: string[] } };
+      onQRCodeReady: (info: { url: string; expireIn: number }) => void;
+    }) => {
+      options.onQRCodeReady({ url: "https://open.feishu.cn/qr-update", expireIn: 600 });
+      return { client_id: "cli_existing", client_secret: "secret-existing" };
+    });
+    try {
+      const outcome = await runLarkScopeAddWizard(
+        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        ["im:message", "im:message.group_msg", "im:message"],
+        { log: (message) => messages.push(String(message ?? "")) },
+        { registerAppImpl, generateQRCode: () => undefined, provisionApp },
+      );
+      expect(outcome).toEqual({ appId: "cli_existing", scopes: ["im:message", "im:message.group_msg"] });
+      expect(registerAppImpl).toHaveBeenCalledWith(expect.objectContaining({
+        appId: "cli_existing",
+        addons: { scopes: { tenant: ["im:message", "im:message.group_msg"] } },
+      }));
+      expect(provisionApp).toHaveBeenCalledWith(expect.objectContaining({ appId: "cli_existing", appSecret: "secret-existing" }));
+      expect(await readFile(envPath, "utf8")).toContain('LARK_APP_SECRET="secret-existing"');
+      expect(messages.join("\n")).toContain("lark service restart --defer");
+      expect(messages.join("\n")).not.toContain("secret-existing");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("refuses to proceed when the scan authorized a different app", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-scopes-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    await mkdir(stateDir, { recursive: true });
+    const envPath = path.join(stateDir, "lark.env");
+    await writeFile(envPath, 'LARK_APP_ID="cli_existing"\nLARK_APP_SECRET="secret-existing"\n', "utf8");
+    const provisionApp = vi.fn();
+    const registerAppImpl = vi.fn(async (options: { onQRCodeReady: (info: { url: string; expireIn: number }) => void }) => {
+      options.onQRCodeReady({ url: "https://open.feishu.cn/qr-update", expireIn: 600 });
+      return { client_id: "cli_other", client_secret: "secret-other" };
+    });
+    try {
+      await expect(runLarkScopeAddWizard(
+        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        ["im:message.group_msg"],
+        { log: () => undefined },
+        { registerAppImpl, generateQRCode: () => undefined, provisionApp },
+      )).rejects.toThrow(/authorized app cli_other, not the configured cli_existing/);
+      expect(provisionApp).not.toHaveBeenCalled();
+      expect(await readFile(envPath, "utf8")).toContain('LARK_APP_ID="cli_existing"');
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("rejects an empty scope list and a missing credential file up front", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-scopes-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    await mkdir(stateDir, { recursive: true });
+    const registerAppImpl = vi.fn();
+    try {
+      await expect(runLarkScopeAddWizard(
+        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        ["   "],
+        { log: () => undefined },
+        { registerAppImpl: registerAppImpl as never },
+      )).rejects.toThrow(/No scopes given/);
+      await expect(runLarkScopeAddWizard(
+        { USERPROFILE: tempDir, CCTB_LARK_STATE_DIR: stateDir },
+        ["im:message"],
+        { log: () => undefined },
+        { registerAppImpl: registerAppImpl as never },
+      )).rejects.toThrow(/run `lark wizard` first/);
+      expect(registerAppImpl).not.toHaveBeenCalled();
     } finally {
       await removeTempRoot(tempDir);
     }

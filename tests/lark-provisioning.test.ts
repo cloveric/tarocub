@@ -261,7 +261,7 @@ describe("provisionLarkApp", () => {
     expect(result.unauthorizedScopes).toEqual([]);
     expect(result.missingOptionalScopes).toEqual([...OPTIONAL_LARK_SCOPES]);
     expect(formatted).toContain("Lark required scopes: ok");
-    expect(formatted).toContain("Optional — advanced features below are opt-in (none are auto-granted by the QR registration)");
+    expect(formatted).toContain("Optional — advanced features below are opt-in (`lark wizard` pre-fills only the /group all pair; the rest are not auto-granted)");
   });
 
   it("reports a missing CORE scope as blocking", async () => {
@@ -292,7 +292,7 @@ describe("provisionLarkApp", () => {
     expect(result.missingOptionalScopes).toContain("sheets:spreadsheet:create");
     expect(result.missingOptionalScopes).toContain("docs:permission.member:create");
     // Surfaced as optional (info) — never blocking. Stable "Optional — " prefix.
-    expect(formatted).toContain("Optional — advanced features below are opt-in (none are auto-granted by the QR registration)");
+    expect(formatted).toContain("Optional — advanced features below are opt-in (`lark wizard` pre-fills only the /group all pair; the rest are not auto-granted)");
     expect(formatted).toContain("Optional — permissions page (for any group above): https://open.feishu.cn/app/cli_app/auth");
     // One grouped line per feature family, each carrying its own import JSON.
     expect(formatted).toContain("Optional — ordinary (non-@) group messages — /group all:");
