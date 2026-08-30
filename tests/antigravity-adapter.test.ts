@@ -219,6 +219,54 @@ describe("ProcessAntigravityAdapter", () => {
     await expect(promise).resolves.toMatchObject({ text: "streamed answer" });
   });
 
+  it("settles a successful result when inherited stdio prevents the child close event", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const abortController = new AbortController();
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Finish without close",
+      files: [],
+      abortSignal: abortController.signal,
+    });
+    const observed = promise.then(
+      (response) => ({ status: "resolved" as const, response }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    emitSuccess(child, "completed despite inherited stdio");
+
+    const outcome = await Promise.race([
+      observed,
+      new Promise<{ status: "timeout" }>((resolve) => {
+        setTimeout(() => resolve({ status: "timeout" }), 750);
+      }),
+    ]);
+    if (outcome.status === "timeout") abortController.abort();
+
+    expect(outcome).toEqual({
+      status: "resolved",
+      response: {
+        text: "completed despite inherited stdio",
+        sessionId: CONVERSATION_ID,
+      },
+    });
+    await observed;
+  });
+
+  it("still rejects a nonzero child exit received after a successful result", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Late failure", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    emitSuccess(child, "premature success");
+    child.stderr.emitData("post-result cleanup failed\n");
+    child.close(1);
+
+    await expect(promise).rejects.toThrow("post-result cleanup failed");
+  });
+
   it("preserves UTF-8 characters split across structured stdout chunks", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);

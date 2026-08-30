@@ -93,6 +93,7 @@ const MAX_PROTOCOL_LINE_BYTES = 64 * 1024 * 1024;
 const MAX_STDERR_DIAGNOSTIC_BYTES = 4 * 1024;
 const ANTIGRAVITY_NATIVE_TURN_TIMEOUT = "6h";
 const ANTIGRAVITY_NATIVE_UNBOUNDED_CEILING = "168h";
+const ANTIGRAVITY_RESULT_CLOSE_GRACE_MS = 250;
 const ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high"]);
 const ANTIGRAVITY_CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -420,13 +421,16 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       let settled = false;
       let totalTimeout: ReturnType<typeof setTimeout> | undefined;
       let inactivityTimeout: ReturnType<typeof setTimeout> | undefined;
+      let resultCloseGraceTimeout: ReturnType<typeof setTimeout> | undefined;
       let abortCleanup: (() => void) | undefined;
 
       const clearTimers = () => {
         if (totalTimeout) clearTimeout(totalTimeout);
         if (inactivityTimeout) clearTimeout(inactivityTimeout);
+        if (resultCloseGraceTimeout) clearTimeout(resultCloseGraceTimeout);
         totalTimeout = undefined;
         inactivityTimeout = undefined;
+        resultCloseGraceTimeout = undefined;
       };
       const clearAbortListener = () => {
         abortCleanup?.();
@@ -447,6 +451,27 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         clearAbortListener();
         killProcessTree(child.pid);
         reject(error);
+      };
+      const resolveSuccessfulResult = () => {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        clearAbortListener();
+        const usage = sumStepUsage(stepUsage.values());
+        resolve({
+          text: resultText.trim() || "Antigravity completed.",
+          sessionId: sessionId!,
+          ...(usage ? { usage } : {}),
+          childPid: child.pid,
+        });
+      };
+      const scheduleResultCloseGrace = () => {
+        if (resultCloseGraceTimeout) clearTimeout(resultCloseGraceTimeout);
+        resultCloseGraceTimeout = setTimeout(() => {
+          if (settled || !resultSeen || !sessionId) return;
+          killProcessTree(child.pid);
+          resolveSuccessfulResult();
+        }, ANTIGRAVITY_RESULT_CLOSE_GRACE_MS);
       };
       const resetInactivityTimeout = () => {
         if (inactivityTimeout) clearTimeout(inactivityTimeout);
@@ -556,6 +581,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           resultText = responseText || streamedText;
           if (!streamedText && resultText) emitTextDelta(resultText);
           emitEngineEvent({ type: "result", text: resultText.trim(), ...(sessionId ? { sessionId } : {}) });
+          scheduleResultCloseGrace();
         }
       };
       const processLine = (line: string) => {
@@ -617,29 +643,29 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           rejectAndKill(error instanceof Error ? error : new Error(String(error)));
           return;
         }
-        settled = true;
-        clearTimers();
-        clearAbortListener();
         stderrTail = appendHeadTailDiagnostic(stderrTail, stderrDecoder.end(), MAX_STDERR_DIAGNOSTIC_BYTES);
         if (code !== 0) {
+          settled = true;
+          clearTimers();
+          clearAbortListener();
           reject(new Error(stderrTail.trim() || `antigravity exited with code ${code}`));
           return;
         }
         if (!resultSeen) {
+          settled = true;
+          clearTimers();
+          clearAbortListener();
           reject(new Error("Antigravity exited successfully without a result event"));
           return;
         }
         if (!sessionId) {
+          settled = true;
+          clearTimers();
+          clearAbortListener();
           reject(new Error("Antigravity exited successfully without a conversation_id"));
           return;
         }
-        const usage = sumStepUsage(stepUsage.values());
-        resolve({
-          text: resultText.trim() || "Antigravity completed.",
-          sessionId,
-          ...(usage ? { usage } : {}),
-          childPid: child.pid,
-        });
+        resolveSuccessfulResult();
       });
 
       child.stdout?.on("data", (chunk) => {
