@@ -64,7 +64,19 @@ describe("runLarkWizard", () => {
         source: "tarocub",
         // The /group all pair rides into the confirm page of the same scan, so
         // a new bot is born with it instead of needing a console visit later.
-        addons: { scopes: { tenant: ["im:message", "im:message.group_msg"] } },
+        addons: {
+          scopes: {
+            tenant: expect.arrayContaining([
+              "im:message",
+              "im:message.group_msg",
+              // Required scopes ride along too: the platform template is
+              // server-side and dropped docx:document:create once already.
+              "docx:document:create",
+              "im:message:send_as_bot",
+              "cardkit:card:write",
+            ]),
+          },
+        },
       }));
       expect(registerAppImpl.mock.calls[0]?.[0]).not.toHaveProperty("appId");
       expect(provisionApp).toHaveBeenCalledWith(expect.objectContaining({

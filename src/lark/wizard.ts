@@ -6,7 +6,7 @@ import qrcode from "qrcode-terminal";
 import { ensureLarkCliBridgeBindingConfig } from "./cli.js";
 import { loadLarkRuntimeEnv, resolveLarkStateDir, writeLarkEnvFile } from "./env-file.js";
 import { BASE_MESSAGE_SCOPE, GROUP_MSG_SCOPE } from "./group-scope-check.js";
-import { formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "./provisioning.js";
+import { REQUIRED_LARK_SCOPES, formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "./provisioning.js";
 import type { LarkRuntimeEnv } from "./config.js";
 
 /** Max wait for the registration server to return a QR before failing fast. */
@@ -14,12 +14,17 @@ const QR_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /**
  * Tenant scopes pre-filled into the PersonalAgent QR confirm page on every
- * registration. The platform's default template does not include the pair
- * that `/group all` needs, and adding them afterwards meant a Developer
- * Console visit (bulk import + 申请开通) per bot. The SDK's `addons` carry
- * them into the same scan the operator already performs.
+ * registration: the /group all pair (never in the platform template) PLUS
+ * every scope the bridge requires. The platform's default template used to
+ * cover the required set, but it is server-side and drifts — it dropped
+ * `docx:document:create` between June and August 2026, so a fresh bot came
+ * out needing a second scan. Pre-filling the full required set makes the
+ * wizard independent of that template; the SDK layers addons additively and
+ * the confirm page shows only what the template lacks.
  */
-export const DEFAULT_LARK_REGISTRATION_TENANT_SCOPES: readonly string[] = [BASE_MESSAGE_SCOPE, GROUP_MSG_SCOPE];
+export const DEFAULT_LARK_REGISTRATION_TENANT_SCOPES: readonly string[] = [
+  ...new Set([...REQUIRED_LARK_SCOPES, BASE_MESSAGE_SCOPE, GROUP_MSG_SCOPE]),
+];
 
 export interface LarkRegistrationAddons {
   preset?: boolean;
