@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyEngineSelection,
   DEFAULT_MEETING_CONFIG,
+  getEngineEffortValidationError,
   loadInstanceConfig,
   readValidatedConfigFile,
   updateInstanceConfig,
@@ -16,6 +17,28 @@ import { resolveDefaultCronTimezone } from "../src/state/cron-timezone.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("getEngineEffortValidationError", () => {
+  it.each([
+    ["claude", "ultra", undefined, "Claude effort"],
+    ["kimi", "medium", undefined, "Kimi effort"],
+    ["antigravity", "max", undefined, "Antigravity effort"],
+    ["deepseek", "medium", undefined, "DeepSeek Harness effort"],
+    ["codex", "ultra", "gpt-5.6-luna", "selected Codex model"],
+  ] as const)("rejects %s effort %s when unsupported", (engine, effort, model, message) => {
+    expect(getEngineEffortValidationError(engine, effort, model)).toContain(message);
+  });
+
+  it.each([
+    ["claude", "max", undefined],
+    ["kimi", "high", undefined],
+    ["antigravity", "medium", undefined],
+    ["deepseek", "max", undefined],
+    ["codex", "ultra", "gpt-5.6-sol"],
+  ] as const)("accepts %s effort %s when supported", (engine, effort, model) => {
+    expect(getEngineEffortValidationError(engine, effort, model)).toBeUndefined();
+  });
 });
 
 describe("loadInstanceConfig", () => {

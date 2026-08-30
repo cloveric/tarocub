@@ -99,6 +99,16 @@ const ANTIGRAVITY_CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 export const ANTIGRAVITY_PROCESS_TURN_TIMEOUT_MS = 6 * 60 * 60_000;
 export const ANTIGRAVITY_PROCESS_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
 
+function permissionFlagsForApprovalMode(mode: ApprovalMode): string[] {
+  if (mode === "bypass") {
+    return ["--dangerously-skip-permissions"];
+  }
+  if (mode === "full-auto") {
+    return ["--dangerously-skip-permissions", "--sandbox"];
+  }
+  return [];
+}
+
 function normalizeExecutableCommand(command: string): string {
   const trimmed = command.trim();
   if (trimmed.length >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
@@ -310,9 +320,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     );
     const prompt = buildAntigravityPrompt({ instructions, text: input.text, files: input.files });
     const runtimeConfig = await this.loadRuntimeConfig();
-    let permissionFlags = runtimeConfig.approvalMode === "full-auto" || runtimeConfig.approvalMode === "bypass"
-      ? ["--dangerously-skip-permissions"]
-      : [];
+    let permissionFlags = permissionFlagsForApprovalMode(runtimeConfig.approvalMode);
     if (runtimeConfig.approvalMode === "normal" && input.onApprovalRequest) {
       const decision = await input.onApprovalRequest({
         engine: "antigravity",
@@ -322,7 +330,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         abortSignal: input.abortSignal,
       });
       if (decision.behavior === "deny") throw new Error("Antigravity turn was denied from Telegram");
-      permissionFlags = ["--dangerously-skip-permissions"];
+      permissionFlags = permissionFlagsForApprovalMode("full-auto");
     }
 
     const workspace = input.workspaceOverride ?? this.workspacePath;
@@ -402,6 +410,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       let streamedText = "";
       let resultText = "";
       let sessionId: string | undefined;
+      let initSeen = false;
       let resultSeen = false;
       const stdoutDecoder = new StringDecoder("utf8");
       const stderrDecoder = new StringDecoder("utf8");
@@ -449,9 +458,15 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           ));
         }, inactivityTimeoutMs);
       };
-      const setSessionId = (candidate: unknown) => {
+      const setSessionId = (candidate: unknown, eventName: "init" | "step_update" | "result") => {
         const next = readConversationId(candidate);
-        if (!next || next === sessionId) return;
+        if (!next) {
+          throw new Error(`Antigravity ${eventName} event is missing a valid conversation_id`);
+        }
+        if (sessionId && next !== sessionId) {
+          throw new Error("Antigravity conversation_id changed during turn");
+        }
+        if (next === sessionId) return;
         sessionId = next;
         emitEngineEvent({ type: "session", sessionId: next });
       };
@@ -481,13 +496,18 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       };
       const processEvent = (parsed: AntigravityStreamEvent) => {
         if (parsed.event === "init") {
-          setSessionId(parsed.conversation_id);
+          if (initSeen) throw new Error("Antigravity emitted more than one init event");
+          setSessionId(parsed.conversation_id, "init");
+          initSeen = true;
           return;
         }
         if (parsed.event === "step_update") {
+          if (!initSeen) throw new Error("Antigravity emitted step_update before init");
           const step = asRecord(parsed.step_update) as AntigravityStepUpdate | undefined;
           if (!step) return;
-          setSessionId(step.conversation_id);
+          if (step.conversation_id !== undefined) {
+            setSessionId(step.conversation_id, "step_update");
+          }
           const index = typeof step.step_index === "number" && Number.isInteger(step.step_index)
             ? step.step_index
             : undefined;
@@ -521,9 +541,11 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           return;
         }
         if (parsed.event === "result") {
+          if (!initSeen) throw new Error("Antigravity emitted result before init");
+          if (resultSeen) throw new Error("Antigravity emitted more than one result event");
           const result = asRecord(parsed.result) as AntigravityResult | undefined;
           if (!result) throw new Error("Antigravity emitted an invalid result event");
-          setSessionId(result.conversation_id);
+          setSessionId(result.conversation_id, "result");
           resultSeen = true;
           const status = typeof result.status === "string" ? result.status : "UNKNOWN";
           if (status !== "SUCCESS") {
@@ -607,10 +629,14 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           reject(new Error("Antigravity exited successfully without a result event"));
           return;
         }
+        if (!sessionId) {
+          reject(new Error("Antigravity exited successfully without a conversation_id"));
+          return;
+        }
         const usage = sumStepUsage(stepUsage.values());
         resolve({
           text: resultText.trim() || "Antigravity completed.",
-          ...(sessionId ? { sessionId } : {}),
+          sessionId,
           ...(usage ? { usage } : {}),
           childPid: child.pid,
         });

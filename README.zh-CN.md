@@ -243,7 +243,7 @@ npm run dev -- telegram engine --instance review-bot
 
 切到 DeepSeek 后，服务优先使用 `DSH_EXECUTABLE`，否则使用 `PATH` 中的 `dsh`；需要先在本机完成 Harness 认证。TaroCub 为每个实例托管私有、仅 loopback 的 `dsh web`，通过官方 HTTP RPC 与双 WebSocket 下行流工作，而不是抓取终端文字。实测兼容基线为 **DeepSeek Harness 0.1.1-rc.2**。
 
-切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。当前实测兼容基线为 **Antigravity CLI 1.1.22**。普通轮次使用原生 NDJSON `stream-json` 输入/输出，分别处理 session、回答、工具、终态和本轮 token；非结构化 stdout 或缺失最终 result 会 fail closed，不会被误发成回答。`/model <id>` 会传给原生 `--model`（用 `agy models` 查看 ID），`/effort` 支持 low、medium、high 和 off。
+切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。当前实测兼容基线为 **Antigravity CLI 1.1.22**。普通轮次使用原生 NDJSON `stream-json` 输入/输出，分别处理 session、回答、工具、终态和本轮 token；非结构化 stdout、缺失或中途变化的 conversation ID、缺失最终 result 都会 fail closed，不会被误发成回答。`full-auto` 自动批准但同时启用 Antigravity 沙箱，只有显式 `bypass` 不启用沙箱。`/model <id>` 会传给原生 `--model`（用 `agy models` 查看 ID），`/effort` 支持 low、medium、high 和 off。
 
 | 特性 | Codex | Claude | Kimi | DeepSeek | Antigravity |
 |---|---|---|---|---|---|

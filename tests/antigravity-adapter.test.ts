@@ -270,7 +270,7 @@ describe("ProcessAntigravityAdapter", () => {
     expect(calls[0]?.args).toEqual(expect.arrayContaining(["--conversation", CONVERSATION_ID]));
   });
 
-  it("passes configured Antigravity model, effort, and YOLO mode to agy", async () => {
+  it("keeps configured Antigravity full-auto turns inside the agy sandbox", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-"));
     const configPath = path.join(root, "config.json");
     try {
@@ -289,11 +289,54 @@ describe("ProcessAntigravityAdapter", () => {
 
       await expect(promise).resolves.toMatchObject({ text: "ok" });
       expect(calls[0]?.args).toEqual(expect.arrayContaining([
-        "--model", "gemini-3.7-flash-high", "--effort", "high", "--dangerously-skip-permissions",
+        "--model", "gemini-3.7-flash-high", "--effort", "high",
+        "--dangerously-skip-permissions", "--sandbox",
       ]));
     } finally {
       await removeTempRoot(root);
     }
+  });
+
+  it("keeps Antigravity bypass explicitly unsandboxed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-"));
+    const configPath = path.join(root, "config.json");
+    try {
+      await writeFile(configPath, JSON.stringify({ engine: "antigravity", approvalMode: "bypass" }), "utf8");
+      const { spawnAntigravity, child, calls } = createSpawnHarness();
+      const adapter = new ProcessAntigravityAdapter(
+        "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, configPath, "/tmp/workspace",
+      );
+
+      const promise = adapter.sendUserMessage("telegram-12345", { text: "Hello", files: [] });
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      emitSuccess(child, "ok");
+      child.close(0);
+
+      await expect(promise).resolves.toMatchObject({ text: "ok" });
+      expect(calls[0]?.args).toContain("--dangerously-skip-permissions");
+      expect(calls[0]?.args).not.toContain("--sandbox");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("sandboxes a normal Antigravity turn after the user approves full-auto", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const onApprovalRequest = vi.fn().mockResolvedValue({ behavior: "allow", scope: "once" });
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello", files: [], onApprovalRequest,
+    });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    emitSuccess(child, "ok");
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text: "ok" });
+    expect(onApprovalRequest).toHaveBeenCalledOnce();
+    expect(calls[0]?.args).toEqual(expect.arrayContaining([
+      "--dangerously-skip-permissions", "--sandbox",
+    ]));
   });
 
   it("keeps native /goal at the start of a direct print prompt and uses a high native ceiling when unbounded", async () => {
@@ -341,6 +384,48 @@ describe("ProcessAntigravityAdapter", () => {
     child.close(0);
 
     await expect(promise).rejects.toThrow("upstream disconnected");
+  });
+
+  it("rejects an init event without a conversation_id", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Missing ID", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", init: {} }));
+
+    await expect(promise).rejects.toThrow("init event is missing a valid conversation_id");
+  });
+
+  it("rejects a successful result without a conversation_id", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Missing result ID", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { status: "SUCCESS", response: "answer" },
+    }));
+
+    await expect(promise).rejects.toThrow("result event is missing a valid conversation_id");
+  });
+
+  it("rejects a conversation_id that changes during a turn", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const changedConversationId = "22222222-3333-4444-8555-666666666666";
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Changed ID", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: changedConversationId, status: "SUCCESS", response: "answer" },
+    }));
+
+    await expect(promise).rejects.toThrow("conversation_id changed during turn");
   });
 
   it("rejects malformed structured output instead of posting it as assistant text", async () => {

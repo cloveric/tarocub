@@ -645,7 +645,7 @@ npm run dev -- telegram yolo --instance work          # Check status
 | Mode | Codex | Claude | Kimi | DeepSeek | Antigravity | Use case |
 |---|---|---|---|---|---|---|
 | `off` | Telegram pre-turn approval or app-server sandbox | Telegram tool approval | ACP tool approval | Harness once/session approval | Telegram pre-turn approval | Default, safest |
-| `on` | `--full-auto` | `--permission-mode bypassPermissions` | ACP `yolo` | Harness `full-auto` in workspace sandbox | `--dangerously-skip-permissions` | Mobile use |
+| `on` | `--full-auto` | `--permission-mode bypassPermissions` | ACP `yolo` | Harness `full-auto` in workspace sandbox | `--dangerously-skip-permissions --sandbox` | Mobile use |
 | `unsafe` | `--dangerously-bypass-*` | `--dangerously-skip-permissions` | ACP `auto` | Harness `danger-full-access` | `--dangerously-skip-permissions` | Trusted env only |
 
 ---

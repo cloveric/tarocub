@@ -108,6 +108,51 @@ describe("UI config API", () => {
     }
   });
 
+  it("clears persisted session bindings before switching engines from the UI", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
+    try {
+      await makeInstance(home, "agy-bot", { engine: "codex" });
+      const stateDir = path.join(home, ".cctb", "agy-bot");
+      await writeFile(path.join(stateDir, "session.json"), JSON.stringify({
+        chats: [{
+          telegramChatId: 123,
+          codexSessionId: "thread-from-codex",
+          status: "idle",
+          updatedAt: new Date(0).toISOString(),
+        }],
+      }), "utf8");
+
+      const post = await handleUiApiRequest("POST", "/api/instances/agy-bot/config", {
+        engine: "antigravity",
+      }, { HOME: home });
+
+      expect(post.status).toBe(200);
+      const session = JSON.parse(await readFile(path.join(stateDir, "session.json"), "utf8"));
+      expect(session.chats).toEqual([]);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not switch engines when persisted session bindings cannot be cleared", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
+    try {
+      await makeInstance(home, "agy-bot", { engine: "codex", effort: "high" });
+      const stateDir = path.join(home, ".cctb", "agy-bot");
+      await writeFile(path.join(stateDir, "session.json"), "{broken", "utf8");
+
+      const post = await handleUiApiRequest("POST", "/api/instances/agy-bot/config", {
+        engine: "antigravity",
+      }, { HOME: home });
+
+      expect(post.status).toBe(409);
+      const saved = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8"));
+      expect(saved).toMatchObject({ engine: "codex", effort: "high" });
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an effort that the selected Antigravity CLI cannot accept", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
     try {
@@ -120,6 +165,24 @@ describe("UI config API", () => {
       expect(post.json).toEqual({ error: "Antigravity effort supports only low, medium, or high" });
       const saved = JSON.parse(await readFile(path.join(home, ".cctb", "agy-bot", "config.json"), "utf8"));
       expect(saved.effort).toBe("low");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("validates effort against the target engine before writing either field", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
+    try {
+      await makeInstance(home, "kimi-bot", { engine: "codex", effort: "high" });
+      const post = await handleUiApiRequest("POST", "/api/instances/kimi-bot/config", {
+        engine: "kimi",
+        effort: "medium",
+      }, { HOME: home });
+
+      expect(post.status).toBe(400);
+      expect(post.json).toEqual({ error: "Kimi effort supports only low, high, or max" });
+      const saved = JSON.parse(await readFile(path.join(home, ".cctb", "kimi-bot", "config.json"), "utf8"));
+      expect(saved).toMatchObject({ engine: "codex", effort: "high" });
     } finally {
       await rm(home, { recursive: true, force: true });
     }

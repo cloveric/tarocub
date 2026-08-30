@@ -73,16 +73,18 @@ not allowed to hide the slash command inside an XML wrapper.
 | Manual `/compact` or context telemetry | Not exposed | No official headless API currently available |
 
 For approval mode `normal`, TaroCub asks once before the turn and then grants
-the whole headless process. `full-auto` and `bypass` pass Antigravity's unsafe
-skip-permissions flag directly. This is not equivalent to the per-tool approval
-flows available from Claude Code, Kimi ACP, or DeepSeek Harness.
+the whole headless process inside Antigravity's sandbox. `full-auto` combines
+the skip-permissions flag with `--sandbox`; only explicit `bypass` omits the
+sandbox. This is not equivalent to the per-tool approval flows available from
+Claude Code, Kimi ACP, or DeepSeek Harness.
 
 ## 中文摘要
 
 TaroCub 已按 Antigravity 1.1.22 的原生结构化协议接入：普通轮次使用
 `stream-json` 输入/输出，回答、工具、终态和 token 分开处理；恢复会话只统计
 本轮 step，避免累计 token 重复记账。`/model` 和 `/effort` 会转成原生启动
-参数，`/goal` 保持原生命令开头并解析结构化结果。
+参数，`/goal` 保持原生命令开头并解析结构化结果。`full-auto` 会同时启用
+`--sandbox`；只有显式 `bypass` 才跳过沙箱。
 
 尚未对齐 Codex/Claude 的部分来自当前上游边界，而不是 bridge 伪装支持：
 Antigravity headless 暂无单工具远程审批、运行中 steer、结果后的后台任务生命

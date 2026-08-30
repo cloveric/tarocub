@@ -2,13 +2,18 @@
 // (no node:http here) so it is fully unit-testable; ui-server.ts wraps it with
 // the loopback + token transport.
 
+import path from "node:path";
+
 import {
-  ANTIGRAVITY_EFFORT_LEVELS,
   applyEngineSelection,
+  getEngineEffortValidationError,
+  isEffortLevel,
   loadInstanceConfig,
   updateInstanceConfig,
+  type EffortLevel,
   type InstanceConfig,
 } from "../telegram/instance-config.js";
+import { SessionStore } from "../state/session-store.js";
 import {
   listCctbInstances,
   resolveInstanceStateDir,
@@ -37,6 +42,42 @@ type EditableField = (typeof EDITABLE_FIELDS)[number];
 const VALID_ENGINES = new Set(["codex", "claude", "antigravity", "kimi", "deepseek"]);
 
 class UiConfigValidationError extends Error {}
+
+function configEngine(config: Record<string, unknown>): InstanceConfig["engine"] {
+  return config.engine === "claude" || config.engine === "antigravity" ||
+      config.engine === "kimi" || config.engine === "deepseek"
+    ? config.engine
+    : "codex";
+}
+
+function applyUiConfigPatch(
+  config: Record<string, unknown>,
+  applied: Partial<Record<EditableField, unknown>>,
+): void {
+  const targetEngine = typeof applied.engine === "string"
+    ? applied.engine as InstanceConfig["engine"]
+    : configEngine(config);
+  if (typeof applied.engine === "string") {
+    applyEngineSelection(config, targetEngine);
+  }
+  for (const [field, value] of Object.entries(applied)) {
+    if (field === "engine") continue;
+    if (value === undefined) delete config[field];
+    else config[field] = value;
+  }
+
+  const compatibilityChanged = "engine" in applied || "model" in applied || "effort" in applied;
+  if (!compatibilityChanged || config.effort === undefined) return;
+  if (!isEffortLevel(config.effort)) {
+    throw new UiConfigValidationError("invalid effort value");
+  }
+  const effortError = getEngineEffortValidationError(
+    configEngine(config),
+    config.effort as EffortLevel,
+    typeof config.model === "string" ? config.model : undefined,
+  );
+  if (effortError) throw new UiConfigValidationError(effortError);
+}
 
 function ok(json: unknown): UiApiResult {
   return { status: 200, json };
@@ -103,7 +144,11 @@ export async function handleUiApiRequest(
         } else if (field === "model") {
           applied.model = typeof value === "string" && value.trim() ? value.trim() : undefined;
         } else if (field === "effort") {
-          applied.effort = typeof value === "string" && value.trim() ? value : undefined;
+          const normalized = typeof value === "string" ? value.trim() : "";
+          if (normalized && !isEffortLevel(normalized)) {
+            return error(400, "invalid effort value");
+          }
+          applied.effort = normalized || undefined;
         } else if (field === "locale" && (value === "en" || value === "zh")) {
           applied.locale = value;
         } else if (field === "verbosity" && (value === 0 || value === 1 || value === 2)) {
@@ -116,31 +161,29 @@ export async function handleUiApiRequest(
         return error(400, "no editable fields in body");
       }
       try {
+        const currentConfig = await loadInstanceConfig(stateDir);
+        const prospectiveConfig: Record<string, unknown> = {
+          engine: currentConfig.engine,
+          ...(currentConfig.model ? { model: currentConfig.model } : {}),
+          ...(currentConfig.effort ? { effort: currentConfig.effort } : {}),
+        };
+        applyUiConfigPatch(prospectiveConfig, applied);
+
+        const targetEngine = configEngine(prospectiveConfig);
+        if (targetEngine !== currentConfig.engine) {
+          try {
+            await new SessionStore(path.join(stateDir, "session.json")).clearAll();
+          } catch (cause) {
+            console.error(
+              `Failed to clear UI session bindings before switching ${instanceName} to ${targetEngine}:`,
+              cause instanceof Error ? cause.message : cause,
+            );
+            return error(409, "could not switch engine because session bindings could not be reset");
+          }
+        }
+
         await updateInstanceConfig(stateDir, (config) => {
-          const currentEngine = config.engine === "claude" || config.engine === "antigravity" ||
-            config.engine === "kimi" || config.engine === "deepseek"
-            ? config.engine
-            : "codex";
-          const targetEngine = typeof applied.engine === "string"
-            ? applied.engine as InstanceConfig["engine"]
-            : currentEngine;
-          if (
-            targetEngine === "antigravity" &&
-            typeof applied.effort === "string" &&
-            !ANTIGRAVITY_EFFORT_LEVELS.includes(
-              applied.effort as (typeof ANTIGRAVITY_EFFORT_LEVELS)[number],
-            )
-          ) {
-            throw new UiConfigValidationError("Antigravity effort supports only low, medium, or high");
-          }
-          if (typeof applied.engine === "string") {
-            applyEngineSelection(config, targetEngine);
-          }
-          for (const [field, value] of Object.entries(applied)) {
-            if (field === "engine") continue;
-            if (value === undefined) delete config[field];
-            else config[field] = value;
-          }
+          applyUiConfigPatch(config, applied);
         });
       } catch (cause) {
         if (cause instanceof UiConfigValidationError) return error(400, cause.message);

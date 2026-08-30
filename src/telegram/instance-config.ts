@@ -34,6 +34,40 @@ export const ANTIGRAVITY_EFFORT_LEVELS = ["low", "medium", "high"] as const sati
 export const DEEPSEEK_EFFORT_LEVELS = ["low", "high", "max"] as const satisfies readonly EffortLevel[];
 export const DEFAULT_KIMI_EFFORT: EffortLevel = "high";
 
+export function isEffortLevel(value: unknown): value is EffortLevel {
+  return typeof value === "string" && EFFORT_LEVELS.includes(value as EffortLevel);
+}
+
+export function getEngineEffortValidationError(
+  engine: InstanceEngine,
+  effort: EffortLevel | undefined,
+  model?: string,
+): string | undefined {
+  if (effort === undefined) return undefined;
+  if (engine === "codex" && isExtendedCodexEffort(effort) && knownCodexModelSupportsEffort(model, effort) !== true) {
+    return "The selected Codex model does not support this effort";
+  }
+  if (engine === "claude" && effort === "ultra") {
+    return "Claude effort supports only low, medium, high, xhigh, or max";
+  }
+  if (engine === "kimi" && !KIMI_EFFORT_LEVELS.includes(effort as (typeof KIMI_EFFORT_LEVELS)[number])) {
+    return "Kimi effort supports only low, high, or max";
+  }
+  if (
+    engine === "antigravity" &&
+    !ANTIGRAVITY_EFFORT_LEVELS.includes(effort as (typeof ANTIGRAVITY_EFFORT_LEVELS)[number])
+  ) {
+    return "Antigravity effort supports only low, medium, or high";
+  }
+  if (
+    engine === "deepseek" &&
+    !DEEPSEEK_EFFORT_LEVELS.includes(effort as (typeof DEEPSEEK_EFFORT_LEVELS)[number])
+  ) {
+    return "DeepSeek Harness effort supports only low, high, or max";
+  }
+  return undefined;
+}
+
 export function normalizeModelCommandInput(engine: InstanceEngine | undefined, model: string): string {
   const trimmed = model.trim();
   if (engine !== "claude") {
@@ -106,33 +140,24 @@ export const DEFAULT_MEETING_CONFIG: MeetingConfig = {
 function sanitizeConfigCompatibility(config: ConfigFile, configPath: string): ConfigFile {
   const effort = config.effort as EffortLevel | undefined;
   const engine = config.engine ?? "codex";
-  const invalidCodexEffort = engine === "codex" &&
-    isExtendedCodexEffort(effort) &&
-    knownCodexModelSupportsEffort(config.model, effort) !== true;
-  const invalidClaudeEffort = engine === "claude" && effort === "ultra";
-  const invalidKimiEffort = engine === "kimi" && effort !== undefined &&
-    !KIMI_EFFORT_LEVELS.includes(effort as (typeof KIMI_EFFORT_LEVELS)[number]);
-  const invalidAntigravityEffort = engine === "antigravity" && effort !== undefined &&
-    !ANTIGRAVITY_EFFORT_LEVELS.includes(effort as (typeof ANTIGRAVITY_EFFORT_LEVELS)[number]);
-  const invalidDeepSeekEffort = engine === "deepseek" && effort !== undefined &&
-    !DEEPSEEK_EFFORT_LEVELS.includes(effort as (typeof DEEPSEEK_EFFORT_LEVELS)[number]);
-  if (!invalidCodexEffort && !invalidClaudeEffort && !invalidKimiEffort && !invalidAntigravityEffort && !invalidDeepSeekEffort) {
+  const reason = getEngineEffortValidationError(engine, effort, config.model);
+  if (!reason) {
     return config;
   }
 
   const sanitized = { ...config };
   delete sanitized.effort;
-  const reason = invalidAntigravityEffort
+  const logReason = engine === "antigravity"
     ? "Antigravity supports only low, medium, and high"
-    : invalidDeepSeekEffort
-    ? "DeepSeek Harness supports only low, high, and max"
-    : invalidKimiEffort
-    ? "Kimi ACP supports only low, high, and max"
-    : invalidClaudeEffort
-      ? "Claude supports up to max"
-      : "the selected Codex model does not advertise that effort";
+    : engine === "deepseek"
+      ? "DeepSeek Harness supports only low, high, and max"
+      : engine === "kimi"
+        ? "Kimi ACP supports only low, high, and max"
+        : engine === "claude"
+          ? "Claude supports up to max"
+          : "the selected Codex model does not advertise that effort";
   console.error(
-    `Ignored incompatible effort ${effort} in ${configPath}; ${reason}.`,
+    `Ignored incompatible effort ${effort} in ${configPath}; ${logReason}.`,
   );
   return sanitized;
 }
