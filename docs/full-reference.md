@@ -224,8 +224,8 @@ transcript as context, and answer when explicitly addressed. **This is inert by
 default and requires a Feishu capability the app may not have.**
 
 - **Beta allowlist (灰度).** Bot meeting attendance needs the scopes
-  `vc:meeting.bot.join:write`, `vc:meeting.message:write`, and
-  `vc:meeting.meetingevent:read`, and those only work if the app is inside
+  `vc:meeting.bot.join:write`, `vc:meeting.message:write`,
+  `vc:meeting.meetingevent:read`, and `vc:meeting.bot.manage:write`, and those only work if the app is inside
   Feishu's beta allowlist. An app outside it gets error `20017 / ErrNotInGray`
   no matter what scopes are granted. Whether a personal-edition (个人版)
   PersonalAgent app can enter this allowlist is unconfirmed — request access via
@@ -244,7 +244,9 @@ default and requires a Feishu capability the app may not have.**
   `config.json` AND the app has the beta scopes above.
 - **Commands.** `/meeting status` (active meetings + push health),
   `/meeting join <9-digit no.> [password]`, `/meeting leave [no.]`,
-  `/meeting ask <question>` (answer with live-transcript context). In-meeting,
+  `/meeting ask <question>` (answer with live-transcript context),
+  `/meeting invite [no.] all|@person...`, and the explicitly confirmed
+  `/meeting end [no.] confirm`. In-meeting,
   address the bot with @ or the configured `trigger` prefix; `respondIn`
   controls whether answers go to the meeting chat, the IM chat, or both.
 

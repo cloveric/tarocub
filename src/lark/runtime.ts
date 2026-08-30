@@ -143,7 +143,7 @@ export interface LarkServiceRuntime {
   cronRuntime?: LarkCronRuntime;
   /** VC bot-meeting support; present ONLY when config.meeting.enabled (gated). */
   meetingSupport?: {
-    handleMeetingCommand(text: string, locale: "en" | "zh"): Promise<string | null>;
+    handleMeetingCommand(text: string, locale: "en" | "zh", context?: { mentionOpenIds?: readonly string[] }): Promise<string | null>;
     dispose(): Promise<void>;
   };
   busRuntime?: LarkBusRuntime;
@@ -163,7 +163,7 @@ export function createLarkServiceRuntime(options: {
   cronRuntime?: LarkCronRuntime;
   /** VC bot-meeting support; present ONLY when config.meeting.enabled (gated). */
   meetingSupport?: {
-    handleMeetingCommand(text: string, locale: "en" | "zh"): Promise<string | null>;
+    handleMeetingCommand(text: string, locale: "en" | "zh", context?: { mentionOpenIds?: readonly string[] }): Promise<string | null>;
     dispose(): Promise<void>;
   };
   busRuntime?: LarkBusRuntime;

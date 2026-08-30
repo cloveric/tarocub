@@ -1,6 +1,7 @@
 import { Client, Domain } from "@larksuiteoapi/node-sdk";
 
 import { redactLarkSensitiveText } from "./redaction.js";
+import { LARK_SLASH_COMMAND_SCOPES } from "./slash-commands.js";
 
 // Core scopes for a working chat bot: receive/send messages, interactive cards,
 // and basic Docs. Verified (2026-05-30) to be AUTO-GRANTED by Feishu's
@@ -36,8 +37,9 @@ export interface LarkOptionalScopeGroup {
 
 // Opt-in feature groups. Verified (2026-05-30) that the PersonalAgent QR
 // registration auto-grants NONE of these — each needs a one-time console scope
-// import + app-version publish. They never block setup; setup/doctor surface
-// each group with its own bulk-import JSON so you enable only what you want.
+// grant. PersonalAgent grants activate at confirmation; enterprise custom apps
+// may additionally require a version publish. They never block setup;
+// setup/doctor surface each group with its own JSON so you enable only what you want.
 export const LARK_OPTIONAL_SCOPE_GROUPS: readonly LarkOptionalScopeGroup[] = [
   { key: "group-messages", label: "ordinary (non-@) group messages — /group all", scopes: ["im:message", "im:message.group_msg"] },
   { key: "chat-admin", label: "broad group-message delivery + chat/member management", scopes: ["im:chat", "im:chat.members:read"] },
@@ -46,7 +48,9 @@ export const LARK_OPTIONAL_SCOPE_GROUPS: readonly LarkOptionalScopeGroup[] = [
   { key: "calendar", label: "Calendar (events + free/busy)", scopes: ["calendar:calendar:read", "calendar:calendar.event:read", "calendar:calendar.event:create", "calendar:calendar.event:update", "calendar:calendar.free_busy:read"] },
   { key: "tasks", label: "Tasks & task lists", scopes: ["task:task:read", "task:task:write", "task:tasklist:read", "task:tasklist:write", "task:comment:write"] },
   { key: "base", label: "Base / Bitable (tables, records, fields)", scopes: ["base:app:read", "base:table:read", "base:table:create", "base:record:read", "base:record:create", "base:record:update", "base:record:delete", "base:field:read", "base:field:create", "base:view:read"] },
+  { key: "slash-commands", label: "native slash-command picker and autocomplete", scopes: LARK_SLASH_COMMAND_SCOPES },
   { key: "meetings", label: "Video meetings & Minutes", scopes: ["vc:meeting.search:read", "vc:record:readonly", "vc:note:read", "minutes:minutes.search:read", "minutes:minutes.upload:write"] },
+  { key: "meeting-agent", label: "Agent meeting attendance, transcript, invite, and host controls", scopes: ["vc:meeting.bot.join:write", "vc:meeting.message:write", "vc:meeting.meetingevent:read", "vc:meeting.bot.manage:write"] },
   { key: "contact", label: "Contact lookup (name/email → user)", scopes: ["contact:user.base:readonly", "contact:user.basic_profile:readonly", "contact:user:search"] },
   { key: "whiteboard", label: "Whiteboards", scopes: ["board:whiteboard:node:read", "board:whiteboard:node:create", "board:whiteboard:node:delete"] },
   { key: "slides", label: "Slides / presentations", scopes: ["slides:presentation:read", "slides:presentation:create", "slides:presentation:update", "slides:presentation:write_only"] },

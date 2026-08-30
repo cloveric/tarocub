@@ -11,10 +11,12 @@ import { removeTempRoot } from "./helpers/temp-files.js";
 async function runMeetingCommand(content: string, options: {
   runtime?: LarkServiceRuntime;
   deny?: boolean;
+  mentions?: unknown[];
 } = {}) {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-meeting-"));
   const sent: string[] = [];
   const channel = {
+    botIdentity: { openId: "ou_bot", name: "Bot" },
     send: vi.fn(async (_to: string, payload: unknown) => {
       sent.push(JSON.stringify(payload));
       return { messageId: "sent_1" };
@@ -44,7 +46,7 @@ async function runMeetingCommand(content: string, options: {
         content,
         rawContentType: "text",
         resources: [],
-        mentions: [],
+        mentions: options.mentions ?? [],
         mentionAll: false,
         mentionedBot: false,
         createTime: Date.now(),
@@ -71,8 +73,32 @@ describe("/meeting command routing", () => {
     runtime.meetingSupport = { handleMeetingCommand, dispose: async () => undefined };
     const { handled, sent } = await runMeetingCommand("/meeting status", { runtime });
     expect(handled).toBe(true);
-    expect(handleMeetingCommand).toHaveBeenCalledWith("/meeting status", expect.stringMatching(/en|zh/));
+    expect(handleMeetingCommand).toHaveBeenCalledWith(
+      "/meeting status",
+      expect.stringMatching(/en|zh/),
+      { mentionOpenIds: [] },
+    );
     expect(sent.join("\n")).toContain("Meeting 123456789");
+  });
+
+  it("passes user mention open_ids to the meeting invite command and drops the bot routing mention", async () => {
+    const runtime = createLarkServiceRuntime();
+    const handleMeetingCommand = vi.fn(async () => "Invited 1");
+    runtime.meetingSupport = { handleMeetingCommand, dispose: async () => undefined };
+
+    await runMeetingCommand("/meeting invite @Alice", {
+      runtime,
+      mentions: [
+        { id: { openId: "ou_bot" }, name: "Bot" },
+        { id: { openId: "ou_alice" }, name: "Alice" },
+      ],
+    });
+
+    expect(handleMeetingCommand).toHaveBeenCalledWith(
+      "/meeting invite @Alice",
+      expect.stringMatching(/en|zh/),
+      { mentionOpenIds: ["ou_alice"] },
+    );
   });
 
   it("does not intercept non-meeting words like /meetings", async () => {

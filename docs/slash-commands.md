@@ -117,6 +117,21 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 | `/deny` | Deny the pending tool call in this chat. There is **no** `/deny session` form — only `/approve` takes that argument. | Telegram, Lark |
 | `/deny <request-id>` | Deny one specific pending request. | Telegram, Lark |
 
+## Video Meetings (Experimental)
+
+These commands are inert unless meeting support is enabled and the app is in Feishu's VC
+bot beta allowlist.
+
+| Command | What It Does | Channels |
+|---|---|---|
+| `/meeting status` | Show active meetings and event-push health. | Lark |
+| `/meeting join <9-digit no.> [password]` | Join a meeting as the app bot. | Lark |
+| `/meeting leave [9-digit no.]` | Leave the only active meeting, or the specified one. | Lark |
+| `/meeting ask <question>` | Answer with the current live-transcript context. | Lark |
+| `/meeting invite [9-digit no.] all` | Invite all suggested participants. | Lark |
+| `/meeting invite [9-digit no.] @person...` | Invite selected mentioned users. | Lark |
+| `/meeting end [9-digit no.] confirm` | End a hosted meeting for everyone; the exact `confirm` suffix is mandatory. | Lark |
+
 ## Voice And Media Keywords
 
 These are message keywords, not slash commands.
@@ -137,3 +152,7 @@ node dist/src/index.js lark doctor
 node dist/src/index.js lark cli identity status
 node dist/src/index.js lark auth status --verify
 ```
+
+To expose this catalog in the native Feishu/Lark `/` picker, grant the app slash-command
+read/write scopes and run `node dist/src/index.js lark slash sync`. This metadata sync is
+idempotent and separate from the bridge's runtime command parser.

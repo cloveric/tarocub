@@ -42,7 +42,7 @@ node dist/src/index.js lark setup --detached --install-cli --identity bot-only
 node dist/src/index.js lark yolo unsafe
 ```
 
-`--detached` 会让扫码注册在 tmux 中持续运行，完成后自动启动 Lark 服务。若 `lark doctor` 报缺 scope，按输出链接补权限、发布应用版本，再运行 `lark provision` 与 `lark doctor`。Telegram 的完整兼容部署流程见 [可选：Telegram 快速开始](#可选telegram-快速开始兼容通道)。
+`--detached` 会让扫码注册在 tmux 中持续运行，完成后自动启动 Lark 服务。若 `lark doctor` 报缺 scope，按输出链接补权限；个人版 PersonalAgent 确认后立即生效，无需发布版本，企业自建应用才可能需要发版。随后运行 `lark provision`、`lark doctor` 和 `lark slash sync`。Telegram 的完整兼容部署流程见 [可选：Telegram 快速开始](#可选telegram-快速开始兼容通道)。
 
 > **权限提示：** `lark yolo unsafe` 会绕过常规审批与部分沙箱限制，只适合你本人控制的可信机器和可信工作区。需要逐次审批时使用 `lark yolo off`。
 
@@ -82,6 +82,7 @@ TaroCub 仍会识别以旧包名 `tarocub-deepseek-harness-plugin` 安装的版�
 | **可追溯网页研究** | 可选 Brave/Tavily MCP 提供 `web_search`、`web_extract`、provider status、fallback notice 和 source log。 |
 | **多 agent 编排** | Agent Bus 做实例间 delegation，Mini Bus 做 topic 间协作，Board 做持久化 Kanban 任务。 |
 | **飞书/Lark 通道（推荐）** | 通过官方 Lark Channel SDK 复用同一个 bridge runtime，支持 streaming card、停止按钮、审批和文件/媒体投递标签。 |
+| **视频会议 Bot（实验性）** | 在灰度能力与权限就绪后，可加入会议、跟随实时字幕、会中问答、邀请成员，并通过带 `confirm` 的命令结束 Bot 主持的会议；默认关闭。 |
 
 ## 飞书 / Lark 通道（推荐）
 
@@ -91,6 +92,7 @@ TaroCub 仍会识别以旧包名 `tarocub-deepseek-harness-plugin` 安装的版�
 npm run build
 node dist/src/index.js lark wizard   # 扫码创建/绑定 PersonalAgent app
 node dist/src/index.js lark provision # 对现有 app 重新检查/补齐权限订阅
+node dist/src/index.js lark slash sync # 同步飞书原生斜杠命令自动补全
 node dist/src/index.js lark status
 node dist/src/index.js lark doctor
 node dist/src/index.js lark service start
@@ -106,6 +108,8 @@ node dist/src/index.js lark dashboard
 在活跃的 Lark bot turn 里执行 `lark service restart --all` 时，当前 Lark 实例会自动改成延迟重启，等回复完成后再重启自己。不要在 Lark bot 里手写 shell 循环逐个 restart Lark 实例，否则容易先杀掉当前执行链。
 
 `lark wizard` 会走官方 Lark SDK 的 PersonalAgent 注册流程，在终端打印二维码，把凭据保存到 `~/.cctb/lark/lark.env`（或 `CCTB_LARK_STATE_DIR/lark.env`），然后检查 bridge 需要的能力：接收消息事件、卡片回调、bot 发消息/资源权限、飞书文档权限。如果 app 有管理权限，wizard 会补齐事件/回调订阅；如果没有，会明确告诉你缺哪个管理 scope。如果你更想手动填凭据，环境变量仍然优先：
+
+飞书输入框里的原生 `/` 自动补全属于应用元数据，不等同于 bridge 已能解析命令。授权 `application:app_slash_command:read` 与 `application:app_slash_command:write` 后运行 `lark slash sync`；`lark slash sync --all` 可同步所有已配置 Bot。同步是幂等的，不删除应用中无关的自定义命令，客户端缓存通常约 5 分钟后刷新。
 
 ```bash
 export LARK_APP_ID="cli_xxx"
@@ -1358,6 +1362,15 @@ Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
 | `/group [status\|allow\|deny\|on\|off\|all\|at]` | 群授权与回复模式(`on`/`off`=整个实例的群模式开关，`all`=不@也回,`at`=只@才回) |
 | `/invite group\|user @某人` · `/remove …` | **Lark** — 授予/撤销群或用户授权 |
 | `/newgroup <名>` · `/newgroup topic <名>` · `/newtopic <名>` | **Lark** — 新建并自动授权项目群 / 话题群；默认仍需 @bot |
+
+**视频会议（实验性、默认关闭）**
+
+| 命令 | 作用 |
+|---|---|
+| `/meeting status` · `/meeting join <9位会议号> [密码]` · `/meeting leave [会议号]` | 查看、加入或离开会议 |
+| `/meeting ask <问题>` | 使用当前实时字幕上下文回答 |
+| `/meeting invite [会议号] all` · `/meeting invite [会议号] @成员...` | 邀请推荐成员或指定成员 |
+| `/meeting end [会议号] confirm` | 为所有人结束 Bot 主持的会议；必须显式输入 `confirm` |
 
 **定时与持久任务**
 

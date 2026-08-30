@@ -12,7 +12,14 @@
 // push dispatcher via attachPush(). Nothing self-starts.
 
 import type { MeetingConfig } from "../../telegram/instance-config.js";
-import { joinMeeting, type LarkVcRequestClient } from "./vc-api.js";
+import {
+  endMeeting,
+  inviteMeetingParticipants,
+  joinMeeting,
+  type LarkVcRequestClient,
+  type MeetingInviteInput,
+  type MeetingInviteResult,
+} from "./vc-api.js";
 import { MeetingSession, type MeetingSessionStatus } from "./session.js";
 import { activityType, type RawActivityItem } from "./types.js";
 
@@ -153,6 +160,20 @@ export class MeetingManager {
     if (!session) return false;
     this.sessions.delete(meetingId);
     await session.leave();
+    return true;
+  }
+
+  /** Invite participants through a session this process currently owns. */
+  async invite(meetingId: string, input: MeetingInviteInput): Promise<MeetingInviteResult | null> {
+    if (!this.sessions.has(meetingId)) return null;
+    return inviteMeetingParticipants(this.deps.client, meetingId, input);
+  }
+
+  /** End a meeting as host. Keep the session intact when the API rejects it. */
+  async end(meetingId: string): Promise<boolean> {
+    if (!this.sessions.has(meetingId)) return false;
+    await endMeeting(this.deps.client, meetingId);
+    this.handleEnded(meetingId);
     return true;
   }
 

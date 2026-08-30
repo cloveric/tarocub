@@ -25,8 +25,9 @@ TaroCub's Lark bots are registered as **Feishu 个人版 (PersonalAgent)** apps 
 - **Core scopes** (receive/send messages, **@-mentioned** group messages, cards, …) are
   **auto-granted by the QR registration** (`lark wizard`). A freshly-created bot has these
   immediately — that's why new bots come up fast.
-- **Optional / advanced scopes** (non-@ group messages for `/group all`, Sheets, Calendar,
-  Base, Docs auto-grant, …) are **NOT auto-granted.** Each must be added in the console.
+- **Optional / advanced scopes** (non-@ group messages for `/group all`, native slash
+  autocomplete, Sheets, Calendar, Base, Docs auto-grant, …) are **NOT auto-granted.**
+  Each must be added in the console.
 
 The authoritative list of optional scope groups + their JSON lives in
 `src/lark/provisioning.ts` (`LARK_OPTIONAL_SCOPE_GROUPS`), or print it:
@@ -34,6 +35,22 @@ The authoritative list of optional scope groups + their JSON lives in
 ```bash
 node dist/src/index.js lark permissions
 ```
+
+## Native slash-command autocomplete
+
+The bridge can already parse `/status`, `/model`, and the rest without app metadata. To
+also show them in Feishu/Lark's native `/` picker, grant
+`application:app_slash_command:read` and `application:app_slash_command:write`, then run:
+
+```bash
+node dist/src/index.js lark slash sync --dry-run --instance <name>
+node dist/src/index.js lark slash sync --instance <name>
+# Or sync every saved Lark app with its own credentials:
+node dist/src/index.js lark slash sync --all
+```
+
+Sync updates only TaroCub's canonical commands and preserves unrelated app commands. The
+client can take about five minutes to refresh its command cache.
 
 ## Enable an optional scope (developer console)
 

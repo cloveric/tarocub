@@ -6,6 +6,7 @@
 // GATING / FEASIBILITY (read before wiring this up): every endpoint here needs
 // application scopes that are behind a Feishu **beta allowlist** (灰度):
 //   - vc:meeting.bot.join:write     (join / leave)
+//   - vc:meeting.bot.manage:write   (end a hosted meeting)
 //   - vc:meeting.message:write      (post into the meeting)
 //   - vc:meeting.meetingevent:read  (read in-meeting events)
 // Granting the scopes is NOT enough — an app outside the allowlist gets
@@ -115,6 +116,97 @@ export async function leaveMeeting(client: LarkVcRequestClient, meetingId: strin
     await client.request({ method: "POST", url: `${BASE}/leave`, data: { meeting_id: meetingId } });
   } catch (error) {
     throw asVcApiError(error, "leave");
+  }
+}
+
+export type MeetingInviteInput =
+  | { type: "all-suggested" }
+  | { type: "selected"; openIds: readonly string[] };
+
+export interface MeetingInviteResult {
+  invitedCount: number;
+  failedCount: number;
+  hasMore: boolean;
+  inviteResults: Array<{ id: string; status: "invited" | "failed" | "unknown" }>;
+}
+
+/** POST /vc/v1/bots/invite — invite Calendar candidates or explicit users. */
+export async function inviteMeetingParticipants(
+  client: LarkVcRequestClient,
+  meetingId: string,
+  input: MeetingInviteInput,
+): Promise<MeetingInviteResult> {
+  const normalizedMeetingId = meetingId.trim();
+  if (!normalizedMeetingId) {
+    throw new VcApiError(undefined, "meeting id must not be empty", "invite");
+  }
+  let data: Record<string, unknown> = {
+    meeting_id: normalizedMeetingId,
+    invite_type: 1,
+  };
+  if (input.type === "selected") {
+    const openIds = [...new Set(input.openIds.map((id) => id.trim()).filter(Boolean))];
+    if (openIds.length === 0) {
+      throw new VcApiError(undefined, "selected invite requires at least one open_id", "invite");
+    }
+    if (openIds.length > 200) {
+      throw new VcApiError(undefined, `selected invite accepts at most 200 users, got ${openIds.length}`, "invite");
+    }
+    if (openIds.some((id) => !id.startsWith("ou_"))) {
+      throw new VcApiError(undefined, "selected invite accepts only user open_id values (ou_xxx)", "invite");
+    }
+    data = {
+      meeting_id: normalizedMeetingId,
+      invite_type: 2,
+      invitees: openIds.map((id) => ({ id, user_type: 1 })),
+    };
+  }
+  try {
+    const response = await client.request<{
+      data?: {
+        invited_count?: number;
+        failed_count?: number;
+        has_more?: boolean;
+        invite_results?: Array<{ id?: string; status?: number }>;
+      };
+    }>({
+      method: "POST",
+      url: `${BASE}/invite`,
+      params: { user_id_type: "open_id" },
+      data,
+    });
+    const result = response?.data ?? {};
+    return {
+      invitedCount: typeof result.invited_count === "number" ? result.invited_count : 0,
+      failedCount: typeof result.failed_count === "number" ? result.failed_count : 0,
+      hasMore: result.has_more === true,
+      inviteResults: (result.invite_results ?? []).flatMap((item) => {
+        if (!item.id) return [];
+        return [{
+          id: item.id,
+          status: item.status === 1 ? "invited" as const : item.status === 2 ? "failed" as const : "unknown" as const,
+        }];
+      }),
+    };
+  } catch (error) {
+    throw asVcApiError(error, "invite");
+  }
+}
+
+/** POST /vc/v1/bots/end — end the meeting when this app bot is the host. */
+export async function endMeeting(client: LarkVcRequestClient, meetingId: string): Promise<void> {
+  const normalizedMeetingId = meetingId.trim();
+  if (!normalizedMeetingId) {
+    throw new VcApiError(undefined, "meeting id must not be empty", "end");
+  }
+  try {
+    await client.request({
+      method: "POST",
+      url: `${BASE}/end`,
+      data: { meeting_id: normalizedMeetingId },
+    });
+  } catch (error) {
+    throw asVcApiError(error, "end");
   }
 }
 

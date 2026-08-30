@@ -499,7 +499,12 @@ async function runAcceptedLarkMessage(
       return true;
     }
     const meetingReply = input.runtime.meetingSupport
-      ? await input.runtime.meetingSupport.handleMeetingCommand(commandText, messageLocale)
+      ? await input.runtime.meetingSupport.handleMeetingCommand(commandText, messageLocale, {
+          mentionOpenIds: extractMeetingMentionOpenIds(
+            normalized.mentions,
+            (input.channel as unknown as { botIdentity?: { openId?: string } }).botIdentity?.openId,
+          ),
+        })
       : (messageLocale === "zh"
         ? "VC 入会功能未启用。在 `~/.cctb/<instance>/config.json` 中设置 `\"meeting\": {\"enabled\": true}` 并重启后可用。注意：机器人入会接口需要飞书侧 beta 白名单，详见 docs/full-reference.md。"
         : "VC meeting support is disabled. Set `\"meeting\": {\"enabled\": true}` in `~/.cctb/<instance>/config.json` and restart. Note: the bot-join API additionally requires Feishu-side beta allowlisting; see docs/full-reference.md.");
@@ -754,6 +759,19 @@ async function runAcceptedLarkMessage(
   await preemptActiveLarkTurnIfEnabled(input, effectiveNormalized, commandText, messageLocale);
 
   return await enqueueLarkTurn(input, effectiveNormalized, messageLocale, handleConversationQueueWait);
+}
+
+function extractMeetingMentionOpenIds(mentions: readonly unknown[], botOpenId?: string): string[] {
+  const ids: string[] = [];
+  for (const mention of mentions) {
+    const record = isRecord(mention) ? mention : {};
+    if (record.isBot === true || record.is_bot === true) continue;
+    const identity = isRecord(record.id) ? record.id : {};
+    const openId = [identity.openId, identity.open_id, record.openId, record.open_id]
+      .find((value): value is string => typeof value === "string" && value.startsWith("ou_"));
+    if (openId && openId !== botOpenId && !ids.includes(openId)) ids.push(openId);
+  }
+  return ids;
 }
 
 const LARK_QUEUE_ESCAPE_RE = /^\/(?:q|queue)(?:\s+([\s\S]+))?$/i;

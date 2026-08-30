@@ -69,6 +69,8 @@ describe("runLarkWizard", () => {
             tenant: expect.arrayContaining([
               "im:message",
               "im:message.group_msg",
+              "application:app_slash_command:read",
+              "application:app_slash_command:write",
               // Required scopes ride along too: the platform template is
               // server-side and dropped docx:document:create once already.
               "docx:document:create",

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   asVcApiError,
+  endMeeting,
+  inviteMeetingParticipants,
   isMeetingNo,
   joinMeeting,
   pullMeetingEvents,
@@ -56,6 +58,77 @@ describe("VC meeting REST layer (ported from zara)", () => {
     });
   });
 
+  it("invites selected users with the Agent bot protocol shape", async () => {
+    const request = vi.fn(async () => ({
+      data: {
+        invited_count: 2,
+        failed_count: 0,
+        invite_results: [
+          { id: "ou_a", status: 1 },
+          { id: "ou_b", status: 1 },
+        ],
+      },
+    }));
+    const result = await inviteMeetingParticipants(
+      { request } as unknown as LarkVcRequestClient,
+      "7628568141510692381",
+      { type: "selected", openIds: ["ou_a", "ou_b", "ou_a"] },
+    );
+
+    expect(result).toMatchObject({ invitedCount: 2, failedCount: 0, hasMore: false });
+    expect(request).toHaveBeenCalledWith({
+      method: "POST",
+      url: "/open-apis/vc/v1/bots/invite",
+      params: { user_id_type: "open_id" },
+      data: {
+        meeting_id: "7628568141510692381",
+        invite_type: 2,
+        invitees: [
+          { id: "ou_a", user_type: 1 },
+          { id: "ou_b", user_type: 1 },
+        ],
+      },
+    });
+  });
+
+  it("rejects invalid or oversized invitee lists before calling Feishu", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as LarkVcRequestClient;
+    await expect(inviteMeetingParticipants(client, "m1", { type: "selected", openIds: ["not-open-id"] }))
+      .rejects.toBeInstanceOf(VcApiError);
+    await expect(inviteMeetingParticipants(client, "m1", {
+      type: "selected",
+      openIds: Array.from({ length: 201 }, (_, index) => `ou_${index}`),
+    })).rejects.toBeInstanceOf(VcApiError);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("invites all suggested attendees without an invitee array", async () => {
+    const request = vi.fn(async () => ({ data: { invited_count: 3, failed_count: 0, has_more: true } }));
+    const result = await inviteMeetingParticipants(
+      { request } as unknown as LarkVcRequestClient,
+      "m1",
+      { type: "all-suggested" },
+    );
+    expect(result.hasMore).toBe(true);
+    expect(request).toHaveBeenCalledWith({
+      method: "POST",
+      url: "/open-apis/vc/v1/bots/invite",
+      params: { user_id_type: "open_id" },
+      data: { meeting_id: "m1", invite_type: 1 },
+    });
+  });
+
+  it("ends a meeting through the host-only Agent bot endpoint", async () => {
+    const request = vi.fn(async () => ({ data: {} }));
+    await endMeeting({ request } as unknown as LarkVcRequestClient, "m1");
+    expect(request).toHaveBeenCalledWith({
+      method: "POST",
+      url: "/open-apis/vc/v1/bots/end",
+      data: { meeting_id: "m1" },
+    });
+  });
+
   it("digs the real Feishu code out of the response body and flags the beta gate", () => {
     const raw = { response: { data: { code: 20017, msg: "not in gray" } } };
     const err = asVcApiError(raw, "join");
@@ -73,9 +146,21 @@ describe("VC meeting preflight (feasibility gating)", () => {
     expect(renderVcMeetingPreflight(verdict, "en")).toContain("beta");
   });
 
-  it("classifies a missing-scope error separately", () => {
+  it("reports only the scope needed by the failing VC endpoint", () => {
     const verdict = classifyVcMeetingError(new VcApiError(99991672, "scope", "join"));
     expect(verdict.status).toBe("scope-missing");
+    if (verdict.status === "scope-missing") {
+      expect(verdict.missingScopes).toEqual(["vc:meeting.bot.join:write"]);
+    }
+
+    expect(classifyVcMeetingError(new VcApiError(99991672, "scope", "end"))).toEqual({
+      status: "scope-missing",
+      missingScopes: ["vc:meeting.bot.manage:write"],
+    });
+    expect(classifyVcMeetingError(new VcApiError(99991672, "scope", "invite"))).toEqual({
+      status: "scope-missing",
+      missingScopes: ["vc:meeting.bot.join:write"],
+    });
   });
 
   it("falls back to unknown with a detail for other errors", () => {

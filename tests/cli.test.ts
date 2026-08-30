@@ -2441,6 +2441,92 @@ describe("runCli", () => {
     }
   });
 
+  it("syncs the native slash-command panel for the selected Lark instance", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const messages: string[] = [];
+    const syncSlashCommands = vi.fn(async (_input: {
+      appId: string;
+      appSecret: string;
+      domain?: string;
+      dryRun?: boolean;
+    }) => ({
+      created: 3,
+      updated: 1,
+      unchanged: 2,
+      preserved: 1,
+      dryRun: true,
+    }));
+
+    try {
+      const handled = await runCli(["lark", "slash", "sync", "--dry-run"], {
+        env: {
+          USERPROFILE: tempDir,
+          LARK_APP_ID: "cli_a",
+          LARK_APP_SECRET: "super-secret",
+          LARK_DOMAIN: "feishu",
+          CCTB_LARK_STATE_DIR: stateDir,
+        },
+        logger: { log: (message) => messages.push(message) },
+        larkSyncSlashCommands: syncSlashCommands,
+      } as Parameters<typeof runCli>[1] & { larkSyncSlashCommands: typeof syncSlashCommands });
+
+      expect(handled).toBe(true);
+      expect(syncSlashCommands).toHaveBeenCalledWith({
+        appId: "cli_a",
+        appSecret: "super-secret",
+        domain: "feishu",
+        dryRun: true,
+      });
+      expect(messages.join("\n")).toContain("create 3");
+      expect(messages.join("\n")).not.toContain("super-secret");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("syncs every configured Lark app without mutating the global lark-cli profile", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const syncSlashCommands = vi.fn(async (_input: {
+      appId: string;
+      appSecret: string;
+      domain?: string;
+      dryRun?: boolean;
+    }) => ({
+      created: 0,
+      updated: 0,
+      unchanged: 42,
+      preserved: 0,
+      dryRun: false,
+    }));
+
+    try {
+      for (const [name, appId] of [["alpha", "cli_alpha"], ["beta", "cli_beta"]] as const) {
+        const stateDir = path.join(tempDir, ".cctb", name);
+        await mkdir(stateDir, { recursive: true });
+        await writeFile(path.join(stateDir, "lark.env"), [
+          `LARK_APP_ID="${appId}"`,
+          `LARK_APP_SECRET="secret-${name}"`,
+          `CCTB_LARK_STATE_DIR="${stateDir}"`,
+          "",
+        ].join("\n"));
+      }
+
+      const handled = await runCli(["lark", "slash", "sync", "--all"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: () => undefined },
+        larkSyncSlashCommands: syncSlashCommands,
+      } as Parameters<typeof runCli>[1] & { larkSyncSlashCommands: typeof syncSlashCommands });
+
+      expect(handled).toBe(true);
+      expect(syncSlashCommands).toHaveBeenCalledTimes(2);
+      expect(syncSlashCommands.mock.calls.map(([input]) => input.appId).sort())
+        .toEqual(["cli_alpha", "cli_beta"]);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("serves Lark app secrets through the exec-provider protocol without extra output", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-lark-secrets-"));
     const stateDir = path.join(tempDir, "lark-state");

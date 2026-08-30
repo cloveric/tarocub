@@ -316,6 +316,8 @@ describe("provisionLarkApp", () => {
       "im:message", "im:message.group_msg", "im:chat", "im:chat.members:read",
       "docs:permission.member:create", "sheets:spreadsheet:create", "sheets:spreadsheet:read",
       "sheets:spreadsheet:write_only", "sheets:spreadsheet.meta:read",
+      "application:app_slash_command:read", "application:app_slash_command:write",
+      "vc:meeting.bot.join:write", "vc:meeting.bot.manage:write",
     ]) {
       expect(OPTIONAL_LARK_SCOPES).toContain(scope);
       expect(REQUIRED_LARK_SCOPES).not.toContain(scope);

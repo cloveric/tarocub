@@ -77,11 +77,12 @@ node dist/src/index.js lark yolo unsafe
 
 `--detached` keeps QR registration alive in tmux, prints one durable registration link, writes progress to `~/.cctb/<lark-instance>/lark-setup.log`, and starts the Lark service when setup completes. Use `--no-start-service` only when you explicitly want to prepare the app without listening yet.
 
-If `lark doctor` reports missing app scopes, open the permission page URL it prints, bulk-import the JSON it prints, publish the app version, then run:
+If `lark doctor` reports missing app scopes, open the permission page URL it prints and grant the JSON it prints. PersonalAgent apps activate the grant immediately after confirmation; enterprise custom apps may still require a version publish. Then run:
 
 ```bash
 node dist/src/index.js lark provision
 node dist/src/index.js lark doctor
+node dist/src/index.js lark slash sync
 ```
 
 ### DeepSeek Harness web search plugin (native bundle)
@@ -156,7 +157,7 @@ npm run dev -- telegram access pair <pairing-code>
 | **Search MCP** | Optional Brave/Tavily MCP gives source-traceable `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
 | **Operational visibility** | `status`, `doctor`, `timeline`, `audit`, `dashboard`, usage tracking, service locks, and backups make failures inspectable instead of mysterious. |
 | **Web config console** | `cctb ui` opens a loopback-only, token-gated web console that lists every instance (engine, model, service liveness) and edits the safe config subset on disk with next-restart semantics. |
-| **VC meeting attendance (experimental)** | On Feishu/Lark, the bot can join a video meeting, follow the live transcript, and answer when addressed (`/meeting join/status/ask/leave`). Off by default; requires Feishu's bot-join beta allowlist. |
+| **VC meeting attendance (experimental)** | On Feishu/Lark, the bot can join a video meeting, follow the live transcript, answer when addressed, invite participants, and explicitly end a hosted meeting (`/meeting join/status/ask/leave/invite/end`). Off by default; requires Feishu's bot-join beta allowlist. |
 
 ## Feature Map
 
@@ -355,6 +356,7 @@ node dist/src/index.js lark setup --detached --install-cli --identity bot-only
 node dist/src/index.js lark yolo unsafe
 node dist/src/index.js lark auth start --recommend --domain docs,drive --scope "sheets:spreadsheet:create sheets:spreadsheet:write_only sheets:spreadsheet:read sheets:spreadsheet.meta:read"
 node dist/src/index.js lark auth finish <device-code>
+node dist/src/index.js lark slash sync
 node dist/src/index.js lark service restart
 ```
 
@@ -368,13 +370,17 @@ Useful Lark commands:
 node dist/src/index.js lark setup --detached --install-cli
 node dist/src/index.js lark status
 node dist/src/index.js lark permissions --missing
+node dist/src/index.js lark slash sync --dry-run
+node dist/src/index.js lark slash sync
 node dist/src/index.js lark access pair <code>
 node dist/src/index.js lark send --chat oc_xxx --message "hello"
 node dist/src/index.js lark timeline 20
 node dist/src/index.js lark dashboard
 ```
 
-Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/ws`, `/newgroup`, `/newtopic`, and `/continue` — plus the Lark-only `/yolo`, `/q`, `/config`, `/stream`, `/steer`, `/bg`, `/account`, and `/approve-session`.
+Inside Lark, the bot supports the same core slash surface as Telegram: `/status`, `/usage`, `/engine`, `/model`, `/effort`, `/fast`, `/goal`, `/resume`, `/detach`, `/stop`, `/reset`, `/cron`, `/board`, `/mini`, `/fan`, `/chain`, `/verify`, `/group`, `/invite`, `/remove`, `/ws`, `/newgroup`, `/newtopic`, and `/continue` — plus the Lark-only `/yolo`, `/q`, `/config`, `/stream`, `/steer`, `/bg`, `/account`, `/approve-session`, and gated `/meeting` controls.
+
+Native Feishu/Lark slash autocomplete is app metadata, separate from command handling. Grant `application:app_slash_command:read` and `application:app_slash_command:write`, then run `lark slash sync`; use `--all` to sync every configured app. Sync is idempotent, preserves unrelated app commands, and may take about five minutes to appear in the client.
 
 Lark group/session semantics:
 

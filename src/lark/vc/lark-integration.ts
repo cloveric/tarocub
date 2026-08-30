@@ -1,10 +1,9 @@
 // Feature 2 final stage — wire the VC meeting core (manager + orchestrator) into
 // the running Lark service. GATED: attachLarkMeetingSupport returns null unless
 // config.meeting.enabled, so an ordinary instance never constructs a manager,
-// never joins a meeting, and this file is entirely inert. Poll-only for now
-// (the manager polls each joined meeting for activity); the push subscription
-// rides a private SDK dispatcher we deliberately do not reach into here, so
-// auto-join-on-invite is a later enhancement — `/meeting join` is the entry.
+// never joins a meeting, and this file is entirely inert. The current service
+// wiring is poll-only; MeetingManager also exposes a public dispatcher hook for
+// a future push subscription. `/meeting join` remains the explicit entry.
 
 import type { MeetingConfig } from "../../telegram/instance-config.js";
 import { MeetingManager } from "./manager.js";
@@ -37,7 +36,11 @@ export interface LarkMeetingSupportDeps {
 export interface LarkMeetingSupport {
   manager: MeetingManager;
   /** Handle a `/meeting …` command; returns the reply text, or null if not a meeting command. */
-  handleMeetingCommand(text: string, locale: "en" | "zh"): Promise<string | null>;
+  handleMeetingCommand(
+    text: string,
+    locale: "en" | "zh",
+    context?: { mentionOpenIds?: readonly string[] },
+  ): Promise<string | null>;
   dispose(): Promise<void>;
 }
 
@@ -67,7 +70,11 @@ export function attachLarkMeetingSupport(deps: LarkMeetingSupportDeps): LarkMeet
     },
   });
 
-  const handleMeetingCommand = async (text: string, locale: "en" | "zh"): Promise<string | null> => {
+  const handleMeetingCommand = async (
+    text: string,
+    locale: "en" | "zh",
+    context: { mentionOpenIds?: readonly string[] } = {},
+  ): Promise<string | null> => {
     const trimmed = text.trim();
     if (!/^\/meeting\b/i.test(trimmed)) {
       return null;
@@ -126,6 +133,76 @@ export function attachLarkMeetingSupport(deps: LarkMeetingSupportDeps): LarkMeet
         await manager.leave(sessions[0]!.meetingId);
         return zh ? `已离开会议 ${sessions[0]!.meetingNo}。` : `Left meeting ${sessions[0]!.meetingNo}.`;
       }
+      case "invite": {
+        const sessions = manager.all();
+        if (sessions.length === 0) {
+          return zh ? "当前没有进行中的会议。" : "No active meetings.";
+        }
+        const inviteArgs = [...args];
+        const explicitMeetingNo = inviteArgs[0] && isMeetingNo(inviteArgs[0]) ? inviteArgs.shift() : undefined;
+        const target = explicitMeetingNo ? manager.byMeetingNo(explicitMeetingNo) : sessions.length === 1 ? sessions[0] : undefined;
+        if (!target) {
+          return zh
+            ? "有多个会议，请指定：`/meeting invite <9位会议号> all` 或 `/meeting invite <9位会议号> <ou_open_id...>`"
+            : "Multiple meetings; specify: `/meeting invite <9-digit no.> all` or `/meeting invite <9-digit no.> <ou_open_id...>`.";
+        }
+        if (inviteArgs.length === 0 && (context.mentionOpenIds?.length ?? 0) === 0) {
+          return zh
+            ? "用法：`/meeting invite [9位会议号] all|<ou_open_id...>`"
+            : "Usage: `/meeting invite [9-digit no.] all|<ou_open_id...>`.";
+        }
+        try {
+          const result = inviteArgs.length === 1 && inviteArgs[0]!.toLowerCase() === "all"
+            ? await manager.invite(target.meetingId, { type: "all-suggested" })
+            : await manager.invite(target.meetingId, {
+                type: "selected",
+                openIds: [
+                  ...inviteArgs.filter((value) => !value.startsWith("@")),
+                  ...(context.mentionOpenIds ?? []),
+                ],
+              });
+          if (!result) {
+            return zh ? "该会议已不在当前 Bot 的活动会话中。" : "That meeting is no longer active for this bot.";
+          }
+          const more = result.hasMore
+            ? (zh ? "；候选人超过单次 200 人上限，部分未邀请" : "; some candidates exceeded the 200-person service limit")
+            : "";
+          return zh
+            ? `已邀请 ${result.invitedCount} 人，失败 ${result.failedCount} 人${more}。`
+            : `Invited ${result.invitedCount}; failed ${result.failedCount}${more}.`;
+        } catch (error) {
+          return renderVcMeetingPreflight(classifyVcMeetingError(error), locale);
+        }
+      }
+      case "end": {
+        const sessions = manager.all();
+        if (sessions.length === 0) {
+          return zh ? "当前没有进行中的会议。" : "No active meetings.";
+        }
+        const confirmed = args.at(-1)?.toLowerCase() === "confirm";
+        const targetArgs = confirmed ? args.slice(0, -1) : args;
+        const explicitMeetingNo = targetArgs[0] && isMeetingNo(targetArgs[0]) ? targetArgs[0] : undefined;
+        const target = explicitMeetingNo ? manager.byMeetingNo(explicitMeetingNo) : sessions.length === 1 ? sessions[0] : undefined;
+        if (!target) {
+          return zh
+            ? "有多个会议，请指定：`/meeting end <9位会议号> confirm`"
+            : "Multiple meetings; specify: `/meeting end <9-digit no.> confirm`.";
+        }
+        if (!confirmed || targetArgs.length > (explicitMeetingNo ? 1 : 0)) {
+          const command = explicitMeetingNo
+            ? `/meeting end ${explicitMeetingNo} confirm`
+            : "/meeting end confirm";
+          return zh
+            ? `这会为所有参会者结束会议 ${target.meetingNo}。如确认，请发送 \`${command}\`。`
+            : `This ends meeting ${target.meetingNo} for everyone. To confirm, send \`${command}\`.`;
+        }
+        try {
+          await manager.end(target.meetingId);
+          return zh ? `已结束会议 ${target.meetingNo}。` : `Ended meeting ${target.meetingNo}.`;
+        } catch (error) {
+          return renderVcMeetingPreflight(classifyVcMeetingError(error), locale);
+        }
+      }
       case "ask": {
         const question = args.join(" ").trim();
         if (!question) {
@@ -141,7 +218,9 @@ export function attachLarkMeetingSupport(deps: LarkMeetingSupportDeps): LarkMeet
         return answer || (zh ? "（无回复）" : "(no answer)");
       }
       default:
-        return zh ? "未知子命令。可用：status / join / leave / ask" : "Unknown subcommand. Available: status / join / leave / ask";
+        return zh
+          ? "未知子命令。可用：status / join / leave / invite / end / ask"
+          : "Unknown subcommand. Available: status / join / leave / invite / end / ask";
     }
   };
 

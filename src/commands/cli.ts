@@ -69,6 +69,10 @@ import { resolveDefaultLarkStateDir } from "../lark/config.js";
 import { LarkGroupModeStore } from "../lark/group-mode-store.js";
 import { createLarkServiceRuntime, LARK_PENDING_TURN_LOOKBACK_MS, readLarkTimelineLogTail, readRotatedLogFile, resolveLarkInstanceName, resolveLarkRuntimeConfig, resolveLarkServiceLockPath, type LarkChannelLike, type LarkRuntimeEnv } from "../lark/service.js";
 import { detectLarkCliStatus, ensureLarkCliBridgeBindingConfig, type LarkCliStatus } from "../lark/cli.js";
+import {
+  syncLarkSlashCommandsForApp,
+  type LarkSlashCommandSyncResult,
+} from "../lark/slash-commands.js";
 import { deliverLarkResponse } from "../lark/delivery.js";
 import { DEFAULT_LARK_REGISTRATION_TENANT_SCOPES, runLarkScopeAddWizard, runLarkWizard } from "../lark/wizard.js";
 import { runUiConsoleCommand } from "./ui-command.js";
@@ -193,6 +197,7 @@ export interface CliOptions {
   larkProvisionApp?: (input: { appId: string; appSecret: string; domain?: string; logger?: CliLogger }) => Promise<LarkProvisioningResult>;
   larkInspectApp?: (input: { appId: string; appSecret: string; domain?: string }) => Promise<LarkProvisioningResult>;
   larkDetectCli?: () => Promise<LarkCliStatus>;
+  larkSyncSlashCommands?: typeof syncLarkSlashCommandsForApp;
   /** Test seam: replaces the interactive Lark wizard. */
   larkWizard?: typeof runLarkWizard;
   larkRunCommand?: LarkRunCommand;
@@ -2982,6 +2987,7 @@ async function runLarkCommand(
     send?: LarkSendCommandDeps;
     dashboard?: DashboardCommandDeps;
     detectCli?: CliOptions["larkDetectCli"];
+    syncSlashCommands?: CliOptions["larkSyncSlashCommands"];
     runCommand?: CliOptions["larkRunCommand"];
     stdinText?: CliOptions["stdinText"];
     /** Test seam: capture the env the wizard actually receives. */
@@ -3225,9 +3231,9 @@ async function runLarkCommand(
 
   if (subcommand === "scopes") {
     // `lark scopes add [scope ...]` — QR update flow for an existing app; with
-    // no scopes it adds the /group all pair. Same instance routing as `wizard`.
+    // no scopes it restores the complete wizard baseline. Same instance routing as `wizard`.
     if (args[0] !== "add" || hasHelpFlag(args)) {
-      logger.log("Usage: lark scopes add [<scope> ...]   (default: im:message im:message.group_msg)");
+      logger.log("Usage: lark scopes add [<scope> ...]   (default: complete QR registration baseline)");
       if (args[0] === "add") {
         return true;
       }
@@ -3239,6 +3245,55 @@ async function runLarkCommand(
       requested.length > 0 ? requested : [...DEFAULT_LARK_REGISTRATION_TENANT_SCOPES],
       logger,
     );
+    return true;
+  }
+
+  if (subcommand === "slash") {
+    if (args[0] !== "sync" || hasHelpFlag(args)) {
+      logger.log("Usage: lark slash sync [--instance <name>|--all] [--dry-run]");
+      if (args[0] === "sync") return true;
+      throw new Error("Usage: lark slash sync [--instance <name>|--all] [--dry-run]");
+    }
+    const allFlag = extractBooleanFlag(args.slice(1), "--all");
+    const dryRunFlag = extractBooleanFlag(allFlag.args, "--dry-run");
+    if (dryRunFlag.args.length !== 0) {
+      throw new Error("Usage: lark slash sync [--instance <name>|--all] [--dry-run]");
+    }
+    if (allFlag.enabled && scoped.instanceName) {
+      throw new Error("Use either --instance <name> or --all, not both.");
+    }
+    const sync = deps.syncSlashCommands ?? syncLarkSlashCommandsForApp;
+    const baseEnv = await loadLarkRuntimeEnv(larkEnv);
+    const targets = allFlag.enabled
+      ? await listConfiguredLarkServiceTargets(baseEnv)
+      : [{ instanceName: resolveLarkInstanceName(baseEnv), stateDir: resolveLarkStateDir(baseEnv) }];
+    if (targets.length === 0) {
+      logger.log("No Lark instances found.");
+      return true;
+    }
+    const failures: string[] = [];
+    for (const target of targets) {
+      try {
+        const targetEnv = allFlag.enabled ? await loadLarkServiceTargetEnv(baseEnv, target) : baseEnv;
+        if (!targetEnv.LARK_APP_ID || !targetEnv.LARK_APP_SECRET) {
+          throw new Error("saved Lark app credentials are missing");
+        }
+        const result = await sync({
+          appId: targetEnv.LARK_APP_ID,
+          appSecret: targetEnv.LARK_APP_SECRET,
+          ...(targetEnv.LARK_DOMAIN ? { domain: targetEnv.LARK_DOMAIN } : {}),
+          dryRun: dryRunFlag.enabled,
+        });
+        logger.log(formatLarkSlashSyncResult(target.instanceName, result));
+      } catch (error) {
+        const detail = redactLarkSensitiveText(error instanceof Error ? error.message : String(error));
+        failures.push(`${target.instanceName}: ${detail}`);
+        logger.log(`Slash command sync failed for ${target.instanceName}: ${detail}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`Lark slash command sync failed for ${failures.length} instance(s): ${failures.join("; ")}`);
+    }
     return true;
   }
 
@@ -3268,7 +3323,12 @@ async function runLarkCommand(
     throw new Error("Usage: node dist/src/index.js lark run");
   }
 
-  throw new Error("Usage: lark <setup|status|doctor|provision|permissions|scopes|wizard|run|service|send|secrets|cli|auth|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
+  throw new Error("Usage: lark <setup|status|doctor|provision|permissions|scopes|slash|wizard|run|service|send|secrets|cli|auth|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>");
+}
+
+function formatLarkSlashSyncResult(instanceName: string, result: LarkSlashCommandSyncResult): string {
+  const mode = result.dryRun ? "dry-run" : "synced";
+  return `Lark slash commands ${mode} for ${instanceName}: create ${result.created}, update ${result.updated}, unchanged ${result.unchanged}, preserve ${result.preserved}. Client autocomplete may take about 5 minutes to refresh.`;
 }
 
 async function runLarkSetupCommand(
@@ -4477,11 +4537,13 @@ Commands:
   restore <archive> [--instance <name>]       Restore instance state from a backup archive
   send [--message <text>] [--image <path>] [--file <path>]
                                               Send files/text through the active turn side-channel or configured Telegram session
-  lark <setup|status|doctor|provision|permissions|wizard|run|service|send|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>
+  lark <setup|status|doctor|provision|permissions|scopes|slash|wizard|run|service|send|access|session|task|backup|restore|instructions|engine|yolo|budget|locale|verbosity|usage|audit|timeline|dashboard>
                                               Inspect, configure, or run the Feishu/Lark channel
   lark setup [--detached] [--install-cli]     Run the QR wizard, CLI bind, provision, auth check, doctor, and service start
   lark permissions [--missing]                Print copyable Feishu/Lark permission JSON
-  lark scopes add [<scope> ...]               Add scopes to the existing app via one QR scan (default: the /group all pair)
+  lark scopes add [<scope> ...]               Add scopes via one QR scan (default: complete registration baseline)
+  lark slash sync [--instance <name>|--all] [--dry-run]
+                                              Sync TaroCub commands to the native Feishu/Lark slash picker
   lark service <start|stop|restart|status|logs|doctor> [--force]
                                               Manage the Feishu/Lark service lifecycle
   lark send --chat <oc_xxx> [--reply-to <message-id>] [--thread] [--message <text>] [--image <path>] [--file <path>] [--stdin]
@@ -5070,6 +5132,7 @@ export async function runCli(argv: string[], options: CliOptions = {}): Promise<
       send: options.larkSendDeps,
       dashboard: options.dashboardDeps,
       detectCli: options.larkDetectCli,
+      syncSlashCommands: options.larkSyncSlashCommands,
       runCommand: options.larkRunCommand,
       stdinText: options.stdinText,
       wizard: options.larkWizard,

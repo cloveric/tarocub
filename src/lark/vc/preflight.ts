@@ -13,9 +13,19 @@ export const VC_MEETING_BETA_CHAT_URL =
 /** App scopes the feature needs; granted independently (one does not imply the others). */
 export const VC_MEETING_REQUIRED_SCOPES = [
   "vc:meeting.bot.join:write",
+  "vc:meeting.bot.manage:write",
   "vc:meeting.message:write",
   "vc:meeting.meetingevent:read",
 ] as const;
+
+const VC_MEETING_ENDPOINT_SCOPES: Readonly<Record<string, readonly string[]>> = {
+  join: ["vc:meeting.bot.join:write"],
+  leave: ["vc:meeting.bot.join:write"],
+  invite: ["vc:meeting.bot.join:write"],
+  end: ["vc:meeting.bot.manage:write"],
+  message: ["vc:meeting.message:write"],
+  events: ["vc:meeting.meetingevent:read"],
+};
 
 export type VcMeetingPreflight =
   | { status: "ok" }
@@ -30,7 +40,10 @@ export function classifyVcMeetingError(error: unknown): VcMeetingPreflight {
     return { status: "not-in-beta", betaChatUrl: VC_MEETING_BETA_CHAT_URL };
   }
   if (vcError?.scopeMissing) {
-    return { status: "scope-missing", missingScopes: [...VC_MEETING_REQUIRED_SCOPES] };
+    return {
+      status: "scope-missing",
+      missingScopes: [...(VC_MEETING_ENDPOINT_SCOPES[vcError.endpoint] ?? VC_MEETING_REQUIRED_SCOPES)],
+    };
   }
   return {
     status: "unknown",

@@ -7,6 +7,7 @@ import { ensureLarkCliBridgeBindingConfig } from "./cli.js";
 import { loadLarkRuntimeEnv, resolveLarkStateDir, writeLarkEnvFile } from "./env-file.js";
 import { BASE_MESSAGE_SCOPE, GROUP_MSG_SCOPE } from "./group-scope-check.js";
 import { REQUIRED_LARK_SCOPES, formatLarkProvisioningResult, provisionLarkApp, type LarkProvisioningResult } from "./provisioning.js";
+import { LARK_SLASH_COMMAND_SCOPES } from "./slash-commands.js";
 import type { LarkRuntimeEnv } from "./config.js";
 
 /** Max wait for the registration server to return a QR before failing fast. */
@@ -14,8 +15,8 @@ const QR_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /**
  * Tenant scopes pre-filled into the PersonalAgent QR confirm page on every
- * registration: the /group all pair (never in the platform template) PLUS
- * every scope the bridge requires. The platform's default template used to
+ * registration: the /group all pair, native slash-command metadata scopes,
+ * and every scope the bridge requires. The platform's default template used to
  * cover the required set, but it is server-side and drifts — it dropped
  * `docx:document:create` between June and August 2026, so a fresh bot came
  * out needing a second scan. Pre-filling the full required set makes the
@@ -23,7 +24,12 @@ const QR_HANDSHAKE_TIMEOUT_MS = 30_000;
  * the confirm page shows only what the template lacks.
  */
 export const DEFAULT_LARK_REGISTRATION_TENANT_SCOPES: readonly string[] = [
-  ...new Set([...REQUIRED_LARK_SCOPES, BASE_MESSAGE_SCOPE, GROUP_MSG_SCOPE]),
+  ...new Set([
+    ...REQUIRED_LARK_SCOPES,
+    BASE_MESSAGE_SCOPE,
+    GROUP_MSG_SCOPE,
+    ...LARK_SLASH_COMMAND_SCOPES,
+  ]),
 ];
 
 export interface LarkRegistrationAddons {

@@ -56,6 +56,14 @@ function leaveCalls(client: { request: ReturnType<typeof vi.fn> }): RequestPaylo
   return client.request.mock.calls.map((c) => c[0] as RequestPayload).filter((p) => p.url.endsWith("/leave"));
 }
 
+function inviteCalls(client: { request: ReturnType<typeof vi.fn> }): RequestPayload[] {
+  return client.request.mock.calls.map((c) => c[0] as RequestPayload).filter((p) => p.url.endsWith("/invite"));
+}
+
+function endCalls(client: { request: ReturnType<typeof vi.fn> }): RequestPayload[] {
+  return client.request.mock.calls.map((c) => c[0] as RequestPayload).filter((p) => p.url.endsWith("/end"));
+}
+
 // Fake timers keep each joined session's poller inert (setTimeout never fires),
 // so the manager tests stay deterministic and free of background polling.
 describe("MeetingManager — lifecycle", () => {
@@ -133,6 +141,60 @@ describe("MeetingManager — lifecycle", () => {
     expect(mgr.all()).toHaveLength(0);
     expect(leaveCalls(client)).toHaveLength(0); // ended != leave; no REST leave
     expect(mgr.handleEnded("mid-123456789")).toBe(false); // idempotent
+  });
+
+  it("invites only through a meeting managed by this process", async () => {
+    const client = makeClient();
+    const mgr = new MeetingManager({ client, config: () => cfg() });
+    await mgr.join("123456789");
+
+    await expect(mgr.invite("mid-123456789", { type: "selected", openIds: ["ou_alice"] })).resolves.toEqual({
+      invitedCount: 0,
+      failedCount: 0,
+      hasMore: false,
+      inviteResults: [],
+    });
+    await expect(mgr.invite("mid-unmanaged", { type: "all-suggested" })).resolves.toBeNull();
+    expect(inviteCalls(client)).toHaveLength(1);
+    expect(inviteCalls(client)[0]).toMatchObject({
+      params: { user_id_type: "open_id" },
+      data: {
+        meeting_id: "mid-123456789",
+        invite_type: 2,
+        invitees: [{ id: "ou_alice", user_type: 1 }],
+      },
+    });
+  });
+
+  it("ends through the API before settling the local session", async () => {
+    const client = makeClient();
+    const ended: string[] = [];
+    const mgr = new MeetingManager({ client, config: () => cfg(), onEnded: (id) => ended.push(id) });
+    const session = await mgr.join("123456789");
+
+    await expect(mgr.end("mid-123456789")).resolves.toBe(true);
+    expect(endCalls(client)).toHaveLength(1);
+    expect(session.ended).toBe(true);
+    expect(mgr.all()).toHaveLength(0);
+    expect(ended).toEqual(["mid-123456789"]);
+  });
+
+  it("keeps the local session when the end API rejects the request", async () => {
+    const client = makeClient();
+    client.request.mockImplementation(async (payload: RequestPayload) => {
+      if (payload.url.endsWith("/join")) {
+        return { data: { meeting: { id: "mid-123456789" } } };
+      }
+      if (payload.url.endsWith("/events")) return { data: { events: [], has_more: false } };
+      if (payload.url.endsWith("/end")) throw new Error("bot is not the meeting host");
+      return {};
+    });
+    const mgr = new MeetingManager({ client, config: () => cfg() });
+    const session = await mgr.join("123456789");
+
+    await expect(mgr.end("mid-123456789")).rejects.toThrow("not the meeting host");
+    expect(session.ended).toBe(false);
+    expect(mgr.get("mid-123456789")).toBe(session);
   });
 
   it("dispose stops sessions WITHOUT leaving the meetings (reconnect)", async () => {
