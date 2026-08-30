@@ -146,7 +146,7 @@ npm run dev -- telegram access pair <pairing-code>
 | **Mid-turn steering** | While a Codex or DeepSeek turn is running on Lark, a plain-text follow-up sent within the steer eligibility window (default 30s, `/steer` to tune/disable/unlimit) is injected straight into it so the engine course-corrects without a second turn — acked with an OK reaction. Past the window (or with `/q <message>`) it queues as its own turn. Files, quoted replies, and queued backlogs keep normal FIFO order automatically. |
 | **Feishu/Lark as a native work surface** | Lark adds what Telegram cannot: Card 2.0 choices, approval cards, Docs comment @mentions, Sheets/Docs/Drive workflows through `lark-cli`, `/newgroup`, and thread-aware group work. |
 | **Optional Telegram control plane** | Existing deployments can still send files and screenshots, record voice messages, approve work, stop turns, inspect status, and operate multiple personal bots. |
-| **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer. Kimi preserves ACP task/review lifecycles, while DeepSeek replays ordered Harness history/projections and preserves native Goal/background-job ownership across reconnects. |
+| **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer. Kimi preserves ACP task/review lifecycles, DeepSeek replays ordered Harness history/projections, and Antigravity maps native structured session/text/tool/result events without posting protocol or thinking output as an answer. |
 | **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources, plus recordings forwarded as ordinary files/documents, are downloaded and transcribed automatically before any Claude/Codex/Kimi/DeepSeek/Antigravity adapter runs. Media documents are recognized from their declared name or downloaded path, so Telegram files without `file_name` still work. Short audio uses local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription, with chunked local fallback on cloud failure. If bridge transcription is unavailable, the original media file remains attached with an explicit fallback note instead of being silently treated as already transcribed. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
 | **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
@@ -312,6 +312,27 @@ budgets cannot constrain DeepSeek turns. `/ultrareview` remains a Claude-only
 workflow. See [DeepSeek Harness Engine](./docs/deepseek-harness-engine.md) for
 the verified capability and limitation matrix.
 
+### Antigravity engine
+
+Select Antigravity with `/engine antigravity`. The verified baseline is
+**Antigravity CLI 1.1.22**. TaroCub uses native NDJSON `stream-json` input and
+output for ordinary turns, maps session/text/tool/result events separately,
+and records current-turn step usage instead of the cumulative usage returned
+when a conversation is resumed. Unstructured stdout or a missing final result
+fails closed rather than appearing in chat as an answer.
+
+`/model <id>` passes a model listed by `agy models`, and `/effort` supports
+`low`, `medium`, `high`, or `off`. Native `/goal` uses direct `-p` prompt mode because
+Antigravity does not accept slash commands through stream input, but its output
+still uses the same structured parser. Conversation resume, shared media ASR,
+files, delivery tags, and native MCP/plugin configuration remain available.
+
+Current upstream boundaries are explicit: the headless CLI does not expose
+per-tool remote approvals, mid-turn steering, post-result background-task
+lifecycle, or a manual compact/context API. Normal approval therefore remains
+a single whole-turn confirmation. See the verified
+[Antigravity Engine matrix](./docs/antigravity-engine.md).
+
 ## Lark Setup
 
 Lark has two levels:
@@ -438,7 +459,7 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 |---|---|
 | `/config` | **Lark** — interactive settings card (recommended) |
 | `/engine [claude\|codex\|kimi\|deepseek\|antigravity]` | Inspect/switch backend engine |
-| `/model [name\|off]` | Inspect/set engine model. Claude has named choices; Kimi and DeepSeek accept provider/model IDs advertised by their native protocols |
+| `/model [name\|off]` | Inspect/set engine model. Claude has named choices; Kimi/DeepSeek accept native provider IDs; Antigravity accepts IDs listed by `agy models` |
 | `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Reasoning effort (model-dependent) |
 | `/fast [on\|off\|status]` | Codex Fast Mode |
 | `/yolo [on\|off\|unsafe\|status]` | **Lark** — approval mode (Telegram sets it from the CLI: `telegram yolo …`) |

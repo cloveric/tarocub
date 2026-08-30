@@ -243,24 +243,26 @@ npm run dev -- telegram engine --instance review-bot
 
 切到 DeepSeek 后，服务优先使用 `DSH_EXECUTABLE`，否则使用 `PATH` 中的 `dsh`；需要先在本机完成 Harness 认证。TaroCub 为每个实例托管私有、仅 loopback 的 `dsh web`，通过官方 HTTP RPC 与双 WebSocket 下行流工作，而不是抓取终端文字。实测兼容基线为 **DeepSeek Harness 0.1.1-rc.2**。
 
-切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。原因是 Telegram 里的 `agy --print` 是非交互运行，默认就应该免打断。Antigravity 的模型选择仍由本机交互式 CLI 管：`agy --print` 不会运行交互式 `/model` 解析器，所以 Telegram 里的 `/model` 会由 bridge 本地回复限制说明，不会再当普通聊天发给模型。
+切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。当前实测兼容基线为 **Antigravity CLI 1.1.22**。普通轮次使用原生 NDJSON `stream-json` 输入/输出，分别处理 session、回答、工具、终态和本轮 token；非结构化 stdout 或缺失最终 result 会 fail closed，不会被误发成回答。`/model <id>` 会传给原生 `--model`（用 `agy models` 查看 ID），`/effort` 支持 low、medium、high 和 off。
 
 | 特性 | Codex | Claude | Kimi | DeepSeek | Antigravity |
 |---|---|---|---|---|---|
-| 协议 | app-server / `codex exec` | stream-json | `kimi acp` | 私有 `dsh web` + 官方 HTTP/WS | `agy --print` |
-| 会话恢复 | `/resume thread <id>` | `/resume` 扫描并选择 | `/resume` 扫描，也支持 `/resume session <id>` | `/resume` 扫描，也支持 `/resume session <id>`；真实 cwd 校验 | 自动绑定日志 conversation；`/resume conversation <id>` |
+| 协议 | app-server / `codex exec` | stream-json | `kimi acp` | 私有 `dsh web` + 官方 HTTP/WS | NDJSON `stream-json`；原生 `/goal` 用直接 `-p` prompt |
+| 会话恢复 | `/resume thread <id>` | `/resume` 扫描并选择 | `/resume` 扫描，也支持 `/resume session <id>` | `/resume` 扫描，也支持 `/resume session <id>`；真实 cwd 校验 | 结构化 `conversation_id` 自动绑定；日志扫描发现；`/resume conversation <id>` |
 | 项目指令 | `agent.md` prompt 注入 | `agent.md` system prompt + workspace `CLAUDE.md` | workspace `.kimi-code/agents/agent.md` 主代理 override | 实例私有 `DSH_HOME/AGENTS.md` | `agent.md` prompt 注入 |
-| 流式与工具 | 原生事件 | 原生事件 | ACP 文本、思考、工具、审批事件 | 原生文本/推理/工具/结果/usage 事件 | stdout chunk |
+| 流式与工具 | 原生事件 | 原生事件 | ACP 文本、思考、工具、审批事件 | 原生文本/推理/工具/结果/usage 事件 | 原生 session/text/tool/result 事件 |
 | 后台任务 | 结构化生命周期 | 结构化生命周期 | Hook + 任务复核/自动重试 | `session/jobs` + 自动复核，最终结果 exactly-once | 仅进程内 |
 | 审批 / 提问 | app-server 沙箱 / process 整轮预审批 | 单工具审批 + 结构化提问 | ACP 单工具审批；当前单选提问 | 单次/会话审批 + 多问题、多选、自由文本 | 整轮预审批 |
 | 本地 skill / MCP | 原生 skill/MCP | 原生 skill/MCP/plugin | 原生 Kimi skill/MCP/plugin + bridge Search MCP | 复用 Harness profile；原生 plugin/MCP 由 Harness 管 | 原生能力 |
 | `/goal` | 结构化 goal | 原生命令透传 | **gap**：真机返回 `Unknown ACP command` | 原生持久 Goal + 可选 token budget | 原生命令透传 |
 | `/steer` | app-server 中途注入 | **gap**，后续消息排队 | **gap**，ACP 无中途 prompt 注入 | 原生 `session.steer` | **gap**，后续消息排队 |
-| `/model` / effort | bridge 配置 | bridge 配置 | ACP session option | Harness session model API 实时校验 | 由本机交互 CLI 管 |
+| `/model` / effort | bridge 配置 | bridge 配置 | ACP session option | Harness session model API 实时校验 | bridge 配置转原生 `--model` / `--effort` |
 | `/compact` / `/context` | 无状态 / runtime context | 支持 / 支持 | 支持 / 暂无结构化 context | 官方命令 / `contextPressure` 投影 | 暂不支持 |
-| 用量 | token（费用视 runtime） | token + USD | **gap**：无结构化 token/费用 | token；**无 USD**，美元预算不生效 | 无结构化费用 |
+| 用量 | token（费用视 runtime） | token + USD | **gap**：无结构化 token/费用 | token；**无 USD**，美元预算不生效 | 本轮 token；无 USD |
 | 工作目录 | 实例 `workspace/` | 实例或恢复 session 的原工作区 | 绑定前用真实 `session/load` 校验 cwd | 绑定前用 `session.list/history` 校验 cwd，跨工作区 fail closed | 实例 `workspace/` |
-| 进程生命周期 | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每实例持久 Host，崩溃重启并按水位恢复 | 每轮退出 |
+| 进程生命周期 | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每实例持久 Host，崩溃重启并按水位恢复 | 每轮结构化进程退出 |
+
+Antigravity 当前仍有明确的上游边界：headless 协议没有单工具远程审批、运行中 steer、result 之后的后台任务生命周期，也没有手动 compact/context API。普通审批因此是整轮一次确认，bridge 不会假装与 Codex/Claude 完全对齐。详见 [Antigravity Engine 能力矩阵](./docs/antigravity-engine.md)。
 
 当前兼容基线是 **Kimi Code 0.37.2**。TaroCub 已补齐它用于委托 Bash/进程执行的 ACP terminal 生命周期：创建、受限 UTF-8 输出、等待、终止、释放，以及 worker 退出时清理未释放终端。0.37.2 还存在一个很窄的 stdio MCP runtime identity 上游回归；bridge 只在命中该精确错误时暂时移除 ACP 注入的 stdio MCP，保留 HTTP/SSE 和 Kimi 原生 MCP/plugin，并在 Kimi 进程重启后重新探测，避免把临时兼容逻辑永久固化。
 
@@ -736,7 +738,7 @@ DeepSeek Harness 提供原生 session 列表、历史与投影。直接发 `/res
 
 ### Antigravity conversation 绑定
 
-Antigravity print mode 会把当前 conversation ID 写进 CLI 日志。bridge 会读取这些日志，在成功运行后自动绑定到当前 Telegram chat，后续 turn 用：
+Antigravity 的结构化 `init` / `result` 会返回权威 conversation ID，bridge 在成功运行后自动绑定到当前聊天，后续 turn 用：
 
 ```text
 agy --conversation <conversation-id>
@@ -756,7 +758,7 @@ agy --conversation <conversation-id>
 - `/status` 会显示当前 conversation ID
 - `/detach` 会解绑该 conversation；如果存在绑定前的旧对话，就恢复它
 
-这仍然使用 Antigravity 的原生会话模型。bridge 不会伪造 model / effort 启动参数。因为 `agy --print` 不能运行交互式 `/model` 解析器，模型选择请在本机交互式 `agy` 里设置；Telegram `/model` 只会解释限制，不会把命令当普通 prompt 发给模型。
+这仍然使用 Antigravity 的原生会话模型。`/model <id>` 和 `/effort low|medium|high` 会分别映射到原生启动参数；`/model off`、`/effort off` 恢复 CLI 默认。`/resume` 的编号发现仍扫描近期 CLI 日志，因为 `agy` 暂时没有结构化 conversation list 命令。
 
 ---
 
@@ -1201,7 +1203,7 @@ npm run dev -- telegram service start --instance agy-bot
 ```
 Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     → 加载 config.json（引擎） → 加载 agent.md → 会话查找
-    → Codex app-server、Claude stream-json、Kimi ACP、DeepSeek Harness 或 agy --print（新建或恢复）
+    → Codex app-server、Claude stream-json、Kimi ACP、DeepSeek Harness 或 Antigravity stream-json（新建或恢复）
     → typing action + timeline 事件 → 最终渲染 → 发送 → 审计
 ```
 
@@ -1428,8 +1430,8 @@ Telegram 用户也可以使用：
 
 - `/status`
 - `/engine [claude|codex|kimi|deepseek|antigravity]` — 切换当前实例引擎（桥会自动清掉陈旧绑定）
-- `/effort [low|medium|high|xhigh|max|ultra|off]` — 设置推理强度；实际可用级别由当前引擎/模型决定，Kimi 通过 ACP thinking 选项应用
-- `/model [名称|off]` — 为 Codex/Claude/Kimi/DeepSeek 切换模型；Kimi/DeepSeek 使用各自原生协议校验 provider/model ID，Antigravity 会解释 `agy --print` 限制
+- `/effort [low|medium|high|xhigh|max|ultra|off]` — 设置推理强度；实际可用级别由当前引擎/模型决定，Kimi 通过 ACP thinking 选项应用，Antigravity 支持 `low|medium|high|off`
+- `/model [名称|off]` — 为 Codex/Claude/Kimi/DeepSeek/Antigravity 切换模型；Kimi/DeepSeek 使用各自原生协议校验 provider/model ID，Antigravity 接受 `agy models` 列出的原生 ID
 - `/fast [on|off|status]` — 切换 Codex Fast Mode。bridge 实例里把它当实验选项使用；如果出现 Codex runtime 失败，先 `/fast off`，不要反复重试；下一条简单消息仍失败时，再重启该实例一次。
 - `/goal <完成条件>` — 设置引擎 goal。默认无 token 预算，除非显式提供 `--budget`；Codex 和 DeepSeek 会执行结构化 Goal（DeepSeek token budget 可跨 bridge 重启恢复），Claude Code 和 Antigravity 使用原生 goal 指令。当前 Kimi ACP 不支持该命令，bridge 会明确拒绝而不是伪装成普通 prompt。
 - `/btw <问题>` — 旁问（不影响当前会话）

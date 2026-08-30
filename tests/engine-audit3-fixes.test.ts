@@ -191,7 +191,9 @@ describe("audit3 fix 1: bus turns start a FRESH engine session on every adapter"
     await waitFor(() => calls.length === 1, "agy spawn");
     expect(calls[0]?.args).not.toContain("--conversation");
 
-    children[0].stdout.emitData("pong\n");
+    children[0].stdout.emitData('{"event":"init","conversation_id":"11111111-2222-4333-8444-555555555555","init":{}}\n');
+    children[0].stdout.emitData('{"event":"step_update","step_update":{"conversation_id":"11111111-2222-4333-8444-555555555555","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"pong"}}\n');
+    children[0].stdout.emitData('{"event":"result","result":{"conversation_id":"11111111-2222-4333-8444-555555555555","status":"SUCCESS","response":"pong"}}\n');
     children[0].close(0);
     await expect(promise).resolves.toMatchObject({ text: "pong" });
   });

@@ -3,6 +3,8 @@
 // the loopback + token transport.
 
 import {
+  ANTIGRAVITY_EFFORT_LEVELS,
+  applyEngineSelection,
   loadInstanceConfig,
   updateInstanceConfig,
   type InstanceConfig,
@@ -33,6 +35,8 @@ const EDITABLE_FIELDS = ["engine", "model", "effort", "locale", "verbosity", "bu
 type EditableField = (typeof EDITABLE_FIELDS)[number];
 
 const VALID_ENGINES = new Set(["codex", "claude", "antigravity", "kimi", "deepseek"]);
+
+class UiConfigValidationError extends Error {}
 
 function ok(json: unknown): UiApiResult {
   return { status: 200, json };
@@ -111,9 +115,37 @@ export async function handleUiApiRequest(
       if (Object.keys(applied).length === 0) {
         return error(400, "no editable fields in body");
       }
-      await updateInstanceConfig(stateDir, (config) => {
-        Object.assign(config, applied);
-      });
+      try {
+        await updateInstanceConfig(stateDir, (config) => {
+          const currentEngine = config.engine === "claude" || config.engine === "antigravity" ||
+            config.engine === "kimi" || config.engine === "deepseek"
+            ? config.engine
+            : "codex";
+          const targetEngine = typeof applied.engine === "string"
+            ? applied.engine as InstanceConfig["engine"]
+            : currentEngine;
+          if (
+            targetEngine === "antigravity" &&
+            typeof applied.effort === "string" &&
+            !ANTIGRAVITY_EFFORT_LEVELS.includes(
+              applied.effort as (typeof ANTIGRAVITY_EFFORT_LEVELS)[number],
+            )
+          ) {
+            throw new UiConfigValidationError("Antigravity effort supports only low, medium, or high");
+          }
+          if (typeof applied.engine === "string") {
+            applyEngineSelection(config, targetEngine);
+          }
+          for (const [field, value] of Object.entries(applied)) {
+            if (field === "engine") continue;
+            if (value === undefined) delete config[field];
+            else config[field] = value;
+          }
+        });
+      } catch (cause) {
+        if (cause instanceof UiConfigValidationError) return error(400, cause.message);
+        throw cause;
+      }
       const config = await loadInstanceConfig(stateDir);
       // Disk-only: the change applies to the instance on its next restart.
       return ok({ instance: instanceName, config: publicConfig(config), appliesOn: "next-restart" });

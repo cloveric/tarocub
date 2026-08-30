@@ -338,23 +338,23 @@ npm run dev -- telegram engine antigravity --instance agy-bot
 npm run dev -- telegram engine --instance review-bot
 ```
 
-Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in the explicit `bypass` mode, because `agy --print` is non-interactive in Telegram. Antigravity model selection is still owned by the native interactive CLI. `agy --print` does not run the interactive `/model` parser, so Telegram `/model` is handled locally with an explanation instead of being forwarded as a chat prompt. Set the model in local interactive `agy` until the CLI exposes a non-interactive model API.
+Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in explicit `bypass` mode because the headless CLI cannot ask a remote chat for per-tool approval. The verified baseline is **Antigravity CLI 1.1.22**. Ordinary turns use native NDJSON `stream-json` input/output; `/model <id>` and `/effort low|medium|high` map to the native startup flags. Native `/goal` is the narrow exception: Antigravity does not accept slash commands through stream input, so TaroCub preserves the command in a direct `-p` prompt while retaining structured output parsing.
 
 | Feature | Codex | Claude | Kimi | DeepSeek | Antigravity |
 |---|---|---|---|---|---|
-| Protocol | Persistent app-server or process runtime | Persistent stream-json worker | Persistent `kimi acp` | Private supervised `dsh web` with official HTTP RPC and WebSockets | `agy --print` |
-| Session resume | Explicit validated thread binding | `/resume` scan/pick | Native ACP scan and `/resume session <id>` | Native Harness scan and `/resume session <id>` with authoritative cwd validation | Logged conversation scan and explicit conversation binding |
+| Protocol | Persistent app-server or process runtime | Persistent stream-json worker | Persistent `kimi acp` | Private supervised `dsh web` with official HTTP RPC and WebSockets | One structured headless process per turn |
+| Session resume | Explicit validated thread binding | `/resume` scan/pick | Native ACP scan and `/resume session <id>` | Native Harness scan and `/resume session <id>` with authoritative cwd validation | Structured conversation ID binding; log scan only for discovery |
 | Project instructions | `agent.md` prompt injection | System prompt + workspace `CLAUDE.md` | Native `.kimi-code/agents/agent.md` in bot workspaces | Private per-instance `DSH_HOME/AGENTS.md` | `agent.md` prompt injection |
-| Streaming / tools | Native events and authoritative completion items | Native stream events | ACP text/reasoning/tools/approvals | Native text/reasoning/tools/results/usage | stdout chunks |
+| Streaming / tools | Native events and authoritative completion items | Native stream events | ACP text/reasoning/tools/approvals | Native text/reasoning/tools/results/usage | Structured text/tool/result events |
 | Background tasks | Structured lifecycle | Structured lifecycle | Observer Hooks plus review/retry aggregation | `session/jobs` plus review grace and exactly-once final result | Process-local only |
 | Approvals / questions | App-server sandbox or turn pre-approval | Per-tool approvals and structured questions | ACP per-tool approval; current question surface is single-choice | Once/session approvals; multiple, multi-select, and free-text questions | Turn pre-approval |
 | YOLO | Full-auto or bypass | Bypass permission mode | ACP `yolo` / `auto` | Harness workspace sandbox or `danger-full-access` | Unsafe skip-permissions |
 | `/goal` | Structured Goal API | Native command | Explicitly unsupported by current ACP | Native durable Goal, persisted optional token budget, restart re-arm | Native command |
 | `/steer` | Native mid-turn injection | Not exposed | Not exposed by ACP | Native `session.steer` | Not exposed |
-| `/model` / effort | Bridge/runtime config | Bridge config | ACP session options | Harness session model APIs validate provider/model/effort | Local interactive CLI only |
+| `/model` / effort | Bridge/runtime config | Bridge config | ACP session options | Harness session model APIs validate provider/model/effort | Native `--model` / `--effort` flags |
 | `/compact` / `/context` | Stateless / runtime context | Native / native | Native compact / no structured context | Harness command / `contextPressure` projection | Not supported |
 | Skills / plugins / MCP | Native Codex home | Native Claude config | Native Kimi plus bridge Search MCP | Native Harness profile/plugin; validated Search plugin or bridge fallback, exactly one client | Native Antigravity config |
-| Usage | Tokens; cost depends on runtime | Tokens + USD | No structured per-turn usage | Tokens, no per-turn USD | No structured cost |
+| Usage | Tokens; cost depends on runtime | Tokens + USD | No structured per-turn usage | Tokens, no per-turn USD | Per-turn tokens, no USD |
 | Working directory | Instance or validated thread workspace | Instance or resumed project | Native session cwd | Native session cwd; conflicting workspace claims fail closed | Instance workspace |
 | Process lifecycle | Warm app-server | 2h idle reap | 2h idle reap unless background work remains | Per-instance host; crash restart and ordered recovery | Exits each turn |
 
@@ -866,7 +866,7 @@ is recovered in sequence order before a new turn may start. See
 
 ### Antigravity conversation attach
 
-Antigravity print mode writes the active conversation ID to its CLI log. The bridge reads those logs, binds the current conversation to the Telegram chat after a successful turn, and resumes later turns with:
+Antigravity's structured `init`/`result` events report the active conversation ID. The bridge binds that ID to the chat after a successful turn and resumes later turns with:
 
 ```text
 agy --conversation <conversation-id>
@@ -886,7 +886,7 @@ From then on:
 - `/status` shows the current conversation ID
 - `/detach` unbinds the conversation and restores the pre-attach conversation when one exists
 
-This still uses Antigravity's native session model. The bridge does not invent model or effort flags. Because `agy --print` cannot run the interactive `/model` parser, set the model in local interactive `agy`; Telegram `/model` will explain the limitation instead of sending the command to the model as a normal prompt.
+This still uses Antigravity's native session model. `/model <id>` maps to native `--model` (use `agy models` to list IDs), while `/effort low|medium|high` maps to native `--effort`; `off` restores the CLI default. Plain `/resume` still scans recent CLI logs because `agy` does not yet expose a structured conversation-list command.
 
 ---
 
@@ -1355,7 +1355,7 @@ npm run dev -- telegram service start --instance agy-bot
 ```
 Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     → Load config.json (engine) → Load agent.md → Session Lookup
-    → Codex app-server, Claude stream-json, Kimi ACP, DeepSeek Harness, or agy --print (new or resume)
+    → Codex app-server, Claude stream-json, Kimi ACP, DeepSeek Harness, or Antigravity stream-json (new or resume)
     → Typing action + timeline events → Final Render → Deliver → Audit
 ```
 
@@ -1536,8 +1536,8 @@ Telegram users can also use:
 
 - `/status`
 - `/engine [claude|codex|kimi|deepseek|antigravity]` — switch engine for the current instance (the bridge resets stale bindings automatically)
-- `/effort [low|medium|high|xhigh|max|ultra|off]` — set reasoning effort level; Kimi applies only ACP-advertised thinking values, and other engines still enforce their own model-specific limits
-- `/model [name|off]` — switch model for Codex/Claude/Kimi/DeepSeek; Kimi and DeepSeek validate native provider/model values, while Antigravity explains the `agy --print` limitation
+- `/effort [low|medium|high|xhigh|max|ultra|off]` — set reasoning effort level; Kimi applies only ACP-advertised thinking values, Antigravity accepts `low|medium|high|off`, and other engines enforce their own model-specific limits
+- `/model [name|off]` — switch model for Codex/Claude/Kimi/DeepSeek/Antigravity; Kimi and DeepSeek validate native provider/model values, while Antigravity accepts IDs listed by `agy models`
 - `/fast [on|off|status]` — toggle Codex Fast Mode. Treat it as experimental in bridge instances; if Codex runtime failures appear, use `/fast off`, avoid repeated retries, then restart the instance once if the next simple turn still fails.
 - `/goal <completion condition>` — set an engine goal. Goals default to no token budget unless you provide `--budget`; Codex and DeepSeek store structured Goals (DeepSeek token budgets persist across bridge restarts), while Claude Code and Antigravity use native goal commands. Current Kimi ACP does not expose goals, so the bridge rejects this command explicitly.
 - `/btw <question>` — ask an isolated side question on a fresh temporary session; it neither changes nor inherits the current session (uniform across all engines because Kimi ACP 0.33 has no session-fork primitive)

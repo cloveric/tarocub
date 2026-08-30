@@ -1,11 +1,13 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProcessAntigravityAdapter } from "../src/codex/antigravity-adapter.js";
 import { removeTempRoot } from "./helpers/temp-files.js";
+
+const CONVERSATION_ID = "11111111-2222-4333-8444-555555555555";
 
 describe("ProcessAntigravityAdapter", () => {
   it("creates a logical telegram session placeholder", async () => {
@@ -15,7 +17,7 @@ describe("ProcessAntigravityAdapter", () => {
     });
   });
 
-  it("runs agy print turns with prompt, attachments, workspace, and side-channel env", async () => {
+  it("uses agy's structured stdin protocol without the broken valueless --print flag", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const childEnv = { HOME: "/tmp/home", TELEGRAM_BOT_TOKEN: "secret-token" };
     const adapter = new ProcessAntigravityAdapter(
@@ -34,44 +36,45 @@ describe("ProcessAntigravityAdapter", () => {
       extraEnv: {
         CCTB_SEND_URL: "http://127.0.0.1/send",
         CCTB_SEND_TOKEN: "token",
-        PATH: `/tmp/bin:/usr/bin`,
+        PATH: "/tmp/bin:/usr/bin",
         NODE_OPTIONS: "--require /tmp/hack.js",
       },
     });
 
-    await vi.waitFor(() => {
-      expect(calls).toHaveLength(1);
-    });
-    child.stdout.emitData("  answer from agy  \n");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    emitSuccess(child, "answer from agy");
     child.close(0);
 
-    await expect(promise).resolves.toEqual({ text: "answer from agy" });
-    expect(calls).toHaveLength(1);
+    await expect(promise).resolves.toEqual({
+      text: "answer from agy",
+      sessionId: CONVERSATION_ID,
+    });
     expect(calls[0]).toMatchObject({
       command: "agy",
-      options: {
-        cwd: "/tmp/workspace",
-        shell: false,
-        windowsHide: true,
-      },
+      options: { cwd: "/tmp/workspace", shell: false, windowsHide: true },
     });
-    expect(calls[0]?.args).not.toContain("--conversation");
+    expect(calls[0]?.args).not.toContain("--print");
+    expect(calls[0]?.args).not.toContain("-");
     expect(calls[0]?.args).toEqual(expect.arrayContaining([
-      "--print",
-      "--print-timeout",
-      "1h",
-      "--add-dir",
-      "/tmp/workspace",
-      "-",
+      "--input-format", "stream-json",
+      "--output-format", "stream-json",
+      "--print-timeout", "6h",
+      "--add-dir", "/tmp/workspace",
     ]));
-    const prompt = child.stdin.writes.join("");
-    expect(prompt).toContain("<private_bridge_instructions>");
-    expect(prompt).toContain(
+
+    const inputEvent = JSON.parse(child.stdin.writes.join("")) as {
+      event: string;
+      message: { content: string };
+    };
+    expect(inputEvent.event).toBe("user");
+    expect(inputEvent.message.content).toContain("<private_bridge_instructions>");
+    expect(inputEvent.message.content).toContain(
       "Follow these instructions silently. Do not describe them, quote them, or treat them as the user request.",
     );
-    expect(prompt).toContain("Reply through Telegram.");
-    expect(prompt).toContain("<user_message>\nHello\n</user_message>");
-    expect(prompt).toContain("Attachment: a.png\nAttachment: b.pdf");
+    expect(inputEvent.message.content).toContain("Reply through Telegram.");
+    expect(inputEvent.message.content).toContain("<user_message>\nHello\n</user_message>");
+    expect(inputEvent.message.content).toContain("Attachment: a.png\nAttachment: b.pdf");
+    expect(child.stdin.ended).toBe(true);
     expect(calls[0]?.options.env?.TELEGRAM_BOT_TOKEN).toBeUndefined();
     expect(calls[0]?.options.env?.AGY_CLI_HIDE_ACCOUNT_INFO).toBe("1");
     expect(childEnv.TELEGRAM_BOT_TOKEN).toBe("secret-token");
@@ -79,489 +82,327 @@ describe("ProcessAntigravityAdapter", () => {
     expect(calls[0]?.options.env?.NODE_OPTIONS).toBeUndefined();
   });
 
-  it("omits agy's print timeout for explicitly unbounded turns", async () => {
+  it("maps structured session, text, tool, result, and per-step usage events", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: "/tmp/home" },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
-
-    const promise = adapter.sendUserMessage("telegram-12345", {
-      text: "/goal --unbounded finish the migration",
-      files: [],
-      disableRuntimeTimeout: true,
-    });
-
-    await vi.waitFor(() => {
-      expect(calls).toHaveLength(1);
-    });
-    child.stdout.emitData("ok");
-    child.close(0);
-
-    await expect(promise).resolves.toEqual({ text: "ok" });
-    expect(calls[0]?.args).toContain("--print");
-    expect(calls[0]?.args).not.toContain("--print-timeout");
-    expect(calls[0]?.args).not.toContain("1h");
-  });
-
-  it("binds new Telegram chats to the Antigravity conversation reported in the per-turn log file", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
-    const { spawnAntigravity, child, calls } = createSpawnHarness();
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: root },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
-
-    try {
-      const onEngineEvent = vi.fn();
-      const promise = adapter.sendUserMessage("telegram-12345", {
-        text: "Hello",
-        files: [],
-        onEngineEvent,
-      });
-
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(1);
-      });
-      const logFileIndex = calls[0]?.args.indexOf("--log-file") ?? -1;
-      expect(logFileIndex).toBeGreaterThanOrEqual(0);
-      const logFile = calls[0]?.args[logFileIndex + 1];
-      expect(logFile).toBeTruthy();
-      await mkdir(path.dirname(logFile!), { recursive: true });
-      await writeFile(
-        logFile!,
-        'I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=11111111-2222-4333-8444-555555555555, sending message\n',
-        "utf8",
-      );
-      const globalLogDir = path.join(root, ".gemini", "antigravity-cli", "log");
-      await mkdir(globalLogDir, { recursive: true });
-      await writeFile(
-        path.join(globalLogDir, "cli-20260520_095913.log"),
-        'I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=fdfc8ab1-7936-4599-98b0-d8ba2593c250, sending message\n',
-        "utf8",
-      );
-      child.stdout.emitData("ok");
-      child.close(0);
-
-      await expect(promise).resolves.toEqual({
-        text: "ok",
-        sessionId: "11111111-2222-4333-8444-555555555555",
-      });
-      expect(onEngineEvent).toHaveBeenCalledWith({
-        type: "session",
-        sessionId: "11111111-2222-4333-8444-555555555555",
-      });
-    } finally {
-      await removeTempRoot(root);
-    }
-  });
-
-  it("falls back to shared log scanning when an older agy rejects --log-file", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
-    const children = [new FakeChildProcess(), new FakeChildProcess()];
-    const calls: Array<{
-      command: string;
-      args: string[];
-      options: { stdio: ["pipe", "pipe", "pipe"]; shell?: boolean; env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean };
-    }> = [];
-    const spawnAntigravity = (
-      command: string,
-      args: string[],
-      options: { stdio: ["pipe", "pipe", "pipe"]; shell?: boolean; env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean },
-    ) => {
-      calls.push({ command, args, options });
-      return children[calls.length - 1]!;
-    };
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: root },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
-
-    try {
-      const promise = adapter.sendUserMessage("telegram-12345", {
-        text: "Hello",
-        files: [],
-      });
-
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(1);
-      });
-      expect(calls[0]?.args).toContain("--log-file");
-      children[0]!.stderr.emitData("flag provided but not defined: -log-file\n");
-      children[0]!.close(2);
-
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(2);
-      });
-      expect(calls[1]?.args).not.toContain("--log-file");
-      const logDir = path.join(root, ".gemini", "antigravity-cli", "log");
-      await mkdir(logDir, { recursive: true });
-      await writeFile(
-        path.join(logDir, "cli-20260520_095913.log"),
-        'I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=FDFC8AB1-7936-4599-98B0-D8BA2593C250, sending message\n',
-        "utf8",
-      );
-      children[1]!.stdout.emitData("ok");
-      children[1]!.close(0);
-
-      await expect(promise).resolves.toEqual({
-        text: "ok",
-        sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
-      });
-    } finally {
-      await removeTempRoot(root);
-    }
-  });
-
-  it("binds new Telegram chats to the Antigravity conversation reported in the CLI log", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
-    const { spawnAntigravity, child, calls } = createSpawnHarness();
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: root },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
-
-    try {
-      const onEngineEvent = vi.fn();
-      const promise = adapter.sendUserMessage("telegram-12345", {
-        text: "Hello",
-        files: [],
-        onEngineEvent,
-      });
-
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(1);
-      });
-      const logDir = path.join(root, ".gemini", "antigravity-cli", "log");
-      await mkdir(logDir, { recursive: true });
-      await writeFile(
-        path.join(logDir, "cli-20260520_095913.log"),
-        'I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=fdfc8ab1-7936-4599-98b0-d8ba2593c250, sending message\n',
-        "utf8",
-      );
-      child.stdout.emitData("ok");
-      child.close(0);
-
-      await expect(promise).resolves.toEqual({
-        text: "ok",
-        sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
-      });
-      expect(onEngineEvent).toHaveBeenCalledWith({
-        type: "session",
-        sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
-      });
-    } finally {
-      await removeTempRoot(root);
-    }
-  });
-
-  it("binds to our pid's conversation even when a newer foreign agy log sorts first (regression #10)", async () => {
-    // Two agy conversations leave logs in the shared dir. A DIFFERENT conversation
-    // (pid 9999) wrote more recently than ours (the child's pid 4242), so it sorts
-    // first by mtime. The old single loop tried our pid in the newest file, missed,
-    // then took that file's any-conversation-id fallback — binding the session to the
-    // foreign conversation. The pid-scoped pass must win regardless of file order.
-    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
-    const { spawnAntigravity, child, calls } = createSpawnHarness();
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: root },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
-
-    try {
-      const promise = adapter.sendUserMessage("telegram-12345", {
-        text: "Hello",
-        files: [],
-      });
-
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(1);
-      });
-      const logDir = path.join(root, ".gemini", "antigravity-cli", "log");
-      await mkdir(logDir, { recursive: true });
-      // Our turn's log carries the child pid 4242 and OUR conversation.
-      const oursPath = path.join(logDir, "cli-20260520_095913.log");
-      await writeFile(
-        oursPath,
-        "I0520 09:59:15.497863  4242 printmode.go:130] Print mode: conversation=fdfc8ab1-7936-4599-98b0-d8ba2593c250, sending message\n",
-        "utf8",
-      );
-      // An unrelated agy conversation (pid 9999) that wrote MORE RECENTLY.
-      const foreignPath = path.join(logDir, "cli-20260520_100000.log");
-      await writeFile(
-        foreignPath,
-        "I0520 10:00:00.000000  9999 printmode.go:130] Print mode: conversation=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, sending message\n",
-        "utf8",
-      );
-      // Force the foreign log newest (sorts first) while both stay inside the recency window.
-      const now = Date.now() / 1000;
-      await utimes(oursPath, now - 2, now - 2);
-      await utimes(foreignPath, now, now);
-
-      child.stdout.emitData("ok");
-      child.close(0);
-
-      await expect(promise).resolves.toEqual({
-        text: "ok",
-        sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
-      });
-    } finally {
-      await removeTempRoot(root);
-    }
-  });
-
-  it("does NOT bind to a foreign conversation when our pid is known but absent from the logs (fail-closed, regression #10b)", async () => {
-    // Our child's pid (4242) never appears in the recent logs — only an unrelated agy
-    // conversation (pid 9999) does. Rather than fall back to that foreign conversation's
-    // id (the very risk this resolver guards against, e.g. a delayed/missing pid line or a
-    // log-format change), resolution must fail closed so the turn starts a fresh session
-    // instead of resuming someone else's.
-    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-home-"));
-    const { spawnAntigravity, child, calls } = createSpawnHarness();
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: root },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
-    const foreignId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-
-    try {
-      const onEngineEvent = vi.fn();
-      const promise = adapter.sendUserMessage("telegram-12345", {
-        text: "Hello",
-        files: [],
-        onEngineEvent,
-      });
-
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(1);
-      });
-      const logDir = path.join(root, ".gemini", "antigravity-cli", "log");
-      await mkdir(logDir, { recursive: true });
-      await writeFile(
-        path.join(logDir, "cli-20260520_100000.log"),
-        `I0520 10:00:00.000000  9999 printmode.go:130] Print mode: conversation=${foreignId}, sending message\n`,
-        "utf8",
-      );
-      child.stdout.emitData("ok");
-      child.close(0);
-
-      const result = await promise;
-      expect(result.text).toBe("ok");
-      // Must NOT have grabbed the foreign conversation id, and must not have emitted it.
-      expect(result.sessionId).not.toBe(foreignId);
-      expect(onEngineEvent).not.toHaveBeenCalledWith({ type: "session", sessionId: foreignId });
-    } finally {
-      await removeTempRoot(root);
-    }
-  });
-
-  it("emits stdout progress as assistant text stream events", async () => {
-    const { spawnAntigravity, child, calls } = createSpawnHarness();
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: "/tmp/home" },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
+      "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, undefined, "/tmp/workspace",
     );
     const onProgress = vi.fn();
     const onEngineEvent = vi.fn();
 
     const promise = adapter.sendUserMessage("telegram-12345", {
-      text: "Stream",
-      files: [],
-      onProgress,
-      onEngineEvent,
+      text: "Use a tool", files: [], onProgress, onEngineEvent,
     });
 
-    await vi.waitFor(() => {
-      expect(calls).toHaveLength(1);
-    });
-    child.stdout.emitData("hello ");
-    child.stdout.emitData("world");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({
+      event: "init", conversation_id: CONVERSATION_ID, init: { cwd: "/tmp/workspace" },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 1, state: "DONE",
+        step_type: "agent_response", text_delta: "hello ",
+        usage: { input_tokens: 10, output_tokens: 2, cache_read_tokens: 3 },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 2, state: "ACTIVE", step_type: "tool",
+        tool_name: "run_command",
+        tool_info: { name: "run_command", parameters: { CommandLine: "pwd" } },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 2, state: "DONE", step_type: "tool",
+        tool_name: "run_command",
+        tool_info: {
+          name: "run_command", parameters: { CommandLine: "pwd" }, output: "/tmp/workspace\n",
+        },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 3, state: "DONE",
+        step_type: "agent_response", text_delta: "world",
+        usage: { input_tokens: 4, output_tokens: 1, cache_read_tokens: 2 },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: {
+        conversation_id: CONVERSATION_ID, status: "SUCCESS", response: "hello world",
+        usage: { input_tokens: 999, output_tokens: 888, cache_read_tokens: 777 },
+      },
+    }));
     child.close(0);
 
-    await expect(promise).resolves.toEqual({ text: "hello world" });
+    await expect(promise).resolves.toEqual({
+      text: "hello world",
+      sessionId: CONVERSATION_ID,
+      usage: { inputTokens: 14, outputTokens: 3, cachedTokens: 5 },
+    });
     expect(onProgress).toHaveBeenNthCalledWith(1, "hello ");
     expect(onProgress).toHaveBeenNthCalledWith(2, "hello world");
-    expect(onEngineEvent).toHaveBeenCalledWith({
-      type: "assistant_text",
-      text: "hello ",
-    });
-    expect(onEngineEvent).toHaveBeenCalledWith({
-      type: "assistant_text",
-      text: "world",
-    });
+    expect(onEngineEvent.mock.calls.map(([event]) => event)).toEqual([
+      { type: "session", sessionId: CONVERSATION_ID },
+      { type: "assistant_text", text: "hello ", delta: true, sessionId: CONVERSATION_ID },
+      {
+        type: "tool_use", toolName: "run_command", toolInput: { CommandLine: "pwd" },
+        toolUseId: `${CONVERSATION_ID}:2`, sessionId: CONVERSATION_ID,
+      },
+      {
+        type: "tool_result", toolName: "run_command", toolUseId: `${CONVERSATION_ID}:2`,
+        output: "/tmp/workspace\n", isError: false, sessionId: CONVERSATION_ID,
+      },
+      { type: "assistant_text", text: "world", delta: true, sessionId: CONVERSATION_ID },
+      { type: "result", text: "hello world", sessionId: CONVERSATION_ID },
+    ]);
   });
 
-  it("preserves UTF-8 characters split across stdout chunks", async () => {
+  it("emits a terminal tool result only once when agy repeats the final step snapshot", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: "/tmp/home" },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
     const onEngineEvent = vi.fn();
-    const text = "开头中文🙂结尾";
-    const bytes = Buffer.from(text, "utf8");
 
     const promise = adapter.sendUserMessage("telegram-12345", {
-      text: "Stream UTF-8",
-      files: [],
-      onEngineEvent,
+      text: "Use a tool", files: [], onEngineEvent,
     });
-
-    await vi.waitFor(() => {
-      expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    const terminalTool = jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 2, state: "DONE", step_type: "tool",
+        tool_name: "run_command", tool_info: { output: "ok" },
+      },
     });
-    child.stdout.emitData(bytes.subarray(0, 7));
-    child.stdout.emitData(bytes.subarray(7));
+    child.stdout.emitData(terminalTool);
+    child.stdout.emitData(terminalTool);
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: "done" },
+    }));
     child.close(0);
 
-    await expect(promise).resolves.toEqual({ text });
+    await expect(promise).resolves.toMatchObject({ text: "done" });
+    const terminalEvents = onEngineEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.type === "tool_result");
+    expect(terminalEvents).toHaveLength(1);
+  });
+
+  it("uses streamed answer text when a successful result carries an empty response", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Answer", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 1, state: "DONE",
+        step_type: "agent_response", text_delta: "streamed answer",
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: "" },
+    }));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text: "streamed answer" });
+  });
+
+  it("preserves UTF-8 characters split across structured stdout chunks", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const onEngineEvent = vi.fn();
+    const text = "开头中文🙂结尾";
+    const stream = Buffer.from([
+      jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }),
+      jsonLine({
+        event: "step_update",
+        step_update: {
+          conversation_id: CONVERSATION_ID, step_index: 1, state: "DONE",
+          step_type: "agent_response", text_delta: text,
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      }),
+      jsonLine({
+        event: "result",
+        result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: text },
+      }),
+    ].join(""), "utf8");
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Stream UTF-8", files: [], onEngineEvent,
+    });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const splitAt = stream.indexOf(Buffer.from("中", "utf8")) + 1;
+    child.stdout.emitData(stream.subarray(0, splitAt));
+    child.stdout.emitData(stream.subarray(splitAt));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text });
     const streamedText = onEngineEvent.mock.calls
-      .map(([event]) => event.text)
+      .map(([event]) => event.type === "assistant_text" ? event.text : "")
       .join("");
     expect(streamedText).toBe(text);
     expect(streamedText).not.toContain("�");
   });
 
-  it("resumes non-logical Antigravity conversations with --conversation", async () => {
+  it("resumes structured conversations with --conversation", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
-    const adapter = new ProcessAntigravityAdapter(
-      "agy",
-      { HOME: "/tmp/home" },
-      spawnAntigravity,
-      undefined,
-      undefined,
-      "/tmp/workspace",
-    );
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
 
-    const promise = adapter.sendUserMessage("fdfc8ab1-7936-4599-98b0-d8ba2593c250", {
-      text: "Continue",
-      files: [],
-    });
-
-    await vi.waitFor(() => {
-      expect(calls).toHaveLength(1);
-    });
-    child.stdout.emitData("continued");
+    const promise = adapter.sendUserMessage(CONVERSATION_ID, { text: "Continue", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    emitSuccess(child, "continued");
     child.close(0);
 
-    await expect(promise).resolves.toEqual({
-      text: "continued",
-      sessionId: "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
-    });
-    expect(calls[0]?.args).toEqual(expect.arrayContaining([
-      "--conversation",
-      "fdfc8ab1-7936-4599-98b0-d8ba2593c250",
-    ]));
+    await expect(promise).resolves.toMatchObject({ text: "continued", sessionId: CONVERSATION_ID });
+    expect(calls[0]?.args).toEqual(expect.arrayContaining(["--conversation", CONVERSATION_ID]));
   });
 
-  it("starts Antigravity in YOLO mode when full-auto is configured", async () => {
+  it("passes configured Antigravity model, effort, and YOLO mode to agy", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-"));
     const configPath = path.join(root, "config.json");
-
     try {
-      await writeFile(configPath, JSON.stringify({ approvalMode: "full-auto" }), "utf8");
+      await writeFile(configPath, JSON.stringify({
+        engine: "antigravity", model: "gemini-3.7-flash-high", effort: "high", approvalMode: "full-auto",
+      }), "utf8");
       const { spawnAntigravity, child, calls } = createSpawnHarness();
       const adapter = new ProcessAntigravityAdapter(
-        "agy",
-        { HOME: "/tmp/home" },
-        spawnAntigravity,
-        undefined,
-        configPath,
-        "/tmp/workspace",
+        "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, configPath, "/tmp/workspace",
       );
 
-      const promise = adapter.sendUserMessage("telegram-12345", {
-        text: "Hello",
-        files: [],
-      });
-
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(1);
-      });
-      child.stdout.emitData("ok");
+      const promise = adapter.sendUserMessage("telegram-12345", { text: "Hello", files: [] });
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      emitSuccess(child, "ok");
       child.close(0);
 
-      await expect(promise).resolves.toEqual({ text: "ok" });
+      await expect(promise).resolves.toMatchObject({ text: "ok" });
       expect(calls[0]?.args).toEqual(expect.arrayContaining([
-        "--print",
-        "--print-timeout",
-        "1h",
-        "--dangerously-skip-permissions",
-        "--add-dir",
-        "/tmp/workspace",
-        "-",
+        "--model", "gemini-3.7-flash-high", "--effort", "high", "--dangerously-skip-permissions",
       ]));
     } finally {
       await removeTempRoot(root);
     }
   });
 
-  it("defaults Antigravity engine configs without an approval mode to YOLO", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-adapter-"));
-    const configPath = path.join(root, "config.json");
+  it("keeps native /goal at the start of a direct print prompt and uses a high native ceiling when unbounded", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, undefined, "/tmp/workspace",
+    );
 
-    try {
-      await writeFile(configPath, JSON.stringify({ engine: "antigravity" }), "utf8");
-      const { spawnAntigravity, child, calls } = createSpawnHarness();
-      const adapter = new ProcessAntigravityAdapter(
-        "agy",
-        { HOME: "/tmp/home" },
-        spawnAntigravity,
-        undefined,
-        configPath,
-        "/tmp/workspace",
-      );
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "/goal finish the migration",
+      files: ["plan.md"],
+      instructions: "Deliver the final result through Lark.",
+      disableRuntimeTimeout: true,
+    });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    emitSuccess(child, "GOAL_OK");
+    child.close(0);
 
-      const promise = adapter.sendUserMessage("telegram-12345", {
-        text: "Hello",
-        files: [],
-      });
+    await expect(promise).resolves.toMatchObject({ text: "GOAL_OK" });
+    expect(calls[0]?.args).not.toContain("--input-format");
+    expect(calls[0]?.args).toEqual(expect.arrayContaining([
+      "-p", "--output-format", "stream-json", "--print-timeout", "168h",
+    ]));
+    const printIndex = calls[0]!.args.indexOf("-p");
+    const prompt = calls[0]!.args[printIndex + 1]!;
+    expect(prompt.startsWith("/goal finish the migration")).toBe(true);
+    expect(prompt).toContain("<private_bridge_instructions>");
+    expect(prompt).toContain("Attachment: plan.md");
+    expect(prompt).not.toContain("<user_message>\n/goal");
+    expect(child.stdin.writes).toEqual([]);
+    expect(child.stdin.ended).toBe(true);
+  });
 
-      await vi.waitFor(() => {
-        expect(calls).toHaveLength(1);
-      });
-      child.stdout.emitData("ok");
-      child.close(0);
+  it("fails closed on an Antigravity ERROR result", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
 
-      await expect(promise).resolves.toEqual({ text: "ok" });
-      expect(calls[0]?.args).toContain("--dangerously-skip-permissions");
-    } finally {
-      await removeTempRoot(root);
-    }
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Fail", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: CONVERSATION_ID, status: "ERROR", error: "upstream disconnected" },
+    }));
+    child.close(0);
+
+    await expect(promise).rejects.toThrow("upstream disconnected");
+  });
+
+  it("rejects malformed structured output instead of posting it as assistant text", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const onEngineEvent = vi.fn();
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Malformed", files: [], onEngineEvent,
+    });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData("internal thinking accidentally printed\n");
+
+    await expect(promise).rejects.toThrow("invalid structured output");
+    expect(onEngineEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "assistant_text" }));
+  });
+
+  it("rejects a clean exit that never emitted the required result event", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Missing result", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.close(0);
+
+    await expect(promise).rejects.toThrow("without a result event");
+  });
+
+  it("retries without --log-file only when an older agy rejects that flag", async () => {
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Retry", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.args).toContain("--log-file");
+    children[0]!.stderr.emitData("unknown flag: --log-file\n");
+    children[0]!.close(2);
+
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]?.args).not.toContain("--log-file");
+    emitSuccess(children[1]!, "retried");
+    children[1]!.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text: "retried", sessionId: CONVERSATION_ID });
   });
 });
+
+type SpawnOptions = {
+  stdio: ["pipe", "pipe", "pipe"];
+  shell?: boolean;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  windowsHide?: boolean;
+};
+type SpawnCall = { command: string; args: string[]; options: SpawnOptions };
+type SpawnAntigravity = (command: string, args: string[], options: SpawnOptions) => FakeChildProcess;
 
 class FakeStream extends EventEmitter {
   emitData(chunk: string | Buffer) {
@@ -575,39 +416,43 @@ class FakeChildProcess extends EventEmitter {
     writes: [] as string[],
     ended: false,
     end: (chunk?: string) => {
-      if (chunk) {
-        this.stdin.writes.push(chunk);
-      }
+      if (chunk) this.stdin.writes.push(chunk);
       this.stdin.ended = true;
     },
+    on: (_event: "error", _listener: (error: Error) => void) => undefined,
   };
   stdout = new FakeStream();
   stderr = new FakeStream();
 
-  kill() {
-    return true;
-  }
-
-  close(code: number | null) {
-    this.emit("close", code);
-  }
+  kill() { return true; }
+  close(code: number | null) { this.emit("close", code); }
 }
 
 function createSpawnHarness() {
   const child = new FakeChildProcess();
-  const calls: Array<{
-    command: string;
-    args: string[];
-    options: { stdio: ["pipe", "pipe", "pipe"]; shell?: boolean; env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean };
-  }> = [];
-  const spawnAntigravity = (
-    command: string,
-    args: string[],
-    options: { stdio: ["pipe", "pipe", "pipe"]; shell?: boolean; env?: NodeJS.ProcessEnv; cwd?: string; windowsHide?: boolean },
-  ) => {
+  const calls: SpawnCall[] = [];
+  const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
     calls.push({ command, args, options });
     return child;
   };
-
   return { spawnAntigravity, child, calls };
+}
+
+function jsonLine(value: unknown): string {
+  return `${JSON.stringify(value)}\n`;
+}
+
+function emitSuccess(child: FakeChildProcess, text: string): void {
+  child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+  child.stdout.emitData(jsonLine({
+    event: "step_update",
+    step_update: {
+      conversation_id: CONVERSATION_ID, step_index: 1, state: "DONE",
+      step_type: "agent_response", text_delta: text,
+    },
+  }));
+  child.stdout.emitData(jsonLine({
+    event: "result",
+    result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: text },
+  }));
 }

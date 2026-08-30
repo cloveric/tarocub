@@ -73,6 +73,13 @@ const ENGINE_LABELS: Record<string, string> = {
 };
 // The config schema (z.enum(EFFORT_LEVELS)) only accepts these; blank = unset.
 const EFFORTS = ["", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+const ENGINE_EFFORTS: Record<string, readonly string[]> = {
+  codex: EFFORTS,
+  claude: ["", "low", "medium", "high", "xhigh", "max"],
+  kimi: ["", "low", "high", "max"],
+  deepseek: ["", "low", "high", "max"],
+  antigravity: ["", "low", "medium", "high"],
+};
 const LOCALES = [
   { value: "en", label: "English (en)" },
   { value: "zh", label: "中文 (zh)" },
@@ -292,6 +299,7 @@ function ConfigPanel({
 
   const dirtyKeys = Object.keys(patch);
   const budgetInvalid = budget.trim() !== "" && !(Number(budget) > 0);
+  const effortOptions = ENGINE_EFFORTS[engine] ?? EFFORTS;
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -340,7 +348,11 @@ function ConfigPanel({
 
       <div className="grid">
         <Field label="Engine" hint="Which CLI backend this instance drives.">
-          <select value={engine} onChange={(e) => setEngine(e.target.value)}>
+          <select value={engine} onChange={(e) => {
+            const nextEngine = e.target.value;
+            setEngine(nextEngine);
+            if (!(ENGINE_EFFORTS[nextEngine] ?? EFFORTS).includes(effort)) setEffort("");
+          }}>
             {ENGINES.map((v) => (
               <option key={v} value={v}>
                 {ENGINE_LABELS[v]}
@@ -363,7 +375,7 @@ function ConfigPanel({
 
         <Field label="Effort" hint="Reasoning effort; blank = unset.">
           <select value={effort} onChange={(e) => setEffort(e.target.value)}>
-            {EFFORTS.map((v) => (
+            {effortOptions.map((v) => (
               <option key={v || "_blank"} value={v}>
                 {v === "" ? "— (unset)" : v}
               </option>

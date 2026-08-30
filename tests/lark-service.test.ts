@@ -5637,7 +5637,7 @@ describe("lark service", () => {
     }
   });
 
-  it("keeps Lark Antigravity model commands local instead of forwarding them", async () => {
+  it("stores Lark Antigravity model commands locally instead of forwarding them", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-agy-model-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "antigravity" }) + "\n");
     const channel = fakeChannel();
@@ -5652,17 +5652,53 @@ describe("lark service", () => {
         bridge,
         runtime: createLarkServiceRuntime(),
         stateDir,
-        message: fakeLarkMessage({ messageId: "om_model", content: "/model gemini-3.5-flash" }),
+        message: fakeLarkMessage({ messageId: "om_model", content: "/model gemini-3.7-flash-high" }),
       });
 
       const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
-      expect(config.model).toBeUndefined();
+      expect(config.model).toBe("gemini-3.7-flash-high");
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { markdown: expect.stringContaining("Antigravity 模型") },
+        { markdown: expect.stringContaining("gemini-3.7-flash-high") },
         { replyTo: "om_model", replyInThread: false },
       );
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stores only agy-compatible Antigravity effort from Lark", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-agy-effort-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "antigravity" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_effort", content: "/effort high" }),
+      });
+      let config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.effort).toBe("high");
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_effort_bad", content: "/effort max" }),
+      });
+      config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.effort).toBe("high");
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("low、medium、high");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

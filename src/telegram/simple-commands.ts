@@ -20,6 +20,7 @@ import {
   type TelegramTurnContext,
 } from "./turn-bookkeeping.js";
 import {
+  ANTIGRAVITY_EFFORT_LEVELS,
   CLAUDE_MODEL_CHOICES,
   DEEPSEEK_EFFORT_LEVELS,
   KIMI_EFFORT_LEVELS,
@@ -30,18 +31,6 @@ import {
 import type { NormalizedTelegramMessage } from "./update-normalizer.js";
 
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
-
-function renderAntigravityNativeEffortMessage(locale: Locale): string {
-  return locale === "zh"
-    ? "Antigravity 的 effort 由 agy CLI 原生控制；bridge 目前还没有可用的 effort 启动参数。模型选择请在本机交互式 agy 里使用 /model。"
-    : "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. For model selection, open agy locally and use /model there.";
-}
-
-function renderAntigravityNativeModelMessage(locale: Locale): string {
-  return locale === "zh"
-    ? "Telegram 里暂不支持切换 Antigravity 模型，因为 agy --print 不会运行交互式 /model 解析器。请在本机交互式 agy 里使用 /model；bridge 不会再把 /model 当普通聊天发给模型。"
-    : "Antigravity model switching is not available from Telegram because agy --print does not run the interactive /model parser. Open agy locally and use /model there; the bridge will not forward /model as a chat prompt.";
-}
 
 function isHelpCommand(text: string): boolean {
   return /^\/help(?:@\w+)?(?:\s|$)/i.test(text.trim());
@@ -180,6 +169,20 @@ export async function handleSimpleLocalTelegramCommand(input: {
           ].join("\n");
     }
 
+    if (cfg.engine === "antigravity") {
+      return locale === "zh"
+        ? [
+            `当前模型: ${current}`,
+            "用 /model <id> 设置 agy models 列出的模型；下一轮启动时由 agy 校验。",
+            "/model off",
+          ].join("\n")
+        : [
+            `Current model: ${current}`,
+            "Use /model <id> with a model listed by agy models; agy validates it when the next turn starts.",
+            "/model off",
+          ].join("\n");
+    }
+
     return locale === "zh"
       ? [
           `当前模型: ${current}`,
@@ -295,11 +298,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
   if (effortCmd) {
     let effortMessage: string;
     let auditValue = effortCmd.level || "query";
-    if (cfg.engine === "antigravity") {
-      effortMessage = renderAntigravityNativeEffortMessage(locale);
-      auditValue = "unsupported-engine";
-      await context.api.sendMessage(normalized.chatId, effortMessage);
-    } else if (!effortCmd.level) {
+    if (!effortCmd.level) {
       const current = cfg.effort ?? "default";
       effortMessage = locale === "zh" ? `当前 effort: ${current}` : `Current effort: ${current}`;
       await context.api.sendMessage(normalized.chatId, effortMessage);
@@ -328,6 +327,16 @@ export async function handleSimpleLocalTelegramCommand(input: {
       effortMessage = locale === "zh"
         ? "DeepSeek Harness effort 仅支持 low、high、max 或 off。"
         : "DeepSeek Harness effort supports only low, high, max, or off.";
+      await context.api.sendMessage(normalized.chatId, effortMessage);
+    } else if (
+      cfg.engine === "antigravity" &&
+      !ANTIGRAVITY_EFFORT_LEVELS.includes(effortCmd.level as (typeof ANTIGRAVITY_EFFORT_LEVELS)[number]) &&
+      effortCmd.level !== "off" && effortCmd.level !== "default"
+    ) {
+      auditValue = "unsupported-antigravity-effort";
+      effortMessage = locale === "zh"
+        ? "Antigravity effort 仅支持 low、medium、high 或 off。"
+        : "Antigravity effort supports only low, medium, high, or off.";
       await context.api.sendMessage(normalized.chatId, effortMessage);
     } else if (VALID_EFFORT_LEVELS.includes(effortCmd.level as EffortLevel) && cfg.engine === "codex") {
       const effort = effortCmd.level as EffortLevel;
@@ -379,11 +388,7 @@ export async function handleSimpleLocalTelegramCommand(input: {
     let modelMessage: string;
     const normalizedModel = normalizeModelCommandInput(cfg.engine, modelCmd.model);
     let auditValue = normalizedModel || "query";
-    if (cfg.engine === "antigravity") {
-      auditValue = "unsupported-print-mode";
-      modelMessage = renderAntigravityNativeModelMessage(locale);
-      await context.api.sendMessage(normalized.chatId, modelMessage);
-    } else if (!normalizedModel) {
+    if (!normalizedModel) {
       modelMessage = renderModelSelectionMessage();
       await context.api.sendMessage(normalized.chatId, modelMessage);
     } else if (!isSingleTokenModelName(normalizedModel)) {

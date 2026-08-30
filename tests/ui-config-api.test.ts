@@ -85,6 +85,46 @@ describe("UI config API", () => {
     }
   });
 
+  it("applies Antigravity engine defaults when switching from the UI", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
+    try {
+      await makeInstance(home, "agy-bot", {
+        engine: "codex",
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
+        approvalMode: "normal",
+      });
+      const post = await handleUiApiRequest("POST", "/api/instances/agy-bot/config", {
+        engine: "antigravity",
+      }, { HOME: home });
+
+      expect(post.status).toBe(200);
+      const saved = JSON.parse(await readFile(path.join(home, ".cctb", "agy-bot", "config.json"), "utf8"));
+      expect(saved).toMatchObject({ engine: "antigravity", approvalMode: "full-auto" });
+      expect(saved.model).toBeUndefined();
+      expect(saved.effort).toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an effort that the selected Antigravity CLI cannot accept", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
+    try {
+      await makeInstance(home, "agy-bot", { engine: "antigravity", effort: "low" });
+      const post = await handleUiApiRequest("POST", "/api/instances/agy-bot/config", {
+        effort: "max",
+      }, { HOME: home });
+
+      expect(post.status).toBe(400);
+      expect(post.json).toEqual({ error: "Antigravity effort supports only low, medium, or high" });
+      const saved = JSON.parse(await readFile(path.join(home, ".cctb", "agy-bot", "config.json"), "utf8"));
+      expect(saved.effort).toBe("low");
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a path-traversal instance name", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
     try {

@@ -57,6 +57,36 @@ describe("loadInstanceConfig", () => {
     }
   });
 
+  it("keeps supported Antigravity effort and drops unsupported extended levels", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({ engine: "antigravity", model: "gemini-3.7-flash-high", effort: "high" }) + "\n",
+        "utf8",
+      );
+      await expect(loadInstanceConfig(root)).resolves.toMatchObject({
+        engine: "antigravity",
+        model: "gemini-3.7-flash-high",
+        effort: "high",
+      });
+
+      await writeFile(
+        path.join(root, "config.json"),
+        JSON.stringify({ engine: "antigravity", model: "gemini-3.7-flash-high", effort: "xhigh" }) + "\n",
+        "utf8",
+      );
+      await expect(loadInstanceConfig(root)).resolves.toMatchObject({
+        engine: "antigravity",
+        effort: undefined,
+      });
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Antigravity supports only low, medium, and high"));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("loads Codex GPT-5.6 ultra effort without dropping it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
 
@@ -531,6 +561,17 @@ describe("applyEngineSelection", () => {
     });
     expect(config.model).toBeUndefined();
     expect(config.codexServiceTier).toBeUndefined();
+    expect(config.effort).toBeUndefined();
+  });
+
+  it("preserves only Antigravity-compatible effort when reselecting that engine", () => {
+    const valid: Record<string, unknown> = { engine: "antigravity", effort: "high" };
+    applyEngineSelection(valid, "antigravity");
+    expect(valid.effort).toBe("high");
+
+    const invalid: Record<string, unknown> = { engine: "antigravity", effort: "max" };
+    applyEngineSelection(invalid, "antigravity");
+    expect(invalid.effort).toBeUndefined();
   });
 
   it("keeps the old Antigravity safety upgrade when explicit normal approvals are selected", () => {

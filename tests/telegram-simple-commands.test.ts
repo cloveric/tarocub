@@ -524,12 +524,16 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
-  it("does not pretend to set Antigravity effort through bridge config", async () => {
+  it("sets an Antigravity effort supported by the agy startup flag", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
-    const updateInstanceConfig = vi.fn();
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, string>) => void) => {
+      const config: Record<string, string> = {};
+      mutate(config);
+      expect(config.effort).toBe("high");
+    });
 
     try {
       const handled = await handleSimpleLocalTelegramCommand({
@@ -547,10 +551,33 @@ describe("handleSimpleLocalTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Effort set to high.");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("rejects Antigravity effort levels that agy does not accept", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
+    const api = { sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }) };
+    const updateInstanceConfig = vi.fn();
+    try {
+      const handled = await handleSimpleLocalTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "en",
+        cfg: { engine: "antigravity" },
+        normalized: createNormalizedMessage("/effort max"),
+        context: { api: api as never, instanceName: "default", updateId: 80 },
+        updateInstanceConfig,
+      });
+
+      expect(handled).toBe(true);
       expect(updateInstanceConfig).not.toHaveBeenCalled();
       expect(api.sendMessage).toHaveBeenCalledWith(
         123,
-        "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. For model selection, open agy locally and use /model there.",
+        "Antigravity effort supports only low, medium, high, or off.",
       );
     } finally {
       await removeTempRoot(root);
@@ -864,13 +891,17 @@ describe("handleSimpleLocalTelegramCommand", () => {
     }
   });
 
-  it("blocks Antigravity /model before it can be sent to agy --print as chat", async () => {
+  it("stores Antigravity /model for agy's startup flag instead of forwarding it as chat", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-simple-commands-"));
     const api = {
       sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
     };
-    const updateInstanceConfig = vi.fn();
-    const normalized = createNormalizedMessage("/model@cloveric17bot Gemini 3.5 Flash High");
+    const updateInstanceConfig = vi.fn(async (mutate: (cfg: Record<string, string>) => void) => {
+      const config: Record<string, string> = {};
+      mutate(config);
+      expect(config.model).toBe("gemini-3.7-flash-high");
+    });
+    const normalized = createNormalizedMessage("/model@cloveric17bot gemini-3.7-flash-high");
 
     try {
       const handled = await handleSimpleLocalTelegramCommand({
@@ -888,12 +919,9 @@ describe("handleSimpleLocalTelegramCommand", () => {
       });
 
       expect(handled).toBe(true);
-      expect(normalized.text).toBe("/model@cloveric17bot Gemini 3.5 Flash High");
-      expect(updateInstanceConfig).not.toHaveBeenCalled();
-      expect(api.sendMessage).toHaveBeenCalledWith(
-        123,
-        "Antigravity model switching is not available from Telegram because agy --print does not run the interactive /model parser. Open agy locally and use /model there; the bridge will not forward /model as a chat prompt.",
-      );
+      expect(normalized.text).toBe("/model@cloveric17bot gemini-3.7-flash-high");
+      expect(updateInstanceConfig).toHaveBeenCalledOnce();
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Model set to gemini-3.7-flash-high.");
     } finally {
       await removeTempRoot(root);
     }

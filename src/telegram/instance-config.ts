@@ -28,6 +28,7 @@ export const DEFAULT_CLAUDE_MODEL = CLAUDE_MODEL_CHOICES[0];
 export const DEFAULT_CLAUDE_EFFORT: EffortLevel = "xhigh";
 export const DEFAULT_CODEX_EFFORT: EffortLevel = "xhigh";
 export const KIMI_EFFORT_LEVELS = ["low", "high", "max"] as const satisfies readonly EffortLevel[];
+export const ANTIGRAVITY_EFFORT_LEVELS = ["low", "medium", "high"] as const satisfies readonly EffortLevel[];
 // DeepSeek Harness reasoning efforts are off/low/high/max; `off` is expressed by
 // clearing the effort (the bridge schema has no "off"), so only these persist.
 export const DEEPSEEK_EFFORT_LEVELS = ["low", "high", "max"] as const satisfies readonly EffortLevel[];
@@ -67,7 +68,7 @@ export interface InstanceConfig {
   codexServiceTier: "fast" | undefined;
   /** Lark element-level streaming (native typewriter). undefined = on (default); false = /stream off. */
   larkElementStream: boolean | undefined;
-  /** Lift the single-turn runtime time cap (60 min). undefined/false = cap enforced (default); true = /timeout off. */
+  /** Lift the bridge runtime watchdog. undefined/false = cap enforced; true = /timeout off. */
   disableRuntimeTimeout: boolean | undefined;
   /** Mid-turn steering. undefined/true = enabled (default); false = /steer off (mid-turn messages always queue). */
   larkSteerEnabled: boolean | undefined;
@@ -111,15 +112,19 @@ function sanitizeConfigCompatibility(config: ConfigFile, configPath: string): Co
   const invalidClaudeEffort = engine === "claude" && effort === "ultra";
   const invalidKimiEffort = engine === "kimi" && effort !== undefined &&
     !KIMI_EFFORT_LEVELS.includes(effort as (typeof KIMI_EFFORT_LEVELS)[number]);
+  const invalidAntigravityEffort = engine === "antigravity" && effort !== undefined &&
+    !ANTIGRAVITY_EFFORT_LEVELS.includes(effort as (typeof ANTIGRAVITY_EFFORT_LEVELS)[number]);
   const invalidDeepSeekEffort = engine === "deepseek" && effort !== undefined &&
     !DEEPSEEK_EFFORT_LEVELS.includes(effort as (typeof DEEPSEEK_EFFORT_LEVELS)[number]);
-  if (!invalidCodexEffort && !invalidClaudeEffort && !invalidKimiEffort && !invalidDeepSeekEffort) {
+  if (!invalidCodexEffort && !invalidClaudeEffort && !invalidKimiEffort && !invalidAntigravityEffort && !invalidDeepSeekEffort) {
     return config;
   }
 
   const sanitized = { ...config };
   delete sanitized.effort;
-  const reason = invalidDeepSeekEffort
+  const reason = invalidAntigravityEffort
+    ? "Antigravity supports only low, medium, and high"
+    : invalidDeepSeekEffort
     ? "DeepSeek Harness supports only low, high, and max"
     : invalidKimiEffort
     ? "Kimi ACP supports only low, high, and max"
@@ -147,6 +152,7 @@ export interface GroupModeConfig {
 const VALID_EFFORT_LEVELS: EffortLevel[] = [...EFFORT_LEVELS];
 const VALID_CLAUDE_EFFORT_LEVELS: EffortLevel[] = VALID_EFFORT_LEVELS.filter((level) => level !== "ultra");
 const VALID_KIMI_EFFORT_LEVELS: EffortLevel[] = [...KIMI_EFFORT_LEVELS];
+const VALID_ANTIGRAVITY_EFFORT_LEVELS: EffortLevel[] = [...ANTIGRAVITY_EFFORT_LEVELS];
 
 function applyClaudeEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
   const modelOverride = typeof config.model === "string" && config.model.trim().length > 0
@@ -191,6 +197,15 @@ function applyKimiEngineDefaults(config: Record<string, unknown>, previousEngine
 
 function applyDeepSeekEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
   if (previousEngine !== "deepseek") {
+    delete config.effort;
+  }
+}
+
+function applyAntigravityEngineDefaults(config: Record<string, unknown>, previousEngine: InstanceEngine | undefined): void {
+  const effortOverride = VALID_ANTIGRAVITY_EFFORT_LEVELS.includes(config.effort as EffortLevel)
+    ? config.effort as EffortLevel
+    : undefined;
+  if (previousEngine !== "antigravity" || effortOverride === undefined) {
     delete config.effort;
   }
 }
@@ -338,6 +353,9 @@ export function applyEngineSelection(
   }
   if (engine === "deepseek") {
     applyDeepSeekEngineDefaults(config, previousEngine);
+  }
+  if (engine === "antigravity") {
+    applyAntigravityEngineDefaults(config, previousEngine);
   }
   if (normalizeApprovalMode(config.approvalMode) === undefined) {
     config.approvalMode = DEFAULT_APPROVAL_MODE;

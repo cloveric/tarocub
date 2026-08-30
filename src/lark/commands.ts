@@ -31,6 +31,7 @@ import { UsageStore } from "../state/usage-store.js";
 import { handleCronCommand, isCronCommand } from "../telegram/cron-commands.js";
 import { handleLocalEngineTelegramCommand } from "../telegram/engine-commands.js";
 import {
+  ANTIGRAVITY_EFFORT_LEVELS,
   applyEngineSelection,
   CLAUDE_MODEL_CHOICES,
   DEEPSEEK_EFFORT_LEVELS,
@@ -1994,12 +1995,14 @@ function renderLarkModelSelectionMessage(cfg: InstanceConfig, locale: Locale): s
   if (locale === "en") {
     return [
       `Current model: ${current}`,
-      "Antigravity model switching is not available from Lark yet. Open interactive agy locally and use /model there.",
+      "Use /model <id> with a model listed by agy models; agy validates it when the next turn starts.",
+      "/model off",
     ].join("\n");
   }
   return [
     `当前模型: ${current}`,
-    "Antigravity 模型暂不能从 Lark 切换；请在本机交互式 agy 里使用 /model。",
+    "用 /model <id> 设置 agy models 列出的模型；下一轮启动时由 agy 校验。",
+    "/model off",
   ].join("\n");
 }
 
@@ -2009,11 +2012,6 @@ async function handleLarkModelCommand(
   model: string,
   locale: Locale,
 ): Promise<string> {
-  if (cfg.engine === "antigravity") {
-    return locale === "en"
-      ? "Antigravity model switching is not available from Lark because agy --print does not run the interactive /model parser. Open agy locally and use /model there; the bridge will not forward /model as a chat prompt."
-      : "Antigravity 模型切换暂不支持从 Lark 发起，因为 agy --print 不会运行交互式 /model 解析器。请在本机交互式 agy 里使用 /model；bridge 不会把 /model 当普通聊天转发给模型。";
-  }
   if (!model) {
     return renderLarkModelSelectionMessage(cfg, locale);
   }
@@ -2059,11 +2057,6 @@ async function handleLarkEffortCommand(
   level: string,
   locale: Locale,
 ): Promise<string> {
-  if (cfg.engine === "antigravity") {
-    return locale === "en"
-      ? "Antigravity effort is controlled by the native agy CLI; the bridge does not expose an effort startup flag yet. For model selection, open agy locally and use /model there."
-      : "Antigravity 的 effort 由 agy CLI 原生控制；bridge 目前还没有可用的 effort 启动参数。模型选择请在本机交互式 agy 里使用 /model。";
-  }
   if (!level) {
     return locale === "en" ? `Current effort: ${cfg.effort ?? "default"}` : `当前 effort: ${cfg.effort ?? "default"}`;
   }
@@ -2089,6 +2082,11 @@ async function handleLarkEffortCommand(
     return locale === "en"
       ? "DeepSeek Harness effort supports only low, high, max, or off."
       : "DeepSeek Harness effort 仅支持 low、high、max 或 off。";
+  }
+  if (cfg.engine === "antigravity" && !ANTIGRAVITY_EFFORT_LEVELS.includes(level as (typeof ANTIGRAVITY_EFFORT_LEVELS)[number])) {
+    return locale === "en"
+      ? "Antigravity effort supports only low, medium, high, or off."
+      : "Antigravity effort 仅支持 low、medium、high 或 off。";
   }
   if (!VALID_LARK_EFFORT_LEVELS.includes(level as EffortLevel)) {
     return locale === "en"
