@@ -137,7 +137,6 @@ class FakeAcpServer {
   loadReplayText = "old replay that must be ignored";
   autoCompleteCancel = true;
   respondToSessionList = true;
-  rejectAcpStdioMcp = false;
   sessionRequestErrorDetails: string | undefined;
   listedSessions: Array<{
     sessionId: string;
@@ -353,16 +352,7 @@ class FakeAcpServer {
   }
 
   private rejectSessionRequest(request: JsonRpcMessage): boolean {
-    const mcpServers = Array.isArray(request.params?.mcpServers)
-      ? request.params.mcpServers
-      : [];
-    const hasStdioServer = mcpServers.some((server) => (
-      typeof server === "object" && server !== null && !("type" in server)
-    ));
-    const details = this.sessionRequestErrorDetails
-      ?? (this.rejectAcpStdioMcp && hasStdioServer
-        ? "ACP stdio MCP server cctb_search does not declare a runtime identity"
-        : undefined);
+    const details = this.sessionRequestErrorDetails;
     if (!details || request.id === undefined) {
       return false;
     }
@@ -5589,10 +5579,11 @@ describe("KimiAcpAdapter", () => {
     adapter.destroy();
   });
 
-  it("retries without ACP stdio MCPs when Kimi rejects their missing runtime identity", async () => {
+  it("fails closed without removing ACP stdio MCPs when session initialization rejects them", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const harness = createHarness((server) => {
-      server.rejectAcpStdioMcp = true;
+      server.sessionRequestErrorDetails =
+        "ACP stdio MCP server cctb_search does not declare a runtime identity";
     });
     const mcpServers: McpServer[] = [
       {
@@ -5613,34 +5604,17 @@ describe("KimiAcpAdapter", () => {
       mcpServers,
     });
 
-    const resumed = adapter.sendUserMessage("durable-session", { text: "continue", files: [] });
-    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
-    const loadRequests = harness.children[0].server.requests("session/load");
-    expect(loadRequests).toHaveLength(2);
-    expect(loadRequests[0]?.params?.mcpServers).toEqual(mcpServers);
-    expect(loadRequests[1]?.params?.mcpServers).toEqual([mcpServers[1]]);
-    harness.children[0].server.sendUpdate({
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "resumed" },
-    }, "durable-session");
-    harness.children[0].server.respondPrompt();
-    await expect(resumed).resolves.toEqual({ text: "resumed" });
+    await expect(adapter.sendUserMessage("durable-session", {
+      text: "continue",
+      files: [],
+    })).rejects.toThrow(
+      "Internal error: ACP stdio MCP server cctb_search does not declare a runtime identity",
+    );
 
-    const created = adapter.sendUserMessage("telegram-after-mcp-fallback", { text: "new", files: [] });
-    await waitFor(() => harness.children[1]?.server.prompts.length === 1);
-    const newRequests = harness.children[1].server.requests("session/new");
-    expect(newRequests).toHaveLength(1);
-    expect(newRequests[0]?.params?.mcpServers).toEqual([mcpServers[1]]);
-    harness.children[1].server.sendUpdate({
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "created" },
-    });
-    harness.children[1].server.respondPrompt();
-    await expect(created).resolves.toEqual({ text: "created", sessionId: "kimi-session-2" });
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(
-      "disabling ACP stdio MCP servers for this adapter process",
-    ));
+    const loadRequests = harness.children[0].server.requests("session/load");
+    expect(loadRequests).toHaveLength(1);
+    expect(loadRequests[0]?.params?.mcpServers).toEqual(mcpServers);
+    expect(warnSpy).not.toHaveBeenCalled();
     adapter.destroy();
     warnSpy.mockRestore();
   });

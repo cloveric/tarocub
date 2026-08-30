@@ -196,20 +196,17 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-The current compatibility baseline is **Kimi Code 0.37.2**. Its default
-`agent-core-v2` ACP path has been live-probed with native tools, session
-creation/resume, detached-task hooks, and ACP terminal delegation. TaroCub now
-implements the ACP terminal lifecycle used by Kimi for delegated Bash/process
-work (`create`, bounded UTF-8 output, wait, kill, and release), and cleans up
-unreleased terminals when a worker exits.
+The current compatibility baseline is **Kimi Code 0.39.1**. A live, no-prompt
+ACP probe verified that both `session/new` and `session/load` accept the
+schema-valid stdio Search MCP and actually start its child process. TaroCub
+therefore always supplies the complete configured MCP list and fails closed if
+Kimi rejects session initialization; it no longer retries by silently removing
+stdio search. Native Kimi user/project MCP files and plugins remain independent.
 
-Kimi 0.37.2 also has a narrow upstream stdio-MCP identity regression: it can
-reject the schema-valid stdio entry after the ACP SDK removes a non-schema
-`type` discriminator. TaroCub retries only that exact error without injected
-stdio MCPs, keeps HTTP/SSE and native Kimi MCP/plugins intact, and probes again
-after every Kimi process restart so a future upstream fix restores stdio MCPs
-automatically. `KIMI_CODE_LEGACY_FLAG=1` remains a rollback escape hatch, not
-the recommended Bot configuration.
+TaroCub implements the ACP terminal lifecycle used by Kimi for delegated
+Bash/process work (`create`, bounded UTF-8 output, wait, kill, and release), and
+cleans up unreleased terminals when a worker exits. `KIMI_CODE_LEGACY_FLAG=1`
+remains a rollback escape hatch, not the recommended Bot configuration.
 
 Kimi's plugin manager is not part of the ACP surface used by TaroCub. Optional
 official capabilities such as Kimi Computer Use and Kimi WebBridge must be

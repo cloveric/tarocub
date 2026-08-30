@@ -44,32 +44,30 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
-## Kimi 0.37.2 Compatibility Re-probe
+## Kimi 0.39.1 Compatibility Re-probe
 
-- Probe date: 2026-08-19
+- Probe date: 2026-08-30
 - Binary: `~/.kimi-code/bin/kimi`
-- Version: `0.37.2`
+- Version: `0.39.1`
 - Integration protocol: persistent `kimi acp`
 
-Kimi 0.37.2 delegates some Bash/process work through ACP terminal client
-requests. TaroCub implements the complete terminal lifecycle advertised during
-ACP initialization: create a process inside the active workspace, read bounded
-UTF-8 output, wait for exit, kill without discarding final output, and release
-the terminal. Worker teardown kills any unreleased process tree, so a crashed or
-reconfigured ACP worker cannot leave delegated children behind.
+An isolated, no-prompt live probe initialized ACP, created a session with the
+TaroCub stdio Search MCP, terminated that worker, and loaded the same session in
+a fresh ACP process with the same MCP configuration. Both `session/new` and
+`session/load` succeeded, and an external marker confirmed that the Search MCP
+child process actually started each time. No stdio runtime-identity error or
+fallback path was observed.
 
-The same release has a narrow schema/runtime mismatch for injected stdio MCP
-servers. The ACP SDK correctly serializes stdio servers without a `type` field,
-but Kimi 0.37.2 can reject that entry with
-`ACP stdio MCP server ... does not declare a runtime identity`. TaroCub retries
-only this exact error with injected stdio servers omitted. HTTP/SSE servers and
-Kimi-native MCP/plugins remain enabled. The omission is scoped to that adapter
-process and resets after restart, so a future Kimi fix is detected without a
-bridge release or permanent feature flag.
+The compatibility baseline is therefore 0.39.1. TaroCub always sends the full
+configured MCP list and surfaces session-initialization errors instead of
+silently retrying without stdio search. This makes MCP regressions visible and
+prevents a Bot from appearing healthy after its search capability disappeared.
 
-The compatibility paths are covered by adapter tests for terminal output
-offsets and limits, wait/kill/release behavior, worker cleanup, exact-match MCP
-fallback, remote transport preservation, and re-probing after process restart.
+The earlier 0.37.2 probe established Kimi's delegated ACP terminal behavior and
+also exposed the now-fixed stdio runtime-identity regression. TaroCub continues
+to implement terminal create, bounded UTF-8 output, wait, kill, release, and
+worker-teardown cleanup; adapter tests retain those lifecycle contracts. The
+temporary 0.37.2 stdio omission fallback has been retired.
 
 ## Kimi 0.32 Background-Task Hook Re-probe
 
