@@ -238,16 +238,23 @@ function normalizeRejectedSlashApiError(error: unknown, action: string): Error {
     const detail = record.data && typeof record.data === "object" && !Array.isArray(record.data)
       ? record.data as { missing_scopes?: unknown }
       : {};
+    const knownScopes = new Set<string>(LARK_SLASH_COMMAND_SCOPES);
     const nestedMissingScopes = Array.isArray(detail.missing_scopes)
-      ? detail.missing_scopes.filter((scope): scope is string => typeof scope === "string")
+      ? detail.missing_scopes.filter(
+          (scope): scope is string => typeof scope === "string" && knownScopes.has(scope),
+        )
       : [];
     const rawMessage = typeof record.msg === "string" ? record.msg.trim() : "";
-    const messageScopes = rawMessage.match(/[a-z][a-z0-9_.-]*:[a-z][a-z0-9_.:-]*/gi) ?? [];
+    const messageScopes = (rawMessage.match(/[a-z][a-z0-9_.-]*:[a-z][a-z0-9_.:-]*/gi) ?? [])
+      .filter((scope) => knownScopes.has(scope));
     const missingScopes = [...new Set([...nestedMissingScopes, ...messageScopes])];
     const code = typeof record.code === "number" ? String(record.code) : "unknown";
     const message = missingScopes.length === 0 && rawMessage ? ` ${rawMessage}` : "";
     const missing = missingScopes.length > 0 ? `; missing scopes: ${missingScopes.join(", ")}` : "";
-    return new Error(`Lark ${action} failed: ${code}${message}${missing}`);
+    const repair = missingScopes.length > 0
+      ? `; run: node dist/src/index.js lark scopes add ${LARK_SLASH_COMMAND_SCOPES.join(" ")}`
+      : "";
+    return new Error(`Lark ${action} failed: ${code}${message}${missing}${repair}`);
   }
   return error instanceof Error ? error : new Error(`Lark ${action} failed: ${String(error)}`);
 }

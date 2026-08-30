@@ -257,7 +257,7 @@ describe("ProcessAntigravityAdapter", () => {
   });
 
   it("keeps a completed turn successful and recycles the worker after a later crash", async () => {
-    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];
     const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
       calls.push({ command, args, options });
@@ -330,7 +330,7 @@ describe("ProcessAntigravityAdapter", () => {
   it("keeps different conversations on isolated workers", async () => {
     const firstId = CONVERSATION_ID;
     const secondId = "22222222-3333-4444-8555-666666666666";
-    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];
     const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
       calls.push({ command, args, options });
@@ -352,7 +352,7 @@ describe("ProcessAntigravityAdapter", () => {
   });
 
   it("fails closed when two workers claim the same real conversation", async () => {
-    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];
     const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
       calls.push({ command, args, options });
@@ -549,7 +549,7 @@ describe("ProcessAntigravityAdapter", () => {
   });
 
   it("recycles a persistent conversation worker before running native /goal", async () => {
-    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243), new FakeChildProcess(4244)];
+    const children = [new FakeChildProcess(), new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];
     const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
       calls.push({ command, args, options });
@@ -578,6 +578,64 @@ describe("ProcessAntigravityAdapter", () => {
     emitSuccess(children[2]!, "after goal");
     await expect(next).resolves.toMatchObject({ text: "after goal" });
     await adapter.destroy();
+  });
+
+  it("rejects native /goal when agy replaces the requested conversation", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const replacementId = "22222222-3333-4444-8555-666666666666";
+
+    const goal = adapter.sendUserMessage(CONVERSATION_ID, { text: "/goal continue", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0]?.args).toEqual(expect.arrayContaining(["--conversation", CONVERSATION_ID]));
+    emitSuccess(child, "silently restarted", replacementId);
+    child.close(0);
+
+    await expect(goal).rejects.toThrow("does not match the requested conversation");
+  });
+
+  it("ignores native /goal step updates that arrive after the result event", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const onProgress = vi.fn();
+    const onEngineEvent = vi.fn();
+
+    const goal = adapter.sendUserMessage(CONVERSATION_ID, {
+      text: "/goal finish", files: [], onProgress, onEngineEvent,
+    });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: "done" },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 99, state: "DONE",
+        step_type: "agent_response", text_delta: "late internal text",
+      },
+    }));
+    child.close(0);
+
+    await expect(goal).resolves.toMatchObject({ text: "done", sessionId: CONVERSATION_ID });
+    expect(onProgress.mock.calls.flat().some((value) => String(value).includes("late internal text"))).toBe(false);
+    expect(onEngineEvent.mock.calls.flat()).not.toContainEqual(expect.objectContaining({
+      type: "assistant_text", text: "late internal text",
+    }));
+  });
+
+  it("fails closed on an unknown native /goal protocol event", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const goal = adapter.sendUserMessage(CONVERSATION_ID, { text: "/goal finish", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({ event: "future_error", error: "protocol changed" }));
+    child.close(0);
+
+    await expect(goal).rejects.toThrow("unsupported event: future_error");
   });
 
   it("destroy stops an active native /goal and blocks overlapping work on its conversation", async () => {
@@ -688,6 +746,17 @@ describe("ProcessAntigravityAdapter", () => {
     await expect(promise).rejects.toThrow("without a result event");
   });
 
+  it("reports the terminating signal when a persistent worker is killed", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Killed", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.close(null, "SIGKILL");
+
+    await expect(promise).rejects.toThrow("SIGKILL");
+  });
+
   it("retries without --log-file only when an older agy rejects that flag", async () => {
     const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];
@@ -714,7 +783,7 @@ describe("ProcessAntigravityAdapter", () => {
   it("restarts an idle worker with the same conversation when model settings change", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-persistent-config-"));
     const configPath = path.join(root, "config.json");
-    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];
     const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
       calls.push({ command, args, options });
@@ -753,7 +822,7 @@ describe("ProcessAntigravityAdapter", () => {
   });
 
   it("reaps idle stream workers without touching an active turn", async () => {
-    const children = [new FakeChildProcess(4242)];
+    const children = [new FakeChildProcess()];
     const calls: SpawnCall[] = [];
     const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
       calls.push({ command, args, options });
@@ -779,7 +848,7 @@ describe("ProcessAntigravityAdapter", () => {
   });
 
   it("destroy closes every persistent worker and rejects an active turn", async () => {
-    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];
     const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
       calls.push({ command, args, options });
@@ -828,7 +897,7 @@ class FakeStream extends EventEmitter {
 }
 
 class FakeChildProcess extends EventEmitter {
-  constructor(readonly pid = 4242) {
+  constructor(readonly pid?: number) {
     super();
   }
 
@@ -854,7 +923,7 @@ class FakeChildProcess extends EventEmitter {
   stderr = new FakeStream();
 
   kill() { return true; }
-  close(code: number | null) { this.emit("close", code); }
+  close(code: number | null, signal: NodeJS.Signals | null = null) { this.emit("close", code, signal); }
 }
 
 function createSpawnHarness() {

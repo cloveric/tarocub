@@ -177,4 +177,29 @@ describe("syncLarkSlashCommands", () => {
     );
     await expect(rejection).rejects.not.toThrow("open.feishu.cn");
   });
+
+  it("filters unrelated colon fields and gives the one-command scope repair", async () => {
+    const request = vi.fn(async () => {
+      const error = new Error("Request failed with status code 400") as Error & {
+        response?: { data?: unknown };
+      };
+      error.response = {
+        data: {
+          code: 99991672,
+          msg: "Access denied app_id:cli_private tenant:t1 application:app_slash_command:read",
+        },
+      };
+      throw error;
+    });
+
+    const rejection = syncLarkSlashCommands({
+      client: { request } as unknown as LarkSlashCommandApiClient,
+      commands: TEST_COMMANDS,
+    });
+    await expect(rejection).rejects.toThrow(
+      "missing scopes: application:app_slash_command:read; run: node dist/src/index.js lark scopes add application:app_slash_command:read application:app_slash_command:write",
+    );
+    await expect(rejection).rejects.not.toThrow("app_id:cli_private");
+    await expect(rejection).rejects.not.toThrow("tenant:t1");
+  });
 });

@@ -37,7 +37,7 @@ type ProcessChildLike = {
   stdout?: ProcessStreamLike;
   stderr?: ProcessStreamLike;
   once(event: "error", listener: (error: Error) => void): void;
-  once(event: "close", listener: (code: number | null) => void): void;
+  once(event: "close", listener: (code: number | null, signal?: NodeJS.Signals | null) => void): void;
 };
 
 type SpawnAntigravity = (command: string, args: string[], options: SpawnOptions) => ProcessChildLike;
@@ -195,6 +195,16 @@ function appendHeadTailDiagnostic(existing: string, chunk: string, maxBytes: num
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) return combined;
   const half = Math.max(1, Math.floor(maxBytes / 2));
   return `${combined.slice(0, half)}\n[... output elided ...]\n${combined.slice(-half)}`;
+}
+
+function formatAntigravityExit(
+  stderr: string,
+  code: number | null,
+  signal?: NodeJS.Signals | null,
+): string {
+  const exit = signal ? `signal ${signal}` : `code ${code}`;
+  const diagnostic = stderr.trim();
+  return diagnostic ? `${diagnostic}\nantigravity exited with ${exit}` : `antigravity exited with ${exit}`;
 }
 
 function decodeStreamChunk(decoder: StringDecoder, chunk: Buffer | string): string {
@@ -482,6 +492,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
         input.onProgress,
         input.onEngineEvent,
+        logicalSession ? undefined : sessionId,
       );
       let response: AntigravityRunResponse;
       try {
@@ -657,7 +668,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     });
     child.stdin.on?.("error", (error) => this.failAndStopWorker(worker, error));
     child.once("error", (error) => this.failAndStopWorker(worker, error));
-    child.once("close", (code) => this.handleWorkerClose(worker, code));
+    child.once("close", (code, signal) => this.handleWorkerClose(worker, code, signal));
 
     if (this.destroyed) {
       this.stopWorker(worker, new Error("Adapter destroyed"));
@@ -980,7 +991,11 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     if (worker.pendingTurn) this.armInactivityTimeout(worker, worker.pendingTurn);
   }
 
-  private handleWorkerClose(worker: AntigravityWorker, code: number | null): void {
+  private handleWorkerClose(
+    worker: AntigravityWorker,
+    code: number | null,
+    signal?: NodeJS.Signals | null,
+  ): void {
     if (worker.removed) return;
     try {
       this.processWorkerChunk(worker, worker.stdoutDecoder.end());
@@ -997,9 +1012,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       MAX_STDERR_DIAGNOSTIC_BYTES,
     );
     if (worker.pendingTurn) {
-      const error = code === 0
+      const error = code === 0 && !signal
         ? new Error("Antigravity exited successfully without a result event")
-        : new Error(worker.stderrTail.trim() || `antigravity exited with code ${code}`);
+        : new Error(formatAntigravityExit(worker.stderrTail, code, signal));
       this.rejectPersistentTurn(worker, error);
     }
     this.removeWorker(worker);
@@ -1097,6 +1112,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     inactivityTimeoutMs: number | null = this.inactivityTimeoutMs,
     onProgress?: CodexUserMessageInput["onProgress"],
     onEngineEvent?: CodexUserMessageInput["onEngineEvent"],
+    expectedSessionId?: string,
   ): Promise<AntigravityRunResponse> {
     const invocation = buildCommandInvocation(this.antigravityExecutable, args);
     const child = this.spawnAntigravity(invocation.command, invocation.args, {
@@ -1201,6 +1217,11 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         if (!next) {
           throw new Error(`Antigravity ${eventName} event is missing a valid conversation_id`);
         }
+        if (expectedSessionId && next !== expectedSessionId) {
+          throw new Error(
+            `Antigravity conversation_id ${next} does not match the requested conversation ${expectedSessionId}`,
+          );
+        }
         if (sessionId && next !== sessionId) {
           throw new Error("Antigravity conversation_id changed during turn");
         }
@@ -1240,6 +1261,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           return;
         }
         if (parsed.event === "step_update") {
+          if (resultSeen) return;
           if (!initSeen) throw new Error("Antigravity emitted step_update before init");
           const step = asRecord(parsed.step_update) as AntigravityStepUpdate | undefined;
           if (!step) return;
@@ -1295,7 +1317,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           if (!streamedText && resultText) emitTextDelta(resultText);
           emitEngineEvent({ type: "result", text: resultText.trim(), ...(sessionId ? { sessionId } : {}) });
           scheduleResultCloseGrace();
+          return;
         }
+        throw new Error(`Antigravity emitted unsupported event: ${String(parsed.event)}`);
       };
       const processLine = (line: string) => {
         if (!line.trim()) return;
@@ -1344,7 +1368,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         clearAbortListener();
         reject(error);
       });
-      child.once("close", (code) => {
+      child.once("close", (code, signal) => {
         if (settled) return;
         try {
           processDecodedChunk(stdoutDecoder.end());
@@ -1361,7 +1385,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           settled = true;
           clearTimers();
           clearAbortListener();
-          reject(new Error(stderrTail.trim() || `antigravity exited with code ${code}`));
+          reject(new Error(formatAntigravityExit(stderrTail, code, signal)));
           return;
         }
         if (!resultSeen) {

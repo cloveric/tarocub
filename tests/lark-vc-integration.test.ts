@@ -154,6 +154,51 @@ describe("/meeting command handling", () => {
     await support.dispose();
   });
 
+  it("ignores display-name fragments when a native mention has a structured open_id", async () => {
+    const request = vi.fn(async (payload: { url: string; data?: Record<string, unknown> }) => {
+      if (payload.url.endsWith("/join")) return { data: { meeting: { id: "meet-long" } } };
+      if (payload.url.endsWith("/events")) return { data: { events: [], has_more: false } };
+      if (payload.url.endsWith("/invite")) return { data: { invited_count: 1, failed_count: 0 } };
+      return { data: {} };
+    });
+    const support = attachLarkMeetingSupport(baseDeps({
+      rawClient: { request } as unknown as LarkVcRequestClient,
+    }) as never)!;
+    await support.handleMeetingCommand("/meeting join 123456789", "en");
+
+    const reply = await support.handleMeetingCommand(
+      "/meeting invite @Alice Wang",
+      "en",
+      { mentionOpenIds: ["ou_alice"] },
+    );
+
+    expect(reply).toContain("Invited 1");
+    const inviteCall = request.mock.calls.find(([payload]) => payload.url.endsWith("/invite"));
+    expect(inviteCall?.[0].data).toMatchObject({
+      invitees: [{ id: "ou_alice", user_type: 1 }],
+    });
+    await support.dispose();
+  });
+
+  it("describes an end failure as an end failure instead of a join preflight failure", async () => {
+    const request = vi.fn(async (payload: { url: string }) => {
+      if (payload.url.endsWith("/join")) return { data: { meeting: { id: "meet-long" } } };
+      if (payload.url.endsWith("/events")) return { data: { events: [], has_more: false } };
+      if (payload.url.endsWith("/end")) throw new Error("bot is not the meeting host");
+      return { data: {} };
+    });
+    const support = attachLarkMeetingSupport(baseDeps({
+      rawClient: { request } as unknown as LarkVcRequestClient,
+    }) as never)!;
+    await support.handleMeetingCommand("/meeting join 123456789", "zh");
+
+    const reply = await support.handleMeetingCommand("/meeting end confirm", "zh");
+
+    expect(reply).toContain("结束会议失败");
+    expect(reply).not.toContain("入会检测");
+    await support.dispose();
+  });
+
   it("accepts selected invitees when the SDK strips mention placeholders from command text", async () => {
     const request = vi.fn(async (payload: { url: string; data?: Record<string, unknown> }) => {
       if (payload.url.endsWith("/join")) return { data: { meeting: { id: "meet-long" } } };

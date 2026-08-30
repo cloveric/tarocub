@@ -33,6 +33,8 @@ export type VcMeetingPreflight =
   | { status: "scope-missing"; missingScopes: string[]; consoleUrl?: string }
   | { status: "unknown"; detail: string };
 
+export type VcMeetingOperation = "join" | "invite" | "end";
+
 /** Classify a VC API failure into an actionable preflight verdict. */
 export function classifyVcMeetingError(error: unknown): VcMeetingPreflight {
   const vcError = error instanceof VcApiError ? error : undefined;
@@ -52,7 +54,11 @@ export function classifyVcMeetingError(error: unknown): VcMeetingPreflight {
 }
 
 /** Human-facing explanation of a preflight verdict, for the /meeting status card. */
-export function renderVcMeetingPreflight(preflight: VcMeetingPreflight, locale: "en" | "zh"): string {
+export function renderVcMeetingPreflight(
+  preflight: VcMeetingPreflight,
+  locale: "en" | "zh",
+  operation: VcMeetingOperation = "join",
+): string {
   const zh = locale === "zh";
   switch (preflight.status) {
     case "ok":
@@ -66,6 +72,12 @@ export function renderVcMeetingPreflight(preflight: VcMeetingPreflight, locale: 
         ? `缺少应用权限：${preflight.missingScopes.join("、")}。请在开发者后台开通后重试。`
         : `Missing app scopes: ${preflight.missingScopes.join(", ")}. Grant them in the developer console and retry.`;
     case "unknown":
+      if (operation === "invite") {
+        return zh ? `邀请参会者失败：${preflight.detail}` : `Meeting invite failed: ${preflight.detail}`;
+      }
+      if (operation === "end") {
+        return zh ? `结束会议失败：${preflight.detail}` : `Meeting end failed: ${preflight.detail}`;
+      }
       return zh
         ? `VC 入会检测未通过：${preflight.detail}`
         : `VC meeting preflight failed: ${preflight.detail}`;

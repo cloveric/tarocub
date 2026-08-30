@@ -152,14 +152,19 @@ export function attachLarkMeetingSupport(deps: LarkMeetingSupportDeps): LarkMeet
             : "Usage: `/meeting invite [9-digit no.] all|<ou_open_id...>`.";
         }
         try {
-          const result = inviteArgs.length === 1 && inviteArgs[0]!.toLowerCase() === "all"
+          const inviteAll = inviteArgs.length === 1 && inviteArgs[0]!.toLowerCase() === "all";
+          const mentionOpenIds = context.mentionOpenIds ?? [];
+          const selectedOpenIds = mentionOpenIds.length > 0 ? mentionOpenIds : inviteArgs;
+          if (!inviteAll && selectedOpenIds.some((value) => !value.startsWith("ou_"))) {
+            return zh
+              ? "用法：`/meeting invite [9位会议号] all|<ou_open_id...>`"
+              : "Usage: `/meeting invite [9-digit no.] all|<ou_open_id...>`.";
+          }
+          const result = inviteAll
             ? await manager.invite(target.meetingId, { type: "all-suggested" })
             : await manager.invite(target.meetingId, {
                 type: "selected",
-                openIds: [
-                  ...inviteArgs.filter((value) => !value.startsWith("@")),
-                  ...(context.mentionOpenIds ?? []),
-                ],
+                openIds: selectedOpenIds,
               });
           if (!result) {
             return zh ? "该会议已不在当前 Bot 的活动会话中。" : "That meeting is no longer active for this bot.";
@@ -171,7 +176,7 @@ export function attachLarkMeetingSupport(deps: LarkMeetingSupportDeps): LarkMeet
             ? `已邀请 ${result.invitedCount} 人，失败 ${result.failedCount} 人${more}。`
             : `Invited ${result.invitedCount}; failed ${result.failedCount}${more}.`;
         } catch (error) {
-          return renderVcMeetingPreflight(classifyVcMeetingError(error), locale);
+          return renderVcMeetingPreflight(classifyVcMeetingError(error), locale, "invite");
         }
       }
       case "end": {
@@ -200,7 +205,7 @@ export function attachLarkMeetingSupport(deps: LarkMeetingSupportDeps): LarkMeet
           await manager.end(target.meetingId);
           return zh ? `已结束会议 ${target.meetingNo}。` : `Ended meeting ${target.meetingNo}.`;
         } catch (error) {
-          return renderVcMeetingPreflight(classifyVcMeetingError(error), locale);
+          return renderVcMeetingPreflight(classifyVcMeetingError(error), locale, "end");
         }
       }
       case "ask": {
