@@ -340,15 +340,15 @@ npm run dev -- telegram engine antigravity --instance agy-bot
 npm run dev -- telegram engine --instance review-bot
 ```
 
-Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in explicit `bypass` mode because the headless CLI cannot ask a remote chat for per-tool approval. The verified baseline is **Antigravity CLI 1.1.22**. Ordinary turns use native NDJSON `stream-json` input/output; `/model <id>` and `/effort low|medium|high` map to the native startup flags. Native `/goal` is the narrow exception: Antigravity does not accept slash commands through stream input, so TaroCub preserves the command in a direct `-p` prompt while retaining structured output parsing.
+Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in explicit `bypass` mode because the headless CLI cannot ask a remote chat for per-tool approval. The verified baseline is **Antigravity CLI 1.1.22**. Ordinary turns use one persistent native NDJSON `stream-json` worker per live conversation. Idle workers are reaped after two hours; crashes and startup-setting changes recreate the worker with the same authoritative conversation ID. `/model <id>` and `/effort low|medium|high` map to native startup flags. Native `/goal` is the narrow exception: Antigravity does not accept slash commands through stream input, so TaroCub recycles the idle worker, preserves the command in a direct `-p` prompt with structured output parsing, then resumes the conversation in a new stream worker on the next ordinary turn.
 
 | Feature | Codex | Claude | Kimi | DeepSeek | Antigravity |
 |---|---|---|---|---|---|
-| Protocol | Persistent app-server or process runtime | Persistent stream-json worker | Persistent `kimi acp` | Private supervised `dsh web` with official HTTP RPC and WebSockets | One structured headless process per turn |
+| Protocol | Persistent app-server or process runtime | Persistent stream-json worker | Persistent `kimi acp` | Private supervised `dsh web` with official HTTP RPC and WebSockets | Persistent stream-json worker per conversation; direct one-shot `/goal` |
 | Session resume | Explicit validated thread binding | `/resume` scan/pick | Native ACP scan and `/resume session <id>` | Native Harness scan and `/resume session <id>` with authoritative cwd validation | Structured conversation ID binding; log scan only for discovery |
 | Project instructions | `agent.md` prompt injection | System prompt + workspace `CLAUDE.md` | Native `.kimi-code/agents/agent.md` in bot workspaces | Private per-instance `DSH_HOME/AGENTS.md` | `agent.md` prompt injection |
 | Streaming / tools | Native events and authoritative completion items | Native stream events | ACP text/reasoning/tools/approvals | Native text/reasoning/tools/results/usage | Structured text/tool/result events |
-| Background tasks | Structured lifecycle | Structured lifecycle | Observer Hooks plus review/retry aggregation | `session/jobs` plus review grace and exactly-once final result | Process-local only |
+| Background tasks | Structured lifecycle | Structured lifecycle | Observer Hooks plus review/retry aggregation | `session/jobs` plus review grace and exactly-once final result | No structured post-result lifecycle |
 | Approvals / questions | App-server sandbox or turn pre-approval | Per-tool approvals and structured questions | ACP per-tool approval; current question surface is single-choice | Once/session approvals; multiple, multi-select, and free-text questions | Turn pre-approval |
 | YOLO | Full-auto or bypass | Bypass permission mode | ACP `yolo` / `auto` | Harness workspace sandbox or `danger-full-access` | Unsafe skip-permissions |
 | `/goal` | Structured Goal API | Native command | Explicitly unsupported by current ACP | Native durable Goal, persisted optional token budget, restart re-arm | Native command |
@@ -358,7 +358,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Skills / plugins / MCP | Native Codex home | Native Claude config | Native Kimi plus bridge Search MCP | Native Harness profile/plugin; validated Search plugin or bridge fallback, exactly one client | Native Antigravity config |
 | Usage | Tokens; cost depends on runtime | Tokens + USD | No structured per-turn usage | Tokens, no per-turn USD | Per-turn tokens, no USD |
 | Working directory | Instance or validated thread workspace | Instance or resumed project | Native session cwd | Native session cwd; conflicting workspace claims fail closed | Instance workspace |
-| Process lifecycle | Warm app-server | 2h idle reap | 2h idle reap unless background work remains | Per-instance host; crash restart and ordered recovery | Exits each turn |
+| Process lifecycle | Warm app-server | 2h idle reap | 2h idle reap unless background work remains | Per-instance host; crash restart and ordered recovery | Persistent per conversation; 2h idle reap; UUID resume after crash/config change |
 
 DeepSeek is verified against **Harness 0.1.1-rc.2**. Image payload transport is
 implemented, but model support is provider-dependent; the tested default
@@ -1357,7 +1357,7 @@ npm run dev -- telegram service start --instance agy-bot
 ```
 Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     → Load config.json (engine) → Load agent.md → Session Lookup
-    → Codex app-server, Claude stream-json, Kimi ACP, DeepSeek Harness, or Antigravity stream-json (new or resume)
+    → Codex app-server, Claude stream-json, Kimi ACP, DeepSeek Harness, or persistent Antigravity stream-json worker (new or resume)
     → Typing action + timeline events → Final Render → Deliver → Audit
 ```
 

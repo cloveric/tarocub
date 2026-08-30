@@ -13,7 +13,6 @@ import type {
   EngineStreamEvent,
 } from "./adapter.js";
 import { killProcessTree } from "./process-tree.js";
-import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
 type SpawnOptions = {
@@ -31,6 +30,7 @@ type ProcessStreamLike = {
 type ProcessChildLike = {
   pid?: number;
   stdin?: {
+    write(chunk: string, callback?: (error?: Error | null) => void): boolean;
     end(chunk?: string): void;
     on?(event: "error", listener: (error: Error) => void): void;
   };
@@ -76,6 +76,7 @@ type AntigravityResult = {
 type AntigravityStreamEvent = {
   event?: unknown;
   conversation_id?: unknown;
+  message?: unknown;
   step_update?: unknown;
   result?: unknown;
 };
@@ -88,12 +89,49 @@ type AntigravityRuntimeConfig = {
 
 type AntigravityRunResponse = CodexAdapterResponse & { childPid?: number };
 
+type AntigravityPendingTurn = {
+  expectedInput: string;
+  userEchoSeen: boolean;
+  streamedText: string;
+  resultText: string;
+  resultSeen: boolean;
+  stepUsage: Map<number, AdapterUsage>;
+  emittedTools: Set<number>;
+  completedTools: Set<number>;
+  onProgress?: CodexUserMessageInput["onProgress"];
+  onEngineEvent?: CodexUserMessageInput["onEngineEvent"];
+  abortCleanup?: () => void;
+  totalTimeout?: ReturnType<typeof setTimeout>;
+  inactivityTimeout?: ReturnType<typeof setTimeout>;
+  timeoutDisabled: boolean;
+  resolve: (response: AntigravityRunResponse) => void;
+  reject: (error: Error) => void;
+};
+
+type AntigravityWorker = {
+  child: ProcessChildLike;
+  currentSessionId?: string;
+  workspacePath?: string;
+  settingsKey: string;
+  stdoutDecoder: StringDecoder;
+  stderrDecoder: StringDecoder;
+  lineBuffer: string;
+  stderrTail: string;
+  initSeen: boolean;
+  pendingTurn: AntigravityPendingTurn | null;
+  lastActivityAt: number;
+  logDir?: string;
+  removed: boolean;
+};
+
 const MAX_INSTRUCTIONS_CHARS = 16_000;
 const MAX_PROTOCOL_LINE_BYTES = 64 * 1024 * 1024;
 const MAX_STDERR_DIAGNOSTIC_BYTES = 4 * 1024;
 const ANTIGRAVITY_NATIVE_TURN_TIMEOUT = "6h";
 const ANTIGRAVITY_NATIVE_UNBOUNDED_CEILING = "168h";
 const ANTIGRAVITY_RESULT_CLOSE_GRACE_MS = 250;
+const DEFAULT_IDLE_WORKER_TTL_MS = 2 * 60 * 60_000;
+const DEFAULT_IDLE_SWEEP_INTERVAL_MS = 60_000;
 const ANTIGRAVITY_EFFORTS = new Set(["low", "medium", "high"]);
 const ANTIGRAVITY_CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -250,9 +288,17 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 export class ProcessAntigravityAdapter implements CodexAdapter {
   readonly bridgeInstructionMode = "telegram-out-only" as const;
-  readonly supportsTurnScopedEnv = true;
+  readonly supportsTurnScopedEnv = false;
   private readonly childEnv: NodeJS.ProcessEnv;
   private readonly spawnAntigravity: SpawnAntigravity;
+  private readonly workers = new Map<string, AntigravityWorker>();
+  private readonly pendingWorkers = new Map<string, Promise<AntigravityWorker>>();
+  private readonly nativeGoalSessions = new Set<string>();
+  private readonly oneShotStops = new Set<(error: Error) => void>();
+  private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
+  private destroyPromise: Promise<void> | undefined;
+  private destroyed = false;
+  private omitLogFile = false;
 
   constructor(
     private readonly antigravityExecutable: string,
@@ -263,6 +309,8 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     private readonly workspacePath?: string,
     private readonly turnTimeoutMs: number = ANTIGRAVITY_PROCESS_TURN_TIMEOUT_MS,
     private readonly inactivityTimeoutMs: number | null = ANTIGRAVITY_PROCESS_INACTIVITY_TIMEOUT_MS,
+    private readonly idleWorkerTtlMs: number = DEFAULT_IDLE_WORKER_TTL_MS,
+    idleSweepIntervalMs: number = DEFAULT_IDLE_SWEEP_INTERVAL_MS,
   ) {
     const buildChildEnv = () => {
       const env = { ...process.env };
@@ -277,6 +325,10 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     this.spawnAntigravity = typeof childEnvOrSpawn === "function"
       ? childEnvOrSpawn
       : spawnAntigravityArg ?? (spawn as unknown as SpawnAntigravity);
+    if (this.idleWorkerTtlMs > 0 && idleSweepIntervalMs > 0) {
+      this.idleSweepTimer = setInterval(() => this.reapIdleWorkers(), idleSweepIntervalMs);
+      this.idleSweepTimer.unref?.();
+    }
   }
 
   async createSession(chatId: number): Promise<CodexSessionHandle> {
@@ -315,6 +367,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
   }
 
   async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
+    if (this.destroyed) throw new Error("Adapter destroyed");
     const instructions = combineInstructions(
       this.instructionsPath ? await this.loadInstructions() : null,
       input.instructions ?? null,
@@ -335,12 +388,78 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     }
 
     const workspace = input.workspaceOverride ?? this.workspacePath;
-    const logicalSession = isLogicalTelegramSessionId(sessionId);
+    let logicalSession = isLogicalTelegramSessionId(sessionId);
     const nativeGoal = isNativeGoalCommand(input.text);
+    if (nativeGoal) {
+      const requestedGoalSessionId = sessionId;
+      if (this.nativeGoalSessions.has(sessionId) || this.pendingWorkers.has(sessionId)) {
+        throw new Error("Antigravity session already has a native /goal in flight");
+      }
+      this.nativeGoalSessions.add(requestedGoalSessionId);
+      try {
+        const existing = this.workers.get(sessionId);
+        if (existing && !existing.removed) {
+          if (existing.pendingTurn) {
+            throw new Error("Cannot run Antigravity /goal while another turn is in flight");
+          }
+          sessionId = existing.currentSessionId ?? sessionId;
+          logicalSession = isLogicalTelegramSessionId(sessionId);
+          this.nativeGoalSessions.add(sessionId);
+          this.stopWorker(existing);
+        }
+        return await this.runNativeGoal(
+          sessionId,
+          logicalSession,
+          prompt,
+          permissionFlags,
+          runtimeConfig,
+          workspace,
+          input,
+        );
+      } finally {
+        this.nativeGoalSessions.delete(requestedGoalSessionId);
+        this.nativeGoalSessions.delete(sessionId);
+      }
+    }
+
+    const settingsKey = JSON.stringify({
+      workspace: workspace ?? null,
+      permissionFlags,
+      model: runtimeConfig.model ?? null,
+      effort: runtimeConfig.effort ?? null,
+      nativeTimeout: input.disableRuntimeTimeout
+        ? ANTIGRAVITY_NATIVE_UNBOUNDED_CEILING
+        : ANTIGRAVITY_NATIVE_TURN_TIMEOUT,
+    });
+    const response = await this.runPersistentMessage(
+      sessionId,
+      prompt,
+      permissionFlags,
+      runtimeConfig,
+      workspace,
+      settingsKey,
+      input,
+    );
+    return {
+      text: response.text,
+      ...(response.usage ? { usage: response.usage } : {}),
+      sessionId: response.sessionId ?? (!logicalSession ? sessionId : undefined),
+    };
+  }
+
+  private async runNativeGoal(
+    sessionId: string,
+    logicalSession: boolean,
+    prompt: string,
+    permissionFlags: string[],
+    runtimeConfig: AntigravityRuntimeConfig,
+    workspace: string | undefined,
+    input: CodexUserMessageInput,
+  ): Promise<CodexAdapterResponse> {
     const turnLogDir = await mkdtemp(path.join(os.tmpdir(), "cctb-agy-log-"));
     const turnLogFile = path.join(turnLogDir, "turn.log");
     const args = [
-      ...(nativeGoal ? ["-p", prompt] : ["--input-format", "stream-json"]),
+      "-p", prompt,
       "--output-format", "stream-json",
       "--print-timeout", input.disableRuntimeTimeout
         ? ANTIGRAVITY_NATIVE_UNBOUNDED_CEILING
@@ -352,19 +471,15 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       ...(!logicalSession ? ["--conversation", sessionId] : []),
       ...(workspace ? ["--add-dir", workspace] : []),
     ];
-    const stdinPayload = nativeGoal
-      ? null
-      : `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`;
 
     try {
-      const run = async (runArgs: string[]) => this.runAntigravityCommand(
+      const run = async (runArgs: string[]) => await this.runAntigravityCommand(
         runArgs,
-        stdinPayload,
+        null,
         input.abortSignal,
         workspace,
         input.disableRuntimeTimeout ? null : this.turnTimeoutMs,
         input.disableRuntimeTimeout ? null : this.inactivityTimeoutMs,
-        input.extraEnv,
         input.onProgress,
         input.onEngineEvent,
       );
@@ -385,6 +500,594 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     }
   }
 
+  private async runPersistentMessage(
+    sessionId: string,
+    prompt: string,
+    permissionFlags: string[],
+    runtimeConfig: AntigravityRuntimeConfig,
+    workspace: string | undefined,
+    settingsKey: string,
+    input: CodexUserMessageInput,
+  ): Promise<AntigravityRunResponse> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const worker = await this.getOrCreateWorker(
+        sessionId,
+        workspace,
+        settingsKey,
+        permissionFlags,
+        runtimeConfig,
+        input.disableRuntimeTimeout === true,
+      );
+      try {
+        const response = await this.runPersistentTurn(worker, prompt, input);
+        if (response.sessionId && !worker.removed) {
+          this.rekeyWorker(worker, response.sessionId);
+        }
+        return response;
+      } catch (error) {
+        if (attempt !== 0 || this.omitLogFile || !isUnsupportedLogFileFlagError(error)) {
+          throw error;
+        }
+        this.omitLogFile = true;
+      }
+    }
+    throw new Error("Antigravity persistent worker retry was exhausted");
+  }
+
+  private async getOrCreateWorker(
+    requestedSessionId: string,
+    workspace: string | undefined,
+    settingsKey: string,
+    permissionFlags: string[],
+    runtimeConfig: AntigravityRuntimeConfig,
+    timeoutDisabled: boolean,
+  ): Promise<AntigravityWorker> {
+    if (this.destroyed) throw new Error("Adapter destroyed");
+    if (this.nativeGoalSessions.has(requestedSessionId)) {
+      throw new Error("Antigravity session already has a native /goal in flight");
+    }
+    let sessionId = requestedSessionId;
+    const existing = this.workers.get(sessionId);
+    if (existing && !existing.removed) {
+      if (existing.settingsKey === settingsKey && existing.workspacePath === workspace) {
+        return existing;
+      }
+      if (existing.pendingTurn) {
+        throw new Error("Cannot reconfigure Antigravity session while a turn is in flight");
+      }
+      sessionId = existing.currentSessionId ?? sessionId;
+      this.stopWorker(existing);
+    }
+
+    const pending = this.pendingWorkers.get(sessionId);
+    if (pending) return await pending;
+
+    const creation = this.createWorker(
+      sessionId,
+      workspace,
+      settingsKey,
+      permissionFlags,
+      runtimeConfig,
+      timeoutDisabled,
+    );
+    this.pendingWorkers.set(sessionId, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.pendingWorkers.get(sessionId) === creation) {
+        this.pendingWorkers.delete(sessionId);
+      }
+    }
+  }
+
+  private async createWorker(
+    sessionId: string,
+    workspace: string | undefined,
+    settingsKey: string,
+    permissionFlags: string[],
+    runtimeConfig: AntigravityRuntimeConfig,
+    timeoutDisabled: boolean,
+  ): Promise<AntigravityWorker> {
+    if (this.destroyed) throw new Error("Adapter destroyed");
+    const logDir = this.omitLogFile ? undefined : await mkdtemp(path.join(os.tmpdir(), "cctb-agy-worker-"));
+    const args = [
+      "--input-format", "stream-json",
+      "--output-format", "stream-json",
+      "--print-timeout", timeoutDisabled
+        ? ANTIGRAVITY_NATIVE_UNBOUNDED_CEILING
+        : ANTIGRAVITY_NATIVE_TURN_TIMEOUT,
+      ...(logDir ? ["--log-file", path.join(logDir, "worker.log")] : []),
+      ...permissionFlags,
+      ...(runtimeConfig.model ? ["--model", runtimeConfig.model] : []),
+      ...(runtimeConfig.effort ? ["--effort", runtimeConfig.effort] : []),
+      ...(!isLogicalTelegramSessionId(sessionId) ? ["--conversation", sessionId] : []),
+      ...(workspace ? ["--add-dir", workspace] : []),
+    ];
+    const invocation = buildCommandInvocation(this.antigravityExecutable, args);
+    let child: ProcessChildLike;
+    try {
+      child = this.spawnAntigravity(invocation.command, invocation.args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: invocation.shell,
+        env: this.childEnv,
+        cwd: workspace ?? this.workspacePath,
+        windowsHide: true,
+      });
+    } catch (error) {
+      if (logDir) void rm(logDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+    if (!child.stdin || !child.stdout || !child.stderr) {
+      killProcessTree(child.pid);
+      if (logDir) void rm(logDir, { recursive: true, force: true }).catch(() => undefined);
+      throw new Error("Antigravity subprocess did not expose stdio pipes");
+    }
+
+    const worker: AntigravityWorker = {
+      child,
+      ...(!isLogicalTelegramSessionId(sessionId) ? { currentSessionId: sessionId } : {}),
+      workspacePath: workspace,
+      settingsKey,
+      stdoutDecoder: new StringDecoder("utf8"),
+      stderrDecoder: new StringDecoder("utf8"),
+      lineBuffer: "",
+      stderrTail: "",
+      initSeen: false,
+      pendingTurn: null,
+      lastActivityAt: Date.now(),
+      ...(logDir ? { logDir } : {}),
+      removed: false,
+    };
+    this.workers.set(sessionId, worker);
+
+    child.stdout.on("data", (chunk) => {
+      if (worker.removed) return;
+      this.markWorkerActivity(worker);
+      try {
+        this.processWorkerChunk(worker, decodeStreamChunk(worker.stdoutDecoder, chunk));
+      } catch (error) {
+        this.failAndStopWorker(worker, error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      if (worker.removed) return;
+      this.markWorkerActivity(worker);
+      const text = decodeStreamChunk(worker.stderrDecoder, chunk);
+      if (text) worker.stderrTail = appendHeadTailDiagnostic(worker.stderrTail, text, MAX_STDERR_DIAGNOSTIC_BYTES);
+    });
+    child.stdin.on?.("error", (error) => this.failAndStopWorker(worker, error));
+    child.once("error", (error) => this.failAndStopWorker(worker, error));
+    child.once("close", (code) => this.handleWorkerClose(worker, code));
+
+    if (this.destroyed) {
+      this.stopWorker(worker, new Error("Adapter destroyed"));
+      throw new Error("Adapter destroyed");
+    }
+    return worker;
+  }
+
+  private runPersistentTurn(
+    worker: AntigravityWorker,
+    prompt: string,
+    input: CodexUserMessageInput,
+  ): Promise<AntigravityRunResponse> {
+    if (this.destroyed) return Promise.reject(new Error("Adapter destroyed"));
+    if (worker.removed) return Promise.reject(new Error("Antigravity worker is no longer available"));
+    if (worker.pendingTurn) {
+      return Promise.reject(new Error("Antigravity session already has an in-flight turn"));
+    }
+
+    return new Promise<AntigravityRunResponse>((resolve, reject) => {
+      const pending: AntigravityPendingTurn = {
+        expectedInput: prompt,
+        userEchoSeen: false,
+        streamedText: "",
+        resultText: "",
+        resultSeen: false,
+        stepUsage: new Map(),
+        emittedTools: new Set(),
+        completedTools: new Set(),
+        onProgress: input.onProgress,
+        onEngineEvent: input.onEngineEvent,
+        timeoutDisabled: input.disableRuntimeTimeout === true,
+        resolve,
+        reject,
+      };
+      worker.pendingTurn = pending;
+      worker.stderrTail = "";
+      this.armTurnTimeouts(worker, pending);
+
+      if (input.abortSignal) {
+        const onAbort = () => this.failAndStopWorker(worker, new Error("Task was stopped by user"));
+        pending.abortCleanup = () => input.abortSignal?.removeEventListener("abort", onAbort);
+        input.abortSignal.addEventListener("abort", onAbort, { once: true });
+        if (input.abortSignal.aborted) {
+          onAbort();
+          return;
+        }
+      }
+
+      const payload = `${JSON.stringify({ event: "user", message: { content: prompt } })}\n`;
+      this.markWorkerActivity(worker);
+      try {
+        worker.child.stdin?.write(payload, (error) => {
+          if (error) this.failAndStopWorker(worker, error);
+        });
+      } catch (error) {
+        this.failAndStopWorker(worker, error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private processWorkerChunk(worker: AntigravityWorker, text: string): void {
+    if (!text) return;
+    worker.lineBuffer += text;
+    let newlineIndex = worker.lineBuffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = worker.lineBuffer.slice(0, newlineIndex).replace(/\r$/, "");
+      worker.lineBuffer = worker.lineBuffer.slice(newlineIndex + 1);
+      this.processWorkerLine(worker, line);
+      newlineIndex = worker.lineBuffer.indexOf("\n");
+    }
+    if (Buffer.byteLength(worker.lineBuffer, "utf8") > MAX_PROTOCOL_LINE_BYTES) {
+      throw new Error("Antigravity structured output exceeded maximum line size");
+    }
+  }
+
+  private processWorkerLine(worker: AntigravityWorker, line: string): void {
+    if (!line.trim()) return;
+    if (Buffer.byteLength(line, "utf8") > MAX_PROTOCOL_LINE_BYTES) {
+      throw new Error("Antigravity structured output exceeded maximum line size");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new Error("Antigravity emitted invalid structured output");
+    }
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("Antigravity emitted invalid structured output");
+    }
+    this.processWorkerEvent(worker, parsed as AntigravityStreamEvent);
+  }
+
+  private processWorkerEvent(worker: AntigravityWorker, parsed: AntigravityStreamEvent): void {
+    if (parsed.event === "init") {
+      if (worker.initSeen) throw new Error("Antigravity emitted more than one init event");
+      this.setWorkerSessionId(worker, parsed.conversation_id, "init");
+      worker.initSeen = true;
+      return;
+    }
+
+    const pending = worker.pendingTurn;
+    if (!pending) {
+      throw new Error("Antigravity emitted a turn event without an active turn");
+    }
+    if (!worker.initSeen) {
+      throw new Error(`Antigravity emitted ${String(parsed.event)} before init`);
+    }
+
+    if (parsed.event === "user") {
+      const message = asRecord(parsed.message);
+      if (pending.userEchoSeen) {
+        throw new Error("Antigravity emitted more than one user echo event");
+      }
+      if (typeof message?.content !== "string" || message.content !== pending.expectedInput) {
+        throw new Error("Antigravity emitted a user echo that does not match the active turn");
+      }
+      pending.userEchoSeen = true;
+      return;
+    }
+
+    if (parsed.event === "step_update") {
+      const step = asRecord(parsed.step_update) as AntigravityStepUpdate | undefined;
+      if (!step) return;
+      if (step.conversation_id !== undefined) {
+        this.setWorkerSessionId(worker, step.conversation_id, "step_update");
+      }
+      const index = typeof step.step_index === "number" && Number.isInteger(step.step_index)
+        ? step.step_index
+        : undefined;
+      if (index !== undefined) {
+        const usage = readUsage(step.usage);
+        if (usage) pending.stepUsage.set(index, usage);
+      }
+      if (step.step_type === "agent_response" && typeof step.text_delta === "string") {
+        this.emitPersistentTextDelta(worker, pending, step.text_delta);
+      }
+      if (step.step_type === "tool" && index !== undefined) {
+        const info = (asRecord(step.tool_info) ?? {}) as AntigravityToolInfo;
+        this.emitPersistentToolUse(worker, pending, step, index, info);
+        if ((step.state === "DONE" || step.state === "ERROR") && !pending.completedTools.has(index)) {
+          pending.completedTools.add(index);
+          const toolName = typeof step.tool_name === "string"
+            ? step.tool_name
+            : typeof info.name === "string" ? info.name : "Antigravity tool";
+          const hasError = step.state === "ERROR" || (info.error !== undefined && info.error !== null);
+          const output = stringifyToolValue(info.output) ?? (hasError ? stringifyToolValue(info.error) : undefined);
+          this.emitPersistentEngineEvent(pending, {
+            type: "tool_result",
+            toolName,
+            toolUseId: `${worker.currentSessionId ?? "antigravity"}:${index}`,
+            ...(output !== undefined ? { output } : {}),
+            isError: hasError,
+            ...(worker.currentSessionId ? { sessionId: worker.currentSessionId } : {}),
+          });
+        }
+      }
+      return;
+    }
+
+    if (parsed.event === "result") {
+      if (pending.resultSeen) throw new Error("Antigravity emitted more than one result event");
+      const result = asRecord(parsed.result) as AntigravityResult | undefined;
+      if (!result) throw new Error("Antigravity emitted an invalid result event");
+      this.setWorkerSessionId(worker, result.conversation_id, "result");
+      pending.resultSeen = true;
+      const status = typeof result.status === "string" ? result.status : "UNKNOWN";
+      if (status !== "SUCCESS") {
+        const message = stringifyToolValue(result.error) ?? `Antigravity result status: ${status}`;
+        throw new Error(message);
+      }
+      const responseText = typeof result.response === "string" ? result.response : "";
+      pending.resultText = responseText || pending.streamedText;
+      if (!pending.streamedText && pending.resultText) {
+        this.emitPersistentTextDelta(worker, pending, pending.resultText);
+      }
+      this.emitPersistentEngineEvent(pending, {
+        type: "result",
+        text: pending.resultText.trim(),
+        ...(worker.currentSessionId ? { sessionId: worker.currentSessionId } : {}),
+      });
+      this.resolvePersistentTurn(worker, pending);
+      return;
+    }
+
+    throw new Error(`Antigravity emitted unsupported structured event: ${String(parsed.event)}`);
+  }
+
+  private setWorkerSessionId(
+    worker: AntigravityWorker,
+    candidate: unknown,
+    eventName: "init" | "step_update" | "result",
+  ): void {
+    const next = readConversationId(candidate);
+    if (!next) throw new Error(`Antigravity ${eventName} event is missing a valid conversation_id`);
+    if (worker.currentSessionId && next !== worker.currentSessionId) {
+      throw new Error("Antigravity conversation_id changed during turn");
+    }
+    const owner = this.workers.get(next);
+    if (owner && owner !== worker && !owner.removed) {
+      throw new Error(`Antigravity conversation ${next} is already owned by another live worker`);
+    }
+    const changed = next !== worker.currentSessionId;
+    worker.currentSessionId = next;
+    this.workers.set(next, worker);
+    if (changed && worker.pendingTurn) {
+      this.emitPersistentEngineEvent(worker.pendingTurn, { type: "session", sessionId: next });
+    }
+  }
+
+  private emitPersistentTextDelta(
+    worker: AntigravityWorker,
+    pending: AntigravityPendingTurn,
+    text: string,
+  ): void {
+    if (!text) return;
+    pending.streamedText += text;
+    try {
+      pending.onProgress?.(pending.streamedText);
+    } catch {
+      // Progress rendering cannot fail the engine turn.
+    }
+    this.emitPersistentEngineEvent(pending, {
+      type: "assistant_text",
+      text,
+      delta: true,
+      ...(worker.currentSessionId ? { sessionId: worker.currentSessionId } : {}),
+    });
+  }
+
+  private emitPersistentToolUse(
+    worker: AntigravityWorker,
+    pending: AntigravityPendingTurn,
+    step: AntigravityStepUpdate,
+    index: number,
+    info: AntigravityToolInfo,
+  ): void {
+    if (pending.emittedTools.has(index)) return;
+    pending.emittedTools.add(index);
+    const toolName = typeof step.tool_name === "string"
+      ? step.tool_name
+      : typeof info.name === "string" ? info.name : "Antigravity tool";
+    this.emitPersistentEngineEvent(pending, {
+      type: "tool_use",
+      toolName,
+      ...(info.parameters !== undefined ? { toolInput: info.parameters } : {}),
+      toolUseId: `${worker.currentSessionId ?? "antigravity"}:${index}`,
+      ...(worker.currentSessionId ? { sessionId: worker.currentSessionId } : {}),
+    });
+  }
+
+  private emitPersistentEngineEvent(pending: AntigravityPendingTurn, event: EngineStreamEvent): void {
+    if (!pending.onEngineEvent) return;
+    try {
+      Promise.resolve(pending.onEngineEvent(event)).catch(() => undefined);
+    } catch {
+      // Engine event rendering is best-effort.
+    }
+  }
+
+  private resolvePersistentTurn(worker: AntigravityWorker, pending: AntigravityPendingTurn): void {
+    if (worker.pendingTurn !== pending) return;
+    this.clearPendingTurn(worker, pending);
+    const usage = sumStepUsage(pending.stepUsage.values());
+    pending.resolve({
+      text: pending.resultText.trim() || "Antigravity completed.",
+      sessionId: worker.currentSessionId,
+      ...(usage ? { usage } : {}),
+      childPid: worker.child.pid,
+    });
+  }
+
+  private rejectPersistentTurn(worker: AntigravityWorker, error: Error): void {
+    const pending = worker.pendingTurn;
+    if (!pending) return;
+    this.clearPendingTurn(worker, pending);
+    pending.reject(error);
+  }
+
+  private clearPendingTurn(worker: AntigravityWorker, pending: AntigravityPendingTurn): void {
+    if (worker.pendingTurn === pending) worker.pendingTurn = null;
+    if (pending.totalTimeout) clearTimeout(pending.totalTimeout);
+    if (pending.inactivityTimeout) clearTimeout(pending.inactivityTimeout);
+    pending.abortCleanup?.();
+    pending.totalTimeout = undefined;
+    pending.inactivityTimeout = undefined;
+    pending.abortCleanup = undefined;
+    worker.lastActivityAt = Date.now();
+  }
+
+  private armTurnTimeouts(worker: AntigravityWorker, pending: AntigravityPendingTurn): void {
+    if (pending.timeoutDisabled) return;
+    if (this.turnTimeoutMs > 0) {
+      pending.totalTimeout = setTimeout(() => {
+        if (worker.pendingTurn !== pending) return;
+        this.failAndStopWorker(worker, new Error(
+          `Antigravity process turn timed out after ${Math.max(1, Math.round(this.turnTimeoutMs / 60_000))} minutes`,
+        ));
+      }, this.turnTimeoutMs);
+      pending.totalTimeout.unref?.();
+    }
+    this.armInactivityTimeout(worker, pending);
+  }
+
+  private armInactivityTimeout(worker: AntigravityWorker, pending: AntigravityPendingTurn): void {
+    if (pending.inactivityTimeout) clearTimeout(pending.inactivityTimeout);
+    pending.inactivityTimeout = undefined;
+    if (pending.timeoutDisabled || this.inactivityTimeoutMs === null || this.inactivityTimeoutMs <= 0) return;
+    pending.inactivityTimeout = setTimeout(() => {
+      if (worker.pendingTurn !== pending) return;
+      this.failAndStopWorker(worker, new Error(
+        `Antigravity process turn became inactive after ${Math.max(1, Math.round(this.inactivityTimeoutMs! / 60_000))} minutes`,
+      ));
+    }, this.inactivityTimeoutMs);
+    pending.inactivityTimeout.unref?.();
+  }
+
+  private markWorkerActivity(worker: AntigravityWorker): void {
+    worker.lastActivityAt = Date.now();
+    if (worker.pendingTurn) this.armInactivityTimeout(worker, worker.pendingTurn);
+  }
+
+  private handleWorkerClose(worker: AntigravityWorker, code: number | null): void {
+    if (worker.removed) return;
+    try {
+      this.processWorkerChunk(worker, worker.stdoutDecoder.end());
+      if (worker.lineBuffer.trim()) {
+        this.processWorkerLine(worker, worker.lineBuffer.replace(/\r$/, ""));
+        worker.lineBuffer = "";
+      }
+    } catch (error) {
+      this.rejectPersistentTurn(worker, error instanceof Error ? error : new Error(String(error)));
+    }
+    worker.stderrTail = appendHeadTailDiagnostic(
+      worker.stderrTail,
+      worker.stderrDecoder.end(),
+      MAX_STDERR_DIAGNOSTIC_BYTES,
+    );
+    if (worker.pendingTurn) {
+      const error = code === 0
+        ? new Error("Antigravity exited successfully without a result event")
+        : new Error(worker.stderrTail.trim() || `antigravity exited with code ${code}`);
+      this.rejectPersistentTurn(worker, error);
+    }
+    this.removeWorker(worker);
+  }
+
+  private failAndStopWorker(worker: AntigravityWorker, error: Error): void {
+    if (worker.removed) return;
+    const stderr = worker.stderrTail.trim();
+    const diagnosed = stderr && !error.message.includes(stderr)
+      ? new Error(`${error.message}\n\nAntigravity stderr:\n${stderr}`)
+      : error;
+    this.rejectPersistentTurn(worker, diagnosed);
+    try {
+      worker.child.stdin?.end();
+    } catch {
+      // The process is killed below even if stdin has already failed.
+    }
+    killProcessTree(worker.child.pid);
+    this.removeWorker(worker);
+  }
+
+  private stopWorker(worker: AntigravityWorker, error?: Error): void {
+    if (worker.removed) return;
+    if (error) this.rejectPersistentTurn(worker, error);
+    try {
+      worker.child.stdin?.end();
+    } catch {
+      // Best-effort graceful EOF before the process-tree kill.
+    }
+    killProcessTree(worker.child.pid);
+    this.removeWorker(worker);
+  }
+
+  private rekeyWorker(worker: AntigravityWorker, sessionId: string): void {
+    if (worker.removed) return;
+    for (const [key, candidate] of this.workers.entries()) {
+      if (candidate === worker && key !== sessionId) this.workers.delete(key);
+    }
+    this.workers.set(sessionId, worker);
+  }
+
+  private removeWorker(worker: AntigravityWorker): void {
+    if (worker.removed) return;
+    worker.removed = true;
+    for (const [key, candidate] of this.workers.entries()) {
+      if (candidate === worker) this.workers.delete(key);
+    }
+    if (worker.logDir) {
+      void rm(worker.logDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }).catch(() => undefined);
+    }
+  }
+
+  private reapIdleWorkers(): void {
+    const now = Date.now();
+    for (const worker of new Set(this.workers.values())) {
+      if (worker.pendingTurn || now - worker.lastActivityAt < this.idleWorkerTtlMs) continue;
+      this.stopWorker(worker);
+    }
+  }
+
+  destroy(): Promise<void> {
+    if (!this.destroyPromise) {
+      this.destroyed = true;
+      this.destroyPromise = this.destroyInternal();
+    }
+    return this.destroyPromise;
+  }
+
+  private async destroyInternal(): Promise<void> {
+    if (this.idleSweepTimer) clearInterval(this.idleSweepTimer);
+    for (const stop of [...this.oneShotStops]) {
+      stop(new Error("Adapter destroyed"));
+    }
+    this.oneShotStops.clear();
+    this.nativeGoalSessions.clear();
+    const pendingCreations = [...this.pendingWorkers.values()];
+    const created = await Promise.allSettled(pendingCreations);
+    const workers = new Set(this.workers.values());
+    for (const result of created) {
+      if (result.status === "fulfilled") workers.add(result.value);
+    }
+    for (const worker of workers) {
+      this.stopWorker(worker, new Error("Adapter destroyed"));
+    }
+    this.workers.clear();
+    this.pendingWorkers.clear();
+  }
+
   private async runAntigravityCommand(
     args: string[],
     stdinPayload: string | null,
@@ -392,7 +1095,6 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     cwdOverride?: string,
     timeoutMs: number | null = this.turnTimeoutMs,
     inactivityTimeoutMs: number | null = this.inactivityTimeoutMs,
-    extraEnv?: Record<string, string>,
     onProgress?: CodexUserMessageInput["onProgress"],
     onEngineEvent?: CodexUserMessageInput["onEngineEvent"],
   ): Promise<AntigravityRunResponse> {
@@ -400,7 +1102,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     const child = this.spawnAntigravity(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
-      env: mergeAllowedTurnExtraEnv(this.childEnv, extraEnv),
+      env: this.childEnv,
       cwd: cwdOverride ?? this.workspacePath,
       windowsHide: true,
     });
@@ -423,6 +1125,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       let inactivityTimeout: ReturnType<typeof setTimeout> | undefined;
       let resultCloseGraceTimeout: ReturnType<typeof setTimeout> | undefined;
       let abortCleanup: (() => void) | undefined;
+      let oneShotStop: ((error: Error) => void) | undefined;
 
       const clearTimers = () => {
         if (totalTimeout) clearTimeout(totalTimeout);
@@ -435,6 +1138,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       const clearAbortListener = () => {
         abortCleanup?.();
         abortCleanup = undefined;
+        if (oneShotStop) this.oneShotStops.delete(oneShotStop);
       };
       const emitEngineEvent = (event: EngineStreamEvent) => {
         if (!onEngineEvent) return;
@@ -452,6 +1156,15 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         killProcessTree(child.pid);
         reject(error);
       };
+      oneShotStop = (error) => {
+        try {
+          child.stdin?.end();
+        } catch {
+          // The process tree is still terminated by rejectAndKill.
+        }
+        rejectAndKill(error);
+      };
+      this.oneShotStops.add(oneShotStop);
       const resolveSuccessfulResult = () => {
         if (settled) return;
         settled = true;

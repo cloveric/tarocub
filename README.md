@@ -317,17 +317,21 @@ the verified capability and limitation matrix.
 
 Select Antigravity with `/engine antigravity`. The verified baseline is
 **Antigravity CLI 1.1.22**. TaroCub uses native NDJSON `stream-json` input and
-output for ordinary turns, maps session/text/tool/result events separately,
-and records current-turn step usage instead of the cumulative usage returned
-when a conversation is resumed. Unstructured stdout, a missing or inconsistent
-conversation ID, or a missing final result fails closed rather than appearing
-in chat as an answer.
+output through one persistent worker per live conversation. Later turns reuse
+the warm process; idle workers are reaped after two hours, while a crash or a
+startup-setting change recreates the worker with the same authoritative
+conversation ID. TaroCub maps session/text/tool/result events separately and
+records current-turn step usage instead of the cumulative usage returned when a
+conversation is resumed. Unstructured stdout, a mismatched input echo, a missing
+or inconsistent conversation ID, or a missing final result fails closed rather
+than appearing in chat as an answer.
 
 `/model <id>` passes a model listed by `agy models`, and `/effort` supports
-`low`, `medium`, `high`, or `off`. Native `/goal` uses direct `-p` prompt mode because
-Antigravity does not accept slash commands through stream input, but its output
-still uses the same structured parser. Conversation resume, shared media ASR,
-files, delivery tags, and native MCP/plugin configuration remain available.
+`low`, `medium`, `high`, or `off`. Native `/goal` uses direct `-p` prompt mode
+because Antigravity does not accept slash commands through stream input; TaroCub
+recycles the idle worker first and resumes the same conversation in a new stream
+worker afterward. Conversation resume, shared media ASR, files, delivery tags,
+and native MCP/plugin configuration remain available.
 `full-auto` auto-approves the turn inside Antigravity's sandbox; explicit
 `bypass` remains the unsandboxed escape hatch.
 

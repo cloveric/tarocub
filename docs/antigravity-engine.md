@@ -12,11 +12,19 @@ Official references:
 
 ## Runtime Contract
 
-Ordinary turns use one headless process per turn with both input and output in
-NDJSON `stream-json` format. TaroCub sends one `user` event, closes stdin, and
-accepts only structured `init`, `step_update`, and `result` records from stdout.
-An unstructured stdout line, an error result, or a clean exit without the final
-result record fails closed instead of being posted as assistant text.
+Ordinary turns share one persistent headless worker per live conversation, with
+both input and output in NDJSON `stream-json` format. TaroCub writes one `user`
+event per turn and keeps stdin open. It accepts one process-level `init`, the
+matching `user` echo emitted by `agy`, and structured `step_update` and `result`
+records for each turn. An unstructured stdout line, a mismatched user echo, an
+error result, or a process exit before the active turn's final result fails
+closed instead of being posted as assistant text.
+
+The worker remains warm for later turns and is reaped after two idle hours.
+Changing a startup setting such as workspace, approval mode, model, effort, or
+native timeout recycles an idle worker and starts a replacement with
+`--conversation <uuid>`. A crash removes the worker; the next turn resumes the
+same authoritative conversation ID in a fresh process.
 
 TaroCub maps the stream as follows:
 
@@ -31,18 +39,21 @@ TaroCub maps the stream as follows:
 
 The result-level usage of a resumed conversation is cumulative. TaroCub does
 not record that value directly; it sums the latest usage for each step in the
-current process so resumed turns are not billed twice.
+current turn so resumed turns are not billed twice.
 
 `/goal` is the one deliberate protocol exception. Antigravity does not accept
-CLI slash commands through stream input, so TaroCub invokes native direct `-p`
-prompt mode with `/goal` as the first prompt token while still parsing structured
-output. Private bridge guidance and attachments follow the goal text and are
-not allowed to hide the slash command inside an XML wrapper.
+CLI slash commands through stream input, so TaroCub first recycles the idle
+persistent worker, then invokes native direct `-p` prompt mode with `/goal` as
+the first prompt token while still parsing structured output. Private bridge
+guidance and attachments follow the goal text and are not allowed to hide the
+slash command inside an XML wrapper. The next ordinary turn starts a new stream
+worker attached to the same conversation.
 
 ## Model, Effort, and Sessions
 
-- `/model <id>` persists a single-token model ID and passes it as `--model` on
-  the next turn. Use `agy models` to discover the current IDs. `/model off`
+- `/model <id>` persists a single-token model ID and passes it as `--model` when
+  the next worker starts. Changing it recycles an idle worker while preserving
+  the conversation. Use `agy models` to discover the current IDs. `/model off`
   restores the CLI default.
 - `/effort` supports `low`, `medium`, `high`, and `off`, matching the native
   startup flag. Incompatible persisted values are removed before startup.
@@ -69,7 +80,7 @@ not allowed to hide the slash command inside an XML wrapper.
 | Per-tool remote approval | Not exposed | Headless stream input has no interactive control-response protocol |
 | Structured questions | Not exposed | Turn-level approval is the safe bridge fallback |
 | Mid-turn steering | Not exposed | Follow-ups queue as another turn |
-| Post-result background lifecycle | Not exposed | Per-turn process exits after the result |
+| Post-result background lifecycle | Not exposed | A result ends the turn; the worker stays warm but emits no background-task lifecycle |
 | Manual `/compact` or context telemetry | Not exposed | No official headless API currently available |
 
 For approval mode `normal`, TaroCub asks once before the turn and then grants
@@ -80,11 +91,13 @@ Claude Code, Kimi ACP, or DeepSeek Harness.
 
 ## 中文摘要
 
-TaroCub 已按 Antigravity 1.1.22 的原生结构化协议接入：普通轮次使用
-`stream-json` 输入/输出，回答、工具、终态和 token 分开处理；恢复会话只统计
-本轮 step，避免累计 token 重复记账。`/model` 和 `/effort` 会转成原生启动
-参数，`/goal` 保持原生命令开头并解析结构化结果。`full-auto` 会同时启用
-`--sandbox`；只有显式 `bypass` 才跳过沙箱。
+TaroCub 已按 Antigravity 1.1.22 的原生结构化协议接入：每个活跃 conversation
+维持一个 `stream-json` worker，后续轮次复用同一进程；回答、工具、终态和
+token 分开处理，恢复会话只统计本轮 step，避免累计 token 重复记账。空闲
+两小时、进程崩溃或启动参数变化时会安全回收，并用权威 conversation ID
+重建。`/goal` 因上游限制仍使用一次性直接 `-p`，执行前会回收持久 worker，
+下一轮再恢复同一会话。`full-auto` 会同时启用 `--sandbox`；只有显式
+`bypass` 才跳过沙箱。
 
 尚未对齐 Codex/Claude 的部分来自当前上游边界，而不是 bridge 伪装支持：
 Antigravity headless 暂无单工具远程审批、运行中 steer、结果后的后台任务生命

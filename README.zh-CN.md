@@ -247,15 +247,15 @@ npm run dev -- telegram engine --instance review-bot
 
 切到 DeepSeek 后，服务优先使用 `DSH_EXECUTABLE`，否则使用 `PATH` 中的 `dsh`；需要先在本机完成 Harness 认证。TaroCub 为每个实例托管私有、仅 loopback 的 `dsh web`，通过官方 HTTP RPC 与双 WebSocket 下行流工作，而不是抓取终端文字。实测兼容基线为 **DeepSeek Harness 0.1.1-rc.2**。
 
-切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。当前实测兼容基线为 **Antigravity CLI 1.1.22**。普通轮次使用原生 NDJSON `stream-json` 输入/输出，分别处理 session、回答、工具、终态和本轮 token；非结构化 stdout、缺失或中途变化的 conversation ID、缺失最终 result 都会 fail closed，不会被误发成回答。`full-auto` 自动批准但同时启用 Antigravity 沙箱，只有显式 `bypass` 不启用沙箱。`/model <id>` 会传给原生 `--model`（用 `agy models` 查看 ID），`/effort` 支持 low、medium、high 和 off。
+切到 Antigravity 时，bridge 会自动把该实例设为 YOLO/full-auto；如果你已经显式设成 `bypass`，则保留 `bypass`。当前实测兼容基线为 **Antigravity CLI 1.1.22**。每个活跃 conversation 维持一个原生 NDJSON `stream-json` worker，后续轮次复用热进程；空闲两小时、进程崩溃或 workspace、审批模式、模型、effort、超时等启动参数变化时会安全回收，并用权威 conversation ID 重建。session、回答、工具、终态和本轮 token 分开处理；非结构化 stdout、不匹配的输入回显、缺失或中途变化的 conversation ID、缺失最终 result 都会 fail closed，不会被误发成回答。`full-auto` 自动批准但同时启用 Antigravity 沙箱，只有显式 `bypass` 不启用沙箱。`/model <id>` 会传给原生 `--model`（用 `agy models` 查看 ID），`/effort` 支持 low、medium、high 和 off。
 
 | 特性 | Codex | Claude | Kimi | DeepSeek | Antigravity |
 |---|---|---|---|---|---|
-| 协议 | app-server / `codex exec` | stream-json | `kimi acp` | 私有 `dsh web` + 官方 HTTP/WS | NDJSON `stream-json`；原生 `/goal` 用直接 `-p` prompt |
+| 协议 | app-server / `codex exec` | stream-json | `kimi acp` | 私有 `dsh web` + 官方 HTTP/WS | 每 conversation 持久 NDJSON `stream-json` worker；原生 `/goal` 用直接 `-p` prompt |
 | 会话恢复 | `/resume thread <id>` | `/resume` 扫描并选择 | `/resume` 扫描，也支持 `/resume session <id>` | `/resume` 扫描，也支持 `/resume session <id>`；真实 cwd 校验 | 结构化 `conversation_id` 自动绑定；日志扫描发现；`/resume conversation <id>` |
 | 项目指令 | `agent.md` prompt 注入 | `agent.md` system prompt + workspace `CLAUDE.md` | workspace `.kimi-code/agents/agent.md` 主代理 override | 实例私有 `DSH_HOME/AGENTS.md` | `agent.md` prompt 注入 |
 | 流式与工具 | 原生事件 | 原生事件 | ACP 文本、思考、工具、审批事件 | 原生文本/推理/工具/结果/usage 事件 | 原生 session/text/tool/result 事件 |
-| 后台任务 | 结构化生命周期 | 结构化生命周期 | Hook + 任务复核/自动重试 | `session/jobs` + 自动复核，最终结果 exactly-once | 仅进程内 |
+| 后台任务 | 结构化生命周期 | 结构化生命周期 | Hook + 任务复核/自动重试 | `session/jobs` + 自动复核，最终结果 exactly-once | result 后无结构化后台生命周期 |
 | 审批 / 提问 | app-server 沙箱 / process 整轮预审批 | 单工具审批 + 结构化提问 | ACP 单工具审批；当前单选提问 | 单次/会话审批 + 多问题、多选、自由文本 | 整轮预审批 |
 | 本地 skill / MCP | 原生 skill/MCP | 原生 skill/MCP/plugin | 原生 Kimi skill/MCP/plugin + bridge Search MCP | 复用 Harness profile；原生 plugin/MCP 由 Harness 管 | 原生能力 |
 | `/goal` | 结构化 goal | 原生命令透传 | **gap**：真机返回 `Unknown ACP command` | 原生持久 Goal + 可选 token budget | 原生命令透传 |
@@ -264,7 +264,7 @@ npm run dev -- telegram engine --instance review-bot
 | `/compact` / `/context` | 无状态 / runtime context | 支持 / 支持 | 支持 / 暂无结构化 context | 官方命令 / `contextPressure` 投影 | 暂不支持 |
 | 用量 | token（费用视 runtime） | token + USD | **gap**：无结构化 token/费用 | token；**无 USD**，美元预算不生效 | 本轮 token；无 USD |
 | 工作目录 | 实例 `workspace/` | 实例或恢复 session 的原工作区 | 绑定前用真实 `session/load` 校验 cwd | 绑定前用 `session.list/history` 校验 cwd，跨工作区 fail closed | 实例 `workspace/` |
-| 进程生命周期 | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每实例持久 Host，崩溃重启并按水位恢复 | 每轮结构化进程退出 |
+| 进程生命周期 | 按 runtime | stream worker 2 小时回收 | ACP worker 2 小时回收；session 可恢复 | 每实例持久 Host，崩溃重启并按水位恢复 | 每 conversation 持久 worker，2 小时空闲回收；崩溃/配置变化后按 UUID 恢复 |
 
 Antigravity 当前仍有明确的上游边界：headless 协议没有单工具远程审批、运行中 steer、result 之后的后台任务生命周期，也没有手动 compact/context API。普通审批因此是整轮一次确认，bridge 不会假装与 Codex/Claude 完全对齐。详见 [Antigravity Engine 能力矩阵](./docs/antigravity-engine.md)。
 
@@ -1207,7 +1207,7 @@ npm run dev -- telegram service start --instance agy-bot
 ```
 Telegram 消息 → 标准化 → 访问检查 → 聊天队列（串行）
     → 加载 config.json（引擎） → 加载 agent.md → 会话查找
-    → Codex app-server、Claude stream-json、Kimi ACP、DeepSeek Harness 或 Antigravity stream-json（新建或恢复）
+    → Codex app-server、Claude stream-json、Kimi ACP、DeepSeek Harness 或 Antigravity 持久 stream-json worker（新建或恢复）
     → typing action + timeline 事件 → 最终渲染 → 发送 → 审计
 ```
 

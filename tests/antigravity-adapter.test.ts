@@ -74,11 +74,12 @@ describe("ProcessAntigravityAdapter", () => {
     expect(inputEvent.message.content).toContain("Reply through Telegram.");
     expect(inputEvent.message.content).toContain("<user_message>\nHello\n</user_message>");
     expect(inputEvent.message.content).toContain("Attachment: a.png\nAttachment: b.pdf");
-    expect(child.stdin.ended).toBe(true);
+    expect(child.stdin.ended).toBe(false);
     expect(calls[0]?.options.env?.TELEGRAM_BOT_TOKEN).toBeUndefined();
     expect(calls[0]?.options.env?.AGY_CLI_HIDE_ACCOUNT_INFO).toBe("1");
     expect(childEnv.TELEGRAM_BOT_TOKEN).toBe("secret-token");
-    expect(calls[0]?.options.env?.CCTB_SEND_URL).toBe("http://127.0.0.1/send");
+    expect(adapter.supportsTurnScopedEnv).toBe(false);
+    expect(calls[0]?.options.env?.CCTB_SEND_URL).toBeUndefined();
     expect(calls[0]?.options.env?.NODE_OPTIONS).toBeUndefined();
   });
 
@@ -219,7 +220,7 @@ describe("ProcessAntigravityAdapter", () => {
     await expect(promise).resolves.toMatchObject({ text: "streamed answer" });
   });
 
-  it("settles a successful result when inherited stdio prevents the child close event", async () => {
+  it("settles each successful result while keeping the stream worker open", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
     const abortController = new AbortController();
@@ -251,20 +252,149 @@ describe("ProcessAntigravityAdapter", () => {
         sessionId: CONVERSATION_ID,
       },
     });
+    expect(child.stdin.ended).toBe(false);
     await observed;
   });
 
-  it("still rejects a nonzero child exit received after a successful result", async () => {
-    const { spawnAntigravity, child, calls } = createSpawnHarness();
+  it("keeps a completed turn successful and recycles the worker after a later crash", async () => {
+    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
     const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
 
     const promise = adapter.sendUserMessage("telegram-12345", { text: "Late failure", files: [] });
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    emitSuccess(child, "premature success");
-    child.stderr.emitData("post-result cleanup failed\n");
-    child.close(1);
+    emitSuccess(children[0]!, "authoritative success");
+    await expect(promise).resolves.toMatchObject({ text: "authoritative success" });
+    children[0]!.stderr.emitData("post-result worker crash\n");
+    children[0]!.close(1);
 
-    await expect(promise).rejects.toThrow("post-result cleanup failed");
+    const next = adapter.sendUserMessage(CONVERSATION_ID, { text: "Recover", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(calls[1]?.args).toEqual(expect.arrayContaining(["--conversation", CONVERSATION_ID]));
+    emitSuccess(children[1]!, "recovered");
+    await expect(next).resolves.toMatchObject({ text: "recovered" });
+  });
+
+  it("reuses one persistent worker for consecutive turns in the same conversation", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const first = adapter.sendUserMessage("telegram-12345", { text: "First", files: [] });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(1));
+    emitSuccess(child, "first answer");
+    await expect(first).resolves.toMatchObject({ text: "first answer", sessionId: CONVERSATION_ID });
+
+    const second = adapter.sendUserMessage(CONVERSATION_ID, { text: "Second", files: [] });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(2));
+    emitTurnSuccess(child, "second answer");
+    await expect(second).resolves.toMatchObject({ text: "second answer", sessionId: CONVERSATION_ID });
+
+    expect(calls).toHaveLength(1);
+    expect(child.stdin.ended).toBe(false);
+    const messages = child.stdin.writes.map((line) => JSON.parse(line) as { message: { content: string } });
+    expect(messages[0]?.message.content).toContain("<user_message>\nFirst\n</user_message>");
+    expect(messages[1]?.message.content).toContain("<user_message>\nSecond\n</user_message>");
+  });
+
+  it("accepts exactly one matching stream-json user echo per turn", async () => {
+    const { spawnAntigravity, child } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const turn = adapter.sendUserMessage(CONVERSATION_ID, { text: "Echoed", files: [] });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(child.stdin.writes[0]!);
+    emitTurnSuccess(child, "accepted");
+
+    await expect(turn).resolves.toMatchObject({ text: "accepted", sessionId: CONVERSATION_ID });
+    await adapter.destroy();
+  });
+
+  it("rejects a stream-json user echo that does not match the active turn", async () => {
+    const { spawnAntigravity, child } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const turn = adapter.sendUserMessage(CONVERSATION_ID, { text: "Expected", files: [] });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({ event: "user", message: { content: "Different" } }));
+
+    await expect(turn).rejects.toThrow("does not match the active turn");
+    expect(child.stdin.ended).toBe(true);
+  });
+
+  it("keeps different conversations on isolated workers", async () => {
+    const firstId = CONVERSATION_ID;
+    const secondId = "22222222-3333-4444-8555-666666666666";
+    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const first = adapter.sendUserMessage(firstId, { text: "A", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const second = adapter.sendUserMessage(secondId, { text: "B", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    emitSuccess(children[0]!, "answer A", firstId);
+    emitSuccess(children[1]!, "answer B", secondId);
+
+    await expect(first).resolves.toMatchObject({ text: "answer A", sessionId: firstId });
+    await expect(second).resolves.toMatchObject({ text: "answer B", sessionId: secondId });
+    expect(children[0]!.stdin.writes).toHaveLength(1);
+    expect(children[1]!.stdin.writes).toHaveLength(1);
+  });
+
+  it("fails closed when two workers claim the same real conversation", async () => {
+    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const first = adapter.sendUserMessage("telegram-111", { text: "A", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const second = adapter.sendUserMessage("telegram-222", { text: "B", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    emitSuccess(children[0]!, "answer A");
+    await expect(first).resolves.toMatchObject({ text: "answer A", sessionId: CONVERSATION_ID });
+    children[1]!.stdout.emitData(jsonLine({
+      event: "init", conversation_id: CONVERSATION_ID, init: {},
+    }));
+
+    await expect(second).rejects.toThrow(`conversation ${CONVERSATION_ID} is already owned`);
+    expect(children[1]!.stdin.ended).toBe(true);
+    expect(children[0]!.stdin.ended).toBe(false);
+
+    const followUp = adapter.sendUserMessage(CONVERSATION_ID, { text: "Still alive", files: [] });
+    await vi.waitFor(() => expect(children[0]!.stdin.writes).toHaveLength(2));
+    emitTurnSuccess(children[0]!, "still alive");
+    await expect(followUp).resolves.toMatchObject({ text: "still alive" });
+    await adapter.destroy();
+  });
+
+  it("fails closed instead of overwriting an in-flight turn on the same worker", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const first = adapter.sendUserMessage(CONVERSATION_ID, { text: "First", files: [] });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(1));
+    await expect(adapter.sendUserMessage(CONVERSATION_ID, { text: "Second", files: [] }))
+      .rejects.toThrow("already has an in-flight turn");
+    expect(child.stdin.writes).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+
+    emitSuccess(child, "first answer");
+    await expect(first).resolves.toMatchObject({ text: "first answer" });
   });
 
   it("preserves UTF-8 characters split across structured stdout chunks", async () => {
@@ -418,6 +548,61 @@ describe("ProcessAntigravityAdapter", () => {
     expect(child.stdin.ended).toBe(true);
   });
 
+  it("recycles a persistent conversation worker before running native /goal", async () => {
+    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243), new FakeChildProcess(4244)];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const first = adapter.sendUserMessage("telegram-12345", { text: "First", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    emitSuccess(children[0]!, "first answer");
+    await expect(first).resolves.toMatchObject({ sessionId: CONVERSATION_ID });
+
+    const goal = adapter.sendUserMessage(CONVERSATION_ID, { text: "/goal finish it", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    expect(children[0]!.stdin.ended).toBe(true);
+    expect(calls[1]?.args).toEqual(expect.arrayContaining(["-p", "--conversation", CONVERSATION_ID]));
+    emitSuccess(children[1]!, "goal complete");
+    children[1]!.close(0);
+    await expect(goal).resolves.toMatchObject({ text: "goal complete", sessionId: CONVERSATION_ID });
+
+    const next = adapter.sendUserMessage(CONVERSATION_ID, { text: "After goal", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    expect(calls[2]?.args).toEqual(expect.arrayContaining([
+      "--input-format", "stream-json", "--conversation", CONVERSATION_ID,
+    ]));
+    emitSuccess(children[2]!, "after goal");
+    await expect(next).resolves.toMatchObject({ text: "after goal" });
+    await adapter.destroy();
+  });
+
+  it("destroy stops an active native /goal and blocks overlapping work on its conversation", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const goal = adapter.sendUserMessage(CONVERSATION_ID, { text: "/goal keep working", files: [] });
+    const goalOutcome = goal.then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    await expect(adapter.sendUserMessage(CONVERSATION_ID, { text: "Overlap", files: [] }))
+      .rejects.toThrow("native /goal in flight");
+    expect(calls).toHaveLength(1);
+
+    await adapter.destroy();
+    expect(child.stdin.ended).toBe(true);
+    const outcome = await goalOutcome;
+    expect(outcome.status).toBe("rejected");
+    expect(outcome.status === "rejected" ? outcome.error : undefined).toEqual(expect.objectContaining({
+      message: "Adapter destroyed",
+    }));
+  });
+
   it("fails closed on an Antigravity ERROR result", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
@@ -525,6 +710,105 @@ describe("ProcessAntigravityAdapter", () => {
 
     await expect(promise).resolves.toMatchObject({ text: "retried", sessionId: CONVERSATION_ID });
   });
+
+  it("restarts an idle worker with the same conversation when model settings change", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "antigravity-persistent-config-"));
+    const configPath = path.join(root, "config.json");
+    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    try {
+      await writeFile(configPath, JSON.stringify({
+        engine: "antigravity", model: "gemini-3.7-flash-high", effort: "high", approvalMode: "full-auto",
+      }));
+      const adapter = new ProcessAntigravityAdapter(
+        "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, configPath, "/tmp/workspace",
+      );
+
+      const first = adapter.sendUserMessage("telegram-12345", { text: "First", files: [] });
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      emitSuccess(children[0]!, "first answer");
+      await expect(first).resolves.toMatchObject({ sessionId: CONVERSATION_ID });
+
+      await writeFile(configPath, JSON.stringify({
+        engine: "antigravity", model: "claude-sonnet-4-6", effort: "medium", approvalMode: "full-auto",
+      }));
+      const second = adapter.sendUserMessage(CONVERSATION_ID, { text: "Second", files: [] });
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
+      expect(children[0]!.stdin.ended).toBe(true);
+      expect(calls[1]?.args).toEqual(expect.arrayContaining([
+        "--conversation", CONVERSATION_ID,
+        "--model", "claude-sonnet-4-6",
+        "--effort", "medium",
+      ]));
+      emitSuccess(children[1]!, "second answer");
+      await expect(second).resolves.toMatchObject({ text: "second answer", sessionId: CONVERSATION_ID });
+      await adapter.destroy();
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("reaps idle stream workers without touching an active turn", async () => {
+    const children = [new FakeChildProcess(4242)];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter(
+      "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, undefined, undefined,
+      undefined, undefined, 25, 5,
+    );
+    try {
+      const first = adapter.sendUserMessage(CONVERSATION_ID, { text: "First", files: [] });
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(children[0]!.stdin.ended).toBe(false);
+      emitSuccess(children[0]!, "first answer");
+      await expect(first).resolves.toMatchObject({ text: "first answer" });
+
+      await vi.waitFor(() => expect(children[0]!.stdin.ended).toBe(true));
+      expect(calls).toHaveLength(1);
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
+  it("destroy closes every persistent worker and rejects an active turn", async () => {
+    const children = [new FakeChildProcess(4242), new FakeChildProcess(4243)];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const completed = adapter.sendUserMessage(CONVERSATION_ID, { text: "Complete", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const active = adapter.sendUserMessage("22222222-3333-4444-8555-666666666666", { text: "Active", files: [] });
+    const activeOutcome = active.then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    emitSuccess(children[0]!, "done", CONVERSATION_ID);
+    await expect(completed).resolves.toMatchObject({ text: "done" });
+
+    await adapter.destroy();
+    expect(children[0]!.stdin.ended).toBe(true);
+    expect(children[1]!.stdin.ended).toBe(true);
+    const outcome = await activeOutcome;
+    expect(outcome.status).toBe("rejected");
+    expect(outcome.status === "rejected" ? outcome.error : undefined).toEqual(expect.objectContaining({
+      message: "Adapter destroyed",
+    }));
+    await expect(adapter.sendUserMessage(CONVERSATION_ID, { text: "After destroy", files: [] }))
+      .rejects.toThrow("Adapter destroyed");
+  });
 });
 
 type SpawnOptions = {
@@ -544,10 +828,22 @@ class FakeStream extends EventEmitter {
 }
 
 class FakeChildProcess extends EventEmitter {
-  pid = 4242;
+  constructor(readonly pid = 4242) {
+    super();
+  }
+
   stdin = {
     writes: [] as string[],
     ended: false,
+    write: (chunk: string, callback?: (error?: Error | null) => void) => {
+      if (this.stdin.ended) {
+        callback?.(new Error("write after end"));
+        return false;
+      }
+      this.stdin.writes.push(chunk);
+      callback?.(null);
+      return true;
+    },
     end: (chunk?: string) => {
       if (chunk) this.stdin.writes.push(chunk);
       this.stdin.ended = true;
@@ -575,17 +871,21 @@ function jsonLine(value: unknown): string {
   return `${JSON.stringify(value)}\n`;
 }
 
-function emitSuccess(child: FakeChildProcess, text: string): void {
-  child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+function emitSuccess(child: FakeChildProcess, text: string, conversationId = CONVERSATION_ID): void {
+  child.stdout.emitData(jsonLine({ event: "init", conversation_id: conversationId, init: {} }));
+  emitTurnSuccess(child, text, conversationId);
+}
+
+function emitTurnSuccess(child: FakeChildProcess, text: string, conversationId = CONVERSATION_ID): void {
   child.stdout.emitData(jsonLine({
     event: "step_update",
     step_update: {
-      conversation_id: CONVERSATION_ID, step_index: 1, state: "DONE",
+      conversation_id: conversationId, step_index: 1, state: "DONE",
       step_type: "agent_response", text_delta: text,
     },
   }));
   child.stdout.emitData(jsonLine({
     event: "result",
-    result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: text },
+    result: { conversation_id: conversationId, status: "SUCCESS", response: text },
   }));
 }
