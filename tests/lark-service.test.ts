@@ -3498,6 +3498,24 @@ describe("lark service", () => {
       const cfg = await loadInstanceConfig(stateDir);
       expect(cfg.groupMode.enabled).toBe(true);
       expect(cfg.groupMode.allowedChatIds).toContain(stableLarkNumericId("lark:oc_new_chat"));
+      expect(cfg.groupMode.listenAllChatIds).not.toContain(stableLarkNumericId("lark:oc_new_chat"));
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          messageId: "om_new_chat_path",
+          chatId: "oc_new_chat",
+          chatType: "group",
+          mentionedBot: false,
+          content: "/Volumes/gdrive/project 请熟悉资料",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

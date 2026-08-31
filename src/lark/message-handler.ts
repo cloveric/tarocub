@@ -117,6 +117,7 @@ import {
 } from "./message-normalizer.js";
 import { sendManagedCard, updateManagedCard, updateManagedCardElement, type ManagedCardHandle } from "./managed-card.js";
 import { redactLarkErrorDetail } from "./redaction.js";
+import { isTaroCubLarkSlashCommand } from "./slash-command-registry.js";
 import { verifyLarkNumericIds } from "./id-map.js";
 import type { LarkQueueCardRef, LarkServiceRuntime, PendingLarkBatch } from "./runtime.js";
 import { type LarkReactionSettings, withLarkMessageReactions } from "./reactions.js";
@@ -1203,7 +1204,7 @@ async function trySteerActiveLarkTurn(
 }
 
 function isSlashCommand(text: string): boolean {
-  return text.trim().startsWith("/");
+  return isTaroCubLarkSlashCommand(text);
 }
 
 function scheduleBatchedLarkTurn(

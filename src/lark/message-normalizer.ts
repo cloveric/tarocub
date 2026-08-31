@@ -1,3 +1,5 @@
+import { isTaroCubLarkSlashCommand } from "./slash-command-registry.js";
+
 export type LarkBridgeChatType = "private" | "group";
 export type LarkChatMode = "p2p" | "group" | "topic";
 
@@ -96,7 +98,7 @@ export function normalizeLarkMessage(
 ): LarkNormalizedBridgeMessage | null {
   const requireMentionInGroup = options.requireMentionInGroup ?? false;
   const isGroupLike = message.chatType !== "p2p";
-  const isExplicitSlashCommand = isLarkSlashCommand(message.content);
+  const isExplicitSlashCommand = isTaroCubLarkSlashCommand(message.content);
 
   if (isGroupLike && requireMentionInGroup && !message.mentionedBot && !message.mentionAll && !isExplicitSlashCommand) {
     return null;
@@ -129,10 +131,6 @@ export function normalizeLarkMessage(
     mentions: message.mentions ?? [],
     attachments,
   };
-}
-
-function isLarkSlashCommand(content: string | undefined): boolean {
-  return Boolean(content?.trim().startsWith("/"));
 }
 
 export function buildLarkConversationKey(chatId: string, threadId?: string): string {

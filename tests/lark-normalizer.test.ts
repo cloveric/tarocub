@@ -164,6 +164,57 @@ describe("normalizeLarkMessage", () => {
     expect(normalized).toBeNull();
   });
 
+  it("does not mistake absolute paths or unknown slash text for mention-bypassing commands", () => {
+    const base = {
+      messageId: "om_path",
+      chatId: "oc_group",
+      chatType: "group" as const,
+      senderId: "ou_user",
+      rawContentType: "text",
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: false,
+      createTime: 123,
+    };
+
+    for (const content of [
+      "/Volumes/gdrive/project 请熟悉资料",
+      "/Users/cloveric/project/README.md 看一下",
+      "/tmp/report.pdf",
+      "/not-a-tarocub-command test",
+    ]) {
+      expect(normalizeLarkMessage({ ...base, content }, { requireMentionInGroup: true })).toBeNull();
+    }
+  });
+
+  it("lets implemented slash commands and aliases bypass a group mention requirement", () => {
+    const base = {
+      messageId: "om_command",
+      chatId: "oc_group",
+      chatType: "group" as const,
+      senderId: "ou_user",
+      rawContentType: "text",
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: false,
+      createTime: 123,
+    };
+
+    for (const content of [
+      "/status",
+      "/status@ccfaa1",
+      "/group all",
+      "/approve-session req_1",
+      "/approval req_1 once",
+      "/start",
+      "/queue 下一条",
+    ]) {
+      expect(normalizeLarkMessage({ ...base, content }, { requireMentionInGroup: true })).not.toBeNull();
+    }
+  });
+
   it("converts supported Feishu resources into local attachment descriptors", () => {
     const normalized = normalizeLarkMessage({
       messageId: "om_123",
