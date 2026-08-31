@@ -359,11 +359,22 @@ function readAcpErrorDetails(error: unknown): string | undefined {
 function normalizeKimiAcpError(error: unknown): Error {
   const normalized = error instanceof Error ? error : new Error(String(error));
   const details = readAcpErrorDetails(error);
-  if (!details || normalized.message.includes(details)) {
-    return normalized;
+  let enriched = normalized;
+  if (details && !normalized.message.includes(details)) {
+    enriched = new Error(`${normalized.message}: ${details}`, { cause: normalized });
+    enriched.name = normalized.name;
   }
-  const enriched = new Error(`${normalized.message}: ${details}`, { cause: normalized });
-  enriched.name = normalized.name;
+
+  if (/ACP stdio MCP|stdio MCP server.*runtime identity/i.test(enriched.message)
+      && !enriched.message.includes("Kimi Code to >= 0.39.1")) {
+    const actionable = new Error(
+      `${enriched.message}\n\nUpgrade Kimi Code to >= 0.39.1 and retry; `
+      + "TaroCub intentionally keeps configured MCP servers fail-closed.",
+      { cause: enriched },
+    );
+    actionable.name = enriched.name;
+    return actionable;
+  }
   return enriched;
 }
 

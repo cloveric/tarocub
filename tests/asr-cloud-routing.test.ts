@@ -4,12 +4,43 @@ import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { detectCloudAsrOverride, readCloudAsrConfig } from "../src/runtime/asr-cloud.js";
+import {
+  buildCloudAsrChildEnv,
+  detectCloudAsrOverride,
+  readCloudAsrConfig,
+} from "../src/runtime/asr-cloud.js";
 import { createDefaultTranscribeVoice } from "../src/telegram/message-input.js";
 import { removeTempRoot } from "./helpers/temp-files.js";
 
 const CLOUD_TRANSCRIPT = "cloud transcript from tingwu";
 const LOCAL_TRANSCRIPT = "local transcript";
+
+describe("cloud ASR child environment", () => {
+  it("passes only runtime plumbing and never bridge or cloud credentials", () => {
+    const childEnv = buildCloudAsrChildEnv({
+      PATH: "/usr/bin",
+      HOME: "/Users/example",
+      HTTPS_PROXY: "http://proxy.example.test:8080",
+      SSL_CERT_FILE: "/etc/cert.pem",
+      LARK_APP_SECRET: "lark-secret",
+      TELEGRAM_BOT_TOKEN: "telegram-secret",
+      ANTHROPIC_API_KEY: "engine-secret",
+      ALIBABA_CLOUD_ACCESS_KEY_ID: "cloud-id",
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: "cloud-secret",
+      TINGWU_APP_KEY: "tingwu-secret",
+      ASR_CLOUD_TASK_TIMEOUT_SECONDS: "123",
+      NODE_OPTIONS: "--require=/tmp/inject.js",
+      LD_PRELOAD: "/tmp/inject.so",
+    });
+
+    expect(childEnv).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/Users/example",
+      HTTPS_PROXY: "http://proxy.example.test:8080",
+      SSL_CERT_FILE: "/etc/cert.pem",
+    });
+  });
+});
 
 /**
  * Install a FAKE Tingwu dir: `<dir>/tingwu_transcribe.py` plus an executable

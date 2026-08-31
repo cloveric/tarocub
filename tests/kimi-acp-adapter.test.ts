@@ -5604,12 +5604,14 @@ describe("KimiAcpAdapter", () => {
       mcpServers,
     });
 
-    await expect(adapter.sendUserMessage("durable-session", {
+    const turn = adapter.sendUserMessage("durable-session", {
       text: "continue",
       files: [],
-    })).rejects.toThrow(
+    });
+    await expect(turn).rejects.toThrow(
       "Internal error: ACP stdio MCP server cctb_search does not declare a runtime identity",
     );
+    await expect(turn).rejects.toThrow("Upgrade Kimi Code to >= 0.39.1 and retry");
 
     const loadRequests = harness.children[0].server.requests("session/load");
     expect(loadRequests).toHaveLength(1);

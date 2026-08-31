@@ -112,6 +112,54 @@ export function isCloudAsrCancelledError(error: unknown): boolean {
 /** SIGTERM → SIGKILL escalation delay when a job is aborted or times out. */
 const CLOUD_PROCESS_HARD_KILL_DELAY_MS = 10_000;
 
+const CLOUD_ASR_CHILD_ENV_KEYS = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "REQUESTS_CA_BUNDLE",
+  "CURL_CA_BUNDLE",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "WINDIR",
+  "COMSPEC",
+  "PATHEXT",
+  "PYTHONUTF8",
+  "PYTHONIOENCODING",
+] as const;
+
+/**
+ * Build a minimal environment for the operator-controlled cloud ASR process.
+ * Credentials are loaded by the official adapter from its own `.env.local`;
+ * engine tokens, Lark/Telegram secrets, and process-injection variables must
+ * never cross this child-process boundary.
+ */
+export function buildCloudAsrChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {};
+  for (const key of CLOUD_ASR_CHILD_ENV_KEYS) {
+    const value = source[key];
+    if (value !== undefined) childEnv[key] = value;
+  }
+  return childEnv;
+}
+
 function parseExplicitPositiveNumber(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") {
     return undefined;
@@ -377,7 +425,10 @@ export function runCloudAsrProcess(options: {
     const stdoutStream = createWriteStream(path.join(options.jobDir, "stdout.log"), { mode: 0o600 });
     const stderrStream = createWriteStream(path.join(options.jobDir, "stderr.log"), { mode: 0o600 });
     // No shell: array args only, so file names can never be interpreted.
-    const child = spawn(options.pythonPath, options.args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(options.pythonPath, options.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: buildCloudAsrChildEnv(),
+    });
     child.stdout.pipe(stdoutStream);
     child.stderr.pipe(stderrStream);
 

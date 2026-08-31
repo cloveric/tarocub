@@ -256,6 +256,71 @@ describe("ProcessAntigravityAdapter", () => {
     await observed;
   });
 
+  it("quarantines persistent tail events after result before opening the next turn", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+    const firstProgress = vi.fn();
+    const firstEvents = vi.fn();
+
+    const first = adapter.sendUserMessage("telegram-12345", {
+      text: "First", files: [], onProgress: firstProgress, onEngineEvent: firstEvents,
+    });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 1, state: "DONE",
+        step_type: "agent_response", text_delta: "first answer",
+        usage: { input_tokens: 10, output_tokens: 2, cache_read_tokens: 3 },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: "first answer" },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 99, state: "DONE",
+        step_type: "agent_response", text_delta: " leaked tail",
+        usage: { input_tokens: 999, output_tokens: 888, cache_read_tokens: 777 },
+      },
+    }));
+
+    await expect(first).resolves.toEqual({
+      text: "first answer",
+      sessionId: CONVERSATION_ID,
+      usage: { inputTokens: 10, outputTokens: 2, cachedTokens: 3 },
+    });
+    expect(firstProgress).toHaveBeenCalledTimes(1);
+    expect(firstProgress).toHaveBeenCalledWith("first answer");
+    expect(JSON.stringify(firstEvents.mock.calls)).not.toContain("leaked tail");
+
+    const second = adapter.sendUserMessage(CONVERSATION_ID, { text: "Second", files: [] });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(2));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 1, state: "DONE",
+        step_type: "agent_response", text_delta: "second answer",
+        usage: { input_tokens: 20, output_tokens: 4, cache_read_tokens: 5 },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: "second answer" },
+    }));
+
+    await expect(second).resolves.toEqual({
+      text: "second answer",
+      sessionId: CONVERSATION_ID,
+      usage: { inputTokens: 20, outputTokens: 4, cachedTokens: 5 },
+    });
+    expect(calls).toHaveLength(1);
+    await adapter.destroy();
+  });
+
   it("keeps a completed turn successful and recycles the worker after a later crash", async () => {
     const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];

@@ -103,6 +103,7 @@ type AntigravityPendingTurn = {
   abortCleanup?: () => void;
   totalTimeout?: ReturnType<typeof setTimeout>;
   inactivityTimeout?: ReturnType<typeof setTimeout>;
+  resultGraceTimeout?: ReturnType<typeof setTimeout>;
   timeoutDisabled: boolean;
   resolve: (response: AntigravityRunResponse) => void;
   reject: (error: Error) => void;
@@ -778,6 +779,13 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       throw new Error(`Antigravity emitted ${String(parsed.event)} before init`);
     }
 
+    // A result is authoritative for the active turn. Keep the turn reserved
+    // for a short grace window and discard any tail deltas so a future agy
+    // protocol change cannot leak text, tools, or usage into the next turn.
+    if (pending.resultSeen && parsed.event === "step_update") {
+      return;
+    }
+
     if (parsed.event === "user") {
       const message = asRecord(parsed.message);
       if (pending.userEchoSeen) {
@@ -834,12 +842,12 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       const result = asRecord(parsed.result) as AntigravityResult | undefined;
       if (!result) throw new Error("Antigravity emitted an invalid result event");
       this.setWorkerSessionId(worker, result.conversation_id, "result");
-      pending.resultSeen = true;
       const status = typeof result.status === "string" ? result.status : "UNKNOWN";
       if (status !== "SUCCESS") {
         const message = stringifyToolValue(result.error) ?? `Antigravity result status: ${status}`;
         throw new Error(message);
       }
+      pending.resultSeen = true;
       const responseText = typeof result.response === "string" ? result.response : "";
       pending.resultText = responseText || pending.streamedText;
       if (!pending.streamedText && pending.resultText) {
@@ -850,7 +858,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         text: pending.resultText.trim(),
         ...(worker.currentSessionId ? { sessionId: worker.currentSessionId } : {}),
       });
-      this.resolvePersistentTurn(worker, pending);
+      this.schedulePersistentResultGrace(worker, pending);
       return;
     }
 
@@ -941,6 +949,17 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     });
   }
 
+  private schedulePersistentResultGrace(
+    worker: AntigravityWorker,
+    pending: AntigravityPendingTurn,
+  ): void {
+    if (pending.resultGraceTimeout) clearTimeout(pending.resultGraceTimeout);
+    pending.resultGraceTimeout = setTimeout(() => {
+      this.resolvePersistentTurn(worker, pending);
+    }, ANTIGRAVITY_RESULT_CLOSE_GRACE_MS);
+    pending.resultGraceTimeout.unref?.();
+  }
+
   private rejectPersistentTurn(worker: AntigravityWorker, error: Error): void {
     const pending = worker.pendingTurn;
     if (!pending) return;
@@ -952,9 +971,11 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     if (worker.pendingTurn === pending) worker.pendingTurn = null;
     if (pending.totalTimeout) clearTimeout(pending.totalTimeout);
     if (pending.inactivityTimeout) clearTimeout(pending.inactivityTimeout);
+    if (pending.resultGraceTimeout) clearTimeout(pending.resultGraceTimeout);
     pending.abortCleanup?.();
     pending.totalTimeout = undefined;
     pending.inactivityTimeout = undefined;
+    pending.resultGraceTimeout = undefined;
     pending.abortCleanup = undefined;
     worker.lastActivityAt = Date.now();
   }
@@ -1011,7 +1032,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       worker.stderrDecoder.end(),
       MAX_STDERR_DIAGNOSTIC_BYTES,
     );
-    if (worker.pendingTurn) {
+    if (worker.pendingTurn?.resultSeen) {
+      this.resolvePersistentTurn(worker, worker.pendingTurn);
+    } else if (worker.pendingTurn) {
       const error = code === 0 && !signal
         ? new Error("Antigravity exited successfully without a result event")
         : new Error(formatAntigravityExit(worker.stderrTail, code, signal));

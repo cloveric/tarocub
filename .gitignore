@@ -15,4 +15,8 @@ tmp-asr-test/
 access.json
 session.json
 asr-jobs/
+integrations/tingwu-asr/.venv/
+integrations/tingwu-asr/output/
+integrations/tingwu-asr/__pycache__/
+tingwu_asr/output/
 .cctb/

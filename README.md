@@ -528,7 +528,7 @@ bash scripts/install-tingwu-asr.sh
 bash ~/.tarocub-secrets/tingwu_asr/configure_env.sh
 ```
 
-The adapter is a subprocess contract, not a local Tingwu server: Tingwu has no TaroCub port. Port `8412` belongs only to local Qwen. The adapter performs OSS upload, signed-URL creation, offline-task polling, result download, and temporary-object cleanup. `lark doctor` checks the script, virtualenv, credential-file presence/permissions, and route threshold without reading credentials; a real smoke test is still required to prove authentication.
+The adapter is a subprocess contract, not a local Tingwu server: Tingwu has no TaroCub port. Port `8412` belongs only to local Qwen. The adapter performs OSS upload, signed-URL creation, offline-task polling, result download, and temporary-object cleanup. TaroCub starts it with a minimal OS/certificate/proxy environment instead of inheriting bot or engine secrets; the adapter loads Aliyun credentials only from its own `.env.local`. A soft cancellation (`SIGTERM`/`SIGINT`) runs OSS cleanup before exit, with the bridge retaining a bounded `SIGKILL` backstop. `lark doctor` checks the script, virtualenv, credential-file presence/permissions, and route threshold without reading credentials; a real smoke test is still required to prove authentication.
 
 | Variable | Default | Meaning |
 |---|---|---|

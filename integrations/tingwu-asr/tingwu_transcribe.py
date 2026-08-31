@@ -12,6 +12,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import signal
 import sys
 import time
 import urllib.request
@@ -27,6 +28,32 @@ from aliyunsdkcore.request import CommonRequest
 DOMAIN = "tingwu.cn-beijing.aliyuncs.com"
 VERSION = "2023-09-30"
 REGION = "cn-beijing"
+
+
+class TerminationRequested(Exception):
+    """Raised by a soft process signal so OSS cleanup can run."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"received signal {signum}")
+        self.signum = signum
+
+
+def install_termination_handlers() -> None:
+    def request_termination(signum: int, _frame: Any) -> None:
+        raise TerminationRequested(signum)
+
+    for name in ("SIGTERM", "SIGINT"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            signal.signal(signum, request_termination)
+
+
+def protect_cleanup_from_soft_signals() -> None:
+    """Let cleanup finish; the bridge still escalates to SIGKILL after 10s."""
+    for name in ("SIGTERM", "SIGINT"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            signal.signal(signum, signal.SIG_IGN)
 
 
 def load_env_file() -> None:
@@ -169,9 +196,7 @@ def upload_local_file(args: argparse.Namespace, out_dir: Path) -> tuple[str, dic
         + source_path.suffix.lower()
     )
 
-    bucket.put_object_from_file(object_key, str(source_path))
     expires = args.oss_url_expires
-    signed_url = bucket.sign_url("GET", object_key, expires)
     upload_info = {
         "bucket": bucket_name,
         "object_key": object_key,
@@ -180,9 +205,29 @@ def upload_local_file(args: argparse.Namespace, out_dir: Path) -> tuple[str, dic
         "uploaded_at": dt.datetime.now().isoformat(timespec="seconds"),
         "deleted": False,
     }
-    write_json(out_dir / "upload.json", upload_info)
-    print(f"uploaded: oss://{bucket_name}/{object_key}", file=sys.stderr)
-    return signed_url, upload_info
+    try:
+        bucket.put_object_from_file(object_key, str(source_path))
+        signed_url = bucket.sign_url("GET", object_key, expires)
+        write_json(out_dir / "upload.json", upload_info)
+        print(f"uploaded: oss://{bucket_name}/{object_key}", file=sys.stderr)
+        return signed_url, upload_info
+    except TerminationRequested:
+        # The signal may arrive after OSS accepted the object but before this
+        # function can return upload_info to main(). Deleting the key is safe
+        # even when the upload never completed and closes that cleanup gap.
+        protect_cleanup_from_soft_signals()
+        try:
+            bucket.delete_object(object_key)
+            upload_info["deleted"] = True
+            upload_info["deleted_at"] = dt.datetime.now().isoformat(timespec="seconds")
+            write_json(out_dir / "upload.json", upload_info)
+            print(f"deleted interrupted upload: oss://{bucket_name}/{object_key}", file=sys.stderr)
+        except Exception as cleanup_error:
+            print(
+                f"warning: failed to delete interrupted OSS upload: {cleanup_error}",
+                file=sys.stderr,
+            )
+        raise
 
 
 def delete_uploaded_file(args: argparse.Namespace, upload_info: dict[str, Any], out_dir: Path) -> None:
@@ -306,17 +351,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     load_env_file()
     args = parse_args()
+    install_termination_handlers()
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     out_dir.chmod(0o700)
 
     upload_info: dict[str, Any] | None = None
     file_url = args.file_url
-    if args.file:
-        file_url, upload_info = upload_local_file(args, out_dir)
-    cleanup_upload = bool(upload_info and args.wait and not args.keep_upload)
-
     try:
+        if args.file:
+            file_url, upload_info = upload_local_file(args, out_dir)
         client = make_client()
         body = build_body(args, file_url)
         task = create_offline_task(client, body)
@@ -353,8 +397,12 @@ def main() -> int:
         write_text(out_dir / "transcription.txt", "\n".join(lines))
         print(f"saved: {out_dir / 'transcription.txt'}")
         return 0
+    except TerminationRequested as error:
+        print(f"termination requested by signal {error.signum}; cleaning up", file=sys.stderr)
+        return 128 + error.signum
     finally:
-        if cleanup_upload and upload_info and not upload_info.get("deleted"):
+        if upload_info and args.wait and not args.keep_upload and not upload_info.get("deleted"):
+            protect_cleanup_from_soft_signals()
             try:
                 delete_uploaded_file(args, upload_info, out_dir)
             except Exception as error:

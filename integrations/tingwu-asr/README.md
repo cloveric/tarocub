@@ -7,6 +7,8 @@ This is TaroCub's reference adapter for long-media cloud transcription. **Do not
 - TaroCub owns media download, duration probing, routing, cancellation, local fallback, and transcript injection before engine dispatch.
 - Media at or above the configured threshold (900 seconds by default) invokes this adapter.
 - The adapter owns OSS upload, signed URL creation, Tingwu offline-task creation and polling, result download, and temporary-object cleanup.
+- TaroCub passes only a minimal OS/certificate/proxy environment to the child; bot, engine, and cloud credentials are not inherited. This adapter loads Aliyun credentials from its own `.env.local`.
+- `SIGTERM`/`SIGINT` cancellation cleans up a temporary OSS object before exit. TaroCub still escalates to `SIGKILL` after a bounded grace period if cleanup hangs.
 - Tingwu has no local daemon or port. Port `8412` belongs to the optional local Qwen ASR used for short media and cloud fallback.
 - Credentials remain in this adapter's `.env.local`; TaroCub never reads or copies them.
 
