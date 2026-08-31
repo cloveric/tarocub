@@ -64,7 +64,9 @@ export const TAROCUB_LARK_SLASH_COMMANDS: readonly LarkSlashCommandDefinition[] 
 
 // These are implemented but intentionally omitted from the native picker:
 // aliases would add noise, while /approval is an internal text fallback.
-const LARK_HIDDEN_OR_ALIAS_COMMANDS = ["start", "queue", "approval"] as const;
+// "kanban" is the documented alias of /board (docs/slash-commands.md); dropping
+// it from this set silently ate /kanban in mention-only groups.
+const LARK_HIDDEN_OR_ALIAS_COMMANDS = ["start", "queue", "approval", "kanban"] as const;
 const LARK_SLASH_COMMAND_NAMES = new Set([
   ...TAROCUB_LARK_SLASH_COMMANDS.map((definition) => definition.command),
   ...LARK_HIDDEN_OR_ALIAS_COMMANDS,

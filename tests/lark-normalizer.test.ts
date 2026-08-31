@@ -180,7 +180,7 @@ describe("normalizeLarkMessage", () => {
 
     for (const content of [
       "/Volumes/gdrive/project 请熟悉资料",
-      "/Users/cloveric/project/README.md 看一下",
+      "/Users/example/project/README.md 看一下",
       "/tmp/report.pdf",
       "/not-a-tarocub-command test",
     ]) {
@@ -209,6 +209,7 @@ describe("normalizeLarkMessage", () => {
       "/approve-session req_1",
       "/approval req_1 once",
       "/start",
+      "/kanban add 修复审计问题",
       "/queue 下一条",
     ]) {
       expect(normalizeLarkMessage({ ...base, content }, { requireMentionInGroup: true })).not.toBeNull();
