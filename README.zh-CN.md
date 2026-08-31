@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="./README.md"><strong>English</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;<strong>中文文档</strong>
+  <a href="./README.md"><strong>English</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;<strong>中文文档</strong>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="https://my.feishu.cn/docx/L5qZd4rfIok8CnxuvfCcatPrnYf"><strong>📖 飞书云文档版</strong></a>
 </p>
 
 <p align="center">
@@ -22,6 +22,7 @@
 </h3>
 
 <p align="center">
+  <a href="https://my.feishu.cn/docx/L5qZd4rfIok8CnxuvfCcatPrnYf"><strong>📖 飞书图文版</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#先从这里开始">先从这里开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#它能给你什么">能做什么</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#产品边界">产品边界</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#核心工作流">核心工作流</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 

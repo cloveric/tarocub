@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>English</strong>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="./README.zh-CN.md"><strong>中文文档</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="./docs/full-reference.md"><strong>Full Reference</strong></a>
+  <strong>English</strong>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="./README.zh-CN.md"><strong>中文文档</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="https://my.feishu.cn/docx/L5qZd4rfIok8CnxuvfCcatPrnYf"><strong>📖 飞书图文版 (Feishu Doc)</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="./docs/full-reference.md"><strong>Full Reference</strong></a>
 </p>
 
 <p align="center">
@@ -24,6 +24,7 @@
 </p>
 
 <p align="center">
+  <a href="https://my.feishu.cn/docx/L5qZd4rfIok8CnxuvfCcatPrnYf"><strong>📖 Feishu Doc (飞书图文)</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#surfaces">Surfaces</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#core-highlights">Core Highlights</a>&nbsp;&nbsp;|&nbsp;&nbsp;
