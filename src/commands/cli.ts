@@ -78,6 +78,7 @@ import { DEFAULT_LARK_REGISTRATION_TENANT_SCOPES, runLarkScopeAddWizard, runLark
 import { runUiConsoleCommand } from "./ui-command.js";
 import { loadCodexUserDefaults } from "../codex/user-defaults.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
+import { formatCloudAsrDoctorChecks } from "../runtime/asr-cloud.js";
 import {
   LARK_OPTIONAL_SCOPE_GROUPS,
   OPTIONAL_LARK_SCOPES,
@@ -907,6 +908,8 @@ async function formatLarkDoctor(
   } catch (error) {
     checks.push(`fail runtime config: ${error instanceof Error ? error.message : String(error)}`);
   }
+
+  checks.push(...formatCloudAsrDoctorChecks(env));
 
   if (env.LARK_APP_ID && env.LARK_APP_SECRET) {
     try {

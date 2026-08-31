@@ -521,9 +521,18 @@ The complete command surface, grouped. Unless marked **Lark**, commands work on 
 
 Short audio is transcribed by the local Qwen ASR. Audio/video at or above the threshold (default 15 minutes) is routed to Aliyun Tongyi Tingwu through the operator's standalone python script; any cloud failure falls back to chunked local transcription. Recordings sent as ordinary Telegram documents or Lark files enter the same router based on their declared filename or downloaded path. This routing runs at the channel layer, before engine selection, so Claude, Codex, Kimi, DeepSeek, and Antigravity receive the same transcript behavior. A promoted media file whose transcription fails or returns empty is still passed to the engine with an explicit bridge fallback note. `/stop` aborts the bridge-side local HTTP wait or terminates CLI/chunking/cloud work, and never starts a fallback after cancellation. The local HTTP server may still finish an already-running model kernel before it notices that its client disconnected.
 
+**Do not design a new cloud adapter per bot.** TaroCub ships one official, secret-free reference adapter in [`integrations/tingwu-asr`](integrations/tingwu-asr/README.md). Install it once per machine; every bot instance points to that same directory:
+
+```bash
+bash scripts/install-tingwu-asr.sh
+bash ~/.tarocub-secrets/tingwu_asr/configure_env.sh
+```
+
+The adapter is a subprocess contract, not a local Tingwu server: Tingwu has no TaroCub port. Port `8412` belongs only to local Qwen. The adapter performs OSS upload, signed-URL creation, offline-task polling, result download, and temporary-object cleanup. `lark doctor` checks the script, virtualenv, credential-file presence/permissions, and route threshold without reading credentials; a real smoke test is still required to prove authentication.
+
 | Variable | Default | Meaning |
 |---|---|---|
-| `TINGWU_ASR_DIR` | *(unset — cloud path fully disabled)* | Directory containing `tingwu_transcribe.py` and `.venv/`. |
+| `TINGWU_ASR_DIR` | *(unset — cloud path fully disabled)* | One shared directory containing the official `tingwu_transcribe.py`, `.venv/`, and private `.env.local`; do not create one per bot. |
 | `ASR_CLOUD_THRESHOLD_SECONDS` | `900` | Duration at or above which a file routes to the cloud. |
 | `ASR_CLOUD_TASK_TIMEOUT_SECONDS` | `7200` for the script's own `--timeout` | When set explicitly it also becomes the child process's wall-clock bound. Unset, the child is still killed after **15 minutes** so one stuck job cannot hold a chat's queue slot for hours. |
 | `ASR_CLOUD_JOB_RETENTION_DAYS` | `7` | `<stateDir>/asr-jobs/<id>/` dirs older than this are pruned on each new job. |
@@ -532,7 +541,7 @@ Short audio is transcribed by the local Qwen ASR. Audio/video at or above the th
 
 Note the distinction inside `lark.env`: these four ride the **whitelist**, not the *extras passthrough*. The passthrough (which forwards engine credentials such as `IFIND_TOKEN` into the engine child) refuses every reserved bridge namespace — `CCTB_`, `TAROCUB_`, `LARK_`, `CODEX_`, `CLAUDE_`, `DSH_`, `KIMI_`, `ANTIGRAVITY_`, `ASR_`, `TELEGRAM_`, `TINGWU_` — precisely because those control the bridge's own behavior (`TINGWU_ASR_DIR` names a directory the bridge *executes a script from*), so an engine-written extra can never redirect it. `DSH_EXECUTABLE` is an explicit bridge-config whitelist key; `DSH_HOME`, endpoints, and future Harness controls remain blocked from extras. The only `KIMI_` extras admitted are the explicit credential allowlist: `KIMI_API_KEY`, `KIMI_MODEL_API_KEY`, `KIMI_REGISTRY_API_KEY`, `KIMI_WEB_FETCH_API_KEY`, and `KIMI_WEB_SEARCH_API_KEY`; endpoint, OAuth-host, custom-header, home, marketplace, and future unknown controls remain blocked. A refused extra is logged at startup as `[lark] lark.env: ignored bridge-reserved keys …`.
 
-**Secrets stay outside any engine workspace.** The Tingwu script loads its own Aliyun credentials from its `.env.local`; the bridge never reads, copies, or logs them. Keep that directory **outside** every engine workspace — the convention on this machine is `~/.tarocub-secrets/tingwu_asr` — so an agent working in `~/.cctb/<instance>/workspace` cannot read, commit, or exfiltrate the credentials.
+**Secrets stay outside any engine workspace.** The Tingwu script loads its own Aliyun credentials from its `.env.local`; the bridge never reads, copies, or logs them. Keep that directory **outside** every engine workspace — the default installer target is `~/.tarocub-secrets/tingwu_asr` — so an agent working in `~/.cctb/<instance>/workspace` cannot read, commit, or exfiltrate the credentials. Use a least-privilege RAM user plus a dedicated OSS bucket/prefix; never use a root-account AccessKey.
 
 ## Safety Model
 

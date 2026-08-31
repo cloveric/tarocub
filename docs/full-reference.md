@@ -708,6 +708,8 @@ Budget is enforced in real-time — the bot replies with a bilingual message whe
 
 Send voice/audio/video in Telegram, or audio/video resources through Lark. Recordings forwarded as ordinary Telegram documents or Lark files use the same path; media type is detected from the declared filename and, on Telegram, the downloaded Bot API path when `file_name` is absent. The bridge transcribes them before forwarding text to the selected engine: short media uses the local Qwen ASR, while media at or above the configured threshold (15 minutes by default) uses Aliyun Tongyi Tingwu when enabled. Cloud ASR is optional; without it, all media stays local. If a promoted media file cannot be transcribed or yields no text, the bridge preserves the attachment and adds an explicit fallback note so the engine can inspect or transcribe it.
 
+Install TaroCub's bundled Tingwu adapter once per machine with `bash scripts/install-tingwu-asr.sh`; do not implement or copy one adapter per bot. The shared subprocess owns OSS upload and Tingwu task polling, while the bridge owns routing and fallback. See [`integrations/tingwu-asr/README.md`](../integrations/tingwu-asr/README.md). `lark doctor` validates this contract without reading `.env.local`.
+
 **How it works:**
 
 1. User sends a voice/audio/video message, or forwards a recording as a Telegram document/Lark file

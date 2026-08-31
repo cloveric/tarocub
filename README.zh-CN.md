@@ -591,12 +591,21 @@ npm run dev -- telegram budget clear --instance work    # 移除上限
 
 **长音频自动走云端（通义听悟，可选）**：配置后，**≥ 15 分钟**的音频/视频自动路由到阿里云通义听悟离线转写（30 分钟音频约 40 秒出全文），短音频仍走本机 Qwen。未配置时全部走本地；云端失败时按安全分片回退本地。
 
-- 激活：`TINGWU_ASR_DIR=/path/to/tingwu_asr`，指向已配好的听悟脚本目录（脚本自带 OSS 上传/任务轮询/临时对象清理，密钥留在该目录的 `.env.local`，桥不读取也不记录）
+**不要让安装 Agent 给每个 Bot 重新开发一套云端适配器。** 仓库已经提供不含密钥的官方参考实现 [`integrations/tingwu-asr`](integrations/tingwu-asr/README.zh-CN.md)。每台机器只安装一份，所有 Bot 实例共享：
+
+```bash
+bash scripts/install-tingwu-asr.sh
+bash ~/.tarocub-secrets/tingwu_asr/configure_env.sh
+```
+
+这是外置子进程协议，不是听悟本地服务：通义听悟没有 TaroCub 专用端口；`8412` 只属于本地 Qwen。官方适配器已经负责 OSS 上传、签名 URL、离线任务轮询、结果下载和临时对象清理。`lark doctor` 会检查脚本、虚拟环境、凭据文件是否存在且权限安全，以及实际路由阈值，但绝不读取凭据内容；认证是否有效仍须用真实音频烟测确认。
+
+- 激活：`TINGWU_ASR_DIR=/path/to/tingwu_asr`，所有 Bot 指向同一个已配好的官方适配器目录；不要按 Bot 复制（密钥留在该目录的 `.env.local`，桥不读取也不记录）
 - 阈值：`ASR_CLOUD_THRESHOLD_SECONDS`（默认 900 秒）
 - 超时：`ASR_CLOUD_TASK_TIMEOUT_SECONDS`。不设置时，脚本自己的 `--timeout` 是 7200 秒，但**子进程最多跑 15 分钟**就会被杀掉——否则一个卡住的云端任务会把这个会话的队列占用两小时。显式设置这个变量会同时抬高（或压低）这两个上限
 - 任务目录保留：`ASR_CLOUD_JOB_RETENTION_DAYS`（默认 7 天），每次新任务顺手清理过期的 `<state>/asr-jobs/<id>/`
 - **变量写在哪里**：Lark 侧直接写进 `~/.cctb/<实例>/lark.env` 即可——这四个走**白名单配置通道**（`loadLarkRuntimeEnv`，和 `LARK_APP_ID` 同一条路），服务启动重写该文件时会保留；也可以导出到启动服务的进程环境，环境变量优先。注意区分同一个文件里的两条路：它们走**白名单**，不走 **extras 透传**——透传只把引擎凭据（`IFIND_TOKEN` 这类 MCP token）转给引擎子进程，并拒绝所有桥保留前缀（`CCTB_`、`TAROCUB_`、`LARK_`、`CODEX_`、`CLAUDE_`、`DSH_`、`KIMI_`、`ANTIGRAVITY_`、`ASR_`、`TELEGRAM_`、`TINGWU_`），因为这些控制桥自身行为（`TINGWU_ASR_DIR` 指向桥**要去执行 python 脚本**的目录），所以引擎写入的 extras 永远改不了它。`DSH_EXECUTABLE` 是显式白名单项；`DSH_HOME`、endpoint 和未来 Harness 控制项不会从 extras 进入桥进程。被拒的 extras 会在启动时打印 `[lark] lark.env: ignored bridge-reserved keys …`
-- **密钥必须放在任何引擎工作区之外**：本机约定放 `~/.tarocub-secrets/tingwu_asr`，这样在 `~/.cctb/<instance>/workspace` 里干活的 agent 读不到、也提交不了这些凭据
+- **密钥必须放在任何引擎工作区之外**：官方安装器默认放 `~/.tarocub-secrets/tingwu_asr`，这样在 `~/.cctb/<instance>/workspace` 里干活的 agent 读不到、也提交不了这些凭据。使用最小权限 RAM 用户及专用 OSS Bucket/Prefix，不要使用主账号 AccessKey
 - **消息内开关**：「强制本地转写」/「强制云端转写」必须和音频在**同一条消息或同一批**发送（当作附件说明）才生效——纯语音消息没有 caption，事后再发是新的一轮，改不了已经开跑的转写（冲突时本地优先）
 - 云端失败自动回退本地；任务产物（原始 JSON/日志/纯文本）保存在 `<state>/asr-jobs/<id>/` 便于追溯
 - `/stop` 会中断时长探测、ffmpeg 切片、Qwen CLI/听悟子进程，并停止等待本地 Qwen HTTP；用户主动取消不会被误报成“转写失败”，也不会取消后又切换路径重跑。已进入模型内核的本地 HTTP 请求可能仍会在后台收尾，但不会继续占用 bot 的会话队列

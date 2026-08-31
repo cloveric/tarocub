@@ -2150,6 +2150,8 @@ describe("runCli", () => {
       expect(output).toContain("ok Lark message event: ok");
       expect(output).toContain("ok Lark card callback: ok");
       expect(output).toContain("ok Lark doc-comment event: ok");
+      expect(output).toContain("Cloud ASR (Aliyun Tingwu): disabled (optional)");
+      expect(output).toContain("bash scripts/install-tingwu-asr.sh");
       expect(output).not.toContain("super-secret");
     } finally {
       await removeTempRoot(tempDir);

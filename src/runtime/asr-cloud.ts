@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, existsSync } from "node:fs";
+import { accessSync, constants, createWriteStream, existsSync, realpathSync, statSync } from "node:fs";
 import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -68,6 +68,13 @@ export interface CloudAsrConfig {
   jobRetentionDays: number;
 }
 
+export interface CloudAsrEnv {
+  TINGWU_ASR_DIR?: string;
+  ASR_CLOUD_THRESHOLD_SECONDS?: string;
+  ASR_CLOUD_TASK_TIMEOUT_SECONDS?: string;
+  ASR_CLOUD_JOB_RETENTION_DAYS?: string;
+}
+
 export type CloudAsrOverride = "cloud" | "local" | null;
 
 const DEFAULT_CLOUD_THRESHOLD_SECONDS = 900;
@@ -121,7 +128,7 @@ function parsePositiveNumber(value: string | undefined, fallback: number): numbe
  * Read the cloud ASR configuration from env. Returns null when TINGWU_ASR_DIR
  * is unset/empty — the cloud path is then fully disabled.
  */
-export function readCloudAsrConfig(env: NodeJS.ProcessEnv = process.env): CloudAsrConfig | null {
+export function readCloudAsrConfig(env: CloudAsrEnv = process.env): CloudAsrConfig | null {
   const dir = (env.TINGWU_ASR_DIR ?? "").trim();
   if (!dir) {
     return null;
@@ -150,6 +157,117 @@ export function readCloudAsrConfig(env: NodeJS.ProcessEnv = process.env): CloudA
     processWallClockSeconds: explicitTaskTimeout ?? DEFAULT_CLOUD_PROCESS_WALL_CLOCK_SECONDS,
     jobRetentionDays: parsePositiveNumber(env.ASR_CLOUD_JOB_RETENTION_DAYS, DEFAULT_CLOUD_JOB_RETENTION_DAYS),
   };
+}
+
+function isEngineWorkspacePath(inputPath: string): boolean {
+  const candidates = [path.resolve(inputPath)];
+  try {
+    candidates.push(realpathSync(inputPath));
+  } catch {
+    // The unresolved path is still useful for diagnosing an incomplete setup.
+  }
+  return candidates.some((candidate) => {
+    const normalized = candidate.split(path.sep).join("/");
+    return /\/\.cctb\/[^/]+\/workspace(?:\/|$)/.test(normalized);
+  });
+}
+
+function isRegularFile(filePath: string): boolean {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isExecutableFile(filePath: string): boolean {
+  if (!isRegularFile(filePath)) {
+    return false;
+  }
+  if (process.platform === "win32") {
+    return true;
+  }
+  try {
+    accessSync(filePath, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function describePrivateFileMode(filePath: string): string | null {
+  if (process.platform === "win32") {
+    return null;
+  }
+  try {
+    const mode = statSync(filePath).mode & 0o777;
+    return (mode & 0o077) === 0 ? null : mode.toString(8).padStart(3, "0");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render non-secret setup checks for operator-facing doctor output. This only
+ * checks paths, file presence/size, and credential-file permissions; it never
+ * reads `.env.local` or runs the operator-controlled adapter.
+ */
+export function formatCloudAsrDoctorChecks(env: CloudAsrEnv = process.env): string[] {
+  const config = readCloudAsrConfig(env);
+  if (!config) {
+    return [
+      "info Cloud ASR (Aliyun Tingwu): disabled (optional). Use the bundled shared adapter: `bash scripts/install-tingwu-asr.sh`.",
+    ];
+  }
+
+  const checks: string[] = [];
+  const displayDir = JSON.stringify(config.dir);
+  if (isEngineWorkspacePath(config.dir)) {
+    checks.push(
+      `fail Cloud ASR secrets boundary: ${displayDir} is inside an engine workspace; reinstall with \`bash scripts/install-tingwu-asr.sh\` (default: ~/.tarocub-secrets/tingwu_asr).`,
+    );
+  }
+
+  const missing: string[] = [];
+  if (!isRegularFile(config.scriptPath)) {
+    missing.push("tingwu_transcribe.py");
+  }
+  if (!isExecutableFile(config.pythonPath)) {
+    missing.push(process.platform === "win32" ? ".venv\\Scripts\\python.exe" : ".venv/bin/python");
+  }
+  if (missing.length > 0) {
+    checks.push(
+      `fail Cloud ASR adapter: incomplete at ${displayDir} (missing ${missing.join(", ")}); run \`bash scripts/install-tingwu-asr.sh --dir "$TINGWU_ASR_DIR"\`.`,
+    );
+  } else {
+    checks.push(`ok Cloud ASR adapter: shared external adapter ready at ${displayDir}`);
+  }
+
+  const credentialsPath = path.join(config.dir, ".env.local");
+  let credentialSize = 0;
+  try {
+    const credentialStat = statSync(credentialsPath);
+    credentialSize = credentialStat.isFile() ? credentialStat.size : 0;
+  } catch {
+    // Missing/unreadable is reported below without opening the file.
+  }
+  if (credentialSize <= 0) {
+    checks.push(
+      "fail Cloud ASR credentials: .env.local is missing or empty; run `bash \"$TINGWU_ASR_DIR/configure_env.sh\"`.",
+    );
+  } else {
+    const unsafeMode = describePrivateFileMode(credentialsPath);
+    checks.push(
+      unsafeMode
+        ? `warn Cloud ASR credentials: present but mode ${unsafeMode} is not private; run \`chmod 600 "$TINGWU_ASR_DIR/.env.local"\``
+        : "ok Cloud ASR credential file: present and private (values/auth not inspected; verify with a real smoke test)",
+    );
+  }
+
+  checks.push(
+    `ok Cloud ASR routing: media >= ${config.thresholdSeconds}s uses Tingwu; short media and cloud failures use local Qwen`,
+  );
+  return checks;
 }
 
 /**
