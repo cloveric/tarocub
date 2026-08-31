@@ -13,6 +13,7 @@
   <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20DeepSeek%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Kimi Code | DeepSeek Harness | Antigravity">
   <img src="https://img.shields.io/badge/DeepSeek%20Harness-native%20plugin-0f766e?style=flat-square" alt="Native DeepSeek Harness plugin">
   <img src="https://img.shields.io/badge/channels-Feishu%2FLark%20%7C%20Telegram-2563eb?style=flat-square" alt="Feishu/Lark | Telegram">
+  <a href="https://linux.do" alt="LINUX DO"><img src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?style=flat-square" alt="LINUX DO"></a>
 </p>
 
 <h1 align="center">TaroCub</h1>

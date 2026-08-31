@@ -14,6 +14,7 @@
   <img src="https://img.shields.io/badge/%E5%BC%95%E6%93%8E-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20DeepSeek%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude | Kimi | DeepSeek Harness | Antigravity">
   <img src="https://img.shields.io/badge/DeepSeek%20Harness-%E5%8E%9F%E7%94%9F%E6%8F%92%E4%BB%B6-0f766e?style=flat-square" alt="DeepSeek Harness 原生插件">
   <img src="https://img.shields.io/badge/%E6%B5%8B%E8%AF%95-Vitest-6E9F18?style=flat-square&logo=vitest&logoColor=white" alt="Vitest">
+  <a href="https://linux.do" alt="LINUX DO"><img src="https://img.shields.io/badge/LINUX-DO-FFB003.svg?style=flat-square" alt="LINUX DO"></a>
 </p>
 
 <h3 align="center">
