@@ -1240,7 +1240,86 @@ function renderToolInput(tool: LarkToolEntry): string {
 
 export function cleanCardText(content: string): string {
   const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
-  return collapseBlankLines(neutralizeMarkdownSetextHeadings(downgradeMarkdownHeadings(stripped))).trim();
+  const compatible = normalizeLarkMarkdownCompatibility(stripped);
+  return collapseBlankLines(neutralizeMarkdownSetextHeadings(downgradeMarkdownHeadings(compatible))).trim();
+}
+
+const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
+  rightarrow: "→",
+  Rightarrow: "⇒",
+  leftarrow: "←",
+  Leftarrow: "⇐",
+  leftrightarrow: "↔",
+  Leftrightarrow: "⇔",
+  to: "→",
+};
+
+function normalizeLarkMarkdownCompatibility(text: string): string {
+  const lines = text.split("\n");
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+
+  return lines.map((line) => {
+    const fenceMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (
+        fenceMatch
+        && fenceMatch[1][0] === fence.marker
+        && fenceMatch[1].length >= fence.length
+        && line.slice(fenceMatch[0].length).trim() === ""
+      ) {
+        fence = undefined;
+      }
+      return line;
+    }
+    if (fenceMatch) {
+      fence = {
+        marker: fenceMatch[1][0] as "`" | "~",
+        length: fenceMatch[1].length,
+      };
+      return line;
+    }
+    return normalizeOutsideInlineCode(line);
+  }).join("\n");
+}
+
+function normalizeOutsideInlineCode(line: string): string {
+  let output = "";
+  let cursor = 0;
+  while (cursor < line.length) {
+    const open = line.indexOf("`", cursor);
+    if (open === -1) {
+      return output + normalizeLarkMarkdownProse(line.slice(cursor));
+    }
+    output += normalizeLarkMarkdownProse(line.slice(cursor, open));
+    let markerLength = 1;
+    while (line[open + markerLength] === "`") {
+      markerLength += 1;
+    }
+    const marker = "`".repeat(markerLength);
+    let close = line.indexOf(marker, open + markerLength);
+    while (close !== -1 && line[close + markerLength] === "`") {
+      close = line.indexOf(marker, close + markerLength + 1);
+    }
+    if (close === -1) {
+      return output + line.slice(open);
+    }
+    output += line.slice(open, close + markerLength);
+    cursor = close + markerLength;
+  }
+  return output;
+}
+
+function normalizeLarkMarkdownProse(text: string): string {
+  return text
+    .replace(
+      /\$\s*\\(rightarrow|Rightarrow|leftarrow|Leftarrow|leftrightarrow|Leftrightarrow|to)\s*\$/g,
+      (_match, command: string) => LARK_INLINE_MATH_SYMBOLS[command] ?? _match,
+    )
+    // CommonMark cannot open emphasis when ** is followed by punctuation and
+    // preceded by ordinary text. Put the emphasis inside the quote instead.
+    .replace(/\*\*“([^*\n]+)”\*\*/g, "“**$1**”")
+    .replace(/\*\*‘([^*\n]+)’\*\*/g, "‘**$1**’")
+    .replace(/\*\*\"([^*\n\"]+)\"\*\*/g, "\"**$1**\"");
 }
 
 function neutralizeMarkdownSetextHeadings(text: string): string {

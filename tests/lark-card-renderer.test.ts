@@ -654,6 +654,35 @@ describe("lark card renderer", () => {
     );
   });
 
+  it("normalizes unsupported inline math arrows for Lark cards", () => {
+    expect(cleanCardText(
+      "先工商过户 $\\rightarrow$ 会计师验资 $\\Rightarrow$ 中登发股",
+    )).toBe("先工商过户 → 会计师验资 ⇒ 中登发股");
+  });
+
+  it("moves bold markers inside quotation marks so inline quotes render in Lark markdown", () => {
+    expect(cleanCardText(
+      "卖方主张**“上市公司先支付首期款”**，再办理工商过户。",
+    )).toBe("卖方主张“**上市公司先支付首期款**”，再办理工商过户。");
+  });
+
+  it("does not normalize card markdown inside fenced or inline code", () => {
+    const raw = [
+      "正文 $\\rightarrow$ 结果",
+      "`示例 $\\rightarrow$ **“原样”**`",
+      "```text",
+      "流程 $\\rightarrow$ **“原样”**",
+      "```",
+    ].join("\n");
+    expect(cleanCardText(raw)).toBe([
+      "正文 → 结果",
+      "`示例 $\\rightarrow$ **“原样”**`",
+      "```text",
+      "流程 $\\rightarrow$ **“原样”**",
+      "```",
+    ].join("\n"));
+  });
+
   it("downgrades a heading inside a blockquote (> ##) without losing the callout, and keeps inner bold balanced", () => {
     // The real bug: Fable emitted `> ## 🥇 …的**逐笔成交明细**` — a level-2
     // heading inside a blockquote with an inner bold span. The old regex only
