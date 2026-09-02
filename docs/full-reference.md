@@ -340,7 +340,7 @@ npm run dev -- telegram engine antigravity --instance agy-bot
 npm run dev -- telegram engine --instance review-bot
 ```
 
-Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in explicit `bypass` mode because the headless CLI cannot ask a remote chat for per-tool approval. The verified baseline is **Antigravity CLI 1.1.22**. Ordinary turns use one persistent native NDJSON `stream-json` worker per live conversation. Idle workers are reaped after two hours; crashes and startup-setting changes recreate the worker with the same authoritative conversation ID. `/model <id>` and `/effort low|medium|high` map to native startup flags. Native `/goal` is the narrow exception: Antigravity does not accept slash commands through stream input, so TaroCub recycles the idle worker, preserves the command in a direct `-p` prompt with structured output parsing, then resumes the conversation in a new stream worker on the next ordinary turn.
+Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in explicit `bypass` mode because the headless CLI cannot ask a remote chat for per-tool approval. The verified baseline is **Antigravity CLI 1.1.24**. Ordinary turns use one persistent native NDJSON `stream-json` worker per live conversation. Idle workers are reaped after two hours; crashes and startup-setting changes recreate the worker with the same authoritative conversation ID. `/model <id>` and `/effort low|medium|high` map to native startup flags. Native `/goal` is the narrow exception: Antigravity does not accept slash commands through stream input, so TaroCub recycles the idle worker, preserves the command in a direct `-p` prompt with structured output parsing, then resumes the conversation in a new stream worker on the next ordinary turn.
 
 | Feature | Codex | Claude | Kimi | DeepSeek | Antigravity |
 |---|---|---|---|---|---|
@@ -420,7 +420,14 @@ claude mcp add web-search \
   -- node "$PWD/dist/src/index.js" search-mcp
 ```
 
-For Antigravity, use Antigravity's own native MCP/plugin configuration when needed. Do not import Claude or Codex native plugins as part of the default bridge setup. The bridge can reuse the same skill documents and tool guidance across engines, but each instance `agent.md` and each engine's native plugin system remain separate.
+For Antigravity, register the local server through its native configuration:
+
+```bash
+agy mcp add cctb_search node "$PWD/dist/src/index.js" search-mcp
+agy mcp list
+```
+
+Do not import Claude or Codex native plugins as part of the default bridge setup. The bridge can reuse the same skill documents and tool guidance across engines, but each instance `agent.md` and each engine's native plugin system remain separate.
 
 Kimi does not need a manual TaroCub Search MCP registration. The bridge injects it into each ACP session and, when direct search environment variables are absent, reads only the known Brave/Tavily keys from Codex MCP environment sections in `CODEX_HOME/config.toml`; explicit process environment values always win and credentials are never copied into Kimi config or logs.
 
@@ -634,6 +641,12 @@ For human operators, the CLI remains available for inspection and debugging, but
 ## YOLO Mode
 
 For hands-free personal bot use, `telegram yolo unsafe` is available. It keeps Codex/Claude/Kimi/DeepSeek/Antigravity moving without asking on each turn by setting `approvalMode: "bypass"`: Codex bypasses approvals and sandboxing, Claude/Antigravity use unsafe skip-permission flags, Kimi maps bypass to ACP `auto`, and DeepSeek selects Harness `danger-full-access`. If you keep YOLO off, the bridge uses channel approval buttons where the engine supports a headless path: Claude, Kimi, and DeepSeek can approve individual tool requests, Codex app-server mode maps YOLO settings to its sandbox mode, and Antigravity process mode gets a turn-level pre-approval. Use unsafe/bypass only on fully trusted local environments.
+
+Kimi is the naming exception: `on` selects ACP `yolo`, where ordinary tools are
+auto-approved but sensitive commands may still ask; `unsafe` selects ACP
+`auto`, whose dangerous-command guard remains enabled by default in Kimi
+0.40.x. Neither mode is an OS sandbox. TaroCub additionally keeps delegated
+terminal cwd values inside the real workspace in Kimi `on` mode.
 
 Claude approval buttons use a short-lived localhost MCP bridge with a random URL token. This protects against blind local port scans, but the token is still visible to same-user local processes that can inspect process command lines. Treat YOLO-off approval as a single-user workstation convenience, not a multi-user isolation boundary.
 

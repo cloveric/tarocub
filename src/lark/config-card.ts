@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { loadCodexUserDefaults } from "../codex/user-defaults.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
-import { resolveApprovalMode } from "../state/approval-mode.js";
+import { renderApprovalModeStatus, resolveApprovalMode } from "../state/approval-mode.js";
 import { AccessStore } from "../state/access-store.js";
 import { SessionStore } from "../state/session-store.js";
 import {
@@ -66,7 +66,13 @@ export async function renderLarkConfigCard(input: LarkConfigCardContext): Promis
   const knownChat = await new LarkKnownChatStore(input.stateDir).get(input.conversationKey).catch(() => null);
   const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const labels = larkConfigLabels(input.locale);
-  const approvalMode = approvalModeLabel(resolvedApprovalMode, input.locale);
+  const approvalMode = cfg.engine === "kimi"
+    ? renderApprovalModeStatus(cfg.engine, resolvedApprovalMode, input.locale)
+    : resolvedApprovalMode === "bypass"
+      ? "unsafe/bypass"
+      : resolvedApprovalMode === "full-auto"
+        ? "full-auto"
+        : input.locale === "en" ? "normal approvals" : "普通审批";
   const fastOn = cfg.codexServiceTier === "fast";
   const modelLabel = renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, input.locale);
   const effortLabel = renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, input.locale);
@@ -603,17 +609,6 @@ function isLarkConfigActionName(value: unknown): value is LarkConfigActionName {
     value === "group" ||
     value === "refresh" ||
     value === "submit";
-}
-
-function approvalModeLabel(value: unknown, locale: Locale): string {
-  const resolved = resolveApprovalMode(value);
-  if (resolved === "bypass") {
-    return "unsafe/bypass";
-  }
-  if (resolved === "full-auto") {
-    return "full-auto";
-  }
-  return locale === "en" ? "normal approvals" : "普通审批";
 }
 
 function larkConfigLabels(locale: Locale): {

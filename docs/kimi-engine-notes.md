@@ -44,6 +44,27 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
+## Kimi 0.40.1 Compatibility Re-probe
+
+- Probe date: 2026-09-03
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `0.40.1`
+- Integration protocol: persistent `kimi acp`
+
+Both ACP new/load paths, the injected stdio Search MCP, and the advertised
+`k3` / `max` / `auto` options remained compatible. Kimi 0.40.0 also stabilized
+the optional secondary model, removed its own Bash cwd workspace restriction,
+and changed dangerous-command handling: ACP `auto` blocks dangerous shell
+commands by default, while manual/YOLO modes ask by default. TaroCub therefore
+keeps the existing semantic mapping (`full-auto` -> ACP `yolo`, `bypass` -> ACP
+`auto`) but no longer describes either mode as an OS sandbox. For the
+bridge-level `full-auto` contract, delegated terminal cwd values are resolved
+through symlinks and rejected when they leave the real workspace.
+
+The cwd check constrains where a delegated terminal starts; it does not prevent
+an allowed command from naming an absolute path outside the workspace. It must
+not be presented as filesystem isolation.
+
 ## Kimi 0.39.1 Compatibility Re-probe
 
 - Probe date: 2026-08-30

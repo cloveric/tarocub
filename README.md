@@ -198,12 +198,16 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-The current compatibility baseline is **Kimi Code 0.39.1**. A live, no-prompt
+The current compatibility baseline is **Kimi Code 0.40.1**. A live, no-prompt
 ACP probe verified that both `session/new` and `session/load` accept the
 schema-valid stdio Search MCP and actually start its child process. TaroCub
 therefore always supplies the complete configured MCP list and fails closed if
 Kimi rejects session initialization; it no longer retries by silently removing
 stdio search. Native Kimi user/project MCP files and plugins remain independent.
+Kimi `full-auto` maps to ACP `yolo`; delegated terminal working directories are
+kept inside the real workspace, but this is not an OS sandbox. Explicit
+`bypass` maps to ACP `auto`, whose dangerous-command guard remains enabled by
+default in Kimi 0.40.x.
 
 TaroCub implements the ACP terminal lifecycle used by Kimi for delegated
 Bash/process work (`create`, bounded UTF-8 output, wait, kill, and release), and
@@ -315,7 +319,7 @@ the verified capability and limitation matrix.
 ### Antigravity engine
 
 Select Antigravity with `/engine antigravity`. The verified baseline is
-**Antigravity CLI 1.1.22**. TaroCub uses native NDJSON `stream-json` input and
+**Antigravity CLI 1.1.24**. TaroCub uses native NDJSON `stream-json` input and
 output through one persistent worker per live conversation. Later turns reuse
 the warm process; idle workers are reaped after two hours, while a crash or a
 startup-setting change recreates the worker with the same authoritative

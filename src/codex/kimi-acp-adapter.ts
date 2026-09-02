@@ -392,6 +392,15 @@ function kimiModeForApprovalMode(mode: ApprovalMode): KimiRuntimeOptions["mode"]
   return "default";
 }
 
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
 function configOptionValues(option: SessionConfigOption): string[] {
   if (option.type !== "select") {
     return [];
@@ -2128,14 +2137,27 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
   }
 
-  private createAcpTerminal(
+  private async createAcpTerminal(
     worker: KimiWorker,
     request: CreateTerminalRequest,
-  ): CreateTerminalResponse {
+  ): Promise<CreateTerminalResponse> {
     this.assertAcpTerminalSession(worker, request.sessionId);
     const cwd = request.cwd ?? worker.workspacePath;
     if (!path.isAbsolute(cwd)) {
       throw new Error(`ACP terminal cwd must be absolute: ${cwd}`);
+    }
+    let spawnCwd = cwd;
+    if (worker.runtimeMode === "yolo") {
+      const [realWorkspace, realCwd] = await Promise.all([
+        realpath(worker.workspacePath),
+        realpath(cwd),
+      ]);
+      if (!isPathInside(realWorkspace, realCwd)) {
+        throw new Error(
+          `Kimi full-auto terminal cwd must stay inside the workspace: ${worker.workspacePath}`,
+        );
+      }
+      spawnCwd = realCwd;
     }
     const outputByteLimit = Math.min(
       MAX_ACP_TERMINAL_OUTPUT_BYTES,
@@ -2147,7 +2169,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
 
     const child = spawn(request.command, request.args ?? [], {
-      cwd,
+      cwd: spawnCwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,

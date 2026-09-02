@@ -24,7 +24,7 @@ import { resolveConversationResume } from "../runtime/conversation-resume.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
 import { AccessStore } from "../state/access-store.js";
-import { resolveApprovalMode } from "../state/approval-mode.js";
+import { renderApprovalModeStatus, resolveApprovalMode } from "../state/approval-mode.js";
 import { FileWorkflowStore, type FileWorkflowStatus } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
 import { UsageStore } from "../state/usage-store.js";
@@ -1729,7 +1729,7 @@ async function renderLarkStatusMessage(
       `Model: ${renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, locale)}`,
       `Effort: ${renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, locale)}`,
       `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
-      `Approval mode: ${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
+      `Approval mode: ${renderApprovalModeStatus(cfg.engine, rawConfig.approvalMode, locale)}`,
       `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
       // Kimi omits usage entirely and DeepSeek omits dollar cost. Show those
       // telemetry limits even without a budget so status never implies complete
@@ -1767,7 +1767,7 @@ async function renderLarkStatusMessage(
     `模型：${renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, locale)}`,
     `推理强度：${renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, locale)}`,
     `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
-    `审批模式：${renderLarkApprovalModeStatus(rawConfig.approvalMode, locale)}`,
+    `审批模式：${renderApprovalModeStatus(cfg.engine, rawConfig.approvalMode, locale)}`,
     `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,
     ...(cfg.engine === "kimi" || cfg.engine === "deepseek"
       ? [renderLarkEngineUsageNote(cfg.engine, locale, cfg.budgetUsd !== undefined)]
@@ -1829,17 +1829,6 @@ function renderLarkCliStatus(status: LarkCliStatus, locale: Locale): string {
 function truncateLarkStatusDetail(detail: string): string {
   const normalized = detail.replace(/\s+/g, " ").trim();
   return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
-}
-
-function renderLarkApprovalModeStatus(mode: unknown, locale: Locale): string {
-  const resolved = resolveApprovalMode(mode);
-  if (resolved === "bypass") {
-    return "YOLO unsafe/bypass";
-  }
-  if (resolved === "full-auto") {
-    return "YOLO/full-auto";
-  }
-  return locale === "en" ? "normal approvals" : "普通审批";
 }
 
 function isBlockingWorkflowStatus(status: FileWorkflowStatus): boolean {
@@ -2352,6 +2341,10 @@ async function handleLarkYoloCommand(stateDir: string, action: string, locale: L
   const cfg = await loadInstanceConfig(stateDir);
   if (!action || action === "status") {
     const mode = resolveApprovalMode((await readRawLarkConfig(stateDir)).approvalMode);
+    if (cfg.engine === "kimi") {
+      const label = renderApprovalModeStatus(cfg.engine, mode, locale);
+      return locale === "en" ? `Current YOLO: ${label}` : `当前 YOLO: ${label}`;
+    }
     if (locale === "en") {
       const label = mode === "bypass" ? "unsafe/bypass" : mode === "full-auto" ? "full-auto" : "off";
       return `Current YOLO: ${label}`;
@@ -2365,6 +2358,11 @@ async function handleLarkYoloCommand(stateDir: string, action: string, locale: L
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "full-auto";
     });
+    if (cfg.engine === "kimi") {
+      return locale === "en"
+        ? "Kimi YOLO enabled. Regular tools are auto-approved; sensitive commands may still ask. This is not an OS sandbox."
+        : "Kimi YOLO 已开启。普通工具自动批准，敏感命令仍可能询问；这不是 OS 沙箱。";
+    }
     return locale === "en"
       ? `YOLO mode ON (full-auto, sandboxed). Current engine: ${cfg.engine}.`
       : `YOLO mode ON（full-auto，sandboxed）。当前引擎：${cfg.engine}。`;
@@ -2379,6 +2377,11 @@ async function handleLarkYoloCommand(stateDir: string, action: string, locale: L
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "bypass";
     });
+    if (cfg.engine === "kimi") {
+      return locale === "en"
+        ? "Kimi Auto enabled for unattended operation. The dangerous-command guard remains on by default; this is not an OS sandbox."
+        : "Kimi Auto 无人值守模式已开启。默认仍保留高危命令保护；这不是 OS 沙箱。";
+    }
     return locale === "en"
       ? "YOLO UNSAFE enabled. Approvals and sandboxing will be bypassed; use only on a trusted machine and workspace."
       : "YOLO UNSAFE 已开启。将跳过审批和 sandbox，请只在可信机器和可信 workspace 使用。";

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, mkdtemp, rm as fsRm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm as fsRm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -595,6 +595,88 @@ describe("KimiAcpAdapter", () => {
       await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
     } finally {
       await adapter.destroy();
+    }
+  });
+
+  it("keeps full-auto ACP terminal working directories inside the real workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-terminal-boundary-"));
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    const linkedOutside = path.join(workspace, "linked-outside");
+    const configPath = path.join(root, "config.json");
+    await mkdir(workspace, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, linkedOutside);
+    await writeFile(configPath, JSON.stringify({
+      engine: "kimi",
+      approvalMode: "full-auto",
+    }), "utf8");
+
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      workspacePath: workspace,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-terminal-boundary", {
+        text: "run a command",
+        files: [],
+      });
+      void turn.catch(() => undefined);
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+
+      const outsideResponse = await requestClientResponse(server, "terminal/create", {
+        sessionId: "kimi-session-1",
+        command: process.execPath,
+        args: ["-e", "process.stdout.write('outside')"],
+        cwd: outside,
+      });
+      expect(JSON.stringify(outsideResponse.error)).toContain(
+        "Kimi full-auto terminal cwd must stay inside the workspace",
+      );
+
+      const symlinkResponse = await requestClientResponse(server, "terminal/create", {
+        sessionId: "kimi-session-1",
+        command: process.execPath,
+        args: ["-e", "process.stdout.write('symlink')"],
+        cwd: linkedOutside,
+      });
+      expect(JSON.stringify(symlinkResponse.error)).toContain(
+        "Kimi full-auto terminal cwd must stay inside the workspace",
+      );
+
+      const allowedResponse = await requestClientResponse(server, "terminal/create", {
+        sessionId: "kimi-session-1",
+        command: process.execPath,
+        args: ["-e", "process.stdout.write(process.cwd())"],
+        cwd: workspace,
+      });
+      expect(allowedResponse.error).toBeUndefined();
+      const terminalId = (allowedResponse.result as { terminalId: string }).terminalId;
+      const waitResponse = await requestClientResponse(server, "terminal/wait_for_exit", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      expect(waitResponse.result).toEqual({ exitCode: 0 });
+      const outputResponse = await requestClientResponse(server, "terminal/output", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      expect(outputResponse.result).toEqual(expect.objectContaining({ output: await realpath(workspace) }));
+      const releaseResponse = await requestClientResponse(server, "terminal/release", {
+        sessionId: "kimi-session-1",
+        terminalId,
+      });
+      expect(releaseResponse.result).toEqual({});
+
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "Kimi completed the request." });
+    } finally {
+      await adapter.destroy();
+      await fsRm(root, { recursive: true, force: true });
     }
   });
 

@@ -1,14 +1,20 @@
 # Antigravity Engine
 
 TaroCub drives the official `agy` CLI as a native local engine. The verified
-compatibility baseline is **Antigravity CLI 1.1.22**. Install and authenticate
+compatibility baseline is **Antigravity CLI 1.1.24**. Install and authenticate
 `agy` locally before selecting `/engine antigravity`.
 
 Official references:
 
 - [Antigravity headless CLI](https://antigravity.google/docs/cli/headless/)
 - [Antigravity slash commands](https://antigravity.google/docs/slash-commands/)
-- [Antigravity CLI releases](https://github.com/google-antigravity/antigravity-cli/releases)
+- [Antigravity CLI changelog](https://antigravity.google/changelog?app=cli)
+
+The 1.1.24 baseline was live-verified with consecutive turns on one persistent
+worker and a fresh-process `--conversation` resume. The public per-platform
+updater manifest advertised 1.1.24 while the bundled CLI changelog still ended
+at 1.1.23, so TaroCub treats the protocol probe, not an inferred changelog, as
+the compatibility evidence.
 
 ## Runtime Contract
 
@@ -91,7 +97,7 @@ Claude Code, Kimi ACP, or DeepSeek Harness.
 
 ## 中文摘要
 
-TaroCub 已按 Antigravity 1.1.22 的原生结构化协议接入：每个活跃 conversation
+TaroCub 已按 Antigravity 1.1.24 的原生结构化协议接入：每个活跃 conversation
 维持一个 `stream-json` worker，后续轮次复用同一进程；回答、工具、终态和
 token 分开处理，恢复会话只统计本轮 step，避免累计 token 重复记账。空闲
 两小时、进程崩溃或启动参数变化时会安全回收，并用权威 conversation ID

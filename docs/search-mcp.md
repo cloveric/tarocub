@@ -113,10 +113,27 @@ keys are never copied into Kimi config. Explicit `BRAVE_API_KEY` /
 server can reuse those same keys from an existing local Codex
 `[mcp_servers.<name>.env]` configuration without logging them.
 
-The current compatibility baseline is Kimi Code 0.39.1. Both ACP session paths
+The current compatibility baseline is Kimi Code 0.40.1. Both ACP session paths
 were live-verified to start the stdio server. TaroCub does not silently retry
 without stdio MCPs: an initialization failure is surfaced so missing search
 capability cannot be mistaken for a healthy session.
+
+## Register With Antigravity
+
+Antigravity reads its own native MCP configuration. TaroCub does not inject
+Codex or Claude MCP state into `agy`, so registration is explicit:
+
+```bash
+cd /path/to/tarocub
+npm run build
+agy mcp add cctb_search node "$PWD/dist/src/index.js" search-mcp
+agy mcp list
+```
+
+The server inherits exported Brave/Tavily keys. When those variables are not
+present, it may reuse only the recognized search keys from an existing local
+Codex MCP environment section; it does not copy or print them. Restart affected
+Antigravity bot instances after changing native MCP configuration.
 
 ## Bot Runtime
 

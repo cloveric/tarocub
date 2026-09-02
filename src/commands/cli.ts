@@ -27,7 +27,7 @@ import {
   resolveAuditLogPath,
   type AuditEventFilter,
 } from "../state/audit-log.js";
-import { resolveApprovalMode } from "../state/approval-mode.js";
+import { renderApprovalModeStatus, resolveApprovalMode } from "../state/approval-mode.js";
 import {
   filterTimelineEvents,
   parseTimelineEvents,
@@ -692,7 +692,7 @@ async function inspectLarkOperationalStatus(
     `Model: ${cfg ? renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, "en") : "unknown"}`,
     `Effort: ${cfg ? renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, "en") : "unknown"}`,
     `Codex Fast Mode: ${cfg ? (cfg.codexServiceTier === "fast" ? "on" : "off") : "unknown"}`,
-    `Approval mode: ${cfg ? renderLarkCliApprovalModeStatus(rawConfig.approvalMode) : "unknown"}`,
+    `Approval mode: ${cfg ? renderApprovalModeStatus(cfg.engine, rawConfig.approvalMode, "en") : "unknown"}`,
     `Budget: ${cfg ? (cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none") : "unknown"}`,
     `Locale: ${cfg?.locale ?? "unknown"}`,
     `Verbosity: ${cfg?.verbosity ?? "unknown"}`,
@@ -728,17 +728,6 @@ async function readRawLarkCliConfig(stateDir: string): Promise<Record<string, un
   } catch {
     return {};
   }
-}
-
-function renderLarkCliApprovalModeStatus(mode: unknown): string {
-  const resolved = resolveApprovalMode(mode);
-  if (resolved === "bypass") {
-    return "YOLO unsafe/bypass";
-  }
-  if (resolved === "full-auto") {
-    return "YOLO/full-auto";
-  }
-  return "normal approvals";
 }
 
 async function describeLarkServiceLock(
@@ -4315,6 +4304,11 @@ async function runYoloCommand(
   if (args.length === 0) {
     const config = await readInstanceConfig(configPath);
     const mode = resolveApprovalMode(config.approvalMode);
+    const engine = typeof config.engine === "string" ? config.engine : "codex";
+    if (engine === "kimi") {
+      logger.log(`Instance "${instanceName}": ${renderApprovalModeStatus(engine, mode, "en")}`);
+      return true;
+    }
     const label =
       mode === "bypass" ? "YOLO UNSAFE (all approvals and sandbox bypassed)"
         : mode === "full-auto" ? "YOLO (full-auto, sandboxed)"
@@ -4327,6 +4321,8 @@ async function runYoloCommand(
   const auditStateDir = resolveAuditStateDir(env, instanceName);
 
   if (subcommand === "on") {
+    const config = await readInstanceConfig(configPath);
+    const engine = typeof config.engine === "string" ? config.engine : "codex";
     await updateCliInstanceConfig(env, instanceName, (config) => {
       config.approvalMode = "full-auto";
     });
@@ -4336,7 +4332,9 @@ async function runYoloCommand(
       outcome: "success",
       metadata: { approvalMode: "full-auto" },
     });
-    logger.log(`Instance "${instanceName}": YOLO mode ON (full-auto, sandboxed). Codex will auto-approve within workspace.`);
+    logger.log(engine === "kimi"
+      ? `Instance "${instanceName}": Kimi YOLO enabled. Regular tools are auto-approved; sensitive commands may still ask. This is not an OS sandbox.`
+      : `Instance "${instanceName}": YOLO mode ON (full-auto, sandboxed). Codex will auto-approve within workspace.`);
     return true;
   }
 
@@ -4355,6 +4353,8 @@ async function runYoloCommand(
   }
 
   if (subcommand === "unsafe") {
+    const config = await readInstanceConfig(configPath);
+    const engine = typeof config.engine === "string" ? config.engine : "codex";
     await updateCliInstanceConfig(env, instanceName, (config) => {
       config.approvalMode = "bypass";
     });
@@ -4364,7 +4364,9 @@ async function runYoloCommand(
       outcome: "success",
       metadata: { approvalMode: "bypass" },
     });
-    logger.log(`Instance "${instanceName}": YOLO UNSAFE. All approvals AND sandbox bypassed. Use with caution.`);
+    logger.log(engine === "kimi"
+      ? `Instance "${instanceName}": Kimi Auto enabled for unattended operation. The dangerous-command guard remains on by default; this is not an OS sandbox.`
+      : `Instance "${instanceName}": YOLO UNSAFE. All approvals AND sandbox bypassed. Use with caution.`);
     return true;
   }
 
