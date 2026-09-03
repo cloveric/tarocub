@@ -46,6 +46,16 @@ import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 export { LARK_FILE_UPLOAD_MAX_BYTES } from "./delivery-preflight.js";
 const LARK_MARKDOWN_CHUNK_LIMIT = 3500;
 
+/** Whether a response carries work that must finish after the engine result. */
+export function hasLarkPostTurnDelivery(text: string): boolean {
+  return Boolean(
+    extractWholeResponseFileBlock(text)
+    || extractDeliveryTagMatches(text).length > 0
+    || extractTelegramToolTagMatches(text).length > 0
+    || extractCronAddTagMatches(text).length > 0
+  );
+}
+
 export async function deliverLarkResponse(input: {
   channel: LarkChannelLike;
   runtime: LarkServiceRuntime;

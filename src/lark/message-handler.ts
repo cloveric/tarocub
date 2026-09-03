@@ -63,7 +63,7 @@ import {
   isLarkLocalEngineCommand,
   isStopCommand,
 } from "./commands.js";
-import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
+import { deliverLarkResponse, hasLarkPostTurnDelivery, sendLarkMarkdown } from "./delivery.js";
 import {
   isLarkDeliveryFollowupRequest,
   larkDeliveryFollowupRepairPrompt,
@@ -2339,35 +2339,24 @@ async function runNormalizedLarkMessage(
         const spillToContinuationCards = runCard !== undefined
           && answerChunks.length > 1
           && answerChunks.length <= LARK_MAX_OVERFLOW_CARDS;
+        const requiresVisibleDeliveryPhase = spillToContinuationCards
+          || answerChunks.length > LARK_MAX_OVERFLOW_CARDS
+          || hasLarkPostTurnDelivery(result.text);
         if (obligationId) {
           // From here on the platform may have (part of) the answer — a crash
           // past this point redelivers WITH the recovered-reply marker.
           await markDeliveryAttempting(input.stateDir, obligationId);
         }
-        const finishResult = runCard
-          ? await runCard.finish(spillToContinuationCards ? answerChunks[0]! : cardDisplayText)
+        const runCardAnswerText = spillToContinuationCards ? answerChunks[0]! : cardDisplayText;
+        const deliveryCardResult = runCard
+          ? await (requiresVisibleDeliveryPhase
+              ? runCard.beginDelivery(runCardAnswerText)
+              : runCard.finish(runCardAnswerText))
           : undefined;
-        runCardFinished = Boolean(runCard);
-        const answerShownInCard = finishResult?.shown ?? false;
+        runCardFinished = Boolean(runCard) && !requiresVisibleDeliveryPhase;
+        const answerShownInCard = deliveryCardResult?.shown ?? false;
         if (answerShownInCard && !spillToContinuationCards) {
           answerVisibleToUser = true;
-        }
-        if (finishResult) {
-          // Record whether the answer actually landed in a card (and why) — card-vs-text
-          // finish was previously unlogged, so a "no card" report could only be guessed at.
-          // reason=update-failed/too-big explains a text fallback; fresh-card means an
-          // in-place update was rejected (e.g. post-interaction revert) and we re-sent.
-          await appendLarkTimelineEvent(input.stateDir, normalized, {
-            type: "engine.event.card_finish",
-            detail: finishResult.reason,
-            metadata: {
-              shown: finishResult.shown,
-              reason: finishResult.reason,
-              answerChars: cardDisplayText.length,
-              answerBytes: Buffer.byteLength(cardDisplayText, "utf8"),
-              ...(spillToContinuationCards ? { spillCards: answerChunks.length } : {}),
-            },
-          });
         }
         await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
         let overflowDelivered = false;
@@ -2462,6 +2451,28 @@ async function runNormalizedLarkMessage(
             },
           });
         }
+        const finishResult = runCard
+          ? requiresVisibleDeliveryPhase
+            ? await runCard.finish(runCardAnswerText)
+            : deliveryCardResult
+          : undefined;
+        runCardFinished = Boolean(runCard);
+        if (finishResult) {
+          // This event now marks end-to-end delivery completion, not merely the
+          // earlier engine result. Until this patch lands, the card remains in
+          // "delivering" and the serial conversation queue remains occupied.
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event.card_finish",
+            detail: finishResult.reason,
+            metadata: {
+              shown: finishResult.shown,
+              reason: finishResult.reason,
+              answerChars: cardDisplayText.length,
+              answerBytes: Buffer.byteLength(cardDisplayText, "utf8"),
+              ...(spillToContinuationCards ? { spillCards: answerChunks.length } : {}),
+            },
+          });
+        }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "turn.completed",
           outcome: deliveryPreflightFailed ? "partial" : "success",
@@ -2478,7 +2489,12 @@ async function runNormalizedLarkMessage(
         }
         let salvaged = answerVisibleToUser;
         if (runCard && !runCardFinished) {
-          const salvageResult = await runCard.finish(completedEngineText).catch(() => undefined);
+          const salvageResult = await runCard.failDelivery(
+            completedEngineText,
+            locale === "en"
+              ? "The result was generated, but attachments or follow-up content could not be delivered."
+              : "结果已生成，但附件或后续内容交付失败。",
+          ).catch(() => undefined);
           salvaged = salvaged || salvageResult?.shown === true;
         }
         if (obligationId) {
@@ -2511,7 +2527,12 @@ async function runNormalizedLarkMessage(
         // duplicate rerun. Preserve/finish the card and record a partial delivery.
         let salvaged = answerVisibleToUser;
         if (runCard && !runCardFinished) {
-          const salvageResult = await runCard.finish(completedEngineText).catch(() => undefined);
+          const salvageResult = await runCard.failDelivery(
+            completedEngineText,
+            locale === "en"
+              ? "The result was generated, but attachments or follow-up content could not be delivered."
+              : "结果已生成，但附件或后续内容交付失败。",
+          ).catch(() => undefined);
           salvaged = salvaged || salvageResult?.shown === true;
         }
         if (obligationId) {
@@ -2636,8 +2657,12 @@ export interface LarkRunCardController {
   beginAnswerAttempt(): void;
   /** Resolve a terminal result against user-visible assistant text from this attempt. */
   resolveFinalText(text: string): string;
+  /** Show the final answer while its files/cards are still being delivered. */
+  beginDelivery(text: string): Promise<LarkRunFinishResult>;
   /** Finalize with the answer; resolves to whether/how the answer was shown in a card. */
   finish(text: string): Promise<LarkRunFinishResult>;
+  /** Preserve the generated answer while surfacing a post-engine delivery failure. */
+  failDelivery(text: string, errorText: string): Promise<LarkRunFinishResult>;
   fail(text: string): Promise<"error" | "partial">;
   interrupt(): Promise<void>;
   idleTimeout(minutes: number): Promise<void>;
@@ -2753,12 +2778,13 @@ export async function createLarkRunCardController(input: {
   // fallback when every in-place update is rejected — a fresh send dodges the
   // post-interaction patch-revert an inline run card can hit, keeping the finished
   // answer in a card instead of spilling to plain text.
-  const trySendFreshInlineCard = async (card: Record<string, unknown>): Promise<boolean> => {
+  const trySendFreshInlineCard = async (
+    card: Record<string, unknown>,
+  ): Promise<{ messageId: string } | undefined> => {
     try {
-      await input.channel.send(input.chatId, { card }, larkReplyOptions(input.replyTo, input.replyInThread));
-      return true;
+      return await input.channel.send(input.chatId, { card }, larkReplyOptions(input.replyTo, input.replyInThread));
     } catch {
-      return false;
+      return undefined;
     }
   };
   // Element-level streaming fast path: while only the live (last) text element
@@ -2992,10 +3018,17 @@ export async function createLarkRunCardController(input: {
         await recallStale();
         handle = freshManaged; // future updates target the fresh card
         sent = { messageId: freshManaged.messageId, fallback: false };
+        degraded = false;
+        consecutiveFullUpdateFailures = 0;
         return { shown: true, reason: "fresh-card" };
       }
-      if (await trySendFreshInlineCard(renderLarkRunCard(state, input.locale))) {
+      const freshInline = await trySendFreshInlineCard(renderLarkRunCard(state, input.locale));
+      if (freshInline) {
         await recallStale();
+        handle = undefined;
+        sent = { messageId: freshInline.messageId, fallback: false };
+        degraded = false;
+        consecutiveFullUpdateFailures = 0;
         return { shown: true, reason: "fresh-card" };
       }
     }
@@ -3014,6 +3047,12 @@ export async function createLarkRunCardController(input: {
         return;
       }
       state = applyLarkEngineEvent(state, event);
+      // Engine completion is not turn completion: files, images, continuation
+      // cards, and durable delivery bookkeeping may still be pending while the
+      // conversation queue remains intentionally held. Never show "Done" yet.
+      if (event.type === "result") {
+        state = { ...state, status: "delivering" };
+      }
       // Coalesced, non-blocking: never await the live patch.
       scheduleUpdate();
     },
@@ -3031,6 +3070,14 @@ export async function createLarkRunCardController(input: {
       answerAttemptStartBlock = state.blocks.length;
     },
     resolveFinalText: (text) => resolveLarkFinalAnswerText(state, text, answerAttemptStartBlock),
+    beginDelivery: async (text): Promise<LarkRunFinishResult> => {
+      const finalText = resolveLarkFinalAnswerText(state, text, answerAttemptStartBlock);
+      state = { ...state, finalAnswerBlockStart: answerAttemptStartBlock };
+      state = applyLarkEngineEvent(state, { type: "result", text: finalText });
+      state = { ...state, status: "delivering" };
+      cancelScheduledUpdate();
+      return await enqueuePatch(() => finalize(finalText));
+    },
     finish: async (text): Promise<LarkRunFinishResult> => {
       const finalText = resolveLarkFinalAnswerText(state, text, answerAttemptStartBlock);
       state = { ...state, finalAnswerBlockStart: answerAttemptStartBlock };
@@ -3039,6 +3086,19 @@ export async function createLarkRunCardController(input: {
       state = applyLarkEngineEvent(state, { type: "result", text: finalText });
       cancelScheduledUpdate();
       // Returns whether/how the answer was shown in a card.
+      return await enqueuePatch(() => finalize(finalText));
+    },
+    failDelivery: async (text, errorText): Promise<LarkRunFinishResult> => {
+      const finalText = resolveLarkFinalAnswerText(state, text, answerAttemptStartBlock);
+      state = { ...state, finalAnswerBlockStart: answerAttemptStartBlock };
+      state = applyLarkEngineEvent(state, { type: "result", text: finalText });
+      state = {
+        ...state,
+        status: "delivery_error",
+        errorText,
+        footer: null,
+      };
+      cancelScheduledUpdate();
       return await enqueuePatch(() => finalize(finalText));
     },
     fail: async (text) => {

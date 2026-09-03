@@ -32,7 +32,15 @@ export type LarkRunBlock =
 export interface LarkRunState {
   conversationKey: string;
   bridgeChatType?: "private" | "group";
-  status: "running" | "done" | "partial" | "error" | "interrupted" | "idle_timeout";
+  status:
+    | "running"
+    | "delivering"
+    | "done"
+    | "partial"
+    | "error"
+    | "delivery_error"
+    | "interrupted"
+    | "idle_timeout";
   blocks: LarkRunBlock[];
   reasoning: { content: string; active: boolean };
   /** Latest TodoWrite/Codex plan (the `{ todos: [...] }` input); rendered as the plan panel. */
@@ -393,7 +401,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
       }
     }
   } else {
-    // Once finished, condense: show the final answer prominently and fold the
+    // Once engine output is final, condense: show the answer prominently and fold the
     // whole process (thinking + every tool call) into one collapsed panel, so
     // the card doesn't become a giant scroll of intermediate steps.
     const answer = cleanCardText(finalAnswerText(state));
@@ -415,7 +423,10 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
   } else if (state.status === "idle_timeout") {
     const mins = state.idleTimeoutMinutes ?? 0;
     elements.push(noteElement(`_⏱ ${labels.idleTimeout(mins)}_`));
-  } else if ((state.status === "error" || state.status === "partial") && state.errorText.trim()) {
+  } else if (
+    (state.status === "error" || state.status === "partial" || state.status === "delivery_error")
+    && state.errorText.trim()
+  ) {
     const prefix = state.status === "partial" ? `${labels.partialWarning}\n\n` : "";
     elements.push(markdownElement(`⚠️ ${truncate(prefix + state.errorText.trim(), LARK_CARD_ANSWER_MAX)}`));
   } else if (state.status === "done" && elements.length === 1) {
@@ -886,10 +897,13 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
     elements.push(noteElement(`_⏹ ${labels.interrupted}_`));
   } else if (state.status === "idle_timeout") {
     elements.push(noteElement(`_⏱ ${labels.idleTimeout(state.idleTimeoutMinutes ?? 0)}_`));
-  } else if ((state.status === "error" || state.status === "partial") && state.errorText.trim()) {
+  } else if (
+    (state.status === "error" || state.status === "partial" || state.status === "delivery_error")
+    && state.errorText.trim()
+  ) {
     const prefix = state.status === "partial" ? `${labels.partialWarning}\n\n` : "";
     elements.push(markdownElement(`⚠️ ${truncate(prefix + state.errorText.trim(), 600)}`));
-  } else if (state.status !== "running" && !answer) {
+  } else if (state.status === "done" && !answer) {
     elements.push(markdownElement(`_${labels.empty}_`));
   }
 
@@ -929,9 +943,14 @@ export function renderLarkRunCardMinimal(state: LarkRunState, locale: Locale = "
     elements.push(noteElement(`_⏹ ${labels.interrupted}_`));
   } else if (state.status === "idle_timeout") {
     elements.push(noteElement(`_⏱ ${labels.idleTimeout(state.idleTimeoutMinutes ?? 0)}_`));
-  } else if ((state.status === "error" || state.status === "partial") && state.errorText.trim()) {
+  } else if (
+    (state.status === "error" || state.status === "partial" || state.status === "delivery_error")
+    && state.errorText.trim()
+  ) {
     const prefix = state.status === "partial" ? `${labels.partialWarning}\n\n` : "";
     elements.push(markdownElement(`⚠️ ${truncate(prefix + state.errorText.trim(), 400)}`));
+  } else if (state.status === "delivering") {
+    elements.push(noteElement(locale === "en" ? "_Full reply is being delivered below._" : "_完整回复正在下方交付。_"));
   } else {
     elements.push(noteElement(locale === "en" ? "_Full reply sent as a message below._" : "_完整回复见下方消息。_"));
   }
@@ -1383,8 +1402,10 @@ function runCardStatusLabel(
   labels: ReturnType<typeof runCardLabels>,
 ): string {
   if (status === "running") return labels.running;
+  if (status === "delivering") return labels.delivering;
   if (status === "partial") return labels.partial;
   if (status === "error") return labels.error;
+  if (status === "delivery_error") return labels.deliveryError;
   if (status === "interrupted") return labels.interruptedTitle;
   if (status === "idle_timeout") return labels.idleTimeoutTitle;
   return labels.done;
@@ -1421,10 +1442,12 @@ function stopButtonElement(
 
 function runCardLabels(locale: Locale): {
   running: string;
+  delivering: string;
   done: string;
   partial: string;
   partialWarning: string;
   error: string;
+  deliveryError: string;
   stop: string;
   thinkingActive: string;
   thinkingDone: string;
@@ -1447,10 +1470,12 @@ function runCardLabels(locale: Locale): {
   return locale === "en"
     ? {
       running: "Task is running...",
+      delivering: "Delivering result...",
       done: "Done",
       partial: "Partially completed",
       partialWarning: "The engine failed after producing output; the content above may be incomplete.",
       error: "Failed",
+      deliveryError: "Delivery incomplete",
       stop: "Stop",
       thinkingActive: "🧠 Thinking",
       thinkingDone: "🧠 Thinking complete · tap to view",
@@ -1472,10 +1497,12 @@ function runCardLabels(locale: Locale): {
     }
     : {
       running: "任务处理中...",
+      delivering: "正在交付结果...",
       done: "已完成",
       partial: "部分完成",
       partialWarning: "引擎在输出内容后失败，以上内容可能不完整。",
       error: "执行失败",
+      deliveryError: "交付未完成",
       stop: "停止",
       thinkingActive: "🧠 思考中",
       thinkingDone: "🧠 思考完成 · 点击查看",
@@ -1941,11 +1968,17 @@ function cardSummary(state: LarkRunState, locale: Locale): string {
   if (state.status === "running") {
     return locale === "en" ? "Task is running" : "任务处理中";
   }
+  if (state.status === "delivering") {
+    return locale === "en" ? "Delivering result" : "正在交付结果";
+  }
   if (state.status === "error") {
     return locale === "en" ? "Failed" : "执行失败";
   }
   if (state.status === "partial") {
     return locale === "en" ? "Partially completed" : "部分完成";
+  }
+  if (state.status === "delivery_error") {
+    return locale === "en" ? "Delivery incomplete" : "交付未完成";
   }
   if (state.status === "interrupted") {
     return locale === "en" ? "Interrupted" : "已中断";

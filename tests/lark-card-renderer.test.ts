@@ -805,6 +805,42 @@ describe("lark card renderer", () => {
     expect(serialized).not.toContain("停止");
   });
 
+  it("distinguishes result delivery from end-to-end completion in both locales", () => {
+    const resultState: LarkRunState = {
+      ...initialLarkRunState("lark:oc_chat"),
+      status: "delivering",
+      blocks: [{ kind: "text", content: "final answer", streaming: false }],
+      resultText: "final answer",
+      footer: null,
+    };
+
+    const zh = JSON.stringify(renderLarkRunCard(resultState, "zh"));
+    expect(zh).toContain("正在交付结果");
+    expect(zh).toContain("final answer");
+    expect(zh).not.toContain("已完成");
+    expect(zh).not.toContain("停止");
+
+    const en = JSON.stringify(renderLarkRunCard(resultState, "en"));
+    expect(en).toContain("Delivering result");
+    expect(en).not.toContain('"content":"**Done**"');
+
+    const artifactOnly: LarkRunState = { ...resultState, blocks: [], resultText: "" };
+    const compact = JSON.stringify(renderLarkRunCardCompact(artifactOnly, "zh"));
+    expect(compact).toContain("正在交付结果");
+    expect(compact).not.toContain("未返回内容");
+    const minimal = JSON.stringify(renderLarkRunCardMinimal(artifactOnly, "en"));
+    expect(minimal).toContain("is being delivered");
+    expect(minimal).not.toContain("Full reply sent");
+
+    const failed = JSON.stringify(renderLarkRunCard({
+      ...resultState,
+      status: "delivery_error",
+      errorText: "Result delivery failed.",
+    }, "en"));
+    expect(failed).toContain("Delivery incomplete");
+    expect(failed).toContain("Result delivery failed.");
+  });
+
   it("renders approval cards with scoped allow and deny actions", () => {
     const card = renderLarkApprovalCard({
       requestId: "req_1",

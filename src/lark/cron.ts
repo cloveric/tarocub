@@ -9,7 +9,7 @@ import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { claimLarkRunSlot } from "./bus.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkReminderCard } from "./card-renderer.js";
-import { sendLarkMarkdown } from "./delivery.js";
+import { hasLarkPostTurnDelivery, sendLarkMarkdown } from "./delivery.js";
 import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
@@ -187,34 +187,49 @@ export function buildLarkCronExecutor(input: {
         if (job.mute) {
           return;
         }
+        const finalText = result.text || renderLarkEmptyCronAgentReply(job);
+        const requiresVisibleDeliveryPhase = hasLarkPostTurnDelivery(result.text);
         let answerShownInCard = false;
-        if (runCard) {
-          answerShownInCard = (await runCard.finish(result.text || renderLarkEmptyCronAgentReply(job))).shown;
-        }
-        if (input.deliverResponse) {
-          await input.deliverResponse({
-            channel: input.channel,
-            runtime: input.runtime,
-            chatId: job.larkChatId!,
-            text: result.text,
-            stateDir: input.stateDir,
-            requestOutputDir,
-            workspaceOverride: input.workspaceOverride,
-            conversationKey,
-            bridgeChatType,
-            bridgeChatId: job.chatId,
-            bridgeUserId: job.userId,
-            larkThreadId: job.larkThreadId,
-            larkMessageId: job.larkMessageId,
-            sendText: runCard ? !answerShownInCard : true,
-            ...replyFields,
-          });
-          return;
-        }
-        if (!runCard) {
-          await sendLarkMarkdown(input.channel, job.larkChatId!, result.text || renderLarkEmptyCronAgentReply(job), {
-            ...replyFields,
-          });
+        try {
+          if (runCard) {
+            answerShownInCard = (await (requiresVisibleDeliveryPhase
+              ? runCard.beginDelivery(finalText)
+              : runCard.finish(finalText))).shown;
+          }
+          if (input.deliverResponse) {
+            await input.deliverResponse({
+              channel: input.channel,
+              runtime: input.runtime,
+              chatId: job.larkChatId!,
+              text: result.text,
+              stateDir: input.stateDir,
+              requestOutputDir,
+              workspaceOverride: input.workspaceOverride,
+              conversationKey,
+              bridgeChatType,
+              bridgeChatId: job.chatId,
+              bridgeUserId: job.userId,
+              larkThreadId: job.larkThreadId,
+              larkMessageId: job.larkMessageId,
+              sendText: runCard ? !answerShownInCard : true,
+              ...replyFields,
+            });
+          } else if (!runCard) {
+            await sendLarkMarkdown(input.channel, job.larkChatId!, finalText, {
+              ...replyFields,
+            });
+          }
+          if (requiresVisibleDeliveryPhase) {
+            await runCard?.finish(finalText);
+          }
+        } catch (error) {
+          await runCard?.failDelivery(
+            finalText,
+            locale === "en"
+              ? "The scheduled result was generated, but its delivery did not finish."
+              : "定时任务结果已生成，但交付未完成。",
+          ).catch(() => undefined);
+          throw error;
         }
       } finally {
         abortSignal?.removeEventListener("abort", forwardAbort);

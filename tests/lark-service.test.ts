@@ -6888,6 +6888,11 @@ describe("lark service", () => {
       const cardUpdates = JSON.stringify((channel.updateCard as ReturnType<typeof vi.fn>).mock.calls);
       expect(cardUpdates).toContain("Here is the summary");
       expect(cardUpdates).not.toContain("send-file:");
+      const cardUpdateCalls = (channel.updateCard as ReturnType<typeof vi.fn>).mock.calls.map((call) => JSON.stringify(call));
+      const deliveringIndex = cardUpdateCalls.findIndex((call) => call.includes("正在交付结果"));
+      const completedIndex = cardUpdateCalls.findIndex((call) => call.includes("已完成"));
+      expect(deliveringIndex).toBeGreaterThanOrEqual(0);
+      expect(completedIndex).toBeGreaterThan(deliveringIndex);
       // The file is still delivered (deliverResponse runs with sendText:false).
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
@@ -9686,6 +9691,79 @@ describe("lark service", () => {
     }
   });
 
+  it("does not mark the run card completed until generated-image delivery finishes", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-status-"));
+    const outputDir = path.join(stateDir, "workspace", "out");
+    const imagePath = path.join(outputDir, "cover.png");
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(imagePath, "image body");
+
+    let signalUploadStarted!: () => void;
+    const uploadStarted = new Promise<void>((resolve) => {
+      signalUploadStarted = resolve;
+    });
+    let releaseUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    const channel = fakeChannel({
+      send: vi.fn(async (_chatId: string, payload: unknown) => {
+        if (payload && typeof payload === "object" && "image" in payload) {
+          signalUploadStarted();
+          await uploadGate;
+        }
+        return { messageId: "sent_1" };
+      }),
+      rawClient: {
+        im: {
+          v1: {
+            image: {
+              create: vi.fn(async () => {
+                signalUploadStarted();
+                await uploadGate;
+                return { image_key: "img_key_delivery_status" };
+              }),
+            },
+          },
+        },
+      },
+    });
+    const responseText = `图片已生成。\n[send-image:${imagePath}]`;
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({ type: "result", text: responseText });
+        return { text: responseText };
+      }),
+    };
+    let turn: Promise<boolean> | undefined;
+
+    try {
+      turn = handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_delivery_status", content: "生成图片" }),
+      });
+
+      await uploadStarted;
+      const whileUploading = JSON.stringify(channel.updateCard.mock.calls);
+      expect(whileUploading).toContain("正在交付结果");
+      expect(whileUploading).not.toContain("已完成");
+
+      releaseUpload();
+      await turn;
+      const finalUpdate = JSON.stringify(channel.updateCard.mock.calls.at(-1));
+      expect(finalUpdate).toContain("已完成");
+    } finally {
+      releaseUpload?.();
+      await turn?.catch(() => undefined);
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("streams Kimi thinking/tools into the Lark run card and auto-delivers .lark-out files", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-stream-delivery-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
@@ -11716,7 +11794,10 @@ describe("lark service", () => {
 
       expect(channel.addReaction).toHaveBeenCalledWith("om_post_delivery", "DONE");
       expect(channel.addReaction).not.toHaveBeenCalledWith("om_post_delivery", "ERROR");
-      expect(JSON.stringify(channel.updateCard.mock.calls)).not.toContain("执行失败");
+      const cardUpdates = JSON.stringify(channel.updateCard.mock.calls);
+      expect(cardUpdates).not.toContain("执行失败");
+      expect(cardUpdates).toContain("交付未完成");
+      expect(cardUpdates).not.toContain("**已完成**");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "engine.event.delivery_failed",
@@ -11819,6 +11900,48 @@ describe("lark service", () => {
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       const finishEvent = timeline.find((e) => e.type === "engine.event.card_finish");
       expect(finishEvent?.metadata).toMatchObject({ shown: true, reason: "fresh-card" });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues finalization on a replacement inline card instead of sending the answer twice", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-run-card-replacement-"));
+    const filePath = path.join(stateDir, "workspace", "replacement.txt");
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, "replacement file");
+    let sendCount = 0;
+    const channel = fakeChannel({
+      send: vi.fn(async () => ({ messageId: sendCount++ === 0 ? "run_card_old" : "run_card_fresh" })),
+      updateCard: vi.fn(async (messageId: string) => {
+        if (messageId === "run_card_old") {
+          throw new Error("old inline card cannot be patched");
+        }
+      }),
+      recallMessage: vi.fn(async () => undefined),
+    });
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: `replacement answer\n[send-file:${filePath}]`,
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_replace_card", content: "do work" }),
+      });
+
+      const answerCards = channel.send.mock.calls.filter((call: unknown[]) =>
+        JSON.stringify(call[1] ?? {}).includes("replacement answer"));
+      expect(answerCards).toHaveLength(1);
+      expect(channel.recallMessage).toHaveBeenCalledWith("run_card_old");
+      const freshUpdates = channel.updateCard.mock.calls.filter((call: unknown[]) => call[0] === "run_card_fresh");
+      expect(freshUpdates).toHaveLength(1);
+      expect(JSON.stringify(freshUpdates[0])).toContain("已完成");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
