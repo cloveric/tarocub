@@ -130,6 +130,10 @@ export async function deliverLarkResponse(input: {
   const matches = extractDeliveryTagMatches(input.text);
   const cleanedText = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(input.text)));
   const replyOptions = larkReplyOptions(input.replyTo, input.replyInThread);
+  // Structured and legacy send directives are alternative spellings of the
+  // same operation. Claim paths across both before sending so a model cannot
+  // accidentally upload one artifact twice by emitting both protocols.
+  const claimedArtifactPaths = new Set<string>();
 
   for (const match of toolMatches) {
     let toolName = "unknown";
@@ -141,6 +145,7 @@ export async function deliverLarkResponse(input: {
         name: parsed.name,
         payload: parsed.payload,
         locale,
+        claimedArtifactPaths,
       });
     } catch (error) {
       if (!(error instanceof SyntaxError)) {
@@ -198,6 +203,9 @@ export async function deliverLarkResponse(input: {
     const pendingImages: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }> = [];
     for (const match of matches) {
       const filePath = match.path;
+      if (!claimLarkArtifactPath(claimedArtifactPaths, filePath)) {
+        continue;
+      }
       const pathPreflight = await preflightLarkDeliveryPath(filePath, deliveryRoots);
       if (!pathPreflight.ok) {
         await appendLarkFileRejectedTimeline(input, {
@@ -426,6 +434,7 @@ async function executeLarkToolTag(input: {
   larkMessageId?: string;
   instanceName?: string;
   locale: Locale;
+  claimedArtifactPaths?: Set<string>;
 }): Promise<boolean> {
   const payload = payloadObject(input.payload);
   if (input.name === "cron.add") {
@@ -479,7 +488,14 @@ async function executeLarkToolTag(input: {
       return false;
     }
     let ok = true;
-    let artifacts = normalized.artifacts;
+    const hadArtifacts = normalized.artifacts.length > 0;
+    const claimedArtifactPaths = input.claimedArtifactPaths;
+    let artifacts = claimedArtifactPaths
+      ? normalized.artifacts.filter((artifact) => claimLarkArtifactPath(claimedArtifactPaths, artifact.path))
+      : normalized.artifacts;
+    if (hadArtifacts && artifacts.length === 0) {
+      return true;
+    }
     if (input.name === "send.batch") {
       const images = artifacts.filter((artifact) => artifact.kind === "image");
       if (images.length > 1) {
@@ -580,6 +596,19 @@ async function executeLarkToolTag(input: {
     text: input.locale === "en" ? `Unsupported Lark tool ${input.name}.` : `错误：不支持的飞书工具 ${input.name}。`,
   }, larkReplyOptions(input.replyTo, input.replyInThread));
   return false;
+}
+
+function claimLarkArtifactPath(claimed: Set<string>, filePath: string): boolean {
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return true;
+  }
+  const key = path.resolve(trimmed);
+  if (claimed.has(key)) {
+    return false;
+  }
+  claimed.add(key);
+  return true;
 }
 
 function renderInvalidLarkToolPayload(

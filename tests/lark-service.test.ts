@@ -10497,6 +10497,53 @@ describe("lark service", () => {
     }
   });
 
+  it("delivers each image once when send.batch and legacy tags repeat the same paths", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cross-protocol-dedup-"));
+    const outputDir = path.join(stateDir, "workspace", "out");
+    await mkdir(outputDir, { recursive: true });
+    const p1 = path.join(outputDir, "p1.png");
+    const p2 = path.join(outputDir, "p2.png");
+    await writeFile(p1, "p1 bytes");
+    await writeFile(p2, "p2 bytes");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: [
+          "```tool-call",
+          JSON.stringify({
+            name: "send.batch",
+            payload: { images: [{ path: p1, caption: "P1" }, { path: p2, caption: "P2" }] },
+          }),
+          "```",
+          `P1 legacy\n[send-image:${p1}]`,
+          `P2 legacy\n[send-image:${p2}]`,
+          "两种协议不应导致重复交付。",
+        ].join("\n\n"),
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_cross_protocol_dedup", content: "出图" }),
+      });
+
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(2);
+      const imageCards = (channel.send.mock.calls as unknown[][])
+        .map((call) => (call[1] as { card?: { body?: { elements?: Array<{ tag?: string }> } } } | undefined)?.card)
+        .filter((card) => card?.body?.elements?.some((element) => element.tag === "img"));
+      expect(imageCards).toHaveLength(1);
+
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline.filter((event) => event.type === "file.accepted")).toHaveLength(2);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders a send.image with a caption as a title+image card", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-caption-"));
     const outputDir = path.join(stateDir, "workspace", "out");

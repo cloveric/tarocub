@@ -247,10 +247,17 @@ describe("larkAgentInstructions", () => {
   it("tells agents to give each image its own title via send.batch {path, caption} or [send-image:] title-above", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions).toContain("give each image its own title");
-    expect(instructions).toContain("images entry an object {path, caption}");
-    expect(instructions).toContain("title on the line directly above");
-    expect(instructions).toContain("packed into ONE card, each image under its own title");
+    expect(instructions).toContain("title each via send.batch {path,caption}");
+    expect(instructions).toContain("title line directly above [send-image:]");
+    expect(instructions).toContain("ONE titled batch -> ONE card");
+  });
+
+  it("forbids duplicate artifact delivery across protocols and later turns", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("exactly one syntax per artifact");
+    expect(instructions).toContain("never repeat a path");
+    expect(instructions).toContain("unless explicitly asked to resend");
   });
 
   it("gives agents one executable send.batch syntax instead of an ambiguous pseudo-tag", () => {
