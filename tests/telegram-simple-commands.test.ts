@@ -833,12 +833,13 @@ describe("handleSimpleLocalTelegramCommand", () => {
         [
           "Current model: default",
           "Choose a model with /model <name>:",
+          "/model gpt-6-astra",
           "/model gpt-5.6-sol",
           "/model gpt-5.6-terra",
           "/model gpt-5.6-luna",
           "/model gpt-5.5",
           "/model off",
-          "Sol/Terra support max and ultra; Luna supports max but not ultra.",
+          "Astra/Sol/Terra support max and ultra; Luna supports max but not ultra.",
         ].join("\n"),
       );
     } finally {

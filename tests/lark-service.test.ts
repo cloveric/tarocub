@@ -5522,6 +5522,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).toContain("Current model: default");
+      expect(rendered).toContain("/model gpt-6-astra");
       expect(rendered).toContain("/model gpt-5.6-sol");
       expect(rendered).toContain("/model gpt-5.6-terra");
       expect(rendered).toContain("/model gpt-5.6-luna");

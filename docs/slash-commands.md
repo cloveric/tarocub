@@ -20,7 +20,7 @@ Use `/help` inside the bot for the live command list available to that chat. Thi
 |---|---|---|
 | `/engine [claude\|codex\|kimi\|deepseek\|antigravity]` | Inspect or switch the backend engine. | Telegram, Lark |
 | `/model [name\|off]` | Inspect or set the engine model. Claude has named aliases; Kimi and DeepSeek validate provider/model IDs through their native protocols. | Telegram, Lark |
-| `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Inspect or set reasoning effort where supported. Codex GPT-5.6 Sol/Terra support `ultra`; Luna supports up to `max`. | Telegram, Lark |
+| `/effort [low\|medium\|high\|xhigh\|max\|ultra\|off]` | Inspect or set reasoning effort where supported. Codex GPT-6 Astra and GPT-5.6 Sol/Terra support `ultra`; Luna supports up to `max`. | Telegram, Lark |
 | `/fast [on\|off\|status]` | Toggle Codex Fast Mode. Bare `/fast` shows status. | Telegram, Lark |
 | `/yolo [on\|off\|unsafe\|status]` | Inspect or switch approval mode. There is no in-chat `/yolo` on Telegram — set it from the CLI (`telegram yolo [on\|off\|unsafe]`). | Lark |
 | `/config` | Open the interactive settings card. | Lark |

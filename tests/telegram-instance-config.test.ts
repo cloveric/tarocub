@@ -36,6 +36,7 @@ describe("getEngineEffortValidationError", () => {
     ["antigravity", "medium", undefined],
     ["deepseek", "max", undefined],
     ["codex", "ultra", "gpt-5.6-sol"],
+    ["codex", "ultra", "gpt-6-astra"],
   ] as const)("accepts %s effort %s when supported", (engine, effort, model) => {
     expect(getEngineEffortValidationError(engine, effort, model)).toBeUndefined();
   });

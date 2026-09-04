@@ -1,16 +1,18 @@
 import type { EffortLevel } from "../state/config-file-schema.js";
 
 export const CODEX_MODEL_CHOICES = [
+  "gpt-6-astra",
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
   "gpt-5.5",
 ] as const;
 
-export const CODEX_EFFORT_COMPATIBILITY_EN = "Sol/Terra support max and ultra; Luna supports max but not ultra.";
-export const CODEX_EFFORT_COMPATIBILITY_ZH = "Sol/Terra 支持 max 和 ultra；Luna 支持 max，但不支持 ultra。";
+export const CODEX_EFFORT_COMPATIBILITY_EN = "Astra/Sol/Terra support max and ultra; Luna supports max but not ultra.";
+export const CODEX_EFFORT_COMPATIBILITY_ZH = "Astra/Sol/Terra 支持 max 和 ultra；Luna 支持 max，但不支持 ultra。";
 
 const CODEX_MODEL_MAX_EFFORT: Readonly<Record<string, EffortLevel>> = {
+  "gpt-6-astra": "ultra",
   "gpt-5.6-sol": "ultra",
   "gpt-5.6-terra": "ultra",
   "gpt-5.6-luna": "max",
