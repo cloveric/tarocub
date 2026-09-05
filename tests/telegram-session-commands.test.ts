@@ -1085,6 +1085,52 @@ describe("handleLocalSessionTelegramCommand", () => {
     }
   });
 
+  it("explains which process holds a Codex thread writer lock", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 11 }),
+    };
+    const sessionStore = {
+      inspect: vi.fn(),
+      findByChatIdSafe: vi.fn().mockResolvedValue({ record: null, warning: undefined }),
+      removeByChatId: vi.fn(),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    };
+
+    try {
+      const handled = await handleLocalSessionTelegramCommand({
+        stateDir: root,
+        startedAt: Date.now() - 10,
+        locale: "zh",
+        cfg: { engine: "codex" },
+        normalized: createNormalizedMessage("/resume thread thread-busy"),
+        context: {
+          api: api as never,
+          instanceName: "default",
+          updateId: 83,
+        },
+        sessionStore,
+        updateInstanceConfig: vi.fn(),
+        validateCodexThread: vi.fn().mockRejectedValue(new Error(
+          "thread thread-busy already has an active writer\n\n"
+          + "该会话线程的写入权被ChatGPT 桌面应用占用（pid 4094），重启本 bot 无效。"
+          + "退出该应用即可恢复；或用 /reset 换一条新线程（会丢失该会话的 Codex 上下文）。",
+        )),
+      });
+
+      expect(handled).toBe(true);
+      expect(sessionStore.upsert).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledWith(
+        123,
+        "Codex thread 正被占用：thread-busy\n\n"
+        + "该会话线程的写入权被ChatGPT 桌面应用占用（pid 4094），重启本 bot 无效。"
+        + "退出该应用即可恢复；或用 /reset 换一条新线程（会丢失该会话的 Codex 上下文）。",
+      );
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("fails closed when the current Codex runtime cannot validate external threads", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-session-commands-"));
     const api = {

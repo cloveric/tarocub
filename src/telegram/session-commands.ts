@@ -573,7 +573,13 @@ export async function handleLocalSessionTelegramCommand(input: {
         const detail = error instanceof Error ? error.message : String(error);
         const isNotFound = /could not resume thread|thread not found|no rollout found/i.test(detail);
         const isUnsupported = /validation unsupported/i.test(detail);
-        const msg = isNotFound
+        const isActiveWriter = /already has an active writer/i.test(detail);
+        const activeWriterDiagnosis = detail.split(/\n\s*\n/).slice(1).join("\n\n").trim();
+        const msg = isActiveWriter
+          ? (locale === "zh"
+            ? `Codex thread 正被占用：${resumeCmd.threadId}\n\n${activeWriterDiagnosis || "该会话正被另一个 Codex 进程占用。结束占用方后重试；重启本 bot 无效。"}`
+            : `Codex thread is in use: ${resumeCmd.threadId}\n\nAnother Codex or ChatGPT process currently owns this thread. Close that application or finish its task, then retry; restarting this bot will not release the thread.`)
+          : isNotFound
           ? (locale === "zh"
             ? `未找到 Codex thread：${resumeCmd.threadId}\n\n请检查 thread id 后重试。`
             : `Codex thread not found: ${resumeCmd.threadId}\n\nCheck the thread ID and try again.`)
@@ -589,7 +595,13 @@ export async function handleLocalSessionTelegramCommand(input: {
           startedAt,
           command: "resume",
           responseText: msg,
-          metadata: { rejected: isNotFound ? "thread-not-found" : "thread-validation-unavailable" },
+          metadata: {
+            rejected: isActiveWriter
+              ? "thread-active-writer"
+              : isNotFound
+                ? "thread-not-found"
+                : "thread-validation-unavailable",
+          },
         });
         return true;
       }
