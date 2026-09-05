@@ -91,6 +91,7 @@ type AntigravityRunResponse = CodexAdapterResponse & { childPid?: number };
 
 type AntigravityPendingTurn = {
   expectedInput: string;
+  requireUserEcho: boolean;
   userEchoSeen: boolean;
   streamedText: string;
   resultText: string;
@@ -119,6 +120,7 @@ type AntigravityWorker = {
   lineBuffer: string;
   stderrTail: string;
   initSeen: boolean;
+  userEchoMode: "unknown" | "present" | "absent";
   pendingTurn: AntigravityPendingTurn | null;
   lastActivityAt: number;
   logDir?: string;
@@ -645,6 +647,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       lineBuffer: "",
       stderrTail: "",
       initSeen: false,
+      userEchoMode: "unknown",
       pendingTurn: null,
       lastActivityAt: Date.now(),
       ...(logDir ? { logDir } : {}),
@@ -692,6 +695,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     return new Promise<AntigravityRunResponse>((resolve, reject) => {
       const pending: AntigravityPendingTurn = {
         expectedInput: prompt,
+        requireUserEcho: worker.userEchoMode === "present",
         userEchoSeen: false,
         streamedText: "",
         resultText: "",
@@ -786,6 +790,13 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       return;
     }
 
+    // A warm worker can flush a prior turn's delayed tail after the next prompt
+    // is written. Stream-json preserves order, so the matching user echo marks
+    // the boundary after which step updates belong to this pending turn.
+    if (pending.requireUserEcho && !pending.userEchoSeen && parsed.event === "step_update") {
+      return;
+    }
+
     if (parsed.event === "user") {
       const message = asRecord(parsed.message);
       if (pending.userEchoSeen) {
@@ -794,6 +805,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       if (typeof message?.content !== "string" || message.content !== pending.expectedInput) {
         throw new Error("Antigravity emitted a user echo that does not match the active turn");
       }
+      worker.userEchoMode = "present";
       pending.userEchoSeen = true;
       return;
     }
@@ -838,7 +850,13 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     }
 
     if (parsed.event === "result") {
+      if (pending.requireUserEcho && !pending.userEchoSeen) {
+        throw new Error("Antigravity emitted a result before the active turn's user echo");
+      }
       if (pending.resultSeen) throw new Error("Antigravity emitted more than one result event");
+      if (worker.userEchoMode === "unknown") {
+        worker.userEchoMode = pending.userEchoSeen ? "present" : "absent";
+      }
       const result = asRecord(parsed.result) as AntigravityResult | undefined;
       if (!result) throw new Error("Antigravity emitted an invalid result event");
       this.setWorkerSessionId(worker, result.conversation_id, "result");

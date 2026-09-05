@@ -644,6 +644,36 @@ describe("lark card renderer", () => {
     expect(body).toContain("正文内容");
   });
 
+  it("does not downgrade heading-like lines inside fenced code blocks", () => {
+    expect(cleanCardText([
+      "```markdown",
+      "# literal heading syntax",
+      "```",
+      "# Actual heading",
+    ].join("\n"))).toBe([
+      "```markdown",
+      "# literal heading syntax",
+      "```",
+      "**Actual heading**",
+    ].join("\n"));
+  });
+
+  it("does not treat a fence-like code line with trailing text as a closing fence", () => {
+    expect(cleanCardText([
+      "```text",
+      "```still code",
+      "# literal after fence-like text",
+      "```",
+      "# Actual heading",
+    ].join("\n"))).toBe([
+      "```text",
+      "```still code",
+      "# literal after fence-like text",
+      "```",
+      "**Actual heading**",
+    ].join("\n"));
+  });
+
   it("neutralizes Setext heading underlines outside fenced code blocks", () => {
     const divider = "=".repeat(40);
     expect(cleanCardText(`Overall: ALL PASS\n${divider}`)).toBe(

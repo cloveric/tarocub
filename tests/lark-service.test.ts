@@ -10089,7 +10089,7 @@ describe("lark service", () => {
         if (card) {
           const imgs = (card.body?.elements ?? []).filter((e) => e.tag === "img").length;
           if (imgs > REJECT_OVER) {
-            throw new Error("card too large");
+            return Promise.reject("card payload too large");
           }
         }
         return { messageId: "sent" };
@@ -10123,6 +10123,52 @@ describe("lark service", () => {
       // Split cards succeeded, so no bare image fallback was needed.
       expect((channel.send.mock.calls as unknown[][]).some((c) =>
         c[1] && typeof c[1] === "object" && "image" in (c[1] as object))).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resend an image batch when the card acknowledgement is ambiguous", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-ambiguous-"));
+    const workspace = path.join(stateDir, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const first = path.join(workspace, "first.png");
+    const second = path.join(workspace, "second.png");
+    await writeFile(first, "first image");
+    await writeFile(second, "second image");
+    const channel = fakeChannel({
+      send: vi.fn(async (_chatId: string, payload: unknown) => {
+        const card = (payload as { card?: { body?: { elements?: Array<{ tag?: string }> } } } | undefined)?.card;
+        const imageCount = (card?.body?.elements ?? []).filter((element) => element.tag === "img").length;
+        if (imageCount > 0) {
+          const error = Object.assign(new Error("timed out waiting for card acknowledgement"), {
+            code: "ETIMEDOUT",
+          });
+          throw error;
+        }
+        return { messageId: "sent" };
+      }),
+    });
+
+    try {
+      await deliverLarkResponse({
+        channel,
+        runtime: createLarkServiceRuntime(),
+        chatId: "oc_chat",
+        text: `P1\n[send-image:${first}]\n\nP2\n[send-image:${second}]`,
+        stateDir,
+      });
+
+      const cardCalls = (channel.send.mock.calls as unknown[][])
+        .map((call) => (call[1] as { card?: { body?: { elements?: Array<{ tag?: string }> } } } | undefined)?.card)
+        .filter((card): card is { body: { elements: Array<{ tag?: string }> } } => Boolean(card));
+      const imageCounts = cardCalls.map((card) => card.body.elements.filter((element) => element.tag === "img").length);
+      expect(imageCounts).toEqual([2]);
+      expect((channel.send.mock.calls as unknown[][]).some((call) => {
+        const payload = call[1] as { image?: unknown; file?: unknown } | undefined;
+        return payload?.image !== undefined || payload?.file !== undefined;
+      })).toBe(false);
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("避免重复");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -10579,6 +10625,46 @@ describe("lark service", () => {
 
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline.filter((event) => event.type === "file.accepted")).toHaveLength(2);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates structured and legacy image paths that resolve through a symlink", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-realpath-dedup-"));
+    const outputDir = path.join(stateDir, "workspace", "out");
+    await mkdir(outputDir, { recursive: true });
+    const realImage = path.join(outputDir, "cover.png");
+    const imageAlias = path.join(outputDir, "cover-alias.png");
+    await writeFile(realImage, "cover bytes");
+    await symlink(realImage, imageAlias);
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: [
+          "```tool-call",
+          JSON.stringify({
+            name: "send.image",
+            payload: { path: realImage, caption: "Cover" },
+          }),
+          "```",
+          `Cover legacy\n[send-image:${imageAlias}]`,
+        ].join("\n\n"),
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_realpath_dedup", content: "出图" }),
+      });
+
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(1);
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline.filter((event) => event.type === "file.accepted")).toHaveLength(1);
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

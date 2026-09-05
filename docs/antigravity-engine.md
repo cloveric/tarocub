@@ -105,6 +105,10 @@ token 分开处理，恢复会话只统计本轮 step，避免累计 token 重�
 下一轮再恢复同一会话。`full-auto` 会同时启用 `--sandbox`；只有显式
 `bypass` 才跳过沙箱。
 
+对会输出 `user` echo 的 CLI 版本，TaroCub 以“与当前 prompt 完全匹配的 echo”
+作为持久 worker 的轮次边界：新一轮 echo 之前迟到的 `step_update` 会被隔离，
+不会污染下一轮文本、进度或 token；缺少预期 echo 的结果会 fail closed。
+
 尚未对齐 Codex/Claude 的部分来自当前上游边界，而不是 bridge 伪装支持：
 Antigravity headless 暂无单工具远程审批、运行中 steer、结果后的后台任务生命
 周期，以及手动 compact/context API。TaroCub 对这些能力明确显示为不支持。

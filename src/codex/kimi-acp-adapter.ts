@@ -125,6 +125,21 @@ type KimiToolState = {
   emittedResult: boolean;
 };
 
+type KimiDetachedQuestion = {
+  state: KimiToolState;
+  taskId?: string;
+  ownerTurnId?: number;
+  onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+  onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
+  lastSeenAt: number;
+};
+
+type KimiDetachedApproval = {
+  controller: AbortController;
+  taskId?: string;
+  startedAt: number;
+};
+
 type KimiTaskNotification = Extract<KimiHookEvent, { hookEventName: "Notification" }>;
 
 type KimiBackgroundTask = {
@@ -261,7 +276,8 @@ type KimiWorker = {
   backgroundTasks: Map<string, KimiBackgroundTask>;
   backgroundContinuations: Map<string, KimiBackgroundContinuation>;
   backgroundContinuationWaiters: Set<KimiBackgroundContinuationWaiter>;
-  detachedApprovalControllers: Map<AbortController, number>;
+  detachedQuestions: Map<string, KimiDetachedQuestion>;
+  detachedApprovalControllers: Map<string, KimiDetachedApproval>;
   terminalBackgroundTasks: Map<string, KimiTerminalBackgroundTask>;
   terminals: Map<string, KimiAcpTerminal>;
   activeHookTurn?: KimiHookTurn;
@@ -1993,6 +2009,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       backgroundTasks: new Map(),
       backgroundContinuations: new Map(),
       backgroundContinuationWaiters: new Set(),
+      detachedQuestions: new Map(),
       detachedApprovalControllers: new Map(),
       terminalBackgroundTasks: new Map(),
       terminals: new Map(),
@@ -2692,9 +2709,11 @@ export class KimiAcpAdapter implements CodexAdapter {
         emittedResult: false,
       };
       worker.tools.set(update.toolCallId, state);
+      this.rememberDetachedQuestion(worker, state, pending, continuation);
       this.maybeEmitToolUse(worker, state);
       if (update.status === "completed" || update.status === "failed") {
         await this.emitToolResult(worker, state, update.status === "failed");
+        worker.detachedQuestions.delete(update.toolCallId);
       }
       return;
     }
@@ -2705,7 +2724,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       } else if (pending?.assistantText) {
         pending.assistantBoundaryPending = true;
       }
-      const state = worker.tools.get(update.toolCallId) ?? {
+      const state = worker.tools.get(update.toolCallId)
+        ?? worker.detachedQuestions.get(update.toolCallId)?.state
+        ?? {
         toolCallId: update.toolCallId,
         toolName: update.title || "Unknown tool",
         emittedUse: false,
@@ -2725,9 +2746,11 @@ export class KimiAcpAdapter implements CodexAdapter {
         state.latestContentText = contentText;
       }
       worker.tools.set(update.toolCallId, state);
+      this.rememberDetachedQuestion(worker, state, pending, continuation);
       this.maybeEmitToolUse(worker, state);
       if (update.status === "completed" || update.status === "failed") {
         await this.emitToolResult(worker, state, update.status === "failed");
+        worker.detachedQuestions.delete(update.toolCallId);
       }
     }
   }
@@ -2744,6 +2767,33 @@ export class KimiAcpAdapter implements CodexAdapter {
     }
     const candidates = [...worker.backgroundContinuations.values()].filter((entry) => !entry.activeTurnId);
     return candidates.length === 1 ? candidates[0] : undefined;
+  }
+
+  private rememberDetachedQuestion(
+    worker: KimiWorker,
+    state: KimiToolState,
+    pending: PendingKimiTurn | null,
+    continuation: KimiBackgroundContinuation | undefined,
+  ): void {
+    const rawInput = state.rawInput ?? maybeParseJson(state.latestContentText);
+    if (!isBackgroundQuestionInput(state.toolName, rawInput)) {
+      return;
+    }
+    state.rawInput ??= rawInput;
+    const existing = worker.detachedQuestions.get(state.toolCallId);
+    worker.detachedQuestions.set(state.toolCallId, {
+      state,
+      taskId: existing?.taskId,
+      ownerTurnId: existing?.ownerTurnId ?? pending?.turnId,
+      onEngineEvent: existing?.onEngineEvent
+        ?? continuation?.onEngineEvent
+        ?? pending?.onEngineEvent
+        ?? worker.onEngineEvent,
+      onApprovalRequest: existing?.onApprovalRequest
+        ?? continuation?.onApprovalRequest
+        ?? pending?.onApprovalRequest,
+      lastSeenAt: Date.now(),
+    });
   }
 
   private nestedTasksForContinuation(worker: KimiWorker, continuationTaskId: string): KimiBackgroundTask[] {
@@ -3799,6 +3849,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         this.attachNestedTaskToContinuation(worker, task, continuation);
       }
       worker.backgroundTasks.set(task.taskId, task);
+      this.bindDetachedQuestionTask(worker, task);
       await this.adoptNestedKimiTaskWorkflow(worker, task);
       this.emitBackgroundTaskStarted(worker, task);
       return;
@@ -4016,6 +4067,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     taskId: string,
     context: Omit<KimiTerminalBackgroundTask, "terminalAt">,
   ): void {
+    this.clearDetachedQuestionTask(worker, taskId, "Kimi background question task settled");
     const existing = worker.terminalBackgroundTasks.get(taskId);
     worker.terminalBackgroundTasks.set(taskId, {
       terminalAt: Date.now(),
@@ -4057,7 +4109,8 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.markActivity(worker);
     const pending = worker.pendingTurn;
     const continuation = this.backgroundContinuationForUpdate(worker);
-    const state = worker.tools.get(request.toolCall.toolCallId);
+    const detachedQuestionState = worker.detachedQuestions.get(request.toolCall.toolCallId);
+    const state = worker.tools.get(request.toolCall.toolCallId) ?? detachedQuestionState?.state;
     if (state) {
       this.maybeEmitToolUse(worker, state);
     }
@@ -4068,16 +4121,29 @@ export class KimiAcpAdapter implements CodexAdapter {
       ? normalizeKimiQuestionInput(request, rawToolInput)
       : rawToolInput;
     const backgroundQuestionTask = detachedQuestion
-      ? this.findBackgroundQuestionTask(worker, rawToolInput)
+      ? (detachedQuestionState?.taskId
+          ? worker.backgroundTasks.get(detachedQuestionState.taskId)
+          : undefined)
+        ?? this.findBackgroundQuestionTask(worker, rawToolInput)
       : undefined;
-    if (backgroundQuestionTask) {
+    if (detachedQuestion && (backgroundQuestionTask || detachedQuestionState)) {
+      if (detachedQuestionState && backgroundQuestionTask) {
+        detachedQuestionState.taskId ??= backgroundQuestionTask.taskId;
+        detachedQuestionState.lastSeenAt = Date.now();
+      }
+      const ownerTurnId = backgroundQuestionTask?.ownerTurnId ?? detachedQuestionState?.ownerTurnId;
+      const onEngineEvent = backgroundQuestionTask?.onEngineEvent
+        ?? detachedQuestionState?.onEngineEvent
+        ?? worker.onEngineEvent;
+      const onApprovalRequest = backgroundQuestionTask?.onApprovalRequest
+        ?? detachedQuestionState?.onApprovalRequest;
       const event: EngineStreamEvent = {
         type: "permission_request",
         toolName,
         toolInput,
         sessionId: worker.currentSessionId ?? request.sessionId,
       };
-      if (pending && backgroundQuestionTask.ownerTurnId === pending.turnId) {
+      if (pending && ownerTurnId === pending.turnId) {
         this.queueEngineEvent(pending, event);
         await Promise.race([
           pending.eventChain,
@@ -4085,14 +4151,16 @@ export class KimiAcpAdapter implements CodexAdapter {
           pending.interruptionPromise.catch(() => undefined),
         ]);
       } else {
-        await this.emitEngineEvent(backgroundQuestionTask.onEngineEvent ?? worker.onEngineEvent, event);
+        await this.emitEngineEvent(onEngineEvent, event);
       }
       return await this.handleDetachedPermissionRequest(
         worker,
         request,
         toolName,
         toolInput,
-        backgroundQuestionTask.onApprovalRequest,
+        onApprovalRequest,
+        request.toolCall.toolCallId,
+        backgroundQuestionTask?.taskId ?? detachedQuestionState?.taskId,
       );
     }
     if (!pending && !continuation) {
@@ -4153,6 +4221,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         toolName,
         toolInput,
         pending.onApprovalRequest,
+        request.toolCall.toolCallId,
       );
     }
     const approvalRequest: EngineApprovalRequest = {
@@ -4196,15 +4265,64 @@ export class KimiAcpAdapter implements CodexAdapter {
     return candidates.length === 1 ? candidates[0] : undefined;
   }
 
+  private bindDetachedQuestionTask(worker: KimiWorker, task: KimiBackgroundTask): void {
+    if (task.kind !== "question") {
+      return;
+    }
+    const unbound = [...worker.detachedQuestions.values()].filter((question) => question.taskId === undefined);
+    const description = task.description?.trim();
+    const exact = description
+      ? unbound.filter((question) => firstQuestionText(question.state.rawInput)?.trim() === description)
+      : [];
+    const question = exact.length === 1 ? exact[0] : unbound.length === 1 ? unbound[0] : undefined;
+    if (!question) {
+      return;
+    }
+    question.taskId = task.taskId;
+    question.lastSeenAt = Date.now();
+    task.ownerTurnId = question.ownerTurnId ?? task.ownerTurnId;
+    task.onEngineEvent = question.onEngineEvent ?? task.onEngineEvent;
+    task.onApprovalRequest = question.onApprovalRequest ?? task.onApprovalRequest;
+  }
+
+  private clearDetachedQuestionTask(worker: KimiWorker, taskId: string, reason: string): void {
+    for (const [toolCallId, approval] of worker.detachedApprovalControllers.entries()) {
+      if (approval.taskId !== taskId) {
+        continue;
+      }
+      approval.controller.abort(new Error(reason));
+      worker.detachedApprovalControllers.delete(toolCallId);
+      worker.detachedQuestions.delete(toolCallId);
+    }
+    for (const [toolCallId, question] of worker.detachedQuestions.entries()) {
+      if (question.taskId !== taskId) {
+        continue;
+      }
+      const approval = worker.detachedApprovalControllers.get(toolCallId);
+      approval?.controller.abort(new Error(reason));
+      worker.detachedApprovalControllers.delete(toolCallId);
+      worker.detachedQuestions.delete(toolCallId);
+    }
+  }
+
   private async handleDetachedPermissionRequest(
     worker: KimiWorker,
     request: RequestPermissionRequest,
     toolName: string,
     toolInput: unknown,
     onApprovalRequest: ((request: EngineApprovalRequest) => Promise<EngineApprovalDecision>) | undefined,
+    toolCallId: string,
+    taskId?: string,
   ): Promise<RequestPermissionResponse> {
     const controller = new AbortController();
-    worker.detachedApprovalControllers.set(controller, Date.now());
+    worker.detachedApprovalControllers.get(toolCallId)?.controller.abort(
+      new Error("Kimi replaced an outstanding background question approval"),
+    );
+    worker.detachedApprovalControllers.set(toolCallId, {
+      controller,
+      taskId,
+      startedAt: Date.now(),
+    });
     const approvalRequest: EngineApprovalRequest = {
       engine: "kimi",
       toolName,
@@ -4231,7 +4349,10 @@ export class KimiAcpAdapter implements CodexAdapter {
         : denyOnFailure();
       return renderPermissionResponse(request, toolName, decision);
     } finally {
-      worker.detachedApprovalControllers.delete(controller);
+      if (worker.detachedApprovalControllers.get(toolCallId)?.controller === controller) {
+        worker.detachedApprovalControllers.delete(toolCallId);
+      }
+      worker.detachedQuestions.delete(toolCallId);
     }
   }
 
@@ -4412,6 +4533,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         worker.pendingTurn
         || worker.backgroundTasks.size > 0
         || worker.backgroundContinuations.size > 0
+        || worker.detachedQuestions.size > 0
         || worker.detachedApprovalControllers.size > 0
         || worker.activeHookTurn?.originKind === "task"
         || now - worker.lastActivityAt < this.idleWorkerTtlMs
@@ -4473,12 +4595,22 @@ export class KimiAcpAdapter implements CodexAdapter {
       }
     }
     if (this.backgroundTaskMaxAgeMs > 0) {
-      for (const [controller, startedAt] of worker.detachedApprovalControllers.entries()) {
-        if (now - startedAt < this.backgroundTaskMaxAgeMs) {
+      for (const [toolCallId, question] of worker.detachedQuestions.entries()) {
+        if (now - question.lastSeenAt < this.backgroundTaskMaxAgeMs) {
           continue;
         }
-        controller.abort(new Error("Kimi background question expired before it was answered"));
-        worker.detachedApprovalControllers.delete(controller);
+        worker.detachedApprovalControllers.get(toolCallId)?.controller.abort(
+          new Error("Kimi background question expired before it was answered"),
+        );
+        worker.detachedApprovalControllers.delete(toolCallId);
+        worker.detachedQuestions.delete(toolCallId);
+      }
+      for (const [toolCallId, approval] of worker.detachedApprovalControllers.entries()) {
+        if (now - approval.startedAt < this.backgroundTaskMaxAgeMs) {
+          continue;
+        }
+        approval.controller.abort(new Error("Kimi background question expired before it was answered"));
+        worker.detachedApprovalControllers.delete(toolCallId);
       }
     }
     this.pruneIgnoredKimiHookTerminals(worker, now);
@@ -4586,8 +4718,9 @@ export class KimiAcpAdapter implements CodexAdapter {
       continuation.approvalAbortController.abort();
     }
     worker.backgroundContinuations.clear();
-    for (const controller of worker.detachedApprovalControllers.keys()) {
-      controller.abort(new Error("Kimi ACP worker was removed"));
+    worker.detachedQuestions.clear();
+    for (const approval of worker.detachedApprovalControllers.values()) {
+      approval.controller.abort(new Error("Kimi ACP worker was removed"));
     }
     worker.detachedApprovalControllers.clear();
     worker.terminalBackgroundTasks.clear();

@@ -19,6 +19,7 @@ import { CronStore } from "../src/state/cron-store.js";
 import { LarkGroupModeStore } from "../src/lark/group-mode-store.js";
 import { resolveLarkServiceLockPath } from "../src/lark/service.js";
 import { DEFAULT_INSTANCE_AGENT_INSTRUCTIONS, stripGeneratedTelegramTransportSection } from "../src/commands/access.js";
+import { withFileMutex } from "../src/state/file-mutex.js";
 
 const REPO_ROOT = "C:\\Users\\hangw\\codex-telegram-channel";
 
@@ -4906,6 +4907,42 @@ describe("runCli", () => {
       config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
       expect(config).toMatchObject({ engine: "kimi", approvalMode: "full-auto" });
       expect(config.kimiAutoNeverAskAcknowledged).toBeUndefined();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("evaluates a Kimi Never Ask acknowledgement inside the config write lock", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const configPath = path.join(stateDir, "config.json");
+    const env = {
+      USERPROFILE: tempDir,
+      CCTB_LARK_STATE_DIR: stateDir,
+      TAROCUB_INSTANCE: "lark-kimi-race",
+    };
+    const messages: string[] = [];
+    let unsafeUpdate: Promise<boolean> | undefined;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(configPath, JSON.stringify({ engine: "kimi" }) + "\n", "utf8");
+      await withFileMutex(configPath, async () => {
+        unsafeUpdate = runCli(["lark", "yolo", "unsafe"], {
+          env,
+          logger: { log: (message) => messages.push(message) },
+        });
+        // The old implementation reads `engine` before it waits for this lock.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await writeFile(configPath, JSON.stringify({ engine: "codex" }) + "\n", "utf8");
+      });
+      await unsafeUpdate;
+
+      const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+      expect(config).toMatchObject({ engine: "codex", approvalMode: "bypass" });
+      expect(config.kimiAutoNeverAskAcknowledged).toBeUndefined();
+      expect(messages.at(-1)).toContain("YOLO UNSAFE");
+      expect(messages.at(-1)).not.toContain("Kimi Auto");
     } finally {
       await removeTempRoot(tempDir);
     }

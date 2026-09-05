@@ -1384,13 +1384,34 @@ function neutralizeMarkdownSetextHeadings(text: string): string {
  * blockquote prefix and preserve it, downgrading only the heading inside.
  */
 function downgradeMarkdownHeadings(text: string): string {
-  return text.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/gm, (_match, quote: string, title: string) => {
-    const trimmed = title.trim();
-    // Don't wrap in ** when the title already contains a ** span (fully bold,
-    // or an inner bold like `…的**逐笔成交明细**`) — an outer ** would create
-    // unbalanced/nested markers. Drop the heading marker and keep the text.
-    return trimmed.includes("**") ? `${quote}${trimmed}` : `${quote}**${trimmed}**`;
-  });
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+  return text.split("\n").map((line) => {
+    if (fence) {
+      const closeMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*\r?$/);
+      if (closeMatch) {
+        const run = closeMatch[1]!;
+        const marker = run[0] as "`" | "~";
+        if (fence.marker === marker && run.length >= fence.length) {
+          fence = undefined;
+        }
+      }
+      return line;
+    }
+    const openMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (openMatch) {
+      const run = openMatch[1]!;
+      const marker = run[0] as "`" | "~";
+      fence = { marker, length: run.length };
+      return line;
+    }
+    return line.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/, (_match, quote: string, title: string) => {
+      const trimmed = title.trim();
+      // Don't wrap in ** when the title already contains a ** span (fully bold,
+      // or an inner bold like `…的**逐笔成交明细**`) — an outer ** would create
+      // unbalanced/nested markers. Drop the heading marker and keep the text.
+      return trimmed.includes("**") ? `${quote}${trimmed}` : `${quote}**${trimmed}**`;
+    });
+  }).join("\n");
 }
 
 function collapseBlankLines(text: string): string {

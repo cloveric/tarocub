@@ -73,8 +73,11 @@ The same release allows `AskUserQuestion(background=true)` to survive the end
 of its foreground turn. TaroCub therefore gives background-question approvals
 a worker-scoped abort lifecycle, retains them while the task is active, and
 matches requests that arrive after the turn to the authenticated Hook-recorded
-question task. Ambiguous or orphaned late requests are denied; worker teardown
-and bounded task expiry also abort them fail closed.
+question task. The originating turn's event and approval handlers remain bound
+even if another foreground turn starts, and both Hook-before-ACP and
+ACP-before-Hook ordering are supported. `TaskStop`, terminal `WaitFor`, worker
+teardown, and bounded task expiry abort the exact task-scoped approval. Ambiguous
+or orphaned late requests are denied fail closed.
 
 ## Kimi 0.40.1 Compatibility Re-probe
 

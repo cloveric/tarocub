@@ -59,7 +59,12 @@ import {
   stopServiceInstance,
   type ServiceCommandDeps,
 } from "./service.js";
-import { applyEngineSelection, loadInstanceConfig, updateInstanceConfig } from "../telegram/instance-config.js";
+import {
+  applyEngineSelection,
+  loadInstanceConfig,
+  updateInstanceApprovalMode,
+  updateInstanceConfig,
+} from "../telegram/instance-config.js";
 import { parseSideChannelSendArgs, renderSideChannelDeliveryText, runSideChannelSendCommand } from "../telegram/side-channel-send.js";
 import { assertTurnScopedSendTarget, runConfiguredSendCommand, stripSendRoutingArgs, type ConfiguredSendDeps } from "./send.js";
 import { runCronCli } from "../cron-cli.js";
@@ -4335,12 +4340,10 @@ async function runYoloCommand(
   const auditStateDir = resolveAuditStateDir(env, instanceName);
 
   if (subcommand === "on") {
-    const config = await readInstanceConfig(configPath);
-    const engine = typeof config.engine === "string" ? config.engine : "codex";
-    await updateCliInstanceConfig(env, instanceName, (config) => {
-      config.approvalMode = "full-auto";
-      delete config.kimiAutoNeverAskAcknowledged;
-    });
+    const engine = await updateInstanceApprovalMode(
+      resolveStateDirForInstance(env, instanceName),
+      "full-auto",
+    );
     await appendAuditEvent(auditStateDir, {
       type: "config.yolo",
       instanceName,
@@ -4354,10 +4357,7 @@ async function runYoloCommand(
   }
 
   if (subcommand === "off") {
-    await updateCliInstanceConfig(env, instanceName, (config) => {
-      config.approvalMode = "normal";
-      delete config.kimiAutoNeverAskAcknowledged;
-    });
+    await updateInstanceApprovalMode(resolveStateDirForInstance(env, instanceName), "normal");
     await appendAuditEvent(auditStateDir, {
       type: "config.yolo",
       instanceName,
@@ -4369,16 +4369,10 @@ async function runYoloCommand(
   }
 
   if (subcommand === "unsafe") {
-    const config = await readInstanceConfig(configPath);
-    const engine = typeof config.engine === "string" ? config.engine : "codex";
-    await updateCliInstanceConfig(env, instanceName, (config) => {
-      config.approvalMode = "bypass";
-      if (engine === "kimi") {
-        config.kimiAutoNeverAskAcknowledged = true;
-      } else {
-        delete config.kimiAutoNeverAskAcknowledged;
-      }
-    });
+    const engine = await updateInstanceApprovalMode(
+      resolveStateDirForInstance(env, instanceName),
+      "bypass",
+    );
     await appendAuditEvent(auditStateDir, {
       type: "config.yolo",
       instanceName,

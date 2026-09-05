@@ -139,6 +139,7 @@ export LARK_APP_SECRET="..."
 - 引擎权限请求审批卡片，点击审批前会按操作者重新走 bridge 访问控制；
 - 收到图片/文件资源后只在当前 turn 临时下载，完成 staging/转写后清理临时输入；
 - 通过 `[send-file:/abs/path]`、`[send-image:/abs/path]`、`send.audio`、`send.video` 和 `send.batch` tool tag 把文件/图片/音视频发回 Lark；
+- 结构化与旧式标签按真实文件身份去重（含软链接/大小写别名）；图片卡片只有在平台明确返回“过大”时才拆分重试，超时或断连等不确定 ACK 不会立即重发；
 - 通过 `lark.post` tool tag 发送富文本/图文混排消息；
 - 通过 `lark.card` tool tag 发送自定义交互卡片，按钮点击会回流到同一个 bridge session；
 - 通过 `lark.doc.create` 创建飞书文档，适合长 specs/docs 和可评论反馈的材料；默认用 app/bot 身份创建，确实需要本机 `lark-cli` 用户身份时可显式 `as:"user"`；

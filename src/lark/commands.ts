@@ -39,6 +39,7 @@ import {
   loadInstanceConfig,
   normalizeModelCommandInput,
   resolveInstanceWorkspacePath,
+  updateInstanceApprovalMode,
   updateInstanceConfig,
   type EffortLevel,
   type GroupModeConfig,
@@ -2375,36 +2376,23 @@ async function handleLarkYoloCommand(stateDir: string, action: string, locale: L
     return `当前 YOLO: ${label}`;
   }
   if (action === "on") {
-    await updateInstanceConfig(stateDir, (config) => {
-      config.approvalMode = "full-auto";
-      delete config.kimiAutoNeverAskAcknowledged;
-    });
-    if (cfg.engine === "kimi") {
+    const engine = await updateInstanceApprovalMode(stateDir, "full-auto");
+    if (engine === "kimi") {
       return locale === "en"
         ? "Kimi YOLO enabled. Regular tools are auto-approved; sensitive commands may still ask. This is not an OS sandbox."
         : "Kimi YOLO 已开启。普通工具自动批准，敏感命令仍可能询问；这不是 OS 沙箱。";
     }
     return locale === "en"
-      ? `YOLO mode ON (full-auto, sandboxed). Current engine: ${cfg.engine}.`
-      : `YOLO mode ON（full-auto，sandboxed）。当前引擎：${cfg.engine}。`;
+      ? `YOLO mode ON (full-auto, sandboxed). Current engine: ${engine}.`
+      : `YOLO mode ON（full-auto，sandboxed）。当前引擎：${engine}。`;
   }
   if (action === "off") {
-    await updateInstanceConfig(stateDir, (config) => {
-      config.approvalMode = "normal";
-      delete config.kimiAutoNeverAskAcknowledged;
-    });
+    await updateInstanceApprovalMode(stateDir, "normal");
     return locale === "en" ? "YOLO mode OFF. Normal approval flow restored." : "YOLO mode OFF。已恢复普通审批流程。";
   }
   if (action === "unsafe") {
-    await updateInstanceConfig(stateDir, (config) => {
-      config.approvalMode = "bypass";
-      if (cfg.engine === "kimi") {
-        config.kimiAutoNeverAskAcknowledged = true;
-      } else {
-        delete config.kimiAutoNeverAskAcknowledged;
-      }
-    });
-    if (cfg.engine === "kimi") {
+    const engine = await updateInstanceApprovalMode(stateDir, "bypass");
+    if (engine === "kimi") {
       return locale === "en"
         ? "Kimi Auto enabled in fully unattended mode. Dangerous and unanalyzable commands execute without interruption; there is no OS sandbox."
         : "Kimi Auto 完全无人值守模式已开启。高危及无法分析的命令也会直接执行，且没有 OS 沙箱。";

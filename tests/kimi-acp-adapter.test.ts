@@ -6118,6 +6118,207 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("keeps a late background AskUserQuestion bound across an intervening foreground turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-cross-turn-question-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", approvalMode: "full-auto" }), "utf8");
+    const harness = createHarness();
+    let originalApprovals = 0;
+    let nextTurnApprovals = 0;
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-cross-turn-question", {
+        text: "ask later",
+        files: [],
+        onApprovalRequest: async () => {
+          originalApprovals += 1;
+          return {
+            behavior: "allow",
+            updatedInput: { answers: { Colour: "blue" } },
+          };
+        },
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "cross-turn-question-1",
+        title: "AskUserQuestion",
+        kind: "other",
+        status: "pending",
+        rawInput: {
+          background: true,
+          questions: [{
+            question: "Which do you choose?",
+            header: "Colour",
+            options: [{ label: "red" }, { label: "blue" }],
+          }],
+        },
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        session_id: server.sessionId,
+        task_id: "question-cross-turn-1",
+        kind: "question",
+        description: "Which do you choose?",
+        status: "running",
+        detached: true,
+      });
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "I continued without waiting." },
+      });
+      server.respondPrompt();
+      await expect(first).resolves.toMatchObject({ text: "I continued without waiting." });
+
+      const second = adapter.sendUserMessage(server.sessionId, {
+        text: "start another foreground turn",
+        files: [],
+        onApprovalRequest: async () => {
+          nextTurnApprovals += 1;
+          return {
+            behavior: "allow",
+            updatedInput: { answers: { Colour: "red" } },
+          };
+        },
+      });
+      await waitFor(() => server.prompts.length === 2);
+
+      const requestId = server.requestPermission({
+        sessionId: server.sessionId,
+        toolCall: { toolCallId: "cross-turn-question-1", title: "AskUserQuestion" },
+        options: [
+          { kind: "allow_once", name: "red", optionId: "cross-turn-red" },
+          { kind: "allow_once", name: "blue", optionId: "cross-turn-blue" },
+          { kind: "reject_once", name: "Skip", optionId: "cross-turn-skip" },
+        ],
+      });
+      await waitFor(() => server.clientResponses.has(requestId));
+      const permissionResult = server.clientResponses.get(requestId)?.result;
+
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "second turn complete" },
+      });
+      server.respondPrompt();
+      await expect(second).resolves.toMatchObject({ text: "second turn complete" });
+      expect(permissionResult).toEqual({
+        outcome: { outcome: "selected", optionId: "cross-turn-blue" },
+      });
+      expect(originalApprovals).toBe(1);
+      expect(nextTurnApprovals).toBe(0);
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts a detached AskUserQuestion approval when TaskStop settles its task", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-stop-question-test-"));
+    const harness = createHarness();
+    let approvalStarted = false;
+    let approvalAborted = false;
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-stop-question", {
+        text: "ask in the background",
+        files: [],
+        onApprovalRequest: async (request) => await new Promise((resolve) => {
+          approvalStarted = true;
+          const onAbort = () => {
+            approvalAborted = true;
+            resolve({ behavior: "deny" });
+          };
+          request.abortSignal?.addEventListener("abort", onAbort, { once: true });
+          if (request.abortSignal?.aborted) onAbort();
+        }),
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      // Hooks and ACP updates are independent streams. Exercise the reverse
+      // ordering too: TaskStarted may arrive before the tool call is visible.
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        session_id: server.sessionId,
+        task_id: "stopped-question-task",
+        kind: "question",
+        description: "Still continue?",
+        status: "running",
+        detached: true,
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "stopped-question-tool",
+        title: "AskUserQuestion",
+        kind: "other",
+        status: "pending",
+        rawInput: {
+          background: true,
+          questions: [{
+            question: "Still continue?",
+            header: "Continue",
+            options: [{ label: "yes" }, { label: "no" }],
+          }],
+        },
+      });
+      server.respondPrompt();
+      await first;
+
+      const requestId = server.requestPermission({
+        sessionId: server.sessionId,
+        toolCall: { toolCallId: "stopped-question-tool", title: "AskUserQuestion" },
+        options: [
+          { kind: "allow_once", name: "yes", optionId: "stop-yes" },
+          { kind: "allow_once", name: "no", optionId: "stop-no" },
+          { kind: "reject_once", name: "Skip", optionId: "stop-skip" },
+        ],
+      });
+      await waitFor(() => approvalStarted);
+
+      const second = adapter.sendUserMessage(server.sessionId, {
+        text: "stop that background question",
+        files: [],
+      });
+      await waitFor(() => server.prompts.length === 2);
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "stop-question-call",
+        title: "TaskStop",
+        kind: "other",
+        status: "pending",
+        rawInput: { task_id: "stopped-question-task" },
+      });
+      server.sendUpdate({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "stop-question-call",
+        title: "TaskStop",
+        status: "completed",
+        rawOutput: "task_id: stopped-question-task\nstatus: killed",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      server.respondPrompt();
+      await second;
+
+      expect(approvalAborted).toBe(true);
+      await waitFor(() => server.clientResponses.has(requestId));
+      expect(server.clientResponses.get(requestId)?.result).toEqual({
+        outcome: { outcome: "selected", optionId: "stop-skip" },
+      });
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("builds the AskUserQuestion form from tool_call content when the request has no structured rawInput", async () => {
     // The docs-recorded LIVE shape: the real 0.31.1 permission request carried
     // no rawInput/questions — only content text on the tool_call. The fallback

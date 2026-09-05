@@ -151,7 +151,7 @@ npm run dev -- telegram access pair <pairing-code>
 | **Optional Telegram control plane** | Existing deployments can still send files and screenshots, record voice messages, approve work, stop turns, inspect status, and operate multiple personal bots. |
 | **Engine-native progress and diagnostics** | Codex consumes authoritative `turn/completed` summaries before any read fallback. Claude forwards child-agent text into the matching live tool panel without contaminating the parent answer. Kimi preserves ACP task/review lifecycles, DeepSeek replays ordered Harness history/projections, and Antigravity maps native structured session/text/tool/result events without posting protocol or thinking output as an answer. |
 | **ASR for voice/audio/video** | Telegram and Lark voice/audio/video resources, plus recordings forwarded as ordinary files/documents, are downloaded and transcribed automatically before any Claude/Codex/Kimi/DeepSeek/Antigravity adapter runs. Media documents are recognized from their declared name or downloaded path, so Telegram files without `file_name` still work. Short audio uses local Qwen ASR, and (when `TINGWU_ASR_DIR` is configured) audio/video **≥ 15 minutes** uses Aliyun Tingwu cloud transcription, with chunked local fallback on cloud failure. If bridge transcription is unavailable, the original media file remains attached with an explicit fallback note instead of being silently treated as already transcribed. `/stop` cancels probing/chunking, CLI or cloud processes, aborts the local HTTP wait, and never starts a fallback after cancellation. Send 强制本地转写 / 强制云端转写 **with** the audio (same message or burst) to force a route. See [Long-audio cloud ASR](#long-audio-cloud-asr) for configuration. |
-| **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. |
+| **File and artifact delivery** | Agents can return generated images, PDFs, reports, decks, source bundles, and other files through structured `send.file`, `send.image`, `send.batch`, audio, and video tags. Structured/legacy aliases are deduplicated by real file identity; image batches split only on an explicit size rejection, while ambiguous acknowledgements stop without an immediate duplicate retry. |
 | **Scheduled work and reminders** | `/cron` and `cron.add` persist one-shot reminders, recurring jobs, and agent-run scheduled tasks outside model memory, with chat/thread routing preserved. |
 | **Agent Bus** | Multiple bot instances can call each other as local workers for delegation, fan-out, chain, verifier, and coordinator-led crew workflows. |
 | **Mini Bus** | Telegram topics or Lark threads can become lightweight named peers, so one group can run planner/writer/reviewer-style workflows without separate bots. |
@@ -217,8 +217,9 @@ under the new semantics.
 Kimi 0.41.0 also allows `AskUserQuestion(background=true)` to outlive the
 foreground turn. TaroCub keeps those approval cards attached to the retained
 background task instead of aborting them with the completed turn, routes a late
-request through the hook-recorded question task, and denies it on worker
-teardown or bounded expiry.
+request through the hook-recorded question task even across a newer foreground
+turn, and aborts it on `TaskStop`, terminal `WaitFor`, worker teardown, or bounded
+expiry.
 
 TaroCub implements the ACP terminal lifecycle used by Kimi for delegated
 Bash/process work (`create`, bounded UTF-8 output, wait, kill, and release), and

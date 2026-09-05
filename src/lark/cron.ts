@@ -9,7 +9,7 @@ import { loadInstanceConfig } from "../telegram/instance-config.js";
 import { claimLarkRunSlot } from "./bus.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkReminderCard } from "./card-renderer.js";
-import { hasLarkPostTurnDelivery, sendLarkMarkdown } from "./delivery.js";
+import { hasLarkPostTurnDelivery, sendLarkMarkdown, type LarkDeliveryResult } from "./delivery.js";
 import { larkAccessChatIdFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
@@ -35,7 +35,7 @@ type LarkCronDeliverResponse = (input: {
   replyInThread?: boolean;
   /** When false, only files/overflow are delivered (the text is already in the run card). */
   sendText?: boolean;
-}) => Promise<void>;
+}) => Promise<LarkDeliveryResult | void>;
 
 export function buildLarkCronExecutor(input: {
   channel: LarkChannelLike;
@@ -197,7 +197,7 @@ export function buildLarkCronExecutor(input: {
               : runCard.finish(finalText))).shown;
           }
           if (input.deliverResponse) {
-            await input.deliverResponse({
+            const deliveryResult = await input.deliverResponse({
               channel: input.channel,
               runtime: input.runtime,
               chatId: job.larkChatId!,
@@ -214,6 +214,9 @@ export function buildLarkCronExecutor(input: {
               sendText: runCard ? !answerShownInCard : true,
               ...replyFields,
             });
+            if (deliveryResult && !deliveryResult.ok) {
+              throw new Error("scheduled post-turn delivery remained unconfirmed");
+            }
           } else if (!runCard) {
             await sendLarkMarkdown(input.channel, job.larkChatId!, finalText, {
               ...replyFields,

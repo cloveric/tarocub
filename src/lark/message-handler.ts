@@ -1841,10 +1841,10 @@ async function runNormalizedLarkMessage(
     let runCardFinished = false;
     let obligationId: string | null = null;
     let deliveryPreflightFailed = false;
+    let obligationRequiresRecovery = false;
     // True once the FULL answer is visible to the user (card, continuation
-    // cards, or overflow doc) — a later post-engine failure (file upload,
-    // bookkeeping) must then settle the obligation delivered, not failed,
-    // or the next boot would redeliver an answer the user already has.
+    // cards, overflow doc, or markdown). Artifact obligations remain recoverable
+    // until every requested upload has a definite platform acknowledgement.
     let answerVisibleToUser = false;
     try {
       // If a "queued" card was already shown for this conversation, take it over
@@ -2339,9 +2339,14 @@ async function runNormalizedLarkMessage(
         const spillToContinuationCards = runCard !== undefined
           && answerChunks.length > 1
           && answerChunks.length <= LARK_MAX_OVERFLOW_CARDS;
+        const requiresPostTurnDelivery = hasLarkPostTurnDelivery(result.text);
         const requiresVisibleDeliveryPhase = spillToContinuationCards
           || answerChunks.length > LARK_MAX_OVERFLOW_CARDS
-          || hasLarkPostTurnDelivery(result.text);
+          || requiresPostTurnDelivery;
+        // Anything after this point can fail before the artifact pipeline runs
+        // (for example usage-ledger persistence). Keep the obligation recoverable
+        // until every requested post-turn delivery has a definite acknowledgement.
+        obligationRequiresRecovery = requiresPostTurnDelivery;
         if (obligationId) {
           // From here on the platform may have (part of) the answer — a crash
           // past this point redelivers WITH the recovered-reply marker.
@@ -2410,7 +2415,7 @@ async function runNormalizedLarkMessage(
             });
           }
         }
-        await deliverLarkResponse({
+        const deliveryResult = await deliverLarkResponse({
           channel: input.channel,
           runtime: input.runtime,
           chatId: normalized.chatId,
@@ -2434,18 +2439,31 @@ async function runNormalizedLarkMessage(
           larkMessageId: normalized.messageId,
           instanceName: input.instanceName,
         });
-        answerVisibleToUser = true;
+        obligationRequiresRecovery = !deliveryResult.ok;
+        answerVisibleToUser = answerVisibleToUser || deliveryResult.textDelivered;
         if (obligationId) {
-          await markDeliveryDelivered(input.stateDir, obligationId);
+          await (deliveryResult.ok
+            ? markDeliveryDelivered(input.stateDir, obligationId)
+            : markDeliveryFailed(input.stateDir, obligationId, "post-turn delivery remained unconfirmed"));
+        }
+        const postTurnDeliveryFailed = !deliveryResult.ok;
+        const deliveryFailed = deliveryPreflightFailed || postTurnDeliveryFailed;
+        if (postTurnDeliveryFailed) {
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event.delivery_failed",
+            outcome: "error",
+            detail: "post_turn_delivery_unconfirmed",
+            metadata: { phase: "post-engine" },
+          });
         }
         if (workflowRecordId) {
           await new FileWorkflowStore(input.stateDir).update(workflowRecordId, (record) => {
-            record.status = deliveryPreflightFailed ? "failed" : "completed";
+            record.status = deliveryFailed ? "failed" : "completed";
           });
           await appendLarkTimelineEvent(input.stateDir, normalized, {
-            type: deliveryPreflightFailed ? "workflow.failed" : "workflow.completed",
-            outcome: deliveryPreflightFailed ? "error" : "success",
-            detail: deliveryPreflightFailed ? "workflow delivery preflight failed" : "workflow marked completed",
+            type: deliveryFailed ? "workflow.failed" : "workflow.completed",
+            outcome: deliveryFailed ? "error" : "success",
+            detail: deliveryFailed ? "workflow delivery failed" : "workflow marked completed",
             metadata: {
               workflowRecordId,
             },
@@ -2453,10 +2471,18 @@ async function runNormalizedLarkMessage(
         }
         const finishResult = runCard
           ? requiresVisibleDeliveryPhase
-            ? await runCard.finish(runCardAnswerText)
+            ? postTurnDeliveryFailed
+              ? await runCard.failDelivery(
+                  runCardAnswerText,
+                  locale === "en"
+                    ? "The result was generated, but attachments or follow-up content could not be confirmed."
+                    : "结果已生成，但附件或后续内容未确认送达。",
+                )
+              : await runCard.finish(runCardAnswerText)
             : deliveryCardResult
           : undefined;
         runCardFinished = Boolean(runCard);
+        answerVisibleToUser = answerVisibleToUser || finishResult?.shown === true;
         if (finishResult) {
           // This event now marks end-to-end delivery completion, not merely the
           // earlier engine result. Until this patch lands, the card remains in
@@ -2475,8 +2501,12 @@ async function runNormalizedLarkMessage(
         }
         await appendLarkTimelineEvent(input.stateDir, normalized, {
           type: "turn.completed",
-          outcome: deliveryPreflightFailed ? "partial" : "success",
-          ...(deliveryPreflightFailed ? { detail: "engine completed; artifact delivery preflight failed" } : {}),
+          outcome: deliveryFailed ? "partial" : "success",
+          ...(deliveryFailed ? {
+            detail: deliveryPreflightFailed
+              ? "engine completed; artifact delivery preflight failed"
+              : "engine completed; post-turn delivery unconfirmed",
+          } : {}),
           metadata: {
             responseChars: result.text.length,
             attachments: normalized.attachments.length,
@@ -2501,7 +2531,7 @@ async function runNormalizedLarkMessage(
           // The user already has the full answer (card/continuations/doc), or
           // the salvage finish just showed it → settle delivered; otherwise
           // leave the obligation failed so the next boot redelivers.
-          await (salvaged
+          await (salvaged && !obligationRequiresRecovery
             ? markDeliveryDelivered(input.stateDir, obligationId)
             : markDeliveryFailed(input.stateDir, obligationId, redactLarkErrorDetail(error)));
         }
@@ -2536,7 +2566,7 @@ async function runNormalizedLarkMessage(
           salvaged = salvaged || salvageResult?.shown === true;
         }
         if (obligationId) {
-          await (salvaged
+          await (salvaged && !obligationRequiresRecovery
             ? markDeliveryDelivered(input.stateDir, obligationId)
             : markDeliveryFailed(input.stateDir, obligationId, redactLarkErrorDetail(error)));
         }

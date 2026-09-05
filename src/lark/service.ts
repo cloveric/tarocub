@@ -407,6 +407,7 @@ export async function runLarkService(
           stateDir,
           instanceName,
           locale: instanceConfig.locale === "zh" ? "zh" : "en",
+          runtime,
           log: (message) => logger.log(`${new Date().toISOString()} ${message}`),
         });
         if (redelivery.recovered > 0 || redelivery.failed > 0) {

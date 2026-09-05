@@ -321,6 +321,62 @@ describe("ProcessAntigravityAdapter", () => {
     await adapter.destroy();
   });
 
+  it("quarantines a delayed tail until the next turn's matching user echo", async () => {
+    const { spawnAntigravity, child } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const first = adapter.sendUserMessage("telegram-12345", { text: "First", files: [] });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(child.stdin.writes[0]!);
+    emitTurnSuccess(child, "first answer");
+    await expect(first).resolves.toMatchObject({ text: "first answer" });
+
+    const progress = vi.fn();
+    const second = adapter.sendUserMessage(CONVERSATION_ID, {
+      text: "Second",
+      files: [],
+      onProgress: progress,
+    });
+    await vi.waitFor(() => expect(child.stdin.writes).toHaveLength(2));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 99,
+        state: "DONE",
+        step_type: "agent_response",
+        text_delta: "stale tail",
+        usage: { input_tokens: 900, output_tokens: 900 },
+      },
+    }));
+    child.stdout.emitData(child.stdin.writes[1]!);
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 1,
+        state: "DONE",
+        step_type: "agent_response",
+        text_delta: "second answer",
+        usage: { input_tokens: 20, output_tokens: 4, cache_read_tokens: 5 },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: { conversation_id: CONVERSATION_ID, status: "SUCCESS", response: "second answer" },
+    }));
+
+    await expect(second).resolves.toEqual({
+      text: "second answer",
+      sessionId: CONVERSATION_ID,
+      usage: { inputTokens: 20, outputTokens: 4, cachedTokens: 5 },
+    });
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(progress).toHaveBeenCalledWith("second answer");
+    await adapter.destroy();
+  });
+
   it("keeps a completed turn successful and recycles the worker after a later crash", async () => {
     const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];

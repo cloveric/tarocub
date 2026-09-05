@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
@@ -46,6 +46,13 @@ import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 export { LARK_FILE_UPLOAD_MAX_BYTES } from "./delivery-preflight.js";
 const LARK_MARKDOWN_CHUNK_LIMIT = 3500;
 
+export interface LarkDeliveryResult {
+  /** True only when every requested post-turn action received a definite success. */
+  ok: boolean;
+  /** Whether the cleaned answer text (or an inline file response) became visible. */
+  textDelivered: boolean;
+}
+
 /** Whether a response carries work that must finish after the engine result. */
 export function hasLarkPostTurnDelivery(text: string): boolean {
   return Boolean(
@@ -54,6 +61,76 @@ export function hasLarkPostTurnDelivery(text: string): boolean {
     || extractTelegramToolTagMatches(text).length > 0
     || extractCronAddTagMatches(text).length > 0
   );
+}
+
+/**
+ * Convert a persisted response into a replay-safe response. Delivery artifacts
+ * are rebuilt as one guarded send.batch call; cron and other side-effect tools
+ * are never re-executed during boot recovery.
+ */
+export function buildLarkRecoveryResponse(text: string): string {
+  if (extractWholeResponseFileBlock(text)) {
+    return text;
+  }
+
+  const toolArtifacts: Array<{ path: string; kind: LarkSendPathKind; caption?: string }> = [];
+  const legacyArtifacts: Array<{ path: string; kind: "image" | "file"; caption?: string }> = [];
+  const toolMessages: string[] = [];
+  for (const match of extractTelegramToolTagMatches(text)) {
+    try {
+      const parsed = parseTelegramToolTagPayload(match.payload);
+      if (!isLarkSendToolName(parsed.name)) {
+        continue;
+      }
+      const normalized = normalizeLarkSendTool(parsed.name, parsed.payload);
+      if (!normalized.ok) {
+        continue;
+      }
+      toolArtifacts.push(...normalized.artifacts);
+      if (normalized.message.trim()) {
+        toolMessages.push(normalized.message.trim());
+      }
+    } catch {
+      // Persisted malformed tools are intentionally not replayed.
+    }
+  }
+  for (const match of extractDeliveryTagMatches(text)) {
+    const caption = match.preferPhoto ? captionForLarkImage(text, match.index) : undefined;
+    legacyArtifacts.push({
+      path: match.path,
+      kind: match.preferPhoto ? "image" : "file",
+      ...(caption ? { caption } : {}),
+    });
+  }
+
+  const cleanedText = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(text)));
+  if (toolArtifacts.length === 0 && legacyArtifacts.length === 0) {
+    return [cleanedText, ...toolMessages].filter(Boolean).join("\n\n");
+  }
+
+  const images = toolArtifacts
+    .filter((artifact) => artifact.kind === "image")
+    .map((artifact) => artifact.caption ? { path: artifact.path, caption: artifact.caption } : artifact.path);
+  const pathsFor = (kind: LarkSendPathKind): string[] => toolArtifacts
+    .filter((artifact) => artifact.kind === kind)
+    .map((artifact) => artifact.path);
+  const payload: Record<string, unknown> = {};
+  if (images.length > 0) payload.images = images;
+  const files = pathsFor("file");
+  const audios = pathsFor("audio");
+  const videos = pathsFor("video");
+  if (files.length > 0) payload.files = files;
+  if (audios.length > 0) payload.audios = audios;
+  if (videos.length > 0) payload.videos = videos;
+  if (toolMessages.length > 0) payload.message = toolMessages.join("\n\n");
+  const toolCall = toolArtifacts.length > 0
+    ? `\`\`\`tool-call\n${JSON.stringify({ name: "send.batch", payload })}\n\`\`\``
+    : toolMessages.join("\n\n");
+  const legacyTags = legacyArtifacts.map((artifact) => {
+    const tag = `[send-${artifact.kind}:${artifact.path}]`;
+    return artifact.kind === "image" && artifact.caption ? `${artifact.caption}\n${tag}` : tag;
+  }).join("\n");
+  return [cleanedText, toolCall, legacyTags].filter(Boolean).join("\n\n");
 }
 
 export async function deliverLarkResponse(input: {
@@ -75,8 +152,10 @@ export async function deliverLarkResponse(input: {
   instanceName?: string;
   sendText?: boolean;
   allowAnyAbsolutePath?: boolean;
-}): Promise<void> {
+}): Promise<LarkDeliveryResult> {
   const locale = await resolveLarkLocale(input.stateDir);
+  let ok = true;
+  let textDelivered = false;
   const wholeFileBlock = extractWholeResponseFileBlock(input.text);
   if (wholeFileBlock) {
     const inlinePreflight = preflightLarkInlineFile(wholeFileBlock);
@@ -95,7 +174,7 @@ export async function deliverLarkResponse(input: {
           fileBytes: inlinePreflight.fileBytes,
         }),
       }, larkReplyOptions(input.replyTo, input.replyInThread));
-      return;
+      return { ok: false, textDelivered: false };
     }
     const body = Buffer.from(wholeFileBlock.body, "utf8");
     try {
@@ -115,14 +194,14 @@ export async function deliverLarkResponse(input: {
       await input.channel.send(input.chatId, {
         text: renderLarkFileDeliveryError("upload-failed", locale, { fileName: wholeFileBlock.fileName }),
       }, larkReplyOptions(input.replyTo, input.replyInThread));
-      return;
+      return { ok: false, textDelivered: false };
     }
     await appendLarkFileAcceptedTimeline(input, {
       fileName: wholeFileBlock.fileName,
       bytes: body.length,
       kind: "file",
     });
-    return;
+    return { ok: true, textDelivered: true };
   }
 
   const toolMatches = extractTelegramToolTagMatches(input.text);
@@ -140,14 +219,16 @@ export async function deliverLarkResponse(input: {
     try {
       const parsed = parseTelegramToolTagPayload(match.payload);
       toolName = parsed.name;
-      await executeLarkToolTag({
+      const toolOk = await executeLarkToolTag({
         ...input,
         name: parsed.name,
         payload: parsed.payload,
         locale,
         claimedArtifactPaths,
       });
+      ok = toolOk && ok;
     } catch (error) {
+      ok = false;
       if (!(error instanceof SyntaxError)) {
         await appendLarkToolErrorTimeline(input, toolName, error);
       }
@@ -171,13 +252,15 @@ export async function deliverLarkResponse(input: {
 
   for (const match of cronAddMatches) {
     try {
-      await executeLarkToolTag({
+      const toolOk = await executeLarkToolTag({
         ...input,
         name: "cron.add",
         payload: match.payload,
         locale,
       });
+      ok = toolOk && ok;
     } catch (error) {
+      ok = false;
       await input.channel.send(input.chatId, {
         text: renderLarkUserFacingError(error, "tool", locale),
       }, replyOptions);
@@ -203,11 +286,12 @@ export async function deliverLarkResponse(input: {
     const pendingImages: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }> = [];
     for (const match of matches) {
       const filePath = match.path;
-      if (!claimLarkArtifactPath(claimedArtifactPaths, filePath)) {
+      if (!await claimLarkArtifactPath(claimedArtifactPaths, filePath)) {
         continue;
       }
       const pathPreflight = await preflightLarkDeliveryPath(filePath, deliveryRoots);
       if (!pathPreflight.ok) {
+        ok = false;
         await appendLarkFileRejectedTimeline(input, {
           path: filePath,
           ...(pathPreflight.realPath ? { realPath: pathPreflight.realPath } : {}),
@@ -244,6 +328,7 @@ export async function deliverLarkResponse(input: {
               },
             }, replyOptions);
           } catch (error) {
+            ok = false;
             // The file was read fine — Feishu rejected the upload. Say so instead
             // of the misleading "failed to read the file".
             await appendLarkFileRejectedTimeline(input, {
@@ -265,11 +350,12 @@ export async function deliverLarkResponse(input: {
           });
         }
       } catch (error) {
+        ok = false;
         const reason = larkFileRejectReasonFromError(error);
         await appendLarkFileRejectedTimeline(input, {
           path: filePath,
           reason,
-          detail: errorDetail(error),
+          detail: redactLarkErrorDetail(error),
           kind: match.preferPhoto ? "image" : "file",
         });
         await input.channel.send(input.chatId, {
@@ -280,8 +366,9 @@ export async function deliverLarkResponse(input: {
 
     if (pendingImages.length > 0) {
       try {
-        await deliverLarkPendingImages({ ...input, locale }, pendingImages, replyOptions);
+        ok = await deliverLarkPendingImages({ ...input, locale }, pendingImages, replyOptions) && ok;
       } catch {
+        ok = false;
         // Best-effort: image delivery must never abort the text reply or the rest of
         // the turn. (Previously this call sat outside the per-match try/catch, so a
         // send failure threw out of deliverLarkResponse and dropped the text answer.)
@@ -296,7 +383,9 @@ export async function deliverLarkResponse(input: {
   // parity), never instead of it: one bad tag must not swallow the whole answer.
   if (input.sendText !== false && cleanedText) {
     const failedChunks = await sendLarkMarkdownBestEffort(input.channel, input.chatId, cleanedText, replyOptions);
+    textDelivered = failedChunks === 0;
     if (failedChunks > 0) {
+      ok = false;
       await appendTimelineEventBestEffort(input.stateDir, {
         type: "engine.event.delivery_failed",
         channel: "lark",
@@ -319,10 +408,7 @@ export async function deliverLarkResponse(input: {
       }, replyOptions).catch(() => undefined);
     }
   }
-
-  if (matches.length === 0) {
-    return;
-  }
+  return { ok, textDelivered };
 }
 
 export async function sendLarkMarkdown(
@@ -490,9 +576,16 @@ async function executeLarkToolTag(input: {
     let ok = true;
     const hadArtifacts = normalized.artifacts.length > 0;
     const claimedArtifactPaths = input.claimedArtifactPaths;
-    let artifacts = claimedArtifactPaths
-      ? normalized.artifacts.filter((artifact) => claimLarkArtifactPath(claimedArtifactPaths, artifact.path))
-      : normalized.artifacts;
+    let artifacts = normalized.artifacts;
+    if (claimedArtifactPaths) {
+      const unclaimed: typeof artifacts = [];
+      for (const artifact of artifacts) {
+        if (await claimLarkArtifactPath(claimedArtifactPaths, artifact.path)) {
+          unclaimed.push(artifact);
+        }
+      }
+      artifacts = unclaimed;
+    }
     if (hadArtifacts && artifacts.length === 0) {
       return true;
     }
@@ -598,17 +691,36 @@ async function executeLarkToolTag(input: {
   return false;
 }
 
-function claimLarkArtifactPath(claimed: Set<string>, filePath: string): boolean {
+async function claimLarkArtifactPath(claimed: Set<string>, filePath: string): Promise<boolean> {
   const trimmed = filePath.trim();
   if (!trimmed) {
     return true;
   }
-  const key = path.resolve(trimmed);
+  let key = `path:${canonicalPathKey(path.resolve(trimmed))}`;
+  try {
+    const real = await realpath(trimmed);
+    const fileStat = await stat(real);
+    // dev + inode identifies the actual file across symlink, hard-link, and
+    // case aliases. Fall back to canonical realpath where inode is unavailable.
+    key = fileStat.ino > 0
+      ? `inode:${fileStat.dev}:${fileStat.ino}`
+      : `path:${canonicalPathKey(real)}`;
+  } catch {
+    // Preflight reports missing/unreadable paths later. A stable path key still
+    // prevents duplicate error notices for identical unresolved directives.
+  }
   if (claimed.has(key)) {
     return false;
   }
   claimed.add(key);
   return true;
+}
+
+function canonicalPathKey(filePath: string): string {
+  const normalized = filePath.normalize("NFC");
+  return process.platform === "darwin" || process.platform === "win32"
+    ? normalized.toLowerCase()
+    : normalized;
 }
 
 function renderInvalidLarkToolPayload(
@@ -695,23 +807,18 @@ async function sendLarkPath(input: {
   if (input.kind === "image") {
     // A captioned image (e.g. a titled send.batch entry, or send.image with a
     // caption) is delivered as a single card pairing the title with the image,
-    // so a 小红书 P1/P2/… series stays legible. Falls back to the plain image
-    // message if there's no caption, or if the upload/card path fails.
+    // so a 小红书 P1/P2/… series stays legible. A failed image-key upload can
+    // safely fall back; an ambiguous card ACK must not, because it may duplicate.
     if (input.caption) {
-      const cardSent = await sendLarkCaptionedImageCard({
-        channel: input.channel,
-        chatId: input.chatId,
-        replyOptions: larkReplyOptions(input.replyTo, input.replyInThread),
-        body,
-        caption: input.caption,
-      }).catch(() => false);
-      if (cardSent) {
-        await appendLarkFileAcceptedTimeline(input, {
-          fileName: path.basename(real),
-          bytes: body.length,
-          kind: "image",
-        });
-        return true;
+      const imgKey = await uploadLarkImageKey(input.channel, body).catch(() => undefined);
+      if (imgKey) {
+        return await sendLarkImageCardOrSplit(input, [{
+          caption: input.caption,
+          imgKey,
+          real,
+          originalPath: input.filePath,
+          body,
+        }], larkReplyOptions(input.replyTo, input.replyInThread));
       }
     }
     return await sendLarkImageWithFileFallback({
@@ -876,23 +983,6 @@ function buildLarkImageCard(items: Array<{ caption?: string; imgKey: string }>):
   };
 }
 
-async function sendLarkCaptionedImageCard(input: {
-  channel: LarkChannelLike;
-  chatId: string;
-  replyOptions: LarkSendOptions | undefined;
-  body: Buffer;
-  caption?: string;
-}): Promise<boolean> {
-  const imgKey = await uploadLarkImageKey(input.channel, input.body);
-  if (!imgKey) {
-    return false;
-  }
-  await input.channel.send(input.chatId, {
-    card: buildLarkImageCard([{ caption: input.caption, imgKey }]),
-  }, input.replyOptions);
-  return true;
-}
-
 interface LarkUploadedImage {
   caption?: string;
   imgKey: string;
@@ -1018,10 +1108,9 @@ async function deliverLarkPendingImages(
 }
 
 /**
- * Sends the given images as ONE card. If the channel rejects it (e.g. the card exceeds
- * the message byte budget), splits the batch in half and retries each half — so the
- * real, undocumented size limit is discovered at send time instead of guessed with a
- * magic count. A single image whose card is still rejected falls back to a bare image.
+ * Sends the given images as ONE card. It splits only after an explicit size rejection,
+ * never after a timeout or connection reset: those errors may happen after Feishu
+ * accepted the card, so retrying would duplicate the images.
  */
 async function sendLarkImageCardOrSplit(
   input: LarkImageDeliveryInput,
@@ -1041,7 +1130,22 @@ async function sendLarkImageCardOrSplit(
       });
     }
     return true;
-  } catch {
+  } catch (error) {
+    if (!isExplicitLarkCardSizeError(error)) {
+      for (const item of items) {
+        await appendLarkFileRejectedTimeline(input, {
+          path: item.originalPath,
+          realPath: item.real,
+          reason: "delivery-uncertain",
+          detail: redactLarkErrorDetail(error),
+          kind: "image",
+        });
+      }
+      await input.channel.send(input.chatId, {
+        text: renderLarkFileDeliveryError("delivery-uncertain", input.locale),
+      }, replyOptions).catch(() => undefined);
+      return false;
+    }
     if (items.length === 1) {
       const only = items[0]!;
       return await sendLarkImageWithFileFallback({
@@ -1087,7 +1191,7 @@ async function sendLarkImageWithFileFallback(input: {
     await appendLarkFileRejectedTimeline(input, {
       path: input.originalPath,
       realPath: input.realPath,
-      reason: larkFileRejectReasonFromError(error),
+      reason: "upload-failed",
       detail: `image delivery failed; falling back to file: ${errorDetail(error)}`,
       kind: "image",
     });
@@ -1111,7 +1215,7 @@ async function sendLarkImageWithFileFallback(input: {
     await appendLarkFileRejectedTimeline(input, {
       path: input.originalPath,
       realPath: input.realPath,
-      reason: larkFileRejectReasonFromError(error),
+      reason: "upload-failed",
       detail: `image file fallback failed: ${errorDetail(error)}`,
       kind: "file",
     });
@@ -1148,6 +1252,8 @@ function renderLarkFileDeliveryError(
         return `File was not sent: ${name ?? "the file"} is ${sizeMb ?? "?"}MB, over Feishu's ${capMb}MB bot upload limit. Split it into smaller parts or compress it further, then resend.`;
       case "upload-failed":
         return `File was not sent: Feishu rejected the upload${name ? ` (${name})` : ""}; details were recorded in logs.`;
+      case "delivery-uncertain":
+        return "The image card's delivery could not be confirmed. To avoid duplicates, it was not retried automatically. If it did not arrive, ask me to resend it.";
       default:
         return "File was not sent: failed to read the file; details were recorded in logs.";
     }
@@ -1165,6 +1271,8 @@ function renderLarkFileDeliveryError(
       return `文件未发送：${name ?? "该文件"} 有 ${sizeMb ?? "?"}MB，超过飞书机器人 ${capMb}MB 上传上限。请拆分成多个小包或进一步压缩后重发。`;
     case "upload-failed":
       return `文件未发送：上传被飞书拒绝${name ? `（${name}）` : ""}，详细原因已记录到日志。`;
+    case "delivery-uncertain":
+      return "图片卡片的送达状态无法确认。为避免重复发送，未自动重试；如果没有收到，请让我重发。";
     default:
       return "文件未发送：读取文件失败，详细原因已记录到日志。";
   }
@@ -1266,6 +1374,41 @@ function larkFileRejectReasonFromError(error: unknown): LarkFileRejectReason {
 
 function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isExplicitLarkCardSizeError(error: unknown): boolean {
+  const records = errorRecords(error);
+  for (const record of records) {
+    const status = Number(record.statusCode ?? record.status);
+    if (status === 413) {
+      return true;
+    }
+  }
+  const evidence = [
+    errorDetail(error),
+    ...records.flatMap((record) => [record.message, record.msg, record.error, record.code]),
+  ]
+    .filter((value): value is string | number => typeof value === "string" || typeof value === "number")
+    .join(" ");
+  return /(?:card|message|payload|request|entity).{0,48}(?:too large|oversi(?:ze|zed)|exceeds?.{0,24}(?:size|limit))/iu.test(evidence)
+    || /(?:too large|oversi(?:ze|zed)|exceeds?.{0,24}(?:size|limit)).{0,48}(?:card|message|payload|request|entity)/iu.test(evidence);
+}
+
+function errorRecords(error: unknown): Array<Record<string, unknown>> {
+  const records: Array<Record<string, unknown>> = [];
+  const queue: unknown[] = [error];
+  const seen = new Set<object>();
+  while (queue.length > 0 && records.length < 8) {
+    const value = queue.shift();
+    if (!value || typeof value !== "object" || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    const record = value as Record<string, unknown>;
+    records.push(record);
+    queue.push(record.cause, record.response, record.data, record.error);
+  }
+  return records;
 }
 
 function payloadObject(payload: unknown): Record<string, unknown> | null {

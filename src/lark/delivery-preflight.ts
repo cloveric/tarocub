@@ -12,7 +12,8 @@ export type LarkFileRejectReason =
   | "permission-denied"
   | "read-error"
   | "too-large"
-  | "upload-failed";
+  | "upload-failed"
+  | "delivery-uncertain";
 
 export const LARK_FILE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
 
@@ -40,7 +41,7 @@ export type LarkPathPreflightResult =
     }
   | {
       ok: false;
-      reason: Exclude<LarkFileRejectReason, "upload-failed">;
+      reason: Exclude<LarkFileRejectReason, "upload-failed" | "delivery-uncertain">;
       realPath?: string;
       detail?: string;
       fileBytes?: number;

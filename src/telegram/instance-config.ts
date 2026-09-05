@@ -497,12 +497,12 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
   };
 }
 
-export async function updateInstanceConfig(
+export async function updateInstanceConfig<T = void>(
   stateDir: string,
-  updater: (config: Record<string, unknown>) => void,
-): Promise<void> {
+  updater: (config: Record<string, unknown>) => T,
+): Promise<T> {
   const configPath = path.join(stateDir, "config.json");
-  await withFileMutex(configPath, async () => {
+  return await withFileMutex(configPath, async () => {
     let config: Record<string, unknown> = {};
     try {
       const existing = await readFile(configPath, "utf8");
@@ -528,7 +528,7 @@ export async function updateInstanceConfig(
         throw error; // transient I/O — don't clobber the intact file
       }
     }
-    updater(config);
+    const result = updater(config);
     const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", "utf8");
     try {
@@ -545,5 +545,27 @@ export async function updateInstanceConfig(
       await unlink(tempPath).catch(() => {});
       throw error;
     }
+    return result;
+  });
+}
+
+export async function updateInstanceApprovalMode(
+  stateDir: string,
+  approvalMode: "normal" | "full-auto" | "bypass",
+): Promise<InstanceEngine> {
+  return await updateInstanceConfig(stateDir, (config) => {
+    const engine: InstanceEngine = config.engine === "claude"
+      || config.engine === "antigravity"
+      || config.engine === "kimi"
+      || config.engine === "deepseek"
+      ? config.engine
+      : "codex";
+    config.approvalMode = approvalMode;
+    if (approvalMode === "bypass" && engine === "kimi") {
+      config.kimiAutoNeverAskAcknowledged = true;
+    } else {
+      delete config.kimiAutoNeverAskAcknowledged;
+    }
+    return engine;
   });
 }

@@ -1071,7 +1071,7 @@ That is not automatically wrong, but the difference should be intentional and do
 
 ### Purpose
 
-Durable delivery-obligation ledger (Hermes-inspired): one row per outbound final engine response with checkpoints around the send (`pending` → `attempting` → `delivered`/`failed`). On boot, `sweepRecoverable` claims undelivered rows whose owning process is dead and `src/lark/delivery-recovery.ts` redelivers them — plainly for `pending` (send never started), with a visible ♻️ recovered-reply marker for `attempting`/`failed` (the platform may already have the message; honest at-least-once, never a silent duplicate).
+Durable delivery-obligation ledger (Hermes-inspired): one row per outbound final engine response with checkpoints around the send (`pending` → `attempting` → `delivered`/`failed`). A row reaches `delivered` only after every requested artifact and text chunk receives a definite success; a rejected or ambiguous artifact ACK keeps the row failed and the turn partial. On boot, `sweepRecoverable` claims undelivered rows whose owning process is dead and `src/lark/delivery-recovery.ts` redelivers them — plainly for `pending` (send never started), with a visible ♻️ recovered-reply marker for `attempting`/`failed` (the platform may already have the message; honest at-least-once, never a silent duplicate).
 
 ### Write rules
 
@@ -1079,6 +1079,9 @@ Durable delivery-obligation ledger (Hermes-inspired): one row per outbound final
 - Attempts are capped (3) and rows older than 24h are `abandoned` — a poison reply cannot crash-loop redelivery, and a day-old reply never suddenly reappears.
 - Bounded: settled rows pruned after 7 days, 200-row cap, replies over 200KB are never recorded (Doc-overflow territory).
 - Kill-switch: `CCTB_DELIVERY_LEDGER=off` disables recording and sweeping.
+- Recovery parses persisted responses through the normal guarded artifact pipeline. It may replay `send.file`, `send.image`, `send.audio`, `send.video`, `send.batch`, and whole-response `file:` blocks, but it strips cron and all other side-effect tools rather than executing them again.
+- Artifact identity uses the real file (device/inode, with canonical-path fallback), so structured and legacy tags cannot resend one file through symlink, hard-link, or case aliases.
+- Image cards split only after an explicit platform size rejection. Timeout, disconnect, and other ambiguous acknowledgements stop without an immediate retry and surface a “request a resend” notice.
 
 ### Recovery rules
 

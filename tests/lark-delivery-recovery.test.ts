@@ -1,10 +1,11 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
 import { redeliverRecoveredLarkObligations } from "../src/lark/delivery-recovery.js";
+import { createLarkServiceRuntime } from "../src/lark/runtime.js";
 import {
   readDeliveryObligations,
   resolveDeliveryObligationsPath,
@@ -79,6 +80,83 @@ describe("redeliverRecoveredLarkObligations", () => {
       const rows = await readDeliveryObligations(stateDir);
       expect(rows.find((row) => row.id === "bad")!.state).toBe("failed");
       expect(rows.find((row) => row.id === "good")!.state).toBe("delivered");
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
+  it("replays image obligations through the guarded artifact pipeline instead of posting raw tags", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-recover-image-"));
+    const workspace = path.join(stateDir, "workspace");
+    const imagePath = path.join(workspace, "report.png");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(imagePath, "image bytes");
+    const uploadImage = vi.fn(async () => ({ image_key: "img_recovered" }));
+    const channel = {
+      send: vi.fn(async (_to: string, _input: unknown) => ({ messageId: "m" })),
+      rawClient: {
+        im: { v1: { image: { create: uploadImage } } },
+      },
+    };
+    try {
+      await seed(stateDir, [{
+        id: "image",
+        state: "attempting",
+        content: `Report ready\n\n[send-image:${imagePath}]`,
+      }]);
+
+      const result = await redeliverRecoveredLarkObligations({ channel, stateDir, locale: "zh" });
+
+      expect(result).toEqual({ recovered: 1, failed: 0 });
+      expect(uploadImage).toHaveBeenCalledTimes(1);
+      expect(channel.send.mock.calls.some((call) => {
+        const payload = call[1] as { card?: { body?: { elements?: Array<{ tag?: string }> } } } | undefined;
+        return (payload?.card?.body?.elements ?? []).some((element) => element.tag === "img");
+      })).toBe(true);
+      expect(channel.send.mock.calls.some((call) => {
+        const markdown = (call[1] as { markdown?: unknown } | undefined)?.markdown;
+        return typeof markdown === "string" && markdown.includes("send-image:");
+      })).toBe(false);
+      const rows = await readDeliveryObligations(stateDir);
+      expect(rows[0]!.state).toBe("delivered");
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
+  it("does not rerun cron or non-delivery tools while recovering a reply", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-recover-safe-tools-"));
+    const createDocument = vi.fn(async () => ({ documentId: "doc_should_not_exist" }));
+    const channel = {
+      send: vi.fn(async (_to: string, _input: unknown) => ({ messageId: "m" })),
+    };
+    try {
+      await seed(stateDir, [{
+        id: "unsafe-tools",
+        state: "pending",
+        content: [
+          "Keep this answer.",
+          "```tool-call",
+          JSON.stringify({ name: "lark.doc.create", payload: { title: "Do not recreate" } }),
+          "```",
+          `[cron-add:${JSON.stringify({ in: "1h", prompt: "Do not reschedule" })}]`,
+        ].join("\n"),
+      }]);
+
+      const result = await redeliverRecoveredLarkObligations({
+        channel,
+        stateDir,
+        locale: "en",
+        runtime: createLarkServiceRuntime({ createDocument }),
+      });
+
+      expect(result).toEqual({ recovered: 1, failed: 0 });
+      expect(createDocument).not.toHaveBeenCalled();
+      const sent = JSON.stringify(channel.send.mock.calls);
+      expect(sent).toContain("Keep this answer.");
+      expect(sent).not.toContain("lark.doc.create");
+      expect(sent).not.toContain("cron-add");
+      expect(sent).not.toContain("Do not reschedule");
     } finally {
       await removeTempRoot(stateDir);
     }
