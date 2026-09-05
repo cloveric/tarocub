@@ -44,6 +44,38 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
+## Kimi 0.41.0 Compatibility Re-probe
+
+- Probe date: 2026-09-05
+- Binary: official macOS arm64 Kimi Code archive, isolated before installation
+- Version: `0.41.0`
+- Integration protocol: persistent `kimi acp`
+
+An isolated, no-prompt ACP probe initialized a new session and loaded the same
+session in a second process with TaroCub's real stdio Search MCP descriptor. The
+server child-start marker fired once on each path. Protocol version 1, the
+`k3`/`k3-256k` model options, `low`/`high`/`max` thinking options, and
+`default`/`plan`/`auto`/`yolo` mode options remained compatible.
+
+Kimi 0.41.0 deliberately changes permission semantics: ACP `auto` is now true
+Never Ask mode, so dangerous and unanalyzable shell commands are no longer
+stopped for confirmation. TaroCub keeps its existing mapping but changes the
+default for Kimi configurations without a stored approval mode to bridge
+`full-auto` / ACP `yolo`; bridge `bypass` / ACP `auto` remains available only as
+an explicit unsafe choice. Existing `bypass` configs without a 0.41 Never Ask
+acknowledgement resolve to `yolo`; running the unsafe command again records that
+acknowledgement. The status and command text describes that boundary without
+claiming an OS sandbox. See the
+[0.41.0 release](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai/kimi-code%400.41.0)
+and [upstream permission change](https://github.com/MoonshotAI/kimi-code/pull/3529).
+
+The same release allows `AskUserQuestion(background=true)` to survive the end
+of its foreground turn. TaroCub therefore gives background-question approvals
+a worker-scoped abort lifecycle, retains them while the task is active, and
+matches requests that arrive after the turn to the authenticated Hook-recorded
+question task. Ambiguous or orphaned late requests are denied; worker teardown
+and bounded task expiry also abort them fail closed.
+
 ## Kimi 0.40.1 Compatibility Re-probe
 
 - Probe date: 2026-09-03

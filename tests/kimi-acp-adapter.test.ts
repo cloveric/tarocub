@@ -4780,6 +4780,7 @@ describe("KimiAcpAdapter", () => {
         engine: "kimi",
         effort: "low",
         approvalMode: "bypass",
+        kimiAutoNeverAskAcknowledged: true,
       }), "utf8");
       const second = adapter.sendUserMessage("kimi-session-1", {
         text: "second",
@@ -4799,6 +4800,61 @@ describe("KimiAcpAdapter", () => {
       }, "kimi-session-1");
       harness.children[1].server.respondPrompt();
       await expect(second).resolves.toEqual({ text: "two" });
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses Kimi YOLO instead of fully unsafe auto when approval mode is absent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-safe-default-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi" }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-safe-default", { text: "hello", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(harness.children[0].server.requests("session/set_config_option").map((request) => request.params)).toContainEqual({
+        sessionId: "kimi-session-1",
+        configId: "mode",
+        value: "yolo",
+      });
+      harness.children[0].server.respondPrompt();
+      await turn;
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates an unacknowledged pre-0.41 Kimi bypass config to ACP yolo", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-legacy-auto-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({
+      engine: "kimi",
+      approvalMode: "bypass",
+    }), "utf8");
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-legacy-auto", { text: "hello", files: [] });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(harness.children[0].server.requests("session/set_config_option").map((request) => request.params)).toContainEqual({
+        sessionId: "kimi-session-1",
+        configId: "mode",
+        value: "yolo",
+      });
+      harness.children[0].server.respondPrompt();
+      await turn;
     } finally {
       adapter.destroy();
       await rm(root, { recursive: true, force: true });
@@ -5914,6 +5970,152 @@ describe("KimiAcpAdapter", () => {
     server.respondPrompt();
     await expect(turn).resolves.toMatchObject({ text: "blue selected" });
     adapter.destroy();
+  });
+
+  it("keeps a background AskUserQuestion answerable after the foreground turn ends", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    let answerQuestion!: () => void;
+    let approvalStarted = false;
+    let approvalAborted = false;
+    const answerReady = new Promise<void>((resolve) => {
+      answerQuestion = resolve;
+    });
+    const turn = adapter.sendUserMessage("telegram-background-question", {
+      text: "ask in the background",
+      files: [],
+      onApprovalRequest: async (request) => {
+        approvalStarted = true;
+        expect(request.toolName).toBe("AskUserQuestion");
+        request.abortSignal?.addEventListener("abort", () => {
+          approvalAborted = true;
+        }, { once: true });
+        await answerReady;
+        return {
+          behavior: "allow",
+          updatedInput: { answers: { Colour: "blue" } },
+        };
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "background-question-1",
+      title: "AskUserQuestion",
+      kind: "other",
+      status: "pending",
+      rawInput: {
+        background: true,
+        questions: [{
+          question: "Which do you choose?",
+          header: "Colour",
+          options: [{ label: "red" }, { label: "blue" }],
+        }],
+      },
+    });
+    const requestId = server.requestPermission({
+      sessionId: server.sessionId,
+      toolCall: { toolCallId: "background-question-1", title: "AskUserQuestion" },
+      options: [
+        { kind: "allow_once", name: "red", optionId: "background-red" },
+        { kind: "allow_once", name: "blue", optionId: "background-blue" },
+        { kind: "reject_once", name: "Skip", optionId: "background-skip" },
+      ],
+    });
+    await waitFor(() => approvalStarted);
+    server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "I will continue while you decide." },
+    });
+    server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "I will continue while you decide." });
+
+    expect(approvalAborted).toBe(false);
+    expect(server.clientResponses.has(requestId)).toBe(false);
+    answerQuestion();
+    await waitFor(() => server.clientResponses.has(requestId));
+    expect(server.clientResponses.get(requestId)?.result).toEqual({
+      outcome: { outcome: "selected", optionId: "background-blue" },
+    });
+    adapter.destroy();
+  });
+
+  it("routes a background AskUserQuestion request that arrives after the foreground turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-late-background-question-test-"));
+    const configPath = path.join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ engine: "kimi", approvalMode: "full-auto" }), "utf8");
+    const harness = createHarness();
+    const events: EngineStreamEvent[] = [];
+    const adapter = new KimiAcpAdapter("kimi", {
+      ...adapterOptions(harness),
+      configPath,
+      engineHomePath: root,
+      hookRelayEnabled: true,
+    });
+    try {
+      const turn = adapter.sendUserMessage("telegram-late-background-question", {
+        text: "ask later",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+        onApprovalRequest: async () => ({
+          behavior: "allow",
+          updatedInput: { answers: { Colour: "blue" } },
+        }),
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      const server = harness.children[0].server;
+      server.sendUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "late-background-question-1",
+        title: "AskUserQuestion",
+        kind: "other",
+        status: "pending",
+        rawInput: {
+          background: true,
+          questions: [{
+            question: "Which do you choose?",
+            header: "Colour",
+            options: [{ label: "red" }, { label: "blue" }],
+          }],
+        },
+      });
+      await postKimiHook(harness, {
+        hook_event_name: "TaskStarted",
+        session_id: server.sessionId,
+        task_id: "question-late-1",
+        kind: "question",
+        description: "Which do you choose?",
+        status: "running",
+        detached: true,
+      });
+      await waitFor(() => events.some((event) => event.type === "background_task_started"));
+      server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "I continued without waiting." },
+      });
+      server.respondPrompt();
+      await expect(turn).resolves.toMatchObject({ text: "I continued without waiting." });
+
+      const requestId = server.requestPermission({
+        sessionId: server.sessionId,
+        toolCall: { toolCallId: "late-background-question-1", title: "AskUserQuestion" },
+        options: [
+          { kind: "allow_once", name: "red", optionId: "late-red" },
+          { kind: "allow_once", name: "blue", optionId: "late-blue" },
+          { kind: "reject_once", name: "Skip", optionId: "late-skip" },
+        ],
+      });
+      await waitFor(() => server.clientResponses.has(requestId));
+      expect(server.clientResponses.get(requestId)?.result).toEqual({
+        outcome: { outcome: "selected", optionId: "late-blue" },
+      });
+    } finally {
+      await adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("builds the AskUserQuestion form from tool_call content when the request has no structured rawInput", async () => {

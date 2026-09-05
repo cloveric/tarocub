@@ -270,7 +270,9 @@ npm run dev -- telegram engine --instance review-bot
 
 Antigravity 当前仍有明确的上游边界：headless 协议没有单工具远程审批、运行中 steer、result 之后的后台任务生命周期，也没有手动 compact/context API。普通审批因此是整轮一次确认，bridge 不会假装与 Codex/Claude 完全对齐。详见 [Antigravity Engine 能力矩阵](./docs/antigravity-engine.md)。
 
-当前兼容基线是 **Kimi Code 0.37.2**。TaroCub 已补齐它用于委托 Bash/进程执行的 ACP terminal 生命周期：创建、受限 UTF-8 输出、等待、终止、释放，以及 worker 退出时清理未释放终端。0.37.2 还存在一个很窄的 stdio MCP runtime identity 上游回归；bridge 只在命中该精确错误时暂时移除 ACP 注入的 stdio MCP，保留 HTTP/SSE 和 Kimi 原生 MCP/plugin，并在 Kimi 进程重启后重新探测，避免把临时兼容逻辑永久固化。
+当前兼容基线是 **Kimi Code 0.41.0**。无 prompt 的真实 ACP 探针确认 `session/new` 与 `session/load` 都接受 bridge 注入的 stdio Search MCP，并会实际启动子进程；TaroCub 因此始终发送完整 MCP 列表，初始化失败时 fail closed，不再静默移除搜索能力。0.41.0 把 ACP `auto` 改成真正的 Never Ask：高危及无法分析的命令也会直接执行。因此新的 Kimi 配置默认使用 bridge `full-auto` / ACP `yolo`；升级前遗留、且没有新版 Never Ask 明确确认标记的 `bypass` 也会安全降级为 `yolo`，只有重新执行 `/yolo unsafe` 才进入 `auto`。两者都不是 OS 沙箱，`yolo` 下的 terminal cwd 边界也不等于文件系统隔离。
+
+Kimi 0.41.0 还允许 `AskUserQuestion(background=true)` 晚于前台回合结束。TaroCub 会把这类审批卡绑定到保留的后台问题任务，不随前台回合结束而取消；若请求稍后才到达，则通过 Hook 记录的 question task 继续路由，并在 worker 销毁或超时后 fail closed。
 
 Kimi 0.33 引入了后台进程结束后的内部“任务复核回合”，模型可能检查错误并自动重试。TaroCub 会在原用户回合结束后继续接收这段 ACP 输出，把多轮重试关联到同一任务链；中间失败保留在审计时间线但不直接误报给用户，最终只发送一次 Kimi 复核后的结论。若复核 Hook 没有到达，则在短暂等待后回退到真实任务输出；丢失的复核状态也会超时释放，不会永久阻塞会话或重启。
 

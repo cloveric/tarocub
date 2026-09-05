@@ -4870,6 +4870,47 @@ describe("runCli", () => {
     }
   });
 
+  it("records an explicit Kimi Never Ask acknowledgement and clears it when YOLO is restored", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const env = {
+      USERPROFILE: tempDir,
+      CCTB_LARK_STATE_DIR: stateDir,
+      TAROCUB_INSTANCE: "lark-kimi",
+    };
+    const messages: string[] = [];
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n", "utf8");
+      await runCli(["lark", "yolo", "unsafe"], {
+        env,
+        logger: { log: (message) => messages.push(message) },
+      });
+      let config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config).toMatchObject({
+        engine: "kimi",
+        approvalMode: "bypass",
+        kimiAutoNeverAskAcknowledged: true,
+      });
+      await runCli(["lark", "yolo"], {
+        env,
+        logger: { log: (message) => messages.push(message) },
+      });
+      expect(messages.at(-1)).toContain("Kimi Auto (fully unattended");
+
+      await runCli(["lark", "yolo", "on"], {
+        env,
+        logger: { log: () => undefined },
+      });
+      config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config).toMatchObject({ engine: "kimi", approvalMode: "full-auto" });
+      expect(config.kimiAutoNeverAskAcknowledged).toBeUndefined();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("warns that the budget cap is Claude-only when setting or showing a budget on a non-Claude engine", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");

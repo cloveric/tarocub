@@ -5850,6 +5850,45 @@ describe("lark service", () => {
     }
   });
 
+  it("requires an explicit Lark command before Kimi uses ACP Never Ask mode", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-auto-"));
+    await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ engine: "kimi" }) + "\n");
+    const channel = fakeChannel();
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_kimi_auto", content: "/yolo unsafe" }),
+      });
+      let config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config).toMatchObject({
+        approvalMode: "bypass",
+        kimiAutoNeverAskAcknowledged: true,
+      });
+
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_kimi_yolo", content: "/yolo on" }),
+      });
+      config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8")) as Record<string, unknown>;
+      expect(config.approvalMode).toBe("full-auto");
+      expect(config.kimiAutoNeverAskAcknowledged).toBeUndefined();
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("resets the current Lark conversation session without running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-reset-"));
     const sessionStore = new SessionStore(path.join(stateDir, "session.json"));

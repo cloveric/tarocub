@@ -230,7 +230,7 @@ describe("createServiceDependenciesForInstance", () => {
     expect(resolveEngineRuntime("codex", "normal", "process")).toBe("process");
   });
 
-  it("defaults configured runtime instances without approval mode to unsafe bypass", async () => {
+  it("defaults Kimi without an approval mode to ACP yolo and keeps other engines on bypass", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const configPath = path.join(root, "config.json");
 
@@ -240,9 +240,37 @@ describe("createServiceDependenciesForInstance", () => {
 
         await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
           engine,
-          approvalMode: "bypass",
+          approvalMode: engine === "kimi" ? "full-auto" : "bypass",
         });
       }
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("requires a Kimi 0.41 Never Ask acknowledgement before resolving bypass to ACP auto", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, JSON.stringify({
+        engine: "kimi",
+        approvalMode: "bypass",
+      }) + "\n", "utf8");
+      await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
+        engine: "kimi",
+        approvalMode: "full-auto",
+      });
+
+      await writeFile(configPath, JSON.stringify({
+        engine: "kimi",
+        approvalMode: "bypass",
+        kimiAutoNeverAskAcknowledged: true,
+      }) + "\n", "utf8");
+      await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
+        engine: "kimi",
+        approvalMode: "bypass",
+      });
     } finally {
       await removeTempRoot(root);
     }

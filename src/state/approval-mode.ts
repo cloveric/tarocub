@@ -10,12 +10,28 @@ export function resolveApprovalMode(value: unknown): ApprovalMode {
   return normalizeApprovalMode(value) ?? DEFAULT_APPROVAL_MODE;
 }
 
+export function resolveApprovalModeForEngine(
+  engine: string,
+  value: unknown,
+  kimiAutoNeverAskAcknowledged: unknown = false,
+): ApprovalMode {
+  const mode = normalizeApprovalMode(value);
+  if (engine === "kimi") {
+    if (mode === "bypass" && kimiAutoNeverAskAcknowledged !== true) {
+      return "full-auto";
+    }
+    return mode ?? "full-auto";
+  }
+  return mode ?? DEFAULT_APPROVAL_MODE;
+}
+
 export function renderApprovalModeStatus(
   engine: string,
   value: unknown,
   locale: "en" | "zh",
+  kimiAutoNeverAskAcknowledged: unknown = false,
 ): string {
-  const mode = resolveApprovalMode(value);
+  const mode = resolveApprovalModeForEngine(engine, value, kimiAutoNeverAskAcknowledged);
   if (engine === "kimi") {
     if (mode === "full-auto") {
       return locale === "en"
@@ -24,8 +40,8 @@ export function renderApprovalModeStatus(
     }
     if (mode === "bypass") {
       return locale === "en"
-        ? "Kimi Auto (unattended; dangerous-command guard remains on by default; no OS sandbox)"
-        : "Kimi Auto（无人值守；默认保留高危命令保护；无 OS 沙箱）";
+        ? "Kimi Auto (fully unattended; dangerous and unanalyzable commands execute without interruption; no OS sandbox)"
+        : "Kimi Auto（完全无人值守；高危及无法分析的命令也会直接执行；无 OS 沙箱）";
     }
   }
   if (mode === "bypass") {

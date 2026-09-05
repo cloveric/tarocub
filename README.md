@@ -198,7 +198,7 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-The current compatibility baseline is **Kimi Code 0.40.1**. A live, no-prompt
+The current compatibility baseline is **Kimi Code 0.41.0**. A live, no-prompt
 ACP probe verified that both `session/new` and `session/load` accept the
 schema-valid stdio Search MCP and actually start its child process. TaroCub
 therefore always supplies the complete configured MCP list and fails closed if
@@ -206,8 +206,19 @@ Kimi rejects session initialization; it no longer retries by silently removing
 stdio search. Native Kimi user/project MCP files and plugins remain independent.
 Kimi `full-auto` maps to ACP `yolo`; delegated terminal working directories are
 kept inside the real workspace, but this is not an OS sandbox. Explicit
-`bypass` maps to ACP `auto`, whose dangerous-command guard remains enabled by
-default in Kimi 0.40.x.
+`bypass` maps to ACP `auto`. Starting with Kimi 0.41.0, `auto` is true Never Ask
+mode: dangerous and unanalyzable commands execute without interruption. New
+Kimi configurations therefore default to bridge `full-auto` / ACP `yolo`; use
+`telegram yolo unsafe` or `/yolo unsafe` only when fully unattended execution is
+intentional. Pre-0.41 Kimi `bypass` values without the new explicit Never Ask
+acknowledgement are also resolved as `yolo`; re-run the unsafe command to opt in
+under the new semantics.
+
+Kimi 0.41.0 also allows `AskUserQuestion(background=true)` to outlive the
+foreground turn. TaroCub keeps those approval cards attached to the retained
+background task instead of aborting them with the completed turn, routes a late
+request through the hook-recorded question task, and denies it on worker
+teardown or bounded expiry.
 
 TaroCub implements the ACP terminal lifecycle used by Kimi for delegated
 Bash/process work (`create`, bounded UTF-8 output, wait, kill, and release), and

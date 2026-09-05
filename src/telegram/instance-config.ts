@@ -9,7 +9,10 @@ import {
   type ConfigFile,
   type EffortLevel,
 } from "../state/config-file-schema.js";
-import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode } from "../state/approval-mode.js";
+import {
+  normalizeApprovalMode,
+  resolveApprovalModeForEngine,
+} from "../state/approval-mode.js";
 import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron-timezone.js";
 import { withFileMutex } from "../state/file-mutex.js";
 import { isExtendedCodexEffort, knownCodexModelSupportsEffort } from "../codex/model-capabilities.js";
@@ -382,8 +385,16 @@ export function applyEngineSelection(
   if (engine === "antigravity") {
     applyAntigravityEngineDefaults(config, previousEngine);
   }
+  if (engine !== "kimi") {
+    delete config.kimiAutoNeverAskAcknowledged;
+  } else if (
+    normalizeApprovalMode(config.approvalMode) === "bypass"
+    && config.kimiAutoNeverAskAcknowledged !== true
+  ) {
+    config.approvalMode = "full-auto";
+  }
   if (normalizeApprovalMode(config.approvalMode) === undefined) {
-    config.approvalMode = DEFAULT_APPROVAL_MODE;
+    config.approvalMode = resolveApprovalModeForEngine(engine, undefined);
   }
   let enabledFullAuto = false;
   if (engine === "antigravity" && config.approvalMode === "normal") {

@@ -644,9 +644,12 @@ For hands-free personal bot use, `telegram yolo unsafe` is available. It keeps C
 
 Kimi is the naming exception: `on` selects ACP `yolo`, where ordinary tools are
 auto-approved but sensitive commands may still ask; `unsafe` selects ACP
-`auto`, whose dangerous-command guard remains enabled by default in Kimi
-0.40.x. Neither mode is an OS sandbox. TaroCub additionally keeps delegated
-terminal cwd values inside the real workspace in Kimi `on` mode.
+`auto`, which is true Never Ask in Kimi 0.41.0: dangerous and unanalyzable
+commands execute without interruption. Neither mode is an OS sandbox. New Kimi
+configurations default to `on`; old unacknowledged Kimi `unsafe` values also
+resolve to `on` until the operator explicitly runs the unsafe command again.
+TaroCub additionally keeps delegated terminal cwd values inside the real
+workspace in `on` mode.
 
 Claude approval buttons use a short-lived localhost MCP bridge with a random URL token. This protects against blind local port scans, but the token is still visible to same-user local processes that can inspect process command lines. Treat YOLO-off approval as a single-user workstation convenience, not a multi-user isolation boundary.
 

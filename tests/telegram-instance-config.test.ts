@@ -487,8 +487,23 @@ describe("applyEngineSelection", () => {
     const result = applyEngineSelection(config, "kimi");
 
     expect(result).toEqual({ clearedModel: true, enabledFullAuto: false });
-    expect(config).toMatchObject({ engine: "kimi", effort: "high" });
+    expect(config).toMatchObject({ engine: "kimi", effort: "high", approvalMode: "full-auto" });
     expect(config.model).toBeUndefined();
+  });
+
+  it("does not carry another engine's unacknowledged bypass mode into Kimi auto", () => {
+    const config: Record<string, unknown> = {
+      engine: "claude",
+      approvalMode: "bypass",
+    };
+
+    applyEngineSelection(config, "kimi");
+
+    expect(config).toMatchObject({
+      engine: "kimi",
+      approvalMode: "full-auto",
+    });
+    expect(config.kimiAutoNeverAskAcknowledged).toBeUndefined();
   });
 
   it("preserves a valid Kimi effort when Kimi is reselected", () => {

@@ -7,7 +7,7 @@ import { Cron } from "croner";
 
 import type { EnvSource } from "../config.js";
 import { readConfiguredBotToken } from "../service.js";
-import { resolveApprovalMode } from "../state/approval-mode.js";
+import { resolveApprovalModeForEngine } from "../state/approval-mode.js";
 import { CrewRunStore } from "../state/crew-run-store.js";
 import { CronStore } from "../state/cron-store.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
@@ -420,7 +420,7 @@ async function ci(
 ): Promise<InstanceSnapshot> {
   const d = target.stateDir;
   const name = target.name;
-  const cfg = await rj<{ engine?: string; approvalMode?: string; verbosity?: number; effort?: string; model?: string; locale?: string; budgetUsd?: number; bus?: { peers?: unknown } }>(path.join(d, "config.json"), {});
+  const cfg = await rj<{ engine?: string; approvalMode?: string; kimiAutoNeverAskAcknowledged?: boolean; verbosity?: number; effort?: string; model?: string; locale?: string; budgetUsd?: number; bus?: { peers?: unknown } }>(path.join(d, "config.json"), {});
   const ac = await rj<{ policy?: string; pairedUsers?: unknown[]; allowlist?: unknown[] }>(path.join(d, "access.json"), {});
   const ss = await rj<{ chats?: unknown[] }>(path.join(d, "session.json"), {});
   const knownChats = parseDashboardKnownChats(await rj(path.join(d, "known-chats.json"), {}));
@@ -452,7 +452,14 @@ async function ci(
   }, name);
 
   return {
-    name, engine: cfg.engine ?? "codex", approvalMode: resolveApprovalMode(cfg.approvalMode), verbosity: cfg.verbosity ?? 1,
+    name,
+    engine: cfg.engine ?? "codex",
+    approvalMode: resolveApprovalModeForEngine(
+      cfg.engine ?? "codex",
+      cfg.approvalMode,
+      cfg.kimiAutoNeverAskAcknowledged,
+    ),
+    verbosity: cfg.verbosity ?? 1,
     effort: cfg.effort ?? "default", model: cfg.model ?? "default", locale: cfg.locale ?? "en",
     budgetUsd: typeof cfg.budgetUsd === "number" ? cfg.budgetUsd : null,
     bus: cfg.bus?.peers ? (cfg.bus.peers === "*" ? "mesh" : Array.isArray(cfg.bus.peers) ? `${(cfg.bus.peers as unknown[]).length} peers` : "off") : "off",

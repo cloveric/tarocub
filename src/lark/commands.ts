@@ -24,7 +24,7 @@ import { resolveConversationResume } from "../runtime/conversation-resume.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
 import { CronStore } from "../state/cron-store.js";
 import { AccessStore } from "../state/access-store.js";
-import { renderApprovalModeStatus, resolveApprovalMode } from "../state/approval-mode.js";
+import { renderApprovalModeStatus, resolveApprovalModeForEngine } from "../state/approval-mode.js";
 import { FileWorkflowStore, type FileWorkflowStatus } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
 import { UsageStore } from "../state/usage-store.js";
@@ -1729,7 +1729,12 @@ async function renderLarkStatusMessage(
       `Model: ${renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, locale)}`,
       `Effort: ${renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, locale)}`,
       `Codex Fast Mode: ${cfg.codexServiceTier === "fast" ? "on" : "off"}`,
-      `Approval mode: ${renderApprovalModeStatus(cfg.engine, rawConfig.approvalMode, locale)}`,
+      `Approval mode: ${renderApprovalModeStatus(
+        cfg.engine,
+        rawConfig.approvalMode,
+        locale,
+        rawConfig.kimiAutoNeverAskAcknowledged,
+      )}`,
       `Budget: ${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none"}`,
       // Kimi omits usage entirely and DeepSeek omits dollar cost. Show those
       // telemetry limits even without a budget so status never implies complete
@@ -1767,7 +1772,12 @@ async function renderLarkStatusMessage(
     `模型：${renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, locale)}`,
     `推理强度：${renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, locale)}`,
     `Codex Fast Mode：${cfg.codexServiceTier === "fast" ? "开启" : "关闭"}`,
-    `审批模式：${renderApprovalModeStatus(cfg.engine, rawConfig.approvalMode, locale)}`,
+    `审批模式：${renderApprovalModeStatus(
+      cfg.engine,
+      rawConfig.approvalMode,
+      locale,
+      rawConfig.kimiAutoNeverAskAcknowledged,
+    )}`,
     `预算：${cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "无"}`,
     ...(cfg.engine === "kimi" || cfg.engine === "deepseek"
       ? [renderLarkEngineUsageNote(cfg.engine, locale, cfg.budgetUsd !== undefined)]
@@ -2340,9 +2350,19 @@ async function handleLarkEngineCommand(
 async function handleLarkYoloCommand(stateDir: string, action: string, locale: Locale): Promise<string> {
   const cfg = await loadInstanceConfig(stateDir);
   if (!action || action === "status") {
-    const mode = resolveApprovalMode((await readRawLarkConfig(stateDir)).approvalMode);
+    const raw = await readRawLarkConfig(stateDir);
+    const mode = resolveApprovalModeForEngine(
+      cfg.engine,
+      raw.approvalMode,
+      raw.kimiAutoNeverAskAcknowledged,
+    );
     if (cfg.engine === "kimi") {
-      const label = renderApprovalModeStatus(cfg.engine, mode, locale);
+      const label = renderApprovalModeStatus(
+        cfg.engine,
+        raw.approvalMode,
+        locale,
+        raw.kimiAutoNeverAskAcknowledged,
+      );
       return locale === "en" ? `Current YOLO: ${label}` : `当前 YOLO: ${label}`;
     }
     if (locale === "en") {
@@ -2357,6 +2377,7 @@ async function handleLarkYoloCommand(stateDir: string, action: string, locale: L
   if (action === "on") {
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "full-auto";
+      delete config.kimiAutoNeverAskAcknowledged;
     });
     if (cfg.engine === "kimi") {
       return locale === "en"
@@ -2370,17 +2391,23 @@ async function handleLarkYoloCommand(stateDir: string, action: string, locale: L
   if (action === "off") {
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "normal";
+      delete config.kimiAutoNeverAskAcknowledged;
     });
     return locale === "en" ? "YOLO mode OFF. Normal approval flow restored." : "YOLO mode OFF。已恢复普通审批流程。";
   }
   if (action === "unsafe") {
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "bypass";
+      if (cfg.engine === "kimi") {
+        config.kimiAutoNeverAskAcknowledged = true;
+      } else {
+        delete config.kimiAutoNeverAskAcknowledged;
+      }
     });
     if (cfg.engine === "kimi") {
       return locale === "en"
-        ? "Kimi Auto enabled for unattended operation. The dangerous-command guard remains on by default; this is not an OS sandbox."
-        : "Kimi Auto 无人值守模式已开启。默认仍保留高危命令保护；这不是 OS 沙箱。";
+        ? "Kimi Auto enabled in fully unattended mode. Dangerous and unanalyzable commands execute without interruption; there is no OS sandbox."
+        : "Kimi Auto 完全无人值守模式已开启。高危及无法分析的命令也会直接执行，且没有 OS 沙箱。";
     }
     return locale === "en"
       ? "YOLO UNSAFE enabled. Approvals and sandboxing will be bypassed; use only on a trusted machine and workspace."

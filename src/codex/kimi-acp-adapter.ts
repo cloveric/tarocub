@@ -55,7 +55,10 @@ import {
 } from "./kimi-hook-relay.js";
 import { killProcessTree } from "./process-tree.js";
 import { syncKimiWorkspaceInstructions } from "./kimi-workspace.js";
-import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
+import {
+  resolveApprovalModeForEngine,
+  type ApprovalMode,
+} from "../state/approval-mode.js";
 import { DEFAULT_KIMI_EFFORT, readValidatedConfigFile } from "../telegram/instance-config.js";
 import { resolveSearchMcpServerInvocation } from "../../deepseek-harness-plugin/src/search-mcp-server.js";
 
@@ -258,6 +261,7 @@ type KimiWorker = {
   backgroundTasks: Map<string, KimiBackgroundTask>;
   backgroundContinuations: Map<string, KimiBackgroundContinuation>;
   backgroundContinuationWaiters: Set<KimiBackgroundContinuationWaiter>;
+  detachedApprovalControllers: Map<AbortController, number>;
   terminalBackgroundTasks: Map<string, KimiTerminalBackgroundTask>;
   terminals: Map<string, KimiAcpTerminal>;
   activeHookTurn?: KimiHookTurn;
@@ -1284,6 +1288,27 @@ function firstAnswer(updatedInput: unknown): string | undefined {
   return undefined;
 }
 
+function isBackgroundQuestionInput(toolName: string, input: unknown): boolean {
+  return toolName === "AskUserQuestion"
+    && typeof input === "object"
+    && input !== null
+    && !Array.isArray(input)
+    && (input as { background?: unknown }).background === true;
+}
+
+function firstQuestionText(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return undefined;
+  }
+  const questions = (input as { questions?: unknown }).questions;
+  const first = Array.isArray(questions) ? questions[0] : undefined;
+  if (typeof first !== "object" || first === null || Array.isArray(first)) {
+    return undefined;
+  }
+  const question = (first as { question?: unknown }).question;
+  return typeof question === "string" && question.trim() ? question.trim() : undefined;
+}
+
 function renderPermissionResponse(
   request: RequestPermissionRequest,
   toolName: string,
@@ -1747,7 +1772,11 @@ export class KimiAcpAdapter implements CodexAdapter {
       return {};
     }
     const parsed = await readValidatedConfigFile(this.configPath);
-    const approvalMode = normalizeApprovalMode(parsed.approvalMode) ?? DEFAULT_APPROVAL_MODE;
+    const approvalMode = resolveApprovalModeForEngine(
+      "kimi",
+      parsed.approvalMode,
+      parsed.kimiAutoNeverAskAcknowledged,
+    );
     return {
       model: typeof parsed.model === "string" && parsed.model.trim()
         ? parsed.model.trim()
@@ -1964,6 +1993,7 @@ export class KimiAcpAdapter implements CodexAdapter {
       backgroundTasks: new Map(),
       backgroundContinuations: new Map(),
       backgroundContinuationWaiters: new Set(),
+      detachedApprovalControllers: new Map(),
       terminalBackgroundTasks: new Map(),
       terminals: new Map(),
       ignoredHookTerminalStarts: [],
@@ -4027,18 +4057,47 @@ export class KimiAcpAdapter implements CodexAdapter {
     this.markActivity(worker);
     const pending = worker.pendingTurn;
     const continuation = this.backgroundContinuationForUpdate(worker);
-    if (!pending && !continuation) {
-      return { outcome: { outcome: "cancelled" } };
-    }
     const state = worker.tools.get(request.toolCall.toolCallId);
     if (state) {
       this.maybeEmitToolUse(worker, state);
     }
     const toolName = requestToolName(request, state);
     const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
+    const detachedQuestion = isBackgroundQuestionInput(toolName, rawToolInput);
     const toolInput = toolName === "AskUserQuestion"
       ? normalizeKimiQuestionInput(request, rawToolInput)
       : rawToolInput;
+    const backgroundQuestionTask = detachedQuestion
+      ? this.findBackgroundQuestionTask(worker, rawToolInput)
+      : undefined;
+    if (backgroundQuestionTask) {
+      const event: EngineStreamEvent = {
+        type: "permission_request",
+        toolName,
+        toolInput,
+        sessionId: worker.currentSessionId ?? request.sessionId,
+      };
+      if (pending && backgroundQuestionTask.ownerTurnId === pending.turnId) {
+        this.queueEngineEvent(pending, event);
+        await Promise.race([
+          pending.eventChain,
+          pending.failurePromise.catch(() => undefined),
+          pending.interruptionPromise.catch(() => undefined),
+        ]);
+      } else {
+        await this.emitEngineEvent(backgroundQuestionTask.onEngineEvent ?? worker.onEngineEvent, event);
+      }
+      return await this.handleDetachedPermissionRequest(
+        worker,
+        request,
+        toolName,
+        toolInput,
+        backgroundQuestionTask.onApprovalRequest,
+      );
+    }
+    if (!pending && !continuation) {
+      return { outcome: { outcome: "cancelled" } };
+    }
     if (continuation) {
       await this.emitEngineEvent(continuation.onEngineEvent ?? worker.onEngineEvent, {
         type: "permission_request",
@@ -4087,6 +4146,15 @@ export class KimiAcpAdapter implements CodexAdapter {
       pending.interruptionPromise.catch(() => undefined),
     ]);
 
+    if (detachedQuestion) {
+      return await this.handleDetachedPermissionRequest(
+        worker,
+        request,
+        toolName,
+        toolInput,
+        pending.onApprovalRequest,
+      );
+    }
     const approvalRequest: EngineApprovalRequest = {
       engine: "kimi",
       toolName,
@@ -4110,6 +4178,61 @@ export class KimiAcpAdapter implements CodexAdapter {
       ]);
     }
     return renderPermissionResponse(request, toolName, decision);
+  }
+
+  private findBackgroundQuestionTask(worker: KimiWorker, rawToolInput: unknown): KimiBackgroundTask | undefined {
+    const candidates = [...worker.backgroundTasks.values()].filter((task) => (
+      task.kind === "question"
+      && task.terminalObserved !== true
+      && task.onApprovalRequest !== undefined
+    ));
+    const question = firstQuestionText(rawToolInput);
+    if (question) {
+      const exact = candidates.filter((task) => task.description?.trim() === question);
+      if (exact.length === 1) {
+        return exact[0];
+      }
+    }
+    return candidates.length === 1 ? candidates[0] : undefined;
+  }
+
+  private async handleDetachedPermissionRequest(
+    worker: KimiWorker,
+    request: RequestPermissionRequest,
+    toolName: string,
+    toolInput: unknown,
+    onApprovalRequest: ((request: EngineApprovalRequest) => Promise<EngineApprovalDecision>) | undefined,
+  ): Promise<RequestPermissionResponse> {
+    const controller = new AbortController();
+    worker.detachedApprovalControllers.set(controller, Date.now());
+    const approvalRequest: EngineApprovalRequest = {
+      engine: "kimi",
+      toolName,
+      toolInput,
+      cwd: worker.workspacePath,
+      sessionId: worker.currentSessionId ?? request.sessionId,
+      abortSignal: controller.signal,
+      permissionSuggestions: request.options,
+    };
+    const denyOnFailure = (): EngineApprovalDecision => ({ behavior: "deny" });
+    const aborted = new Promise<EngineApprovalDecision>((resolve) => {
+      controller.signal.addEventListener("abort", () => resolve(denyOnFailure()), { once: true });
+    });
+    try {
+      const decision = onApprovalRequest
+        ? await Promise.race([
+            Promise.resolve().then(() => onApprovalRequest(approvalRequest)).catch(denyOnFailure),
+            worker.failurePromise.catch((error) => {
+              controller.abort(error);
+              return denyOnFailure();
+            }),
+            aborted,
+          ])
+        : denyOnFailure();
+      return renderPermissionResponse(request, toolName, decision);
+    } finally {
+      worker.detachedApprovalControllers.delete(controller);
+    }
   }
 
   private armTurnTimeouts(worker: KimiWorker, pending: PendingKimiTurn): void {
@@ -4289,6 +4412,7 @@ export class KimiAcpAdapter implements CodexAdapter {
         worker.pendingTurn
         || worker.backgroundTasks.size > 0
         || worker.backgroundContinuations.size > 0
+        || worker.detachedApprovalControllers.size > 0
         || worker.activeHookTurn?.originKind === "task"
         || now - worker.lastActivityAt < this.idleWorkerTtlMs
       ) {
@@ -4346,6 +4470,15 @@ export class KimiAcpAdapter implements CodexAdapter {
     for (const [taskId, terminal] of worker.terminalBackgroundTasks.entries()) {
       if (now - terminal.terminalAt >= DEFAULT_BACKGROUND_TASK_TOMBSTONE_TTL_MS) {
         worker.terminalBackgroundTasks.delete(taskId);
+      }
+    }
+    if (this.backgroundTaskMaxAgeMs > 0) {
+      for (const [controller, startedAt] of worker.detachedApprovalControllers.entries()) {
+        if (now - startedAt < this.backgroundTaskMaxAgeMs) {
+          continue;
+        }
+        controller.abort(new Error("Kimi background question expired before it was answered"));
+        worker.detachedApprovalControllers.delete(controller);
       }
     }
     this.pruneIgnoredKimiHookTerminals(worker, now);
@@ -4453,6 +4586,10 @@ export class KimiAcpAdapter implements CodexAdapter {
       continuation.approvalAbortController.abort();
     }
     worker.backgroundContinuations.clear();
+    for (const controller of worker.detachedApprovalControllers.keys()) {
+      controller.abort(new Error("Kimi ACP worker was removed"));
+    }
+    worker.detachedApprovalControllers.clear();
     worker.terminalBackgroundTasks.clear();
     worker.activeHookTurn = undefined;
     worker.pendingHookTerminal = undefined;

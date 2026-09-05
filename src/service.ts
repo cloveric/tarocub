@@ -19,7 +19,7 @@ import { AccessStore } from "./state/access-store.js";
 import { appendAuditEvent } from "./state/audit-log.js";
 import { SessionStore } from "./state/session-store.js";
 import { RuntimeStateStore } from "./state/runtime-state.js";
-import { resolveApprovalMode, type ApprovalMode } from "./state/approval-mode.js";
+import { resolveApprovalModeForEngine, type ApprovalMode } from "./state/approval-mode.js";
 import { TelegramApi, withTelegramMessageThread } from "./telegram/api.js";
 import { ackTelegramCallbackQuery, handleNormalizedTelegramMessage, type TelegramDeliveryContext } from "./telegram/delivery.js";
 import { handleTelegramApprovalCommand, isTelegramApprovalCommand } from "./telegram/approval-requests.js";
@@ -581,7 +581,11 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
   const engine = parsed.engine === "claude" || parsed.engine === "antigravity" || parsed.engine === "kimi" || parsed.engine === "deepseek"
     ? parsed.engine
     : "codex";
-  const approvalMode = resolveApprovalMode(parsed.approvalMode);
+  const approvalMode = resolveApprovalModeForEngine(
+    engine,
+    parsed.approvalMode,
+    parsed.kimiAutoNeverAskAcknowledged,
+  );
   return {
     engine,
     approvalMode,

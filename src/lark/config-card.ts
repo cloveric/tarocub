@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { loadCodexUserDefaults } from "../codex/user-defaults.js";
 import { renderEngineEffortSetting, renderEngineModelSetting } from "../runtime/engine-settings-display.js";
-import { renderApprovalModeStatus, resolveApprovalMode } from "../state/approval-mode.js";
+import { renderApprovalModeStatus, resolveApprovalModeForEngine } from "../state/approval-mode.js";
 import { AccessStore } from "../state/access-store.js";
 import { SessionStore } from "../state/session-store.js";
 import {
@@ -60,14 +60,23 @@ export function isLarkConfigCardActionValue(value: Record<string, unknown>): val
 export async function renderLarkConfigCard(input: LarkConfigCardContext): Promise<Record<string, unknown>> {
   const cfg = await loadInstanceConfig(input.stateDir);
   const raw = await readRawLarkConfig(input.stateDir);
-  const resolvedApprovalMode = resolveApprovalMode(raw.approvalMode);
+  const resolvedApprovalMode = resolveApprovalModeForEngine(
+    cfg.engine,
+    raw.approvalMode,
+    raw.kimiAutoNeverAskAcknowledged,
+  );
   const groupState = await readLarkConfigGroupState(input, cfg);
   const accessState = await new AccessStore(path.join(input.stateDir, "access.json")).load().catch(() => null);
   const knownChat = await new LarkKnownChatStore(input.stateDir).get(input.conversationKey).catch(() => null);
   const codexDefaults = cfg.engine === "codex" ? await loadCodexUserDefaults() : undefined;
   const labels = larkConfigLabels(input.locale);
   const approvalMode = cfg.engine === "kimi"
-    ? renderApprovalModeStatus(cfg.engine, resolvedApprovalMode, input.locale)
+    ? renderApprovalModeStatus(
+        cfg.engine,
+        raw.approvalMode,
+        input.locale,
+        raw.kimiAutoNeverAskAcknowledged,
+      )
     : resolvedApprovalMode === "bypass"
       ? "unsafe/bypass"
       : resolvedApprovalMode === "full-auto"
@@ -307,21 +316,29 @@ async function applyFastAction(stateDir: string, value: string | undefined, loca
 }
 
 async function applyYoloAction(stateDir: string, value: string | undefined, locale: Locale): Promise<string> {
+  const cfg = await loadInstanceConfig(stateDir);
   if (value === "on") {
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "full-auto";
+      delete config.kimiAutoNeverAskAcknowledged;
     });
     return locale === "en" ? "YOLO/full-auto enabled." : "YOLO/full-auto 已开启。";
   }
   if (value === "off") {
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "normal";
+      delete config.kimiAutoNeverAskAcknowledged;
     });
     return locale === "en" ? "YOLO disabled; normal approvals restored." : "YOLO 已关闭，恢复普通审批。";
   }
   if (value === "unsafe") {
     await updateInstanceConfig(stateDir, (config) => {
       config.approvalMode = "bypass";
+      if (cfg.engine === "kimi") {
+        config.kimiAutoNeverAskAcknowledged = true;
+      } else {
+        delete config.kimiAutoNeverAskAcknowledged;
+      }
     });
     return locale === "en" ? "YOLO unsafe/bypass enabled." : "YOLO unsafe/bypass 已开启。";
   }

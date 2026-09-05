@@ -27,7 +27,7 @@ import {
   resolveAuditLogPath,
   type AuditEventFilter,
 } from "../state/audit-log.js";
-import { renderApprovalModeStatus, resolveApprovalMode } from "../state/approval-mode.js";
+import { renderApprovalModeStatus, resolveApprovalModeForEngine } from "../state/approval-mode.js";
 import {
   filterTimelineEvents,
   parseTimelineEvents,
@@ -692,7 +692,12 @@ async function inspectLarkOperationalStatus(
     `Model: ${cfg ? renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, "en") : "unknown"}`,
     `Effort: ${cfg ? renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, "en") : "unknown"}`,
     `Codex Fast Mode: ${cfg ? (cfg.codexServiceTier === "fast" ? "on" : "off") : "unknown"}`,
-    `Approval mode: ${cfg ? renderApprovalModeStatus(cfg.engine, rawConfig.approvalMode, "en") : "unknown"}`,
+    `Approval mode: ${cfg ? renderApprovalModeStatus(
+      cfg.engine,
+      rawConfig.approvalMode,
+      "en",
+      rawConfig.kimiAutoNeverAskAcknowledged,
+    ) : "unknown"}`,
     `Budget: ${cfg ? (cfg.budgetUsd !== undefined ? `$${cfg.budgetUsd.toFixed(2)}` : "none") : "unknown"}`,
     `Locale: ${cfg?.locale ?? "unknown"}`,
     `Verbosity: ${cfg?.verbosity ?? "unknown"}`,
@@ -4303,10 +4308,19 @@ async function runYoloCommand(
 
   if (args.length === 0) {
     const config = await readInstanceConfig(configPath);
-    const mode = resolveApprovalMode(config.approvalMode);
     const engine = typeof config.engine === "string" ? config.engine : "codex";
+    const mode = resolveApprovalModeForEngine(
+      engine,
+      config.approvalMode,
+      config.kimiAutoNeverAskAcknowledged,
+    );
     if (engine === "kimi") {
-      logger.log(`Instance "${instanceName}": ${renderApprovalModeStatus(engine, mode, "en")}`);
+      logger.log(`Instance "${instanceName}": ${renderApprovalModeStatus(
+        engine,
+        config.approvalMode,
+        "en",
+        config.kimiAutoNeverAskAcknowledged,
+      )}`);
       return true;
     }
     const label =
@@ -4325,6 +4339,7 @@ async function runYoloCommand(
     const engine = typeof config.engine === "string" ? config.engine : "codex";
     await updateCliInstanceConfig(env, instanceName, (config) => {
       config.approvalMode = "full-auto";
+      delete config.kimiAutoNeverAskAcknowledged;
     });
     await appendAuditEvent(auditStateDir, {
       type: "config.yolo",
@@ -4341,6 +4356,7 @@ async function runYoloCommand(
   if (subcommand === "off") {
     await updateCliInstanceConfig(env, instanceName, (config) => {
       config.approvalMode = "normal";
+      delete config.kimiAutoNeverAskAcknowledged;
     });
     await appendAuditEvent(auditStateDir, {
       type: "config.yolo",
@@ -4357,6 +4373,11 @@ async function runYoloCommand(
     const engine = typeof config.engine === "string" ? config.engine : "codex";
     await updateCliInstanceConfig(env, instanceName, (config) => {
       config.approvalMode = "bypass";
+      if (engine === "kimi") {
+        config.kimiAutoNeverAskAcknowledged = true;
+      } else {
+        delete config.kimiAutoNeverAskAcknowledged;
+      }
     });
     await appendAuditEvent(auditStateDir, {
       type: "config.yolo",
@@ -4365,7 +4386,7 @@ async function runYoloCommand(
       metadata: { approvalMode: "bypass" },
     });
     logger.log(engine === "kimi"
-      ? `Instance "${instanceName}": Kimi Auto enabled for unattended operation. The dangerous-command guard remains on by default; this is not an OS sandbox.`
+      ? `Instance "${instanceName}": Kimi Auto enabled in fully unattended mode. Dangerous and unanalyzable commands execute without interruption; there is no OS sandbox.`
       : `Instance "${instanceName}": YOLO UNSAFE. All approvals AND sandbox bypassed. Use with caution.`);
     return true;
   }
