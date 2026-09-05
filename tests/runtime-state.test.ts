@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { JsonStore } from "../src/state/json-store.js";
 import { RuntimeStateStore } from "../src/state/runtime-state.js";
 
 describe("RuntimeStateStore", () => {
@@ -18,6 +19,45 @@ describe("RuntimeStateStore", () => {
         activeTurnCount: 0,
       });
     } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("does not quarantine a valid runtime file written during corruption recovery", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "runtime-state.json");
+    let releaseFirstQuarantine!: () => void;
+    let firstQuarantineStarted!: () => void;
+    const started = new Promise<void>((resolve) => { firstQuarantineStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseFirstQuarantine = resolve; });
+    const original = JsonStore.prototype.quarantineCurrentFile;
+    let calls = 0;
+    const spy = vi.spyOn(JsonStore.prototype, "quarantineCurrentFile").mockImplementation(async function (
+      this: JsonStore<unknown>,
+      reason,
+    ) {
+      calls += 1;
+      if (calls === 1) {
+        firstQuarantineStarted();
+        await gate;
+      }
+      return await original.call(this, reason);
+    });
+
+    try {
+      await writeFile(filePath, "{broken", "utf8");
+      const store = new RuntimeStateStore(filePath);
+      const load = store.load();
+      await started;
+      const update = store.markHandledUpdateId(42);
+      await Promise.race([update.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, 50))]);
+      releaseFirstQuarantine();
+      await Promise.all([load, update]);
+
+      await expect(store.load()).resolves.toMatchObject({ lastHandledUpdateId: 42 });
+    } finally {
+      releaseFirstQuarantine?.();
+      spy.mockRestore();
       await removeTempRoot(tempDir);
     }
   });

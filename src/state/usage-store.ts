@@ -98,6 +98,10 @@ export class UsageStore {
   }
 
   async load(): Promise<UsageRecord> {
+    return await withFileMutex(this.filePath, async () => await this.loadUnlocked());
+  }
+
+  private async loadUnlocked(): Promise<UsageRecord> {
     try {
       return await this.store.read({ ...defaultUsage });
     } catch (error) {
@@ -124,7 +128,7 @@ export class UsageStore {
   async record(turn: TurnUsage, now = new Date()): Promise<void> {
     const task = async () => {
       await withFileMutex(this.filePath, async () => {
-        const current = await this.load();
+        const current = await this.loadUnlocked();
         const timestamp = now.toISOString();
         addTurnUsage(current, turn, timestamp);
         const dayKey = timestamp.slice(0, 10);
@@ -152,7 +156,7 @@ export class UsageStore {
   async recordUnmetered(now = new Date()): Promise<void> {
     const task = async () => {
       await withFileMutex(this.filePath, async () => {
-        const current = await this.load();
+        const current = await this.loadUnlocked();
         const timestamp = now.toISOString();
         addUnmeteredUsage(current, timestamp);
         const dayKey = timestamp.slice(0, 10);

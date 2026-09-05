@@ -10020,7 +10020,7 @@ describe("lark service", () => {
     }
   });
 
-  it("packs a large [send-image:] batch into a SINGLE card — no preset count cap", async () => {
+  it("packs a large in-limit [send-image:] batch into a single card", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-image-onecard-"));
     const workspace = path.join(stateDir, "workspace");
     await mkdir(workspace, { recursive: true });
@@ -10050,7 +10050,7 @@ describe("lark service", () => {
         .map((c) => (c[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
         .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } => Boolean(card));
 
-      // The whole batch rides in ONE card — no arbitrary per-card limit.
+      // The whole validated batch rides in one card.
       expect(cardCalls).toHaveLength(1);
       expect(cardCalls[0]!.body.elements.filter((e) => e.tag === "img")).toHaveLength(total);
 

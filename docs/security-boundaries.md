@@ -34,14 +34,15 @@ If those assumptions change, this document is no longer enough. The code will ne
 
 ## Boundary Map
 
-The current system has six important boundaries:
+The current system has seven important boundaries:
 
 1. Telegram/Lark input vs authorized chat
 2. Local bus caller vs trusted peer instance
-3. Model output vs filesystem egress
-4. Per-instance state vs operational artifacts
-5. Bot workspace vs shared engine-global config
-6. User intent orchestration vs provider CLI side effects
+3. Local web-console caller vs privileged configuration API
+4. Model output vs filesystem egress
+5. Per-instance state vs operational artifacts
+6. Bot workspace vs shared engine-global config
+7. User intent orchestration vs provider CLI side effects
 
 Not all of these are equally strong.
 
@@ -135,7 +136,39 @@ The Agent Bus is a privileged local control plane, not a public API.
 
 Treat bus changes as security-sensitive even when they are "only local". A loopback API with delegated model execution is still a real authority boundary.
 
-## 3. File Delivery Boundary
+## 3. Local Web Console Boundary
+
+The optional web console is a privileged local configuration surface. Loopback binding reduces exposure, but it does not replace authentication.
+
+### Trusted
+
+- a browser opened by the local operator with the random token generated for the current console process
+- same-origin API requests authenticated by that token or its short-lived browser-session cookie
+
+### Untrusted
+
+- arbitrary local web pages and browser extensions
+- unauthenticated local processes
+- stale, copied, or externally shared console URLs
+
+### Current enforcement
+
+- the console server binds only to loopback
+- the initial URL token is accepted as a bearer credential, exchanged for an `HttpOnly`, `SameSite=Strict` session cookie, and removed from the visible URL with `history.replaceState`
+- the client keeps a session-scoped token copy for explicit API authorization; same-origin cookie authentication also preserves refresh behavior after URL cleanup
+- shell responses set `no-store`, `no-referrer`, `nosniff`, frame denial, a restrictive permissions policy, and a content security policy
+
+### Residual risk
+
+- the first navigation still carries the token locally before client-side cleanup
+- same-user process or browser compromise can recover local console authority
+- the console uses loopback HTTP rather than TLS and must never be rebound to a non-loopback interface without a new threat model
+
+### Design rule
+
+Do not add an unauthenticated console endpoint or persist the console token beyond the browser session. Any new shell asset must remain compatible with the restrictive response headers.
+
+## 4. File Delivery Boundary
 
 File delivery is the highest-risk boundary in the product because it turns model output into filesystem reads and Telegram/Lark egress.
 
@@ -161,6 +194,8 @@ File delivery is the highest-risk boundary in the product because it turns model
 - delivery only permits canonical paths under the bot workspace or the active `/resume` workspace override
 - non-files, oversized files, missing files, and permission failures are rejected and surfaced back to the user
 - both channels refuse credential-shaped basenames and extensions, including `.env*`, `*.pem`, `*.key`, `id_rsa`, and `id_ed25519`
+- Lark batches are rejected before upload when they exceed 20 artifacts or 120 MiB in aggregate
+- Lark image batches are preflighted first and then read/uploaded one image at a time, so one request does not retain every image buffer simultaneously
 
 ### Residual risk
 
@@ -172,7 +207,7 @@ File delivery is the highest-risk boundary in the product because it turns model
 
 Any change touching file extraction, `[tool:]` send tags, legacy `[send-file:]`, `/resume`, workspace roots, or canonical path checks requires explicit security review and regression tests.
 
-## 4. Per-Instance State Boundary
+## 5. Per-Instance State Boundary
 
 Each instance has a private state root under `~/.cctb/<instance>/`.
 
@@ -192,7 +227,9 @@ Each instance has a private state root under `~/.cctb/<instance>/`.
 - structured state uses atomic temp-file + rename writes
 - private state is written with owner-only permissions
 - corrupt JSON state can be quarantined rather than silently overwritten
+- read-modify-write and quarantine/reset recovery paths use the same cross-process file mutex, preventing a repair from renaming a newer concurrent write
 - restore logic preserves private permissions on sensitive state
+- backup creation and restore stream file bodies and enforce file-count, compressed-size, expanded-size, and per-file bounds before untrusted archives can exhaust memory or disk
 - lock files and runtime metadata are kept separate from authoritative config/state
 
 ### Residual risk
@@ -212,7 +249,7 @@ When adding a new state file, define up front:
 - what recovery behavior is allowed
 - whether the file is credential-bearing or privacy-sensitive
 
-## 5. Shared Or Linked Engine-Home Boundary
+## 6. Shared Or Linked Engine-Home Boundary
 
 The bot no longer has a fully isolated engine-global home.
 
@@ -249,7 +286,7 @@ Any feature that touches provider config roots should document whether it is:
 
 Do not describe the system as "fully isolated" without qualifying this boundary.
 
-## 6. Engine Process Boundary
+## 7. Engine Process Boundary
 
 The provider CLI is not a pure function. It is a privileged local subprocess with filesystem and config side effects.
 

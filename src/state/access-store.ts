@@ -202,7 +202,7 @@ export class AccessStore {
     allowlist: number[];
     pendingPairs: { code: string; telegramChatId: number; expiresAt: string }[];
   }> {
-    const state = await this.loadForWrite();
+    const state = await withFileMutex(this.filePath, async () => await this.loadForWrite());
 
     return {
       multiChat: state.multiChat,

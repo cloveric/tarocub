@@ -134,6 +134,39 @@ describe("UI config API", () => {
     }
   });
 
+  it("restores session bindings when an engine config write fails", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
+    try {
+      await makeInstance(home, "agy-bot", { engine: "codex", effort: "high" });
+      const stateDir = path.join(home, ".cctb", "agy-bot");
+      const originalSession = {
+        chats: [{
+          telegramChatId: 123,
+          codexSessionId: "thread-from-codex",
+          status: "idle",
+          updatedAt: new Date(0).toISOString(),
+        }],
+      };
+      await writeFile(path.join(stateDir, "session.json"), JSON.stringify(originalSession), "utf8");
+
+      const request = handleUiApiRequest("POST", "/api/instances/agy-bot/config", {
+        engine: "antigravity",
+      }, { HOME: home }, {
+        updateInstanceConfig: async () => {
+          throw new Error("simulated config write failure");
+        },
+      });
+
+      await expect(request).rejects.toThrow("simulated config write failure");
+      const config = JSON.parse(await readFile(path.join(stateDir, "config.json"), "utf8"));
+      const session = JSON.parse(await readFile(path.join(stateDir, "session.json"), "utf8"));
+      expect(config).toMatchObject({ engine: "codex", effort: "high" });
+      expect(session).toMatchObject(originalSession);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("does not switch engines when persisted session bindings cannot be cleared", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-ui-"));
     try {
@@ -219,8 +252,30 @@ describe("UI config API", () => {
           headers: { "x-ui-token": server.token },
         });
         expect(good.status).toBe(200);
+        expect(good.headers.get("cache-control")).toBe("no-store");
+        expect(good.headers.get("referrer-policy")).toBe("no-referrer");
         const payload = await good.json() as { instances: Array<{ name: string }> };
         expect(payload.instances.map((i) => i.name)).toContain("ccfcc1");
+
+        const shell = await fetch(`http://127.0.0.1:${server.port}/?token=${server.token}`);
+        expect(shell.status).toBe(200);
+        expect(shell.headers.get("cache-control")).toBe("no-store");
+        expect(shell.headers.get("referrer-policy")).toBe("no-referrer");
+        expect(shell.headers.get("x-frame-options")).toBe("DENY");
+        const authCookie = shell.headers.get("set-cookie");
+        expect(authCookie).toMatch(/tarocub_ui=.+; Path=\/; HttpOnly; SameSite=Strict/);
+        const refreshedShell = await fetch(`http://127.0.0.1:${server.port}/`, {
+          headers: { cookie: authCookie!.split(";", 1)[0]! },
+        });
+        expect(refreshedShell.status).toBe(200);
+        // A different loopback port is still a different origin. Cookie auth
+        // must not turn another local web app into a CSRF entry point.
+        const crossPortOrigin = await rawGet(server.port, "/api/instances", {
+          cookie: authCookie!.split(";", 1)[0]!,
+          host: `127.0.0.1:${server.port}`,
+          origin: "http://127.0.0.1:9",
+        });
+        expect(crossPortOrigin).toBe(403);
         // Non-loopback Host header → 403 (DNS-rebind guard), via raw http so the
         // Host header is actually sent.
         const rebind = await rawGet(server.port, "/api/instances", {

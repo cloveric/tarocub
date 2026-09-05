@@ -9,6 +9,7 @@ import { childProcessTestEnv, removeTempRoot } from "./helpers/temp-files.js";
 import { describe, expect, it, vi } from "vitest";
 
 import { UsageStore } from "../src/state/usage-store.js";
+import { JsonStore } from "../src/state/json-store.js";
 
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
@@ -106,6 +107,52 @@ describe("UsageStore", () => {
       expect(files.some((f) => f.includes("usage.json.corrupt.") && f.endsWith(".bak"))).toBe(true);
     } finally {
       errorSpy.mockRestore();
+      await removeTempRoot(stateDir);
+    }
+  });
+
+  it("does not overwrite concurrent usage recorded during corruption recovery", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(stateDir, "usage.json");
+    const store = new UsageStore(stateDir);
+    let releaseFirstQuarantine!: () => void;
+    let firstQuarantineStarted!: () => void;
+    const started = new Promise<void>((resolve) => { firstQuarantineStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseFirstQuarantine = resolve; });
+    const original = JsonStore.prototype.quarantineCurrentFile;
+    let calls = 0;
+    const quarantineSpy = vi.spyOn(JsonStore.prototype, "quarantineCurrentFile").mockImplementation(async function (
+      this: JsonStore<unknown>,
+      reason,
+    ) {
+      calls += 1;
+      if (calls === 1) {
+        firstQuarantineStarted();
+        await gate;
+      }
+      return await original.call(this, reason);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      await store.record({ inputTokens: 10, outputTokens: 1, costUsd: 0.1 });
+      await writeFile(filePath, "{broken", "utf8");
+      const load = store.load();
+      await started;
+      const record = store.record({ inputTokens: 5, outputTokens: 1, costUsd: 0.05 });
+      await Promise.race([record.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, 50))]);
+      releaseFirstQuarantine();
+      await Promise.all([load, record]);
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({
+        totalInputTokens: 15,
+        requestCount: 2,
+        totalCostUsd: 0.15,
+      }));
+    } finally {
+      releaseFirstQuarantine?.();
+      errorSpy.mockRestore();
+      quarantineSpy.mockRestore();
       await removeTempRoot(stateDir);
     }
   });

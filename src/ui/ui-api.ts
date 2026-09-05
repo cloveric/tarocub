@@ -33,6 +33,10 @@ export interface UiApiResult {
 
 export interface UiApiDeps {
   isProcessAlive?: IsProcessAlive;
+  updateInstanceConfig?: (
+    stateDir: string,
+    updater: (config: Record<string, unknown>) => void,
+  ) => Promise<void>;
 }
 
 /** Fields the UI may edit. Anything else in the body is ignored (never trusted). */
@@ -170,21 +174,31 @@ export async function handleUiApiRequest(
         applyUiConfigPatch(prospectiveConfig, applied);
 
         const targetEngine = configEngine(prospectiveConfig);
+        const persistConfig = async (): Promise<void> => {
+          await (deps.updateInstanceConfig ?? updateInstanceConfig)(stateDir, (config) => {
+            applyUiConfigPatch(config, applied);
+          });
+        };
         if (targetEngine !== currentConfig.engine) {
+          let configWriteStarted = false;
           try {
-            await new SessionStore(path.join(stateDir, "session.json")).clearAll();
+            await new SessionStore(path.join(stateDir, "session.json")).clearAllThen(async () => {
+              configWriteStarted = true;
+              await persistConfig();
+            });
           } catch (cause) {
+            if (configWriteStarted) {
+              throw cause;
+            }
             console.error(
               `Failed to clear UI session bindings before switching ${instanceName} to ${targetEngine}:`,
               cause instanceof Error ? cause.message : cause,
             );
             return error(409, "could not switch engine because session bindings could not be reset");
           }
+        } else {
+          await persistConfig();
         }
-
-        await updateInstanceConfig(stateDir, (config) => {
-          applyUiConfigPatch(config, applied);
-        });
       } catch (cause) {
         if (cause instanceof UiConfigValidationError) return error(400, cause.message);
         throw cause;

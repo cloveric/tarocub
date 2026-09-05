@@ -1,6 +1,8 @@
 import type { FormEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { consumeUiToken } from "./ui-token";
+
 // ---------------------------------------------------------------------------
 // API contract (see src/ui/ui-api.ts). Every request carries the per-process
 // token as the `x-ui-token` header. The token arrives in the initial URL
@@ -8,7 +10,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 // bar beyond the first read.
 // ---------------------------------------------------------------------------
 
-const TOKEN = new URLSearchParams(window.location.search).get("token") ?? "";
+const TOKEN = consumeUiToken({
+  href: window.location.href,
+  storage: sessionStorage,
+  history: window.history,
+});
 
 interface InstanceSummary {
   name: string;

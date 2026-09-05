@@ -763,6 +763,58 @@ describe("FileWorkflowStore", () => {
     }
   });
 
+  it("does not discard a concurrent append during targeted corruption recovery", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const store = new FileWorkflowStore(stateDir);
+    const filePath = path.join(stateDir, "file-workflow.json");
+    let releaseQuarantine!: () => void;
+    let quarantineStarted!: () => void;
+    const started = new Promise<void>((resolve) => { quarantineStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseQuarantine = resolve; });
+    const original = JsonStore.prototype.quarantineCurrentFile;
+    let calls = 0;
+    const quarantineSpy = vi.spyOn(JsonStore.prototype, "quarantineCurrentFile").mockImplementation(async function (
+      this: JsonStore<unknown>,
+      reason,
+    ) {
+      calls += 1;
+      if (calls === 1) {
+        quarantineStarted();
+        await gate;
+      }
+      return await original.call(this, reason);
+    });
+
+    try {
+      await writeFile(filePath, "{not valid json", "utf8");
+      const recovery = store.removeRecovering("missing");
+      await started;
+      const append = store.append({
+        uploadId: "concurrent",
+        chatId: 100,
+        userId: 100,
+        kind: "document",
+        status: "processing",
+        sourceFiles: ["source.pdf"],
+        derivedFiles: [],
+        summary: "concurrent",
+        createdAt: "2026-04-10T00:00:00.000Z",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      });
+      await Promise.race([append.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, 50))]);
+      releaseQuarantine();
+      await Promise.all([recovery, append]);
+
+      await expect(store.find("concurrent")).resolves.toEqual(expect.objectContaining({
+        uploadId: "concurrent",
+      }));
+    } finally {
+      releaseQuarantine?.();
+      quarantineSpy.mockRestore();
+      await removeTempRoot(stateDir);
+    }
+  });
+
   it("does not treat permission-denied targeted recovery as self-healing", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const store = new FileWorkflowStore(stateDir);

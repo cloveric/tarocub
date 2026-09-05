@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { removeTempRoot } from "./helpers/temp-files.js";
@@ -455,6 +455,24 @@ describe("updateInstanceConfig", () => {
       for (let index = 0; index < 20; index++) {
         expect(persisted[`field${index}`]).toBe(index);
       }
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps config.json private after replacing an existing file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-instance-config-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, JSON.stringify({ engine: "codex" }), "utf8");
+      await chmod(configPath, 0o644);
+
+      await updateInstanceConfig(root, (config) => {
+        config.locale = "zh";
+      });
+
+      expect((await stat(configPath)).mode & 0o777).toBe(0o600);
     } finally {
       await removeTempRoot(root);
     }

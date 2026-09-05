@@ -12,10 +12,13 @@ export type LarkFileRejectReason =
   | "permission-denied"
   | "read-error"
   | "too-large"
+  | "batch-too-large"
   | "upload-failed"
   | "delivery-uncertain";
 
 export const LARK_FILE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
+export const LARK_BATCH_ARTIFACT_MAX_COUNT = 20;
+export const LARK_BATCH_UPLOAD_MAX_BYTES = 120 * 1024 * 1024;
 
 export interface LarkDeliveryPreflightInput {
   stateDir?: string;
@@ -41,7 +44,7 @@ export type LarkPathPreflightResult =
     }
   | {
       ok: false;
-      reason: Exclude<LarkFileRejectReason, "upload-failed" | "delivery-uncertain">;
+      reason: Exclude<LarkFileRejectReason, "batch-too-large" | "upload-failed" | "delivery-uncertain">;
       realPath?: string;
       detail?: string;
       fileBytes?: number;
@@ -62,7 +65,7 @@ export type NormalizedLarkSendTool =
     }
   | {
       ok: false;
-      reason: "requires_path" | "string_array" | "image_entries";
+      reason: "requires_path" | "string_array" | "image_entries" | "too_many_artifacts";
       field?: string;
     };
 
@@ -123,6 +126,9 @@ export function normalizeLarkSendTool(name: LarkSendToolName, payload: unknown):
   }
   for (const filePath of stringArray(record?.videos)) {
     artifacts.push({ path: filePath, kind: "video" });
+  }
+  if (artifacts.length > LARK_BATCH_ARTIFACT_MAX_COUNT) {
+    return { ok: false, reason: "too_many_artifacts", field: "artifacts" };
   }
   return {
     ok: true,

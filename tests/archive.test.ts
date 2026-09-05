@@ -32,6 +32,53 @@ function buildArchive(input: {
 }
 
 describe("state archive extraction", () => {
+  it("stops decompression when an archive expands beyond 128 MiB", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-archive-test-"));
+    const destination = path.join(root, "restore-root");
+    const archivePath = path.join(root, "gzip-bomb.cctb.gz");
+
+    try {
+      await mkdir(destination, { recursive: true });
+      await writeFile(archivePath, gzipSync(Buffer.alloc(128 * 1024 * 1024 + 1)));
+
+      await expect(extractArchive(archivePath, destination)).rejects.toThrow(/uncompressed size limit/i);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("rejects an archive manifest with more than 10000 files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-archive-test-"));
+    const destination = path.join(root, "restore-root");
+    const archivePath = path.join(root, "too-many-files.cctb.gz");
+    const files = Array.from({ length: 10_001 }, (_, index) => ({
+      path: index === 0 ? "../escape" : `files/${index}.txt`,
+      size: 0,
+      contentOffset: 0,
+    }));
+    const header = Buffer.from(JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      rootName: "alpha",
+      files,
+    }), "utf8");
+    const headerLength = Buffer.alloc(4);
+    headerLength.writeUInt32BE(header.length, 0);
+
+    try {
+      await mkdir(destination, { recursive: true });
+      await writeFile(archivePath, gzipSync(Buffer.concat([
+        Buffer.from("CCTB", "utf8"),
+        headerLength,
+        header,
+      ])));
+
+      await expect(extractArchive(archivePath, destination)).rejects.toThrow(/too many files/i);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("rejects an archive rootName that escapes the destination", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cctb-archive-test-"));
     const destination = path.join(root, "restore-root");

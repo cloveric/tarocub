@@ -17,6 +17,7 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 import { AccessStore, findConflictingLockedChatId } from "../src/state/access-store.js";
+import { JsonStore } from "../src/state/json-store.js";
 
 const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
@@ -234,6 +235,53 @@ describe("AccessStore", () => {
         allowlist: [101, 202, 303],
       }));
     } finally {
+      await removeTempRoot(dir);
+    }
+  });
+
+  it("does not quarantine a valid access file written while a corrupt-state read is recovering", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(dir, "access.json");
+    let releaseFirstQuarantine!: () => void;
+    let firstQuarantineStarted!: () => void;
+    const quarantineStarted = new Promise<void>((resolve) => {
+      firstQuarantineStarted = resolve;
+    });
+    const quarantineGate = new Promise<void>((resolve) => {
+      releaseFirstQuarantine = resolve;
+    });
+    const originalQuarantine = JsonStore.prototype.quarantineCurrentFile;
+    let quarantineCalls = 0;
+    const quarantineSpy = vi.spyOn(JsonStore.prototype, "quarantineCurrentFile").mockImplementation(async function (
+      this: JsonStore<unknown>,
+      reason,
+    ) {
+      quarantineCalls += 1;
+      if (quarantineCalls === 1) {
+        firstQuarantineStarted();
+        await quarantineGate;
+      }
+      return await originalQuarantine.call(this, reason);
+    });
+
+    try {
+      await writeFile(filePath, "{broken", "utf8");
+      const store = new AccessStore(filePath);
+      const status = store.getStatus();
+      await quarantineStarted;
+
+      const allow = store.allowChat(123);
+      await Promise.race([
+        allow.catch(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, 50)),
+      ]);
+      releaseFirstQuarantine();
+      await Promise.all([status, allow]);
+
+      await expect(store.load()).resolves.toEqual(expect.objectContaining({ allowlist: [123] }));
+    } finally {
+      releaseFirstQuarantine?.();
+      quarantineSpy.mockRestore();
       await removeTempRoot(dir);
     }
   });

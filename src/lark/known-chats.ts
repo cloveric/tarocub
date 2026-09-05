@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { withFileMutex } from "../state/file-mutex.js";
 import { JsonStore } from "../state/json-store.js";
 import type { LarkBridgeChatType, LarkChatMode, LarkNormalizedBridgeMessage } from "./message-normalizer.js";
 
@@ -96,7 +97,7 @@ export class LarkKnownChatStore {
   async record(normalized: LarkNormalizedBridgeMessage, now = new Date()): Promise<void> {
     const entry = knownChatFromNormalized(normalized, now);
     await this.enqueueWrite(async () => {
-      const state = await this.readState();
+      const state = await this.readStateUnlocked();
       const next = dedupeKnownChats([
         entry,
         ...state.chats.filter((chat) => chat.conversationKey !== entry.conversationKey),
@@ -118,6 +119,10 @@ export class LarkKnownChatStore {
   }
 
   private async readState(): Promise<LarkKnownChatState> {
+    return await withFileMutex(this.filePath, async () => await this.readStateUnlocked());
+  }
+
+  private async readStateUnlocked(): Promise<LarkKnownChatState> {
     try {
       return await this.store.read({ chats: [] });
     } catch (error) {
@@ -135,7 +140,10 @@ export class LarkKnownChatStore {
 
   private async enqueueWrite(operation: () => Promise<void>): Promise<void> {
     const previous = LarkKnownChatStore.writeQueues.get(this.filePath) ?? Promise.resolve();
-    const next = previous.then(operation, operation);
+    const lockedOperation = async (): Promise<void> => {
+      await withFileMutex(this.filePath, operation);
+    };
+    const next = previous.then(lockedOperation, lockedOperation);
     const queued = next.catch(() => undefined);
     LarkKnownChatStore.writeQueues.set(this.filePath, queued);
     try {

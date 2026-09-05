@@ -42,6 +42,10 @@ export class SessionStore {
   }
 
   async load(): Promise<SessionState> {
+    return await withFileMutex(this.filePath, async () => await this.loadUnlocked());
+  }
+
+  private async loadUnlocked(): Promise<SessionState> {
     return this.store.read(createDefaultSessionState());
   }
 
@@ -63,7 +67,7 @@ export class SessionStore {
 
   async upsert(record: SessionRecord): Promise<void> {
     await this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadUnlocked();
       const normalized = normalizeRecord(record);
       const key = recordConversationKey(normalized);
       const index = state.chats.findIndex((entry) => recordConversationKey(entry) === key);
@@ -119,79 +123,101 @@ export class SessionStore {
   }
 
   private async removeMatching(predicate: (record: SessionRecord) => boolean): Promise<boolean> {
+    return this.enqueueWrite(async () => this.removeMatchingUnlocked(predicate));
+  }
+
+  private async removeMatchingUnlocked(predicate: (record: SessionRecord) => boolean): Promise<boolean> {
+    const state = await this.loadUnlocked();
     let removed = false;
-
-    await this.enqueueWrite(async () => {
-      const state = await this.load();
-      const nextChats = state.chats.filter((record) => {
-        if (predicate(record)) {
-          removed = true;
-          return false;
-        }
-
-        return true;
-      });
-
-      if (!removed) {
-        return;
+    const nextChats = state.chats.filter((record) => {
+      if (predicate(record)) {
+        removed = true;
+        return false;
       }
 
+      return true;
+    });
+
+    if (removed) {
       state.chats = nextChats;
       await this.store.write(state);
-    });
+    }
 
     return removed;
   }
 
   async clearAll(): Promise<number> {
-    let removedCount = 0;
-
-    await this.enqueueWrite(async () => {
-      const state = await this.load();
-      removedCount = state.chats.length;
+    return this.enqueueWrite(async () => {
+      const state = await this.loadUnlocked();
+      const removedCount = state.chats.length;
       if (removedCount === 0) {
-        return;
+        return 0;
       }
 
       state.chats = [];
       await this.store.write(state);
+      return removedCount;
     });
+  }
 
-    return removedCount;
+  /**
+   * Clear bindings while another durable update runs. The session mutex stays
+   * held for the whole operation so concurrent upserts cannot be overwritten;
+   * if the update fails, the original bindings are restored before release.
+   */
+  async clearAllThen<T>(operation: () => Promise<T>): Promise<{ removedCount: number; result: T }> {
+    return this.enqueueWrite(async () => {
+      const original = await this.loadUnlocked();
+      const removedCount = original.chats.length;
+      if (removedCount > 0) {
+        await this.store.write(createDefaultSessionState());
+      }
+
+      try {
+        return { removedCount, result: await operation() };
+      } catch (cause) {
+        if (removedCount > 0) {
+          try {
+            await this.store.write(original);
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [cause, rollbackError],
+              "session bindings could not be restored after a failed update",
+            );
+          }
+        }
+        throw cause;
+      }
+    });
   }
 
   async removeByChatIdRecovering(telegramChatId: number): Promise<{ removed: boolean; repaired: boolean }> {
-    try {
-      return {
-        removed: await this.removeByChatId(telegramChatId),
-        repaired: false,
-      };
-    } catch (error) {
-      if (!isRepairableSessionStateError(error)) {
-        throw error;
-      }
-
-      await this.store.quarantineCurrentFile("corrupt");
-      await this.reset();
-      return { removed: false, repaired: true };
-    }
+    return this.removeMatchingRecovering((record) => matchesChatId(record, telegramChatId));
   }
 
   async removeByConversationKeyRecovering(conversationKey: string): Promise<{ removed: boolean; repaired: boolean }> {
-    try {
-      return {
-        removed: await this.removeByConversationKey(conversationKey),
-        repaired: false,
-      };
-    } catch (error) {
-      if (!isRepairableSessionStateError(error)) {
-        throw error;
-      }
+    return this.removeMatchingRecovering((record) => recordConversationKey(record) === conversationKey);
+  }
 
-      await this.store.quarantineCurrentFile("corrupt");
-      await this.reset();
-      return { removed: false, repaired: true };
-    }
+  private async removeMatchingRecovering(
+    predicate: (record: SessionRecord) => boolean,
+  ): Promise<{ removed: boolean; repaired: boolean }> {
+    return this.enqueueWrite(async () => {
+      try {
+        return {
+          removed: await this.removeMatchingUnlocked(predicate),
+          repaired: false,
+        };
+      } catch (error) {
+        if (!isRepairableSessionStateError(error)) {
+          throw error;
+        }
+
+        await this.store.quarantineCurrentFile("corrupt");
+        await this.store.write(createDefaultSessionState());
+        return { removed: false, repaired: true };
+      }
+    });
   }
 
   async reset(): Promise<void> {
@@ -200,7 +226,7 @@ export class SessionStore {
     });
   }
 
-  private enqueueWrite(task: () => Promise<void>): Promise<void> {
+  private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
     const run = this.pendingWrite.then(
       () => withFileMutex(this.filePath, task),
       () => withFileMutex(this.filePath, task),

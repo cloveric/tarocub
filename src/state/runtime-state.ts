@@ -34,6 +34,10 @@ export class RuntimeStateStore {
   }
 
   async load(): Promise<RuntimeState> {
+    return await withFileMutex(this.filePath, async () => await this.loadUnlocked());
+  }
+
+  private async loadUnlocked(): Promise<RuntimeState> {
     try {
       return await this.store.read(createDefaultRuntimeState());
     } catch (error) {
@@ -54,7 +58,7 @@ export class RuntimeStateStore {
 
   async markHandledUpdateId(updateId: number): Promise<void> {
     return this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadUnlocked();
       if (state.lastHandledUpdateId !== null && updateId <= state.lastHandledUpdateId) {
         return;
       }
@@ -66,7 +70,7 @@ export class RuntimeStateStore {
 
   async markTurnStarted(now = new Date()): Promise<void> {
     return this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadUnlocked();
       const timestamp = now.toISOString();
       state.activeTurnCount = Math.max(0, state.activeTurnCount ?? 0) + 1;
       state.activeTurnStartedAt ??= timestamp;
@@ -77,7 +81,7 @@ export class RuntimeStateStore {
 
   async markTurnActivity(now = new Date()): Promise<void> {
     return this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadUnlocked();
       if ((state.activeTurnCount ?? 0) <= 0) {
         return;
       }
@@ -89,7 +93,7 @@ export class RuntimeStateStore {
 
   async markTurnCompleted(now = new Date()): Promise<void> {
     return this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadUnlocked();
       state.activeTurnCount = Math.max(0, (state.activeTurnCount ?? 0) - 1);
       if (state.activeTurnCount === 0) {
         delete state.activeTurnStartedAt;
@@ -103,7 +107,7 @@ export class RuntimeStateStore {
 
   async resetActiveTurns(): Promise<void> {
     return this.enqueueWrite(async () => {
-      const state = await this.load();
+      const state = await this.loadUnlocked();
       state.activeTurnCount = 0;
       delete state.activeTurnStartedAt;
       delete state.activeTurnUpdatedAt;

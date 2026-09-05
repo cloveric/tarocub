@@ -2,9 +2,10 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LarkKnownChatStore } from "../src/lark/known-chats.js";
+import { JsonStore } from "../src/state/json-store.js";
 import type { LarkNormalizedBridgeMessage } from "../src/lark/message-normalizer.js";
 
 function groupMessage(chatId: string): LarkNormalizedBridgeMessage {
@@ -137,6 +138,47 @@ describe("LarkKnownChatStore", () => {
       expect(Array.isArray(healed.chats)).toBe(true);
       expect(healed.chats).toHaveLength(1);
     } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not quarantine a valid known-chat file written during corruption recovery", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-known-chats-race-"));
+    const filePath = path.join(stateDir, "known-chats.json");
+    let releaseFirstQuarantine!: () => void;
+    let firstQuarantineStarted!: () => void;
+    const started = new Promise<void>((resolve) => { firstQuarantineStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseFirstQuarantine = resolve; });
+    const original = JsonStore.prototype.quarantineCurrentFile;
+    let calls = 0;
+    const spy = vi.spyOn(JsonStore.prototype, "quarantineCurrentFile").mockImplementation(async function (
+      this: JsonStore<unknown>,
+      reason,
+    ) {
+      calls += 1;
+      if (calls === 1) {
+        firstQuarantineStarted();
+        await gate;
+      }
+      return await original.call(this, reason);
+    });
+
+    try {
+      await writeFile(filePath, "{broken", "utf8");
+      const store = new LarkKnownChatStore(stateDir);
+      const list = store.list();
+      await started;
+      const record = store.record(groupMessage("oc_recovered"));
+      await Promise.race([record.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, 50))]);
+      releaseFirstQuarantine();
+      await Promise.all([list, record]);
+
+      await expect(store.get("lark:oc_recovered")).resolves.toEqual(expect.objectContaining({
+        conversationKey: "lark:oc_recovered",
+      }));
+    } finally {
+      releaseFirstQuarantine?.();
+      spy.mockRestore();
       await rm(stateDir, { recursive: true, force: true });
     }
   });

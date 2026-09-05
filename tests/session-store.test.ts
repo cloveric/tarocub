@@ -317,6 +317,41 @@ describe("SessionStore", () => {
     }
   });
 
+  it("keeps readers behind a clear-and-update transaction", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const writer = new SessionStore(filePath);
+    const reader = new SessionStore(filePath);
+    let releaseOperation!: () => void;
+    let operationStarted!: () => void;
+    const started = new Promise<void>((resolve) => { operationStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseOperation = resolve; });
+
+    try {
+      await writer.upsert(createRecord());
+      const transaction = writer.clearAllThen(async () => {
+        operationStarted();
+        await gate;
+      });
+      await started;
+
+      let readResolved = false;
+      const read = reader.load().then((state) => {
+        readResolved = true;
+        return state;
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      expect(readResolved).toBe(false);
+
+      releaseOperation();
+      await transaction;
+      await expect(read).resolves.toMatchObject({ chats: [] });
+    } finally {
+      releaseOperation?.();
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("returns fresh default state when the file is missing", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const filePath = path.join(tempDir, "session.json");
@@ -484,6 +519,47 @@ describe("SessionStore", () => {
       expect(backups).toHaveLength(1);
       await expect(readFile(path.join(tempDir, backups[0]!), "utf8")).resolves.toBe(unreadableContents);
     } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("does not discard a concurrent upsert during targeted corruption recovery", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const filePath = path.join(tempDir, "session.json");
+    const store = new SessionStore(filePath);
+    let releaseQuarantine!: () => void;
+    let quarantineStarted!: () => void;
+    const started = new Promise<void>((resolve) => { quarantineStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releaseQuarantine = resolve; });
+    const original = JsonStore.prototype.quarantineCurrentFile;
+    let calls = 0;
+    const quarantineSpy = vi.spyOn(JsonStore.prototype, "quarantineCurrentFile").mockImplementation(async function (
+      this: JsonStore<unknown>,
+      reason,
+    ) {
+      calls += 1;
+      if (calls === 1) {
+        quarantineStarted();
+        await gate;
+      }
+      return await original.call(this, reason);
+    });
+
+    try {
+      await writeFile(filePath, "{not valid json", "utf8");
+      const recovery = store.removeByChatIdRecovering(123);
+      await started;
+      const upsert = store.upsert(createRecord({ telegramChatId: 456, codexSessionId: "concurrent" }));
+      await Promise.race([upsert.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, 50))]);
+      releaseQuarantine();
+      await Promise.all([recovery, upsert]);
+
+      await expect(store.findByChatId(456)).resolves.toEqual(expect.objectContaining({
+        codexSessionId: "concurrent",
+      }));
+    } finally {
+      releaseQuarantine?.();
+      quarantineSpy.mockRestore();
       await removeTempRoot(tempDir);
     }
   });

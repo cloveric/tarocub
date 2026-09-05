@@ -1259,8 +1259,7 @@ function renderToolInput(tool: LarkToolEntry): string {
 
 export function cleanCardText(content: string): string {
   const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
-  const compatible = normalizeLarkMarkdownCompatibility(stripped);
-  return collapseBlankLines(neutralizeMarkdownSetextHeadings(downgradeMarkdownHeadings(compatible))).trim();
+  return transformLarkCardMarkdown(stripped).trim();
 }
 
 const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
@@ -1272,34 +1271,6 @@ const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
   Leftrightarrow: "⇔",
   to: "→",
 };
-
-function normalizeLarkMarkdownCompatibility(text: string): string {
-  const lines = text.split("\n");
-  let fence: { marker: "`" | "~"; length: number } | undefined;
-
-  return lines.map((line) => {
-    const fenceMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
-    if (fence) {
-      if (
-        fenceMatch
-        && fenceMatch[1][0] === fence.marker
-        && fenceMatch[1].length >= fence.length
-        && line.slice(fenceMatch[0].length).trim() === ""
-      ) {
-        fence = undefined;
-      }
-      return line;
-    }
-    if (fenceMatch) {
-      fence = {
-        marker: fenceMatch[1][0] as "`" | "~",
-        length: fenceMatch[1].length,
-      };
-      return line;
-    }
-    return normalizeOutsideInlineCode(line);
-  }).join("\n");
-}
 
 function normalizeOutsideInlineCode(line: string): string {
   let output = "";
@@ -1362,11 +1333,10 @@ function parseMarkdownFenceLine(line: string): MarkdownFenceLine | undefined {
   };
 }
 
-function neutralizeMarkdownSetextHeadings(text: string): string {
-  const lines = text.split("\n");
+function transformLarkCardMarkdown(text: string): string {
+  const output: string[] = [];
   let fence: Omit<MarkdownFenceLine, "trailing"> | undefined;
-
-  return lines.map((line) => {
+  for (const line of text.split("\n")) {
     const fenceMatch = parseMarkdownFenceLine(line);
     if (fence) {
       if (
@@ -1378,7 +1348,8 @@ function neutralizeMarkdownSetextHeadings(text: string): string {
       ) {
         fence = undefined;
       }
-      return line;
+      output.push(line);
+      continue;
     }
     if (fenceMatch) {
       fence = {
@@ -1386,64 +1357,27 @@ function neutralizeMarkdownSetextHeadings(text: string): string {
         length: fenceMatch.length,
         quoteDepth: fenceMatch.quoteDepth,
       };
-      return line;
+      output.push(line);
+      continue;
     }
 
-    // A line of '=' characters turns the preceding line into a Setext H1 in
-    // Feishu. Escape the first marker while preserving divider-like output.
-    return line.replace(/^([ \t]{0,3}(?:>[ \t]?)*)(={3,})[ \t]*$/, "$1\\$2");
-  }).join("\n");
-}
-
-/**
- * Feishu renders markdown ATX headings (`#`–`######`) at large heading sizes,
- * which looks oversized and noisy inside a chat card — especially for answers
- * with many `##` sections. Downgrade headings to bold so they keep their
- * structure at normal body size.
- *
- * Headings can sit behind a blockquote marker (`> ## Title`), which Feishu
- * renders as a grey callout box AROUND the oversized heading — the exact
- * "font suddenly large + grey + clashes with body" report. Match an optional
- * blockquote prefix and preserve it, downgrading only the heading inside.
- */
-function downgradeMarkdownHeadings(text: string): string {
-  let fence: Omit<MarkdownFenceLine, "trailing"> | undefined;
-  return text.split("\n").map((line) => {
-    if (fence) {
-      const closeMatch = parseMarkdownFenceLine(line);
-      if (closeMatch) {
-        if (
-          fence.marker === closeMatch.marker
-          && closeMatch.length >= fence.length
-          && closeMatch.quoteDepth === fence.quoteDepth
-          && closeMatch.trailing.trim() === ""
-        ) {
-          fence = undefined;
-        }
-      }
-      return line;
-    }
-    const openMatch = parseMarkdownFenceLine(line);
-    if (openMatch) {
-      fence = {
-        marker: openMatch.marker,
-        length: openMatch.length,
-        quoteDepth: openMatch.quoteDepth,
-      };
-      return line;
-    }
-    return line.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/, (_match, quote: string, title: string) => {
+    let transformed = normalizeOutsideInlineCode(line);
+    transformed = transformed.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/, (_match, quote: string, title: string) => {
       const trimmed = title.trim();
       // Don't wrap in ** when the title already contains a ** span (fully bold,
       // or an inner bold like `…的**逐笔成交明细**`) — an outer ** would create
       // unbalanced/nested markers. Drop the heading marker and keep the text.
       return trimmed.includes("**") ? `${quote}${trimmed}` : `${quote}**${trimmed}**`;
     });
-  }).join("\n");
-}
-
-function collapseBlankLines(text: string): string {
-  return text.replace(/\n{3,}/g, "\n\n");
+    // A line of '=' characters turns the preceding line into a Setext H1 in
+    // Feishu. Escape the first marker while preserving divider-like output.
+    transformed = transformed.replace(/^([ \t]{0,3}(?:>[ \t]?)*)(={3,})[ \t]*$/, "$1\\$2");
+    if (transformed === "" && output.at(-1) === "") {
+      continue;
+    }
+    output.push(transformed);
+  }
+  return output.join("\n");
 }
 
 function runCardStatusLabel(

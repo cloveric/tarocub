@@ -125,7 +125,7 @@ Implication:
 
 Atomic rename prevents partial writes, but it does **not** prevent lost updates in read-modify-write flows.
 
-Stores that mutate counters or collections must serialize writes inside the process.
+Stores that mutate counters or collections must serialize each read-modify-write transaction and every destructive recovery with the same file-scoped mutex across processes. A read that can quarantine/reset state must also hold that mutex; otherwise it can rename a newer writer's valid file as corrupt.
 
 Current examples:
 
@@ -134,6 +134,8 @@ Current examples:
 - `UsageStore`
 - `FileWorkflowStore`
 - `CronStore`
+
+Some stores also keep an in-process promise queue to preserve call order, but that queue is not a substitute for the cross-process file mutex.
 
 ### Security rule
 
@@ -237,8 +239,10 @@ An old instance may still contain `resume`. Runtime code migrates that value ont
 ### Write rules
 
 - must be written atomically
+- the state directory and `config.json` must remain owner-only (`0700` and `0600`) even when replacing a pre-existing file with broader permissions
 - readers tolerate missing file by falling back to defaults
 - runtime should not silently overwrite unreadable/corrupt config
+- a web-console engine change clears incompatible provider-session bindings and commits the config update under one session transaction; if the config write fails, the original session bindings are restored before the mutex is released
 
 Current behavior is split:
 
@@ -290,20 +294,15 @@ This file is authoritative for:
 
 ### Write rules
 
-Current writes are read-modify-write and are **not** internally queued.
-
-That means this store is logically authoritative but still vulnerable to same-process lost-update races if heavily mutated concurrently.
-
-In practice, writes are low-frequency enough today that this has not been a major issue, but the file should still be treated as mutable shared state.
+Current writes are read-modify-write operations serialized in-process and across processes. Status reads that can trigger corruption recovery use the same file mutex as mutations.
 
 ### Recovery rules
 
 - missing file -> default state:
   - `policy = pairing`
   - empty allowlist/pairs/pending codes
-- invalid shape currently throws from the parser
-
-There is no built-in quarantine-and-repair path here today.
+- corrupt JSON or invalid shape is quarantined and reset to the fail-closed default (`pairing`, no authorized chats) on a repair-capable operation
+- transient I/O and permission errors are rethrown rather than mistaken for corruption
 
 ### Sensitivity
 
@@ -345,9 +344,10 @@ It lets Telegram private chats/topics and Lark private chats/groups/topics conti
 
 ### Write rules
 
-- writes are serialized in-process
+- reads and writes are serialized with a cross-process file mutex; writes also retain in-process ordering
 - updates are upsert-style by canonical `conversationKey`, with legacy chat/thread keys normalized on read/write
 - removal supports recovery behavior on corrupt state
+- `clearAllThen()` holds the session mutex across session clearing plus its durable companion update, and restores the original bindings if that update fails
 
 ### Recovery rules
 
@@ -390,7 +390,7 @@ This file is authoritative for "how far Telegram polling has durably advanced".
 
 ### Write rules
 
-- writes are serialized in-process
+- reads and writes are serialized with a cross-process file mutex; writes also retain in-process ordering
 - updates are monotonic: lower update IDs do not replace higher ones
 
 ### Recovery rules
@@ -724,7 +724,8 @@ This file is authoritative for in-progress and resumable file-processing state, 
 
 ### Write rules
 
-- writes are serialized in-process
+- writes and corruption recovery are serialized with a cross-process file mutex; writes also retain in-process ordering
+- ordinary snapshot reads rely on atomic replacement and do not mutate or quarantine state
 - records are append/update/remove by `uploadId`
 - status is mutated over time; `updatedAt` is refreshed on mutation
 
@@ -961,12 +962,17 @@ A backup is authoritative only as a snapshot artifact, not as live state.
 
 - skips symlinks
 - skips oversized files
-- writes a gzipped custom archive format
+- skips regenerable dependency/VCS/scratch directories and operational logs by default
+- streams source file bodies through gzip rather than buffering the complete archive
+- rejects manifests above 10,000 files and archives above the 128 MiB expanded-format limit
+- writes a gzipped custom archive format through a private temporary file before atomic replacement
 
 ### Recovery rules
 
 - restore validates archive magic and version
 - restore prevents path traversal
+- restore rejects compressed inputs above 64 MiB, expanded archives above 128 MiB, manifests above 10,000 files, and individual members above 100 MiB
+- restore expands and copies members through bounded streams instead of loading the complete archive or every member into memory
 - restore reapplies restrictive permissions
 
 ### Sensitivity

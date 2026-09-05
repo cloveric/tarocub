@@ -729,6 +729,49 @@ describe("lark card renderer", () => {
     ].join("\n"));
   });
 
+  it("does not normalize compatibility syntax inside a blockquoted fenced code block", () => {
+    const raw = [
+      "> ```text",
+      "> literal $\\rightarrow$ **“quoted”**",
+      "> ```",
+      "outside $\\rightarrow$ **“quoted”**",
+    ].join("\n");
+
+    expect(cleanCardText(raw)).toBe([
+      "> ```text",
+      "> literal $\\rightarrow$ **“quoted”**",
+      "> ```",
+      "outside → “**quoted**”",
+    ].join("\n"));
+  });
+
+  it("preserves repeated blank lines inside fenced code while collapsing prose gaps", () => {
+    const raw = [
+      "before",
+      "",
+      "",
+      "after",
+      "```text",
+      "first",
+      "",
+      "",
+      "second",
+      "```",
+    ].join("\n");
+
+    expect(cleanCardText(raw)).toBe([
+      "before",
+      "",
+      "after",
+      "```text",
+      "first",
+      "",
+      "",
+      "second",
+      "```",
+    ].join("\n"));
+  });
+
   it("downgrades a heading inside a blockquote (> ##) without losing the callout, and keeps inner bold balanced", () => {
     // The real bug: Fable emitted `> ## 🥇 …的**逐笔成交明细**` — a level-2
     // heading inside a blockquote with an inner bold span. The old regex only

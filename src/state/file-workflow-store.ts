@@ -178,45 +178,38 @@ export class FileWorkflowStore {
   }
 
   async remove(uploadId: string): Promise<boolean> {
-    let removed = false;
+    return this.enqueueWrite(async () => this.removeUnlocked(uploadId));
+  }
 
-    await this.enqueueWrite(async () => {
-      const state = await this.load();
-      const nextRecords = state.records.filter((record) => {
-        if (record.uploadId === uploadId) {
-          removed = true;
-          return false;
-        }
+  private async removeUnlocked(uploadId: string): Promise<boolean> {
+    const state = await this.load();
+    const nextRecords = state.records.filter((record) => record.uploadId !== uploadId);
+    if (nextRecords.length === state.records.length) {
+      return false;
+    }
 
-        return true;
-      });
-
-      if (!removed) {
-        return;
-      }
-
-      state.records = nextRecords;
-      await this.store.write(state);
-    });
-
-    return removed;
+    state.records = nextRecords;
+    await this.store.write(state);
+    return true;
   }
 
   async removeRecovering(uploadId: string): Promise<{ removed: boolean; repaired: boolean }> {
-    try {
-      return {
-        removed: await this.remove(uploadId),
-        repaired: false,
-      };
-    } catch (error) {
-      if (!isRepairableFileWorkflowStateError(error)) {
-        throw error;
-      }
+    return this.enqueueWrite(async () => {
+      try {
+        return {
+          removed: await this.removeUnlocked(uploadId),
+          repaired: false,
+        };
+      } catch (error) {
+        if (!isRepairableFileWorkflowStateError(error)) {
+          throw error;
+        }
 
-      await this.store.quarantineCurrentFile("corrupt");
-      await this.reset();
-      return { removed: false, repaired: true };
-    }
+        await this.store.quarantineCurrentFile("corrupt");
+        await this.store.write(createDefaultState());
+        return { removed: false, repaired: true };
+      }
+    });
   }
 
   async update(uploadId: string, mutate: (record: FileWorkflowRecord) => void): Promise<FileWorkflowRecord | null> {
@@ -369,7 +362,7 @@ export class FileWorkflowStore {
     });
   }
 
-  private enqueueWrite(task: () => Promise<void>): Promise<void> {
+  private enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
     const run = this.pendingWrite.then(
       () => withFileMutex(this.filePath, task),
       () => withFileMutex(this.filePath, task),

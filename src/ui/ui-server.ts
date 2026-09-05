@@ -12,6 +12,27 @@ import { CONSOLE_HTML } from "./console-html.js";
 import { handleUiApiRequest, type UiApiDeps, type UiApiEnv } from "./ui-api.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const UI_AUTH_COOKIE = "tarocub_ui";
+const BASE_SECURITY_HEADERS = {
+  "cache-control": "no-store",
+  "referrer-policy": "no-referrer",
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+} as const;
+const SHELL_SECURITY_HEADERS = {
+  ...BASE_SECURITY_HEADERS,
+  "content-security-policy": [
+    "default-src 'none'",
+    "script-src 'unsafe-inline'",
+    "style-src 'unsafe-inline'",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'none'",
+  ].join("; "),
+} as const;
 
 export interface UiServerHandle {
   url: string;
@@ -29,16 +50,37 @@ function constantTimeEquals(a: string, b: string): boolean {
   return timingSafeEqual(left, right);
 }
 
-/** Host header must be loopback; a cross-origin Origin is rejected (DNS-rebind guard). */
+function readCookie(cookieHeader: string | undefined, name: string): string {
+  if (!cookieHeader) {
+    return "";
+  }
+  for (const field of cookieHeader.split(";")) {
+    const separator = field.indexOf("=");
+    if (separator < 0 || field.slice(0, separator).trim() !== name) {
+      continue;
+    }
+    return field.slice(separator + 1).trim();
+  }
+  return "";
+}
+
+/** Host must be loopback and a browser Origin must exactly match it. */
 function isLoopbackRequest(host: string | undefined, origin: string | undefined): boolean {
   const hostOk = !host || /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host);
   if (!hostOk) {
     return false;
   }
   if (origin) {
+    if (!host) {
+      return false;
+    }
     try {
-      const originHost = new URL(origin).hostname;
-      if (!["127.0.0.1", "localhost", "::1"].includes(originHost)) {
+      const parsedOrigin = new URL(origin);
+      const expectedOrigin = new URL(`http://${host}`);
+      if (
+        parsedOrigin.protocol !== "http:"
+        || parsedOrigin.host.toLowerCase() !== expectedOrigin.host.toLowerCase()
+      ) {
         return false;
       }
     } catch {
@@ -75,18 +117,28 @@ export async function startUiServer(
       const host = req.headers.host;
       const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
       if (!isLoopbackRequest(host, origin)) {
-        res.writeHead(403).end("forbidden");
+        res.writeHead(403, BASE_SECURITY_HEADERS).end("forbidden");
         return;
       }
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      const provided = (req.headers["x-ui-token"] as string | undefined) ?? url.searchParams.get("token") ?? "";
+      const headerToken = (req.headers["x-ui-token"] as string | undefined) ?? "";
+      const queryToken = url.searchParams.get("token") ?? "";
+      const cookieToken = readCookie(req.headers.cookie, UI_AUTH_COOKIE);
+      const provided = headerToken || queryToken || cookieToken;
       if (!constantTimeEquals(provided, token)) {
-        res.writeHead(401).end("unauthorized");
+        res.writeHead(401, BASE_SECURITY_HEADERS).end("unauthorized");
         return;
       }
+      const authHeaders = queryToken
+        ? { "set-cookie": `${UI_AUTH_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict` }
+        : {};
       const method = (req.method ?? "GET").toUpperCase();
       if (!url.pathname.startsWith("/api/")) {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "x-content-type-options": "nosniff" });
+        res.writeHead(200, {
+          ...SHELL_SECURITY_HEADERS,
+          ...authHeaders,
+          "content-type": "text/html; charset=utf-8",
+        });
         res.end(CONSOLE_HTML);
         return;
       }
@@ -94,15 +146,17 @@ export async function startUiServer(
       try {
         body = method === "GET" ? undefined : await readBody(req);
       } catch {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid body" }));
+        res.writeHead(400, { ...BASE_SECURITY_HEADERS, ...authHeaders, "content-type": "application/json" })
+          .end(JSON.stringify({ error: "invalid body" }));
         return;
       }
       const result = await handleUiApiRequest(method, url.pathname, body, env, options.deps ?? {});
-      res.writeHead(result.status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.writeHead(result.status, { ...BASE_SECURITY_HEADERS, ...authHeaders, "content-type": "application/json" });
       res.end(JSON.stringify(result.json));
     })().catch(() => {
       if (!res.headersSent) {
-        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "internal error" }));
+        res.writeHead(500, { ...BASE_SECURITY_HEADERS, "content-type": "application/json" })
+          .end(JSON.stringify({ error: "internal error" }));
       }
     });
   });

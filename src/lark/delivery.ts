@@ -22,12 +22,15 @@ import { sendLarkCardWithFallback } from "./card-delivery.js";
 import {
   extractWholeResponseFileBlock,
   isLarkSendToolName,
+  LARK_BATCH_ARTIFACT_MAX_COUNT,
+  LARK_BATCH_UPLOAD_MAX_BYTES,
   LARK_FILE_UPLOAD_MAX_BYTES,
   normalizeLarkSendTool,
   preflightLarkDeliveryPath,
   preflightLarkInlineFile,
   resolveLarkDeliveryRoots,
   type LarkFileRejectReason,
+  type LarkSendArtifact,
   type LarkSendPathKind,
 } from "./delivery-preflight.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
@@ -267,7 +270,42 @@ export async function deliverLarkResponse(input: {
     }
   }
 
-  if (matches.length > 0) {
+  let deliveryMatches = matches;
+  if (matches.length > LARK_BATCH_ARTIFACT_MAX_COUNT) {
+    ok = false;
+    deliveryMatches = [];
+    await input.channel.send(input.chatId, {
+      text: renderInvalidLarkToolPayload("send.batch", "too_many_artifacts", locale, "artifacts"),
+    }, replyOptions);
+  }
+
+  if (deliveryMatches.length > 0) {
+    const unclaimedMatches: typeof deliveryMatches = [];
+    for (const match of deliveryMatches) {
+      if (await claimLarkArtifactPath(claimedArtifactPaths, match.path)) {
+        unclaimedMatches.push(match);
+      }
+    }
+    deliveryMatches = unclaimedMatches;
+  }
+
+  if (deliveryMatches.length > 0) {
+    const legacyArtifacts: LarkSendArtifact[] = deliveryMatches.map((match) => ({
+      path: match.path,
+      kind: match.preferPhoto ? "image" : "file",
+    }));
+    const withinAggregateLimit = await enforceLarkBatchAggregateLimit(
+      { ...input, locale },
+      legacyArtifacts,
+      replyOptions,
+    );
+    if (!withinAggregateLimit) {
+      ok = false;
+      deliveryMatches = [];
+    }
+  }
+
+  if (deliveryMatches.length > 0) {
     const deliveryRoots = await resolveLarkDeliveryRoots(input);
     // One identical failure notice per delivery, not one per file: a reply
     // carrying five refused tags posted the same lecture five times. The
@@ -281,14 +319,11 @@ export async function deliverLarkResponse(input: {
       await input.channel.send(input.chatId, { text }, replyOptions);
     };
 
-    // Images are collected and delivered together as one card (a titled series stays
-    // grouped — see deliverLarkPendingImages); files are sent inline as we go.
-    const pendingImages: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }> = [];
-    for (const match of matches) {
+    // Image descriptors are collected, but image bodies are read only while each
+    // upload is in flight. This keeps a large titled series from living in RAM at once.
+    const pendingImages: Array<{ path: string; caption?: string }> = [];
+    for (const match of deliveryMatches) {
       const filePath = match.path;
-      if (!await claimLarkArtifactPath(claimedArtifactPaths, filePath)) {
-        continue;
-      }
       const pathPreflight = await preflightLarkDeliveryPath(filePath, deliveryRoots);
       if (!pathPreflight.ok) {
         ok = false;
@@ -306,49 +341,45 @@ export async function deliverLarkResponse(input: {
         }));
         continue;
       }
+      if (match.preferPhoto) {
+        const caption = captionForLarkImage(input.text, match.index);
+        pendingImages.push({
+          path: filePath,
+          ...(caption ? { caption } : {}),
+        });
+        continue;
+      }
       const real = pathPreflight.realPath;
       try {
         const body = await readFile(real);
-        if (match.preferPhoto) {
-          // Pair each image with the caption that precedes its tag; the whole batch
-          // is rendered as one card below so a titled series (e.g. 小红书 P1/P2/…)
-          // stays grouped and legible instead of arriving as a bare, unlabelled pile.
-          pendingImages.push({
-            caption: captionForLarkImage(input.text, match.index),
-            body,
-            real,
-            originalPath: filePath,
-          });
-        } else {
-          try {
-            await input.channel.send(input.chatId, {
-              file: {
-                source: body,
-                fileName: path.basename(real),
-              },
-            }, replyOptions);
-          } catch (error) {
-            ok = false;
-            // The file was read fine — Feishu rejected the upload. Say so instead
-            // of the misleading "failed to read the file".
-            await appendLarkFileRejectedTimeline(input, {
-              path: filePath,
-              realPath: real,
-              reason: "upload-failed",
-              detail: errorDetail(error),
-              kind: "file",
-            });
-            await input.channel.send(input.chatId, {
-              text: renderLarkFileDeliveryError("upload-failed", locale, { fileName: path.basename(real) }),
-            }, replyOptions);
-            continue;
-          }
-          await appendLarkFileAcceptedTimeline(input, {
-            fileName: path.basename(real),
-            bytes: body.length,
+        try {
+          await input.channel.send(input.chatId, {
+            file: {
+              source: body,
+              fileName: path.basename(real),
+            },
+          }, replyOptions);
+        } catch (error) {
+          ok = false;
+          // The file was read fine — Feishu rejected the upload. Say so instead
+          // of the misleading "failed to read the file".
+          await appendLarkFileRejectedTimeline(input, {
+            path: filePath,
+            realPath: real,
+            reason: "upload-failed",
+            detail: errorDetail(error),
             kind: "file",
           });
+          await input.channel.send(input.chatId, {
+            text: renderLarkFileDeliveryError("upload-failed", locale, { fileName: path.basename(real) }),
+          }, replyOptions);
+          continue;
         }
+        await appendLarkFileAcceptedTimeline(input, {
+          fileName: path.basename(real),
+          bytes: body.length,
+          kind: "file",
+        });
       } catch (error) {
         ok = false;
         const reason = larkFileRejectReasonFromError(error);
@@ -356,7 +387,7 @@ export async function deliverLarkResponse(input: {
           path: filePath,
           reason,
           detail: redactLarkErrorDetail(error),
-          kind: match.preferPhoto ? "image" : "file",
+          kind: "file",
         });
         await input.channel.send(input.chatId, {
           text: renderLarkFileDeliveryError(reason, locale, { fileName: path.basename(filePath) }),
@@ -366,14 +397,14 @@ export async function deliverLarkResponse(input: {
 
     if (pendingImages.length > 0) {
       try {
-        ok = await deliverLarkPendingImages({ ...input, locale }, pendingImages, replyOptions) && ok;
+        ok = await sendLarkImageArtifactBatch({ ...input, locale }, pendingImages, replyOptions) && ok;
       } catch {
         ok = false;
         // Best-effort: image delivery must never abort the text reply or the rest of
         // the turn. (Previously this call sat outside the per-match try/catch, so a
         // send failure threw out of deliverLarkResponse and dropped the text answer.)
         // Per-image failures already record rejected-timeline events inside
-        // deliverLarkPendingImages / sendLarkImageWithFileFallback.
+        // sendLarkImageArtifactBatch / sendLarkImageWithFileFallback.
       }
     }
   }
@@ -590,6 +621,14 @@ async function executeLarkToolTag(input: {
       return true;
     }
     if (input.name === "send.batch") {
+      const withinAggregateLimit = await enforceLarkBatchAggregateLimit(
+        input,
+        artifacts,
+        larkReplyOptions(input.replyTo, input.replyInThread),
+      );
+      if (!withinAggregateLimit) {
+        return false;
+      }
       const images = artifacts.filter((artifact) => artifact.kind === "image");
       if (images.length > 1) {
         ok = await sendLarkImageArtifactBatch(
@@ -725,11 +764,14 @@ function canonicalPathKey(filePath: string): string {
 
 function renderInvalidLarkToolPayload(
   toolName: string,
-  reason: "requires_path" | "string_array" | "image_entries",
+  reason: "requires_path" | "string_array" | "image_entries" | "too_many_artifacts",
   locale: Locale,
   field?: string,
 ): string {
   if (locale === "en") {
+    if (reason === "too_many_artifacts") {
+      return `Invalid Lark tool payload: ${toolName} supports at most 20 artifacts per batch.`;
+    }
     if (reason === "requires_path") {
       return `Invalid Lark tool payload: ${toolName} requires payload.path.`;
     }
@@ -737,6 +779,9 @@ function renderInvalidLarkToolPayload(
       return `Invalid Lark tool payload: ${toolName} images must be path strings or {path, caption} objects.`;
     }
     return `Invalid Lark tool payload: ${toolName} ${field ?? "field"} must be an array of strings.`;
+  }
+  if (reason === "too_many_artifacts") {
+    return `错误：飞书工具参数无效：${toolName} 每批最多发送 20 个产物。`;
   }
   if (reason === "requires_path") {
     return `错误：飞书工具参数无效：${toolName} 需要 payload.path。`;
@@ -817,6 +862,7 @@ async function sendLarkPath(input: {
           imgKey,
           real,
           originalPath: input.filePath,
+          bytes: body.length,
           body,
         }], larkReplyOptions(input.replyTo, input.replyInThread));
       }
@@ -959,10 +1005,9 @@ async function uploadLarkImageKey(channel: LarkChannelLike, body: Buffer): Promi
 
 /**
  * Builds a Card 2.0 holding one or more images, each preceded by its caption (if
- * any). One image → a single titled card; many images → the whole batch in one card
- * (a 小红书 series stays grouped). There is no preset count limit — the only real
- * ceiling is the Feishu message byte size, which {@link deliverLarkPendingImages}
- * discovers at send time and works around by splitting.
+ * any). One image → a single titled card; many images → the whole validated batch
+ * in one card (a 小红书 series stays grouped). Feishu's card-size ceiling is still
+ * discovered at send time and handled by splitting.
  */
 function buildLarkImageCard(items: Array<{ caption?: string; imgKey: string }>): Record<string, unknown> {
   const elements: Record<string, unknown>[] = [];
@@ -988,7 +1033,8 @@ interface LarkUploadedImage {
   imgKey: string;
   real: string;
   originalPath: string;
-  body: Buffer;
+  bytes: number;
+  body?: Buffer;
 }
 
 type LarkImageDeliveryInput = {
@@ -1008,14 +1054,51 @@ type LarkImageDeliveryInput = {
   locale: Locale;
 };
 
+async function enforceLarkBatchAggregateLimit(
+  input: LarkImageDeliveryInput,
+  artifacts: readonly LarkSendArtifact[],
+  replyOptions: LarkSendOptions | undefined,
+): Promise<boolean> {
+  const deliveryRoots = await resolveLarkDeliveryRoots(input);
+  const accepted: Array<{ artifact: LarkSendArtifact; realPath: string }> = [];
+  let totalBytes = 0;
+
+  for (const artifact of artifacts) {
+    const pathPreflight = await preflightLarkDeliveryPath(artifact.path, deliveryRoots);
+    if (!pathPreflight.ok) {
+      continue;
+    }
+    totalBytes += pathPreflight.fileBytes;
+    accepted.push({ artifact, realPath: pathPreflight.realPath });
+  }
+  if (totalBytes <= LARK_BATCH_UPLOAD_MAX_BYTES) {
+    return true;
+  }
+
+  for (const { artifact, realPath } of accepted) {
+    await appendLarkFileRejectedTimeline(input, {
+      path: artifact.path,
+      realPath,
+      reason: "batch-too-large",
+      detail: `${totalBytes} bytes > ${LARK_BATCH_UPLOAD_MAX_BYTES}`,
+      kind: artifact.kind,
+    });
+  }
+  await input.channel.send(input.chatId, {
+    text: renderLarkFileDeliveryError("batch-too-large", input.locale, { fileBytes: totalBytes }),
+  }, replyOptions);
+  return false;
+}
+
 async function sendLarkImageArtifactBatch(
   input: LarkImageDeliveryInput,
   artifacts: ReadonlyArray<{ path: string; caption?: string }>,
   replyOptions: LarkSendOptions | undefined,
 ): Promise<boolean> {
   const deliveryRoots = await resolveLarkDeliveryRoots(input);
-  const pendingImages: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }> = [];
+  const pendingImages: Array<{ caption?: string; real: string; originalPath: string; bytes: number }> = [];
   let ok = true;
+  let totalBytes = 0;
 
   for (const artifact of artifacts) {
     const pathPreflight = await preflightLarkDeliveryPath(artifact.path, deliveryRoots);
@@ -1038,30 +1121,31 @@ async function sendLarkImageArtifactBatch(
       continue;
     }
 
-    try {
-      pendingImages.push({
-        ...(artifact.caption ? { caption: artifact.caption } : {}),
-        body: await readFile(pathPreflight.realPath),
-        real: pathPreflight.realPath,
-        originalPath: artifact.path,
-      });
-    } catch (error) {
-      ok = false;
-      const reason = larkFileRejectReasonFromError(error);
-      await appendLarkFileRejectedTimeline(input, {
-        path: artifact.path,
-        realPath: pathPreflight.realPath,
-        reason,
-        detail: errorDetail(error),
-        kind: "image",
-      });
-      await input.channel.send(input.chatId, {
-        text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(pathPreflight.realPath) }),
-      }, replyOptions);
-    }
+    totalBytes += pathPreflight.fileBytes;
+    pendingImages.push({
+      ...(artifact.caption ? { caption: artifact.caption } : {}),
+      real: pathPreflight.realPath,
+      originalPath: artifact.path,
+      bytes: pathPreflight.fileBytes,
+    });
   }
 
   if (pendingImages.length === 0) {
+    return false;
+  }
+  if (totalBytes > LARK_BATCH_UPLOAD_MAX_BYTES) {
+    for (const image of pendingImages) {
+      await appendLarkFileRejectedTimeline(input, {
+        path: image.originalPath,
+        realPath: image.real,
+        reason: "batch-too-large",
+        detail: `${totalBytes} bytes > ${LARK_BATCH_UPLOAD_MAX_BYTES}`,
+        kind: "image",
+      });
+    }
+    await input.channel.send(input.chatId, {
+      text: renderLarkFileDeliveryError("batch-too-large", input.locale, { fileBytes: totalBytes }),
+    }, replyOptions);
     return false;
   }
   return await deliverLarkPendingImages(input, pendingImages, replyOptions) && ok;
@@ -1070,41 +1154,57 @@ async function sendLarkImageArtifactBatch(
 /**
  * Delivers a batch of images as a SINGLE card (each image keeps its
  * own caption above it) so a titled series — e.g. a 小红书 P1/P2/… deck — arrives as
- * one grouped deliverable rather than one card per image. There is no preset image
- * count: the whole batch goes in one card. The only real ceiling is the Feishu message
- * byte size (img_key references are tiny — an 18-image card is ~3 KB), so we don't
- * guess a number; if the channel ever rejects the card as too large, we split it in
- * half and retry each half (see sendLarkImageCardOrSplit). Any image whose upload
- * fails — or a lone image whose card is still rejected — degrades to a bare image
- * message, never worse than before.
+ * one grouped deliverable rather than one card per image. Validated batches stay in
+ * one card unless Feishu rejects the card as too large; then we split it in half and
+ * retry each half (see sendLarkImageCardOrSplit). Any image whose upload fails — or a
+ * lone image whose card is still rejected — degrades to a bare image message.
  */
 async function deliverLarkPendingImages(
   input: LarkImageDeliveryInput,
-  images: Array<{ caption?: string; body: Buffer; real: string; originalPath: string }>,
+  images: Array<{ caption?: string; real: string; originalPath: string; bytes: number }>,
   replyOptions: LarkSendOptions | undefined,
 ): Promise<boolean> {
   const uploaded: LarkUploadedImage[] = [];
-  const failedUploads: typeof images = [];
+  let ok = true;
   for (const img of images) {
-    const imgKey = await uploadLarkImageKey(input.channel, img.body).catch(() => undefined);
-    if (imgKey) {
-      uploaded.push({ caption: img.caption, imgKey, real: img.real, originalPath: img.originalPath, body: img.body });
-    } else {
-      failedUploads.push(img);
+    let body: Buffer;
+    try {
+      body = await readFile(img.real);
+    } catch (error) {
+      ok = false;
+      const reason = larkFileRejectReasonFromError(error);
+      await appendLarkFileRejectedTimeline(input, {
+        path: img.originalPath,
+        realPath: img.real,
+        reason,
+        detail: errorDetail(error),
+        kind: "image",
+      });
+      await input.channel.send(input.chatId, {
+        text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(img.real) }),
+      }, replyOptions);
+      continue;
     }
-  }
-
-  let ok = await sendLarkImageCardOrSplit(input, uploaded, replyOptions);
-
-  for (const img of failedUploads) {
-    ok = await sendLarkImageWithFileFallback({
-      ...input,
-      body: img.body,
-      realPath: img.real,
+    const imgKey = await uploadLarkImageKey(input.channel, body).catch(() => undefined);
+    if (!imgKey) {
+      ok = await sendLarkImageWithFileFallback({
+        ...input,
+        body,
+        realPath: img.real,
+        originalPath: img.originalPath,
+      }) && ok;
+      continue;
+    }
+    uploaded.push({
+      ...(img.caption ? { caption: img.caption } : {}),
+      imgKey,
+      real: img.real,
       originalPath: img.originalPath,
-    }) && ok;
+      bytes: body.length,
+    });
   }
-  return ok;
+
+  return await sendLarkImageCardOrSplit(input, uploaded, replyOptions) && ok;
 }
 
 /**
@@ -1125,7 +1225,7 @@ async function sendLarkImageCardOrSplit(
     for (const item of items) {
       await appendLarkFileAcceptedTimeline(input, {
         fileName: path.basename(item.real),
-        bytes: item.body.length,
+        bytes: item.bytes,
         kind: "image",
       });
     }
@@ -1148,12 +1248,24 @@ async function sendLarkImageCardOrSplit(
     }
     if (items.length === 1) {
       const only = items[0]!;
-      return await sendLarkImageWithFileFallback({
-        ...input,
-        body: only.body,
-        realPath: only.real,
-        originalPath: only.originalPath,
-      });
+      let body: Buffer;
+      try {
+        body = only.body ?? await readFile(only.real);
+      } catch (error) {
+        const reason = larkFileRejectReasonFromError(error);
+        await appendLarkFileRejectedTimeline(input, {
+          path: only.originalPath,
+          realPath: only.real,
+          reason,
+          detail: errorDetail(error),
+          kind: "image",
+        });
+        await input.channel.send(input.chatId, {
+          text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(only.real) }),
+        }, replyOptions).catch(() => undefined);
+        return false;
+      }
+      return await sendLarkImageWithFileFallback({ ...input, body, realPath: only.real, originalPath: only.originalPath });
     }
     const mid = Math.floor(items.length / 2);
     const firstHalfOk = await sendLarkImageCardOrSplit(input, items.slice(0, mid), replyOptions);
@@ -1238,6 +1350,7 @@ function renderLarkFileDeliveryError(
   const name = context.fileName;
   const sizeMb = context.fileBytes !== undefined ? Math.ceil(context.fileBytes / (1024 * 1024)) : undefined;
   const capMb = Math.floor(LARK_FILE_UPLOAD_MAX_BYTES / (1024 * 1024));
+  const batchCapMb = Math.floor(LARK_BATCH_UPLOAD_MAX_BYTES / (1024 * 1024));
   if (locale === "en") {
     switch (reason) {
       case "outside-workspace":
@@ -1250,6 +1363,8 @@ function renderLarkFileDeliveryError(
         return `File was not sent: no permission to read it${name ? ` (${name})` : ""}.`;
       case "too-large":
         return `File was not sent: ${name ?? "the file"} is ${sizeMb ?? "?"}MB, over Feishu's ${capMb}MB bot upload limit. Split it into smaller parts or compress it further, then resend.`;
+      case "batch-too-large":
+        return `Files were not sent: the batch is ${sizeMb ?? "?"}MB, over the ${batchCapMb}MB aggregate limit. Split it into smaller batches and resend.`;
       case "upload-failed":
         return `File was not sent: Feishu rejected the upload${name ? ` (${name})` : ""}; details were recorded in logs.`;
       case "delivery-uncertain":
@@ -1269,6 +1384,8 @@ function renderLarkFileDeliveryError(
       return `文件未发送：没有读取权限${name ? `（${name}）` : ""}。`;
     case "too-large":
       return `文件未发送：${name ?? "该文件"} 有 ${sizeMb ?? "?"}MB，超过飞书机器人 ${capMb}MB 上传上限。请拆分成多个小包或进一步压缩后重发。`;
+    case "batch-too-large":
+      return `文件未发送：本批次合计 ${sizeMb ?? "?"}MB，超过 ${batchCapMb}MB 总量上限。请拆成多个批次后重发。`;
     case "upload-failed":
       return `文件未发送：上传被飞书拒绝${name ? `（${name}）` : ""}，详细原因已记录到日志。`;
     case "delivery-uncertain":

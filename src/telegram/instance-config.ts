@@ -15,6 +15,7 @@ import {
 } from "../state/approval-mode.js";
 import { normalizeCronTimezone, resolveDefaultCronTimezone } from "../state/cron-timezone.js";
 import { withFileMutex } from "../state/file-mutex.js";
+import { STATE_FILE_MODE } from "../state/state-permissions.js";
 import { isExtendedCodexEffort, knownCodexModelSupportsEffort } from "../codex/model-capabilities.js";
 
 export type { EffortLevel };
@@ -530,7 +531,10 @@ export async function updateInstanceConfig<T = void>(
     }
     const result = updater(config);
     const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+    await writeFile(tempPath, JSON.stringify(config, null, 2) + "\n", {
+      encoding: "utf8",
+      mode: STATE_FILE_MODE,
+    });
     try {
       // fsync before rename (matching JsonStore.write) so a crash right after the
       // rename can't leave an empty/truncated config.json behind.
