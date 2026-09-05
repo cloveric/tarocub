@@ -674,6 +674,22 @@ describe("lark card renderer", () => {
     ].join("\n"));
   });
 
+  it("preserves heading syntax inside a blockquoted fenced code block", () => {
+    expect(cleanCardText([
+      "> ```markdown",
+      "> # literal heading syntax",
+      "> ===",
+      "> ```",
+      "> # Actual quoted heading",
+    ].join("\n"))).toBe([
+      "> ```markdown",
+      "> # literal heading syntax",
+      "> ===",
+      "> ```",
+      "> **Actual quoted heading**",
+    ].join("\n"));
+  });
+
   it("neutralizes Setext heading underlines outside fenced code blocks", () => {
     const divider = "=".repeat(40);
     expect(cleanCardText(`Overall: ALL PASS\n${divider}`)).toBe(

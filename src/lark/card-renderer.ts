@@ -1341,18 +1341,40 @@ function normalizeLarkMarkdownProse(text: string): string {
     .replace(/\*\*\"([^*\n\"]+)\"\*\*/g, "\"**$1**\"");
 }
 
+type MarkdownFenceLine = {
+  marker: "`" | "~";
+  length: number;
+  quoteDepth: number;
+  trailing: string;
+};
+
+function parseMarkdownFenceLine(line: string): MarkdownFenceLine | undefined {
+  const match = line.match(/^[ \t]{0,3}((?:>[ \t]?)*)(`{3,}|~{3,})(.*)$/);
+  if (!match) {
+    return undefined;
+  }
+  const run = match[2]!;
+  return {
+    marker: run[0] as "`" | "~",
+    length: run.length,
+    quoteDepth: (match[1]!.match(/>/g) ?? []).length,
+    trailing: match[3] ?? "",
+  };
+}
+
 function neutralizeMarkdownSetextHeadings(text: string): string {
   const lines = text.split("\n");
-  let fence: { marker: "`" | "~"; length: number } | undefined;
+  let fence: Omit<MarkdownFenceLine, "trailing"> | undefined;
 
   return lines.map((line) => {
-    const fenceMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    const fenceMatch = parseMarkdownFenceLine(line);
     if (fence) {
       if (
         fenceMatch
-        && fenceMatch[1][0] === fence.marker
-        && fenceMatch[1].length >= fence.length
-        && line.slice(fenceMatch[0].length).trim() === ""
+        && fenceMatch.marker === fence.marker
+        && fenceMatch.length >= fence.length
+        && fenceMatch.quoteDepth === fence.quoteDepth
+        && fenceMatch.trailing.trim() === ""
       ) {
         fence = undefined;
       }
@@ -1360,8 +1382,9 @@ function neutralizeMarkdownSetextHeadings(text: string): string {
     }
     if (fenceMatch) {
       fence = {
-        marker: fenceMatch[1][0] as "`" | "~",
-        length: fenceMatch[1].length,
+        marker: fenceMatch.marker,
+        length: fenceMatch.length,
+        quoteDepth: fenceMatch.quoteDepth,
       };
       return line;
     }
@@ -1384,24 +1407,29 @@ function neutralizeMarkdownSetextHeadings(text: string): string {
  * blockquote prefix and preserve it, downgrading only the heading inside.
  */
 function downgradeMarkdownHeadings(text: string): string {
-  let fence: { marker: "`" | "~"; length: number } | undefined;
+  let fence: Omit<MarkdownFenceLine, "trailing"> | undefined;
   return text.split("\n").map((line) => {
     if (fence) {
-      const closeMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*\r?$/);
+      const closeMatch = parseMarkdownFenceLine(line);
       if (closeMatch) {
-        const run = closeMatch[1]!;
-        const marker = run[0] as "`" | "~";
-        if (fence.marker === marker && run.length >= fence.length) {
+        if (
+          fence.marker === closeMatch.marker
+          && closeMatch.length >= fence.length
+          && closeMatch.quoteDepth === fence.quoteDepth
+          && closeMatch.trailing.trim() === ""
+        ) {
           fence = undefined;
         }
       }
       return line;
     }
-    const openMatch = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    const openMatch = parseMarkdownFenceLine(line);
     if (openMatch) {
-      const run = openMatch[1]!;
-      const marker = run[0] as "`" | "~";
-      fence = { marker, length: run.length };
+      fence = {
+        marker: openMatch.marker,
+        length: openMatch.length,
+        quoteDepth: openMatch.quoteDepth,
+      };
       return line;
     }
     return line.replace(/^[ \t]{0,3}((?:>[ \t]?)*)#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/, (_match, quote: string, title: string) => {
