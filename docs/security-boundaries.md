@@ -194,7 +194,7 @@ File delivery is the highest-risk boundary in the product because it turns model
 - delivery only permits canonical paths under the bot workspace or the active `/resume` workspace override
 - non-files, oversized files, missing files, and permission failures are rejected and surfaced back to the user
 - both channels refuse credential-shaped basenames and extensions, including `.env*`, `*.pem`, `*.key`, `id_rsa`, and `id_ed25519`
-- Lark batches are rejected before upload when they exceed 20 artifacts or 120 MiB in aggregate
+- Lark batches are rejected before upload when they exceed 120 MiB in aggregate
 - Lark image batches are preflighted first and then read/uploaded one image at a time, so one request does not retain every image buffer simultaneously
 
 ### Residual risk

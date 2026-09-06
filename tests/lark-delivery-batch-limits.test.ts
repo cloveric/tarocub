@@ -64,7 +64,7 @@ describe("Lark image batch resource bounds", () => {
     }
   });
 
-  it("rejects more than 20 legacy image tags before uploading", async () => {
+  it("delivers more than 20 legacy image tags without an artificial count rejection", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-legacy-count-"));
     const workspace = path.join(stateDir, "workspace");
     const paths = Array.from({ length: 21 }, (_, index) => path.join(workspace, `p${index + 1}.png`));
@@ -84,9 +84,10 @@ describe("Lark image batch resource bounds", () => {
         stateDir,
       });
 
-      expect(result.ok).toBe(false);
-      expect(upload).not.toHaveBeenCalled();
-      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("20");
+      expect(result.ok).toBe(true);
+      expect(upload).toHaveBeenCalledTimes(21);
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("img_key");
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("最多发送 20");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

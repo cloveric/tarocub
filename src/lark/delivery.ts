@@ -22,7 +22,6 @@ import { sendLarkCardWithFallback } from "./card-delivery.js";
 import {
   extractWholeResponseFileBlock,
   isLarkSendToolName,
-  LARK_BATCH_ARTIFACT_MAX_COUNT,
   LARK_BATCH_UPLOAD_MAX_BYTES,
   LARK_FILE_UPLOAD_MAX_BYTES,
   normalizeLarkSendTool,
@@ -271,13 +270,6 @@ export async function deliverLarkResponse(input: {
   }
 
   let deliveryMatches = matches;
-  if (matches.length > LARK_BATCH_ARTIFACT_MAX_COUNT) {
-    ok = false;
-    deliveryMatches = [];
-    await input.channel.send(input.chatId, {
-      text: renderInvalidLarkToolPayload("send.batch", "too_many_artifacts", locale, "artifacts"),
-    }, replyOptions);
-  }
 
   if (deliveryMatches.length > 0) {
     const unclaimedMatches: typeof deliveryMatches = [];
@@ -764,14 +756,11 @@ function canonicalPathKey(filePath: string): string {
 
 function renderInvalidLarkToolPayload(
   toolName: string,
-  reason: "requires_path" | "string_array" | "image_entries" | "too_many_artifacts",
+  reason: "requires_path" | "string_array" | "image_entries",
   locale: Locale,
   field?: string,
 ): string {
   if (locale === "en") {
-    if (reason === "too_many_artifacts") {
-      return `Invalid Lark tool payload: ${toolName} supports at most 20 artifacts per batch.`;
-    }
     if (reason === "requires_path") {
       return `Invalid Lark tool payload: ${toolName} requires payload.path.`;
     }
@@ -779,9 +768,6 @@ function renderInvalidLarkToolPayload(
       return `Invalid Lark tool payload: ${toolName} images must be path strings or {path, caption} objects.`;
     }
     return `Invalid Lark tool payload: ${toolName} ${field ?? "field"} must be an array of strings.`;
-  }
-  if (reason === "too_many_artifacts") {
-    return `错误：飞书工具参数无效：${toolName} 每批最多发送 20 个产物。`;
   }
   if (reason === "requires_path") {
     return `错误：飞书工具参数无效：${toolName} 需要 payload.path。`;
