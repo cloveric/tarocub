@@ -260,6 +260,14 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("unless explicitly asked to resend");
   });
 
+  it("tells agents to split deliveries that exceed the Lark batch limits", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("send.batch: max 20 artifacts/120 MiB per call");
+    expect(instructions).toContain("split larger sets into multiple calls");
+    expect(instructions).toContain("each path once");
+  });
+
   it("gives agents one executable send.batch syntax instead of an ambiguous pseudo-tag", () => {
     const instructions = larkAgentInstructions();
 
