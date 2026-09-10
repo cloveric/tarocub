@@ -1966,7 +1966,7 @@ async function runNormalizedLarkMessage(
             // card, so the chunk-1 render cannot decline for size).
             await deliverLarkResponse({ ...deliverArgs, text: event.text, sendText: false });
             const replyOptions = larkReplyOptions(normalized.messageId, Boolean(normalized.threadId));
-            const firstCard = renderLarkNotificationCard(headerText, notificationChunks[0]!);
+            const firstCard = renderLarkNotificationCard(headerText, notificationChunks[0]!, locale);
             if (firstCard) {
               await sendLarkCardWithFallback({
                 channel: input.channel,

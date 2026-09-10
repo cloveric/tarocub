@@ -1691,6 +1691,50 @@ describe("lark service", () => {
     }
   });
 
+  it("spills a six-table background notification into two valid cards", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-tables-"));
+    const channel = fakeChannel();
+    const report = Array.from({ length: 6 }, (_, index) => [
+      `| 指标 ${index + 1} | 数值 |`,
+      "| --- | --- |",
+      `| row-${index + 1} | ${index + 1} |`,
+    ].join("\n")).join("\n\n");
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: {
+        onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;
+      }) => {
+        await input.onEngineEvent?.({ type: "task_notification", text: report });
+        return { text: "任务已启动。" };
+      }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_task_tables", content: "跑一个多表格后台任务" }),
+      });
+
+      const calls = channel.send.mock.calls as unknown[][];
+      const tableCards = calls
+        .map((call) => call[1] as { card?: unknown })
+        .filter((payload) => payload.card && (
+          JSON.stringify(payload.card).includes("后台任务完成")
+          || JSON.stringify(payload.card).includes("接上")
+        ))
+        .map((payload) => JSON.stringify(payload.card));
+      expect(tableCards).toHaveLength(2);
+      expect(tableCards[0]).toContain("row-5");
+      expect(tableCards[0]).not.toContain("指标 6");
+      expect(tableCards[1]).toContain("row-6");
+      expect(calls.some((call) => JSON.stringify(call[1]).includes("单卡表格上限"))).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("still falls back to chunked plain text for a document-sized background notification", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-task-notification-doc-"));
     const channel = fakeChannel();

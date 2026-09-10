@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   ELEMENT_CONTENT_MAX_BYTES,
   LARK_CARD_ANSWER_MAX,
+  LARK_CARD_TABLE_MAX,
   LARK_OVERFLOW_CARD_MAX_BYTES,
   LARK_OVERFLOW_CARD_MAX_CHARS,
   type LarkRunState,
   applyLarkEngineEvent,
   cleanCardText,
+  countLarkMarkdownTables,
   exceedsCardAnswerBudget,
   initialLarkRunState,
   renderLarkApprovalCard,
@@ -22,6 +24,34 @@ import {
   liveRunCardStreamElement,
   resolveLarkFinalAnswerText,
 } from "../src/lark/card-renderer.js";
+
+function markdownTables(count: number): string {
+  return Array.from({ length: count }, (_, index) => [
+    `| 指标 ${index + 1} | 数值 |`,
+    "| --- | --- |",
+    `| row-${index + 1} | ${index + 1} |`,
+  ].join("\n")).join("\n\n");
+}
+
+function countCardMarkdownTables(card: unknown): number {
+  let count = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+      return;
+    }
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    if (record.tag === "markdown" && typeof record.content === "string") {
+      count += countLarkMarkdownTables(record.content);
+    }
+    Object.values(record).forEach(walk);
+  };
+  walk(card);
+  return count;
+}
 
 function maxMarkdownElementLength(card: unknown): number {
   let max = 0;
@@ -223,6 +253,58 @@ describe("lark card renderer", () => {
     const card = renderLarkRunCard(state) as { body: { elements: Array<Record<string, unknown>> } };
     const element = card.body.elements.find((el) => el.element_id === live!.elementId);
     expect(element?.content).toBe(live!.content);
+  });
+
+  it("keeps a live card within the five-table ceiling without losing the sixth table", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: markdownTables(6) });
+
+    const card = renderLarkRunCard(state) as { body: { elements: Array<Record<string, unknown>> } };
+    expect(countCardMarkdownTables(card)).toBe(LARK_CARD_TABLE_MAX);
+    expect(JSON.stringify(card)).toContain("```text");
+    expect(JSON.stringify(card)).toContain("row-6");
+
+    const live = liveRunCardStreamElement(state);
+    const element = card.body.elements.find((candidate) => candidate.element_id === live?.elementId);
+    expect(live?.rolling).toBe(true);
+    expect(live?.content).toBe(element?.content);
+  });
+
+  it("enforces the table ceiling across nested reasoning and answer elements", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "thinking", text: markdownTables(3) });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: markdownTables(3) });
+
+    const card = renderLarkRunCard(state);
+    expect(countCardMarkdownTables(card)).toBe(LARK_CARD_TABLE_MAX);
+    expect(JSON.stringify(card)).toContain("```text");
+    expect(liveRunCardStreamElement(state)?.rolling).toBe(true);
+  });
+
+  it("keeps table-constrained live markdown within the element byte ceiling", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, {
+      type: "thinking",
+      text: `${markdownTables(6)}\n\n${"长内容".repeat(3000)}`,
+    });
+
+    const contents: string[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+      } else if (node && typeof node === "object") {
+        const record = node as Record<string, unknown>;
+        if (record.tag === "markdown" && typeof record.content === "string") {
+          contents.push(record.content);
+        }
+        Object.values(record).forEach(walk);
+      }
+    };
+    walk(renderLarkRunCard(state));
+    const constrained = contents.find((content) => content.includes("```text"));
+    expect(constrained).toBeDefined();
+    expect(Buffer.byteLength(constrained!, "utf8")).toBeLessThanOrEqual(ELEMENT_CONTENT_MAX_BYTES);
+    expect((constrained!.match(/```/g) ?? []).length % 2).toBe(0);
   });
 
   it("renders every over-cap running text group as a rolling tail (a following tool call doesn't rewind it)", () => {
@@ -1020,6 +1102,37 @@ describe("long-answer continuation cards", () => {
     expect(splitLarkAnswerIntoCardChunks("")).toEqual([""]);
   });
 
+  it("splits before table 6 while keeping every header with its delimiter", () => {
+    const text = markdownTables(6);
+    const chunks = splitLarkAnswerIntoCardChunks(text);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.every((chunk) => countLarkMarkdownTables(chunk) <= LARK_CARD_TABLE_MAX)).toBe(true);
+    expect(chunks.join("\n")).toBe(text);
+    expect(chunks[0]).toContain("row-5");
+    expect(chunks[0]).not.toContain("指标 6");
+    expect(chunks[1]).toContain("| 指标 6 | 数值 |");
+    expect(chunks[1]).toContain("| --- | --- |");
+    expect(chunks[1]).toContain("row-6");
+  });
+
+  it("moves the sixth table's section heading onto its continuation card", () => {
+    const tables = markdownTables(6).split("\n\n");
+    const text = [...tables.slice(0, 5), "**第六部分**\n\n" + tables[5]].join("\n\n");
+    const chunks = splitLarkAnswerIntoCardChunks(text);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("\n")).toBe(text);
+    expect(chunks[0]).not.toContain("第六部分");
+    expect(chunks[1]).toMatch(/^\*\*第六部分\*\*\n\n\| 指标 6/);
+  });
+
+  it("does not count table-like rows inside fenced code", () => {
+    const fenced = `\`\`\`text\n${markdownTables(6)}\n\`\`\``;
+    expect(countLarkMarkdownTables(fenced)).toBe(0);
+    expect(splitLarkAnswerIntoCardChunks(fenced)).toEqual([fenced]);
+  });
+
   it("packs whole lines into budget-sized chunks losslessly (rejoin reconstructs the original)", () => {
     const text = Array.from({ length: 60 }, (_, i) => `第${i}行：` + "测".repeat(100)).join("\n");
     const chunks = splitLarkAnswerIntoCardChunks(text);
@@ -1123,6 +1236,11 @@ describe("renderLarkNotificationCard", () => {
   it("returns null when the body is too large for one card element (caller keeps plain text)", () => {
     const huge = "中".repeat(LARK_CARD_ANSWER_MAX + 1);
     expect(renderLarkNotificationCard("后台任务完成", huge)).toBeNull();
+  });
+
+  it("accepts five tables but routes a sixth through the continuation-card path", () => {
+    expect(renderLarkNotificationCard("后台任务完成", markdownTables(5))).not.toBeNull();
+    expect(renderLarkNotificationCard("后台任务完成", markdownTables(6))).toBeNull();
   });
 
   it("strips delivery tags from the body so they never leak as literal text", () => {

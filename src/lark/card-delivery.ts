@@ -45,9 +45,23 @@ export async function deliverLarkContinuationCards(input: {
 }
 
 export function renderLarkCardFallbackText(fallbackText: string, locale: Locale, error: unknown): string {
-  const hint = locale === "en"
-    ? "Interactive card delivery failed, so this was sent as plain text. Run `node dist/src/index.js lark doctor` to check card permissions/callbacks."
-    : "交互卡片发送失败，已降级为纯文本。请运行 `node dist/src/index.js lark doctor` 检查卡片权限和回调订阅。";
+  const errorText = error instanceof Error ? error.message.toLowerCase() : "";
+  const tableLimit = errorText.includes("card table number over limit")
+    || (errorText.includes("errorvalue") && errorText.includes("table"));
+  const capacityLimit = tableLimit
+    || errorText.includes("element exceeds the limit")
+    || errorText.includes("card content exceeds limit");
+  const hint = tableLimit
+    ? locale === "en"
+      ? "The interactive card exceeded Lark's per-card table limit, so it was sent as plain text instead. No content was lost."
+      : "交互卡片超过飞书单卡表格上限，已自动改用纯文本发送，内容未丢失。"
+    : capacityLimit
+      ? locale === "en"
+        ? "The interactive card exceeded Lark's card capacity, so it was sent as plain text instead. No content was lost."
+        : "交互卡片超过飞书卡片容量上限，已自动改用纯文本发送，内容未丢失。"
+      : locale === "en"
+        ? "Interactive card delivery failed, so this was sent as plain text. Run `node dist/src/index.js lark doctor` to check card permissions/callbacks."
+        : "交互卡片发送失败，已降级为纯文本。请运行 `node dist/src/index.js lark doctor` 检查卡片权限和回调订阅。";
   const detail = error instanceof Error && error.message
     ? locale === "en" ? `\n\nDetail: ${redactLarkErrorDetail(error)}` : `\n\n详情：${redactLarkErrorDetail(error)}`
     : "";

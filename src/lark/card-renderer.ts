@@ -445,7 +445,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     elements.push(stopButtonElement(state, labels));
   }
 
-  return {
+  return constrainLarkCardTables({
     schema: "2.0",
     config: {
       streaming_mode: state.status === "running",
@@ -458,7 +458,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
       padding: "12px 12px 12px 12px",
       elements,
     },
-  };
+  });
 }
 
 // Feishu's native typewriter defaults to 70ms per character (~14 chars/s) —
@@ -486,6 +486,168 @@ const LARK_STREAMING_CONFIG = {
 export const LARK_CARD_ANSWER_MAX = 5000;
 const COMPACT_ANSWER_MAX = LARK_CARD_ANSWER_MAX;
 const PROCESS_PANEL_MAX = 3000;
+
+// Feishu renders Markdown tables as native Table components and rejects a card
+// containing a sixth table with ErrCode 11310 ("card table number over limit").
+// This is a separate structural ceiling from the character/byte budgets below.
+export const LARK_CARD_TABLE_MAX = 5;
+
+interface MarkdownTableRange {
+  start: number;
+  end: number;
+}
+
+function splitMarkdownTableCells(line: string): string[] | null {
+  const cells: string[] = [];
+  let current = "";
+  let escaped = false;
+  let sawPipe = false;
+  for (const ch of line.trim()) {
+    if (ch === "|" && !escaped) {
+      cells.push(current);
+      current = "";
+      sawPipe = true;
+    } else {
+      current += ch;
+    }
+    escaped = ch === "\\" ? !escaped : false;
+  }
+  if (!sawPipe) {
+    return null;
+  }
+  cells.push(current);
+  if (cells[0]?.trim() === "") {
+    cells.shift();
+  }
+  if (cells.at(-1)?.trim() === "") {
+    cells.pop();
+  }
+  return cells;
+}
+
+function isMarkdownTableDelimiter(line: string): boolean {
+  const cells = splitMarkdownTableCells(line);
+  return cells !== null && cells.length > 0
+    && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  return Boolean(line.trim()) && splitMarkdownTableCells(line) !== null;
+}
+
+function isMarkdownSectionHeading(line: string): boolean {
+  const trimmed = line.trim();
+  return /^#{1,6}\s+\S/.test(trimmed) || /^\*\*\S.*\*\*[:：]?$/.test(trimmed);
+}
+
+function markdownTableRanges(markdown: string): MarkdownTableRange[] {
+  const lines = markdown.split("\n");
+  const ranges: MarkdownTableRange[] = [];
+  let fence: { marker: string; length: number } | null = null;
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index]!;
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]![0]!;
+      const length = fenceMatch[1]!.length;
+      if (!fence) {
+        fence = { marker, length };
+      } else if (marker === fence.marker && length >= fence.length && !fenceMatch[2]!.trim()) {
+        fence = null;
+      }
+      index += 1;
+      continue;
+    }
+    if (fence) {
+      index += 1;
+      continue;
+    }
+    const delimiter = lines[index + 1];
+    if (isMarkdownTableRow(line) && delimiter !== undefined && isMarkdownTableDelimiter(delimiter)) {
+      let end = index + 2;
+      while (end < lines.length && isMarkdownTableRow(lines[end]!)) {
+        end += 1;
+      }
+      ranges.push({ start: index, end });
+      index = end;
+      continue;
+    }
+    index += 1;
+  }
+  return ranges;
+}
+
+export function countLarkMarkdownTables(markdown: string): number {
+  return markdownTableRanges(markdown).length;
+}
+
+function constrainMarkdownTables(markdown: string, allowance: number): {
+  markdown: string;
+  retained: number;
+} {
+  const ranges = markdownTableRanges(markdown);
+  if (ranges.length <= allowance) {
+    return { markdown, retained: ranges.length };
+  }
+  const lines = markdown.split("\n");
+  const output: string[] = [];
+  let cursor = 0;
+  let retained = 0;
+  for (const range of ranges) {
+    output.push(...lines.slice(cursor, range.start));
+    const table = lines.slice(range.start, range.end);
+    if (retained < allowance) {
+      output.push(...table);
+      retained += 1;
+    } else {
+      // Keep every cell visible, but prevent Feishu from promoting this block
+      // into another native Table component.
+      output.push("```text", ...table, "```");
+    }
+    cursor = range.end;
+  }
+  output.push(...lines.slice(cursor));
+  return { markdown: output.join("\n"), retained };
+}
+
+function capConstrainedMarkdown(markdown: string): string {
+  if (Buffer.byteLength(markdown, "utf8") <= ELEMENT_CONTENT_MAX_BYTES) {
+    return markdown;
+  }
+  const closingFence = "\n```";
+  const capped = truncateBytes(
+    markdown,
+    ELEMENT_CONTENT_MAX_BYTES - Buffer.byteLength(closingFence, "utf8"),
+  );
+  return (capped.match(/```/g) ?? []).length % 2 === 1
+    ? `${capped}${closingFence}`
+    : capped;
+}
+
+/** Defensive backstop for live cards, whose intermediate blocks are not yet
+ * passed through the final-answer chunker. Extra tables become code blocks so
+ * a streaming patch cannot freeze the card; final delivery still uses cards
+ * split at table boundaries and therefore keeps all tables native. */
+export function constrainLarkCardTables<T extends Record<string, unknown>>(card: T): T {
+  let remaining = LARK_CARD_TABLE_MAX;
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      return value.map(visit);
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.tag === "markdown" && typeof record.content === "string") {
+      const constrained = constrainMarkdownTables(record.content, remaining);
+      remaining -= constrained.retained;
+      return { ...record, content: capConstrainedMarkdown(constrained.markdown) };
+    }
+    return Object.fromEntries(Object.entries(record).map(([key, nested]) => [key, visit(nested)]));
+  };
+  return visit(card) as T;
+}
 
 // The dual answer-element budget, mirroring the rule finalize's answerFitsCard
 // check documents: an answer element is capped in chars (LARK_CARD_ANSWER_MAX)
@@ -569,12 +731,23 @@ export function liveRunCardStreamElement(
   // monotonic guard would then freeze the byte-truncated preview until the
   // char count also crossed the cap.
   const rolling = exceedsCardAnswerBudget(cleaned);
+  const rawContent = rolling
+    ? rollingTailContent(cleaned, locale)
+    : truncateBytes(cleaned, ELEMENT_CONTENT_MAX_BYTES);
+  const renderedCard = renderLarkRunCard(state, locale) as {
+    body?: { elements?: Array<Record<string, unknown>> };
+  };
+  const renderedContent = renderedCard.body?.elements?.find(
+    (element) => element.element_id === streamTextElementId(textIndex),
+  )?.content;
+  const content = typeof renderedContent === "string" ? renderedContent : rawContent;
   return {
     elementId: streamTextElementId(textIndex),
-    content: rolling
-      ? rollingTailContent(cleaned, locale)
-      : truncateBytes(cleaned, ELEMENT_CONTENT_MAX_BYTES),
-    rolling,
+    content,
+    // Table limiting rewrites the live element in place, so it needs the same
+    // replacement semantics/cadence as a rolling tail rather than the normal
+    // append-only monotonic guard.
+    rolling: rolling || content !== rawContent,
   };
 }
 
@@ -752,6 +925,9 @@ export function renderLarkNotificationCard(
   if (exceedsCardAnswerBudget(cleaned)) {
     return null;
   }
+  if (countLarkMarkdownTables(cleaned) > LARK_CARD_TABLE_MAX) {
+    return null;
+  }
   return {
     schema: "2.0",
     config: { update_multi: true, summary: { content: headerText } },
@@ -923,7 +1099,7 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
     elements.push(stopButtonElement(state, labels));
   }
 
-  return {
+  return constrainLarkCardTables({
     schema: "2.0",
     config: {
       streaming_mode: false,
@@ -935,7 +1111,7 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
       padding: "12px 12px 12px 12px",
       elements,
     },
-  };
+  });
 }
 
 /**
@@ -989,7 +1165,7 @@ export function renderLarkRunCardMinimal(state: LarkRunState, locale: Locale = "
 export function renderLarkReminderCard(body: string, locale: Locale = "zh"): Record<string, unknown> {
   const heading = locale === "en" ? "⏰ Reminder" : "⏰ 提醒";
   const text = body.trim() || (locale === "en" ? "(reminder)" : "（提醒）");
-  return {
+  return constrainLarkCardTables({
     schema: "2.0",
     config: {
       streaming_mode: false,
@@ -1004,7 +1180,7 @@ export function renderLarkReminderCard(body: string, locale: Locale = "zh"): Rec
         markdownElement(truncate(text, LARK_CARD_ANSWER_MAX)),
       ],
     },
-  };
+  });
 }
 
 type ToolGroup = { kind: "tools"; tools: LarkToolEntry[] };
@@ -1815,9 +1991,9 @@ export function truncateBytes(s: string, maxBytes: number): string {
 // LARK_MAX_OVERFLOW_CARDS chunks) still falls back to a Doc, where a long stream of
 // cards would be worse than one link.
 //
-// Each chunk must fit a card's answer element on BOTH axes the run card checks:
-// LARK_CARD_ANSWER_MAX chars AND ELEMENT_CONTENT_MAX_BYTES bytes. Headroom is left so a
-// chunk alongside the card's other small elements never trips the limit.
+// Each chunk must fit the run card's character and byte budgets AND Feishu's
+// five-table structural ceiling. Headroom is left so a chunk alongside the
+// card's other small elements never trips the size limit.
 export const LARK_OVERFLOW_CARD_MAX_CHARS = LARK_CARD_ANSWER_MAX - 80;
 export const LARK_OVERFLOW_CARD_MAX_BYTES = ELEMENT_CONTENT_MAX_BYTES - 400;
 export const LARK_MAX_OVERFLOW_CARDS = 6;
@@ -1826,10 +2002,17 @@ export const LARK_MAX_OVERFLOW_CARDS = 6;
 // "\n```" suffix, ≤ 8 chars = 8 bytes) balanceChunkFenceParity may add can
 // never push a balanced chunk past the card budgets.
 const CHUNK_FENCE_HEADROOM = 8;
+const CARD_CHUNK_CHAR_BUDGET = LARK_OVERFLOW_CARD_MAX_CHARS - CHUNK_FENCE_HEADROOM;
+const CARD_CHUNK_BYTE_BUDGET = LARK_OVERFLOW_CARD_MAX_BYTES - CHUNK_FENCE_HEADROOM;
+
+function fitsCardChunkSize(s: string): boolean {
+  return s.length <= CARD_CHUNK_CHAR_BUDGET
+    && Buffer.byteLength(s, "utf8") <= CARD_CHUNK_BYTE_BUDGET;
+}
 
 function fitsCardChunk(s: string): boolean {
-  return s.length <= LARK_OVERFLOW_CARD_MAX_CHARS - CHUNK_FENCE_HEADROOM
-    && Buffer.byteLength(s, "utf8") <= LARK_OVERFLOW_CARD_MAX_BYTES - CHUNK_FENCE_HEADROOM;
+  return fitsCardChunkSize(s)
+    && countLarkMarkdownTables(s) <= LARK_CARD_TABLE_MAX;
 }
 
 // Hard-split a single oversized line into budget-sized pieces without cutting a code
@@ -1838,15 +2021,20 @@ function fitsCardChunk(s: string): boolean {
 function hardSplitCardLine(line: string): string[] {
   const pieces: string[] = [];
   let buf = "";
+  let chars = 0;
+  let bytes = 0;
   for (const ch of line) {
-    const next = buf + ch;
-    if (!fitsCardChunk(next)) {
-      if (buf) {
-        pieces.push(buf);
-      }
+    const nextChars = chars + ch.length;
+    const nextBytes = bytes + Buffer.byteLength(ch, "utf8");
+    if (buf && (nextChars > CARD_CHUNK_CHAR_BUDGET || nextBytes > CARD_CHUNK_BYTE_BUDGET)) {
+      pieces.push(buf);
       buf = ch;
+      chars = ch.length;
+      bytes = Buffer.byteLength(ch, "utf8");
     } else {
-      buf = next;
+      buf += ch;
+      chars = nextChars;
+      bytes = nextBytes;
     }
   }
   if (buf) {
@@ -1871,6 +2059,48 @@ export function splitLarkAnswerIntoCardChunks(text: string): string[] {
     if (fitsCardChunk(candidate)) {
       current = candidate;
     } else {
+      // A table becomes recognizable only when its delimiter row arrives. If
+      // that row would create table 6, move its header (and an immediately
+      // preceding section heading) into the next chunk too.
+      if (
+        current
+        && isMarkdownTableDelimiter(line)
+        && countLarkMarkdownTables(candidate) > LARK_CARD_TABLE_MAX
+      ) {
+        const currentLines = current.split("\n");
+        const header = currentLines.at(-1) ?? "";
+        if (isMarkdownTableRow(header)) {
+          currentLines.pop();
+          const spacingBeforeTable: string[] = [];
+          while (currentLines.at(-1) === "") {
+            spacingBeforeTable.unshift(currentLines.pop()!);
+          }
+          const sectionHeading = currentLines.at(-1);
+          let movedPrefix: string[] = [];
+          if (sectionHeading && isMarkdownSectionHeading(sectionHeading)) {
+            const headingPrefix = [sectionHeading, ...spacingBeforeTable];
+            const tableStartWithHeading = [...headingPrefix, header, line].join("\n");
+            if (fitsCardChunk(tableStartWithHeading)) {
+              currentLines.pop();
+              movedPrefix = headingPrefix;
+            }
+          }
+          if (movedPrefix.length === 0) {
+            currentLines.push(...spacingBeforeTable);
+          }
+          const tableStart = [...movedPrefix, header, line].join("\n");
+          if (!fitsCardChunk(tableStart)) {
+            current = [...currentLines, header].join("\n");
+            flush();
+            current = line;
+            return;
+          }
+          current = currentLines.join("\n");
+          flush();
+          current = tableStart;
+          return;
+        }
+      }
       flush();
       current = line;
     }
@@ -1938,7 +2168,7 @@ export function renderLarkContinuationCard(
   // Feishu title and any [send-file:]/tool/cron tag would leak as literal text — making
   // continuation cards inconsistent with the run card that carries chunk 1.
   const cleaned = cleanCardText(body, locale);
-  return {
+  return constrainLarkCardTables({
     schema: "2.0",
     config: {
       streaming_mode: false,
@@ -1953,7 +2183,7 @@ export function renderLarkContinuationCard(
         markdownElement(cleaned || (locale === "en" ? "(empty)" : "（空）")),
       ],
     },
-  };
+  });
 }
 
 function cardSummary(state: LarkRunState, locale: Locale): string {

@@ -54,4 +54,31 @@ describe("Lark card delivery fallback", () => {
     expect(JSON.stringify(fallbackPayload)).toContain("app_secret=[redacted]");
     expect(JSON.stringify(fallbackPayload)).toContain("Bearer [redacted]");
   });
+
+  it("identifies the table ceiling as a capacity issue instead of a permission problem", async () => {
+    const channel = {
+      send: vi.fn(async (_to: string, input: unknown) => {
+        if (typeof input === "object" && input !== null && "card" in input) {
+          throw new Error(
+            "Failed to create card content, ext=ErrCode: 11310; ErrMsg: card table number over limit; ErrorValue: table;",
+          );
+        }
+        return { messageId: "text_1" };
+      }),
+    };
+
+    await sendLarkCardWithFallback({
+      channel,
+      chatId: "oc_chat",
+      card: { schema: "2.0" },
+      fallbackText: "六张业务表",
+      locale: "zh",
+    });
+
+    const fallback = JSON.stringify(channel.send.mock.calls[1]?.[1]);
+    expect(fallback).toContain("单卡表格上限");
+    expect(fallback).toContain("内容未丢失");
+    expect(fallback).not.toContain("lark doctor");
+    expect(fallback).not.toContain("权限");
+  });
 });
