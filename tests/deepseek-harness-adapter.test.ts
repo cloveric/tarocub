@@ -13,9 +13,10 @@ import {
   DeepSeekHarnessAdapter,
   type DeepSeekHarnessGateway,
 } from "../src/codex/deepseek-harness-adapter.js";
-import type {
-  DeepSeekHarnessProtocolHandlers,
-  DeepSeekHarnessServerRequest,
+import {
+  DeepSeekHarnessRpcError,
+  type DeepSeekHarnessProtocolHandlers,
+  type DeepSeekHarnessServerRequest,
 } from "../src/codex/deepseek-harness-protocol.js";
 
 type GatewayCall = { method: string; payload: unknown };
@@ -361,7 +362,7 @@ describe("DeepSeekHarnessAdapter", () => {
         args: {
           agentId: session.sessionId,
           line: "/permission full-auto",
-          images: [],
+          submittedAttachments: [],
         },
       },
     });
@@ -533,6 +534,48 @@ describe("DeepSeekHarnessAdapter", () => {
     expect(gateway.calls.filter((call) => call.method === "commands/execute")).toEqual([
       {
         method: "commands/execute",
+        payload: { args: { agentId: sessionId, line: "/permission workspace-write", submittedAttachments: [] } },
+      },
+      {
+        method: "commands/execute",
+        payload: { args: { agentId: sessionId, line: "/compact", submittedAttachments: [] } },
+      },
+    ]);
+  });
+
+  it("falls back to the legacy command attachment field after a strict schema rejection", async () => {
+    const { adapter, gateway } = createAdapter();
+    const { sessionId } = await adapter.createSession(1);
+    gateway.responses.set("commands/execute", (payload: unknown) => {
+      const args = (payload as { args: Record<string, unknown> }).args;
+      if ("submittedAttachments" in args) {
+        throw new DeepSeekHarnessRpcError({
+          code: "invalid-arguments",
+          message: 'args fields do not match the descriptor: missing "images"; unexpected "submittedAttachments"',
+        });
+      }
+      const line = String(args.line ?? "");
+      return {
+        commandId: `command-${line}`,
+        result: { kind: "success", text: line === "/compact" ? "Compacted" : "Configured" },
+      };
+    });
+
+    await expect(adapter.sendUserMessage(sessionId, { text: "/compact", files: [] }))
+      .resolves.toMatchObject({ sessionId, text: "Compacted" });
+    expect(gateway.calls.filter((call) => call.method === "commands/execute")).toEqual([
+      {
+        method: "commands/execute",
+        payload: {
+          args: {
+            agentId: sessionId,
+            line: "/permission workspace-write",
+            submittedAttachments: [],
+          },
+        },
+      },
+      {
+        method: "commands/execute",
         payload: { args: { agentId: sessionId, line: "/permission workspace-write", images: [] } },
       },
       {
@@ -615,7 +658,7 @@ describe("DeepSeekHarnessAdapter", () => {
       });
       expect(gateway.calls).toContainEqual({
         method: "commands/execute",
-        payload: { args: { agentId: sessionId, line: "/permission workspace-write", images: [] } },
+        payload: { args: { agentId: sessionId, line: "/permission workspace-write", submittedAttachments: [] } },
       });
       await finishTurn(gateway, sessionId, 1, 1, "one");
       await expect(first).resolves.toMatchObject({ text: "one" });
@@ -634,7 +677,7 @@ describe("DeepSeekHarnessAdapter", () => {
       });
       expect(gateway.calls).toContainEqual({
         method: "commands/execute",
-        payload: { args: { agentId: sessionId, line: "/permission full-auto", images: [] } },
+        payload: { args: { agentId: sessionId, line: "/permission full-auto", submittedAttachments: [] } },
       });
       await finishTurn(gateway, sessionId, 2, 4, "two");
       await expect(second).resolves.toMatchObject({ text: "two" });
@@ -648,7 +691,7 @@ describe("DeepSeekHarnessAdapter", () => {
       });
       expect(gateway.calls).toContainEqual({
         method: "commands/execute",
-        payload: { args: { agentId: sessionId, line: "/permission danger-full-access", images: [] } },
+        payload: { args: { agentId: sessionId, line: "/permission danger-full-access", submittedAttachments: [] } },
       });
       await finishTurn(gateway, sessionId, 3, 7, "three");
       await expect(third).resolves.toMatchObject({ text: "three" });

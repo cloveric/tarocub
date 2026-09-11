@@ -246,6 +246,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
   private readonly goalBudgetPausePromises = new Map<string, Promise<void>>();
   private readonly eventChains = new Map<string, Promise<void>>();
   private readonly bufferedFrames: DeepSeekHarnessServerRequest[] = [];
+  private commandAttachmentField: "submittedAttachments" | "images" | undefined;
   private connectPromise: Promise<void> | undefined;
   private hostDefaultModel: DeepSeekHarnessModelSelection | undefined;
   private hostDefaultModelPromise: Promise<DeepSeekHarnessModelSelection> | undefined;
@@ -2350,13 +2351,28 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     line: string,
     signal?: AbortSignal,
   ): Promise<string> {
-    const execution = asRecord(await this.gateway.request("commands/execute", {
-      args: {
-        agentId: sessionId,
-        line,
-        images: [],
-      },
-    }, signal));
+    const execute = async (attachmentField: "submittedAttachments" | "images"): Promise<unknown> => (
+      await this.gateway.request("commands/execute", {
+        args: {
+          agentId: sessionId,
+          line,
+          [attachmentField]: [],
+        },
+      }, signal)
+    );
+    const preferredField = this.commandAttachmentField ?? "submittedAttachments";
+    let executionValue: unknown;
+    try {
+      executionValue = await execute(preferredField);
+      this.commandAttachmentField = preferredField;
+    } catch (error) {
+      if (preferredField !== "submittedAttachments" || !isLegacyCommandAttachmentSchemaError(error)) {
+        throw error;
+      }
+      executionValue = await execute("images");
+      this.commandAttachmentField = "images";
+    }
+    const execution = asRecord(executionValue);
     if (!execution) {
       throw new Error(`DeepSeek Harness did not recognize ${line}`);
     }
@@ -3008,6 +3024,15 @@ function isAlreadyArmedGoalError(error: unknown): boolean {
   }
   return asRecord(error.details)?.goalCode === "GOAL_INVALID_TRANSITION"
     && /already active and armed/i.test(error.message);
+}
+
+function isLegacyCommandAttachmentSchemaError(error: unknown): boolean {
+  if (!(error instanceof DeepSeekHarnessRpcError)) {
+    return false;
+  }
+  return error.message.includes("fields do not match the descriptor")
+    && error.message.includes('missing "images"')
+    && error.message.includes('unexpected "submittedAttachments"');
 }
 
 function parseGoalProjection(value: unknown): GoalProjection | null {

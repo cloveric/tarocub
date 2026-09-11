@@ -669,7 +669,7 @@ describe("DeepSeekHarnessProtocolClient", () => {
       args: {
         agentId: "session-1",
         line: "/permission full-auto",
-        images: [],
+        submittedAttachments: [],
       },
     })).resolves.toMatchObject({
       commandId: "command-1",
@@ -683,7 +683,7 @@ describe("DeepSeekHarnessProtocolClient", () => {
           args: {
             agentId: "session-1",
             line: "/permission full-auto",
-            images: [],
+            submittedAttachments: [],
           },
         },
       },
