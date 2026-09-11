@@ -2010,12 +2010,17 @@ async function runNormalizedLarkMessage(
         }
       };
       const deliveryFollowupGuardActive = isLarkDeliveryFollowupRequest(commandText);
-      let suppressedDeliveryFollowupState: LarkRunState | undefined = deliveryFollowupGuardActive
-        ? initialLarkRunState(normalized.conversationKey, normalized.bridgeChatType)
-        : undefined;
+      // Keep a private copy of the initial engine stream. It is normally only
+      // needed by the delivery-followup guard, but it also lets us safely recover
+      // complete artifact directives when an engine dies before its result event.
+      let initialResponseState = initialLarkRunState(
+        normalized.conversationKey,
+        normalized.bridgeChatType,
+      );
       let initialTurnSawToolActivity = false;
       let initialTurnSawUnsafeToolActivity = false;
       const handleInitialEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
+        initialResponseState = applyLarkEngineEvent(initialResponseState, event);
         if (event.type === "tool_use") {
           initialTurnSawToolActivity = true;
           if (!isReplaySafeLarkToolName(event.toolName)) {
@@ -2027,7 +2032,6 @@ async function runNormalizedLarkMessage(
           // post-turn guard inspects the complete answer. Keep only answer text
           // off the card here; tools, thinking, errors, and tasks still flow.
           if (event.type === "assistant_text" || event.type === "result") {
-            suppressedDeliveryFollowupState = applyLarkEngineEvent(suppressedDeliveryFollowupState!, event);
             await appendLarkTimelineEvent(input.stateDir, normalized, {
               type: "engine.event",
               detail: event.type,
@@ -2193,9 +2197,12 @@ async function runNormalizedLarkMessage(
           if (classifyLarkTurnTermination(error, runController.signal).kind !== "error") {
             throw error;
           }
-          const candidate = suppressedDeliveryFollowupState
-            ? resolveLarkFinalAnswerText(suppressedDeliveryFollowupState, "").trim()
-            : "";
+          // Some engines can stream a complete answer (including delivery tags)
+          // and then fail before their terminal result event. Recover that answer
+          // only when every referenced artifact passes preflight. Delivery-followup
+          // turns keep answer text off the live card, so this private stream snapshot
+          // is the canonical recovery source for both paths.
+          const candidate = resolveLarkFinalAnswerText(initialResponseState, "").trim();
           const preflight = candidate
             ? await preflightLarkResponseDeliveryDirectives(candidate, deliveryPreflight)
             : undefined;
@@ -2211,7 +2218,9 @@ async function runNormalizedLarkMessage(
           await appendLarkTimelineEvent(input.stateDir, normalized, {
             type: "engine.event",
             outcome: "recovered",
-            detail: "delivery_followup_partial_recovered",
+            detail: deliveryFollowupGuardActive
+              ? "delivery_followup_partial_recovered"
+              : "streamed_artifact_partial_recovered",
             metadata: {
               artifactCount: preflight.artifactCount,
               engineError: redactLarkErrorDetail(error),
