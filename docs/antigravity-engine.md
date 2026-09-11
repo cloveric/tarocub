@@ -1,7 +1,7 @@
 # Antigravity Engine
 
 TaroCub drives the official `agy` CLI as a native local engine. The verified
-compatibility baseline is **Antigravity CLI 1.1.24**. Install and authenticate
+compatibility baseline is **Antigravity CLI 1.2.1**. Install and authenticate
 `agy` locally before selecting `/engine antigravity`.
 
 Official references:
@@ -10,11 +10,10 @@ Official references:
 - [Antigravity slash commands](https://antigravity.google/docs/slash-commands/)
 - [Antigravity CLI changelog](https://antigravity.google/changelog?app=cli)
 
-The 1.1.24 baseline was live-verified with consecutive turns on one persistent
-worker and a fresh-process `--conversation` resume. The public per-platform
-updater manifest advertised 1.1.24 while the bundled CLI changelog still ended
-at 1.1.23, so TaroCub treats the protocol probe, not an inferred changelog, as
-the compatibility evidence.
+The 1.2.1 baseline was live-verified with consecutive turns on one persistent
+worker, a fresh-process `--conversation` resume, and a real call through the
+configured `cctb_search` MCP. TaroCub treats these protocol probes, not merely
+the installed version string, as the compatibility evidence.
 
 ## Runtime Contract
 
@@ -31,6 +30,12 @@ Changing a startup setting such as workspace, approval mode, model, effort, or
 native timeout recycles an idle worker and starts a replacement with
 `--conversation <uuid>`. A crash removes the worker; the next turn resumes the
 same authoritative conversation ID in a fresh process.
+
+Antigravity 1.2.1 retries transient model API failures, including mid-stream
+interruptions, in-process with exponential backoff while preserving completed
+tool outputs. This does not change the stream contract: TaroCub still waits for
+the authoritative successful `result`, deduplicates repeated tool snapshots by
+step index, and fails closed if the CLI ultimately cannot complete the turn.
 
 TaroCub maps the stream as follows:
 
@@ -97,13 +102,17 @@ Claude Code, Kimi ACP, or DeepSeek Harness.
 
 ## 中文摘要
 
-TaroCub 已按 Antigravity 1.1.24 的原生结构化协议接入：每个活跃 conversation
+TaroCub 已按 Antigravity 1.2.1 的原生结构化协议接入：每个活跃 conversation
 维持一个 `stream-json` worker，后续轮次复用同一进程；回答、工具、终态和
 token 分开处理，恢复会话只统计本轮 step，避免累计 token 重复记账。空闲
 两小时、进程崩溃或启动参数变化时会安全回收，并用权威 conversation ID
 重建。`/goal` 因上游限制仍使用一次性直接 `-p`，执行前会回收持久 worker，
 下一轮再恢复同一会话。`full-auto` 会同时启用 `--sandbox`；只有显式
 `bypass` 才跳过沙箱。
+
+1.2.1 会在进程内重试 502、503、504、分钟级 429 和中途断流，并保留已经
+完成的工具结果；TaroCub 无需改变协议，仍以最终成功 `result` 为准，并按
+step index 去重重复工具快照。
 
 对会输出 `user` echo 的 CLI 版本，TaroCub 以“与当前 prompt 完全匹配的 echo”
 作为持久 worker 的轮次边界：新一轮 echo 之前迟到的 `step_update` 会被隔离，

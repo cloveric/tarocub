@@ -337,7 +337,7 @@ the verified capability and limitation matrix.
 ### Antigravity engine
 
 Select Antigravity with `/engine antigravity`. The verified baseline is
-**Antigravity CLI 1.1.24**. TaroCub uses native NDJSON `stream-json` input and
+**Antigravity CLI 1.2.1**. TaroCub uses native NDJSON `stream-json` input and
 output through one persistent worker per live conversation. Later turns reuse
 the warm process; idle workers are reaped after two hours, while a crash or a
 startup-setting change recreates the worker with the same authoritative
@@ -346,6 +346,10 @@ records current-turn step usage instead of the cumulative usage returned when a
 conversation is resumed. Unstructured stdout, a mismatched input echo, a missing
 or inconsistent conversation ID, or a missing final result fails closed rather
 than appearing in chat as an answer.
+
+Antigravity 1.2.1 retries transient model API errors and mid-stream
+interruptions in-process while preserving completed tool outputs. Its
+structured stream contract remains compatible with TaroCub.
 
 `/model <id>` passes a model listed by `agy models`, and `/effort` supports
 `low`, `medium`, `high`, or `off`. Native `/goal` uses direct `-p` prompt mode
