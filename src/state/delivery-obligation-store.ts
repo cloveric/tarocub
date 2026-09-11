@@ -14,8 +14,9 @@
 // - attempting — crashed mid-send: the platform MAY already have the message.
 //                Redelivered WITH a visible recovered-reply marker, so the
 //                contract is honest at-least-once, never a silent duplicate.
-// - failed     — definitively rejected once; the restart is a natural retry
-//                boundary. Also carries the marker.
+// - failed     — rejected once; the restart is a retry boundary when the
+//                persisted response still passes delivery preflight. Also
+//                carries the marker.
 // - delivered  — nothing to do; retention prunes.
 //
 // Poison rows cannot spin: attempts are capped, stale rows expire, and both
@@ -219,6 +220,11 @@ export async function markDeliveryDelivered(stateDir: string, id: string): Promi
 
 export async function markDeliveryFailed(stateDir: string, id: string, error?: string): Promise<void> {
   await updateState(stateDir, id, "failed", error);
+}
+
+/** Settle a delivery that cannot become valid through a restart retry. */
+export async function markDeliveryAbandoned(stateDir: string, id: string, error?: string): Promise<void> {
+  await updateState(stateDir, id, "abandoned", error);
 }
 
 /**

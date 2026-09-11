@@ -46,7 +46,7 @@ describe("redeliverRecoveredLarkObligations", () => {
         { id: "marked", state: "attempting" },
       ]);
       const result = await redeliverRecoveredLarkObligations({ channel, stateDir, locale: "zh" });
-      expect(result).toEqual({ recovered: 2, failed: 0 });
+      expect(result).toEqual({ recovered: 2, failed: 0, abandoned: 0 });
       const plain = sent.find((entry) => entry.markdown.includes("content-plain"))!;
       const marked = sent.find((entry) => entry.markdown.includes("content-marked"))!;
       expect(plain.markdown).not.toContain("♻️");
@@ -76,7 +76,7 @@ describe("redeliverRecoveredLarkObligations", () => {
         { id: "good", state: "pending", content: "content-good" },
       ]);
       const result = await redeliverRecoveredLarkObligations({ channel, stateDir, locale: "en" });
-      expect(result).toEqual({ recovered: 1, failed: 1 });
+      expect(result).toEqual({ recovered: 1, failed: 1, abandoned: 0 });
       const rows = await readDeliveryObligations(stateDir);
       expect(rows.find((row) => row.id === "bad")!.state).toBe("failed");
       expect(rows.find((row) => row.id === "good")!.state).toBe("delivered");
@@ -107,7 +107,7 @@ describe("redeliverRecoveredLarkObligations", () => {
 
       const result = await redeliverRecoveredLarkObligations({ channel, stateDir, locale: "zh" });
 
-      expect(result).toEqual({ recovered: 1, failed: 0 });
+      expect(result).toEqual({ recovered: 1, failed: 0, abandoned: 0 });
       expect(uploadImage).toHaveBeenCalledTimes(1);
       expect(channel.send.mock.calls.some((call) => {
         const payload = call[1] as { card?: { body?: { elements?: Array<{ tag?: string }> } } } | undefined;
@@ -119,6 +119,48 @@ describe("redeliverRecoveredLarkObligations", () => {
       })).toBe(false);
       const rows = await readDeliveryObligations(stateDir);
       expect(rows[0]!.state).toBe("delivered");
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
+  it("abandons a previously failed reply with a missing artifact without replaying valid siblings", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-recover-terminal-"));
+    const workspace = path.join(stateDir, "workspace");
+    const validImage = path.join(workspace, "cover.jpg");
+    const missingImage = path.join(workspace, "page-3.png");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(validImage, "image bytes");
+    const uploadImage = vi.fn(async () => ({ image_key: "img_must_not_send" }));
+    const channel = {
+      send: vi.fn(async () => ({ messageId: "m" })),
+      rawClient: {
+        im: { v1: { image: { create: uploadImage } } },
+      },
+    };
+    try {
+      await seed(stateDir, [{
+        id: "terminal",
+        state: "failed",
+        content: [
+          "Old image set",
+          "```tool-call",
+          JSON.stringify({
+            name: "send.batch",
+            payload: { images: [validImage, missingImage] },
+          }),
+          "```",
+        ].join("\n"),
+      }]);
+
+      const result = await redeliverRecoveredLarkObligations({ channel, stateDir, locale: "zh" });
+
+      expect(result).toEqual({ recovered: 0, failed: 0, abandoned: 1 });
+      expect(uploadImage).not.toHaveBeenCalled();
+      expect(channel.send).not.toHaveBeenCalled();
+      const rows = await readDeliveryObligations(stateDir);
+      expect(rows[0]!.state).toBe("abandoned");
+      expect(rows[0]!.lastError).toContain("not-found");
     } finally {
       await removeTempRoot(stateDir);
     }
@@ -150,7 +192,7 @@ describe("redeliverRecoveredLarkObligations", () => {
         runtime: createLarkServiceRuntime({ createDocument }),
       });
 
-      expect(result).toEqual({ recovered: 1, failed: 0 });
+      expect(result).toEqual({ recovered: 1, failed: 0, abandoned: 0 });
       expect(createDocument).not.toHaveBeenCalled();
       const sent = JSON.stringify(channel.send.mock.calls);
       expect(sent).toContain("Keep this answer.");
@@ -167,7 +209,7 @@ describe("redeliverRecoveredLarkObligations", () => {
     const channel = { send: vi.fn() };
     try {
       const result = await redeliverRecoveredLarkObligations({ channel, stateDir, locale: "en" });
-      expect(result).toEqual({ recovered: 0, failed: 0 });
+      expect(result).toEqual({ recovered: 0, failed: 0, abandoned: 0 });
       expect(channel.send).not.toHaveBeenCalled();
     } finally {
       await removeTempRoot(stateDir);

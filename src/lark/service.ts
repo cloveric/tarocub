@@ -410,11 +410,15 @@ export async function runLarkService(
           runtime,
           log: (message) => logger.log(`${new Date().toISOString()} ${message}`),
         });
-        if (redelivery.recovered > 0 || redelivery.failed > 0) {
+        if (redelivery.recovered > 0 || redelivery.failed > 0 || redelivery.abandoned > 0) {
           logLifecycleEvent({
             type: "service.startup_maintenance",
             outcome: redelivery.failed > 0 ? "error" : "success",
-            detail: `delivery ledger: redelivered ${redelivery.recovered}, failed ${redelivery.failed}`,
+            detail: [
+              `delivery ledger: redelivered ${redelivery.recovered}`,
+              `failed ${redelivery.failed}`,
+              `abandoned ${redelivery.abandoned}`,
+            ].join(", "),
             metadata: { ...redelivery },
           });
         }

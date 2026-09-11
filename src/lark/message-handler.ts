@@ -2286,8 +2286,15 @@ async function runNormalizedLarkMessage(
         const allArtifactsRejectedOutsideWorkspace = outsideWorkspaceIssues.length > 0
           && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.issues.length
           && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.artifactCount;
-        if (allArtifactsRejectedOutsideWorkspace) {
-          for (const issue of outsideWorkspaceIssues) {
+        // Keep single-file failures and mixed sandbox refusals on their existing
+        // explicit-error path. A partially valid batch with a missing path is
+        // different: repair it before any sibling is sent, so a typo cannot
+        // create a partial delivery followed by duplicate boot-time replays.
+        const hasRepairablePartialMissingArtifact = initialDeliveryDirectivePreflight.issues.some(
+          (issue) => issue.reason === "not-found",
+        ) && initialDeliveryDirectivePreflight.artifactCount > initialDeliveryDirectivePreflight.issues.length;
+        if (allArtifactsRejectedOutsideWorkspace || hasRepairablePartialMissingArtifact) {
+          for (const issue of initialDeliveryDirectivePreflight.issues) {
             await appendLarkTimelineEvent(input.stateDir, normalized, {
               type: "file.rejected",
               outcome: "rejected",
@@ -2307,7 +2314,7 @@ async function runNormalizedLarkMessage(
             detail: "delivery_preflight_rejected_path",
             metadata: {
               phase: "delivery-preflight-guard",
-              rejectedPaths: outsideWorkspaceIssues.length,
+              rejectedPaths: initialDeliveryDirectivePreflight.issues.length,
             },
           });
           const firstUsage = result.usage;

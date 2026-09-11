@@ -5,12 +5,14 @@
 // later boot retries up to the attempts cap) and never blocks startup.
 
 import {
+  markDeliveryAbandoned,
   markDeliveryDelivered,
   markDeliveryFailed,
   sweepRecoverableDeliveries,
 } from "../state/delivery-obligation-store.js";
 import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { buildLarkRecoveryResponse, deliverLarkResponse } from "./delivery.js";
+import { preflightLarkResponseDeliveryDirectives } from "./delivery-followup.js";
 import { extractWholeResponseFileBlock } from "./delivery-preflight.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
@@ -37,9 +39,10 @@ export async function redeliverRecoveredLarkObligations(input: {
   locale: "en" | "zh";
   runtime?: LarkServiceRuntime;
   log?: (message: string) => void;
-}): Promise<{ recovered: number; failed: number }> {
+}): Promise<{ recovered: number; failed: number; abandoned: number }> {
   let recovered = 0;
   let failed = 0;
+  let abandoned = 0;
   const claimed = await sweepRecoverableDeliveries(input.stateDir, { channel: "lark" });
   for (const row of claimed) {
     const conversationKey = row.conversationKey ?? `lark:${row.chatId}`;
@@ -47,6 +50,35 @@ export async function redeliverRecoveredLarkObligations(input: {
       const safeReplay = buildLarkRecoveryResponse(row.content).trim() || (input.locale === "en"
         ? "A recovered reply contained only actions that are unsafe to rerun, so those actions were skipped."
         : "恢复的回复只包含不适合自动重跑的操作，因此已跳过这些操作。");
+      const replayPreflight = await preflightLarkResponseDeliveryDirectives(safeReplay, {
+        stateDir: input.stateDir,
+      });
+      // A failed row was already attempted and its deterministic path errors
+      // were surfaced to the user. Replaying valid siblings cannot fix a
+      // missing/refused path; it only duplicates artifacts on every restart.
+      if (row.state === "failed" && replayPreflight.issues.length > 0) {
+        const reasons = [...new Set(replayPreflight.issues.map((issue) => issue.reason))];
+        const detail = `unrecoverable delivery directives: ${reasons.join(", ")}`;
+        await markDeliveryAbandoned(input.stateDir, row.id, detail);
+        abandoned += 1;
+        await appendTimelineEventBestEffort(input.stateDir, {
+          type: "delivery.recovered",
+          ...(input.instanceName ? { instanceName: input.instanceName } : {}),
+          channel: "lark",
+          chatId: stableLarkNumericId(conversationKey),
+          conversationKey,
+          outcome: "abandoned",
+          detail: `abandoned obligation ${row.id}: ${detail}`,
+          metadata: {
+            obligationId: row.id,
+            attempts: row.attempts,
+            rejectedPaths: replayPreflight.issues.length,
+            reasons,
+          },
+        }, "Lark delivery recovery abandonment timeline event");
+        input.log?.(`delivery recovery abandoned obligation ${row.id}: ${detail}`);
+        continue;
+      }
       const wholeFile = Boolean(extractWholeResponseFileBlock(safeReplay));
       const replyOptions = {
         ...(row.replyTo ? { replyTo: row.replyTo } : {}),
@@ -108,5 +140,5 @@ export async function redeliverRecoveredLarkObligations(input: {
       input.log?.(`delivery recovery failed for obligation ${row.id}: ${redactLarkErrorDetail(error)}`);
     }
   }
-  return { recovered, failed };
+  return { recovered, failed, abandoned };
 }
