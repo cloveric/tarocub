@@ -46,9 +46,14 @@ export type DeepSeekHarnessPermissionPreset =
   | "full-auto"
   | "danger-full-access";
 
-/** Appended to bridge instructions on DSH only: the TaroCub Search MCP tool names as DSH exposes them. */
-export const DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE =
-  "In DeepSeek Harness, the TaroCub Search MCP tools are exposed as `mcp__cctb_search__web_extract` and `mcp__cctb_search__web_search`.";
+/** Appended to bridge instructions on DSH only: exact search tools and when their use is mandatory. */
+export const DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE = [
+  "In DeepSeek Harness, the TaroCub Search MCP tools are exposed as `mcp__cctb_search__web_extract` and `mcp__cctb_search__web_search`.",
+  "Before answering, you MUST call `mcp__cctb_search__web_search` for external facts that may have changed, including requests to check or verify the latest/current state, model or software versions/features/releases, prices/rates, laws/policies/regulations, news, benchmark scores/leaderboards, and medical/legal/financial claims.",
+  "When the user provides an exact URL, call `mcp__cctb_search__web_extract` first; use web search for discovery or when extraction fails.",
+  "For repository, workspace, or local-machine state, inspect the local environment instead of searching the web. Stable concepts may be answered directly.",
+  "If required search or extraction is unavailable, say verification could not be completed and label the answer unverified; never present memory as a current fact.",
+].join(" ");
 
 export interface DeepSeekHarnessModelSelection {
   provider?: string;

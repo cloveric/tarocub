@@ -43,6 +43,13 @@ Feishu/Lark app or claim that the separate TaroCub service is configured. The
 legacy `github:cloveric/tarocub#path:deepseek-harness-plugin` source remains
 compatible.
 
+For TaroCub Lark turns, the DeepSeek adapter also injects an engine-only search
+policy with the exact MCP tool names. It requires search before answering
+time-varying external or high-stakes claims, uses extraction first for an exact
+URL, keeps repository and local-machine checks local, and labels answers
+unverified when required retrieval is unavailable. This policy is not added to
+the shared Lark prompt or the user's global Harness `AGENTS.md`.
+
 ```bash
 dsh --profile web --dump-config | grep -A18 -B2 mcp-cctb-search
 dsh plugin --profile web update deepseek-harness-web-search-plugin

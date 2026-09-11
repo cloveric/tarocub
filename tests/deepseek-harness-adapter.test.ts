@@ -388,7 +388,7 @@ describe("DeepSeekHarnessAdapter", () => {
     expect(gateway.closed).toBe(true);
   });
 
-  it("appends the DSH-only search tool names inside the private bridge instructions", async () => {
+  it("appends the DSH-only search policy inside the private bridge instructions", async () => {
     // The MCP tool names are DeepSeek-Harness-specific, so they ride in the
     // adapter's own preamble instead of the shared every-turn Lark prompt
     // (which has a hard character budget and serves every engine).
@@ -408,6 +408,13 @@ describe("DeepSeekHarnessAdapter", () => {
     expect(text).toContain("Reply in Chinese.");
     expect(text).toContain("`mcp__cctb_search__web_extract`");
     expect(text).toContain("`mcp__cctb_search__web_search`");
+    expect(text).toContain("MUST call `mcp__cctb_search__web_search`");
+    expect(text).toContain("latest/current state");
+    expect(text).toContain("model or software versions/features/releases");
+    expect(text).toContain("medical/legal/financial claims");
+    expect(text).toContain("provides an exact URL");
+    expect(text).toContain("inspect the local environment instead of searching the web");
+    expect(text).toContain("label the answer unverified");
     // The note is part of the private block, not the user message.
     expect(text.indexOf("mcp__cctb_search__web_extract")).toBeLessThan(text.indexOf("<user_message>"));
 
