@@ -24,6 +24,7 @@ import {
 import { ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS } from "./engine-timeouts.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode } from "../state/approval-mode.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
+import { detectImageMediaTypeFromFile, normalizeImageFileName } from "../runtime/image-media.js";
 
 export const DEEPSEEK_HARNESS_TURN_TIMEOUT_MS = 6 * 60 * 60_000;
 export const DEEPSEEK_HARNESS_INACTIVITY_TIMEOUT_MS = ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS;
@@ -2454,7 +2455,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
     const nonImageFiles: string[] = [];
     const images: Array<Record<string, unknown>> = [];
     for (const file of input.files) {
-      const mediaType = imageMediaType(file);
+      const mediaType = await detectImageMediaTypeFromFile(file);
       if (!mediaType) {
         nonImageFiles.push(file);
         continue;
@@ -2463,7 +2464,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
         type: "image",
         mediaType,
         data: (await readFile(file)).toString("base64"),
-        name: path.basename(file),
+        name: normalizeImageFileName(path.basename(file), mediaType),
       });
     }
     const sections: string[] = [];
@@ -3144,22 +3145,6 @@ function assistantContentText(value: unknown, type: "text" | "reasoning"): strin
 
 function assistantContentHasType(value: unknown, type: string): boolean {
   return Array.isArray(value) && value.some((item) => asRecord(item)?.type === type);
-}
-
-function imageMediaType(filePath: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" | null {
-  switch (path.extname(filePath).toLowerCase()) {
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".webp":
-      return "image/webp";
-    case ".gif":
-      return "image/gif";
-    default:
-      return null;
-  }
 }
 
 function asRecord(value: unknown): Record<string, any> | undefined {

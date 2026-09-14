@@ -483,6 +483,39 @@ describe("DeepSeekHarnessAdapter", () => {
     }
   });
 
+  it("declares Harness image media types from bytes when the file extension is wrong", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "deepseek-harness-image-type-"));
+    const imagePath = path.join(root, "feishu-image.png");
+    const imageBytes = Buffer.from("ffd8ffe000104a464946", "hex");
+    await writeFile(imagePath, imageBytes);
+
+    try {
+      const { adapter, gateway } = createAdapter();
+      const { sessionId } = await adapter.createSession(12349);
+      const turn = adapter.sendUserMessage(sessionId, {
+        text: "Inspect this image",
+        files: [imagePath],
+      });
+      await waitForCall(gateway, "session.prompt", 1);
+
+      const prompt = gateway.calls.find((call) => call.method === "session.prompt")?.payload as {
+        content: Array<Record<string, unknown>>;
+      };
+      expect(prompt.content[1]).toEqual({
+        type: "image",
+        mediaType: "image/jpeg",
+        data: imageBytes.toString("base64"),
+        name: "feishu-image.jpg",
+      });
+
+      await finishTurn(gateway, sessionId, 1, 1, "Inspected");
+      await expect(turn).resolves.toMatchObject({ text: "Inspected" });
+      await adapter.destroy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("releases the single-writer claim after Harness rejects a prompt", async () => {
     const { adapter, gateway } = createAdapter();
     const { sessionId } = await adapter.createSession(12347);

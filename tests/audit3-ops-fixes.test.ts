@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readdir, stat, truncate, utimes, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, stat, truncate, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -396,6 +396,30 @@ describe("Lark inbound attachment size limit", () => {
       expect((thrown as Error).message).toContain("Lark attachment download failed");
       expect(classifyFailure(thrown)).toBe("file-workflow");
       expect(renderLarkUserFacingError(thrown, "prepare", "zh")).not.toContain("准备飞书消息时失败");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("names Feishu image downloads from their bytes instead of assuming PNG", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "audit3-lark-image-type-"));
+    const jpegBytes = Buffer.from("ffd8ffe000104a464946", "hex");
+    try {
+      const downloaded = await downloadLarkAttachments({
+        channel: { downloadResource: vi.fn(async () => jpegBytes) } as never,
+        stateDir: root,
+        messageId: "om_jpeg",
+        attachments: [
+          { kind: "image", fileKey: "img_1" },
+          { kind: "image", fileKey: "img_2", fileName: "scan.png" },
+        ],
+      });
+
+      expect(downloaded.map((attachment) => path.basename(attachment.localPath))).toEqual([
+        "image-1.jpg",
+        "scan.jpg",
+      ]);
+      await expect(readFile(downloaded[0]!.localPath)).resolves.toEqual(jpegBytes);
     } finally {
       await removeTempRoot(root);
     }

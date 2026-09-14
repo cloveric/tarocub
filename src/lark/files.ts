@@ -9,6 +9,7 @@ import {
   type DownloadedAttachment,
   type FileWorkflowResult,
 } from "../runtime/file-workflow.js";
+import { detectImageMediaType, normalizeImageFileName } from "../runtime/image-media.js";
 import { ELEMENT_CONTENT_MAX_BYTES, truncateBytes } from "./card-renderer.js";
 import type { Locale } from "../telegram/message-renderer.js";
 import type { NormalizedTelegramAttachment } from "../telegram/update-normalizer.js";
@@ -177,7 +178,9 @@ export async function downloadLarkAttachments(input: {
     // Backstop for the (current) case where no size was advertised: the body is
     // already in memory, so refuse before it is persisted and handed downstream.
     assertLarkAttachmentDownloadable(attachment, body.length);
-    const fileName = attachment.fileName ?? `${attachment.kind}-${index + 1}${defaultExtension(attachment.kind)}`;
+    const fallbackName = attachment.fileName ?? `${attachment.kind}-${index + 1}${defaultExtension(attachment.kind)}`;
+    const detectedImageType = attachment.kind === "image" ? detectImageMediaType(body) : null;
+    const fileName = detectedImageType ? normalizeImageFileName(fallbackName, detectedImageType) : fallbackName;
     // A merged attachment burst downloads several messages' files into ONE
     // directory — same-named files (e.g. two cameras' IMG_001.jpg) would
     // silently overwrite each other. Suffix duplicates instead.
