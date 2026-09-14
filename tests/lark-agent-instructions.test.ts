@@ -286,6 +286,15 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("fenced `file:name.ext`");
   });
 
+  it("forbids LaTeX that Lark cards would expose as raw source", () => {
+    const instructions = larkAgentInstructions();
+
+    expect(instructions).toContain("Lark cards do not render LaTeX");
+    expect(instructions).toContain("never use `$...$`");
+    expect(instructions).toContain("Unicode math symbols");
+    expect(instructions).toContain("`÷`, `×`, `≈`, `≤`, `≥`");
+  });
+
   it("does not instruct Lark agents to use Telegram-only side-channel send commands", () => {
     const instructions = larkAgentInstructions();
 

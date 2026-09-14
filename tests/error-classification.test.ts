@@ -23,6 +23,26 @@ describe("classifyFailure auth detection", () => {
     expect(classifyFailure(new Error("not logged in"))).toBe("auth");
     expect(classifyFailure(new Error("unauthorized"))).toBe("auth");
     expect(classifyFailure(new Error("Please run /login"))).toBe("auth");
+    expect(classifyFailure(new Error(
+      "Antigravity emitted result before init\n\n" +
+      "Error: authentication required. Run 'agy' to log in, then retry.\n" +
+      "error: authentication failed or timed out",
+    ))).toBe("auth");
+  });
+
+  it("renders the Antigravity startup auth failure instead of restart advice", () => {
+    const error = new Error(
+      "Antigravity emitted result before init\n\n" +
+      "Error: authentication required. Run 'agy' to log in, then retry.\n" +
+      "error: authentication failed or timed out",
+    );
+    const zh = renderLarkUserFacingError(error, "engine", "zh");
+    expect(zh).toContain("Antigravity 认证刷新失败");
+    expect(zh).toContain("运行 `agy`");
+    expect(zh).not.toContain("重启实例");
+    const en = renderLarkUserFacingError(error, "engine", "en");
+    expect(en).toContain("Antigravity authentication could not be refreshed");
+    expect(en).not.toContain("Restart");
   });
 
   it("does not misclassify unrelated errors as auth", () => {

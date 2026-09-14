@@ -38,6 +38,8 @@ export function renderLarkUserFacingError(
     return tooLarge;
   }
   const category = classifyFailure(error);
+  const errorText = error instanceof Error ? `${error.name}\n${error.message}` : String(error);
+  const isAntigravityAuth = category === "auth" && /(?:antigravity|\bagy\b)/i.test(errorText);
   if (category === "engine-thread-locked") {
     // The adapter already produced an operator-actionable explanation (who
     // holds the lock, what to do). Surfacing it verbatim is the whole point —
@@ -50,6 +52,9 @@ export function renderLarkUserFacingError(
   }
   if (locale === "en") {
     if (category === "auth") {
+      if (isAntigravityAuth) {
+        return "Error: Antigravity authentication could not be refreshed. Run `agy` locally to sign in, then retry.";
+      }
       return "Error: engine or Lark authentication has expired. Please sign in again and retry.";
     }
     if (category === "write-permission") {
@@ -85,6 +90,9 @@ export function renderLarkUserFacingError(
   }
 
   if (category === "auth") {
+    if (isAntigravityAuth) {
+      return "错误：Antigravity 认证刷新失败。请先在本机运行 `agy` 完成登录，再重试。";
+    }
     return "错误：引擎或飞书认证已失效，请重新登录后重试。";
   }
   if (category === "write-permission") {

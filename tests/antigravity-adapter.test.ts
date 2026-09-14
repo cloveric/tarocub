@@ -830,6 +830,54 @@ describe("ProcessAntigravityAdapter", () => {
     await expect(promise).rejects.toThrow("upstream disconnected");
   });
 
+  it("retries once when agy authentication fails before init", async () => {
+    const children = [new FakeChildProcess(), new FakeChildProcess()];
+    const calls: SpawnCall[] = [];
+    const spawnAntigravity: SpawnAntigravity = (command, args, options) => {
+      calls.push({ command, args, options });
+      return children[calls.length - 1]!;
+    };
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage(CONVERSATION_ID, { text: "Create a skill", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    children[0]!.stderr.emitData(
+      "Error: authentication required. Run 'agy' to log in, then retry.\n" +
+      "error: authentication failed or timed out\n",
+    );
+    children[0]!.stdout.emitData(jsonLine({
+      event: "result",
+      result: { status: "ERROR", error: "authentication required" },
+    }));
+
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    emitSuccess(children[1]!, "skill created");
+    await expect(promise).resolves.toMatchObject({ text: "skill created", sessionId: CONVERSATION_ID });
+    expect(children[0]!.stdin.writes).toHaveLength(1);
+    expect(children[1]!.stdin.writes).toHaveLength(1);
+    await adapter.destroy();
+  });
+
+  it("does not replay an authentication failure after init", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage(CONVERSATION_ID, { text: "Publish content", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: {
+        conversation_id: CONVERSATION_ID,
+        status: "ERROR",
+        error: "UNAUTHENTICATED: invalid authentication credentials",
+      },
+    }));
+
+    await expect(promise).rejects.toThrow("UNAUTHENTICATED");
+    expect(calls).toHaveLength(1);
+  });
+
   it("rejects an init event without a conversation_id", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);

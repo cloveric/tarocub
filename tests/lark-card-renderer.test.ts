@@ -821,6 +821,32 @@ describe("lark card renderer", () => {
     )).toBe("先工商过户 → 会计师验资 ⇒ 中登发股");
   });
 
+  it("turns common LaTeX calculations into readable Lark card text", () => {
+    const raw = "* **2029年**：$13,000 \\text{ 万元} \\div 845 \\text{ 吨} \\approx \\mathbf{15.3846 \\text{ 万元/吨}}$";
+
+    expect(cleanCardText(raw)).toBe(
+      "* **2029年**：13,000 万元 ÷ 845 吨 ≈ **15.3846 万元/吨**",
+    );
+  });
+
+  it("keeps currency and literal code intact while normalizing bracketed math", () => {
+    const raw = [
+      "预算为 $100–$200，比例为 \\(1 \\div 2 \\approx 0.5\\)。",
+      "`示例 $13,000 \\text{ 万元}$`",
+      "```text",
+      "$20,000 \\text{ 万元} \\div 1,300 \\text{ 吨}$",
+      "```",
+    ].join("\n");
+
+    expect(cleanCardText(raw)).toBe([
+      "预算为 $100–$200，比例为 1 ÷ 2 ≈ 0.5。",
+      "`示例 $13,000 \\text{ 万元}$`",
+      "```text",
+      "$20,000 \\text{ 万元} \\div 1,300 \\text{ 吨}$",
+      "```",
+    ].join("\n"));
+  });
+
   it("moves bold markers inside quotation marks so inline quotes render in Lark markdown", () => {
     expect(cleanCardText(
       "卖方主张**“上市公司先支付首期款”**，再办理工商过户。",

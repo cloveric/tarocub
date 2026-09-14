@@ -1455,7 +1455,63 @@ const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
   leftrightarrow: "↔",
   Leftrightarrow: "⇔",
   to: "→",
+  div: "÷",
+  times: "×",
+  cdot: "·",
+  approx: "≈",
+  sim: "∼",
+  neq: "≠",
+  ne: "≠",
+  le: "≤",
+  leq: "≤",
+  ge: "≥",
+  geq: "≥",
+  pm: "±",
+  infty: "∞",
 };
+
+function normalizeLarkMathBody(body: string): string {
+  let output = body;
+
+  // Unwrap the subset agents commonly use for units and emphasis. Iterate so
+  // nested forms such as `\mathbf{15.4 \text{万元/吨}}` become valid Markdown.
+  for (let pass = 0; pass < 8; pass += 1) {
+    const previous = output;
+    output = output
+      .replace(/\\(?:text|textrm|mathrm|operatorname|mathit)\s*\{([^{}]*)\}/g, "$1")
+      .replace(/\\(?:mathbf|textbf|boldsymbol)\s*\{([^{}]*)\}/g, "**$1**")
+      .replace(/\\(?:boxed|overline|underline)\s*\{([^{}]*)\}/g, "$1")
+      .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)")
+      .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)");
+    if (output === previous) break;
+  }
+
+  output = output
+    .replace(/\\(?:left|right)\b/g, "")
+    .replace(/\\(rightarrow|Rightarrow|leftarrow|Leftarrow|leftrightarrow|Leftrightarrow|to|div|times|cdot|approx|sim|neq|ne|leq|le|geq|ge|pm|infty)\b/g, (_match, command: string) => (
+      LARK_INLINE_MATH_SYMBOLS[command] ?? command
+    ))
+    .replace(/\\[,;:!]\s*/g, " ")
+    .replace(/\\([%#$&_{}])/g, "$1")
+    .replace(/([_^])\{([^{}]+)\}/g, "$1$2")
+    .replace(/[{}]/g, "")
+    .replace(/~/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return output;
+}
+
+function normalizeUnsupportedLarkMath(text: string): string {
+  const render = (_match: string, body: string): string => normalizeLarkMathBody(body);
+  return text
+    .replace(/\$\$([^$\n]+)\$\$/g, render)
+    // Paired dollar signs are also used for currency. Only treat the inline
+    // form as math when it contains an actual TeX command.
+    .replace(/\$([^$\n]*\\[A-Za-z]+[^$\n]*)\$/g, render)
+    .replace(/\\\(([^\n]+?)\\\)/g, render)
+    .replace(/\\\[([^\n]+?)\\\]/g, render);
+}
 
 function normalizeOutsideInlineCode(line: string): string {
   let output = "";
@@ -1485,11 +1541,7 @@ function normalizeOutsideInlineCode(line: string): string {
 }
 
 function normalizeLarkMarkdownProse(text: string): string {
-  return text
-    .replace(
-      /\$\s*\\(rightarrow|Rightarrow|leftarrow|Leftarrow|leftrightarrow|Leftrightarrow|to)\s*\$/g,
-      (_match, command: string) => LARK_INLINE_MATH_SYMBOLS[command] ?? _match,
-    )
+  return normalizeUnsupportedLarkMath(text)
     // CommonMark cannot open emphasis when ** is followed by punctuation and
     // preceded by ordinary text. Put the emphasis inside the quote instead.
     .replace(/\*\*“([^*\n]+)”\*\*/g, "“**$1**”")

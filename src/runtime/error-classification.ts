@@ -92,6 +92,9 @@ export function classifyFailure(error: unknown): FailureCategory {
     text.includes("missing bearer") ||
     text.includes("please run /login") ||
     text.includes("login required") ||
+    text.includes("authentication required") ||
+    text.includes("authentication failed") ||
+    text.includes("not logged into antigravity") ||
     text.includes("failed to authenticate") ||
     text.includes("authentication_error") ||
     text.includes("invalid authentication credentials") ||

@@ -193,6 +193,20 @@ function isUnsupportedLogFileFlagError(error: unknown): boolean {
   );
 }
 
+function isRecoverableStartupAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /antigravity emitted result before init/i.test(message) &&
+    (
+      /authentication required/i.test(message) ||
+      /authentication failed or timed out/i.test(message) ||
+      /not logged (?:in to|into) antigravity/i.test(message) ||
+      /\bunauthenticated\b/i.test(message) ||
+      /invalid authentication credentials/i.test(message)
+    )
+  );
+}
+
 function appendHeadTailDiagnostic(existing: string, chunk: string, maxBytes: number): string {
   const combined = existing + chunk;
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) return combined;
@@ -523,7 +537,8 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     settingsKey: string,
     input: CodexUserMessageInput,
   ): Promise<AntigravityRunResponse> {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let retriedStartupAuth = false;
+    while (true) {
       const worker = await this.getOrCreateWorker(
         sessionId,
         workspace,
@@ -539,13 +554,20 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         }
         return response;
       } catch (error) {
-        if (attempt !== 0 || this.omitLogFile || !isUnsupportedLogFileFlagError(error)) {
-          throw error;
+        // agy can occasionally fail its first silent OAuth refresh and emit an
+        // auth result before init. No model or tool work has started at that
+        // point, so rebuilding the worker and replaying once is side-effect safe.
+        if (!retriedStartupAuth && isRecoverableStartupAuthError(error)) {
+          retriedStartupAuth = true;
+          continue;
         }
-        this.omitLogFile = true;
+        if (!this.omitLogFile && isUnsupportedLogFileFlagError(error)) {
+          this.omitLogFile = true;
+          continue;
+        }
+        throw error;
       }
     }
-    throw new Error("Antigravity persistent worker retry was exhausted");
   }
 
   private async getOrCreateWorker(
