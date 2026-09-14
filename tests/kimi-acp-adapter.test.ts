@@ -547,6 +547,7 @@ describe("KimiAcpAdapter", () => {
       const server = harness.children[0].server;
       expect(server.requests("initialize")[0]?.params?.clientCapabilities).toEqual({
         terminal: true,
+        elicitation: { form: {} },
       });
 
       const createId = server.requestClient("terminal/create", {
@@ -5887,6 +5888,268 @@ describe("KimiAcpAdapter", () => {
     });
     server.respondPrompt();
     await expect(turn).resolves.toMatchObject({ text: "approved" });
+    adapter.destroy();
+  });
+
+  it("maps ACP form elicitation to a full multi-question Kimi card", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const turn = adapter.sendUserMessage("telegram-elicitation", {
+      text: "ask two questions",
+      files: [],
+      onApprovalRequest: async (request) => {
+        expect(request).toMatchObject({
+          engine: "kimi",
+          toolName: "AskUserQuestion",
+          cwd: "/tmp/kimi-workspace",
+          sessionId: "kimi-session-1",
+          toolInput: {
+            questions: [
+              {
+                question: "Which colour?",
+                header: "Colour",
+                multi_select: false,
+                options: [
+                  { label: "Red", description: "Warm" },
+                  { label: "Blue", description: "Cool" },
+                ],
+              },
+              {
+                question: "Which traits?",
+                header: "Traits",
+                multi_select: true,
+                options: [
+                  { label: "Fast" },
+                  { label: "Safe, stable" },
+                ],
+              },
+            ],
+          },
+        });
+        return {
+          behavior: "allow",
+          updatedInput: {
+            answers: {
+              "Which colour?": "Blue",
+              "Which traits?": "Safe, stable, Fast",
+            },
+          },
+        };
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "elicitation-question-1",
+      title: "AskUserQuestion",
+      kind: "other",
+      status: "pending",
+      rawInput: {
+        questions: [
+          { question: "Which colour?", header: "Colour" },
+          { question: "Which traits?", header: "Traits", multi_select: true },
+        ],
+      },
+    });
+    const requestId = server.requestClient("elicitation/create", {
+      mode: "form",
+      sessionId: server.sessionId,
+      toolCallId: "elicitation-question-1",
+      message: "Please answer both questions.",
+      requestedSchema: {
+        type: "object",
+        required: ["q0", "q1"],
+        properties: {
+          q0: {
+            type: "string",
+            title: "Colour",
+            oneOf: [
+              { const: "red-id", title: "Red", description: "Warm" },
+              { const: "blue-id", title: "Blue", description: "Cool" },
+            ],
+          },
+          q1: {
+            type: "array",
+            title: "Traits",
+            minItems: 1,
+            items: {
+              anyOf: [
+                { const: "fast-id", title: "Fast" },
+                { const: "safe-id", title: "Safe, stable" },
+              ],
+            },
+          },
+        },
+      },
+    });
+    await waitFor(() => server.clientResponses.has(requestId));
+    expect(server.clientResponses.get(requestId)?.error).toBeUndefined();
+    expect(server.clientResponses.get(requestId)?.result).toEqual({
+      action: "accept",
+      content: {
+        q0: "blue-id",
+        q1: ["safe-id", "fast-id"],
+      },
+    });
+    server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "answers received" },
+    });
+    server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "answers received" });
+    adapter.destroy();
+  });
+
+  it("keeps a background ACP form elicitation answerable after its foreground turn", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    let answerQuestion!: () => void;
+    let approvalStarted = false;
+    const answerReady = new Promise<void>((resolve) => {
+      answerQuestion = resolve;
+    });
+    const turn = adapter.sendUserMessage("telegram-background-elicitation", {
+      text: "ask later",
+      files: [],
+      onApprovalRequest: async (request) => {
+        approvalStarted = true;
+        expect(request.toolInput).toMatchObject({ background: true });
+        await answerReady;
+        return {
+          behavior: "allow",
+          updatedInput: { answers: { "Continue the task?": "Yes" } },
+        };
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "background-elicitation-1",
+      title: "AskUserQuestion",
+      kind: "other",
+      status: "pending",
+      rawInput: {
+        background: true,
+        questions: [{ question: "Continue the task?", header: "Continue" }],
+      },
+    });
+    const requestId = server.requestClient("elicitation/create", {
+      mode: "form",
+      sessionId: server.sessionId,
+      toolCallId: "background-elicitation-1",
+      message: "Continue the task?",
+      requestedSchema: {
+        type: "object",
+        required: ["q0"],
+        properties: {
+          q0: {
+            type: "string",
+            title: "Continue",
+            description: "Continue the task?",
+            enum: ["Yes", "No"],
+          },
+        },
+      },
+    });
+    await waitFor(() => approvalStarted);
+    server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "foreground complete" },
+    });
+    server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "foreground complete" });
+    expect(server.clientResponses.has(requestId)).toBe(false);
+
+    answerQuestion();
+    await waitFor(() => server.clientResponses.has(requestId));
+    expect(server.clientResponses.get(requestId)?.result).toEqual({
+      action: "accept",
+      content: { q0: "Yes" },
+    });
+    adapter.destroy();
+  });
+
+  it("cancels an outstanding ACP form elicitation when the turn is stopped", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const controller = new AbortController();
+    let approvalStarted = false;
+    const turn = adapter.sendUserMessage("telegram-stop-elicitation", {
+      text: "ask",
+      files: [],
+      abortSignal: controller.signal,
+      onApprovalRequest: async (request) => await new Promise((resolve) => {
+        approvalStarted = true;
+        request.abortSignal?.addEventListener("abort", () => resolve({ behavior: "deny" }), { once: true });
+      }),
+    });
+    const rejected = expect(turn).rejects.toThrow("Task was stopped by user");
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "stop-elicitation-1",
+      title: "AskUserQuestion",
+      kind: "other",
+      status: "pending",
+      rawInput: { questions: [{ question: "Continue?", header: "Continue" }] },
+    });
+    const requestId = server.requestClient("elicitation/create", {
+      mode: "form",
+      sessionId: server.sessionId,
+      toolCallId: "stop-elicitation-1",
+      message: "Continue?",
+      requestedSchema: {
+        type: "object",
+        required: ["q0"],
+        properties: {
+          q0: {
+            type: "string",
+            title: "Continue",
+            description: "Continue?",
+            enum: ["Yes", "No"],
+          },
+        },
+      },
+    });
+    await waitFor(() => approvalStarted);
+    controller.abort();
+    await rejected;
+    await waitFor(() => server.clientResponses.has(requestId));
+    expect(server.clientResponses.get(requestId)?.result).toEqual({ action: "cancel" });
+    adapter.destroy();
+  });
+
+  it("fails closed for ACP form fields the channel choice UI cannot represent", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const onApprovalRequest = vi.fn(async () => ({ behavior: "allow" as const }));
+    const turn = adapter.sendUserMessage("telegram-free-text-elicitation", {
+      text: "ask for free text",
+      files: [],
+      onApprovalRequest,
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    const response = await requestClientResponse(server, "elicitation/create", {
+      mode: "form",
+      sessionId: server.sessionId,
+      message: "Type a secret",
+      requestedSchema: {
+        type: "object",
+        required: ["value"],
+        properties: {
+          value: { type: "string", title: "Value" },
+        },
+      },
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({ action: "cancel" });
+    expect(onApprovalRequest).not.toHaveBeenCalled();
+    server.respondPrompt();
+    await turn;
     adapter.destroy();
   });
 

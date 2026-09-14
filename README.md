@@ -191,20 +191,26 @@ locally. TaroCub uses the persistent `kimi acp` protocol, not prompt-mode text
 scraping.
 
 Kimi supports streamed text/thought/tool events, `/stop`, tool approvals,
-single-choice Lark and Telegram questions, `/compact`, model/effort/mode
-options, and `/resume` session scanning/selection. TaroCub loads instance and
+multi-question and multi-select Lark/Telegram forms, `/compact`,
+model/effort/mode options, and `/resume` session scanning/selection. TaroCub loads instance and
 channel guidance through a workspace `.kimi-code/agents/agent.md` main-agent
 override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-The current compatibility baseline is **Kimi Code 0.42.0**. A live ACP probe
+The current compatibility baseline is **Kimi Code 0.43.0** with
+`@agentclientprotocol/sdk` 1.4.0. A live ACP probe
 verified `session/new` and cross-process `session/load`, structured questions,
 Search MCP execution, cancellation followed by worker reuse, and exactly-once
-background Agent completion. TaroCub always supplies the complete configured
+background Agent completion. Kimi 0.43's standard ACP form elicitation was also
+verified end to end with two questions, including multi-select and distinct
+display labels/wire values. Older permission-style single-choice requests remain
+supported as a compatibility fallback. TaroCub always supplies the complete configured
 MCP list and fails closed if Kimi rejects session initialization; it does not
 retry by silently removing stdio search. Native Kimi user/project MCP files and
-plugins remain independent. Kimi 0.42 always enables its secondary-model pool,
+plugins remain independent. Kimi 0.43 can defer MCP tool definitions, but the
+built-in Search MCP deliberately remains immediately discoverable rather than
+being deferred. Kimi 0.42 always enables its secondary-model pool,
 but without a `[secondary_model]` section subagents inherit the caller's model,
 so existing TaroCub instances do not need a new model setting.
 Kimi `full-auto` maps to ACP `yolo`; delegated terminal working directories are
@@ -282,9 +288,9 @@ cross-engine release contract.
 
 Telegram renders structured `AskUserQuestion` requests in one editable inline
 flow: multiple questions advance sequentially, while multi-select questions use
-toggle buttons plus an explicit Submit action. Kimi's current ACP permission
-protocol still advertises only one single-choice question at a time; the richer
-flow applies when an engine such as Claude supplies it.
+toggle buttons plus an explicit Submit action. Kimi 0.43 now reaches that richer
+flow through ACP form elicitation; older Kimi permission callbacks still use the
+single-choice fallback.
 
 ### DeepSeek Harness engine
 

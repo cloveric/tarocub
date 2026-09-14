@@ -349,7 +349,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Project instructions | `agent.md` prompt injection | System prompt + workspace `CLAUDE.md` | Native `.kimi-code/agents/agent.md` in bot workspaces | Private per-instance `DSH_HOME/AGENTS.md` | `agent.md` prompt injection |
 | Streaming / tools | Native events and authoritative completion items | Native stream events | ACP text/reasoning/tools/approvals | Native text/reasoning/tools/results/usage | Structured text/tool/result events |
 | Background tasks | Structured lifecycle | Structured lifecycle | Observer Hooks plus review/retry aggregation | `session/jobs` plus review grace and exactly-once final result | No structured post-result lifecycle |
-| Approvals / questions | App-server sandbox or turn pre-approval | Per-tool approvals and structured questions | ACP per-tool approval; current question surface is single-choice | Once/session approvals; multiple, multi-select, and free-text questions | Turn pre-approval |
+| Approvals / questions | App-server sandbox or turn pre-approval | Per-tool approvals and structured questions | ACP per-tool approval; Kimi 0.43 choice forms support multiple and multi-select questions | Once/session approvals; multiple, multi-select, and free-text questions | Turn pre-approval |
 | YOLO | Full-auto or bypass | Bypass permission mode | ACP `yolo` / `auto` | Harness workspace sandbox or `danger-full-access` | Unsafe skip-permissions |
 | `/goal` | Structured Goal API | Native command | Explicitly unsupported by current ACP | Native durable Goal, persisted optional token budget, restart re-arm | Native command |
 | `/steer` | Native mid-turn injection | Not exposed | Not exposed by ACP | Native `session.steer` | Not exposed |

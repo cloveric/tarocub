@@ -113,11 +113,13 @@ keys are never copied into Kimi config. Explicit `BRAVE_API_KEY` /
 server can reuse those same keys from an existing local Codex
 `[mcp_servers.<name>.env]` configuration without logging them.
 
-The current compatibility baseline is Kimi Code 0.42.0. Both ACP session paths
+The current compatibility baseline is Kimi Code 0.43.0. Both ACP session paths
 and a real `provider_status` tool call were live-verified; object-valued MCP
 results remained structured. TaroCub does not silently retry without stdio
 MCPs: an initialization failure is surfaced so missing search capability cannot
-be mistaken for a healthy session.
+be mistaken for a healthy session. Kimi 0.43 supports deferred MCP tool
+definitions, but TaroCub deliberately keeps `cctb_search` inline so the model
+can discover current-fact search without an additional tool-loading decision.
 
 ## Register With Antigravity
 

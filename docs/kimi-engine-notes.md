@@ -4,7 +4,7 @@ This document records the protocol evidence used to add Kimi Code CLI as a
 TaroCub engine. It is intentionally evidence-first: behavior is marked as
 verified only when it was observed against the locally installed binary.
 
-## Probe Baseline
+## Initial Probe Baseline
 
 - Probe date: 2026-08-02
 - Binary: `~/.kimi-code/bin/kimi`
@@ -43,6 +43,43 @@ ACP was verified to provide:
 
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
+
+## Kimi 0.43.0 Compatibility Re-probe
+
+- Probe date: 2026-09-14
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `0.43.0`
+- Integration protocol: persistent `kimi acp`
+- Client SDK: `@agentclientprotocol/sdk@1.4.0`
+
+TaroCub's real adapter completed ACP initialization, created a session with the
+built-in Search MCP, produced an exact model reply, and then ran a second live
+turn in which Kimi invoked `AskUserQuestion` with two fields. The client
+advertised ACP `elicitation.form`; the bridge rendered the original per-field
+question text, returned one single-select and one multi-select answer, and Kimi
+completed with the expected `KIMI_FORM_FINAL_OK` response.
+
+The SDK upgrade required one ordering fix. ACP 1.x dispatches session updates
+and reverse requests concurrently, so a permission or elicitation request can
+enter its handler while the preceding `tool_call` update is still being
+processed. TaroCub now drains the accepted update chain before resolving either
+request. This preserves raw command input, the exact question schema, and
+detached-task ownership; a stopped turn still answers the outstanding wire
+request with deny/cancel instead of leaving Kimi wedged. Adapter coverage now
+includes full forms, background forms that outlive their foreground turn, and
+stop-time cancellation.
+
+Other 0.43 changes do not require bridge shims. Compaction retries, partial
+streamed tool-call recovery, and MCP attachment preservation are internal Kimi
+fixes. Deferred MCP tool loading is available upstream, but TaroCub keeps
+`cctb_search` inline so current-fact discovery is not hidden behind an extra
+tool lookup. The bridge also leaves Kimi's permission-mode reminder enabled;
+the new disable flag is intended for controlled harnesses and would change
+production model behavior. Kimi can now steer an internal background `WaitFor`,
+but ACP still exposes no safe mid-turn steering method, so TaroCub continues to
+queue Kimi follow-ups rather than sending a concurrent prompt. See the
+[0.43.0 release](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai/kimi-code%400.43.0)
+and [ACP TypeScript SDK 1.4.0](https://github.com/agentclientprotocol/typescript-sdk/releases/tag/v1.4.0).
 
 ## Kimi 0.42.0 Compatibility Re-probe
 
@@ -670,8 +707,8 @@ covered by integration tests for a Kimi-configured instance:
 - bare `/resume`, numbered selection, and `/resume session <session-id>`, using
   real ACP `session/list` metadata plus pre-binding `session/load`, with the
   original session cwd persisted for the resumed turn;
-- single-choice `AskUserQuestion` forms/buttons in Lark and Telegram using only
-  ACP-advertised option IDs;
+- Kimi 0.43 ACP form elicitation with complete multi-question and multi-select
+  cards in Lark and Telegram, plus the older single-choice permission fallback;
 - native workspace instructions, local skills, and the injected TaroCub Search
   MCP alongside Kimi's own MCP/plugins.
 
@@ -682,15 +719,16 @@ extra exception.
 
 ## Verified Gaps
 
-- Kimi ACP has no mid-turn prompt injection. `/steer` reports the gap and new
+- Kimi ACP has no client mid-turn prompt injection. Kimi 0.43 can steer its own
+  background `WaitFor`, but `/steer` still reports the ACP gap and new bridge
   messages queue as separate turns.
 - The live ACP `/goal` probe returned `Unknown ACP command: /goal`. The bridge
   rejects `/goal` explicitly rather than disguising a normal prompt as a goal.
 - ACP 0.33.0 still emits no structured per-turn token or cost telemetry. `/usage` and
   `/status` say that Kimi turns are excluded; configured dollar budgets cannot
   meter them.
-- ACP questions support selecting an advertised option ID, but not arbitrary
-  free-text answers or verified multi-question forms.
+- ACP 1.4 choice forms support verified multi-question and multi-select input.
+  Arbitrary free-text form fields remain unsupported and fail closed.
 - The existing `verbosity` setting is a compatibility/configuration value; it
   does not currently suppress Kimi thought events. Lark renders structured
   thought events in the run card, while Telegram has no live-edit stream card.

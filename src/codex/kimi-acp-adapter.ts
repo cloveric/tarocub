@@ -6,9 +6,14 @@ import { StringDecoder } from "node:string_decoder";
 
 import {
   ClientSideConnection,
+  CreateElicitationRequest as CreateElicitationRequestGuard,
   PROTOCOL_VERSION,
+  type CreateElicitationRequest,
+  type CreateElicitationResponse,
   type CreateTerminalRequest,
   type CreateTerminalResponse,
+  type ElicitationContentValue,
+  type ElicitationPropertySchema,
   type InitializeResponse,
   type KillTerminalRequest,
   type KillTerminalResponse,
@@ -123,6 +128,27 @@ type KimiToolState = {
   latestContentText?: string;
   emittedUse: boolean;
   emittedResult: boolean;
+};
+
+type KimiElicitationOption = {
+  label: string;
+  value: string;
+  description?: string;
+};
+
+type KimiElicitationField = {
+  key: string;
+  answerKey: string;
+  multiSelect: boolean;
+  required: boolean;
+  minItems?: number;
+  maxItems?: number;
+  options: KimiElicitationOption[];
+};
+
+type KimiElicitationForm = {
+  toolInput: unknown;
+  fields: KimiElicitationField[];
 };
 
 type KimiDetachedQuestion = {
@@ -1280,6 +1306,273 @@ function normalizeKimiQuestionInput(request: RequestPermissionRequest, toolInput
   };
 }
 
+function elicitationOptions(schema: ElicitationPropertySchema): KimiElicitationOption[] | undefined {
+  const rawOptions = (() => {
+    if (schema.type === "string") {
+      if (Array.isArray(schema.oneOf)) {
+        return schema.oneOf.map((option) => ({
+          label: option.title.trim() || option.const,
+          value: option.const,
+          ...(option.description?.trim() ? { description: option.description.trim() } : {}),
+        }));
+      }
+      if (Array.isArray(schema.enum)) {
+        return schema.enum.map((value) => ({ label: value, value }));
+      }
+      return undefined;
+    }
+    if (schema.type !== "array" || !schema.items || typeof schema.items !== "object") {
+      return undefined;
+    }
+    if ("anyOf" in schema.items && Array.isArray(schema.items.anyOf)) {
+      return schema.items.anyOf.map((option) => ({
+        label: option.title.trim() || option.const,
+        value: option.const,
+        ...(option.description?.trim() ? { description: option.description.trim() } : {}),
+      }));
+    }
+    if ("enum" in schema.items && Array.isArray(schema.items.enum)) {
+      return schema.items.enum.map((value) => ({ label: value, value }));
+    }
+    return undefined;
+  })();
+  if (!rawOptions || rawOptions.length === 0 || rawOptions.some((option) => !option.label || !option.value)) {
+    return undefined;
+  }
+
+  const labelCounts = new Map<string, number>();
+  for (const option of rawOptions) {
+    const key = option.label.toLocaleLowerCase();
+    labelCounts.set(key, (labelCounts.get(key) ?? 0) + 1);
+  }
+  return rawOptions.map((option) => (
+    (labelCounts.get(option.label.toLocaleLowerCase()) ?? 0) > 1
+      ? { ...option, label: `${option.label} (${option.value})` }
+      : option
+  ));
+}
+
+function normalizeKimiElicitationForm(
+  request: CreateElicitationRequest,
+  rawToolInput: unknown,
+): KimiElicitationForm | undefined {
+  if (!CreateElicitationRequestGuard.isForm(request) || !("sessionId" in request)) {
+    return undefined;
+  }
+  const properties = request.requestedSchema.properties;
+  const entries = properties ? Object.entries(properties) : [];
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const required = new Set(request.requestedSchema.required ?? []);
+  const answerKeys = new Set<string>();
+  const rawQuestions = (() => {
+    if (!rawToolInput || typeof rawToolInput !== "object" || Array.isArray(rawToolInput)) {
+      return [];
+    }
+    const value = (rawToolInput as { questions?: unknown }).questions;
+    return Array.isArray(value) ? value : [];
+  })();
+  const requestMessage = request.message.trim();
+  const messageLines = requestMessage.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const questions: Array<{
+    question: string;
+    header: string;
+    multi_select: boolean;
+    options: Array<{ label: string; description?: string }>;
+  }> = [];
+  const fields: KimiElicitationField[] = [];
+
+  for (const [index, [key, schema]] of entries.entries()) {
+    const options = elicitationOptions(schema);
+    if (!options) {
+      return undefined;
+    }
+    const rawQuestion = rawQuestions[index];
+    const rawQuestionRecord = rawQuestion && typeof rawQuestion === "object" && !Array.isArray(rawQuestion)
+      ? rawQuestion as { question?: unknown; header?: unknown }
+      : undefined;
+    const rawQuestionText = typeof rawQuestionRecord?.question === "string"
+      ? rawQuestionRecord.question.trim()
+      : "";
+    const rawHeader = typeof rawQuestionRecord?.header === "string"
+      ? rawQuestionRecord.header.trim()
+      : "";
+    const schemaTitle = typeof schema.title === "string" ? schema.title.trim() : "";
+    const schemaDescription = typeof schema.description === "string" ? schema.description.trim() : "";
+    const header = rawHeader
+      || schemaTitle
+      || request.requestedSchema.title?.trim()
+      || `Question ${index + 1}`;
+    const baseQuestion = rawQuestionText
+      || schemaDescription
+      || (messageLines.length === entries.length ? messageLines[index] : "")
+      || (requestMessage ? (entries.length === 1 ? requestMessage : `${requestMessage} (${header})`) : "")
+      || header;
+    let answerKey = baseQuestion;
+    if (answerKeys.has(answerKey)) {
+      answerKey = `${baseQuestion} (${index + 1})`;
+    }
+    answerKeys.add(answerKey);
+    const multiSelect = schema.type === "array";
+    questions.push({
+      question: answerKey,
+      header,
+      multi_select: multiSelect,
+      options: options.map((option) => ({
+        label: option.label,
+        ...(option.description ? { description: option.description } : {}),
+      })),
+    });
+    fields.push({
+      key,
+      answerKey,
+      multiSelect,
+      required: required.has(key),
+      ...(multiSelect && typeof schema.minItems === "number" ? { minItems: schema.minItems } : {}),
+      ...(multiSelect && typeof schema.maxItems === "number" ? { maxItems: schema.maxItems } : {}),
+      options,
+    });
+  }
+
+  return {
+    toolInput: {
+      ...(isBackgroundQuestionInput("AskUserQuestion", rawToolInput) ? { background: true } : {}),
+      questions,
+    },
+    fields,
+  };
+}
+
+function approvalAnswers(updatedInput: unknown): Record<string, unknown> | undefined {
+  if (!updatedInput || typeof updatedInput !== "object" || Array.isArray(updatedInput)) {
+    return undefined;
+  }
+  const answers = (updatedInput as { answers?: unknown }).answers;
+  return answers && typeof answers === "object" && !Array.isArray(answers)
+    ? answers as Record<string, unknown>
+    : undefined;
+}
+
+function optionForElicitationLabel(
+  options: KimiElicitationOption[],
+  label: string,
+): KimiElicitationOption | undefined {
+  const normalized = label.trim().toLocaleLowerCase();
+  return options.find((option) => option.label.toLocaleLowerCase() === normalized);
+}
+
+function parseJoinedElicitationOptions(
+  answer: string,
+  options: KimiElicitationOption[],
+): KimiElicitationOption[] | undefined {
+  const text = answer.trim();
+  if (!text) {
+    return [];
+  }
+  const memo = new Map<string, KimiElicitationOption[] | undefined>();
+  const visit = (offset: number): KimiElicitationOption[] | undefined => {
+    if (offset === text.length) {
+      return [];
+    }
+    const memoKey = String(offset);
+    if (memo.has(memoKey)) {
+      return memo.get(memoKey);
+    }
+    for (let index = 0; index < options.length; index += 1) {
+      const option = options[index]!;
+      const candidate = text.slice(offset, offset + option.label.length);
+      if (candidate.toLocaleLowerCase() !== option.label.toLocaleLowerCase()) {
+        continue;
+      }
+      const end = offset + option.label.length;
+      if (end === text.length) {
+        const result = [option];
+        memo.set(memoKey, result);
+        return result;
+      }
+      if (text.slice(end, end + 2) !== ", ") {
+        continue;
+      }
+      const tail = visit(end + 2);
+      if (tail) {
+        const result = [option, ...tail];
+        memo.set(memoKey, result);
+        return result;
+      }
+    }
+    memo.set(memoKey, undefined);
+    return undefined;
+  };
+  return visit(0);
+}
+
+function renderElicitationResponse(
+  form: KimiElicitationForm,
+  decision: EngineApprovalDecision,
+  aborted = false,
+): CreateElicitationResponse {
+  if (aborted) {
+    return { action: "cancel" };
+  }
+  if (decision.behavior !== "allow") {
+    return { action: "decline" };
+  }
+  const answers = approvalAnswers(decision.updatedInput);
+  if (!answers) {
+    return { action: "decline" };
+  }
+  const content: Record<string, ElicitationContentValue> = {};
+  for (const field of form.fields) {
+    const rawAnswer = answers[field.answerKey] ?? answers[field.key];
+    if (rawAnswer === undefined || rawAnswer === null || rawAnswer === "") {
+      if (field.required || (field.minItems ?? 0) > 0) {
+        return { action: "decline" };
+      }
+      continue;
+    }
+    if (!field.multiSelect) {
+      if (typeof rawAnswer !== "string") {
+        return { action: "decline" };
+      }
+      const selected = optionForElicitationLabel(field.options, rawAnswer);
+      if (!selected) {
+        return { action: "decline" };
+      }
+      content[field.key] = selected.value;
+      continue;
+    }
+    let selected: KimiElicitationOption[] | undefined;
+    if (Array.isArray(rawAnswer)) {
+      const mapped = rawAnswer.map((entry) => (
+        typeof entry === "string" ? optionForElicitationLabel(field.options, entry) : undefined
+      ));
+      selected = mapped.every((option): option is KimiElicitationOption => option !== undefined)
+        ? mapped
+        : undefined;
+    } else if (typeof rawAnswer === "string") {
+      selected = parseJoinedElicitationOptions(rawAnswer, field.options);
+    }
+    if (!selected) {
+      return { action: "decline" };
+    }
+    if (new Set(selected.map((option) => option.value)).size !== selected.length) {
+      return { action: "decline" };
+    }
+    if ((field.required || (field.minItems ?? 0) > 0) && selected.length === 0) {
+      return { action: "decline" };
+    }
+    if (field.minItems !== undefined && selected.length < field.minItems) {
+      return { action: "decline" };
+    }
+    if (field.maxItems !== undefined && selected.length > field.maxItems) {
+      return { action: "decline" };
+    }
+    content[field.key] = selected.map((option) => option.value);
+  }
+  return { action: "accept", content };
+}
+
 function requestToolName(request: RequestPermissionRequest, state?: KimiToolState): string {
   return state?.toolName || request.toolCall.title || "Unknown tool";
 }
@@ -1984,6 +2277,7 @@ export class KimiAcpAdapter implements CodexAdapter {
     });
     const connection = new ClientSideConnection(() => ({
       requestPermission: async (request) => await this.handlePermissionRequest(worker, request),
+      createElicitation: async (request) => await this.handleElicitationRequest(worker, request),
       sessionUpdate: (notification) => this.queueKimiSessionUpdate(worker, notification),
       createTerminal: async (request) => this.createAcpTerminal(worker, request),
       terminalOutput: async (request) => this.readAcpTerminal(worker, request),
@@ -2066,7 +2360,7 @@ export class KimiAcpAdapter implements CodexAdapter {
           connection.initialize({
             protocolVersion: PROTOCOL_VERSION,
             clientInfo: { name: "tarocub", version: "0.1.0" },
-            clientCapabilities: { terminal: true },
+            clientCapabilities: { terminal: true, elicitation: { form: {} } },
           }),
           worker.failurePromise,
         ]),
@@ -4102,13 +4396,155 @@ export class KimiAcpAdapter implements CodexAdapter {
     return this.getTerminalBackgroundTask(worker, taskId, now) !== undefined;
   }
 
+  private async handleElicitationRequest(
+    worker: KimiWorker,
+    request: CreateElicitationRequest,
+  ): Promise<CreateElicitationResponse> {
+    this.markActivity(worker);
+    if (!CreateElicitationRequestGuard.isForm(request) || !("sessionId" in request)) {
+      return { action: "cancel" };
+    }
+    const pendingAtRequest = worker.pendingTurn;
+    // ACP 1.x can dispatch this request before the preceding tool_call update
+    // finishes processing. Drain it so background ownership and raw input are
+    // available before the form is handed to a channel.
+    await this.drainKimiSessionUpdates(worker);
+    const pending = pendingAtRequest ?? worker.pendingTurn;
+    const continuation = pending ? undefined : this.backgroundContinuationForUpdate(worker);
+    const toolCallId = request.toolCallId ?? undefined;
+    const detachedQuestionState = toolCallId ? worker.detachedQuestions.get(toolCallId) : undefined;
+    const state = toolCallId
+      ? worker.tools.get(toolCallId) ?? detachedQuestionState?.state
+      : undefined;
+    if (state) {
+      this.maybeEmitToolUse(worker, state);
+    }
+    const rawToolInput = state?.rawInput ?? maybeParseJson(state?.latestContentText) ?? {};
+    const form = normalizeKimiElicitationForm(request, rawToolInput);
+    if (!form) {
+      return { action: "cancel" };
+    }
+    const detachedQuestion = Boolean(toolCallId)
+      && isBackgroundQuestionInput(state?.toolName ?? "AskUserQuestion", rawToolInput);
+    const backgroundQuestionTask = detachedQuestion
+      ? (detachedQuestionState?.taskId
+          ? worker.backgroundTasks.get(detachedQuestionState.taskId)
+          : undefined)
+        ?? this.findBackgroundQuestionTask(worker, rawToolInput)
+      : undefined;
+    const event: EngineStreamEvent = {
+      type: "permission_request",
+      toolName: "AskUserQuestion",
+      toolInput: form.toolInput,
+      sessionId: worker.currentSessionId ?? request.sessionId,
+    };
+
+    if (detachedQuestion && toolCallId && (backgroundQuestionTask || detachedQuestionState)) {
+      if (detachedQuestionState && backgroundQuestionTask) {
+        detachedQuestionState.taskId ??= backgroundQuestionTask.taskId;
+        detachedQuestionState.lastSeenAt = Date.now();
+      }
+      const ownerTurnId = backgroundQuestionTask?.ownerTurnId ?? detachedQuestionState?.ownerTurnId;
+      const onEngineEvent = backgroundQuestionTask?.onEngineEvent
+        ?? detachedQuestionState?.onEngineEvent
+        ?? worker.onEngineEvent;
+      const onApprovalRequest = backgroundQuestionTask?.onApprovalRequest
+        ?? detachedQuestionState?.onApprovalRequest;
+      if (pending && ownerTurnId === pending.turnId) {
+        this.queueEngineEvent(pending, event);
+        await Promise.race([
+          pending.eventChain,
+          pending.failurePromise.catch(() => undefined),
+          pending.interruptionPromise.catch(() => undefined),
+        ]);
+      } else {
+        await this.emitEngineEvent(onEngineEvent, event);
+      }
+      return await this.handleDetachedElicitationRequest(
+        worker,
+        request.sessionId,
+        form,
+        onApprovalRequest,
+        toolCallId,
+        backgroundQuestionTask?.taskId ?? detachedQuestionState?.taskId,
+      );
+    }
+
+    if (!pending && !continuation) {
+      return { action: "cancel" };
+    }
+    if (continuation) {
+      await this.emitEngineEvent(continuation.onEngineEvent ?? worker.onEngineEvent, event);
+      const approvalRequest: EngineApprovalRequest = {
+        engine: "kimi",
+        toolName: "AskUserQuestion",
+        toolInput: form.toolInput,
+        cwd: worker.workspacePath,
+        sessionId: worker.currentSessionId ?? request.sessionId,
+        abortSignal: continuation.approvalAbortController.signal,
+      };
+      const denyOnFailure = (): EngineApprovalDecision => ({ behavior: "deny" });
+      const decision = continuation.onApprovalRequest
+        ? await Promise.race([
+            Promise.resolve().then(() => continuation.onApprovalRequest!(approvalRequest)).catch(denyOnFailure),
+            worker.failurePromise.catch(denyOnFailure),
+          ])
+        : denyOnFailure();
+      return renderElicitationResponse(
+        form,
+        decision,
+        continuation.approvalAbortController.signal.aborted,
+      );
+    }
+    if (!pending) {
+      return { action: "cancel" };
+    }
+
+    await Promise.race([
+      pending.eventChain,
+      pending.failurePromise.catch(() => undefined),
+      pending.interruptionPromise.catch(() => undefined),
+    ]);
+    this.queueEngineEvent(pending, event);
+    await Promise.race([
+      pending.eventChain,
+      pending.failurePromise.catch(() => undefined),
+      pending.interruptionPromise.catch(() => undefined),
+    ]);
+
+    const approvalRequest: EngineApprovalRequest = {
+      engine: "kimi",
+      toolName: "AskUserQuestion",
+      toolInput: form.toolInput,
+      cwd: worker.workspacePath,
+      sessionId: worker.currentSessionId ?? request.sessionId,
+      abortSignal: pending.approvalAbortController.signal,
+    };
+    const denyOnFailure = (): EngineApprovalDecision => ({ behavior: "deny" });
+    const decision = pending.onApprovalRequest
+      ? await Promise.race([
+          Promise.resolve().then(() => pending.onApprovalRequest!(approvalRequest)).catch(denyOnFailure),
+          pending.failurePromise.catch(denyOnFailure),
+          pending.interruptionPromise.catch(denyOnFailure),
+        ])
+      : denyOnFailure();
+    return renderElicitationResponse(form, decision, pending.approvalAbortController.signal.aborted);
+  }
+
   private async handlePermissionRequest(
     worker: KimiWorker,
     request: RequestPermissionRequest,
   ): Promise<RequestPermissionResponse> {
     this.markActivity(worker);
-    const pending = worker.pendingTurn;
-    const continuation = this.backgroundContinuationForUpdate(worker);
+    const pendingAtRequest = worker.pendingTurn;
+    // ACP SDK 1.x dispatches notifications and reverse requests concurrently.
+    // Drain earlier tool_call updates before resolving the matching permission
+    // request so raw input and detached-question ownership are available.
+    await this.drainKimiSessionUpdates(worker);
+    // Keep the originating turn long enough to answer deny if /stop settles it
+    // while the preceding update chain is draining.
+    const pending = pendingAtRequest ?? worker.pendingTurn;
+    const continuation = pending ? undefined : this.backgroundContinuationForUpdate(worker);
     const detachedQuestionState = worker.detachedQuestions.get(request.toolCall.toolCallId);
     const state = worker.tools.get(request.toolCall.toolCallId) ?? detachedQuestionState?.state;
     if (state) {
@@ -4301,6 +4737,55 @@ export class KimiAcpAdapter implements CodexAdapter {
       const approval = worker.detachedApprovalControllers.get(toolCallId);
       approval?.controller.abort(new Error(reason));
       worker.detachedApprovalControllers.delete(toolCallId);
+      worker.detachedQuestions.delete(toolCallId);
+    }
+  }
+
+  private async handleDetachedElicitationRequest(
+    worker: KimiWorker,
+    sessionId: string,
+    form: KimiElicitationForm,
+    onApprovalRequest: ((request: EngineApprovalRequest) => Promise<EngineApprovalDecision>) | undefined,
+    toolCallId: string,
+    taskId?: string,
+  ): Promise<CreateElicitationResponse> {
+    const controller = new AbortController();
+    worker.detachedApprovalControllers.get(toolCallId)?.controller.abort(
+      new Error("Kimi replaced an outstanding background question approval"),
+    );
+    worker.detachedApprovalControllers.set(toolCallId, {
+      controller,
+      taskId,
+      startedAt: Date.now(),
+    });
+    const approvalRequest: EngineApprovalRequest = {
+      engine: "kimi",
+      toolName: "AskUserQuestion",
+      toolInput: form.toolInput,
+      cwd: worker.workspacePath,
+      sessionId: worker.currentSessionId ?? sessionId,
+      abortSignal: controller.signal,
+    };
+    const denyOnFailure = (): EngineApprovalDecision => ({ behavior: "deny" });
+    const aborted = new Promise<EngineApprovalDecision>((resolve) => {
+      controller.signal.addEventListener("abort", () => resolve(denyOnFailure()), { once: true });
+    });
+    try {
+      const decision = onApprovalRequest
+        ? await Promise.race([
+            Promise.resolve().then(() => onApprovalRequest(approvalRequest)).catch(denyOnFailure),
+            worker.failurePromise.catch((error) => {
+              controller.abort(error);
+              return denyOnFailure();
+            }),
+            aborted,
+          ])
+        : denyOnFailure();
+      return renderElicitationResponse(form, decision, controller.signal.aborted);
+    } finally {
+      if (worker.detachedApprovalControllers.get(toolCallId)?.controller === controller) {
+        worker.detachedApprovalControllers.delete(toolCallId);
+      }
       worker.detachedQuestions.delete(toolCallId);
     }
   }
