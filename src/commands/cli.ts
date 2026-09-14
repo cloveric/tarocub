@@ -817,6 +817,49 @@ async function checkLarkCliDocsCreate(): Promise<string> {
   }
 }
 
+async function checkLarkCliSkillsSync(): Promise<string> {
+  try {
+    const { stdout, stderr } = await execFile(
+      "lark-cli",
+      ["doctor", "--offline"],
+      {
+        env: { ...process.env, LARK_CHANNEL: "1" },
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    return formatLarkCliSkillsSyncCheck(`${stdout}\n${stderr}`);
+  } catch (error) {
+    const detail = redactLarkSensitiveText(error instanceof Error ? error.message : String(error));
+    return `info lark-cli skills: sync check unavailable (${detail})`;
+  }
+}
+
+export function formatLarkCliSkillsSyncCheck(output: string): string {
+  const parsed = parseJsonFromPossiblyDecoratedOutput(output) as {
+    _notice?: {
+      skills?: {
+        current?: string;
+        target?: string;
+        message?: string;
+      };
+    };
+    checks?: Array<{
+      name?: string;
+      status?: string;
+      message?: string;
+    }>;
+  };
+  const skills = parsed._notice?.skills;
+  if (skills) {
+    const current = skills.current?.trim() || "unknown";
+    const target = skills.target?.trim() || "the installed CLI";
+    return `warn lark-cli skills: ${current} out of sync with ${target}; run \`lark-cli update\``;
+  }
+  const version = parsed.checks?.find((check) => check.name === "cli_version" && check.status === "pass")?.message?.trim();
+  return `ok lark-cli skills: in sync${version ? ` with ${version}` : ""}`;
+}
+
 async function runLarkCommandProcess(input: LarkRunCommandInput): Promise<{ stdout: string; stderr: string }> {
   const timeoutMs = input.timeoutMs ?? 30_000;
   const maxBuffer = input.maxBuffer ?? 10 * 1024 * 1024;
@@ -899,6 +942,7 @@ async function formatLarkDoctor(
     `ok State dir: ${stateDir}`,
     `${serviceLock.startsWith("running ") ? "ok" : "warn"} Service lock: ${serviceLock}`,
     await checkLarkCliDocsCreate(),
+    await checkLarkCliSkillsSync(),
   ];
 
   try {
@@ -3518,7 +3562,7 @@ function hasActionableLarkDoctorProblem(doctor: string): boolean {
       if (!line.startsWith("- fail ") && !line.startsWith("- warn ")) {
         return false;
       }
-      return !line.startsWith("- warn Service lock:");
+      return !line.startsWith("- warn Service lock:") && !line.startsWith("- warn lark-cli skills:");
     });
 }
 

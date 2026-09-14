@@ -10,6 +10,7 @@ import { AccessStore } from "../src/state/access-store.js";
 import {
   buildDetachedLarkSetupCommand,
   findLarkServiceProcessIdsFromPs,
+  formatLarkCliSkillsSyncCheck,
   resolveLarkSetupTargetEnv,
   runCli,
 } from "../src/commands/cli.js";
@@ -24,6 +25,25 @@ import { withFileMutex } from "../src/state/file-mutex.js";
 const REPO_ROOT = "C:\\Users\\hangw\\codex-telegram-channel";
 
 describe("runCli", () => {
+  it("reports stale lark-cli skills with the supported repair command", () => {
+    expect(formatLarkCliSkillsSyncCheck(JSON.stringify({
+      _notice: {
+        skills: {
+          current: "1.0.94",
+          target: "1.0.95",
+          message: "skills are stale",
+        },
+      },
+    }))).toBe("warn lark-cli skills: 1.0.94 out of sync with 1.0.95; run `lark-cli update`");
+  });
+
+  it("reports lark-cli skills as synchronized when offline doctor is clean", () => {
+    expect(formatLarkCliSkillsSyncCheck(JSON.stringify({
+      checks: [{ name: "cli_version", status: "pass", message: "1.0.95" }],
+      ok: true,
+    }))).toBe("ok lark-cli skills: in sync with 1.0.95");
+  });
+
   it("keeps the generated Telegram transport prompt compact enough for every-turn use", () => {
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS.length).toBeLessThan(850);
     expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS.split("\n").length).toBeLessThanOrEqual(6);
